@@ -63,34 +63,38 @@ export function createArtifactSearchEngine(exceptions) {
     return node.shadowRoot ? [node.shadowRoot] : node.childNodes;
   }
   function* blockSteps(root) {
-    var found = [], current, stack = [[root, root]], seen = new Set(), count = 0;
+    var found = [], current, stack = [[root, root, false]], seen = new Set(), count = 0;
     while (stack.length) {
-      var entry = stack.pop(), node = entry[0], boundary = entry[1];
+      var entry = stack.pop(), node = entry[0], boundary = entry[1], invisible = entry[2];
       if (seen.has(node)) continue;
       seen.add(node);
       if (++count % 128 === 0) yield;
       if (node.nodeType === 3) {
         if (!node.data) continue;
-        if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [], texts: [] }; found.push(current); }
-        current.text += node.data; current.nodes.push(node); current.texts.push(node.data); continue;
+        // visibility hides only its own text: a descendant may set it back to visible.
+        if (invisible) { current = undefined; continue; }
+        if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [], texts: [], live: [] }; found.push(current); }
+        current.text += node.data; current.nodes.push(node); current.texts.push(node.data); current.live.push(true); continue;
       }
       if (node.nodeType !== 1 && node.nodeType !== 11) continue;
       if (node.nodeType === 1) {
         if (node.matches(excluded) || (node.matches("button,[role='button']") && !node.closest("th"))) { current = undefined; continue; }
         var style = node.ownerDocument.defaultView.getComputedStyle(node);
-        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || style.opacity === "0" || style.contentVisibility === "hidden") { current = undefined; continue; }
+        if (style.display === "none" || style.opacity === "0" || style.contentVisibility === "hidden") { current = undefined; continue; }
+        invisible = style.visibility === "hidden" || style.visibility === "collapse";
         var flowingText = boundary.nodeType === 1 && boundary.matches(".pdf-text-layer,[data-content]");
         if (!flowingText && node.matches("p,h1,h2,h3,h4,h5,h6,td,th,li,pre,[data-content],[data-line],text,.pdf-text-layer")) boundary = node;
         else if (!flowingText && (style.display === "block" || style.display === "flex" || style.display === "grid")) boundary = node;
         if (node.tagName === "BR") {
-          if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [], texts: [] }; found.push(current); }
-          current.text += "\n"; current.nodes.push(node.ownerDocument.createTextNode("\n")); current.texts.push("\n"); continue;
+          if (invisible) { current = undefined; continue; }
+          if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [], texts: [], live: [] }; found.push(current); }
+          current.text += "\n"; current.nodes.push(node.ownerDocument.createTextNode("\n")); current.texts.push("\n"); current.live.push(false); continue;
         }
         // Closed details expose their summary, not the concealed body.
-        if (node.tagName === "DETAILS" && !node.open) { var summary = node.querySelector("summary"); if (summary) stack.push([summary, summary]); current = undefined; continue; }
+        if (node.tagName === "DETAILS" && !node.open) { var summary = node.querySelector("summary"); if (summary) stack.push([summary, summary, invisible]); current = undefined; continue; }
       }
       var nodes = children(node);
-      for (var i = nodes.length - 1; i >= 0; i--) stack.push([nodes[i], boundary]);
+      for (var i = nodes.length - 1; i >= 0; i--) stack.push([nodes[i], boundary, invisible]);
     }
     return found.filter(function (block) { return block.text.trim(); });
   }
@@ -135,7 +139,8 @@ export function createArtifactSearchEngine(exceptions) {
   // starts again; after the last attempt the edited blocks are left out and
   // the document observer refreshes the result.
   function edited(block) {
-    for (var i = 0; i < block.nodes.length; i++) if (block.nodes[i].data !== block.texts[i]) return true;
+    // A replaced or removed node counts too, even when its text is unchanged.
+    for (var i = 0; i < block.nodes.length; i++) if (block.nodes[i].data !== block.texts[i] || (block.live[i] && !block.nodes[i].isConnected)) return true;
     return false;
   }
   function* searchSteps(root, query) {
@@ -198,7 +203,7 @@ export function createArtifactSearchEngine(exceptions) {
   function reveal(match) {
     match = first(match);
     if (!match) return;
-    var element = match.startContainer.parentElement, doc = match.startContainer.ownerDocument, win = doc.defaultView;
+    var element = match.startContainer.assignedSlot || match.startContainer.parentElement, doc = match.startContainer.ownerDocument, win = doc.defaultView;
     if (!element) return;
     function delta(start, end, low, high) {
       if (end - start > high - low) return start - low;
@@ -245,7 +250,7 @@ export function createArtifactSearchEngine(exceptions) {
           live.add(node);
           if (!watched.has(node)) {
             var observer = new win.MutationObserver(function (changes) { if (!changes.every(ignored)) schedule(); });
-            observer.observe(node, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["hidden", "aria-hidden", "class", "style", "open", "slot", "name", "data-editing", "data-artifact-find-unavailable"] });
+            observer.observe(node, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["hidden", "aria-hidden", "class", "style", "open", "slot", "name", "data-editing", "data-artifact-find-unavailable", "data-artifact-find-exclude"] });
             node.addEventListener("slotchange", schedule);
             watched.set(node, observer); added = watched.size > 1 || added;
           }

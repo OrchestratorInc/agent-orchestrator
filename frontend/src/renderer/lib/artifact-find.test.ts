@@ -139,22 +139,50 @@ describe("artifact text search", () => {
 		document.body.innerHTML = '<p id="clock">0</p>';
 		const changed = vi.fn(), dispose = createArtifactFindEngine().observe(document.body, changed);
 		let tick = 0; const timer = setInterval(() => { document.getElementById("clock")!.textContent = String(++tick); }, 50);
-		await vi.advanceTimersByTimeAsync(500);
-		expect(changed.mock.calls.length).toBeGreaterThanOrEqual(3);
-		clearInterval(timer); dispose(); vi.useRealTimers();
+		try {
+			await vi.advanceTimersByTimeAsync(500);
+			expect(changed.mock.calls.length).toBeGreaterThanOrEqual(3);
+		} finally { clearInterval(timer); dispose(); }
+	});
+	it("refreshes when a reader excludes content from Find", async () => {
+		vi.useFakeTimers();
+		document.body.innerHTML = "<p>needle</p>";
+		const changed = vi.fn(), dispose = createArtifactFindEngine().observe(document.body, changed);
+		try {
+			await vi.advanceTimersByTimeAsync(50); changed.mockClear();
+			document.querySelector("p")!.setAttribute("data-artifact-find-exclude", "");
+			await vi.advanceTimersByTimeAsync(150);
+			expect(changed).toHaveBeenCalled();
+		} finally { dispose(); }
+	});
+	it("finds text a descendant makes visible again under visibility:hidden", async () => {
+		document.body.innerHTML = '<div style="visibility:hidden">secret <span style="visibility:visible">shown</span></div>';
+		const engine = createArtifactFindEngine();
+		expect(await engine.search(document.body, "shown")).toHaveLength(1);
+		expect(await engine.search(document.body, "secret")).toHaveLength(0);
+	});
+	it("starts again when a text node is replaced by one with the same text", async () => {
+		document.body.innerHTML = "<p>needle</p><p>a needle</p>";
+		const second = document.querySelectorAll("p")[1];
+		let clock = 0; vi.spyOn(performance, "now").mockImplementation(() => clock += 10);
+		const pending = createArtifactFindEngine().search(document.body, "needle");
+		second.replaceChildren(document.createTextNode("a needle"));
+		expect(await pending).toHaveLength(2);
 	});
 	it("observes nested and late shadow roots and stops all discovery on teardown", async () => {
 		vi.useFakeTimers();
 		document.body.innerHTML = '<x-card></x-card>';
 		const host = document.querySelector("x-card")!, changed = vi.fn(), engine = createArtifactFindEngine();
 		const dispose = engine.observe(document.body, changed);
-		const shadow = host.attachShadow({ mode: "open" }); shadow.innerHTML = '<p>needle</p><x-nested></x-nested>';
-		const nested = shadow.querySelector("x-nested")!.attachShadow({ mode: "open" }); nested.innerHTML = "<slot>fallback</slot>";
-		await vi.advanceTimersByTimeAsync(650); expect(changed).toHaveBeenCalled(); changed.mockClear();
-		nested.querySelector("slot")!.textContent = "updated";
-		await vi.advanceTimersByTimeAsync(150); expect(changed).toHaveBeenCalled();
-		dispose(); changed.mockClear(); shadow.querySelector("p")!.textContent = "later";
-		await vi.advanceTimersByTimeAsync(1000); expect(changed).not.toHaveBeenCalled();
-		expect(vi.getTimerCount()).toBe(0); vi.useRealTimers();
+		try {
+			const shadow = host.attachShadow({ mode: "open" }); shadow.innerHTML = '<p>needle</p><x-nested></x-nested>';
+			const nested = shadow.querySelector("x-nested")!.attachShadow({ mode: "open" }); nested.innerHTML = "<slot>fallback</slot>";
+			await vi.advanceTimersByTimeAsync(650); expect(changed).toHaveBeenCalled(); changed.mockClear();
+			nested.querySelector("slot")!.textContent = "updated";
+			await vi.advanceTimersByTimeAsync(150); expect(changed).toHaveBeenCalled();
+			dispose(); changed.mockClear(); shadow.querySelector("p")!.textContent = "later";
+			await vi.advanceTimersByTimeAsync(1000); expect(changed).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { dispose(); }
 	});
 });
