@@ -16,22 +16,17 @@ func (e commandError) FailureCause() string {
 	return classifyGitFailure(e.output, e.err)
 }
 
-// Is lets callers match a git command that failed because its folder is not a
-// Git repository against ports.ErrWorkspaceNotARepo, so the service layer can
-// return actionable recovery guidance instead of git's raw exit 128.
-func (e commandError) Is(target error) bool {
-	return target == ports.ErrWorkspaceNotARepo && e.FailureCause() == "not_a_repo"
-}
-
-// RepoPath returns the folder the failed git command ran in (its `-C` path),
-// or "" when the command did not name one.
-func (e commandError) RepoPath() string {
-	for i := 0; i+1 < len(e.args); i++ {
-		if e.args[i] == "-C" {
-			return e.args[i+1]
-		}
+// notARepoAt reports err as a *ports.WorkspaceNotARepoError naming repo when
+// git refused to run in repo because it is not a Git repository. Callers pass
+// only a registered project repository folder (never a session worktree), so
+// the service layer can return project-level recovery guidance instead of
+// git's raw exit 128. Any other failure is returned unchanged.
+func notARepoAt(repo string, err error) error {
+	var cmd commandError
+	if errors.As(err, &cmd) && cmd.FailureCause() == "not_a_repo" {
+		return &ports.WorkspaceNotARepoError{Path: repo, Err: err}
 	}
-	return ""
+	return err
 }
 
 func classifyGitFailure(output string, err error) string {

@@ -2299,20 +2299,14 @@ func mapSessionError(err error) error {
 	}
 }
 
-// projectNotARepoError turns git's raw "not a git repository" exit 128 (for
-// example a registered project or workspace root whose .git was deleted) into
-// an actionable error that names the folder and how to recover.
+// projectNotARepoError turns git's raw "not a git repository" exit 128 for a
+// registered project folder (for example a project or workspace root whose .git
+// was deleted) into an actionable error that names the folder and how to
+// recover. The text is shared with asynchronous chat start failures.
 func projectNotARepoError(err error) error {
-	const fix = "Restore the folder's .git directory (or run `git init` and create an initial commit there), or remove and re-add the project in Orchestrator, then try again."
-	var located interface{ RepoPath() string }
-	path := ""
-	if errors.As(err, &located) {
-		path = located.RepoPath()
-	}
-	message := "The project folder is no longer a Git repository. " + fix
+	message, path, fix, _ := sessionmanager.ProjectNotARepoGuidance(err)
 	details := map[string]any{"suggestedFix": fix}
 	if path != "" {
-		message = fmt.Sprintf("The project folder %q is no longer a Git repository. %s", path, fix)
 		details["path"] = path
 	}
 	return apierr.Invalid("PROJECT_NOT_A_REPO", message, details)

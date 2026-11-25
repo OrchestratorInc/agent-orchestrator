@@ -4021,27 +4021,14 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 	}
 }
 
-// notARepoGitError stands in for the gitworktree adapter's command error: it
-// matches ports.ErrWorkspaceNotARepo and names the folder git ran in.
-type notARepoGitError struct{ path string }
-
-func (e notARepoGitError) Error() string {
-	return "git -C " + e.path + " worktree list --porcelain: exit status 128: fatal: not a git repository (or any of the parent directories): .git"
-}
-
-func (e notARepoGitError) Is(target error) bool {
-	return target == ports.ErrWorkspaceNotARepo
-}
-
-func (e notARepoGitError) RepoPath() string {
-	return e.path
-}
-
 // TestToSpawnAPIErrorMapsProjectNotARepo covers #8905: a registered project
 // (or workspace root) whose .git was deleted surfaces a typed error naming the
 // folder and how to recover, not git's raw exit 128.
 func TestToSpawnAPIErrorMapsProjectNotARepo(t *testing.T) {
-	raw := fmt.Errorf("spawn ws-1: %w: gitworktree: worktree list: %w", sessionmanager.ErrWorkspaceCreate, notARepoGitError{path: "/work/ws"})
+	raw := fmt.Errorf("spawn ws-1: %w: gitworktree: worktree list: %w", sessionmanager.ErrWorkspaceCreate, &ports.WorkspaceNotARepoError{
+		Path: "/work/ws",
+		Err:  errors.New("git -C /work/ws worktree list --porcelain: exit status 128: fatal: not a git repository (or any of the parent directories): .git"),
+	})
 	var e *apierr.Error
 	if !errors.As(toSpawnAPIError(raw), &e) {
 		t.Fatalf("mapped = %v, want *apierr.Error", toSpawnAPIError(raw))
