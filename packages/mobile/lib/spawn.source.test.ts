@@ -267,7 +267,8 @@ describe("spawn draft", () => {
 		});
 
 		it("clears the notice on every edit the user makes to the form", () => {
-			expect(spawn).toContain("const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {\n\t\tsetError(errorAfterEdit);\n\t\tchange(...args);\n\t};");
+			expect(spawn).toContain("const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {\n\t\tsetError(errorAfterEdit);");
+			expect(between(spawn, "const edited = <A extends unknown[]>", "const clearModelOverride = ")).toContain("change(...args);\n\t};");
 			const controls = between(spawn, "<SpawnComposerControls", "onSpawn={() => { void onSpawn(); }}");
 			for (const prop of [
 				"onSelectHost={edited(chooseHost)}",
@@ -374,6 +375,18 @@ describe("spawn draft", () => {
 		expect(choose).toContain("if (selectedHostId !== null) resetHostChoice();");
 		expect(choose).toContain("if (isCloudHost(auto.hostId) || machineHosts.some((host) => host.id === auto.hostId)) hostSettled.current = true;");
 		expect(between(spawn, "const chooseHost = (nextHostId: string) => {", "void selectSpawnHost(")).toContain("hostSettled.current = true;");
+	});
+
+	// An automatic move clears project, agent and model, so after a by-hand
+	// edit (every control and the prompt go through `edited`) it would send
+	// Start to a machine the person never picked, with choices they never made.
+	it("stops choosing its machine once the form is edited by hand", () => {
+		const edited = between(spawn, "const edited = <A extends unknown[]>", "const clearModelOverride = ");
+		expect(edited).toContain("if (selectedHostId !== null) hostSettled.current = true;");
+		expectBefore(edited, "hostSettled.current = true;", "change(...args);");
+		for (const control of ["onSelectProject={edited(changeProject)}", "onSelectHarness={edited(selectAgent)}", "onSelectModel={edited(selectModel)}", "onChangePrompt={edited(setPrompt)}"]) {
+			expect(spawn).toContain(control);
+		}
 	});
 
 	// Chosen while it reconnects, a machine's credential is not proven yet.

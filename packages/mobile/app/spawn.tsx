@@ -764,6 +764,10 @@ function SpawnPage() {
 	// change emptying the composer) leave it.
 	const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {
 		setError(errorAfterEdit);
+		// Edited by hand, the form is the person's: the page stops choosing its
+		// machine, since a move would clear their choices and send Start
+		// elsewhere. Not before one is chosen, or it would stay on none.
+		if (selectedHostId !== null) hostSettled.current = true;
 		change(...args);
 	};
 
