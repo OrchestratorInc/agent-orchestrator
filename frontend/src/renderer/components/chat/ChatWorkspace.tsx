@@ -268,12 +268,8 @@ import {
 
 const NO_SKILLS: ChatSkill[] = [];
 
-const EMPTY_CHAT_PLACEHOLDERS = [
-	"Fix a failing test in this project",
-	"Explain how this project is structured",
-	"Plan the next step for this feature",
-	"Find and fix a bug in this project",
-] as const;
+// The empty composer teaches its two shortcuts: "/" opens skills, "@" adds context.
+const EMPTY_CHAT_PLACEHOLDER = "Ask anything, / for skills, @ for context";
 
 /**
  * The newest pending approval or question the live turn is waiting on.
@@ -2116,11 +2112,6 @@ function ChatWorkspaceContent({
 	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
 	const openedDocked = settledDocked !== false;
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
-	const [emptyChatPlaceholder] = useState(
-		() => sessionRole === "orchestrator"
-			? "Ask anything about this project"
-			: EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
-	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	// The composer itself, not the dock: the dock also holds the welcome heading, which
 	// disappears on the first send, and sliding from the dock's top would make the
@@ -2593,7 +2584,7 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
+										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : EMPTY_CHAT_PLACEHOLDER) : undefined}
 										skills={skills}
 										skillsLoading={skillsLoading}
 										filePaths={filePaths}
