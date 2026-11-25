@@ -156,6 +156,33 @@ func TestExportImportClaudeMovesConversation(t *testing.T) {
 	}
 }
 
+func TestImportClaudeResumesAWindowsConversation(t *testing.T) {
+	f := newClaudeFixture(t)
+	const cwd = `C:\Users\alice\worktrees\web-3`
+	line, _ := json.Marshal(map[string]string{"type": "user", "cwd": cwd, "content": cwd + `\notes.txt`})
+	writeFile(t, filepath.Join(f.projA, testID+".jsonl"), string(line)+"\n")
+	buf, m := exportFixture(t, f)
+	if m.SourceCwd != cwd {
+		t.Fatalf("source cwd = %q", m.SourceCwd)
+	}
+	res, err := ImportClaude(context.Background(), buf, ClaudeImportOptions{ConfigDir: f.cfgB, LaunchCwd: f.cwdB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(readLines(t, res.TranscriptPath)[0]), &got); err != nil || got["cwd"] != f.cwdB || got["content"] != f.cwdB+"/notes.txt" {
+		t.Fatalf("record = %v, %v", got, err)
+	}
+	for _, path := range []string{`C:\Users\a`, `\\server\share\a`, "/Users/a"} {
+		if err := (Manifest{Version: formatVersion, SourceCwd: path, SourceProjectDir: path}).validate(); err != nil {
+			t.Errorf("validate(%q): %v", path, err)
+		}
+	}
+	if err := (Manifest{Version: formatVersion, SourceCwd: `web-3\a`, SourceProjectDir: "/Users/a"}).validate(); err == nil {
+		t.Error("relative source path accepted")
+	}
+}
+
 func TestImportClaudeKeepsExistingTranscript(t *testing.T) {
 	f := newClaudeFixture(t)
 	buf, _ := exportFixture(t, f)

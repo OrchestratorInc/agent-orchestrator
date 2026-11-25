@@ -6,9 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+var windowsPath = regexp.MustCompile(`^(?:[A-Za-z]:|\\\\[^\\/]+)[\\/]`)
+
+// isAbsPath accepts an absolute path of any platform: the machine that
+// recorded it may run another one.
+func isAbsPath(p string) bool {
+	return strings.HasPrefix(p, "/") || windowsPath.MatchString(p)
+}
 
 // pathMap rewrites absolute path prefixes from the source machine to this one
 // inside JSON Lines records.
@@ -22,13 +31,18 @@ type prefixPair struct {
 func newPathMap(pairs map[string]string) (pathMap, error) {
 	var m pathMap
 	for old, new := range pairs {
-		if !strings.HasPrefix(old, "/") || strings.Trim(old, "/") == "" {
+		if !isAbsPath(old) || strings.Trim(windowsPath.ReplaceAllString(old, ""), `/\`) == "" {
 			return nil, fmt.Errorf("nativetransfer: refusing to rewrite path prefix %q", old)
 		}
 		if old == new {
 			continue
 		}
 		m = append(m, prefixPair{old: old, new: new, oldJSON: jsonText(old)})
+		// Tools on Windows also write paths with forward slashes.
+		if separator(old) == '\\' {
+			slashed := strings.ReplaceAll(old, `\`, "/")
+			m = append(m, prefixPair{old: slashed, new: strings.ReplaceAll(new, `\`, "/"), oldJSON: jsonText(slashed)})
+		}
 	}
 	// Longest first, so a prefix nested inside another is replaced by the more specific pair.
 	sort.Slice(m, func(i, j int) bool { return len(m[i].old) > len(m[j].old) })
@@ -122,8 +136,10 @@ func (m pathMap) rewriteString(s string) (string, bool) {
 }
 
 // replacePathPrefix replaces from where it stands as a whole path, so
-// "/w/web-3" matches "/w/web-3/a.go" but not "/w/web-30" or "/x/w/web-3".
+// "/w/web-3" matches "/w/web-3/a.go" but not "/w/web-30" or "/x/w/web-3". The
+// rest of a Windows path takes the separators of a POSIX to, and the reverse.
 func replacePathPrefix(s, from, to string) (string, bool) {
+	fromSep, toSep := separator(from), separator(to)
 	var b strings.Builder
 	changed := false
 	i := 0
@@ -138,6 +154,13 @@ func replacePathPrefix(s, from, to string) (string, bool) {
 		if (j == 0 || !isPathNameByte(s[j-1])) && (end == len(s) || !isPathNameByte(s[end])) {
 			b.WriteString(to)
 			changed = true
+			for ; fromSep != toSep && end < len(s) && (s[end] == fromSep || isPathNameByte(s[end])); end++ {
+				if s[end] == fromSep {
+					b.WriteByte(toSep)
+				} else {
+					b.WriteByte(s[end])
+				}
+			}
 		} else {
 			b.WriteString(from)
 		}
@@ -148,6 +171,13 @@ func replacePathPrefix(s, from, to string) (string, bool) {
 	}
 	b.WriteString(s[i:])
 	return b.String(), true
+}
+
+func separator(p string) byte {
+	if windowsPath.MatchString(p) && strings.Contains(p, `\`) {
+		return '\\'
+	}
+	return '/'
 }
 
 func isPathNameByte(c byte) bool {
