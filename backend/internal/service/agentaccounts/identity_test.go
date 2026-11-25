@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,20 +77,34 @@ func TestAddAPIKeyAccountSavesAValidColor(t *testing.T) {
 }
 
 // holdingStore holds the first identity write until release is closed, so a
-// second update can run while the first is between its read and its write.
+// second update can run while the first is between its read and its write. It
+// guards memStore, which is not safe for concurrent use, the way SQLite is.
 type holdingStore struct {
 	*memStore
+	mu      sync.Mutex
 	held    chan struct{}
 	release chan struct{}
 	first   bool
 }
 
+func (h *holdingStore) ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	accounts, err := h.memStore.ListAgentAccounts(ctx)
+	return append([]domain.AgentAccount(nil), accounts...), err
+}
+
 func (h *holdingStore) UpdateAgentAccountIdentity(ctx context.Context, id, name, color string) error {
-	if !h.first {
-		h.first = true
+	h.mu.Lock()
+	first := !h.first
+	h.first = true
+	h.mu.Unlock()
+	if first {
 		close(h.held)
 		<-h.release
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return h.memStore.UpdateAgentAccountIdentity(ctx, id, name, color)
 }
 
@@ -132,7 +147,10 @@ func TestUpdateIdentityOverlappingPartialUpdatesKeepBothFields(t *testing.T) {
 	if err := <-colorDone; err != nil {
 		t.Fatal(err)
 	}
-	if got := store.accounts[0]; got.Name != "Work" || got.Color != "blue" {
+	holding.mu.Lock()
+	got := store.accounts[0]
+	holding.mu.Unlock()
+	if got.Name != "Work" || got.Color != "blue" {
 		t.Fatalf("overlapping updates lost a field: name %q color %q", got.Name, got.Color)
 	}
 }
