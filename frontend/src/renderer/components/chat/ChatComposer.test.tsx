@@ -353,6 +353,24 @@ describe("send keys", () => {
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
 		expect(composerWireText(field)).toBe("");
 	});
+	it("leaves a cancelled long paste out of the box when the image beside it fails", async () => {
+		let fail: (error: Error) => void = () => undefined;
+		const stage = vi.fn(() => new Promise<string[]>((_, reject) => { fail = reject; }));
+		const { field } = renderComposer({ draftSessionId: "composer-sheet-cancel", onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: { ...textClipboard("a\tb\n".repeat(2000)), files: [png()] } });
+		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching pasted-text.txt" }));
+		fail(new Error("disk full"));
+		expect(await screen.findByText(/Nothing was attached/)).toBeInTheDocument();
+		expect(composerWireText(field)).toBe("");
+	});
+	it("puts a long paste over a Cloud chat's file limit in the box", async () => {
+		const stage = vi.fn();
+		const { field } = renderComposer({ draftSessionId: "composer-cloud-cap", onStageAttachments: stage, cloudAttachments: { maxBytes: 6000 } });
+		fireEvent.paste(field, { clipboardData: textClipboard("x".repeat(7000)) });
+		expect(await screen.findByText(/Each file must be under/)).toBeInTheDocument();
+		await waitFor(() => expect(composerWireText(field)).toBe("x".repeat(7000)));
+		expect(stage).not.toHaveBeenCalled();
+	});
 	it("attaches a long text that comes with an image as a file beside the image", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.txt"]);
 		const { field } = renderComposer({ draftSessionId: "composer-sheet-paste", onStageAttachments: stage });

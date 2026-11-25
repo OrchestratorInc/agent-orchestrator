@@ -670,7 +670,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
 	const plainPasteShortcut = useRef(false);
 	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
-	const failedStaging = useRef(new WeakSet<File>());
+	const cancelledUploads = useRef(new Set<string>());
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -763,10 +763,7 @@ export const ChatComposer = memo(function ChatComposer({
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			// A file too large to inline goes as its handle on disk; the stager
 			// streams it to the daemon (toWireAttachments).
-			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal).catch((error: unknown) => {
-				if (!signal.aborted) for (const { file } of attachments) if (file) failedStaging.current.add(file);
-				throw error;
-			});
+			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal);
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
 			}
@@ -2484,9 +2481,10 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!textAsFile) return;
 		const pasted = files[files.length - 1]!;
 		const scope = restoredSessionId.current;
+		cancelledUploads.current.delete(pasted.name);
 		const landed = attached.then((added) => {
 			if (added.some((attachment) => attachment.name === pasted.name)) return true;
-			if (failedStaging.current.has(pasted) && restoredSessionId.current === scope) editor.current?.appendText(text);
+			if (!cancelledUploads.current.has(pasted.name) && restoredSessionId.current === scope) editor.current?.appendText(text);
 			return false;
 		});
 		pendingTextPastes.current.add(landed);
@@ -2724,6 +2722,7 @@ export const ChatComposer = memo(function ChatComposer({
 										statusLabel={`Attaching ${file.name}`}
 										cancelLabel={`Cancel attaching ${file.name}`}
 										onCancel={() => {
+											cancelledUploads.current.add(file.name);
 											fileAttachments.cancelPending(file.id);
 											editor.current?.focus();
 										}}
