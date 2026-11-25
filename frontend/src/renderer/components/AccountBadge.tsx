@@ -29,8 +29,9 @@ export interface AccountBadgeProps {
 	className?: string;
 }
 
-/** `[ logo | CA ]`: the provider's logo and the account's letters on its color. The letters are
- * always there, so the color is never the only cue. One bordered segment split by a divider, 16px tall so the 14px logo fits inside. */
+/** The provider's logo, then a separate square with the account's letters on its color. The letters
+ * are always there, so the color is never the only cue. No outer frame: inside a chip or a row, a
+ * border around the pair reads as a nested control. */
 export function AccountBadge({ provider, accountProvider, name, email, color, className }: AccountBadgeProps) {
 	const label = name?.trim() || email || "";
 	const letters = accountAbbreviation({ name, email, provider: accountProvider ?? provider });
@@ -39,16 +40,14 @@ export function AccountBadge({ provider, accountProvider, name, email, color, cl
 			role="img"
 			aria-label={label}
 			title={label || undefined}
-			className={cn("inline-flex h-4 shrink-0 items-stretch overflow-hidden rounded-[4px] border border-border", className)}
+			className={cn("inline-flex h-4 shrink-0 items-center gap-1", className)}
 		>
-			<span aria-hidden="true" className="inline-flex items-center px-0.5">
-				<ProviderMark provider={provider} className="size-3.5" />
-			</span>
+			<ProviderMark provider={provider} className="size-3.5" />
 			<span
 				aria-hidden="true"
 				className={cn(
-					"inline-flex min-w-3.5 items-center justify-center border-l border-border px-1 text-[9px] font-semibold leading-none",
-					color ? `${COLOR_CLASS[color]} text-(--account-badge-foreground)` : "bg-muted text-foreground",
+					"inline-flex h-4 min-w-4 items-center justify-center rounded-[4px] px-1 text-[9px] font-semibold leading-none",
+					color ? `${COLOR_CLASS[color]} text-(--account-badge-foreground)` : "bg-foreground/15 text-foreground",
 				)}
 			>
 				{letters}
