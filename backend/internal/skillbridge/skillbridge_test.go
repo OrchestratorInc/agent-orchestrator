@@ -279,6 +279,22 @@ func TestSyncInterruptedKeepsOnlyWhatMayStay(t *testing.T) {
 	}
 }
 
+func TestSyncInterruptedKeepsOneCopyOfEachName(t *testing.T) {
+	preferred, other := t.TempDir(), t.TempDir()
+	writeSkill(t, other, "old-folder", "shared", "old")
+	for checks := range 40 {
+		dir := filepath.Join(t.TempDir(), "session")
+		sync(t, Config{Dir: dir, Sources: []string{other}})
+		// The skill now comes from a preferred root, under another folder.
+		writeSkill(t, preferred, "a-new-folder", "shared", "new")
+		_, _ = Sync(&stopAfter{Context: context.Background(), checks: checks},
+			Config{Dir: dir, Layout: AgentsLayout, Sources: []string{preferred, other}})
+		if got := bridged(t, dir); len(got) > 1 {
+			t.Fatalf("after %d checks: %v, want one folder for the skill", checks, got)
+		}
+	}
+}
+
 func TestSyncRemovesWhatTheAgentAdded(t *testing.T) {
 	root, dir := t.TempDir(), filepath.Join(t.TempDir(), "session")
 	writeSkill(t, root, "a", "a", "")

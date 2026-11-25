@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,8 @@ func TestSharedSkillInstructionsGoWithTheMessage(t *testing.T) {
 		{"a path", ports.ChatUserMessage{Text: "/deploy/staging.yml is wrong"}, false},
 		{"a longer name", ports.ChatUserMessage{Text: "/deploy-all now"}, false},
 		{"not shared", ports.ChatUserMessage{Text: "/other to staging"}, false},
+		{"the user's opening brief", ports.ChatUserMessage{Text: "/deploy to staging", SpawnOpeningPrompt: true}, true},
+		{"an issue in an opening prompt", ports.ChatUserMessage{Text: "Work on tracker issue o/r#1.\n\nBody:\n/deploy to staging", SpawnOpeningPrompt: true}, false},
 		{"relayed by the user", ports.ChatUserMessage{Text: "/deploy to staging", Origin: domain.MessageOriginAutomation, AuthoredByUser: true}, true},
 		{"written by someone else", ports.ChatUserMessage{Text: "/deploy to staging", Origin: domain.MessageOriginAutomation}, false},
 	} {
@@ -185,4 +188,41 @@ func TestSharedSkillInstructionsGoWithASideQuestion(t *testing.T) {
 	if got := provider.sent[0].Text; !strings.Contains(got, "Use the \"deploy\" skill.\n\nnow") || !strings.Contains(got, "Ship it with ./ship.sh") {
 		t.Fatalf("sent %q", got)
 	}
+}
+
+func TestPromotedSkillRecordsWhatTheAgentReceived(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	shareSkills(t, h, shareSkill(t, "deploy", "Ship it with ./ship.sh"))
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "/deploy staging", ClientMessageID: "queued", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatal(err)
+	}
+	calls := provider.steers()
+	sent := calls[len(calls)-1].msg.Text
+	if !strings.Contains(sent, "Ship it with ./ship.sh") {
+		t.Fatalf("steered %q", sent)
+	}
+	snapshot, err := h.svc.Snapshot(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, activity := range snapshot.Activities {
+		var detail struct {
+			Text              string `json:"text"`
+			ProviderInputText string `json:"providerInputText"`
+		}
+		if json.Unmarshal(activity.Detail, &detail) == nil && detail.ProviderInputText != "" {
+			if detail.ProviderInputText != sent || detail.Text != "/deploy staging" {
+				t.Fatalf("activity = %+v, want what was sent and what was written", detail)
+			}
+			return
+		}
+	}
+	t.Fatal("no steer activity recorded what the agent received")
 }

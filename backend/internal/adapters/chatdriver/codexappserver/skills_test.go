@@ -110,7 +110,7 @@ func TestListSkillsReportsAnEmptyListRatherThanNil(t *testing.T) {
 }
 
 func TestDriverGivesANewAppServerTheBridgedSkills(t *testing.T) {
-	source, data := t.TempDir(), t.TempDir()
+	source, data, workspace := t.TempDir(), t.TempDir(), t.TempDir()
 	skill := filepath.Join(source, "mine", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestDriverGivesANewAppServerTheBridgedSkills(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			driver, srv := newTestDriver(t)
 			if tc.refused {
-				srv.failures["skills/extraRoots/set"] = "unknown method"
+				srv.failures["skills/extraRoots/set"] = `{"code":-32601,"message":"unknown method"}`
 			} else {
 				srv.responses["skills/extraRoots/set"] = `{}`
 			}
@@ -146,11 +146,11 @@ func TestDriverGivesANewAppServerTheBridgedSkills(t *testing.T) {
 			var err error
 			if tc.resume {
 				conv, err = driver.Resume(context.Background(), ports.ChatResumeConfig{
-					SessionID: tc.session, DataDir: data, WorkspacePath: "/tmp/ws", ProviderConversationID: "thread-1",
+					SessionID: tc.session, DataDir: data, WorkspacePath: workspace, ProviderConversationID: "thread-1",
 				})
 			} else {
 				conv, err = driver.Start(context.Background(), ports.ChatStartConfig{
-					SessionID: tc.session, DataDir: data, WorkspacePath: "/tmp/ws",
+					SessionID: tc.session, DataDir: data, WorkspacePath: workspace,
 				})
 			}
 			if err != nil {

@@ -677,3 +677,12 @@ func TestCanonicalIssueIDGitLabHostDisambiguates(t *testing.T) {
 		t.Fatalf("gitlab.com and self-managed with same native produced identical IssueID %q", dotCom)
 	}
 }
+
+// A chat runs a skill that a message starts with, so an issue someone else wrote
+// must never be what an intake prompt starts with.
+func TestBuildIssuePromptNeverStartsWithTheIssue(t *testing.T) {
+	prompt := BuildIssuePrompt(domain.Issue{Title: "/deploy", Body: "/deploy"})
+	if !strings.HasPrefix(prompt, "Work on tracker issue") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}

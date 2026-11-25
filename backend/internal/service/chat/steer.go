@@ -332,7 +332,8 @@ func (c *Controller) PromoteQueuedTurn(
 		Text: queued.Text, Content: content, Origin: queued.Origin,
 		AuthoredByUser: queued.AuthoredByUser, ClientMessageID: queued.ClientMessageID,
 	}
-	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(c.withSharedSkillInstructions(ctx, msg)))
+	providerMessage := c.withSharedSkillInstructions(ctx, msg)
+	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(providerMessage))
 	if err != nil {
 		classified := classify(err)
 		switch {
@@ -359,7 +360,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	activityID := c.newID()
 	activity, err := makeSteerActivity(activityID, msg, turnID, steerProviderInput{
-		Text: msg.Text, Content: msg.Content, SourceTurnIDs: []string{turnID},
+		Text: providerMessage.Text, Content: providerMessage.Content, SourceTurnIDs: []string{turnID},
 	})
 	if err != nil {
 		return PromoteQueuedTurnResult{}, settleUncertain(err)
