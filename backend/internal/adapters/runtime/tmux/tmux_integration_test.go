@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +82,49 @@ func TestRuntimeIntegration(t *testing.T) {
 	}
 	if alive {
 		t.Fatal("alive after destroy = true, want false")
+	}
+}
+
+func TestRuntimeIntegrationUserShellVariants(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	for _, shell := range []string{"fish", "zsh", "bash", "sh"} {
+		path, err := exec.LookPath(shell)
+		if err != nil {
+			t.Run(shell, func(t *testing.T) { t.Skipf("%s unavailable", shell) })
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			t.Setenv("SHELL", path)
+			ctx := context.Background()
+			id := strings.ReplaceAll(t.Name(), "/", "_")
+			r := New(Options{Timeout: 5 * time.Second, EnvDir: t.TempDir()})
+			t.Cleanup(func() { _ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id}) })
+			marker := filepath.Join(t.TempDir(), "launched")
+			h, err := r.Create(ctx, ports.RuntimeConfig{
+				SessionID:     domain.SessionID(id),
+				WorkspacePath: t.TempDir(),
+				Argv:          []string{"/bin/sh", "-c", `printf 'launched-under-posix\n' > "$1"`, "sh", marker},
+			})
+			if err != nil {
+				t.Fatalf("Create with SHELL=%s: %v", path, err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				data, err := os.ReadFile(marker)
+				if err == nil && string(data) == "launched-under-posix\n" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("launch marker = %q, %v; want launched-under-posix", data, err)
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			if alive, err := r.IsAlive(ctx, h); err != nil || !alive {
+				t.Fatalf("IsAlive after launch = %v, %v; want true", alive, err)
+			}
+		})
 	}
 }
 

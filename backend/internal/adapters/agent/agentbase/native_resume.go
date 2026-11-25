@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,8 +26,9 @@ func NativeJSONSessionExists(ctx context.Context, binary string, args []string, 
 	cmd := aoprocess.CommandContext(ctx, binary, args...)
 	cmd.Dir = ref.WorkspacePath
 	cmd.Env = os.Environ()
-	for key, value := range env {
-		cmd.Env = append(cmd.Env, key+"="+value)
+	// Sorted so duplicate spellings resolve the same way on every run.
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		cmd.Env = append(cmd.Env, key+"="+env[key])
 	}
 	data, err := cmd.Output()
 	if err != nil {

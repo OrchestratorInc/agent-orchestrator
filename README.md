@@ -178,6 +178,24 @@ Download from [orchestrator.inc/download](https://orchestrator.inc/download/) or
 
 Open Orchestrator.inc and point it at the repository you want it to manage. The desktop app runs the daemon for you, so no CLI is required. See the [installation guide](https://docs.orchestrator.inc/installation) for agent CLI setup and troubleshooting.
 
+### Install with your coding agent
+
+Ask your coding agent to "set up Orchestrator" and point it at [orchestrator.inc/install.md](https://orchestrator.inc/install.md), or at [Use Orchestrator from your coding agent](https://docs.orchestrator.inc/agent-setup) in the docs. Both walk through the install, adding a repository, and starting a worker with the `ao` CLI.
+
+Install from a terminal:
+
+```bash
+# macOS: installs the app and puts `ao` on your PATH
+brew install --cask agent-orchestrator
+```
+
+```powershell
+# Windows
+winget install --id OrchestratorInc.AgentOrchestrator -e
+```
+
+The app bundles the `ao` CLI. Without the Homebrew cask, it isn't on your `PATH`; on macOS it is at `/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao`. Signing in to a coding agent and to GitHub (`gh auth login`) still needs a person.
+
 ## Documentation
 
 | Document | Start here when you need |

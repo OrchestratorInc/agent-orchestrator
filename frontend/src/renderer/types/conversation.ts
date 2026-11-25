@@ -133,6 +133,7 @@ export interface ConversationTurn {
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
+	hasEventPrompt?: boolean;
 	/**
 	 * Where the turn's group sorts when that is not its first loaded item: a
 	 * turn whose prompt is above the loaded part of a history began before
@@ -155,6 +156,12 @@ export interface ConversationTurn {
 	 * reason, rather than as a run that failed.
 	 */
 	notRun?: boolean;
+	/**
+	 * A running Cloud turn no agent has taken yet: the session is still starting,
+	 * or its worker took the turn while it checks out the project, runs Setup and
+	 * starts the agent. It reads as the session getting ready, not as thinking.
+	 */
+	agentPending?: boolean;
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;

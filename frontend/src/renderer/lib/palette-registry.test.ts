@@ -80,6 +80,7 @@ describe("palette registry", () => {
 	it("names a row's page beside it and keeps page keywords on the page row", () => {
 		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false });
 		const logins = items.find((item) => item.id === "setting:harness-logins");
+		expect(logins?.title).toBe("Agent logins");
 		expect(logins?.subtitle).toBe(t("settings.harness"));
 		expect(logins?.action).toEqual({ kind: "open-settings-section", section: "harness", focus: t("settings.harness.viewLabel") });
 		// Accounts live on the Harness page, so an accounts search lands there.

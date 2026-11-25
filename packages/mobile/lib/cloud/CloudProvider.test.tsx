@@ -104,6 +104,137 @@ describe("CloudProvider", () => {
 		expect(latest?.projects).toEqual([project("b-p", "b")]);
 	});
 
+	it("reads the projects and the caller's standalone agents apart, and keeps each project once", async () => {
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		fixtures.client.listProjects.mockImplementation(async (orgId: string, list: { standaloneAgents?: string } = {}) =>
+			list.standaloneAgents === "only" ? page([agent]) : page([project(`${orgId}-p`, orgId)]));
+		await mount();
+		expect(fixtures.client.listProjects.mock.calls.map((call) => call[1]?.standaloneAgents)).toEqual(["exclude", "only"]);
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+
+		// A control plane without agents ignores the filter and lists every project in both reads.
+		fixtures.client.listProjects.mockImplementation(async (orgId: string) => page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshProjects(); await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p"]);
+	});
+
+	it("lists a project the phone just created before the next read", async () => {
+		await mount();
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		act(() => latest!.upsertProject(agent));
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+		act(() => latest!.upsertProject({ ...agent, displayName: "renamed" }));
+		expect(latest?.projects).toHaveLength(2);
+		expect(latest?.projects[1].displayName).toBe("renamed");
+	});
+
+	it("keeps a project put in the list during a read that started before it, and lets a later read drop it", async () => {
+		await mount();
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		// Both halves of a refresh are out when the agent's project goes in.
+		const finish: Array<(value: unknown) => void> = [];
+		fixtures.client.listProjects.mockImplementation(() => new Promise((resolve) => { finish.push(resolve); }));
+		const stale = latest!.refreshProjects();
+		act(() => latest!.upsertProject(agent));
+		await act(async () => { finish.forEach((resolve) => resolve(page([project("a-p", "a")]))); await stale; await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+
+		// A read that started after it answers for it: deleted meanwhile, it goes.
+		fixtures.client.listProjects.mockImplementation(async (orgId: string) => page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshProjects(); await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p"]);
+	});
+
+	it("drops a project read that lands after a newer one, so it can't undo the newer read", async () => {
+		await mount();
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		// Read A starts before the agent exists.
+		const finishA: Array<(value: unknown) => void> = [];
+		fixtures.client.listProjects.mockImplementation(() => new Promise((resolve) => { finishA.push(resolve); }));
+		const readA = latest!.refreshProjects();
+		act(() => latest!.upsertProject(agent));
+		// Read B starts after it, lists it, and lands first.
+		fixtures.client.listProjects.mockImplementation(async (orgId: string, list: { standaloneAgents?: string } = {}) =>
+			list.standaloneAgents === "only" ? page([agent]) : page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshProjects(); await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+		// Read A lands last, without the agent: it is out of date.
+		await act(async () => { finishA.forEach((resolve) => resolve(page([project("a-p", "a")]))); await readA; await flush(); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+	});
+
+	it("ignores the failure of a project read that lands after a newer one succeeded", async () => {
+		await mount();
+		const failA: Array<(cause: unknown) => void> = [];
+		fixtures.client.listProjects.mockImplementation(() => new Promise((_resolve, reject) => { failA.push(reject); }));
+		const readA = latest!.refreshProjects();
+		fixtures.client.listProjects.mockImplementation(async (orgId: string) => page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshProjects(); await flush(); });
+		await act(async () => { failA.forEach((reject) => reject(new Error("offline"))); await readA; await flush(); });
+		expect(latest).toMatchObject({ projectsError: null, error: null, projects: [{ id: "a-p" }] });
+	});
+
+	it("reads the projects again when a polled session names one it hasn't read, once per project", async () => {
+		await mount();
+		const reads = () => fixtures.client.listProjects.mock.calls.length;
+		const before = reads();
+		// An agent started on another device: its session comes before its project.
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		fixtures.client.listProjects.mockImplementation(async (orgId: string, list: { standaloneAgents?: string } = {}) =>
+			list.standaloneAgents === "only" ? page([agent]) : page([project(`${orgId}-p`, orgId)]));
+		fixtures.client.listSessions.mockImplementation(async () => page([{ id: "s1", projectId: "a-agent" }]));
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 2);
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+
+		// Known now: the next poll reads no projects.
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 2);
+
+		// A project that never lists (a session shared from elsewhere) costs one read, not one per poll.
+		fixtures.client.listSessions.mockImplementation(async () => page([{ id: "s1", projectId: "a-agent" }, { id: "s2", projectId: "elsewhere" }]));
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 4);
+	});
+
+	it("tries the project read again on a later poll when it failed", async () => {
+		await mount();
+		const reads = () => fixtures.client.listProjects.mock.calls.length;
+		const before = reads();
+		fixtures.client.listSessions.mockImplementation(async () => page([{ id: "s1", projectId: "a-agent" }]));
+		fixtures.client.listProjects.mockImplementation(async () => { throw new Error("offline"); });
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 2);
+
+		// Back online: the next poll reads the projects again, and finds the agent.
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		fixtures.client.listProjects.mockImplementation(async (orgId: string, list: { standaloneAgents?: string } = {}) =>
+			list.standaloneAgents === "only" ? page([agent]) : page([project(`${orgId}-p`, orgId)]));
+		await act(async () => { await latest!.refreshSessions(); await flush(); });
+		expect(reads()).toBe(before + 4);
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+	});
+
+	it("drops a scoped write that lands after the organization changed", async () => {
+		await mount();
+		const agent = { ...project("a-agent", "a"), standaloneAgent: true } as CloudProject;
+		const session = { id: "s-a", orgId: "a", projectId: "a-agent" } as never;
+		// Same organization: the writes land.
+		act(() => { const writes = latest!.scoped(); writes.upsertProject(agent); writes.upsertSession(session); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["a-p", "a-agent"]);
+		expect(latest?.sessions.map((item) => item.id)).toEqual(["s-a"]);
+
+		// Taken in "a", then a 403 re-resolves to "b" before the create answers.
+		const late = latest!.scoped();
+		fixtures.client.getMe.mockImplementation(async () => me("b"));
+		await reResolve();
+		expect(latest?.org?.id).toBe("b");
+		act(() => { late.upsertProject({ ...agent, id: "a-agent-2" }); late.upsertSession({ id: "s-a-2", orgId: "a", projectId: "a-agent-2" } as never); });
+		expect(latest?.projects.map((item) => item.id)).toEqual(["b-p"]);
+		expect(latest?.sessions).toEqual([]);
+	});
+
 	it("comes back to ready when retried from an error, though it kept its organization", async () => {
 		await mount();
 		fixtures.client.getMe.mockImplementation(async () => { throw new Error("offline"); });
