@@ -39,13 +39,15 @@ import {
 	OptionMenuContent,
 	OptionMenuItem,
 	OptionMenuLabel,
+	OptionMenuSub,
+	OptionMenuSubContent,
+	OptionMenuSubTrigger,
 	OptionMenuTrigger,
 } from "../ui/option-menu";
 import { Switch } from "../ui/switch";
 import { CloseButton } from "../ui/close-button";
 import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
-import { EffortSlider } from "./EffortSlider";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
@@ -474,30 +476,33 @@ export function AgentModelPicker({
 			</OptionMenuItem>
 		) : null,
 		settable && !waiting && source.efforts.length > 0 ? (
-			<EffortSlider
-				key="effort"
-				label={t("agentSwitch.effort")}
-				valueLabel={(choice) => choice?.label ?? t("agentSwitch.defaultModel")}
-				choices={source.efforts}
-				value={source.effort}
-				disabled={!source.onPickEffort || source.efforts.length < 2}
-				ultraValue={isUltraEffort}
-				onCommit={(effort) => {
-					markModelPick();
-					source.onPickEffort?.(effort);
-				}}
-			/>
+			<OptionMenuSub key="effort" closeOnSelect>
+				<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
+				<OptionMenuSubContent align="end" sideOffset={10} className={SUB_CLASS}>
+					{source.efforts.map((choice) => (
+						<OptionMenuItem
+							key={choice.value}
+							active={choice.value === source.effort}
+							radio
+							disabled={!source.onPickEffort}
+							onSelect={() => {
+								markModelPick();
+								if (choice.value !== source.effort) source.onPickEffort?.(choice.value);
+							}}
+							className="text-xs text-foreground"
+						>
+							{/* On its own span: the row's highlight would otherwise be clipped to the text. */}
+							<span className={isUltraEffort(choice.value) ? "ultra-text" : undefined}>{choice.label}</span>
+						</OptionMenuItem>
+					))}
+				</OptionMenuSubContent>
+			</OptionMenuSub>
 		) : settable && !waiting && !modelsProblem ? (
-			// The same slider, disabled, so the menu does not change shape between models. An agent
+			// The same row, disabled, so the menu does not change shape between models. An agent
 			// that names its levels only once it runs (OpenCode) shows this until then.
-			<EffortSlider
-				key="effort"
-				label={t("agentSwitch.effort")}
-				valueLabel={() => t("agentSwitch.defaultModel")}
-				choices={[]}
-				disabled
-				onCommit={() => {}}
-			/>
+			<OptionMenuSub key="effort" closeOnSelect>
+				<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
+			</OptionMenuSub>
 		) : null,
 	].filter(Boolean);
 	// The pending agent's auto-compact, else the running one's; a pending switch hides the running agent's extras.
@@ -524,7 +529,8 @@ export function AgentModelPicker({
 	const showToggles = settable && !waiting && (!modelsProblem || source.fast !== undefined || source.thinking !== undefined);
 	const notOffered = t("agentSwitch.notOffered");
 	const settingsGroups = [
-		settingsRows.length > 0 ? settingsRows : null,
+		// As much room under the effort row as over it, so its hover shade sits evenly between the lines.
+		settingsRows.length > 0 ? <div className="pb-1">{settingsRows}</div> : null,
 		showToggles ? (
 			<>
 				<div className="flex items-center gap-1">
@@ -537,7 +543,7 @@ export function AgentModelPicker({
 							hint={t("agentSwitch.fastModeHint")}
 						/>
 					) : null}
-					{/* Claude Code's Ultracode is a mode beside Fast mode, not a level on the effort slider. */}
+					{/* Claude Code's Ultracode is a mode beside Fast mode, not an effort level. */}
 					{source.ultracode !== undefined ? (
 						<IconToggle
 							icon={AgentZap}

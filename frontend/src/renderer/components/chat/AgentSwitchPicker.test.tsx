@@ -93,25 +93,10 @@ describe("AgentModelPicker", () => {
 		// The agent is the rail's; there is no Agent or Model row to open.
 		expect(screen.queryByRole("menuitem", { name: /^Agent/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /^Model/ })).not.toBeInTheDocument();
-		// The effort is a slider row: Left and Right step through the levels, the menu stays open.
-		const effort = screen.getByRole("slider", { name: "Effort" });
-		expect(effort).toHaveAttribute("aria-valuetext", "High");
-		act(() => effort.focus());
-		await user.keyboard("{ArrowLeft}");
-		expect(current.onPickEffort).not.toHaveBeenCalled();
-		await user.keyboard("{ArrowRight}");
+		// The effort is a row that opens its levels to the side; picking one closes only that side menu.
+		await user.click(screen.getByRole("menuitem", { name: /Effort.*High/ }));
+		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
 		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
-		// Home and End jump to the lowest and highest level, and keep the menu's highlight on the slider.
-		// The lowest here is High, the level already running; Home still sends it, since Max is not applied yet.
-		await user.keyboard("{Home}");
-		expect(effort).toHaveAttribute("aria-valuetext", "High");
-		expect(current.onPickEffort).toHaveBeenLastCalledWith("high");
-		expect(effort).toHaveFocus();
-		await user.keyboard("{End}");
-		expect(current.onPickEffort).toHaveBeenCalledTimes(3);
-		expect(current.onPickEffort).toHaveBeenLastCalledWith("max");
-		expect(effort).toHaveFocus();
-		await user.keyboard("{Enter}");
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
 	});
@@ -175,58 +160,6 @@ describe("AgentModelPicker", () => {
 		expect(screen.getByText("fireworks/accounts/fireworks/models/kimi")).toBeInTheDocument();
 	});
 
-	it("follows the pointer while dragging, holds the sent level, and shows the agent's again if it is not taken", async () => {
-		const user = userEvent.setup();
-		const { current } = open();
-		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const slider = screen.getByRole("slider", { name: "Effort" });
-		const track = slider.querySelector<HTMLElement>('[aria-hidden="true"]')!;
-		track.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 18, right: 200, bottom: 18, x: 0, y: 0, toJSON: () => ({}) });
-		let captured = false;
-		track.setPointerCapture = () => { captured = true; };
-		track.hasPointerCapture = () => captured;
-		track.releasePointerCapture = () => { captured = false; };
-		// The thumb follows the pointer between levels instead of jumping from one to the next.
-		fireEvent.pointerDown(track, { button: 0, clientX: 70, pointerId: 1 });
-		const thumb = track.lastElementChild as HTMLElement;
-		const midway = thumb.style.left;
-		fireEvent.pointerMove(track, { button: 0, clientX: 80, pointerId: 1 });
-		expect(thumb.style.left).not.toBe(midway);
-		expect(slider).toHaveAttribute("aria-valuetext", "High");
-		fireEvent.pointerMove(track, { button: 0, clientX: 195, pointerId: 1 });
-		expect(slider).toHaveAttribute("aria-valuetext", "Max");
-		fireEvent.pointerUp(track, { button: 0, clientX: 195, pointerId: 1 });
-		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
-		// Held on Max while the agent answers, so the thumb does not jump back and forth.
-		expect(slider).toHaveAttribute("aria-valuetext", "Max");
-		// The agent never reports Max (it refused), so its own level, High, shows again.
-		await vi.waitFor(() => expect(slider).toHaveAttribute("aria-valuetext", "High"), { timeout: 4000 });
-	});
-
-	it("eases a click on the track to the nearest level instead of jumping the thumb to the pointer", async () => {
-		const user = userEvent.setup();
-		const { current } = open();
-		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const slider = screen.getByRole("slider", { name: "Effort" });
-		const track = slider.querySelector<HTMLElement>('[aria-hidden="true"]')!;
-		track.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 18, right: 200, bottom: 18, x: 0, y: 0, toJSON: () => ({}) });
-		let captured = false;
-		track.setPointerCapture = () => { captured = true; };
-		track.hasPointerCapture = () => captured;
-		track.releasePointerCapture = () => { captured = false; };
-		const thumb = track.lastElementChild as HTMLElement;
-		const before = thumb.style.left;
-		expect(thumb).toHaveClass("cursor-grab");
-		fireEvent.pointerDown(track, { button: 0, clientX: 190, pointerId: 1 });
-		// A press, or a jitter under the drag threshold, leaves the thumb where it is.
-		fireEvent.pointerMove(track, { button: 0, clientX: 191, pointerId: 1 });
-		expect(thumb.style.left).toBe(before);
-		fireEvent.pointerUp(track, { button: 0, clientX: 191, pointerId: 1 });
-		// Released, it eases to the nearest level rather than following the pointer there.
-		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
-		expect(thumb).toHaveClass("motion-safe:transition-[left]");
-	});
-
 	it("lists Claude's newest models first and keeps the older releases below them", async () => {
 		const user = userEvent.setup();
 		open(undefined, false, "claude-code", {
@@ -269,7 +202,7 @@ describe("AgentModelPicker", () => {
 		const user = userEvent.setup();
 		open(undefined, false, "cursor", { thinking: true, onToggleThinking: vi.fn() });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuetext", "High");
+		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
 		expect(screen.getByText("Thinking")).toBeInTheDocument();
 	});
 
@@ -278,7 +211,7 @@ describe("AgentModelPicker", () => {
 		open(undefined, false, "cursor", { thinking: true, onToggleThinking: vi.fn() }, true);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.queryByText("Loading settings")).not.toBeInTheDocument();
-		expect(screen.getByRole("slider", { name: "Effort" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
 		expect(screen.getByText("Thinking")).toBeInTheDocument();
 	});
 
@@ -402,7 +335,7 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
 		await user.keyboard("{ArrowDown}");
-		expect(screen.getByRole("slider", { name: "Effort" })).toHaveFocus();
+		expect(screen.getByRole("menuitem", { name: /Effort/ })).toHaveFocus();
 		await user.keyboard("{ArrowUp}");
 		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveFocus();
 		await user.keyboard("{ArrowDown}");
@@ -615,7 +548,7 @@ describe("AgentModelPicker", () => {
 		open({ harness: "codex" });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
-		expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuetext", "High");
+		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
 		expect(await screen.findByRole("menuitemradio", { name: /^GPT X/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: /^Opus/ })).not.toBeInTheDocument();
 	});
@@ -712,7 +645,7 @@ describe("AgentModelPicker", () => {
 	});
 
 	describe("Ultracode", () => {
-		it("is a mode beside Fast mode, not a level on the effort slider", async () => {
+		it("is a mode beside Fast mode, not an effort level", async () => {
 			const user = userEvent.setup();
 			const onToggleUltracode = vi.fn();
 			open(undefined, false, "claude-code", { fast: false, onToggleFast: vi.fn(), ultracode: false, onToggleUltracode });
@@ -720,10 +653,12 @@ describe("AgentModelPicker", () => {
 			const ultracode = screen.getByRole("menuitemcheckbox", { name: "Ultracode" });
 			expect(ultracode).toHaveAttribute("aria-checked", "false");
 			expect(ultracode.parentElement).toContainElement(screen.getByRole("menuitemcheckbox", { name: "Fast mode" }));
-			expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuemax", "1");
 			await user.click(ultracode);
 			expect(onToggleUltracode).toHaveBeenCalledExactlyOnceWith(true);
 			expect(screen.queryAllByRole("menu")).toHaveLength(1);
+			await user.click(screen.getByRole("menuitem", { name: /Effort/ }));
+			expect(await screen.findByRole("menuitemradio", { name: "High" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitemradio", { name: /Ultracode/ })).not.toBeInTheDocument();
 		});
 
 		it("says on hover what it and Fast mode do", async () => {
@@ -760,7 +695,7 @@ describe("AgentModelPicker", () => {
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			await user.click(await screen.findByRole("menuitemcheckbox", { name: "Ultracode" }));
 			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ harness: "claude-code", effort: "high", ultracode: true }));
-			expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuemax", "2");
+			expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
 		});
 
 		it("stays on when a switch to Claude Code picks another level", async () => {
@@ -768,8 +703,8 @@ describe("AgentModelPicker", () => {
 			const { onPendingChange } = open({ harness: "claude-code", effort: "xhigh", ultracode: true }, false, "codex");
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			expect(await screen.findByRole("menuitemcheckbox", { name: "Ultracode" })).toHaveAttribute("aria-checked", "true");
-			act(() => screen.getByRole("slider", { name: "Effort" }).focus());
-			await user.keyboard("{ArrowRight}");
+			await user.click(screen.getByRole("menuitem", { name: /Effort/ }));
+			fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
 			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ effort: "max", ultracode: true }));
 		});
 

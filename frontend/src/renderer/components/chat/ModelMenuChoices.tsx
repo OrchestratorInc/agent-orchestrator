@@ -6,8 +6,8 @@ import { cn } from "../../lib/utils";
 const INITIAL_VISIBLE_COUNT = 100;
 const MAX_SEARCH_RESULTS = 50;
 const BATCH_SIZE = 50;
-// A settings row under the list: a menu item, or a slider such as the effort's.
-const FOOTER_ROW = '[role^="menuitem"]:not([data-disabled]), [role="slider"]:not([data-disabled])';
+// A settings row under the list.
+const FOOTER_ROW = '[role^="menuitem"]:not([data-disabled])';
 // The height held while open, capped by the room Radix leaves the menu less the menu surface's
 // padding and border, so it can never hold the menu taller than the window allows.
 const HELD_HEIGHT_CLASS = "min-h-[min(var(--model-menu-held,0px),calc(var(--radix-dropdown-menu-content-available-height,100vh)-var(--space-2)-2px))]";
