@@ -96,11 +96,9 @@ export type NewCommentDraft = { text: string; failed: boolean; sending: boolean;
 /**
  * The new-comment box: one bordered box holding the text, the post error and
  * Cancel / Comment. A failed post keeps the text with Retry, under the same
- * client id, so a retry never saves the comment twice. Compact, under an
- * element's threads, it is one line until something is typed.
+ * client id, so a retry never saves the comment twice.
  */
-function NewCommentBox({ compact, draft, onCancel, onChange, onSubmit }: {
-	compact: boolean;
+function NewCommentBox({ draft, onCancel, onChange, onSubmit }: {
 	draft: NewCommentDraft;
 	onCancel: () => void;
 	onChange: (text: string) => void;
@@ -111,8 +109,8 @@ function NewCommentBox({ compact, draft, onCancel, onChange, onSubmit }: {
 		<div className="flex flex-col gap-1.5 rounded-md border border-logo-accent bg-background p-2" data-testid="artifact-comments-new">
 			<textarea
 				aria-label={t("artifactComments.newPlaceholder")}
-				autoFocus={!compact}
-				className="board-scrollbar max-h-40 min-h-6 w-full resize-none border-0 bg-transparent text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+				autoFocus
+				className="board-scrollbar max-h-40 min-h-10 w-full resize-none border-0 bg-transparent text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 				maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
 				onChange={(event) => onChange(event.target.value)}
 				onKeyDown={(event) => {
@@ -125,7 +123,7 @@ function NewCommentBox({ compact, draft, onCancel, onChange, onSubmit }: {
 					}
 				}}
 				placeholder={t("artifactComments.newPlaceholder")}
-				rows={compact && !draft.text ? 1 : 2}
+				rows={2}
 				value={draft.text}
 			/>
 			{draft.failed ? (
@@ -134,12 +132,10 @@ function NewCommentBox({ compact, draft, onCancel, onChange, onSubmit }: {
 					<Button className="text-destructive" onClick={onSubmit} size="none" type="button" variant="link">{t("artifactComments.retry")}</Button>
 				</p>
 			) : null}
-			{!compact || draft.text ? (
-				<div className="flex justify-end gap-1">
-					<Button onClick={onCancel} size="xs" type="button" variant="quiet">{t("artifactComments.cancel")}</Button>
-					<Button disabled={!draft.text.trim() || draft.sending} onClick={onSubmit} size="xs" type="button" variant="primary">{t("artifactComments.comment")}</Button>
-				</div>
-			) : null}
+			<div className="flex justify-end gap-1">
+				<Button onClick={onCancel} size="xs" type="button" variant="quiet">{t("artifactComments.cancel")}</Button>
+				<Button disabled={!draft.text.trim() || draft.sending} onClick={onSubmit} size="xs" type="button" variant="primary">{t("artifactComments.comment")}</Button>
+			</div>
 		</div>
 	);
 }
@@ -411,10 +407,16 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 export type ArtifactCommentsPanelProps = {
 	comments: ArtifactCommentsState;
 	groups: ArtifactCommentGroups;
-	/** The element the popover is for, with the anchor a picked element brings for a new comment. */
+	/**
+	 * The element the popover is for. Clicked on the page, it brings its anchor
+	 * and the popover is a new comment on it; from its count, no anchor, and the
+	 * popover is its threads.
+	 */
 	element: { path: string; anchor: ArtifactCommentAnchor | null };
 	/** Closes the popover; comment mode stays on. */
 	onClose: () => void;
+	/** A new comment posted: show the element's threads, the new one open. */
+	onPosted: () => void;
 	/** The session that made the file, when the app knows it: offers Send to agent to the owner. */
 	sendTarget?: ArtifactCommentsSendTarget;
 	className?: string;
@@ -425,9 +427,10 @@ export type ArtifactCommentsPanelProps = {
 };
 
 /**
- * One element's comments, in a popover beside it: its open threads, newest
- * first with one open at a time; its resolved threads behind "N resolved on
- * this element · Show"; and a box to start a new thread on it.
+ * One element's popover, beside it. From its count: its open threads, newest
+ * first with one open at a time, and its resolved threads behind "N resolved
+ * on this element · Show". From a click on the element: a box for a new
+ * comment on it, and nothing else.
  */
 export function ArtifactCommentsPanel({
 	className,
@@ -436,6 +439,7 @@ export function ArtifactCommentsPanel({
 	groups,
 	onClose,
 	onNaturalHeight,
+	onPosted,
 	sendTarget,
 	style,
 }: ArtifactCommentsPanelProps) {
@@ -447,8 +451,7 @@ export function ArtifactCommentsPanel({
 	const resolvedGroup = groups.resolved.find((group) => group.path === element.path);
 	const threads = openGroup?.threads ?? [];
 	const resolvedThreads = resolvedGroup?.threads ?? [];
-	const anchor = element.anchor ?? openGroup?.anchor ?? resolvedGroup?.anchor ?? null;
-	const hasThreads = threads.length > 0 || resolvedThreads.length > 0;
+	const anchor = element.anchor;
 	// One thread open: the newest, until another is clicked; back to the newest
 	// for another element or once a new thread is posted here.
 	const [openThreadId, setOpenThreadId] = useState<string | null>(null);
@@ -477,13 +480,14 @@ export function ArtifactCommentsPanel({
 			await comments.createThread(anchor, text, draft.clientId);
 			dropDraft(path);
 			setOpenThreadId(null);
+			onPosted();
 		} catch {
 			updateDraft(path, { sending: false, failed: true });
 		}
 	};
 	const cancel = () => {
 		dropDraft(element.path);
-		if (!hasThreads) onClose();
+		onClose();
 	};
 
 	// The natural height: the popover's frame (header, borders) plus all of its content.
@@ -522,7 +526,7 @@ export function ArtifactCommentsPanel({
 			<div className="flex h-10 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-3">
 				<h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
 					{t("artifactComments.title")}
-					{threads.length > 0 ? <span className="font-normal text-muted-foreground">{" · "}{t("artifactComments.openCount", { n: threads.length })}</span> : null}
+					{!anchor && threads.length > 0 ? <span className="font-normal text-muted-foreground">{" · "}{t("artifactComments.openCount", { n: threads.length })}</span> : null}
 				</h2>
 				<Button aria-label={t("artifactComments.close")} onClick={onClose} size="icon-sm" type="button" variant="quiet">
 					<X aria-hidden="true" className="size-icon-sm" />
@@ -536,7 +540,7 @@ export function ArtifactCommentsPanel({
 							<RetryButton onClick={() => void comments.refetch()} />
 						</div>
 					) : null}
-					{threads.length > 0 ? (
+					{!anchor && threads.length > 0 ? (
 						<div className="flex flex-col divide-y divide-border">
 							{threads.map((thread, index) => {
 								const chosen = openThreadId !== null && threads.some((other) => other.id === openThreadId);
@@ -548,7 +552,7 @@ export function ArtifactCommentsPanel({
 							})}
 						</div>
 					) : null}
-					{resolvedThreads.length > 0 ? (
+					{!anchor && resolvedThreads.length > 0 ? (
 						<div className={cn("flex flex-col gap-2", threads.length > 0 && "border-t border-border pt-2.5")}>
 							<button
 								aria-expanded={showResolved}
@@ -563,7 +567,6 @@ export function ArtifactCommentsPanel({
 					) : null}
 					{snapshot && anchor ? (
 						<NewCommentBox
-							compact={hasThreads}
 							draft={draft}
 							onCancel={cancel}
 							onChange={(text) => updateDraft(element.path, { text })}

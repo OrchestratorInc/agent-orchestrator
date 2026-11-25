@@ -364,21 +364,23 @@ describe("ArtifactCommentsPanel: one element's comments", () => {
 		const [first, second] = client.createArtifactShareThread.mock.calls.map(([, input]) => input);
 		expect(second).toEqual(first);
 		expect(first).toMatchObject({ version: 3, anchor: newAnchor, body: "Which account?" });
+		// Posted: the box gives way to the element's threads, the new one open.
 		await waitFor(() => expect(within(popover).getByText("Which account?")).toBeInTheDocument());
-		expect(within(popover).getByRole("textbox", { name: "Add a comment…" })).toHaveValue("");
+		expect(within(popover).queryByRole("textbox", { name: "Add a comment…" })).not.toBeInTheDocument();
 		port.close();
 	});
 
-	it("shows an element's threads with a one-line box under them when it is clicked", async () => {
+	it("offers only a new comment on an element clicked, and only its threads from its count", async () => {
 		const { port } = await ready(fakeClient());
 		port.postMessage({ type: "pick", anchor: thread().anchor });
 		const popover = await screen.findByRole("complementary", { name: "Comments" });
-		expect(within(popover).getByText("Yes, will add.")).toBeInTheDocument();
-		const box = within(popover).getByRole("textbox", { name: "Add a comment…" });
-		expect(box).not.toHaveFocus();
-		expect(within(popover).queryByRole("button", { name: "Comment" })).not.toBeInTheDocument();
-		await userEvent.type(box, "Another point");
-		expect(within(popover).getByRole("button", { name: "Comment" })).toBeEnabled();
+		expect(within(popover).getByRole("textbox", { name: "Add a comment…" })).toHaveFocus();
+		expect(within(popover).queryByText("Yes, will add.")).not.toBeInTheDocument();
+		expect(within(popover).queryByText(/1 open/)).not.toBeInTheDocument();
+
+		port.postMessage({ type: "marker", path: thread().anchor.path });
+		expect(await within(popover).findByText("Yes, will add.")).toBeInTheDocument();
+		expect(within(popover).queryByRole("textbox", { name: "Add a comment…" })).not.toBeInTheDocument();
 		port.close();
 	});
 

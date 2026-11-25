@@ -67,8 +67,9 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
  * The open file's published page in comment mode: the same bytes the link
  * shows, framed from its share host with this account's view token. Elements
  * with comments carry a count; the page outlines what's under the pointer.
- * Clicking an element (or its count) opens a popover beside it with that
- * element's comments and a box for a new one; nothing else pops up. Comments
+ * Clicking an element's count opens a popover beside it with that element's
+ * comments; clicking the element itself opens one with a box for a new
+ * comment on it; nothing else pops up. Comments
  * belong to the published version, so the local file is not shown meanwhile;
  * a notice says so when the local file has changed since publishing.
  */
@@ -92,6 +93,8 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 	// Where the selected element is in the frame, from the bridge: the popover sits beside it.
 	const [selection, setSelection] = useState<({ path: string } & CommentsSelectionRect) | null>(null);
 	const closePopover = useCallback(() => setElement(null), []);
+	// From a new comment to the element's threads, once it is posted.
+	const showThreads = useCallback(() => setElement((current) => current && { path: current.path, anchor: null }), []);
 	const elementRef = useRef(element);
 	elementRef.current = element;
 	const bridge = useCommentBridge(frame, {
@@ -172,6 +175,7 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						groups={groups}
 						onClose={closePopover}
 						onNaturalHeight={setPopoverHeight}
+						onPosted={showThreads}
 						sendTarget={sendTarget}
 						style={placement ? { top: placement.top, maxHeight: placement.maxHeight } : undefined}
 					/>
