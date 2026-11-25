@@ -61,7 +61,7 @@ var _ ports.AgentInterfaceHandoffStorageBridge = (*Plugin)(nil)
 var _ ports.TerminalSurfaceInspector = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
 var _ ports.BlockedActivitySignaler = (*Plugin)(nil)
-var _ ports.AgentSkillBridge = (*Plugin)(nil)
+var _ ports.AgentSkillSource = (*Plugin)(nil)
 
 // EmitsSubmitActivity reports that PreInvocation proves submitted work has
 // reached AGY's execution loop.

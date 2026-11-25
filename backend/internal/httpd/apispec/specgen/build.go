@@ -228,7 +228,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
-	"ControllersUpdateSkillBridgeRequest":                  "UpdateSkillBridgeRequest",
+	"ControllersUpdateSkillSharingRequest":                 "UpdateSkillSharingRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
@@ -1628,9 +1628,9 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodPatch, path: "/api/v1/settings/skill-bridge", id: "updateSkillBridge", tag: "settings",
-			summary: "Turn the skill bridge preview on or off until the daemon restarts",
-			reqBody: controllers.UpdateSkillBridgeRequest{},
+			method: http.MethodPatch, path: "/api/v1/settings/skill-sharing", id: "updateSkillSharing", tag: "settings",
+			summary: "Turn sharing the user's skills with every agent on or off",
+			reqBody: controllers.UpdateSkillSharingRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

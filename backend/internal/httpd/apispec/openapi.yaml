@@ -15941,14 +15941,14 @@ paths:
       summary: Choose how long archived sessions are kept before they are deleted
       tags:
       - settings
-  /api/v1/settings/skill-bridge:
+  /api/v1/settings/skill-sharing:
     patch:
-      operationId: updateSkillBridge
+      operationId: updateSkillSharing
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpdateSkillBridgeRequest'
+              $ref: '#/components/schemas/UpdateSkillSharingRequest'
         required: true
       responses:
         "200":
@@ -15975,7 +15975,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Turn the skill bridge preview on or off until the daemon restarts
+      summary: Turn sharing the user's skills with every agent on or off
       tags:
       - settings
   /api/v1/settings/version-refresh:
@@ -26873,6 +26873,11 @@ components:
           description: Days an archived session whose worktree is released is kept
             before the daemon deletes it permanently; 0 keeps it.
           type: integer
+        skillSharing:
+          description: Sessions get the user's skills from ~/.agents, ~/.claude and
+            ~/.codex that their agent does not load itself, inside Orchestrator only.
+            A running session follows at its next resume.
+          type: boolean
         trackerIntakeEnabled:
           type: boolean
         versionRefresh:
@@ -26889,6 +26894,7 @@ components:
       - computerUse
       - accountHandoff
       - commitAttribution
+      - skillSharing
       - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
@@ -28341,12 +28347,9 @@ components:
       required:
       - title
       type: object
-    UpdateSkillBridgeRequest:
+    UpdateSkillSharingRequest:
       properties:
         enabled:
-          description: Whether new and resumed sessions get a private copy of the
-            user's skills their agent does not already load. Kept until the daemon
-            restarts.
           type:
           - "null"
           - boolean

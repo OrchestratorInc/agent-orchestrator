@@ -22,7 +22,7 @@ func TestTerminalCommandsAddTheBridgedSkillFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := skillbridge.Sync(context.Background(), skillbridge.Config{
-		Dir: skillbridge.SessionDir(data, "agy", "s-1"), Sources: []string{source},
+		Dir: skillbridge.SessionDir(data, "agy", "s-1"), Layout: skillbridge.AgentsLayout, Sources: []string{source},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,9 @@ func TestNativeSkillRootsCoverWhereAgyLooks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	roots := New().NativeSkillRoots(context.Background(), workspace, map[string]string{"GEMINI_HOME": gemini})
+	roots := New().SkillSupport(context.Background(), ports.AgentSkillRequest{
+		WorkspacePath: workspace, Env: map[string]string{"GEMINI_HOME": gemini},
+	}).Native
 	for i := range roots {
 		roots[i] = filepath.Clean(roots[i])
 	}
@@ -95,22 +97,30 @@ func TestNativeSkillRootsIncludeAgentsSkillsFromTheReleaseThatReadsThem(t *testi
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("GEMINI_HOME", "")
+	t.Setenv(ACPServerPathEnvVar, "")
 	agents := filepath.Join(home, ".agents", "skills")
-	roots := func(version string, env map[string]string) []string {
+	roots := func(version string, chat bool, env map[string]string) []string {
 		binary := filepath.Join(t.TempDir(), "agy")
 		if err := os.WriteFile(binary, []byte("#!/bin/sh\necho "+version+"\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		return (&Plugin{resolvedBinary: binary}).NativeSkillRoots(context.Background(), "", env)
+		return (&Plugin{resolvedBinary: binary}).SkillSupport(context.Background(), ports.AgentSkillRequest{Env: env, Chat: chat}).Native
 	}
 	for version, want := range map[string]bool{
 		"1.5.15": false, "1.5.16": true, "1.5.17": true, "1.6.0": true, "1.4.99": false, "dev": false,
 	} {
-		if got := slices.Contains(roots(version, nil), agents); got != want {
+		if got := slices.Contains(roots(version, true, nil), agents); got != want {
 			t.Errorf("agy %s reads ~/.agents/skills = %v, want %v", version, got, want)
 		}
 	}
-	if slices.Contains(roots("1.5.16", map[string]string{"GEMINI_HOME": t.TempDir()}), agents) {
+	if slices.Contains(roots("1.5.16", true, map[string]string{"GEMINI_HOME": t.TempDir()}), agents) {
 		t.Error("agy with another data folder was taken to read ~/.agents/skills")
+	}
+	t.Setenv(ACPServerPathEnvVar, "/opt/agy_acp_server")
+	if slices.Contains(roots("1.5.16", true, nil), agents) {
+		t.Error("the separate chat server was taken to read ~/.agents/skills")
+	}
+	if !slices.Contains(roots("1.5.16", false, nil), agents) {
+		t.Error("a terminal session runs the agy CLI, which reads ~/.agents/skills")
 	}
 }

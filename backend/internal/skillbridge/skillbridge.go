@@ -1,10 +1,13 @@
-// Package skillbridge gives one session a folder of the user's own skills.
+// Package skillbridge gives one session the user's own skills, whichever agent
+// runs it.
 //
 // Each agent looks for SKILL.md folders in its own places, so a skill the user
-// wrote for one agent is often invisible to another. The bridge copies the
-// skills an agent misses into a folder Orchestrator owns, and the agent's
-// adapter adds that folder to the one session. Nothing is written to the user's
-// agent config or skill folders, so agents behave the same outside Orchestrator.
+// wrote for one agent is often invisible to another. Sync copies the skills an
+// agent misses into a folder Orchestrator owns, and the agent's adapter adds
+// that folder to the one session. WriteIndex lists them for the agents that
+// cannot take a folder, and for the chat's `/` menu. Nothing is written to the
+// user's agent config or skill folders, so agents behave the same outside
+// Orchestrator.
 //
 // The folder holds real copies: agy asks for approval before it reads a file
 // whose resolved path is outside its workspace, which a symlink's would be.
@@ -20,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,8 +49,12 @@ type Limits struct {
 	TotalBytes int64
 }
 
-// skillsPath is where agents look inside an added directory.
-var skillsPath = filepath.Join(".agents", "skills")
+// Layouts are where an agent looks for skills inside a directory added to its
+// session.
+const (
+	AgentsLayout = ".agents/skills"
+	ClaudeLayout = ".claude/skills"
+)
 
 // DefaultLimits leave out a skill that carries a build or a dataset (one real
 // skill was 385 MB) while keeping ordinary ones whole.
@@ -56,6 +64,8 @@ var DefaultLimits = Limits{SkillBytes: 32 << 20, SkillFiles: 4000, TotalBytes: 2
 type Config struct {
 	// Dir is the session's folder, from SessionDir.
 	Dir string
+	// Layout is the skills folder inside Dir: AgentsLayout or ClaudeLayout.
+	Layout string
 	// Sources are folders of skills to copy from, the most preferred first.
 	Sources []string
 	// Native are folders of skills the session already has. agy prefers a skill
@@ -192,21 +202,41 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.Limits == (Limits{}) {
 		cfg.Limits = DefaultLimits
 	}
-	root, err := openFolder(cfg.Dir)
+	if cfg.Layout != AgentsLayout && cfg.Layout != ClaudeLayout {
+		return Result{}, fmt.Errorf("skill bridge layout %q is not supported", cfg.Layout)
+	}
+	skillsPath := filepath.FromSlash(cfg.Layout)
+	root, err := openFolder(cfg.Dir, skillsPath)
 	if err != nil {
 		return Result{}, err
 	}
 	defer func() { _ = root.Close() }()
-	removeLeftovers(cfg.Dir)
 	previous := readManifest(cfg.Dir)
+	if err := removeForeign(root, skillsPath); err != nil {
+		return Result{}, err
+	}
 	next := manifest{Owner: "orchestrator", Skills: map[string]string{}}
 	var result Result
 	var total int64
-	taken := nativeNames(cfg.Native)
+	taken, err := nativeNames(ctx, cfg.Native)
+	if err != nil {
+		// Which names the session already has is unknown, and a copy of one of
+		// them would override it. Leave the session without copies this time.
+		_ = root.Close()
+		return result, errors.Join(err, os.RemoveAll(cfg.Dir))
+	}
+	native := maps.Clone(taken)
+	stop := func(cause error) (Result, error) {
+		return result, errors.Join(cause, keepEarlier(root, skillsPath, native, previous, next))
+	}
+	candidates, err := listSkills(ctx, cfg.Sources)
+	if err != nil {
+		return stop(err)
+	}
 	seen := map[string]struct{}{}
-	for _, candidate := range listSkills(cfg.Sources) {
+	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
-			return stopEarly(cfg.Dir, previous, next, result, err)
+			return stop(err)
 		}
 		skip := func(reason string) {
 			result.Skipped = append(result.Skipped, Skipped{Path: candidate.path, Reason: reason})
@@ -222,8 +252,11 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 		if taken.has(candidate) {
 			continue
 		}
-		contents, err := scanSkill(candidate.real, cfg.Limits)
+		contents, err := scanSkill(ctx, candidate.real, cfg.Limits)
 		if err != nil {
+			if ctx.Err() != nil {
+				return stop(ctx.Err())
+			}
 			skip(err.Error())
 			continue
 		}
@@ -235,7 +268,7 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 		if previous.Skills[candidate.folder] != contents.fingerprint || !isDir(root, target) {
 			if err := replaceSkill(ctx, contents, root, target); err != nil {
 				if ctx.Err() != nil {
-					return stopEarly(cfg.Dir, previous, next, result, ctx.Err())
+					return stop(ctx.Err())
 				}
 				skip(err.Error())
 				continue
@@ -251,7 +284,7 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 		_ = root.Close()
 		return result, os.RemoveAll(cfg.Dir)
 	}
-	if err := removeStale(root, next); err != nil {
+	if err := removeStale(root, skillsPath, next); err != nil {
 		return result, err
 	}
 	return result, writeManifest(cfg.Dir, next)
@@ -262,7 +295,7 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 // removed, and everything is replaced and deleted through an os.Root, which
 // refuses to leave the folder. Following such a link would delete what it
 // points at: the user's own skills, say.
-func openFolder(dir string) (*os.Root, error) {
+func openFolder(dir, skillsPath string) (*os.Root, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -285,22 +318,53 @@ func openFolder(dir string) (*os.Root, error) {
 	return root, nil
 }
 
-// stopEarly keeps what an interrupted Sync copied and what earlier ones left.
-func stopEarly(dir string, previous, next manifest, result Result, cause error) (Result, error) {
+// removeForeign clears what is not Orchestrator's: what a Sync cut short by a
+// crash left half written, and anything the agent added. Agents read more than
+// skills from some folders, such as settings beside .claude/skills.
+func removeForeign(root *os.Root, skillsPath string) error {
+	top, skills := filepath.Split(skillsPath)
+	top = filepath.Clean(top)
+	var errs []error
+	for dir, keep := range map[string][]string{".": {top, manifestName}, top: {skills}} {
+		entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(dir))
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if !slices.Contains(keep, entry.Name()) {
+				errs = append(errs, root.RemoveAll(filepath.Join(dir, entry.Name())))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// keepEarlier ends an interrupted Sync: the session keeps what this one copied
+// and what earlier ones left, except a copy of a skill it now has another way,
+// and anything unknown.
+func keepEarlier(root *os.Root, skillsPath string, native nameSet, previous, next manifest) error {
 	for folder, fingerprint := range previous.Skills {
-		if _, replaced := next.Skills[folder]; !replaced {
+		if _, replaced := next.Skills[folder]; replaced {
+			continue
+		}
+		earlier, ok := readSkill(filepath.Join(root.Name(), skillsPath, folder))
+		if ok && !native.has(earlier) {
 			next.Skills[folder] = fingerprint
 		}
 	}
-	return result, errors.Join(cause, writeManifest(dir, next))
+	if err := removeStale(root, skillsPath, next); err != nil {
+		return err
+	}
+	return writeManifest(root.Name(), next)
 }
 
 type skill struct {
-	folder string
-	name   string
-	path   string
-	real   string
-	err    error
+	folder      string
+	name        string
+	description string
+	path        string
+	real        string
+	err         error
 }
 
 // nameSet matches skills by folder and by name, ignoring case: agents key
@@ -320,18 +384,23 @@ func (s nameSet) add(skill skill) {
 	}
 }
 
-func nativeNames(roots []string) nameSet {
+func nativeNames(ctx context.Context, roots []string) (nameSet, error) {
+	skills, err := listSkills(ctx, roots)
 	names := nameSet{}
-	for _, skill := range listSkills(roots) {
+	for _, skill := range skills {
 		names.add(skill)
 	}
-	return names
+	return names, err
 }
 
 // listSkills finds the skills in each root, or the root itself when it is one.
-func listSkills(roots []string) []skill {
+// Its only error is the context's.
+func listSkills(ctx context.Context, roots []string) ([]skill, error) {
 	var skills []skill
 	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return skills, err
+		}
 		if found, ok := readSkill(root); ok {
 			skills = append(skills, found)
 			continue
@@ -341,6 +410,9 @@ func listSkills(roots []string) []skill {
 			continue
 		}
 		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return skills, err
+			}
 			// Dot folders hold an agent's own skills (Codex's .system), not the user's.
 			if strings.HasPrefix(entry.Name(), ".") {
 				continue
@@ -350,7 +422,7 @@ func listSkills(roots []string) []skill {
 			}
 		}
 	}
-	return skills
+	return skills, nil
 }
 
 func readSkill(path string) (skill, bool) {
@@ -362,43 +434,55 @@ func readSkill(path string) (skill, bool) {
 		return skill{}, false
 	}
 	found := skill{folder: filepath.Base(path), path: path, real: resolved}
-	found.name, found.err = readFrontmatter(filepath.Join(resolved, skillFile))
+	found.name, found.description, found.err = readFrontmatter(filepath.Join(resolved, skillFile))
 	return found, true
 }
 
-// readFrontmatter returns a skill's name, or why agents would not load it.
-func readFrontmatter(path string) (string, error) {
+// readFrontmatter returns a skill's name and description, or why agents would
+// not load it.
+func readFrontmatter(path string) (name, description string, err error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", errors.New("SKILL.md cannot be read")
+		return "", "", errors.New("SKILL.md cannot be read")
 	}
 	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, skillFileLimit))
 	if err != nil {
-		return "", errors.New("SKILL.md cannot be read")
+		return "", "", errors.New("SKILL.md cannot be read")
 	}
-	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
-	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-	body, ok := bytes.CutPrefix(data, []byte("---\n"))
+	front, _, ok := splitFrontmatter(data)
 	if !ok {
-		return "", errors.New("SKILL.md has no frontmatter")
-	}
-	front, _, ok := bytes.Cut(body, []byte("\n---"))
-	if !ok {
-		return "", errors.New("SKILL.md has no frontmatter")
+		return "", "", errors.New("SKILL.md has no frontmatter")
 	}
 	var meta struct {
 		Name        string `yaml:"name"`
 		Description string `yaml:"description"`
 	}
 	if yaml.Unmarshal(front, &meta) != nil {
-		return "", errors.New("SKILL.md frontmatter is not valid YAML")
+		return "", "", errors.New("SKILL.md frontmatter is not valid YAML")
 	}
-	name := strings.TrimSpace(meta.Name)
-	if name == "" || strings.TrimSpace(meta.Description) == "" {
-		return name, errors.New("SKILL.md has no name or description")
+	name, description = strings.TrimSpace(meta.Name), strings.TrimSpace(meta.Description)
+	if name == "" || description == "" {
+		return name, description, errors.New("SKILL.md has no name or description")
 	}
-	return name, nil
+	return name, description, nil
+}
+
+// splitFrontmatter separates a SKILL.md's YAML header from its instructions.
+func splitFrontmatter(data []byte) (front, body []byte, ok bool) {
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	rest, ok := bytes.CutPrefix(data, []byte("---\n"))
+	if !ok {
+		return nil, data, false
+	}
+	front, body, ok = bytes.Cut(rest, []byte("\n---"))
+	if !ok {
+		return nil, data, false
+	}
+	// The closing fence's own line ends the header.
+	_, body, _ = bytes.Cut(body, []byte("\n"))
+	return front, body, true
 }
 
 type skillContents struct {
@@ -416,12 +500,15 @@ type skillEntry struct {
 // scanSkill lists a skill's files and fingerprints them by path, size, mode
 // and modification time. A symlink is followed only to a file inside the skill,
 // so a skill cannot pull other files of the user's into an agent's workspace.
-func scanSkill(root string, limits Limits) (skillContents, error) {
+func scanSkill(ctx context.Context, root string, limits Limits) (skillContents, error) {
 	var contents skillContents
 	hash := sha256.New()
 	_, _ = fmt.Fprintf(hash, "%s\n", root)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if entry.IsDir() {
@@ -512,7 +599,7 @@ func copyFile(file skillEntry, target string) error {
 	return errors.Join(err, out.Close())
 }
 
-func removeStale(root *os.Root, keep manifest) error {
+func removeStale(root *os.Root, skillsPath string, keep manifest) error {
 	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(skillsPath))
 	if err != nil {
 		return err
@@ -524,16 +611,6 @@ func removeStale(root *os.Root, keep manifest) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// removeLeftovers clears what a Sync cut short by a crash left half written.
-func removeLeftovers(dir string) {
-	for _, pattern := range []string{".staging-*", ".manifest-*"} {
-		paths, _ := filepath.Glob(filepath.Join(dir, pattern))
-		for _, path := range paths {
-			_ = os.RemoveAll(path)
-		}
-	}
 }
 
 func readManifest(dir string) manifest {
@@ -550,13 +627,17 @@ func writeManifest(dir string, m manifest) error {
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(dir, ".manifest-")
+	return writeAtomic(filepath.Join(dir, manifestName), append(data, '\n'))
+}
+
+func writeAtomic(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".write-")
 	if err != nil {
 		return err
 	}
-	_, err = temp.Write(append(data, '\n'))
+	_, err = temp.Write(data)
 	if err = errors.Join(err, temp.Close()); err == nil {
-		err = os.Rename(temp.Name(), filepath.Join(dir, manifestName))
+		err = os.Rename(temp.Name(), path)
 	}
 	if err != nil {
 		_ = os.Remove(temp.Name())

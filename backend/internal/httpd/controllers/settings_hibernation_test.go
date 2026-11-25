@@ -53,23 +53,23 @@ func TestSettingsChatHibernationRequiresBoolean(t *testing.T) {
 	}
 }
 
-type skillBridgeSettingsService struct {
+type skillSharingSettingsService struct {
 	hibernationSettingsService
-	bridge bool
+	sharing bool
 }
 
-func (s *skillBridgeSettingsService) SetSkillBridge(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
-	s.bridge = enabled
+func (s *skillSharingSettingsService) SetSkillSharing(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.sharing = enabled
 	s.calls++
 	return settingssvc.Snapshot{}, nil
 }
 
-func TestSettingsSkillBridgeRequiresBoolean(t *testing.T) {
-	svc := &skillBridgeSettingsService{}
+func TestSettingsSkillSharingRequiresBoolean(t *testing.T) {
+	svc := &skillSharingSettingsService{}
 	c := &SettingsController{Svc: svc}
 	patch := func(body string) int {
 		w := httptest.NewRecorder()
-		c.setSkillBridge(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/skill-bridge", strings.NewReader(body)))
+		c.setSkillSharing(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/skill-sharing", strings.NewReader(body)))
 		return w.Code
 	}
 	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"true"}`} {
@@ -78,8 +78,8 @@ func TestSettingsSkillBridgeRequiresBoolean(t *testing.T) {
 		}
 	}
 	for _, enabled := range []bool{true, false} {
-		if code := patch(`{"enabled":` + strconv.FormatBool(enabled) + `}`); code != http.StatusOK || svc.bridge != enabled {
-			t.Fatalf("enabled=%v status=%d stored=%v", enabled, code, svc.bridge)
+		if code := patch(`{"enabled":` + strconv.FormatBool(enabled) + `}`); code != http.StatusOK || svc.sharing != enabled {
+			t.Fatalf("enabled=%v status=%d stored=%v", enabled, code, svc.sharing)
 		}
 	}
 }

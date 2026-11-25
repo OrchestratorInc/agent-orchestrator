@@ -32,6 +32,10 @@ func (*hibernationSettingsStore) SetAccountHandoff(context.Context, bool, time.T
 	return nil
 }
 
+func (*hibernationSettingsStore) SetSkillSharing(context.Context, bool, time.Time) error {
+	return nil
+}
+
 func (*hibernationSettingsStore) SetCommitAttribution(context.Context, bool, time.Time) error {
 	return nil
 }
@@ -51,26 +55,6 @@ func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	snapshot, err = second.Get(ctx)
 	if err != nil || snapshot.ChatHibernationEnabled || second.ChatHibernationEnabled() {
 		t.Fatalf("restarted daemon retained chat hibernation: snapshot=%+v err=%v", snapshot, err)
-	}
-}
-
-func TestSkillBridgeIsUnknownUntilTheDesktopSaysSo(t *testing.T) {
-	ctx := context.Background()
-	store := &hibernationSettingsStore{}
-	svc := New(store, nil, Offering{}, nil)
-	if enabled, known := svc.SkillBridge(); enabled || known {
-		t.Fatalf("a new daemon reported enabled=%v known=%v", enabled, known)
-	}
-	for _, want := range []bool{true, false} {
-		if _, err := svc.SetSkillBridge(ctx, want); err != nil {
-			t.Fatal(err)
-		}
-		if enabled, known := svc.SkillBridge(); enabled != want || !known {
-			t.Fatalf("after setting %v: enabled=%v known=%v", want, enabled, known)
-		}
-	}
-	if _, known := New(store, nil, Offering{}, nil).SkillBridge(); known {
-		t.Fatal("a restarted daemon kept the switch")
 	}
 }
 

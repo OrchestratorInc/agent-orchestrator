@@ -29,6 +29,7 @@ type Store interface {
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
 	SetCommitAttribution(ctx context.Context, enabled bool, now time.Time) error
+	SetSkillSharing(ctx context.Context, enabled bool, now time.Time) error
 	SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error
 	SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error
 }
@@ -48,6 +49,9 @@ type Snapshot struct {
 	// Advanced, in Developer mode): new sessions credit Orchestrator on their
 	// commits and PRs, unless the project turns a part off. Off by default.
 	CommitAttribution bool
+	// SkillSharing gives every agent the user's skills it does not load itself
+	// (Settings, General). Off by default.
+	SkillSharing bool
 	// SessionRetentionDays is how long an archived session whose worktree is
 	// released is kept before the daemon deletes it (Settings, General). 0, the
 	// default, keeps it.
@@ -108,8 +112,6 @@ type Service struct {
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
-	// skillBridge holds the Developer mode switch: 0 not told yet, 1 on, 2 off.
-	skillBridge atomic.Int32
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
@@ -239,6 +241,22 @@ func (s *Service) SetCommitAttribution(ctx context.Context, enabled bool) (Snaps
 	return s.Get(ctx)
 }
 
+// SkillSharingEnabled reports whether sessions get the user's skills their agent
+// misses. A read failure counts as off.
+func (s *Service) SkillSharingEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.SkillSharing
+}
+
+// SetSkillSharing switches skill sharing. A running session follows at its next
+// resume.
+func (s *Service) SetSkillSharing(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetSkillSharing(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
+}
+
 // DefaultSessionMode resolves the default for a spawn that named no mode. A read
 // failure falls back to the compatibility default rather than failing the spawn:
 // an unreadable preference should not stop work.
@@ -298,30 +316,6 @@ func (s *Service) SetChatHibernationEnabled(ctx context.Context, enabled bool) (
 	}
 	snapshot.ChatHibernationEnabled = enabled
 	return snapshot, nil
-}
-
-// SkillBridge reports whether new sessions get the user's skills their agent
-// misses. known is false from daemon boot until the desktop says whether
-// Developer Mode is on.
-func (s *Service) SkillBridge() (enabled, known bool) {
-	switch s.skillBridge.Load() {
-	case 1:
-		return true, true
-	case 2:
-		return false, true
-	default:
-		return false, false
-	}
-}
-
-// SetSkillBridge changes the in-memory skill bridge switch.
-func (s *Service) SetSkillBridge(ctx context.Context, enabled bool) (Snapshot, error) {
-	value := int32(2)
-	if enabled {
-		value = 1
-	}
-	s.skillBridge.Store(value)
-	return s.Get(ctx)
 }
 
 // ChatHarnesses lists the harnesses that can run in chat mode today.

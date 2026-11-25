@@ -441,11 +441,10 @@ function ShellLayout() {
 	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
 	// One chain per daemon setting Developer Mode drives: each request waits for
 	// its own previous one, so an older enable cannot finish after a disable.
-	const developerModeSyncRef = useRef<Record<"chatHibernation" | "limitHistory" | "devices" | "skillBridge", Promise<void>>>({
+	const developerModeSyncRef = useRef<Record<"chatHibernation" | "limitHistory" | "devices", Promise<void>>>({
 		chatHibernation: Promise.resolve(),
 		limitHistory: Promise.resolve(),
 		devices: Promise.resolve(),
-		skillBridge: Promise.resolve(),
 	});
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
@@ -1246,7 +1245,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		sync("chatHibernation", () => apiClient.PATCH("/api/v1/settings/chat-hibernation", { body: { enabled: developerMode } }));
 		sync("limitHistory", () => apiClient.PUT("/api/v1/usage/limit-history", { body: { enabled: developerMode } }));
 		sync("devices", () => apiClient.PUT("/api/v1/devices/availability", { body: { enabled: developerMode } }));
-		sync("skillBridge", () => apiClient.PATCH("/api/v1/settings/skill-bridge", { body: { enabled: developerMode } }));
 		return () => {
 			cancelled = true;
 			for (const retry of retries) clearTimeout(retry);

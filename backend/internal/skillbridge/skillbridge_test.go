@@ -48,6 +48,9 @@ func symlink(t *testing.T, target, link string) {
 
 func sync(t *testing.T, cfg Config) Result {
 	t.Helper()
+	if cfg.Layout == "" {
+		cfg.Layout = AgentsLayout
+	}
 	result, err := Sync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -227,25 +230,130 @@ func TestSyncUpdatesOnlyWhatChangedAndRemovesWhatIsGone(t *testing.T) {
 	}
 }
 
-func TestSyncKeepsEarlierCopiesWhenInterrupted(t *testing.T) {
+// stopAfter is a context that ends after a number of checks.
+type stopAfter struct {
+	context.Context
+	checks int
+}
+
+func (c *stopAfter) Err() error {
+	c.checks--
+	if c.checks < 0 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestSyncInterruptedKeepsOnlyWhatMayStay(t *testing.T) {
+	root, project := t.TempDir(), t.TempDir()
+	writeSkill(t, root, "a", "a", "")
+	writeSkill(t, root, "claimed", "claimed", "")
+	for checks := range 40 {
+		dir := filepath.Join(t.TempDir(), "session")
+		sync(t, Config{Dir: dir, Sources: []string{root}})
+		// Since then the project gained its own "claimed".
+		native := filepath.Join(project, "skills")
+		writeSkill(t, native, "other-folder", "claimed", "")
+		writeFile(t, filepath.Join(dir, ".staging-crashed", "skill", "SKILL.md"), "half")
+		_, err := Sync(&stopAfter{Context: context.Background(), checks: checks},
+			Config{Dir: dir, Layout: AgentsLayout, Sources: []string{root}, Native: []string{native}})
+		got := bridged(t, dir)
+		for _, name := range got {
+			if name != "a" {
+				t.Fatalf("after %d checks: %v, want no copy of the project's skill", checks, got)
+			}
+		}
+		if err == nil && len(got) != 1 {
+			t.Fatalf("after %d checks: %v", checks, got)
+		}
+		if len(got) == 0 && err == nil {
+			t.Fatal("a finished sync lost the skill")
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, ".staging-crashed")); !os.IsNotExist(statErr) {
+			t.Fatal("a crashed sync's leftovers were kept")
+		}
+		again := sync(t, Config{Dir: dir, Sources: []string{root}, Native: []string{native}})
+		if len(got) == 1 && again.Copied != 0 {
+			t.Fatalf("after %d checks the earlier copy was forgotten: %+v", checks, again)
+		}
+	}
+}
+
+func TestSyncRemovesWhatTheAgentAdded(t *testing.T) {
 	root, dir := t.TempDir(), filepath.Join(t.TempDir(), "session")
 	writeSkill(t, root, "a", "a", "")
-	cfg := Config{Dir: dir, Sources: []string{root}}
+	cfg := Config{Dir: dir, Layout: ClaudeLayout, Sources: []string{root}}
 	sync(t, cfg)
-	writeFile(t, filepath.Join(dir, ".staging-crashed", "skill", "SKILL.md"), "half")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := Sync(ctx, cfg); err == nil {
-		t.Fatal("an interrupted sync reported success")
+	writeFile(t, filepath.Join(dir, ".claude", "settings.json"), `{"hooks":{}}`)
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "obey")
+	writeSkill(t, filepath.Join(dir, ".claude", "skills"), "planted", "planted", "")
+	sync(t, cfg)
+	for _, planted := range []string{"CLAUDE.md", filepath.Join(".claude", "settings.json"), filepath.Join(".claude", "skills", "planted")} {
+		if _, err := os.Lstat(filepath.Join(dir, planted)); !os.IsNotExist(err) {
+			t.Errorf("%s was kept", planted)
+		}
 	}
-	if !reflect.DeepEqual(bridged(t, dir), []string{"a"}) {
-		t.Fatalf("on disk %v, want the earlier copy", bridged(t, dir))
+	if got := readFile(t, filepath.Join(dir, ".claude", "skills", "a", "SKILL.md")); got == "" {
+		t.Fatal("the skill is gone")
 	}
-	if again := sync(t, cfg); again.Copied != 0 {
-		t.Fatalf("the earlier copy was forgotten: %+v", again)
+}
+
+func TestSyncRefusesAnUnknownLayout(t *testing.T) {
+	if _, err := Sync(context.Background(), Config{Dir: filepath.Join(t.TempDir(), "s"), Layout: "../skills"}); err == nil {
+		t.Fatal("an unknown layout was accepted")
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".staging-crashed")); !os.IsNotExist(err) {
-		t.Fatal("a crashed sync's leftovers were kept")
+}
+
+func TestMissingListsWhatTheSessionLacksWithoutCopying(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	roots := UserRoots(home)
+	writeSkill(t, roots[0], "shared", "shared", "agents")
+	writeSkill(t, roots[1], "shared", "shared", "claude")
+	writeSkill(t, roots[1], "mine", "mine", "do it")
+	writeSkill(t, roots[2], "theirs", "theirs", "")
+	writeFile(t, filepath.Join(roots[1], "broken", "SKILL.md"), "no header")
+	writeSkill(t, project, "theirs", "theirs", "")
+	skills, err := Missing(context.Background(), roots, []string{project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, skill := range skills {
+		names = append(names, skill.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"shared", "mine"}) {
+		t.Fatalf("missing = %v", names)
+	}
+
+	data := t.TempDir()
+	if err := WriteIndex(data, "s-1", skills); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadIndex(data, "s-1"); !reflect.DeepEqual(got, skills) {
+		t.Fatalf("index = %+v, want %+v", got, skills)
+	}
+	document := readFile(t, IndexDocument(data, "s-1"))
+	if !strings.Contains(document, "## mine\n\nDoes mine.\n\nFolder: `"+filepath.ToSlash(skills[1].Path)+"`") {
+		t.Fatalf("document = %s", document)
+	}
+	if body, whole := skills[1].Instructions(); !whole || body != "do it" {
+		t.Fatalf("instructions = %q, %v", body, whole)
+	}
+	if err := Remove(data, "s-1"); err != nil || ReadIndex(data, "s-1") != nil {
+		t.Fatalf("index outlived its session: %v", err)
+	}
+	if err := WriteIndex(data, "s-1", nil); err != nil || ReadIndex(data, "s-1") != nil {
+		t.Fatalf("an empty index was kept: %v", err)
+	}
+}
+
+func TestInstructionsTooLongToHandOver(t *testing.T) {
+	dir := writeSkill(t, t.TempDir(), "long", "long", strings.Repeat("x", instructionsLimit))
+	if _, whole := (Skill{Path: dir}).Instructions(); whole {
+		t.Fatal("a long skill was handed over whole")
+	}
+	if !(Skill{Path: dir}).Exists() || (Skill{Path: t.TempDir()}).Exists() {
+		t.Fatal("Exists does not follow the skill file")
 	}
 }
 

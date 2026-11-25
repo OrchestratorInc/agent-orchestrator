@@ -245,6 +245,8 @@ sql:
             go_type: "bool"
           - column: "app_settings.commit_attribution"
             go_type: "bool"
+          - column: "app_settings.skill_sharing"
+            go_type: "bool"
           - column: "app_settings.limit_history"
             go_type: "bool"
           - column: "app_settings.account_handoff"

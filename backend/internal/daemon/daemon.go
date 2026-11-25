@@ -837,7 +837,7 @@ func Run(buildVersion string) (retErr error) {
 	// commits and PRs. Wired before tracker intake starts, so a session its
 	// first poll spawns already sees the setting.
 	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
-	sessMgr.SetSkillBridge(settingsSvc.SkillBridge)
+	sessMgr.SetSkillSharingEnabled(settingsSvc.SkillSharingEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input

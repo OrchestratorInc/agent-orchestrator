@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillbridge"
 )
 
@@ -19,13 +21,19 @@ func SkillDirectories(dataDir, sessionID string) []string {
 	return nil
 }
 
-// NativeSkillRoots lists where agy itself finds skills: the user's global
-// folders and plugins, agy's built-ins, the folders a skills.json declares, and
+// ACPServerPathEnvVar makes chat run Google's separate agy_acp_server (see
+// package agyacp). It is not the agy CLI, so it is not taken to read
+// ~/.agents/skills.
+const ACPServerPathEnvVar = "AO_AGY_ACP_SERVER_PATH"
+
+// SkillSupport reports where agy finds skills: the user's global folders and
+// plugins, agy's built-ins, the folders a skills.json declares, and
 // ~/.agents/skills from 1.5.16.
-func (p *Plugin) NativeSkillRoots(ctx context.Context, workspacePath string, env map[string]string) []string {
-	gemini, err := GeminiHome(env)
+func (p *Plugin) SkillSupport(ctx context.Context, request ports.AgentSkillRequest) ports.AgentSkillSupport {
+	support := ports.AgentSkillSupport{Layout: skillbridge.AgentsLayout}
+	gemini, err := GeminiHome(request.Env)
 	if err != nil {
-		return nil
+		return support
 	}
 	home, _ := os.UserHomeDir()
 	config := filepath.Join(gemini, "config")
@@ -34,7 +42,8 @@ func (p *Plugin) NativeSkillRoots(ctx context.Context, workspacePath string, env
 		filepath.Join(gemini, "skills"),
 	}
 	// agy does not read ~/.agents/skills with another data folder (--gemini-dir).
-	if home != "" && filepath.Clean(gemini) == filepath.Join(home, ".gemini") && p.loadsAgentsSkills(ctx) {
+	separateServer := request.Chat && strings.TrimSpace(os.Getenv(ACPServerPathEnvVar)) != ""
+	if home != "" && !separateServer && filepath.Clean(gemini) == filepath.Join(home, ".gemini") && p.loadsAgentsSkills(ctx) {
 		roots = append(roots, filepath.Join(home, ".agents", "skills"))
 	}
 	plugins := []string{filepath.Join(config, "plugins")}
@@ -50,11 +59,12 @@ func (p *Plugin) NativeSkillRoots(ctx context.Context, workspacePath string, env
 		roots = append(roots, found...)
 	}
 	roots = append(roots, skillbridge.DeclaredRoots(filepath.Join(config, "skills.json"), gemini, home)...)
-	if workspacePath != "" {
+	if workspace := request.WorkspacePath; workspace != "" {
 		roots = append(roots, skillbridge.DeclaredRoots(
-			filepath.Join(workspacePath, ".agents", "skills.json"), workspacePath, home)...)
+			filepath.Join(workspace, ".agents", "skills.json"), workspace, home)...)
 	}
-	return roots
+	support.Native = roots
+	return support
 }
 
 func (p *Plugin) loadsAgentsSkills(ctx context.Context) bool {

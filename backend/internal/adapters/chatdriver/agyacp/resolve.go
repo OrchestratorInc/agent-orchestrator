@@ -14,7 +14,7 @@ import (
 
 // serverPathEnvVar points AO at an exact agy_acp_server executable, like
 // AO_CLAUDE_ACP_COMMAND does for Claude's adapter.
-const serverPathEnvVar = "AO_AGY_ACP_SERVER_PATH"
+const serverPathEnvVar = agy.ACPServerPathEnvVar
 
 // harnessPathEnvVar is how the server finds its localharness_external helper
 // when it is not on PATH, for example when agy_acp_server is a symlink.

@@ -2,9 +2,13 @@ package codexappserver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/skillbridge"
 )
 
 // The menu is built from this list, so what it drops matters as much as what it
@@ -102,5 +106,60 @@ func TestListSkillsReportsAnEmptyListRatherThanNil(t *testing.T) {
 	}
 	if len(skills) != 0 {
 		t.Errorf("got %d skills, want none: %+v", len(skills), skills)
+	}
+}
+
+func TestDriverGivesANewAppServerTheBridgedSkills(t *testing.T) {
+	source, data := t.TempDir(), t.TempDir()
+	skill := filepath.Join(source, "mine", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skill, []byte("---\nname: mine\ndescription: d\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := skillbridge.Sync(context.Background(), skillbridge.Config{
+		Dir: skillbridge.SessionDir(data, "codex", "s-1"), Layout: skillbridge.AgentsLayout, Sources: []string{source},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		session domain.SessionID
+		resume  bool
+		refused bool
+		want    bool
+	}{
+		{name: "start", session: "s-1", want: true},
+		{name: "resume", session: "s-1", resume: true, want: true},
+		{name: "refused by an older Codex", session: "s-1", refused: true, want: true},
+		{name: "no skills", session: "s-2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			driver, srv := newTestDriver(t)
+			if tc.refused {
+				srv.failures["skills/extraRoots/set"] = "unknown method"
+			} else {
+				srv.responses["skills/extraRoots/set"] = `{}`
+			}
+			var conv ports.ChatConversation
+			var err error
+			if tc.resume {
+				conv, err = driver.Resume(context.Background(), ports.ChatResumeConfig{
+					SessionID: tc.session, DataDir: data, WorkspacePath: "/tmp/ws", ProviderConversationID: "thread-1",
+				})
+			} else {
+				conv, err = driver.Start(context.Background(), ports.ChatStartConfig{
+					SessionID: tc.session, DataDir: data, WorkspacePath: "/tmp/ws",
+				})
+			}
+			if err != nil {
+				t.Fatalf("the session did not start: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+			if got := srv.sentMethod("skills/extraRoots/set"); got != tc.want {
+				t.Fatalf("skills sent = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

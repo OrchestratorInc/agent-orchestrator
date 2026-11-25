@@ -65,7 +65,8 @@ func newSideWorkflow(t *testing.T, mode string, harnesses ...domain.AgentHarness
 	}
 	changed := &changedExcerptStore{Store: st, mode: mode}
 	var ids atomic.Int64
-	svc := chatsvc.New(chatsvc.Options{Store: changed, Reader: fullSnapshotReader(st), Sessions: st, Drivers: fakeRegistry{driver: driver}, AppRunID: "workflow", NewID: func() string { return fmt.Sprintf("workflow-%d", ids.Add(1)) }})
+	dataDir := t.TempDir()
+	svc := chatsvc.New(chatsvc.Options{Store: changed, Reader: fullSnapshotReader(st), Sessions: st, Drivers: fakeRegistry{driver: driver}, AppRunID: "workflow", DataDir: dataDir, NewID: func() string { return fmt.Sprintf("workflow-%d", ids.Add(1)) }})
 	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: harnessType, WorkspacePath: t.TempDir(), Model: "initial", Effort: "low", Permissions: "default", SystemPrompt: "Frozen instructions", MCPServers: []ports.ChatMCPServerConfig{{Name: "exploration", Type: "stdio", Command: "test-mcp", Env: map[string]string{"AO_SESSION_ID": string(testSession)}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +75,7 @@ func newSideWorkflow(t *testing.T, mode string, harnesses ...domain.AgentHarness
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { svc.StopAll(ctx) })
-	return &sideWorkflow{harness: &harness{st: st, svc: svc, ctrl: ctrl, conv: main}, driver: driver, changed: changed}
+	return &sideWorkflow{harness: &harness{st: st, svc: svc, ctrl: ctrl, conv: main, rendersDir: dataDir}, driver: driver, changed: changed}
 }
 func (h *sideWorkflow) source(t *testing.T) ports.ChatExcerptReference {
 	t.Helper()

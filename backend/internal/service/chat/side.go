@@ -1445,7 +1445,10 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 		}
 	}
 	m.announce(side.ID)
-	text := sideQuestionWithReferences(turn)
+	question := turn
+	question.Text = withSharedSkillInstructions(ctx, m.service.dataDir, side.SessionID, runtime.conv,
+		ports.ChatUserMessage{Text: turn.Text, Origin: domain.MessageOriginHuman}).Text
+	text := sideQuestionWithReferences(question)
 	// Keep attachment paths and resource contents out of the user's wording while
 	// retaining a text representation for providers without resource blocks.
 	for _, item := range turn.Content {

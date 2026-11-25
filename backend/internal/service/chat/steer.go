@@ -332,7 +332,7 @@ func (c *Controller) PromoteQueuedTurn(
 		Text: queued.Text, Content: content, Origin: queued.Origin,
 		AuthoredByUser: queued.AuthoredByUser, ClientMessageID: queued.ClientMessageID,
 	}
-	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(msg))
+	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(c.withSharedSkillInstructions(ctx, msg)))
 	if err != nil {
 		classified := classify(err)
 		switch {
@@ -494,7 +494,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	} else if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: claim pending messages: %w", ErrSteerDeliveryUncertain, err)
 	}
-	providerMessage := msg
+	providerMessage := c.withSharedSkillInstructions(ctx, msg)
 	if len(batch) > 0 {
 		providerMessage, err = c.queuedBatchInput(ctx, batch, &msg)
 		if err != nil {

@@ -5238,7 +5238,7 @@ export interface paths {
         patch: operations["updateSessionRetention"];
         trace?: never;
     };
-    "/api/v1/settings/skill-bridge": {
+    "/api/v1/settings/skill-sharing": {
         parameters: {
             query?: never;
             header?: never;
@@ -5251,8 +5251,8 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Turn the skill bridge preview on or off until the daemon restarts */
-        patch: operations["updateSkillBridge"];
+        /** Turn sharing the user's skills with every agent on or off */
+        patch: operations["updateSkillSharing"];
         trace?: never;
     };
     "/api/v1/settings/version-refresh": {
@@ -9498,6 +9498,8 @@ export interface components {
             localEnabled: boolean;
             /** @description Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it. */
             sessionRetentionDays: number;
+            /** @description Sessions get the user's skills from ~/.agents, ~/.claude and ~/.codex that their agent does not load itself, inside Orchestrator only. A running session follows at its next resume. */
+            skillSharing: boolean;
             trackerIntakeEnabled: boolean;
             /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
             versionRefresh: boolean;
@@ -10058,8 +10060,7 @@ export interface components {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
         };
-        UpdateSkillBridgeRequest: {
-            /** @description Whether new and resumed sessions get a private copy of the user's skills their agent does not already load. Kept until the daemon restarts. */
+        UpdateSkillSharingRequest: {
             enabled: null | boolean;
         };
         UpdateVersionRefreshRequest: {
@@ -29964,7 +29965,7 @@ export interface operations {
             };
         };
     };
-    updateSkillBridge: {
+    updateSkillSharing: {
         parameters: {
             query?: never;
             header?: never;
@@ -29973,7 +29974,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateSkillBridgeRequest"];
+                "application/json": components["schemas"]["UpdateSkillSharingRequest"];
             };
         };
         responses: {
