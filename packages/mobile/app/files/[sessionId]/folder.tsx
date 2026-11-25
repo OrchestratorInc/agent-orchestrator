@@ -2,7 +2,8 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { hostRouteMatches } from "../../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../../lib/hostRoute";
+import { MachineRejectedState } from "../../../lib/MachineRejectedState";
 import { Spinner } from "../../../lib/Spinner";
 import { HostScope, useApp } from "../../../lib/store";
 import type { Theme } from "../../../lib/theme";
@@ -46,7 +47,8 @@ function SessionFolderContent() {
 	const dir = String(dirParam ?? "").replace(/\/+$/, "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { currentHostId, connection, loading: appLoading } = useApp();
+	const app = useApp();
+	const { currentHostId, loading: appLoading } = app;
 	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
@@ -71,7 +73,11 @@ function SessionFolderContent() {
 	if (signedOut) return <View style={styles.center}><EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this session's files." /></View>;
 	if (unreachable) return <View style={styles.center}><EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
 	if (!backend && (appLoading || cloud)) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	if (!backend && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const machine = !backend ? machineState(app) : "ok";
+	if (machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
+	if (machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
 
 	const bottomInset = review.comments.length ? REVIEW_BUTTON_CLEARANCE : space.xxl;
 	return (

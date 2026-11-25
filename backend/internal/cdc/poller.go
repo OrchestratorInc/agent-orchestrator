@@ -103,6 +103,11 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 		defer t.Stop()
 		full := false
 		for {
+			// Reads are not cancellable (see poll), so a backlog of full batches
+			// must not keep the loop past cancellation.
+			if ctx.Err() != nil {
+				return
+			}
 			if !full {
 				select {
 				case <-ctx.Done():
@@ -139,7 +144,10 @@ func (p *Poller) Poll(ctx context.Context) error {
 
 // poll returns how many events it read.
 func (p *Poller) poll(ctx context.Context) (int, error) {
-	evs, err := p.src.EventsAfter(ctx, p.lastSeq, p.batch)
+	// Not cancellable: a cancellable context makes the SQLite driver and
+	// database/sql each start a watcher goroutine for every query, two wakeups
+	// per poll. Start still stops on ctx; one in-flight read simply finishes.
+	evs, err := p.src.EventsAfter(context.WithoutCancel(ctx), p.lastSeq, p.batch)
 	if err != nil {
 		return 0, fmt.Errorf("cdc poller: read after %d: %w", p.lastSeq, err)
 	}

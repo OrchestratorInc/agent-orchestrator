@@ -4,6 +4,8 @@ import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import {
 	openReviewStatesFor,
 	reviewIsRunning,
+	reviewPhase,
+	reviewPhaseRun,
 	reviewRunDisabled,
 	reviewSessionRunAction,
 	sessionReviewsQueryOptions,
@@ -115,5 +117,22 @@ describe("shared review eligibility helpers", () => {
 		expect(reviewSessionRunAction([reviewState(1, "needs_review")], false)).toBe(
 			appI18n.t("inspector.review.runLatest"),
 		);
+	});
+});
+
+describe("reviewPhaseRun", () => {
+	const running = (n: number, harness: string, status: string) =>
+		({ prUrl: `https://github.com/acme/app/pull/${n}`, prNumber: n, targetSha: `sha-${n}`, status: "running", latestRun: { id: `run-${n}`, harness, status, targetSha: `sha-${n}`, createdAt: "2026-06-10T00:00:00Z" } }) as unknown as PRReviewState;
+
+	it("names the run waiting for input, not the first PR's", () => {
+		const states = [running(3, "codex", "launching"), running(4, "claude-code", "running")];
+		const phase = reviewPhase(states, "waiting_input", "claude-code");
+		expect(phase).toBe("waiting_input");
+		expect(reviewPhaseRun(states, phase, "claude-code")?.id).toBe("run-4");
+	});
+
+	it("names the launching run while a pass starts", () => {
+		const states = [running(3, "codex", "stopping"), running(4, "codex", "queued")];
+		expect(reviewPhaseRun(states, "starting")?.id).toBe("run-4");
 	});
 });

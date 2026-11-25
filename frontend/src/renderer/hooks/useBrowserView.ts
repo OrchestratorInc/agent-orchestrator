@@ -74,6 +74,8 @@ type UseBrowserViewOptions = {
 	 * remain visible even if the DB still carries a preview_url.
 	 */
 	terminated?: boolean;
+	/** Destroy this view on unmount instead of retaining it for a session switch. */
+	transient?: boolean;
 	/** The daemon tears down native targets when the session ends, even for durable artifacts. */
 	sessionEnded?: boolean;
 	/**
@@ -327,12 +329,14 @@ export function useBrowserView({
 	active,
 	poppedOut,
 	terminated,
+	transient,
 	sessionEnded,
 	previewUrl,
 	previewRevision,
 }: UseBrowserViewOptions): BrowserViewModel {
 	const lifecycleRef = useRef({ sessionId, terminated });
 	lifecycleRef.current = { sessionId, terminated };
+	const transientClosedRef = useRef(false);
 	const [viewId, setViewId] = useState("");
 	const [navState, setNavState] = useState<BrowserNavState>(EMPTY_NAV_STATE);
 	const [annotationMode, setAnnotationModeState] = useState(false);
@@ -533,6 +537,7 @@ export function useBrowserView({
 
 	useEffect(() => {
 		let disposed = false;
+		transientClosedRef.current = false;
 		// Preview revisions are scoped to a session. A native view survives session
 		// switches, so seed from the per-session consumed trigger to avoid
 		// reasserting previewUrl over manual navigation on switch-back.
@@ -598,7 +603,7 @@ export function useBrowserView({
 		}
 		window.ao?.browser.ensure(sessionId, false).then((state) => {
 			if (disposed) {
-				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
+				if (transient || (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated)) {
 					window.ao?.browser.destroy(state.viewId);
 				}
 				return;
@@ -629,6 +634,12 @@ export function useBrowserView({
 		});
 		return () => {
 			disposed = true;
+			if (transient) {
+				transientClosedRef.current = true;
+				consumedPreviewTriggers.delete(sessionId);
+				closedTabsBySession.delete(sessionId);
+				nativeViewBySession.delete(sessionId);
+			}
 			const id = ownViewId;
 			if (id) {
 				if (annotationModeRef.current) {
@@ -638,7 +649,7 @@ export function useBrowserView({
 					});
 					setAnnotationModeState(false);
 				}
-				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
+				if (transient || (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated)) {
 					window.ao?.browser.destroy(id);
 				} else if (viewIdRef.current === id) {
 					// Otherwise a session switch already took over this view and
@@ -655,6 +666,7 @@ export function useBrowserView({
 		scheduleSettleMeasure,
 		sendHiddenBounds,
 		sessionId,
+		transient,
 	]);
 
 	// Swap native views as the destination session first paints: show its
@@ -1025,10 +1037,14 @@ export function useBrowserView({
 
 	const openTab = useCallback(
 		async (url?: string) => {
-			if (!hasNativeBrowser) return;
+			if (!hasNativeBrowser || transientClosedRef.current) return;
 			let viewId = viewIdRef.current;
 			if (!viewId) {
 				const ensured = await window.ao!.browser.ensure(sessionId, false);
+				if (transientClosedRef.current) {
+					window.ao?.browser.destroy(ensured.viewId);
+					return;
+				}
 				viewId = ensured.viewId;
 				viewIdRef.current = viewId;
 				setViewId(viewId);
@@ -1041,10 +1057,14 @@ export function useBrowserView({
 	);
 	const openLink = useCallback(
 		async (url: string) => {
-			if (!hasNativeBrowser) return;
+			if (!hasNativeBrowser || transientClosedRef.current) return;
 			let id = viewIdRef.current;
 			if (!id) {
 				const ensured = await window.ao!.browser.ensure(sessionId, false);
+				if (transientClosedRef.current) {
+					window.ao?.browser.destroy(ensured.viewId);
+					return;
+				}
 				id = ensured.viewId;
 				viewIdRef.current = id;
 				setViewId(id);
@@ -1062,6 +1082,7 @@ export function useBrowserView({
 				// Keep the last known tabs as a fallback if the native host is briefly
 				// unavailable; opening the link remains better than dropping the click.
 			}
+			if (transientClosedRef.current) return;
 			// A link is the person's: it never selects or loads into an agent tab.
 			const existingTab = tabs.find((tab) => !tab.remote && !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
 			if (existingTab) {

@@ -3090,6 +3090,9 @@ describe("HarnessSettingsSection", () => {
 		expect(copied).toContain("Memory: Orchestrator 2.0 GB · available 4.0 GB of 32.0 GB");
 		expect(copied).toContain("CPU: 30% of 8 cores · load 1.25");
 		expect(copied).toContain("Live sessions: 1 · 612 MB");
+		// The button confirms the copy, then goes back to its own label.
+		expect(await within(row).findByRole("button", { name: "Copied" })).toBeInTheDocument();
+		await waitFor(() => expect(within(row).getByRole("button", { name: "Copy diagnostics" })).toBeInTheDocument(), { timeout: 3_000 });
 	});
 
 	it("copies the remote host's machine numbers, not this computer's", async () => {
