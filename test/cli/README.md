@@ -12,7 +12,7 @@ the fresh-install check below, not by this daemon suite.
 
 | Tier                          | What                                                                                                                                                                                                                                                                  | Where                                                |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| **Comprehensive (primary)**   | A cross-platform Go suite that builds `ao` and exercises the daemon and CLI lifecycle against isolated state. Runs natively on **ubuntu + macOS + windows**.                                                                                                    | `backend/internal/cli/e2e_test.go` and `e2e_sigpipe_unix_test.go` (build tag `e2e`) |
+| **Comprehensive (primary)**   | A cross-platform Go suite that builds `ao` and exercises the daemon and CLI lifecycle against isolated state. Runs on **ubuntu** for pull requests, and also on **macOS + windows** for pushes, PRs into `stable`, or PRs labelled `ci:full`.                                                                                                    | `backend/internal/cli/e2e_test.go` and `e2e_sigpipe_unix_test.go` (build tag `e2e`) |
 | **Fresh-install (hardening)** | Proves a clean installation can run `version` and `doctor`, then reaches the expected `ao start` release-fetch error without a panic or silent success.                                                                                                        | `test/cli/Dockerfile` + `test/cli/install-check.sh`  |
 
 ## Run it
@@ -48,7 +48,9 @@ docker run --rm --init ao-cli-smoke
 stop) · `TestE2E_Lifecycle` (daemon startup, ready, idempotent, daemon-created store,
 `/healthz` identity, stop, run-file cleanup) · `TestE2E_ShutdownGuard` (the
 `/shutdown` CSRF + DNS-rebinding 403 guard, daemon survives) ·
-`TestE2E_StaleRunFile` (dead-PID run-file → stale → cleaned) · `TestE2E_ExitCodes`
+`TestE2E_StaleRunFile` (dead-PID run-file → stale → cleaned) ·
+`TestE2E_SecondDaemonOnSameDataDir` (a second daemon on the same data dir
+waits and exits 75 without opening `ao.db`, then starts once the owner stops) · `TestE2E_ExitCodes`
 (2 usage / 1 runtime / config error) · `TestE2E_Completion` (all four shells).
 On Unix, the tagged suite also runs
 `TestE2E_DaemonClosedOutputPipeShutdownRemovesRunFile`, which verifies that a

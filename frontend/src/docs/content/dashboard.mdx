@@ -9,10 +9,10 @@ The Orchestrator desktop app is where you manage projects and sessions. Open a w
 
 | Area | What it contains |
 | --- | --- |
-| **Sidebar** | Registered projects and their worker or orchestrator sessions. |
-| **Board / center pane** | Sessions grouped by their current derived state. |
-| **Session view** | Structured Chat or the live native Terminal UI. |
-| **Inspector** | Pull request, reviews, files, and browser preview for the selected session. |
+| **Left sidebar** | **Sessions** (chats outside any project), **Projects** with their orchestrator and worker sessions, and links to **Automations** and **Artifacts**. Pin a session or project to keep it at the top. |
+| **Board / center pane** | A project's sessions grouped into **Working**, **Needs you**, **In review**, and **Ready to merge**. |
+| **Session view** | Structured Chat or the live native Terminal UI, with a tab bar for extra terminals and open files. |
+| **Right sidebar** | **Summary**, **Files**, and **Browser**; **Reviews** for a worker until its pull requests are merged or closed; **Side chat**, **Subagents**, **Artifacts**, and **Background tasks** when the session has them. With Developer mode on, local workers also get a **Device** tab for an iOS Simulator or Android Emulator. |
 
 Orchestrator remembers the session's committed interface mode. Opening a Chat session restores its paged conversation timeline; opening a TUI session reconnects to its terminal through the daemon mux.
 
@@ -60,7 +60,7 @@ Where supported, Orchestrator can resume the same provider conversation in Chat.
 
 ## Pull requests and reviews
 
-Once a session has a linked pull request, the inspector shows a concise summary:
+Once a session has a linked pull request, the right sidebar's **Summary** shows a concise summary:
 
 - Pull-request identity and link.
 - CI state, including failing check names and links.
@@ -91,9 +91,9 @@ Opening the panel marks loaded unread alerts as read, but leaves them in the fee
 
 ## Connect Mobile
 
-In **Settings → Connect Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. Orchestrator advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
+In **Settings → Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. Orchestrator advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
 
-Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Turn notifications off on the phone, or remove it in Connect Mobile. On supported Macs, **Keep awake** can help keep the computer reachable.
+Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Turn notifications off on the phone, or remove it in **Settings → Mobile**. On supported Macs, **Keep awake** can help keep the computer reachable.
 
 ## Project settings
 
@@ -101,7 +101,7 @@ Project settings configure worker and orchestrator roles without changing the re
 
 GitHub and GitLab provide pull-request and issue data. **Cues** belong to a project. Create a Cue to save an agent instruction or shell command. An agent Cue sends a prompt to an eligible session or starts a worker. A blocked session cannot accept an ordinary prompt. A command Cue runs the exact command in a fresh local terminal; it does not ask an agent to interpret it.
 
-Use **General** to choose the default session interface. **Harness** shows setup and readiness, and the subscription accounts of Claude Code and Codex. **Browser** manages profiles and downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
+Use **General** to choose the default session interface. **Agents** shows setup and readiness, and the subscription accounts of Claude Code and Codex. **Browser** manages profiles and downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
 
 Closing a terminal or switching views does not archive a session. Some detached terminal and Chat processes can survive a daemon restart; reconnecting depends on the computer and provider state. **Archive** ends the Orchestrator session. Stopping only its agent leaves a session you can resume. See [session commands](/cli#ao-session) for resume, restore, and cleanup.
 
