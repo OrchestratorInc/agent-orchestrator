@@ -1,5 +1,6 @@
 import { createContext, Fragment, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import type { ChatSkill } from "../../types/conversation";
+import { FileChip } from "./ChatFileIcon";
 
 /**
  * A skill or file chip the composer sent. The message itself carries only `wire`
@@ -192,7 +193,12 @@ export function useComposerTokenRenderer(sessionId: string, text: string): Compo
 			const segments = split(run);
 			if (segments.length === 1 && !segments[0]?.token) return renderPlain(run);
 			return segments.map((segment, index) =>
-				segment.token ? (
+				// A sent @-file wears the same chip as a file named in a reply.
+				segment.token?.kind === "file" ? (
+					<span key={index} data-message-token="file" className="mx-0.5">
+						<FileChip path={segment.token.value}>{segment.text}</FileChip>
+					</span>
+				) : segment.token ? (
 					<span key={index} data-message-token={segment.token.kind} className="text-logo-accent-text">
 						{segment.text}
 					</span>

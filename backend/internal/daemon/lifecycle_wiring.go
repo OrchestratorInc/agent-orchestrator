@@ -286,6 +286,8 @@ type sessionLifecycle interface {
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
+	SetDevicesOffered(offered func() bool)
+	SetCommitAttributionEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
@@ -407,6 +409,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Logger:              log,
 		ReconcileWorkers:    startupReconcileWorkers,
 		CodexOperationGate:  codexOperationGate,
+		TerminateOnPRMerge:  cfg.TerminateOnPRMerge,
 	})
 	mgr.SetAgentReadiness(agentReadiness)
 	scmProvider := newMultiSCMProvider(cfg.GitLab, log)
