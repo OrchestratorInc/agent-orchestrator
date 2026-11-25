@@ -7439,7 +7439,8 @@ html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot
  * end. The 1px border is dropped (the classic button draws its edge as an
  * inset ring); heights are fixed, so only the width loses 2px. Every other
  * filled button (destructive, triggers, ad hoc raised controls) is flat: its
- * face and a faint edge. */
+ * face and a faint edge. Radix's pressed 1px label shift is left out: the
+ * label stays put. */
 html[data-new-desktop-ui] .button-raised:not(.button-classic) {
 	border-color: color-mix(in oklch, var(--color-text-primary) 4%, transparent);
 	box-shadow: none;
@@ -7462,7 +7463,6 @@ html[data-new-desktop-ui] .button-classic {
 		inset 0 2px 1px -1px #ffffffb3;
 	--rx-classic-hc-hover-filter: contrast(0.88) saturate(1.1) brightness(1.1);
 	--rx-classic-hc-active-filter: contrast(0.82) saturate(1.2) brightness(1.16);
-	--rx-classic-active-padding-top: 1px;
 	position: relative;
 	z-index: 0;
 	border-width: 0;
@@ -7536,7 +7536,6 @@ html[data-new-desktop-ui] .button-classic:not(.button-classic-contrast)[data-sta
 html[data-new-desktop-ui] .button-classic:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"]) {
 	background-color: var(--accent-9);
 	background-image: linear-gradient(#0000000d, transparent);
-	padding-top: var(--rx-classic-active-padding-top);
 	box-shadow:
 		inset 0 4px 2px -2px var(--gray-a4),
 		inset 0 1px 1px var(--gray-a7),
