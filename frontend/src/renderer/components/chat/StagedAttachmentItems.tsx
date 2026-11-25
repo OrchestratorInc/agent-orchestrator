@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ComponentProps } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
@@ -17,12 +17,31 @@ import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS, attachmentName, atta
  * `contents`, so every kind of attachment shares the row. The single inner row
  * is what the fade watches resize as images load.
  */
-export function AttachmentStrip({ className, children }: { className?: string; children: ReactNode }) {
+export function AttachmentStrip({
+	className,
+	itemCount,
+	children,
+	...props
+}: Omit<ComponentProps<"div">, "ref"> & {
+	/** How many tiles the strip holds. When it grows, the strip glides to its end so the new tile shows. */
+	itemCount?: number;
+}) {
 	const scroller = useRef<HTMLDivElement>(null);
 	useEdgeFade(scroller, "x");
+	const shownCount = useRef(itemCount);
+	useEffect(() => {
+		const previous = shownCount.current;
+		shownCount.current = itemCount;
+		if (itemCount === undefined || previous === undefined || itemCount <= previous || !scroller.current) return;
+		scroller.current.scrollLeft = scroller.current.scrollWidth;
+	}, [itemCount]);
 	return (
 		// Padded out and pulled back so a tile's focus ring isn't clipped by the scroller.
-		<div ref={scroller} className={cn("edge-fade edge-fade-x scrollbar-none -m-0.5 max-w-[min(78%,560px)] overflow-x-auto overflow-y-hidden overscroll-x-contain p-0.5", className)}>
+		<div
+			{...props}
+			ref={scroller}
+			className={cn("edge-fade edge-fade-x scrollbar-none -m-0.5 max-w-[min(78%,560px)] overflow-x-auto overflow-y-hidden overscroll-x-contain p-0.5 motion-safe:scroll-smooth", className)}
+		>
 			<div className="flex w-max items-start gap-2">{children}</div>
 		</div>
 	);

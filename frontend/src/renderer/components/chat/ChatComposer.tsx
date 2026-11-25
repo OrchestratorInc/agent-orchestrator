@@ -129,6 +129,7 @@ import {
 } from "../../lib/chat-drafts";
 import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
 import { ComposerAttachmentTile, ComposerPendingTile } from "./ComposerAttachmentTile";
+import { AttachmentStrip } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
@@ -2653,8 +2654,12 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{(staged && !stripConcealed) || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
-					<div className="flex flex-wrap items-start gap-2 pr-1.5 pt-1.5" data-testid="composer-attachments-and-annotations">
-						{/* The top and right padding leave room for each tile's corner remove control. */}
+					<AttachmentStrip
+						// The top and right padding leave room for each tile's corner remove control and its focus ring.
+						className="-mr-1 -mt-1 max-w-none pr-2.5 pt-2.5"
+						itemCount={stripAttachments.length + pendingAttachments.length}
+						data-testid="composer-attachments-and-annotations"
+					>
 						{(staged && !stripConcealed) || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
 								{stripAttachments.map(({ file, path, preview, mediaUrl }) => (
@@ -2727,7 +2732,7 @@ export const ChatComposer = memo(function ChatComposer({
 								}}
 							/>
 						) : null}
-					</div>
+					</AttachmentStrip>
 				) : null}
 
 				<ComposerEditor
