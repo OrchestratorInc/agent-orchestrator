@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ChevronRight, ListTodo, SquareTerminal } from "@/components/app-icons";
+import { create } from "zustand";
+import { ChevronDown, ListTodo, SquareTerminal } from "@/components/app-icons";
 import {
 	useBackgroundTasks,
 	useStopBackgroundTask,
 	type BackgroundTask,
 	type BackgroundTaskReading,
 } from "../hooks/useBackgroundTasks";
+import { sessionUiKey } from "../lib/hosts";
 import { shellTaskLabel } from "../lib/shell-task-label";
 import { cn } from "../lib/utils";
+import { failedTaskKey, useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
@@ -63,6 +66,11 @@ function taskName(task: BackgroundTask, t: TFunction): TaskName {
 	}
 }
 
+/** One task's name on its own, as the side panel shows it. */
+export function backgroundTaskName(task: BackgroundTask, t: TFunction): string {
+	return taskName(task, t).name;
+}
+
 /** How a row was told apart from a like one: by its folder, or by its command. */
 export type TaskNameSuffixes = Map<string, "dir" | "command">;
 
@@ -92,15 +100,17 @@ export function backgroundTaskNames(tasks: BackgroundTask[], t: TFunction, suffi
 	}));
 }
 
-const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
+export const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
 
 /**
- * What the composer tab shows: live work and recent failures. Agents have their
- * own Subagents view; work that completed or was stopped needs no attention.
+ * What the composer tab shows: live work and failures not yet looked at. Agents
+ * have their own Subagents view; work that completed or was stopped needs no
+ * attention, and a failure leaves once its tab has shown it (`seenFailures`).
  */
-export function composerBackgroundTasks(reading?: BackgroundTaskReading): BackgroundTask[] {
+export function composerBackgroundTasks(reading?: BackgroundTaskReading, seenFailures?: readonly string[]): BackgroundTask[] {
 	if (!reading || reading.availability === "unavailable") return [];
-	const tasks = reading.tasks.filter((task) => task.kind !== "agent" && (isLive(task) || task.state === "failed"));
+	const tasks = reading.tasks.filter((task) => task.kind !== "agent"
+		&& (isLive(task) || (task.state === "failed" && !seenFailures?.includes(failedTaskKey(task)))));
 	// Failures need attention and must remain visible above the five-row cap.
 	return [...tasks.filter((task) => !isLive(task)), ...tasks.filter(isLive)];
 }
@@ -114,7 +124,7 @@ export function formatElapsed(ms: number): string {
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function elapsed(task: BackgroundTask, now: number): string | null {
+export function elapsed(task: BackgroundTask, now: number): string | null {
 	const start = task.startedAt ? Date.parse(task.startedAt) : Number.NaN;
 	const end = isLive(task) ? now : task.endedAt ? Date.parse(task.endedAt) : Number.NaN;
 	if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
@@ -122,7 +132,7 @@ function elapsed(task: BackgroundTask, now: number): string | null {
 }
 
 /** Ticks only while something runs: every second in a task's first minute, then every ten. */
-function useNow(tasks: BackgroundTask[]): number {
+export function useNow(tasks: BackgroundTask[]): number {
 	const [now, setNow] = useState(() => Date.now());
 	const live = tasks.filter(isLive);
 	const young = live.some((task) => task.startedAt && now - Date.parse(task.startedAt) < 60_000);
@@ -138,42 +148,75 @@ function useNow(tasks: BackgroundTask[]): number {
 const STOP_SETTLE_MS = 10_000;
 const STOP_ERROR_MS = 4_000;
 
-/** Stop requests in flight, per task, and the one that last failed. */
-function useTaskStops(sessionId: string, liveIds: string) {
+/**
+ * Stops in flight for every control that can stop a task (the composer strip
+ * and its side-panel tab), keyed by session and task, so a stop started in one
+ * disables the other. Each holds the request that took it: only that request
+ * releases it, and it outlives the control that started it, so leaving a task's
+ * detail mid-request never re-enables Stop elsewhere.
+ */
+const useStopsInFlight = create<{ keys: ReadonlyMap<string, number> }>(() => ({ keys: new Map() }));
+const stopKey = (sessionId: string, taskId: string) => `${sessionId}\n${taskId}`;
+const settleTimers = new Map<number, number>();
+let lastStopRequest = 0;
+
+function takeStop(key: string): number {
+	const request = ++lastStopRequest;
+	useStopsInFlight.setState((state) => ({ keys: new Map(state.keys).set(key, request) }));
+	// A task that never leaves the live set gets its button back.
+	settleTimers.set(request, window.setTimeout(() => releaseStop(key, request), STOP_SETTLE_MS));
+	return request;
+}
+
+function releaseStop(key: string, request: number) {
+	window.clearTimeout(settleTimers.get(request));
+	settleTimers.delete(request);
+	useStopsInFlight.setState((state) => {
+		if (state.keys.get(key) !== request) return state;
+		const keys = new Map(state.keys);
+		keys.delete(key);
+		return { keys };
+	});
+}
+
+export function resetStopsInFlightForTest(): void {
+	for (const timer of settleTimers.values()) window.clearTimeout(timer);
+	settleTimers.clear();
+	useStopsInFlight.setState({ keys: new Map() });
+}
+
+/** Stop requests in flight, per task (shared by every control for this session), and the one that last failed here. */
+export function useTaskStops(sessionId: string, liveIds: string) {
 	const mutation = useStopBackgroundTask(sessionId);
-	const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
+	const keys = useStopsInFlight((state) => state.keys);
+	const stopping = useMemo(() => {
+		const prefix = stopKey(sessionId, "");
+		return new Set([...keys.keys()].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length)));
+	}, [keys, sessionId]);
 	const [failed, setFailed] = useState<string | null>(null);
-	const timers = useRef(new Map<string, number>());
-	const release = useCallback((id: string) => {
-		window.clearTimeout(timers.current.get(id));
-		timers.current.delete(id);
-		setStopping((previous) => {
-			if (!previous.has(id)) return previous;
-			const next = new Set(previous);
-			next.delete(id);
-			return next;
-		});
-	}, []);
-	// A stopped task leaves the live set; one that never does gets its button back.
+	// The stops this control started, by task: a stopped task leaves the live set and lets its stop go.
+	const started = useRef(new Map<string, number>());
 	useEffect(() => {
 		const live = new Set(liveIds ? liveIds.split("\n") : []);
-		for (const id of [...timers.current.keys()]) if (!live.has(id)) release(id);
-	}, [liveIds, release]);
+		for (const [id, request] of [...started.current]) {
+			if (live.has(id)) continue;
+			started.current.delete(id);
+			releaseStop(stopKey(sessionId, id), request);
+		}
+	}, [liveIds, sessionId]);
 	useEffect(() => {
 		if (!failed) return;
 		const timer = window.setTimeout(() => setFailed(null), STOP_ERROR_MS);
 		return () => window.clearTimeout(timer);
 	}, [failed]);
-	useEffect(() => () => {
-		for (const timer of timers.current.values()) window.clearTimeout(timer);
-	}, []);
 	const stop = (id: string) => {
 		if (stopping.has(id)) return;
 		setFailed(null);
-		setStopping((previous) => new Set(previous).add(id));
-		timers.current.set(id, window.setTimeout(() => release(id), STOP_SETTLE_MS));
+		const key = stopKey(sessionId, id);
+		const request = takeStop(key);
+		started.current.set(id, request);
 		void mutation.mutateAsync(id).catch(() => {
-			release(id);
+			releaseStop(key, request);
 			setFailed(id);
 		});
 	};
@@ -181,17 +224,25 @@ function useTaskStops(sessionId: string, liveIds: string) {
 }
 
 /** Chat entry point: a tab on the composer's top edge. Renders nothing while no work shows. */
-export function SessionBackgroundTasks({ session }: { session: WorkspaceSession }) {
+export function SessionBackgroundTasks({ session, onOpenTask }: { session: WorkspaceSession; onOpenTask?: (task: BackgroundTask) => void }) {
 	const enabled = supportsLocalBackgroundTasks(session);
 	const query = useBackgroundTasks(session.id, enabled);
+	const seenFailures = useUiStore((state) => state.inspectorSessions[sessionUiKey(session.id, session.hostId)]?.seenFailedTasks);
 	if (!enabled) return null;
-	return <ComposerBackgroundTasks sessionId={session.id} reading={query.isError ? undefined : query.data} />;
+	return <ComposerBackgroundTasks sessionId={session.id} reading={query.isError ? undefined : query.data} onOpenTask={onOpenTask} seenFailures={seenFailures} />;
 }
 
-export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: string; reading?: BackgroundTaskReading }) {
+/** `onOpenTask` opens a task in the side panel; without it, tasks are not clickable. */
+export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFailures }: {
+	sessionId: string;
+	reading?: BackgroundTaskReading;
+	onOpenTask?: (task: BackgroundTask) => void;
+	/** Failed runs already shown in their tab (`failedTaskKey`), left out of the strip. */
+	seenFailures?: readonly string[];
+}) {
 	const { t } = useTranslation();
 	const listId = useId();
-	const tasks = useMemo(() => composerBackgroundTasks(reading), [reading]);
+	const tasks = useMemo(() => composerBackgroundTasks(reading, seenFailures), [reading, seenFailures]);
 	// Parsed once per reading, not on every elapsed-time tick.
 	const suffixes = useRef<TaskNameSuffixes>(new Map());
 	const names = useMemo(() => backgroundTaskNames(tasks, t, suffixes.current), [tasks, t]);
@@ -229,7 +280,9 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 		// A poll must not move focus that still belongs to a mounted control.
 		if (!focusedElement.current || focusedElement.current.isConnected || document.activeElement !== document.body) return;
 		focusedElement.current = null;
+		// The next row's Stop first, so repeated keyboard stops keep going.
 		const next =
+			region.current?.querySelector<HTMLElement>("[data-task-id] [data-task-stop]:not(:disabled)") ??
 			region.current?.querySelector<HTMLElement>("[data-task-id] button:not(:disabled)") ??
 			region.current?.querySelector<HTMLElement>("button:not(:disabled)");
 		const editor = scope.current?.querySelector<HTMLElement>('form.cursor-chat-composer [contenteditable="true"], form.cursor-chat-composer textarea');
@@ -268,6 +321,7 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 				size="icon-xs"
 				className="shrink-0"
 				aria-label={t("backgroundTasks.stop", { name: name(task) })}
+				data-task-stop=""
 				disabled={stopping.has(task.id)}
 				onClick={() => stop(task.id)}
 			>
@@ -275,6 +329,16 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 			</Button>
 		);
 	};
+
+	// The task's name and time open it in the side panel; the stop square stays its own control.
+	const opener = (task: BackgroundTask, content: ReactNode) => onOpenTask ? (
+		<Pressable
+			className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+			onClick={() => onOpenTask(task)}
+		>
+			{content}
+		</Pressable>
+	) : content;
 
 	return (
 		<section
@@ -299,6 +363,8 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 					onClick={() => setOpen((value) => !value)}
 					className="flex h-8 w-full min-w-0 items-center gap-2 rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
 				>
+					{/* Leads the row like the queued-messages toggle above it. */}
+					<ChevronDown aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", open ? "rotate-0" : "-rotate-90")} />
 					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
 					{live.length ? (
 						<span className="shrink-0 text-xs font-medium text-foreground/90">{t("backgroundTasks.runningCount", { count: live.length })}</span>
@@ -311,10 +377,6 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 					{failedCount ? (
 						<span className="min-w-0 truncate text-caption text-destructive">{t("backgroundTasks.failedCount", { count: failedCount })}</span>
 					) : null}
-					<ChevronRight
-						aria-hidden="true"
-						className={cn("ml-auto size-3 shrink-0 text-muted-foreground/60 transition-transform motion-reduce:transition-none", open && "rotate-90")}
-					/>
 				</Pressable>
 			) : null}
 			<ul key="task-rows" id={listId} role={several ? "list" : "presentation"} className={several ? "chat-composer-tasks-list" : undefined}>
@@ -322,14 +384,16 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 					? tasks.map((task) => (
 							<li key={`${task.id}:${task.runId ?? ""}`} data-task-id={task.id} className="flex h-8 min-w-0 items-center gap-2">
 								{!several ? <SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : null}
-								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={task.description?.trim() || name(task)}>
-									{name(task)}
-								</span>
-								{/* A live task shows no mark; say its state to screen readers, as failures say theirs. */}
-								{task.state === "running" || task.state === "paused" ? (
-									<span className="sr-only">{t(task.state === "paused" ? "backgroundTasks.state.paused" : "backgroundTasks.state.running")}</span>
-								) : null}
-								{time(task)}
+								{opener(task, <>
+									<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={task.description?.trim() || name(task)}>
+										{name(task)}
+									</span>
+									{/* A live task shows no mark; say its state to screen readers, as failures say theirs. */}
+									{task.state === "running" || task.state === "paused" ? (
+										<span className="sr-only">{t(task.state === "paused" ? "backgroundTasks.state.paused" : "backgroundTasks.state.running")}</span>
+									) : null}
+									{time(task)}
+								</>)}
 								{trailing(task)}
 							</li>
 						))

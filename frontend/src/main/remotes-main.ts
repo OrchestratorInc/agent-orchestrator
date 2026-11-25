@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readRemoteIdentity, type PairDeviceResult, type RemoteHealth } from "./remote-request";
+import { IncompatibleRemoteVersionError, checkHostUpdate, pairDevice, probeRemote, readAuthErrorCode, readHostUpdate, readRemoteIdentity, startHostUpdate, type HostUpdateView, type PairDeviceResult, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
 import type { LoopbackTunnels } from "./loopback-tunnel";
@@ -60,6 +60,7 @@ export type RemotesIpcDeps = {
 	pair?: (entry: Pick<RemoteEntry, "url" | "hostId">, secret: string, device: { name: string; platform: string }) => Promise<PairDeviceResult>;
 	authErrorCode?: (entry: RemoteEntry) => Promise<string | undefined>;
 	deviceName?: () => Promise<string>;
+	hostUpdate?: { read: (entry: RemoteEntry) => Promise<HostUpdateView | null>; start: (entry: RemoteEntry, version?: string) => Promise<HostUpdateView | null>; check: (entry: RemoteEntry) => Promise<string> };
 };
 
 export class LocalIdentityUnavailableError extends ExpectedIpcError {
@@ -79,6 +80,7 @@ export function registerRemotesIpc(
 	{
 		file, registry, tunnels, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
 		probe = probeRemote, identity = readRemoteIdentity, pair = pairDevice, authErrorCode = readAuthErrorCode, deviceName = computerName,
+		hostUpdate = { read: readHostUpdate, start: startHostUpdate, check: checkHostUpdate },
 	}: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
@@ -371,6 +373,38 @@ export function registerRemotesIpc(
 		// No time limit: AO Cloud may first make the machine's tunnel, which can
 		// take more than a minute.
 		await accountHosts("PUT", `/${encodeURIComponent(issued.hostId)}`, { body: issued.registration });
+	});
+	const updatableHost = async (url: string) => {
+		const account = await accountID();
+		const entry = (await owned()).find((saved) => saved.url === url);
+		if (!entry?.hostId) throw new ExpectedIpcError("Host does not belong to this account.");
+		const localHostId = await requireLocalIdentity();
+		refuseSelf(entry.hostId, localHostId);
+		let actual: string | undefined;
+		try { actual = await identity(entry); }
+		catch (error) {
+			if (!(error instanceof IncompatibleRemoteVersionError)) return null;
+			actual = error.hostId;
+		}
+		if (actual !== entry.hostId) throw new ExpectedIpcError(`remote host identity changed for ${entry.url}; connection refused`);
+		await checkConnectionContext(localHostId, account);
+		return entry;
+	};
+	ipcMain.handle("remotes:hostUpdate", async (_event, url: string) => {
+		const entry = await updatableHost(url);
+		return entry ? hostUpdate.read(entry) : null;
+	});
+	ipcMain.handle("remotes:checkHostUpdate", async (_event, url: string) => {
+		const entry = await updatableHost(url);
+		if (!entry) throw new ExpectedIpcError(`host ${url} is offline`);
+		try { return await hostUpdate.check(entry); }
+		catch (error) { throw new ExpectedIpcError(error instanceof Error ? error.message : String(error)); }
+	});
+	ipcMain.handle("remotes:startHostUpdate", async (_event, url: string, version?: string) => {
+		const entry = await updatableHost(url);
+		if (!entry) throw new ExpectedIpcError(`host ${url} is offline`);
+		try { return await hostUpdate.start(entry, typeof version === "string" && version ? version : undefined); }
+		catch (error) { throw new ExpectedIpcError(error instanceof Error ? error.message : String(error)); }
 	});
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
 	ipcMain.handle("remotes:computerName", () => computerName());
