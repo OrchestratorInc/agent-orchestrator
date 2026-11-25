@@ -96,8 +96,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
-			// When the current local stream last delivered a frame (or was created), and
-			// whether this daemon has shown it sends heartbeats. A daemon from before the
+			// When the current local stream last delivered a frame (or was created), on the
+			// monotonic clock so a wall-clock change cannot disarm the check, and whether
+			// this daemon has shown it sends heartbeats. A daemon from before the
 			// heartbeat is never judged stalled, so an idle stream to it is left alone.
 			let lastFrameAt = 0;
 			let heartbeatBaseUrl: string | undefined;
@@ -593,7 +594,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				source?.close();
 				source = undefined;
 				sourceBaseUrl = baseUrl;
-				lastFrameAt = Date.now();
+				lastFrameAt = performance.now();
 				try {
 					// Start at the newest event. Without a cursor the daemon replays the
 					// whole change_log (up to 100k rows under retention) on every connect,
@@ -607,7 +608,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					const connectedSource = source;
 					let opened = false;
 					const sawFrame = () => {
-						if (source === connectedSource) lastFrameAt = Date.now();
+						if (source === connectedSource) lastFrameAt = performance.now();
 					};
 					source.onopen = () => {
 						if (disposed || source !== connectedSource) return;
@@ -684,7 +685,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// A pending retry already owns the next attempt, and keeps its backoff.
 			const stallWatch = setInterval(() => {
 				if (disposed || retryTimer || !source || heartbeatBaseUrl !== sourceBaseUrl) return;
-				if (Date.now() - lastFrameAt < EVENT_STREAM_STALL_MS) return;
+				if (performance.now() - lastFrameAt < EVENT_STREAM_STALL_MS) return;
 				source.close();
 				setEventsConnectionState("disconnected");
 				connectSource();
