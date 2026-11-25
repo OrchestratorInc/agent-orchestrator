@@ -2055,6 +2055,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):
 		return apierr.Invalid("UNSUPPORTED_MODEL", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrSpawnPermissionExceedsPolicy):
+		return apierr.Invalid("SPAWN_PERMISSION_EXCEEDS_POLICY", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTerminalUnsupported):
 		return apierr.Invalid("TERMINAL_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):

@@ -1863,7 +1863,7 @@ func TestSpawn_IgnoresNonOrchestratorParent(t *testing.T) {
 
 // The orchestrator's approval mode fills in only what the project leaves
 // unset: an explicit project permission for the role is the user's choice and
-// wins over it, and a permission the spawn names wins over both (#5954).
+// wins over it. A stricter permission named by the spawn is still allowed (#5954).
 func TestSpawn_ExplicitProjectPermissionBeatsOrchestratorInheritance(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -1877,9 +1877,12 @@ func TestSpawn_ExplicitProjectPermissionBeatsOrchestratorInheritance(t *testing.
 		{"project-wide permission", func(c *domain.ProjectConfig) {
 			c.AgentConfig.Permissions = domain.PermissionModeDefault
 		}, "", domain.PermissionModeDefault},
-		{"spawn's own permission", func(c *domain.ProjectConfig) {
+		{"stricter spawn permission", func(c *domain.ProjectConfig) {
 			c.Worker.AgentConfig.Permissions = domain.PermissionModeAcceptEdits
-		}, domain.PermissionModeAuto, domain.PermissionModeAuto},
+		}, domain.PermissionModeDefault, domain.PermissionModeDefault},
+		{"equal spawn permission", func(c *domain.ProjectConfig) {
+			c.Worker.AgentConfig.Permissions = domain.PermissionModeAcceptEdits
+		}, domain.PermissionModeAcceptEdits, domain.PermissionModeAcceptEdits},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, st, rt, _ := newManager()
@@ -1900,6 +1903,73 @@ func TestSpawn_ExplicitProjectPermissionBeatsOrchestratorInheritance(t *testing.
 				t.Fatalf("worker permission environment = %q, want %q (not the orchestrator's bypass-permissions)", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSpawn_OrchestratorPermissionCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		project    domain.PermissionMode
+		parent     domain.PermissionMode
+		requested  domain.PermissionMode
+		wantError  bool
+		wantActive domain.PermissionMode
+	}{
+		{"project default blocks bypass", domain.PermissionModeDefault, domain.PermissionModeBypassPermissions, domain.PermissionModeBypassPermissions, true, ""},
+		{"project accept-edits blocks auto", domain.PermissionModeAcceptEdits, domain.PermissionModeBypassPermissions, domain.PermissionModeAuto, true, ""},
+		{"project auto allows stricter", domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, domain.PermissionModeAcceptEdits, false, domain.PermissionModeAcceptEdits},
+		{"parent default blocks bypass when project is unset", "", domain.PermissionModeDefault, domain.PermissionModeBypassPermissions, true, ""},
+		{"default auto blocks bypass when project and parent are unset", "", "", domain.PermissionModeBypassPermissions, true, ""},
+		{"parent auto allows equal when project is unset", "", domain.PermissionModeAuto, domain.PermissionModeAuto, false, domain.PermissionModeAuto},
+		{"parent mode fills an unset request", "", domain.PermissionModeAcceptEdits, "", false, domain.PermissionModeAcceptEdits},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.Worker.AgentConfig.Permissions = tc.project
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindOrchestrator}
+			st.conversations["mer-0"] = domain.ConversationRecord{
+				SessionID: "mer-0", Settings: domain.ConversationSettings{ApprovalMode: tc.parent},
+			}
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+				AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			})
+			if tc.wantError {
+				if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+					t.Fatalf("spawn error = %v, want permission ceiling refusal", err)
+				}
+				if rt.created != 0 {
+					t.Fatal("runtime was created for an over-permissive worker")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.wantActive) {
+				t.Fatalf("worker permission environment = %q, want %q", got, tc.wantActive)
+			}
+		})
+	}
+}
+
+func TestSpawn_OrchestratorPermissionCeilingUsesParentSessionWithoutChat(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["mer-0"] = domain.SessionRecord{
+		ID: "mer-0", ProjectID: "mer", Kind: domain.KindOrchestrator,
+		Metadata: domain.SessionMetadata{Permissions: domain.PermissionModeDefault},
+	}
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+		AgentConfig: ports.AgentConfig{Permissions: domain.PermissionModeBypassPermissions},
+	})
+	if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+		t.Fatalf("spawn error = %v, want parent permission ceiling refusal", err)
+	}
+	if rt.created != 0 {
+		t.Fatal("runtime was created for an over-permissive worker")
 	}
 }
 

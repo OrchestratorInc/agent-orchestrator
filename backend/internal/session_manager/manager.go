@@ -65,6 +65,9 @@ var (
 	// selected harness's catalog and the harness does not accept arbitrary model
 	// ids. The API maps it to a 400.
 	ErrUnsupportedModel = errors.New("session: model is not supported by the selected harness")
+	// ErrSpawnPermissionExceedsPolicy rejects an orchestrator's worker mode when
+	// it is more permissive than the project's role setting or parent mode.
+	ErrSpawnPermissionExceedsPolicy = errors.New("session: spawn permission exceeds the orchestrator's permission ceiling")
 	// ErrTerminalUnsupported means a terminal launch was requested for a
 	// harness that runs in Chat only. Unlike ports.ErrChatUnsupported it must
 	// not prompt a terminal retry. The API maps it to a 400.
@@ -1151,17 +1154,41 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.RequireNewBranch = true
 		}
 	}
-	// A worker an orchestrator spawns takes the orchestrator's approval mode
-	// (#4898), but only when the project sets none for the role: an explicit
-	// project permission is the user's choice for that role and wins (#5954).
-	// A permission the spawn itself names wins over both.
-	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" &&
-		effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions == "" {
-		permissions, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
+	// An orchestrator's worker inherits its approval mode only when the project
+	// sets none for the role (#4898, #5954). An explicit spawn mode may be
+	// stricter, but cannot exceed that project or parent ceiling.
+	if cfg.ParentSessionID != "" {
+		projectPermission := effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions
+		parentPermission, isOrchestrator, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 		}
-		cfg.AgentConfig.Permissions = permissions
+		if isOrchestrator {
+			ceiling := projectPermission
+			if ceiling == "" {
+				ceiling = parentPermission
+				if ceiling == "" {
+					ceiling = ports.PermissionModeAuto
+				}
+			}
+			if requested := cfg.AgentConfig.Permissions; requested != "" && ceiling != "" {
+				allowed := false
+				for _, mode := range ports.PermissionModesStrictestFirst {
+					if mode == requested {
+						allowed = true
+						break
+					}
+					if mode == ceiling {
+						break
+					}
+				}
+				if !allowed {
+					return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: requested %q exceeds %q", ErrSpawnPermissionExceedsPolicy, requested, ceiling)
+				}
+			} else if cfg.AgentConfig.Permissions == "" && projectPermission == "" {
+				cfg.AgentConfig.Permissions = parentPermission
+			}
+		}
 	}
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
@@ -2143,32 +2170,35 @@ func containsString(values []string, value string) bool {
 	return false
 }
 
-// inheritedSpawnPermissions derives a worker override from its requesting chat
-// orchestrator. The request supplies identity only: the stored conversation
-// settings remain the authority for the permission policy.
-func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (domain.PermissionMode, error) {
+// inheritedSpawnPermissions derives a worker override from its requesting
+// orchestrator. The request supplies identity only: saved Chat settings take
+// precedence over the parent session's starting permission mode.
+func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (domain.PermissionMode, bool, error) {
 	parent, ok, err := m.store.GetSession(ctx, parentID)
 	if err != nil {
-		return "", fmt.Errorf("load parent session %s: %w", parentID, err)
+		return "", false, fmt.Errorf("load parent session %s: %w", parentID, err)
 	}
 	if !ok || parent.ProjectID != projectID || parent.Kind != domain.KindOrchestrator {
 		// AO_SESSION_ID is available in every session, not only orchestrators.
 		// A worker (or a stale/cross-project value) must preserve the historical
 		// project-default spawn behavior rather than gain an inherited policy.
-		return "", nil
+		return "", false, nil
 	}
 	conversations, ok := m.store.(conversationSettingsStore)
 	if !ok {
-		return "", nil
+		return parent.Metadata.Permissions, true, nil
 	}
 	conversation, err := conversations.ConversationForSession(ctx, parentID)
 	if errors.Is(err, domain.ErrNoConversation) {
-		return "", nil
+		return parent.Metadata.Permissions, true, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("load parent conversation %s: %w", parentID, err)
+		return "", false, fmt.Errorf("load parent conversation %s: %w", parentID, err)
 	}
-	return conversation.Settings.ApprovalMode, nil
+	if conversation.Settings.ApprovalMode != "" {
+		return conversation.Settings.ApprovalMode, true, nil
+	}
+	return parent.Metadata.Permissions, true, nil
 }
 
 // loadProject loads the project record so spawn can resolve its per-project

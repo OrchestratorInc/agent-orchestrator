@@ -133,9 +133,10 @@ branch, issue, or PR-claim options.
 
 A spawned session's permission mode is `--permission` when given, otherwise
 the project's setting for the role (`<role>.agentConfig.permissions`, then
-`agentConfig.permissions`). When the project sets none, a worker spawned from
-an orchestrator session takes that orchestrator's Chat approval mode, and any
-other spawn defaults to `auto`.
+`agentConfig.permissions`). An orchestrator may request an equal or stricter
+mode for its worker, but cannot exceed the project setting. When the project
+sets none, the orchestrator's own approval mode is the ceiling and the default.
+Other spawns without a permission setting default to `auto`.
 
 `ao session claim-pr <pr-ref>` attaches a PR to the current worker by reading
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
