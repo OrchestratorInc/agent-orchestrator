@@ -3008,11 +3008,12 @@ html.sidebar-reordering * {
 	--thread-stroke: 1.5px;
 }
 /* A step opened on its own: a straight line under its icon, in the thread's stroke and
-   colour, with its details where the step's text starts (22px). */
+   colour, with its details where the step's text starts (22px). A row whose icon sits
+   further in (an auto-approval's) sets the icon's centre and the gap to its text. */
 .activity-step-line {
-	margin-left: calc(7px - var(--thread-stroke) / 2);
+	margin-left: calc(var(--step-line-x, 7px) - var(--thread-stroke) / 2);
 	border-left: var(--thread-stroke) solid var(--thread-line);
-	padding-left: calc(15px - var(--thread-stroke) / 2);
+	padding-left: calc(var(--step-line-gap, 15px) - var(--thread-stroke) / 2);
 }
 .activity-thread {
 	--thread-indent: 19px;

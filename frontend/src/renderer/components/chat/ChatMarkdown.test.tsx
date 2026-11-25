@@ -673,6 +673,23 @@ describe("ChatMarkdown", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
 	});
 
+	it("chips a listed artifact's path by the file's name, and keeps a link's own words", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plans/q3.md" }] }] }];
+		renderWithSessionLinkHandler("Guide: `/tmp/ao/artifacts/worker-1/plans/q3.md`, and [the plan](/tmp/ao/artifacts/worker-1/plans/q3.md).", vi.fn());
+		const [bare, worded] = screen.getAllByRole("link");
+		expect(bare).toHaveAttribute("data-chat-chip", "");
+		expect(bare).toHaveTextContent(/^q3\.md$/);
+		expect(worded).toHaveAttribute("data-chat-chip", "");
+		expect(worded).toHaveTextContent(/^the plan$/);
+	});
+
+	it("chips a link into an artifacts folder the session doesn't list, named by its file", () => {
+		renderWithSessionLinkHandler("[/tmp/ao/artifacts/worker-9/notes.md](/tmp/ao/artifacts/worker-9/notes.md)", vi.fn());
+		const link = screen.getByRole("link");
+		expect(link).toHaveAttribute("data-chat-chip", "");
+		expect(link).toHaveTextContent(/^notes\.md$/);
+	});
+
 	it("offers path actions on an absolute artifact reference while preserving its artifact link", async () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
@@ -914,7 +931,8 @@ describe("ChatMarkdown", () => {
 				body: "Filed it\nartifact: issue#42.md", createdAt: "2026-10-28T12:00:00Z",
 			}]} />
 		</ChatLinkProvider>);
-		expect(screen.getByRole("link", { name: "worker-1/why?.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/why%3F.md");
+		// Inline code reads as the artifact's chip, named by its file.
+		expect(screen.getByRole("link", { name: "why?.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/why%3F.md");
 		expect(screen.getByRole("link", { name: "issue#42.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/issue%2342.md");
 	});
 

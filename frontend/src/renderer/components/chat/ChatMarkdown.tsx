@@ -572,6 +572,23 @@ function isBareLinkText(href: string, text: string): boolean {
 	return bare(text) !== "" && bare(text) === bare(href);
 }
 
+/** The file a link points at, by its last path segment: `.../artifacts/s-1/notes.md` is `notes.md`. */
+function linkedFileName(href: string): string | undefined {
+	const last = href.split(/[?#]/, 1)[0]!.replace(/\/+$/, "").split("/").pop();
+	if (!last) return undefined;
+	try {
+		return decodeURIComponent(last);
+	} catch {
+		return last;
+	}
+}
+
+/** Whether a link's text is just its path (or the file's name), with no words of its own. */
+function isBarePathText(text: string, fileName: string): boolean {
+	const trimmed = text.trim().replace(/^`|`$/g, "");
+	return trimmed === fileName || (/[\\/]/.test(trimmed) && trimmed.split(/[\\/]/).pop() === fileName);
+}
+
 function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
@@ -611,6 +628,13 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	const sessionChip = Boolean(href && sessionLink && isSessionLink(href) && !linksImage(node));
 	// A web link with words of its own is the same chip: its site's icon, then its words.
 	const worded = Boolean(href && !className && !chip && !site && !sessionLink && isWebLink(href) && !linksImage(node));
+	// A link to an artifact, or to a file in an artifacts folder, is the same chip:
+	// the file's icon, then its name. A bare path reads as the file's name; words keep.
+	const artifactName = href && !className && !chip && !sessionChip && !linksImage(node)
+		&& ((sessionLink && !isSessionLink(href)) || (!sessionLink && !isWebLink(href) && hasArtifactDirectorySegment(href)))
+		? linkedFileName(href)
+		: undefined;
+	const artifactLabel = artifactName && text !== undefined && isBarePathText(text, artifactName) ? artifactName : undefined;
 	return (
 		<AppLink
 			href={href}
@@ -646,8 +670,8 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			}}
 			target="_blank"
 			rel="noreferrer noopener"
-			data-chat-chip={chip || site || sessionChip || worded ? "" : undefined}
-			className={chip || site || sessionChip ? PULL_REQUEST_CHIP_CLASS : worded ? cn(PULL_REQUEST_CHIP_CLASS, "max-w-full") : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
+			data-chat-chip={chip || site || sessionChip || worded || artifactName ? "" : undefined}
+			className={chip || site || sessionChip ? PULL_REQUEST_CHIP_CLASS : worded || artifactName ? cn(PULL_REQUEST_CHIP_CLASS, "max-w-full") : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
 			{chip && href ? <PullRequestChipContent href={href} repo={chip.repo} number={chip.number} /> : site && href ? (
 				<LinkSiteChipContent url={href} />
@@ -655,6 +679,17 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 				<>
 					<AOMascot className="size-3.5 shrink-0" />
 					<span data-session-chip="">{children}</span>
+				</>
+			) : artifactName ? (
+				<>
+					<ChatFileIcon path={artifactName} className="shrink-0" />
+					<span data-link-words="" className="min-w-0 truncate">
+						{artifactLabel ?? (
+							<InsideMarkdownLink.Provider value>
+								<InsideArtifactLink.Provider value>{children}</InsideArtifactLink.Provider>
+							</InsideMarkdownLink.Provider>
+						)}
+					</span>
 				</>
 			) : worded && href ? (
 				<>
@@ -879,7 +914,12 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 		// files, cut short, a folder) still wears its icon, on a plain chip.
 		const named = text ? namedPath(text, findDir) : undefined;
 		const plain = named ? <NamedPathChip named={named}><code {...positions} data-excerpt-kind="inline-code">{children}</code></NamedPathChip> : code;
-		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={plain}>{name}</ArtifactPathCode>;
+		// A listed artifact's path reads as its chip, named by the file alone; the name
+		// stands for the whole path when the reader quotes it.
+		if (text?.includes("/") && openSession) {
+			const fileName = text.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || text;
+			return <ArtifactPathCode text={text} unlisted={plain}><span {...positions} data-excerpt-block="">{fileName}</span></ArtifactPathCode>;
+		}
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{plain}</ChatPathMenu> : plain;
 	}

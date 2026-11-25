@@ -201,6 +201,12 @@ describe("auto review", () => {
 		expect(screen.getByText(/You were not asked/)).toBeInTheDocument();
 	});
 
+	it("hangs its boxes on the step line under its icon when opened on its own", async () => {
+		render(<ActivityRow activity={review} />);
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(screen.getByText(/You were not asked/).closest(".activity-step-line")).not.toBeNull();
+	});
+
 	it("makes the rationale reachable", async () => {
 		render(<ActivityRow activity={review} />);
 		await userEvent.click(screen.getByRole("button", { expanded: false }));

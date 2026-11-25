@@ -3420,6 +3420,7 @@ const RISK_TONE: Record<string, string> = {
  * because a denial is why something the user expected did not happen.
  */
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
+	const insideRail = useContext(InsideActivityRail);
 	const [open, setOpen] = useState(false);
 	const detail = activity.detail;
 	const denied = (detail?.status ?? "").toLowerCase().includes("den");
@@ -3516,8 +3517,10 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 			</div>
 
 			{open && hasBody ? (
-				// Lined up with the label, past the icon (11px inset, 15px icon, 9px gap).
-				<div className="flex flex-col gap-2 pr-[11px] pb-2.5 pl-[35px]">
+				// Like any opened step: inside a thread the boxes start under the row's icon with
+				// nothing beside them; a row on its own hangs them on a straight line under its
+				// icon (11px inset, 15px icon), lined up with the label.
+				<div className={cn("flex flex-col gap-2 pr-[11px] pb-2.5", insideRail ? "pl-[11px]" : "activity-step-line [--step-line-gap:16.5px] [--step-line-x:18.5px]")}>
 					<div className="flex flex-col gap-1.5 rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 text-xs leading-relaxed">
 						{/* Said in full rather than implied by the label: "auto-approved" alone
 						    leaves it ambiguous whether the user set something up that did this. */}
@@ -4413,35 +4416,33 @@ export function TurnArtifacts({
 	const openArtifacts = useOpenArtifacts();
 	const count = artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`;
 	return (
-		<section aria-label={count} className="flex min-w-0 flex-col rounded-[var(--radius-panel)] bg-surface pb-1.5">
-			<div className="flex min-h-11 items-center justify-between gap-3 px-4">
-				<span className="text-sm text-muted-foreground">{count}</span>
+		// The same card as the turn's changed files: its header, its button and its row size.
+		<section aria-label={count} className="flex min-w-0 flex-col overflow-hidden rounded-lg bg-surface">
+			<div className="flex items-center gap-2 px-3 py-2">
+				<span className="shrink-0 text-xs text-muted-foreground">{count}</span>
+				<span className="flex-1" />
 				{openArtifacts ? (
-					<button
-						type="button"
-						onClick={openArtifacts}
-						className="shrink-0 rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-					>
+					<Button type="button" variant="quiet" size="xs" onClick={openArtifacts}>
 						Open Artifacts
-					</button>
+					</Button>
 				) : null}
 			</div>
-			<ul className="m-0 flex list-none flex-col px-1.5">
+			<ul className="m-0 flex list-none flex-col px-1.5 pb-1.5">
 				{artifacts.map(({ artifact, status }) => {
 					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
 					const verb = status === "added" ? "Created" : "Updated";
 					const type = artifactTypeLabel(artifact.path, artifact.kind);
 					const line = (
 						<>
-							<span className="relative size-6 shrink-0 overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border">
+							<span className="relative size-4 shrink-0 overflow-hidden rounded-[3px] bg-[var(--solid-muted,var(--muted))] ring-1 ring-border">
 								<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={TURN_ARTIFACT_PAGE_HEIGHT} row={row} />
 							</span>
-							<span className="min-w-0 truncate text-sm text-foreground">{artifact.name}</span>
-							<span className="shrink-0 text-sm text-passive">{type}</span>
-							<span className="ml-auto shrink-0 pl-3 text-sm text-muted-foreground">{verb}</span>
+							<span className="min-w-0 truncate text-xs text-foreground/80">{artifact.name}</span>
+							<span className="shrink-0 text-xs text-muted-foreground/70">{type}</span>
+							<span className="ml-auto shrink-0 pl-3 text-caption text-muted-foreground">{verb}</span>
 						</>
 					);
-					const rowClass = "flex h-10 w-full min-w-0 items-center gap-3 rounded-lg px-2.5 text-left";
+					const rowClass = "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left";
 					return (
 						<li key={artifact.path} className="min-w-0">
 							<HoverCard openDelay={250} closeDelay={100}>
