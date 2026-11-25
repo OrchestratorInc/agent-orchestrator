@@ -745,3 +745,62 @@ func TestConcurrentCompressedReadsShareOneByteBudget(t *testing.T) {
 	}
 	release()
 }
+
+// A root prepared under an older pin must stay openable after the pin moves:
+// reopen requires only a recorded, root-bound proof version.
+func TestPreparedRootWithOlderProofVersionStillValidates(t *testing.T) {
+	ctx := context.Background()
+	root, path, cwd := importFixture(t, false)
+	a, err := ReadImportArchive(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{resolvedBinary: "fake-dsh", importVersion: func(context.Context) (string, error) { return supportedImportVersion, nil }}
+	r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}}
+	ref, err := p.PrepareImportedSession(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Re-home the prepared root as if an older AO release had written it.
+	rehome := func(version string) string {
+		t.Helper()
+		proof, err := readImportProof(ref.ConfigDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof.Version = version
+		encoded, name, err := importProofBytes(proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		older := filepath.Join(filepath.Dir(ref.ConfigDir), name)
+		if err := os.Rename(ref.ConfigDir, older); err != nil {
+			t.Fatal(err)
+		}
+		ref.ConfigDir = older
+		if err := os.WriteFile(filepath.Join(older, importProofName), encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, profile := range []string{"acp", headlessProfile} {
+			patch, err := privateImportPatch(older, proof.CredentialsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(older, "profiles", profile, "cordis.patch.yml"), patch, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return older
+	}
+	older := rehome("0.1.0-older-pin")
+	if got, err := validatePrivateImport(ctx, older, importTestID, r.LaunchCWD); err != nil || got == "" {
+		t.Fatalf("older proof version reopen = %q, %v", got, err)
+	}
+	if err := ValidateImportedACP(ctx, older, importTestID, r.LaunchCWD); err != nil {
+		t.Fatalf("older proof version ACP reopen: %v", err)
+	}
+	empty := rehome("")
+	if _, err := validatePrivateImport(ctx, empty, importTestID, r.LaunchCWD); err == nil {
+		t.Fatal("reopen accepted a proof without a recorded version")
+	}
+}
