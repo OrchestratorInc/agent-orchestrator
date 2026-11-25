@@ -54,15 +54,26 @@ function threadLines(comments: readonly ArtifactComment[], budget: number): stri
 	const [first, ...rest] = lines;
 	if (rest.length === 0) return [compactText(first, Math.max(MIN_LINE_LENGTH, budget - 1))];
 
-	// The first comment's floor and the longest omission marker are held back.
-	let room = budget - Math.min(lineCost(first), MIN_FIRST_COMMENT_LENGTH + 1) - lineCost(omitted(rest.length));
-	const tail: string[] = [];
-	for (let index = rest.length - 1; index >= 0; index -= 1) {
-		if (lineCost(rest[index]) > room) break;
-		room -= lineCost(rest[index]);
-		tail.unshift(rest[index]);
+	// The latest comments that fit in `room`, newest last, and the room left.
+	const latest = (room: number): { tail: string[]; left: number } => {
+		const tail: string[] = [];
+		for (let index = rest.length - 1; index >= 0; index -= 1) {
+			if (lineCost(rest[index]) > room) break;
+			room -= lineCost(rest[index]);
+			tail.unshift(rest[index]);
+		}
+		return { tail, left: room };
+	};
+	// The first comment's floor is held back; the omission marker only when
+	// something is actually omitted (its longest form, so the count fits).
+	const roomAfterFloor = budget - Math.min(lineCost(first), MIN_FIRST_COMMENT_LENGTH + 1);
+	let { tail, left } = latest(roomAfterFloor);
+	if (tail.length < rest.length) ({ tail, left } = latest(roomAfterFloor - lineCost(omitted(rest.length))));
+	if (tail.length === 0) {
+		// Nothing fits whole: shorten the latest rather than drop it.
+		const room = rest.length > 1 ? left : roomAfterFloor;
+		tail = [compactText(rest[rest.length - 1], Math.max(MIN_LINE_LENGTH, room - 1))];
 	}
-	if (tail.length === 0) tail.push(compactText(rest[rest.length - 1], Math.max(MIN_LINE_LENGTH, room - 1)));
 
 	const skipped = rest.length - tail.length;
 	const used = tail.reduce((sum, line) => sum + lineCost(line), 0) + (skipped > 0 ? lineCost(omitted(skipped)) : 0);

@@ -317,4 +317,29 @@ describe("formatArtifactCommentMessage", () => {
 		expect(long).toContain("- … 1 more comment omitted …");
 		expect(long.endsWith("They will republish it.")).toBe(true);
 	});
+
+	it("holds back room for the omission marker only when a comment is omitted", () => {
+		const bigFrame = {
+			...designThread,
+			anchor: { path: `body${">p:1".repeat(99)}`, tag: "p", textHash: "9f2c00112233aabb", excerpt: "e".repeat(120) },
+		};
+		const artifact = { path: `docs/${"d".repeat(495)}`, version: 1 };
+		const note = "n".repeat(1800);
+		// The thread's room: the cap minus the frame, measured with a one-line thread.
+		const probe = formatArtifactCommentMessage({ ...bigFrame, comments: [comment("1", "x")] }, artifact, note);
+		const budget = MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH - (probe.length - "- Sam: x".length);
+		// A latest comment that fits beside the first's 200-character floor, but
+		// not if the (unused) omission marker's room were held back too.
+		const prefix = "- Aditi: ";
+		const body = "w".repeat(budget - 201 - 10 - prefix.length - 1);
+		const message = formatArtifactCommentMessage(
+			{ ...bigFrame, comments: [comment("1", "f".repeat(1200)), comment("2", body, aditi)] },
+			artifact,
+			note,
+		);
+		expect(message.length).toBeLessThanOrEqual(MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH);
+		expect(message).toContain(`${prefix}${body}\n`);
+		expect(message).not.toContain("omitted");
+		expect(message).toMatch(/- Sam: f+ \[truncated\]/);
+	});
 });
