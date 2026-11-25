@@ -107,9 +107,11 @@ describe("spawn composer", () => {
 		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeGreaterThan(0);
 		expect(changeProject.indexOf("setProjectDetail(undefined);")).toBeGreaterThan(0);
 		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeLessThan(changeProject.indexOf("setProjectDetail(undefined);"));
-		const chooseHost = between(spawn, "const chooseHost = ", "const changeProject = ");
-		expect(chooseHost).toContain("loadedFor.current.catalog = undefined;");
-		expect(chooseHost).toContain("loadedFor.current.project = undefined;");
+		// Leaving a machine, by hand or by the page's own choice, clears its loads.
+		const resetHostChoice = between(spawn, "const resetHostChoice = ", "const chooseHost = ");
+		expect(resetHostChoice).toContain("loadedFor.current.catalog = undefined;");
+		expect(resetHostChoice).toContain("loadedFor.current.project = undefined;");
+		expect(between(spawn, "const chooseHost = ", "const changeProject = ")).toContain("resetHostChoice();");
 	});
 
 	// The same connection back after an app switch loads nothing; another
@@ -210,7 +212,10 @@ describe("spawn draft", () => {
 	// A Cloud draft picked before Cloud loaded landed on a machine (or none) for good.
 	it("waits for Cloud before picking the machine for a Cloud draft", () => {
 		expect(spawn).toContain("const cloudResolved = Boolean(cloud) || (cloudState.status !== \"loading\" && cloudState.status !== \"connecting\");");
-		expect(spawn).toContain("}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);");
+		// autoSpawnHostId holds a Cloud draft or route until Cloud has resolved.
+		const choose = between(spawn, "const auto = autoSpawnHostId({", "if (!auto.settled) return;");
+		expect(choose).toContain("cloudResolved,");
+		expect(spawn).toContain("}, [cloud, cloudResolved, configResolved, currentHostId, draftRestored, hostStates, machineHosts, phoneNetwork, routeHostId, selectedHostId]);");
 	});
 
 	// A Start sent with a picked account and restored without it sent another
@@ -352,11 +357,36 @@ describe("spawn draft", () => {
 		expect(spawn).toContain("if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);");
 		expect(spawn).toContain("if (picked.effort) setEffort(picked.effort);");
 		// The machine waits for the draft, and goes back to the draft's own.
-		expect(spawn).toContain("if (!draftRestored) return;\n\t\tconst draftHostId = restoredHostId.current;");
-		// Unrouted, the restored draft's machine is waited for before another is picked.
-		expect(spawn).toContain("const awaitedHostId = routeHostId ?? draftHostId ?? undefined;");
-		expect(spawn).toContain("if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;");
-		expect(spawn).toContain("const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;");
+		const choose = between(spawn, "if (hostSettled.current) return;", "const auto = autoSpawnHostId({");
+		expect(choose).toContain("if (!draftRestored) return;");
+		expect(spawn).toContain("draftHostId: restoredHostId.current ?? undefined,");
+	});
+
+	// Back from the background every machine is reconnecting. The page used to
+	// pick once, then: no machine, another machine or Cloud, and kept it after
+	// the default came back. It now keeps choosing (autoSpawnHostId) until a
+	// machine is picked by hand or the one chosen can be used.
+	it("keeps choosing its machine until one is picked or can be used", () => {
+		const choose = between(spawn, "if (hostSettled.current) return;", "}, [cloud, cloudResolved");
+		expect(choose).toContain("const auto = autoSpawnHostId({");
+		expect(choose).toContain("if (!auto.settled) return;");
+		// Moving off a machine clears what was chosen for it, as a pick by hand does.
+		expect(choose).toContain("if (selectedHostId !== null) resetHostChoice();");
+		expect(choose).toContain("if (isCloudHost(auto.hostId) || machineHosts.some((host) => host.id === auto.hostId)) hostSettled.current = true;");
+		expect(between(spawn, "const chooseHost = (nextHostId: string) => {", "void selectSpawnHost(")).toContain("hostSettled.current = true;");
+	});
+
+	// Chosen while it reconnects, a machine's credential is not proven yet.
+	it("sends its requests only through a connection the machine has answered on", () => {
+		expect(spawn).toContain("const config = provenSpawnConfig(provenConfig.current, liveConfig, selectedHost?.connection ?? \"closed\");");
+		expect(spawn).not.toContain("const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;");
+	});
+
+	it("asks a machine that failed to connect again as soon as the page is open on it", () => {
+		const retry = between(spawn, "const retriedHost = useRef<string | null>(null);", "}, [cloudSelected, liveConfig");
+		expect(retry).toContain("spawnHostNeedsRetry(");
+		expect(retry).toContain("retriedHost.current = selectedHostId;");
+		expect(retry).toContain("void refreshHost(selectedHostId)");
 	});
 
 	it("saves the draft for the machine picked and the account signed in", () => {
