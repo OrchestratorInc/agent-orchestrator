@@ -5440,6 +5440,8 @@
 	"move.finishEarlier": "Ein früherer Verschiebeversuch hat diese Sitzung möglicherweise bereits in der Orchestrator Cloud gestartet. Verschieben schließt diesen Vorgang ab.",
 	"move.failedUnknown": "Das Ergebnis ist unbekannt. Prüfe die Sitzung, bevor du es erneut versuchst.",
 	"move.finishGaveUp": "Orchestrator versucht nicht mehr, eine in die Orchestrator Cloud verschobene Sitzung zu archivieren. Archiviere sie auf diesem Computer.",
+	"move.sessionMoving": "Diese Sitzung wird auf einen anderen Computer verschoben. Sie nimmt daher keine Nachrichten an und ihr Agent bleibt gestoppt. Starte ihren Agenten neu, um sie in der Orchestrator Cloud zu behalten.",
+	"move.workerTooOld": "Der Orchestrator-Cloud-Worker dieser Sitzung ist zu alt, um sie zu verschieben. Starte die Sitzung neu, um ihn zu aktualisieren, und verschiebe sie dann.",
 	"moveHere.menuItem": "Auf diesen Computer verschieben…",
 	"moveHere.title": "{{title}} auf diesen Computer verschieben",
 	"moveHere.project": "Projekt",

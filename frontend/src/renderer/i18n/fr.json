@@ -5608,6 +5608,8 @@
 	"move.finishEarlier": "Une tentative précédente a peut-être déjà démarré cette session dans Orchestrator Cloud. Déplacer la session termine cette tentative.",
 	"move.failedUnknown": "Le résultat est inconnu. Vérifiez la session avant de réessayer.",
 	"move.finishGaveUp": "Orchestrator a cessé d'essayer d'archiver une session déplacée vers Orchestrator Cloud. Archivez-la sur cet ordinateur.",
+	"move.sessionMoving": "Cette session est en cours de déplacement vers un autre ordinateur : elle n'accepte aucun message et son agent reste arrêté. Redémarrez son agent pour la garder dans Orchestrator Cloud.",
+	"move.workerTooOld": "Le worker Orchestrator Cloud de cette session est trop ancien pour la déplacer. Redémarrez la session pour le mettre à jour, puis déplacez-la.",
 	"moveHere.menuItem": "Déplacer vers cet ordinateur…",
 	"moveHere.title": "Déplacer {{title}} vers cet ordinateur",
 	"moveHere.project": "Projet",

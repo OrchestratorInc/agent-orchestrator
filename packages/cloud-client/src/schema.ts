@@ -1041,7 +1041,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. While the session's work is moving to another machine (SESSION_MOVING), its terminal agent is not started again; agent/restart abandons the move. */
         post: operations["retrySessionStartup"];
         delete?: never;
         options?: never;
@@ -1305,7 +1305,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. On a session whose work is moving to another machine (SESSION_MOVING), it abandons the move: the session stays here and its agent starts again. */
         post: operations["restartSessionAgent"];
         delete?: never;
         options?: never;
@@ -2029,6 +2029,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description While a session's work is moving to another machine (after a move's export answered, until the session is deleted or agent/restart abandons the move), the ticket opens its terminal but its agent is not started again; a message is refused with 409 SESSION_MOVING. */
         post: operations["createTerminalTicket"];
         delete?: never;
         options?: never;
@@ -3142,9 +3143,9 @@ export interface components {
                  * @enum {string}
                  */
                 permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
-                /** @description The tracker issue the session works on, which the moved session keeps. */
+                /** @description The GitHub issue issue intake started the session for, as owner/repo#N; absent for a session intake did not start. */
                 issueId?: string;
-                /** @description URLs of the session's open pull requests, which the moved session claims. */
+                /** @description URLs of the session's open pull requests (its own or claimed by it; not merged or closed); absent when it has none. */
                 pullRequests?: string[];
             };
             handoffNote: string;
@@ -8557,6 +8558,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description SESSION_MOVING: the session's work is moving to another machine. After a move's export answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -8674,6 +8684,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -8712,6 +8731,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the session's latest conversation could not be saved to AO Cloud, so the move stopped; ask again. details.branch names the branch and details.pushedTip the commit origin now has. Another refusal of the worker's answers here too, with its code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
@@ -8759,6 +8796,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the session's latest conversation could not be saved to AO Cloud, so the move stopped; ask again. details.branch names the branch and details.pushedTip the commit origin now has. Another refusal of the worker's answers here too, with its code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
@@ -9467,6 +9522,15 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            /** @description SESSION_MOVING: the session's work is moving to another machine. After a move's export answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

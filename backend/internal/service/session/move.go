@@ -304,6 +304,11 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 	if !validPermissionMode(m.Permissions) {
 		m.Permissions = ""
 	}
+	// AO Cloud names a GitHub issue owner/repo#N; this machine's tracker ids
+	// carry their provider (github:owner/repo#N), which intake matches on.
+	if id := strings.TrimSpace(string(m.IssueID)); id != "" && !strings.Contains(id, ":") {
+		m.IssueID = domain.IssueID(string(domain.TrackerProviderGitHub) + ":" + id)
+	}
 	if in.MoveID == "" || m.Branch == "" || m.Tip == "" || m.Harness == "" {
 		return MoveImportOutcome{}, apierr.Invalid("MOVE_MANIFEST_INVALID", "moveId, branch, tip and harness are required", nil)
 	}

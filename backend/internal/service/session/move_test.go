@@ -870,6 +870,27 @@ func TestImportMoveTellsTheAgentAboutTheWIPCommit(t *testing.T) {
 	}
 }
 
+// AO Cloud's manifest names a GitHub issue owner/repo#N; the session here
+// gets this machine's tracker id for it, which intake matches on.
+func TestImportMoveTakesCloudsIssueAsATrackerID(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	var spawned ports.SpawnConfig
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		spawned = cfg
+		return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+	}}
+	manifest := importManifest(tip)
+	manifest.IssueID = "acme/app#42"
+	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-issue", Manifest: manifest}); err != nil {
+		t.Fatal(err)
+	}
+	if spawned.IssueID != "github:acme/app#42" {
+		t.Fatalf("spawned issue = %q, want github:acme/app#42", spawned.IssueID)
+	}
+}
+
 // A session moved back keeps the tracker issue and the open pull requests it
 // had here, when AO Cloud's manifest does not send them.
 func TestImportMoveKeepsTheIssueAndPullRequests(t *testing.T) {

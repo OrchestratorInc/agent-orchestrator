@@ -1879,6 +1879,18 @@ paths:
                 properties:
                   transition:
                     $ref: "#/components/schemas/SessionInterfaceTransition"
+        "409":
+          description: >-
+            SESSION_MOVING: the session's work is moving to another machine.
+            After a move's export answered, AO Cloud refuses this until the
+            move ends (the session deleted) or is abandoned (agent/restart):
+            the session takes no messages, its worker claims no queued turn,
+            its terminal agent is not started again and its interface does
+            not switch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
     delete:
@@ -1932,7 +1944,9 @@ paths:
         the worker bootstrap runs again against the existing sandbox; a
         bring-your-own workspace is never recreated. Returns 409
         startup_retry_unavailable when the worker has already checked in or the
-        session is not meant to be running.
+        session is not meant to be running. While the session's work is moving
+        to another machine (SESSION_MOVING), its terminal agent is not started
+        again; agent/restart abandons the move.
       responses:
         "202":
           description: The retry was accepted for asynchronous processing.
@@ -1992,6 +2006,15 @@ paths:
                         format: int64
                         description: The transcript and its sidecar folder.
                       subagents: { type: integer }
+        "409":
+          description: >-
+            MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
+            restarting the session updates it. Refused before the worker is
+            asked, so nothing stopped, committed or pushed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export:
@@ -2050,6 +2073,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
+            restarting the session updates it. Refused before the worker is
+            asked, so nothing stopped, committed or pushed. Other refusals of
+            the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer
+            409 too, with their code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the
+            session's latest conversation could not be saved to AO Cloud, so the
+            move stopped; ask again. details.branch names the branch and
+            details.pushedTip the commit origin now has. Another refusal of the
+            worker's answers here too, with its code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export/{moveId}:
@@ -2097,6 +2142,28 @@ paths:
             pushed (only when a worker took it); details.moveId names it. Try
             again with a new export, which reuses a pushed WIP commit, or
             restart the agent to stay in AO Cloud.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
+            restarting the session updates it. Refused before the worker is
+            asked, so nothing stopped, committed or pushed. Other refusals of
+            the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer
+            409 too, with their code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the
+            session's latest conversation could not be saved to AO Cloud, so the
+            move stopped; ask again. details.branch names the branch and
+            details.pushedTip the commit origin now has. Another refusal of the
+            worker's answers here too, with its code.
           content:
             application/json:
               schema:
@@ -2411,7 +2478,9 @@ paths:
         agent keeps one, and reads the session as idle rather than exited.
         requested is false when the agent is still running or starting. A
         session in Chat starts its agent with its next message instead; a
-        session viewer cannot restart it.
+        session viewer cannot restart it. On a session whose work is moving to
+        another machine (SESSION_MOVING), it abandons the move: the session
+        stays here and its agent starts again.
       responses:
         "200":
           description: Whether a start was requested.
@@ -2758,6 +2827,18 @@ paths:
                 properties:
                   event:
                     $ref: "#/components/schemas/UserMessageEvent"
+        "409":
+          description: >-
+            SESSION_MOVING: the session's work is moving to another machine.
+            After a move's export answered, AO Cloud refuses this until the
+            move ends (the session deleted) or is abandoned (agent/restart):
+            the session takes no messages, its worker claims no queued turn,
+            its terminal agent is not started again and its interface does
+            not switch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models:
@@ -3447,6 +3528,11 @@ paths:
     post:
       operationId: createTerminalTicket
       tags: [Terminal]
+      description: >-
+        While a session's work is moving to another machine (after a move's
+        export answered, until the session is deleted or agent/restart
+        abandons the move), the ticket opens its terminal but its agent is not
+        started again; a message is refused with 409 SESSION_MOVING.
       requestBody:
         required: true
         content:
@@ -5551,11 +5637,15 @@ components:
                 keeps. Absent when the session has none of its own.
             issueId:
               type: string
-              description: The tracker issue the session works on, which the moved session keeps.
+              description: >-
+                The GitHub issue issue intake started the session for, as
+                owner/repo#N; absent for a session intake did not start.
             pullRequests:
               type: array
               items: { type: string }
-              description: URLs of the session's open pull requests, which the moved session claims.
+              description: >-
+                URLs of the session's open pull requests (its own or claimed
+                by it; not merged or closed); absent when it has none.
         handoffNote: { type: string }
         transcript:
           type: object

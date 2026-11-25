@@ -5440,6 +5440,8 @@
 	"move.finishEarlier": "以前の移動ですでにこのセッションが Orchestrator Cloud で開始されている可能性があります。移動するとその移動を完了します。",
 	"move.failedUnknown": "結果は不明です。再試行する前にセッションを確認してください。",
 	"move.finishGaveUp": "Orchestrator Cloud に移動したセッションのアーカイブを中止しました。このコンピューターでアーカイブしてください。",
+	"move.sessionMoving": "このセッションは別のコンピューターに移動中のため、メッセージを受け付けず、エージェントは停止したままです。Orchestrator Cloud に残すには、エージェントを再起動してください。",
+	"move.workerTooOld": "このセッションの Orchestrator Cloud ワーカーは古すぎるため移動できません。セッションを再起動して更新してから移動してください。",
 	"moveHere.menuItem": "このコンピュータに移動…",
 	"moveHere.title": "{{title}} をこのコンピュータに移動",
 	"moveHere.project": "プロジェクト",

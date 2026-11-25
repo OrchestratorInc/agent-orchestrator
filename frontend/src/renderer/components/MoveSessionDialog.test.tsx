@@ -637,6 +637,21 @@ describe("moving a Cloud session to this computer", () => {
 		expect(useUnsettledMoveHereStore.getState().moves).toEqual({});
 	});
 
+	it("says plainly that the session's Cloud worker is too old to move, before and on export", async () => {
+		cloud.previewSessionMove.mockRejectedValue(new CloudCpError("worker too old (CP text)", { status: 409, code: "MOVE_WORKER_TOO_OLD" }));
+		const first = renderHere();
+		expect(await screen.findByText("This session's Orchestrator Cloud worker is too old to move it. Restart the session to update it, then move it.")).toBeTruthy();
+		first.unmount();
+
+		cloud.previewSessionMove.mockResolvedValue({ branch: "feat/login", changes: [] });
+		cloud.exportSessionMove.mockRejectedValue(new CloudCpError("worker too old (CP text)", { status: 409, code: "MOVE_WORKER_TOO_OLD" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("This session's Orchestrator Cloud worker is too old to move it. Restart the session to update it, then move it.")).toBeTruthy();
+		expect(screen.queryByText("worker too old (CP text)")).toBeNull();
+	});
+
 	it("keeps the Cloud session when it was used again after the move, and says so", async () => {
 		useUnfinishedMoveStore.setState({ moves: [] });
 		cloud.exportSessionMove.mockResolvedValue({ ...(await cloud.exportSessionMove.getMockImplementation()?.()), moveId: "exp-1" });

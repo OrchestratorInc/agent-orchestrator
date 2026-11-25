@@ -1528,6 +1528,10 @@ export interface CloudCpMoveExportResponse {
 		displayName?: string;
 		/** The session's approval mode; absent from a control plane that does not carry it. */
 		permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+		/** The GitHub issue intake started the session for, as owner/repo#N. */
+		issueId?: string;
+		/** URLs of the session's open pull requests. */
+		pullRequests?: string[];
 	};
 	handoffNote: string;
 	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */

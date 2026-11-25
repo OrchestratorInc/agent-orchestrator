@@ -5420,6 +5420,8 @@
 	"move.finishEarlier": "An earlier move may already have started this session in Orchestrator Cloud. Moving finishes that move.",
 	"move.failedUnknown": "The outcome is unknown. Check the session before trying again.",
 	"move.finishGaveUp": "Orchestrator stopped trying to archive a session that moved to Orchestrator Cloud. Archive it on this computer.",
+	"move.sessionMoving": "This session is moving to another computer, so it takes no messages and its agent stays stopped. Restart its agent to keep it in Orchestrator Cloud.",
+	"move.workerTooOld": "This session's Orchestrator Cloud worker is too old to move it. Restart the session to update it, then move it.",
 	"moveHere.menuItem": "Move to this computer…",
 	"moveHere.title": "Move {{title}} to this computer",
 	"moveHere.project": "Project",

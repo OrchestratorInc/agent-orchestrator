@@ -5460,6 +5460,8 @@
 	"move.finishEarlier": "Önceki bir taşıma bu oturumu Orchestrator Cloud'da zaten başlatmış olabilir. Taşımak o taşımayı tamamlar.",
 	"move.failedUnknown": "Sonuç bilinmiyor. Yeniden denemeden önce oturumu kontrol edin.",
 	"move.finishGaveUp": "Orchestrator, Orchestrator Cloud'a taşınan bir oturumu arşivlemeyi denemeyi bıraktı. Oturumu bu bilgisayarda arşivleyin.",
+	"move.sessionMoving": "Bu oturum başka bir bilgisayara taşınıyor, bu yüzden mesaj almıyor ve ajanı durdurulmuş kalıyor. Orchestrator Cloud'da tutmak için ajanını yeniden başlatın.",
+	"move.workerTooOld": "Bu oturumun Orchestrator Cloud worker'ı onu taşımak için çok eski. Güncellemek için oturumu yeniden başlatın, sonra taşıyın.",
 	"moveHere.menuItem": "Bu bilgisayara taşı…",
 	"moveHere.title": "{{title}} oturumunu bu bilgisayara taşı",
 	"moveHere.project": "Proje",

@@ -5422,6 +5422,8 @@
 	"move.finishEarlier": "之前的一次移动可能已经在 Orchestrator Cloud 中启动了此会话。移动将完成那次移动。",
 	"move.failedUnknown": "结果未知。请先检查会话再重试。",
 	"move.finishGaveUp": "Orchestrator 已停止尝试归档一个已移动到 Orchestrator Cloud 的会话。请在这台电脑上归档它。",
+	"move.sessionMoving": "此会话正在移动到另一台电脑，因此不接收消息，其智能体保持停止。要将它保留在 Orchestrator Cloud 中，请重新启动其智能体。",
+	"move.workerTooOld": "此会话的 Orchestrator Cloud worker 版本过旧，无法移动。请重新启动会话以更新它，然后再移动。",
 	"moveHere.menuItem": "移动到此电脑…",
 	"moveHere.title": "将 {{title}} 移动到此电脑",
 	"moveHere.project": "项目",
