@@ -5120,6 +5120,8 @@ type BrowserRemoteCommandResponse struct {
 	Output string            `json:"output"`
 	Error  string            `json:"error,omitempty"`
 	Files  map[string]string `json:"files,omitempty" description:"Files the command wrote, by path, base64."`
+}
+
 // DevicePlatformStatus says whether this machine can run a platform's
 // simulators or emulators, and why not.
 type DevicePlatformStatus struct {
