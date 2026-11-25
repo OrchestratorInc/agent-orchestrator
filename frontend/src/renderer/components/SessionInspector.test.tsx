@@ -3108,6 +3108,46 @@ describe("SessionInspector Activity section", () => {
     },
   );
 
+  it.each([
+    ["ci_failed", "CI Failed"],
+    ["changes_requested", "Changes Requested"],
+    ["commented", "Commented"],
+  ] as const)(
+    "leaves %s to the PR card in the PR view, so the rail's status is only the agent's",
+    (status, label) => {
+      useUiStore.setState({ developerMode: true, prView: true });
+      renderWithQuery(
+        <SessionInspector
+          session={session([], {
+            status,
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          })}
+        />,
+      );
+
+      const rail = within(activitySection().getByTestId("activity-rail"));
+      expect(rail.getByText("Idle")).toBeInTheDocument();
+      expect(rail.queryByText(label)).not.toBeInTheDocument();
+      // Quiet: the words are plain; only the dot beside them carries the state's colour.
+      expect(rail.getByText("Idle").getAttribute("style")).toBeNull();
+      expect(rail.getByTestId("rail-status-dot").getAttribute("style")).toContain("background");
+    },
+  );
+
+  it.each(["waiting_input", "blocked", "exited"] as const)(
+    "keeps red off the PR view's status dot when the session is %s",
+    (state) => {
+      useUiStore.setState({ developerMode: true, prView: true });
+      renderWithQuery(
+        <SessionInspector session={session([], { activity: { state, lastActivityAt: "2026-06-15T10:00:00Z" } })} />,
+      );
+
+      const dot = within(activitySection().getByTestId("activity-rail")).getByTestId("rail-status-dot");
+      expect(dot?.getAttribute("style")).toBeNull();
+      expect(dot?.className).toMatch(/bg-foreground|bg-status-idle/);
+    },
+  );
+
   it("keeps an unresolved, non-blocking review comment visible as Commented feedback while the agent is working (#5765)", () => {
     renderWithQuery(
       <SessionInspector
@@ -7840,6 +7880,23 @@ describe("SessionInspector without the PR view", () => {
     expect(screen.queryByTestId("pr-focus")).not.toBeInTheDocument();
     expect(screen.queryByText("Open tab")).not.toBeInTheDocument();
     expect(screen.queryByText(/^Comments \(/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("activity-rail")).not.toBeInTheDocument();
+  });
+
+  it("shows the activity as a rail only while the PR view is on", () => {
+    useUiStore.setState({ developerMode: true, prView: true });
+    const prs = [readyPR()];
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs, linkedPrs: [] } }
+      : respond(path));
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")])} />,
+      undefined,
+      (client) => seedPRSummaries(client, prs),
+    );
+
+    expect(screen.getByTestId("activity-rail")).toBeInTheDocument();
   });
 
   it("merges from the card through the daemon, as before the PR view", async () => {

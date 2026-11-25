@@ -1148,6 +1148,8 @@ func Run(buildVersion string) (retErr error) {
 			HeadChecks:    prReader,
 			Queuer:        prReader,
 			Details:       store,
+			Editor:        prReader,
+			EditWriter:    store,
 			Lifecycle:     lcStack.LCM,
 			Logger:        log,
 		})

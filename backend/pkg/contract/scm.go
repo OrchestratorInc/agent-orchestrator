@@ -125,6 +125,23 @@ type PullRequestSubmittedReview struct {
 	AutoInjectReview bool           `json:"autoInjectReview"`
 }
 
+// MaxPullRequestReviewEventBody bounds, in runes, the body a review event carries:
+// enough for an excerpt, as the summary's own reviews carry theirs whole.
+const MaxPullRequestReviewEventBody = 2048
+
+// PullRequestReviewEvent is one submitted review in a pull request's history. Unlike
+// PullRequestSubmittedReview, which keeps each reviewer's newest review, every
+// submitted review is its own event, under the provider's ID for it.
+type PullRequestReviewEvent struct {
+	ID          string         `json:"id"`
+	Reviewer    string         `json:"reviewerId"`
+	Verdict     ReviewDecision `json:"verdict"`
+	Body        string         `json:"body,omitempty"`
+	URL         string         `json:"reviewUrl,omitempty"`
+	SubmittedAt time.Time      `json:"submittedAt"`
+	IsBot       bool           `json:"isBot,omitempty"`
+}
+
 // PullRequestReviewSummary is the latest aggregate provider review observation.
 type PullRequestReviewSummary struct {
 	Decision                   ReviewDecision `json:"decision"`
@@ -137,6 +154,9 @@ type PullRequestReviewSummary struct {
 	UnresolvedBy          []PullRequestUnresolvedReviewer `json:"unresolvedBy"`
 	ResolvedBy            []PullRequestUnresolvedReviewer `json:"resolvedBy,omitempty"`
 	Reviews               []PullRequestSubmittedReview    `json:"reviews"`
+	// History is every stored review that gave a verdict or said something,
+	// oldest first.
+	History []PullRequestReviewEvent `json:"history,omitempty"`
 }
 
 // PullRequestConflictFile is one file involved in a merge conflict.

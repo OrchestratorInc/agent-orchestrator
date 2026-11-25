@@ -18,32 +18,38 @@ import (
 )
 
 type fakePRService struct {
-	mergeResult   prsvc.MergeResult
-	mergeErr      error
-	mergeRequest  prsvc.MergeRequest
-	resolveResult prsvc.ResolveResult
-	resolveErr    error
-	stateResult   prsvc.StateResult
-	stateErr      error
-	stateRequest  prsvc.StateRequest
-	stateCalls    int
-	commentResult prsvc.CommentResult
-	commentErr    error
-	commentReq    prsvc.CommentRequest
-	commentCalls  int
-	accessResult  prsvc.AttachmentAccessResult
-	accessErr     error
-	accessCalls   []string
-	stackResult   prsvc.StackResult
-	stackMerge    prsvc.StackMergeResult
-	stackMergeReq prsvc.StackMergeRequest
-	stackErr      error
-	stackCalls    []string
-	detailsErr    error
-	detailsCalls  []string
-	dequeueResult prsvc.DequeueResult
-	dequeueErr    error
-	dequeueCalls  []string
+	mergeResult      prsvc.MergeResult
+	mergeErr         error
+	mergeRequest     prsvc.MergeRequest
+	resolveResult    prsvc.ResolveResult
+	resolveErr       error
+	stateResult      prsvc.StateResult
+	stateErr         error
+	stateRequest     prsvc.StateRequest
+	stateCalls       int
+	commentResult    prsvc.CommentResult
+	commentErr       error
+	commentReq       prsvc.CommentRequest
+	commentCalls     int
+	accessResult     prsvc.AttachmentAccessResult
+	accessErr        error
+	accessCalls      []string
+	stackResult      prsvc.StackResult
+	stackMerge       prsvc.StackMergeResult
+	stackMergeReq    prsvc.StackMergeRequest
+	stackErr         error
+	stackCalls       []string
+	detailsErr       error
+	detailsCalls     []string
+	editContent      prsvc.EditContentResult
+	editContentCalls []string
+	editResult       prsvc.EditResult
+	editRequest      prsvc.EditRequest
+	editCalls        int
+	editErr          error
+	dequeueResult    prsvc.DequeueResult
+	dequeueErr       error
+	dequeueCalls     []string
 }
 
 func (f *fakePRService) Dequeue(_ context.Context, prID, prURL string) (prsvc.DequeueResult, error) {

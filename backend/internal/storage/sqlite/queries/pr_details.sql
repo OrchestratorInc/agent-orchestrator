@@ -21,3 +21,6 @@ SELECT provider_updated_at FROM pr_details WHERE pr_url = ?;
 
 -- name: SetPRDetailsConversation :execrows
 UPDATE pr_details SET conversation = ? WHERE pr_url = ?;
+
+-- name: SetPRDetailsDescription :execrows
+UPDATE pr_details SET description = ?, description_truncated = ? WHERE pr_url = ?;

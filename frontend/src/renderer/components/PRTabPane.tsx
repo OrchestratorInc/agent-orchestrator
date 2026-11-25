@@ -3,7 +3,9 @@ import { CheckStateGlyph, type PRCheckState } from "@aoagents/product-ui";
 import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileDiff, FileText, MessageSquare, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { usePRContentPoll } from "../hooks/usePRContentPoll";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
+import { usePREdit } from "../hooks/usePREdit";
 import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { usePRStack } from "../hooks/usePRStack";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -11,6 +13,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prMergeQueueEntry, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import type { PRTabSection } from "../lib/pr-tabs";
+import { usePRViewEnabled } from "../lib/pr-view";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { GitHubIcon } from "./GitHubIcon";
@@ -19,6 +22,7 @@ import { AppLink } from "./AppLink";
 import { checkTone, sortedChecks } from "./PRCardDetails";
 import { PRAvatar, PRComments, prCommentCount } from "./PRComments";
 import { PRDescriptionBody } from "./PRDescriptionBody";
+import { PREditableDescription, PREditableTitle } from "./PREdit";
 import { prStateIcon } from "./PRPills";
 import { PRStackSection, usePRStackSection } from "./PRStack";
 import { ProductExternalLink } from "./ProductExternalLink";
@@ -259,6 +263,10 @@ export function PRTabPane({ active = true, hostId, onViewInDiff, request, sessio
 	useTelemetrySurface("pr_tab", active);
 	const pr = useSessionPR(session, url, hostId);
 	const detailsFailed = usePRDetailsLoad(pr, session.id, hostId, !session.cloud);
+	// The title and description are edited here, never on the sidebar's card.
+	const canEdit = usePRViewEnabled() && !session.cloud;
+	const edit = usePREdit(pr, session.id, hostId, canEdit);
+	usePRContentPoll(session.id, hostId, canEdit && (pr?.state === "open" || pr?.state === "draft"));
 	usePRNoChecksClock([pr]);
 	const [section, setSection] = useState<PRTabSection>(request?.section ?? "summary");
 	const scrollerRef = useRef<HTMLDivElement>(null);
@@ -327,7 +335,7 @@ export function PRTabPane({ active = true, hostId, onViewInDiff, request, sessio
 							</ProductExternalLink>
 						</div>
 						<div className="flex min-w-0 flex-col items-start gap-2.5 @xl:flex-row @xl:gap-4">
-							<h2 className="m-0 min-w-0 flex-1 text-heading font-medium leading-tight text-foreground [overflow-wrap:anywhere]">{pr.title}</h2>
+							<PREditableTitle className="flex-1 self-stretch" edit={canEdit ? edit : undefined} pr={pr} />
 							{(pr.state === "open" || pr.state === "draft") && !session.cloud ? (
 								<div className="max-w-full shrink-0">
 									<PRActionButton canMerge={prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) && Boolean(pr.url && pr.headSha)} hostId={hostId} pr={pr} sessionId={session.id} />
@@ -362,7 +370,11 @@ export function PRTabPane({ active = true, hostId, onViewInDiff, request, sessio
 					</div>
 					<div className="min-w-0 py-5" ref={bodyRef}>
 						<TabsContent className="min-w-0 data-[state=inactive]:hidden" forceMount value="summary">
-							<PRDescriptionBody cloud={false} detailsFailed={detailsFailed} pr={pr} />
+							{canEdit ? (
+								<PREditableDescription edit={edit} pr={pr}>
+									<PRDescriptionBody cloud={false} detailsFailed={detailsFailed} pr={pr} />
+								</PREditableDescription>
+							) : <PRDescriptionBody cloud={false} detailsFailed={detailsFailed} pr={pr} />}
 						</TabsContent>
 						<TabsContent className="min-w-0 data-[state=inactive]:hidden" forceMount value="comments">
 							<PRComments detailsFailed={detailsFailed} hostId={hostId} onViewInDiff={onViewInDiff} pr={pr} session={session} />

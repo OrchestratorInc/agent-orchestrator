@@ -70,6 +70,7 @@ import { SessionForksSection } from "./SessionForksSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { openPRTab } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
+import type { RailCommit } from "../lib/activity-rail";
 import { ClassicSessionBranchSummary } from "./ClassicSessionBranchSummary";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
@@ -78,6 +79,8 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
+import { ActivityRail } from "./ActivityRail";
+import { useSessionRailWork } from "../hooks/useSessionRailWork";
 import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
@@ -1654,8 +1657,11 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 
 // ponytail: newest 5 commits only; a "show all" control when long sessions need it.
 const TIMELINE_COMMIT_LIMIT = 5;
+const NO_COMMITS: RailCommit[] = [];
 
 function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+	const prView = usePRViewEnabled();
+	const work = useSessionRailWork(session, hostId, prView);
 	// Keyed on the daemon's commit count, not the shared history query that every
 	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
@@ -1765,26 +1771,55 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
 		: getAgentActivityView(session.activity);
 	const activityAt = (accountMoving ? transition?.createdAt : undefined) ?? session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
+	const status = (
+		<span className="inline-flex flex-wrap items-center gap-1.5">
+			<span className="inline-flex align-middle">
+				{accountMoving ? <TimelinePill {...activityView} /> : <InspectorActivityPill activity={session.activity} />}
+			</span>
+			{session.status === "no_signal" ? (
+				<span className="inline-flex align-middle">
+					<TimelinePill {...getSessionTimelinePillView("no_signal")} />
+				</span>
+			) : null}
+			{scmTimelineStates(session).map((state) => (
+				<span key={state} className="inline-flex align-middle">
+					<InspectorScmPill state={state} />
+				</span>
+			))}
+		</span>
+	);
+	// The PR view's rail puts the people on the line and what they said on the PRs.
+	if (prView) {
+		// The card says where each PR stands (checks, reviews, conflicts), so the
+		// rail's first row says only what the agent is doing, and quietly: a dot
+		// in the icon column, and the state in plain words.
+		// Red is for failures alone, so a session that needs you gets a plain white
+		// dot, and one that exited a grey one.
+		const quietDot = activityView.state === "waiting_input" || activityView.state === "blocked" ? "bg-foreground" : activityView.state === "exited" ? "bg-status-idle" : undefined;
+		const statusDot = <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", quietDot, activityView.breathe && "animate-status-pulse")} data-testid="rail-status-dot" style={quietDot ? undefined : { background: activityView.tone }} />;
+		const railStatus = (
+			<>
+				{activityView.label}
+				{session.status === "no_signal" ? <span className="text-muted-foreground"> · {getSessionTimelinePillView("no_signal").label}</span> : null}
+			</>
+		);
+		return (
+			<ActivityRail
+				commits={commits ?? NO_COMMITS}
+				hostId={hostId}
+				prs={prs}
+				session={session}
+				status={railStatus}
+				statusDot={statusDot}
+				statusAt={activityAt}
+				work={work}
+			/>
+		);
+	}
 	pushEvent(
 		{
 			tone: "now",
-			content: (
-				<span className="inline-flex flex-wrap items-center gap-1.5">
-					<span className="inline-flex align-middle">
-						{accountMoving ? <TimelinePill {...activityView} /> : <InspectorActivityPill activity={session.activity} />}
-					</span>
-					{session.status === "no_signal" ? (
-						<span className="inline-flex align-middle">
-							<TimelinePill {...getSessionTimelinePillView("no_signal")} />
-						</span>
-					) : null}
-					{scmTimelineStates(session).map((state) => (
-						<span key={state} className="inline-flex align-middle">
-							<InspectorScmPill state={state} />
-						</span>
-					))}
-				</span>
-			),
+			content: status,
 			timestamp: activityAt ? formatTimeCompact(activityAt) : null,
 			markerTone: activityView.tone,
 			markerBreathe: activityView.breathe,
