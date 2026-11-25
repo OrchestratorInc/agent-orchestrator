@@ -120,3 +120,26 @@ it("keeps a rejected move's reason so the composer can show it", async () => {
 	queryClient.clear();
 	await new Promise((resolve) => setTimeout(resolve, 0));
 });
+
+it("shows the chosen account's badge in the session account picker", async () => {
+	getMock.mockImplementation((path: string) => Promise.resolve({ data:
+		path === "/api/v1/agents/accounts" ? { accounts: [
+			{ id: "acct-a", provider: "claude", name: "Cristian Account", email: "a@example.com", color: "blue", signedIn: true, default: true },
+			{ id: "acct-b", provider: "claude", name: "Company Account", email: "b@example.com", signedIn: true },
+		] }
+		: path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { claude: "acct-a" }
+		: {} }));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const { findByRole, unmount } = render(<QueryClientProvider client={queryClient}>
+		<SessionAccountSummary session={session("s-badge")} />
+	</QueryClientProvider>);
+
+	const badge = await findByRole("img", { name: "Cristian Account" });
+	expect(badge).toHaveTextContent("CA");
+	expect(badge.querySelector(".bg-\\(--account-color-blue\\)")).not.toBeNull();
+
+	await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+	unmount();
+	queryClient.clear();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+});
