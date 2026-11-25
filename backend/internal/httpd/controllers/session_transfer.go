@@ -72,9 +72,9 @@ type ReceiveTransferRequest struct {
 
 // ReceiveTransferResponse returns the session continuing a transfer.
 type ReceiveTransferResponse struct {
-	Session   SessionView `json:"session"`
-	Warnings  []string    `json:"warnings"`
-	Resumed   bool        `json:"resumed" description:"True when the agent resumed its moved conversation; false when it started from the handoff note."`
+	Session  SessionView `json:"session"`
+	Warnings []string    `json:"warnings"`
+	Resumed  bool        `json:"resumed" description:"True when the agent resumed its moved conversation; false when it started from the handoff note."`
 }
 
 // CommitTransferRequest is the body of POST /sessions/{sessionId}/transfer/commit.

@@ -26109,6 +26109,8 @@ components:
           type: string
         label:
           type: string
+        projectId:
+          type: string
         sessionId:
           type: string
         transferId:
@@ -26117,6 +26119,7 @@ components:
       - transferId
       - hostId
       - label
+      - projectId
       - sessionId
       type: object
     SessionPRCISummary:
@@ -26908,11 +26911,14 @@ components:
           type: string
         label:
           type: string
+        projectId:
+          type: string
         sessionId:
           type: string
       required:
       - hostId
       - label
+      - projectId
       - sessionId
       type: object
     SessionTransferNative:

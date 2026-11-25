@@ -48,6 +48,7 @@ type SessionTransferNative struct {
 type SessionTransferDestination struct {
 	HostID    string    `json:"hostId"`
 	Label     string    `json:"label"`
+	ProjectID ProjectID `json:"projectId"`
 	SessionID SessionID `json:"sessionId"`
 }
 
@@ -56,6 +57,7 @@ type SessionMovedTo struct {
 	TransferID string    `json:"transferId"`
 	HostID     string    `json:"hostId"`
 	Label      string    `json:"label"`
+	ProjectID  ProjectID `json:"projectId"`
 	SessionID  SessionID `json:"sessionId"`
 }
 

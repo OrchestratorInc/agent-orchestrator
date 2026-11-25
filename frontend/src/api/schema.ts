@@ -9185,6 +9185,7 @@ export interface components {
         SessionMovedTo: {
             hostId: string;
             label: string;
+            projectId: string;
             sessionId: string;
             transferId: string;
         };
@@ -9487,6 +9488,7 @@ export interface components {
         SessionTransferDestination: {
             hostId: string;
             label: string;
+            projectId: string;
             sessionId: string;
         };
         SessionTransferNative: {

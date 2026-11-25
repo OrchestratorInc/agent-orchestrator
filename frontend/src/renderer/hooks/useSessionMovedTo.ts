@@ -79,7 +79,7 @@ export function usePendingMove(session: WorkspaceSession | undefined) {
 	const inBanner = useMoveStore((store) => Boolean(session && store.moves[moveKey(session.hostId, session.id)]));
 	if (!pending || !session || session.isTerminated || inBanner) return undefined;
 	const source = { client: clientForSessionHost(session.hostId), hostId: session.hostId ?? LOCAL_HOST, sessionId: session.id, label: "" };
-	const target = targets.find((each) => (each.hostId === LOCAL_HOST ? machineId : each.hostId) === pending.hostId);
+	const target = targets.find((each) => (each.hostId === LOCAL_HOST ? machineId : each.hostId) === pending.hostId && each.projectId === pending.projectId);
 	return {
 		label: pending.label,
 		keeping,

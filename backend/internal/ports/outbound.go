@@ -439,10 +439,11 @@ type Workspace interface {
 type WorkspaceTransfer interface {
 	// CheckTransfer refuses a worktree whose work PushTransfer cannot carry.
 	CheckTransfer(ctx context.Context, info WorkspaceInfo) error
-	// PushTransfer pushes the worktree's branch and, when preservedRef is set,
-	// that ref to remotePreservedRef on origin, never forcing. What was staged
-	// goes beside it. It returns the branch head.
-	PushTransfer(ctx context.Context, info WorkspaceInfo, preservedRef, remotePreservedRef string) (head string, err error)
+	// PushTransfer pushes the worktree's branch, never forcing, and its
+	// uncommitted work to remotePreservedRef: preservedRef when set, with what
+	// is staged beside it. A refused branch leaves neither on origin. It returns
+	// the branch head and whether there was uncommitted work.
+	PushTransfer(ctx context.Context, info WorkspaceInfo, preservedRef, remotePreservedRef string) (head string, uncommitted bool, err error)
 	// FetchTransfer fetches a moved branch and, when set, a preserved ref from origin.
 	FetchTransfer(ctx context.Context, repoPath, branch, remotePreservedRef string) error
 	// AlignTransferBranch points the local branch at head when it is missing or
@@ -611,6 +612,9 @@ var (
 	// ErrTransferNestedRepo is returned when the worktree holds an untracked
 	// repository of its own, which a move cannot carry.
 	ErrTransferNestedRepo = errors.New("workspace: folder is its own git repository")
+	// ErrTransferSubmodule is returned when a submodule holds work its own
+	// remote does not have.
+	ErrTransferSubmodule = errors.New("workspace: submodule has work that is not pushed")
 	// ErrTransferPush is returned when origin does not take the moved work.
 	ErrTransferPush = errors.New("workspace: could not push to origin")
 	// ErrTransferFetch is returned when the moved work cannot be read from origin.

@@ -1074,6 +1074,11 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	// Deferred remove is a best-effort cleanup in case git leaves the file.
 	defer func() { _ = os.Remove(tmpIdxPath) }()
 
+	// Start from the real index: tracked files that an ignore rule matches, or
+	// that a sparse checkout leaves out, are not added to an empty one.
+	if err := w.copyIndex(ctx, path, tmpIdxPath); err != nil {
+		return "", fmt.Errorf("gitworktree: copy index: %w", err)
+	}
 	// Stage all tracked and non-ignored untracked files into the temp index.
 	// GIT_INDEX_FILE overrides the index so the real index is never touched.
 	addCmd := aoprocess.CommandContext(ctx, w.binary, addAllTempIndexArgs(path)...)
@@ -1127,6 +1132,22 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", fmt.Errorf("gitworktree: update-ref %q: %w", ref, err)
 	}
 	return ref, nil
+}
+
+// copyIndex copies the worktree's index to dst. A worktree without one copies nothing.
+func (w *Workspace) copyIndex(ctx context.Context, path, dst string) error {
+	gitDir, err := w.run(ctx, w.binary, "-C", path, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(gitDir)), "index"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o600)
 }
 
 func isNotGitRepositoryError(err error) bool {

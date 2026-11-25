@@ -18,8 +18,8 @@ vi.mock("./useMoveSession", () => ({ useMoveTargets: () => ({ targets: state.tar
 vi.mock("./useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: state.local }), useRemoteWorkspaces: () => ({ data: state.remote }) }));
 
 const project = (id: string, hostId?: string) => ({ id, hostId, sessions: [{ id: "web-9" }] });
-const movedToB = { movedTo: { hostId: "h_b", transferId: "tr1", label: "MacBook B", sessionId: "web-9" } };
-const pendingToB = { pending: { hostId: "h_b", transferId: "tr1", label: "MacBook B", sessionId: "" } };
+const movedToB = { movedTo: { hostId: "h_b", transferId: "tr1", label: "MacBook B", projectId: "web", sessionId: "web-9" } };
+const pendingToB = { pending: { hostId: "h_b", transferId: "tr1", label: "MacBook B", projectId: "web-2", sessionId: "" } };
 
 function render<T>(hook: (session: WorkspaceSession) => T, machineId: string, transfer: unknown, session: Partial<WorkspaceSession>) {
 	const client = new QueryClient();
@@ -62,13 +62,13 @@ it("opens a session that moved to this computer here", () => {
 	expect(navigate).toHaveBeenCalledExactlyOnceWith(sessionNavigateTarget("web", "web-9", "local"));
 });
 
-it("finishes a move to the recorded computer from either desktop", () => {
-	const local = { hostId: "local", projectId: "web", label: "This computer" };
-	const remote = { hostId: "h_b", projectId: "web", label: "MacBook B" };
+it("finishes a move to the recorded project from either desktop", () => {
+	const local = { hostId: "local", projectId: "web-2", label: "This computer" };
+	const remote = { hostId: "h_b", projectId: "web-2", label: "MacBook B" };
 
-	state.targets = [remote];
+	state.targets = [{ ...remote, projectId: "web" }, remote];
 	render(usePendingMove, "h_a", pendingToB, {}).current?.finish?.();
-	state.targets = [local];
+	state.targets = [{ ...local, projectId: "web" }, local];
 	render(usePendingMove, "h_b", pendingToB, { hostId: "h_a" }).current?.finish?.();
 	expect(start.mock.calls).toEqual([[remote], [local]]);
 

@@ -78,6 +78,7 @@ export function MoveBanner({ session }: { session: WorkspaceSession }) {
 		return (
 			<Row alert icon={alert} title={t("moveSession.commitFailed", { target: host, message: move.result?.commitError ?? "" })}>
 				<Button size="sm" variant="secondary" disabled={busy} onClick={() => run(actions.retryCommit)}>{t("moveSession.retry")}</Button>
+				{dismiss}
 			</Row>
 		);
 	}

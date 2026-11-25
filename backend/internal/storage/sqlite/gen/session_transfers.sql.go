@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const cancelPendingTransfer = `-- name: CancelPendingTransfer :exec
+const cancelPendingTransfer = `-- name: CancelPendingTransfer :execrows
 DELETE FROM session_transfers WHERE session_id = ? AND transfer_id = ? AND dest_session_id = ''
 `
 
@@ -19,19 +19,54 @@ type CancelPendingTransferParams struct {
 	TransferID string
 }
 
-func (q *Queries) CancelPendingTransfer(ctx context.Context, arg CancelPendingTransferParams) error {
-	_, err := q.db.ExecContext(ctx, cancelPendingTransfer, arg.SessionID, arg.TransferID)
-	return err
+func (q *Queries) CancelPendingTransfer(ctx context.Context, arg CancelPendingTransferParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cancelPendingTransfer, arg.SessionID, arg.TransferID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finishPendingTransfer = `-- name: FinishPendingTransfer :execrows
+UPDATE session_transfers SET dest_label = ?, dest_session_id = ?, created_at = ?
+WHERE session_id = ? AND transfer_id = ? AND dest_host_id = ? AND dest_project_id = ? AND dest_session_id = ''
+`
+
+type FinishPendingTransferParams struct {
+	DestLabel     string
+	DestSessionID string
+	CreatedAt     time.Time
+	SessionID     string
+	TransferID    string
+	DestHostID    string
+	DestProjectID string
+}
+
+func (q *Queries) FinishPendingTransfer(ctx context.Context, arg FinishPendingTransferParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finishPendingTransfer,
+		arg.DestLabel,
+		arg.DestSessionID,
+		arg.CreatedAt,
+		arg.SessionID,
+		arg.TransferID,
+		arg.DestHostID,
+		arg.DestProjectID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getSessionTransfer = `-- name: GetSessionTransfer :one
-SELECT transfer_id, dest_host_id, dest_label, dest_session_id FROM session_transfers WHERE session_id = ?
+SELECT transfer_id, dest_host_id, dest_label, dest_project_id, dest_session_id FROM session_transfers WHERE session_id = ?
 `
 
 type GetSessionTransferRow struct {
 	TransferID    string
 	DestHostID    string
 	DestLabel     string
+	DestProjectID string
 	DestSessionID string
 }
 
@@ -42,6 +77,7 @@ func (q *Queries) GetSessionTransfer(ctx context.Context, sessionID string) (Get
 		&i.TransferID,
 		&i.DestHostID,
 		&i.DestLabel,
+		&i.DestProjectID,
 		&i.DestSessionID,
 	)
 	return i, err
@@ -75,22 +111,24 @@ func (q *Queries) ListTransferredSessionIDs(ctx context.Context) ([]string, erro
 }
 
 const recordPendingTransfer = `-- name: RecordPendingTransfer :exec
-INSERT INTO session_transfers (session_id, transfer_id, dest_host_id, dest_label, dest_session_id, created_at)
-VALUES (?, ?, ?, ?, '', ?)
+INSERT INTO session_transfers (session_id, transfer_id, dest_host_id, dest_label, dest_project_id, dest_session_id, created_at)
+VALUES (?, ?, ?, ?, ?, '', ?)
 ON CONFLICT(session_id) DO UPDATE SET
     transfer_id = excluded.transfer_id,
     dest_host_id = excluded.dest_host_id,
     dest_label = excluded.dest_label,
+    dest_project_id = excluded.dest_project_id,
     created_at = excluded.created_at
 WHERE session_transfers.dest_session_id = ''
 `
 
 type RecordPendingTransferParams struct {
-	SessionID  string
-	TransferID string
-	DestHostID string
-	DestLabel  string
-	CreatedAt  time.Time
+	SessionID     string
+	TransferID    string
+	DestHostID    string
+	DestLabel     string
+	DestProjectID string
+	CreatedAt     time.Time
 }
 
 func (q *Queries) RecordPendingTransfer(ctx context.Context, arg RecordPendingTransferParams) error {
@@ -99,39 +137,7 @@ func (q *Queries) RecordPendingTransfer(ctx context.Context, arg RecordPendingTr
 		arg.TransferID,
 		arg.DestHostID,
 		arg.DestLabel,
-		arg.CreatedAt,
-	)
-	return err
-}
-
-const recordSessionTransfer = `-- name: RecordSessionTransfer :exec
-INSERT INTO session_transfers (session_id, transfer_id, dest_host_id, dest_label, dest_session_id, created_at)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(session_id) DO UPDATE SET
-    transfer_id = excluded.transfer_id,
-    dest_host_id = excluded.dest_host_id,
-    dest_label = excluded.dest_label,
-    dest_session_id = excluded.dest_session_id,
-    created_at = excluded.created_at
-WHERE session_transfers.dest_session_id = ''
-`
-
-type RecordSessionTransferParams struct {
-	SessionID     string
-	TransferID    string
-	DestHostID    string
-	DestLabel     string
-	DestSessionID string
-	CreatedAt     time.Time
-}
-
-func (q *Queries) RecordSessionTransfer(ctx context.Context, arg RecordSessionTransferParams) error {
-	_, err := q.db.ExecContext(ctx, recordSessionTransfer,
-		arg.SessionID,
-		arg.TransferID,
-		arg.DestHostID,
-		arg.DestLabel,
-		arg.DestSessionID,
+		arg.DestProjectID,
 		arg.CreatedAt,
 	)
 	return err

@@ -207,6 +207,9 @@ func transferError(err error) error {
 	}
 	msg := strings.TrimPrefix(err.Error(), "session: ")
 	switch {
+	// First: it wraps why the start failed, which says nothing about what still runs.
+	case errors.Is(err, sessionmanager.ErrTransferUnconfirmed):
+		return apierr.Conflict("TRANSFER_UNCONFIRMED", shortenTransferText(msg), nil)
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	case errors.Is(err, sessionmanager.ErrTransferAgentBusy):
@@ -228,6 +231,8 @@ func transferError(err error) error {
 		return apierr.Conflict("TRANSFER_GIT_BUSY", text, nil)
 	case errors.Is(err, ports.ErrTransferNestedRepo):
 		return apierr.Conflict("TRANSFER_NESTED_REPO", fmt.Sprintf("The folder %s is its own git repository, which a move cannot carry. Move it out, or add it to .gitignore, then move the session.", transferDetail(err, ports.ErrTransferNestedRepo)), nil)
+	case errors.Is(err, ports.ErrTransferSubmodule):
+		return apierr.Conflict("TRANSFER_SUBMODULE", fmt.Sprintf("The submodule %s has work that is not pushed, which a move cannot carry. Commit and push it, then move the session.", transferDetail(err, ports.ErrTransferSubmodule)), nil)
 	case errors.Is(err, ports.ErrTransferPush):
 		said := transferDetail(err, ports.ErrTransferPush)
 		if strings.Contains(said, "fetch first") || strings.Contains(said, "non-fast-forward") {
@@ -242,6 +247,10 @@ func transferError(err error) error {
 		return apierr.Conflict("SESSION_MOVED", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferPending):
 		return apierr.Conflict("TRANSFER_PENDING", msg, nil)
+	case errors.Is(err, sessionmanager.ErrTransferNotPending):
+		return apierr.Conflict("TRANSFER_NOT_PENDING", msg, nil)
+	case errors.Is(err, sessionmanager.ErrClientRequestConflict):
+		return apierr.Conflict("TRANSFER_CONFLICT", "That computer already received a different move with this ID.", nil)
 	case errors.Is(err, sessionmanager.ErrTransferDefaultBranch):
 		return apierr.Conflict("TRANSFER_DEFAULT_BRANCH", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferArchive):

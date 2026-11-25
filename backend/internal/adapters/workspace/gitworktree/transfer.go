@@ -53,6 +53,47 @@ func (w *Workspace) checkMovable(ctx context.Context, path string) error {
 			return fmt.Errorf("%w: %s", ports.ErrTransferNestedRepo, strings.TrimSuffix(dir, "/"))
 		}
 	}
+	return w.checkSubmodules(ctx, path)
+}
+
+// checkSubmodules refuses a submodule whose uncommitted changes or commits
+// exist only in this checkout: the moved work records no more than its commit.
+func (w *Workspace) checkSubmodules(ctx context.Context, path string) error {
+	entries, err := w.run(ctx, w.binary, "-C", path, "ls-files", "--stage", "-z")
+	if err != nil {
+		return err
+	}
+	for _, entry := range strings.Split(string(entries), "\x00") {
+		name, ok := strings.CutPrefix(entry, "160000 ")
+		if !ok {
+			continue
+		}
+		_, name, _ = strings.Cut(name, "\t")
+		dir := filepath.Join(path, filepath.FromSlash(name))
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err != nil {
+			continue // Not checked out.
+		}
+		status, err := w.run(ctx, w.binary, "-C", dir, "status", "--porcelain", "--ignore-submodules=none")
+		if err != nil {
+			return err
+		}
+		unpushed, err := w.run(ctx, w.binary, "-C", dir, "rev-list", "--max-count=1", "HEAD", "--not", "--remotes")
+		if err != nil {
+			return err
+		}
+		gitDir, err := w.run(ctx, w.binary, "-C", dir, "rev-parse", "--absolute-git-dir")
+		if err != nil {
+			return err
+		}
+		// A shallow clone lists the commits it fetched, which no remote branch here may hold.
+		fetched, _ := os.ReadFile(filepath.Join(strings.TrimSpace(string(gitDir)), "shallow"))
+		if len(status) > 0 || !strings.Contains(string(fetched), strings.TrimSpace(string(unpushed))) {
+			return fmt.Errorf("%w: %s", ports.ErrTransferSubmodule, name)
+		}
+		if err := w.checkSubmodules(ctx, dir); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -65,8 +106,12 @@ func (w *Workspace) stagedCommit(ctx context.Context, path, head string) (string
 	if headTree, err := w.revParse(ctx, path, head+"^{tree}"); err != nil || headTree == strings.TrimSpace(string(tree)) {
 		return "", err
 	}
+	return w.commitTree(ctx, path, strings.TrimSpace(string(tree)), head, "staged changes")
+}
+
+func (w *Workspace) commitTree(ctx context.Context, path, tree, parent, message string) (string, error) {
 	out, err := w.run(ctx, w.binary, "-C", path, "-c", "user.name=Orchestrator", "-c", "user.email=orchestrator@localhost",
-		"commit-tree", strings.TrimSpace(string(tree)), "-p", head, "-m", "staged changes")
+		"commit-tree", tree, "-p", parent, "-m", message)
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -101,39 +146,47 @@ func (w *Workspace) CheckTransfer(ctx context.Context, info ports.WorkspaceInfo)
 	return nil
 }
 
-// PushTransfer pushes the worktree's branch, and the preserved ref when set,
-// to origin without forcing. It returns the branch head.
-func (w *Workspace) PushTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef string) (string, error) {
+// PushTransfer pushes the worktree's branch to origin without forcing, with
+// uncommitted work at remotePreservedRef: preservedRef, and what is staged.
+// A refused branch pushes neither. It returns the branch head and whether
+// there was uncommitted work.
+func (w *Workspace) PushTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef string) (head string, uncommitted bool, err error) {
 	path, err := w.validateManagedPath(info.Path)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	if !strings.HasPrefix(remotePreservedRef, "refs/ao/preserved/") {
+		return "", false, fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
 	}
 	if err := w.CheckTransfer(ctx, info); err != nil {
-		return "", err
+		return "", false, err
 	}
-	head, err := w.revParse(ctx, path, "HEAD")
+	if head, err = w.revParse(ctx, path, "HEAD"); err != nil {
+		return "", false, err
+	}
+	staged, err := w.stagedCommit(ctx, path, head)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
+	if preservedRef == "" && staged != "" {
+		// A staged edit undone on disk: the files match HEAD, only the index differs.
+		if preservedRef, err = w.commitTree(ctx, path, head+"^{tree}", head, "ao preserved"); err != nil {
+			return "", false, err
+		}
+	}
+	args := []string{"-C", path, "push", "--porcelain"}
 	refspecs := []string{"HEAD:refs/heads/" + info.Branch}
 	if preservedRef != "" {
-		if !strings.HasPrefix(remotePreservedRef, "refs/ao/preserved/") {
-			return "", fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
-		}
+		args = append(args, "--atomic")
 		refspecs = append(refspecs, preservedRef+":"+remotePreservedRef)
-		staged, err := w.stagedCommit(ctx, path, head)
-		if err != nil {
-			return "", err
-		}
-		if staged != "" {
-			refspecs = append(refspecs, staged+":"+remotePreservedRef+indexSuffix)
-		}
 	}
-	args := append([]string{"-C", path, "push", "--porcelain", "origin"}, refspecs...)
-	if out, err := w.run(ctx, w.binary, args...); err != nil {
-		return "", fmt.Errorf("%w: %s", ports.ErrTransferPush, gitSaid(out))
+	if staged != "" {
+		refspecs = append(refspecs, staged+":"+remotePreservedRef+indexSuffix)
 	}
-	return head, nil
+	if out, err := w.run(ctx, w.binary, append(append(args, "origin"), refspecs...)...); err != nil {
+		return "", false, fmt.Errorf("%w: %s", ports.ErrTransferPush, gitSaid(out))
+	}
+	return head, preservedRef != "", nil
 }
 
 // FetchTransfer fetches a moved branch and, when set, its preserved ref from origin.

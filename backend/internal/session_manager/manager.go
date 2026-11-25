@@ -452,6 +452,8 @@ type Manager struct {
 	forkRetry ForkRetrier
 	// forkWorkspaces holds new forks' worktree paths until their setup runs.
 	forkWorkspaces sync.Map
+	// transferLocks serializes work on one session's move; see lockTransfer.
+	transferLocks sync.Map
 	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness      ports.AgentReadinessProvider
 	backgroundTaskUsage BackgroundTaskUsage
@@ -4282,6 +4284,9 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
+	if err := m.refuseMoved(ctx, rec.ID); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.

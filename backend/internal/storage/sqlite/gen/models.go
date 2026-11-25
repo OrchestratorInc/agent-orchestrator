@@ -994,6 +994,7 @@ type SessionTransfer struct {
 	TransferID    string
 	DestHostID    string
 	DestLabel     string
+	DestProjectID string
 	DestSessionID string
 	CreatedAt     time.Time
 }

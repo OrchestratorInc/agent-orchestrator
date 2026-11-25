@@ -7,7 +7,7 @@ import { HOST_UNREACHABLE_CODES, LOCAL_HOST } from "./hosts";
 
 type Client = ReturnType<typeof clientForSessionHost>;
 type Transfer = components["schemas"]["SessionTransfer"];
-type Destination = { hostId: string; label: string };
+type Destination = { hostId: string; label: string; projectId: string };
 
 /** Archive parts stay well under a tunnel's request size limit. */
 export const MOVE_PART_BYTES = 8 * 1024 * 1024;
@@ -56,7 +56,8 @@ export function newTransferId(): string {
  * moved. Until the destination accepts the session, a failure cancels the move
  * and resumes the source agent, so nothing is lost. After that, only marking
  * the source is left, which commitMove can retry. Running it again after an
- * interrupted move to the same destination finishes that move.
+ * interrupted move to the same destination finishes that move: the destination
+ * may have started it, so it is asked before anything is copied or cancelled.
  */
 export async function moveSession(input: MoveInput): Promise<MoveResult> {
 	const { source, target } = input;
@@ -81,22 +82,28 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		}));
 		if (prepared.error || !prepared.data) throw apiErrorException(prepared.error, "Could not prepare the move");
 		const transfer: Transfer = prepared.data.transfer;
-		// An unfinished earlier move to this host comes back instead of a new one.
+		// An unfinished earlier move to this destination comes back instead of a new one.
+		const earlier = transfer.transferId !== transferId;
 		transferId = transfer.transferId;
-		if (transfer.native) {
-			step = "copy";
-			input.onStep?.("copy");
-			await copyArchive(source, target, transferId, input.onProgress);
-		}
 		step = "receive";
-		input.onStep?.("receive");
-		({ sessionId, warnings, resumed } = await receive(target.client, target.projectId, transfer, target.label));
+		let received = earlier ? await receiveUnlessNotCopied(target.client, target.projectId, transfer, target.label) : undefined;
+		if (!received) {
+			if (transfer.native) {
+				step = "copy";
+				input.onStep?.("copy");
+				await copyArchive(source, target, transferId, input.onProgress);
+			}
+			step = "receive";
+			input.onStep?.("receive");
+			received = await receive(target.client, target.projectId, transfer, target.label);
+		}
+		({ sessionId, warnings, resumed } = received);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const code = error instanceof Error ? apiErrorCode(error.cause) : undefined;
 		// The destination may have started the session before it stopped answering.
 		// Leave the move pending so Retry finishes it instead of running it twice.
-		if (step === "receive" && error instanceof Unreachable) throw new MoveError(message, step, false, "RECEIVE_UNCONFIRMED", transferId);
+		if (step === "receive" && (error instanceof Unreachable || code === "TRANSFER_UNCONFIRMED")) throw new MoveError(message, step, false, "RECEIVE_UNCONFIRMED", transferId);
 		throw new MoveError(message, step, await cancelMove(source, transferId), code, transferId);
 	}
 	input.onStep?.("commit");
@@ -119,13 +126,13 @@ async function checkDestination(target: MoveInput["target"]): Promise<void> {
  * computer" would point at whichever computer opens the old session.
  */
 async function recordedDestination(target: MoveInput["target"]): Promise<Destination> {
-	if (target.hostId !== LOCAL_HOST) return { hostId: target.hostId, label: target.label };
+	if (target.hostId !== LOCAL_HOST) return { hostId: target.hostId, label: target.label, projectId: target.projectId };
 	const [identity, name] = await Promise.all([
 		target.client.GET("/api/v1/identity").catch(() => undefined),
 		aoBridge.remotes.computerName().catch(() => ""),
 	]);
 	if (!identity?.data) throw new MoveError(`${target.label} is not reachable`, "prepare", true);
-	return { hostId: identity.data.hostId, label: name || target.label };
+	return { hostId: identity.data.hostId, label: name || target.label, projectId: target.projectId };
 }
 
 /** Forgets the move on the source and resumes its agent. True when the agent runs there again. */
@@ -179,11 +186,23 @@ async function receive(target: Client, projectId: string, transfer: Transfer, la
 	for (let attempt = 0; ; attempt++) {
 		try {
 			const res = await reach(label, target.POST("/api/v1/sessions/transfer/receive", { body: { projectId, transfer } }));
+			// An answer that is not the daemon's own, such as a tunnel's timeout page, says nothing about the session.
+			if (!res.data && !apiErrorCode(res.error)) throw new Unreachable(`${label} is not reachable`);
 			if (res.error || !res.data) throw apiErrorException(res.error, "The other computer could not start the session");
 			return { sessionId: res.data.session.id, warnings: res.data.warnings ?? [], resumed: res.data.resumed ?? false };
 		} catch (error) {
 			if (attempt >= 1 || !(error instanceof Unreachable)) throw error;
 		}
+	}
+}
+
+/** Undefined when the destination has neither the session nor its whole conversation. */
+async function receiveUnlessNotCopied(...args: Parameters<typeof receive>) {
+	try {
+		return await receive(...args);
+	} catch (error) {
+		if (error instanceof Error && apiErrorCode(error.cause) === "TRANSFER_ARCHIVE_INVALID") return undefined;
+		throw error;
 	}
 }
 

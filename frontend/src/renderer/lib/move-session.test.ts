@@ -49,7 +49,7 @@ describe("moveSession", () => {
 		const steps: string[] = [];
 		const result = await moveSession({ ...input, onStep: (step) => steps.push(step) });
 
-		expect(result).toEqual({ sessionId: "web-9", warnings: [], committed: true, commitError: undefined, transferId: "tr1", destination: { hostId: "host-b", label: "MacBook B" }, resumed: true });
+		expect(result).toEqual({ sessionId: "web-9", warnings: [], committed: true, commitError: undefined, transferId: "tr1", destination: { hostId: "host-b", label: "MacBook B", projectId: "web" }, resumed: true });
 		expect(steps).toEqual(["prepare", "copy", "receive", "commit"]);
 		expect(source.calls).toEqual([
 			"POST /api/v1/sessions/{sessionId}/transfer/prepare",
@@ -74,7 +74,7 @@ describe("moveSession", () => {
 		vi.spyOn(aoBridge.remotes, "computerName").mockResolvedValue("Studio");
 		const { source, target, input } = hosts(undefined, undefined, { hostId: "h_studio", apiVersion: 1 });
 		const result = await moveSession({ ...input, target: { ...input.target, hostId: "local", label: "This computer" } });
-		const destination = { hostId: "h_studio", label: "Studio" };
+		const destination = { hostId: "h_studio", label: "Studio", projectId: "web" };
 		expect(result.destination).toEqual(destination);
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ destination });
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ destination: { ...destination, sessionId: "web-9" } });
@@ -126,6 +126,42 @@ describe("moveSession", () => {
 
 		expect(result.transferId).toBe("tr-earlier");
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ transferId: "tr-earlier" });
+	});
+
+	const earlierMove = (receive: Handler) => {
+		const move = hosts(undefined, receive);
+		const sourceClient = move.source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) =>
+			path.endsWith("/transfer/prepare") ? (await post(path, options), { data: { transfer: { ...transfer, transferId: "tr-earlier" } } }) : post(path, options);
+		return { ...move, copies: () => move.target.calls.filter((call) => call.startsWith("PUT")).length };
+	};
+	const cancelled = "POST /api/v1/sessions/{sessionId}/transfer/cancel";
+
+	it("takes the session an earlier try already started instead of copying again", async () => {
+		const { source, input, copies } = earlierMove(() => received);
+		const result = await moveSession(input);
+		expect([result.sessionId, result.transferId, copies()]).toEqual(["web-9", "tr-earlier", 0]);
+		expect(source.calls).not.toContain(cancelled);
+	});
+
+	it("copies the conversation again when an earlier try left no session", async () => {
+		let attempts = 0;
+		const { input, copies } = earlierMove(() => (attempts++ ? received : { error: { code: "TRANSFER_ARCHIVE_INVALID", message: "not uploaded" } }));
+		expect((await moveSession(input)).sessionId).toBe("web-9");
+		expect([attempts, copies()]).toEqual([2, 2]);
+	});
+
+	it.each([
+		["does not answer", { error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } }],
+		["answers with a tunnel's error page", { error: "<html>524: A timeout occurred</html>" }],
+		["cannot tell whether it runs there", { error: { code: "TRANSFER_UNCONFIRMED", message: "the session may have started on that computer" } }],
+	])("keeps an earlier try pending when the destination %s", async (_, answer) => {
+		const { source, input, copies } = earlierMove(() => answer);
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+		expect([error.code, error.transferId, error.resumedSource, copies()]).toEqual(["RECEIVE_UNCONFIRMED", "tr-earlier", false, 0]);
+		expect(source.calls).not.toContain(cancelled);
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
 	it("asks the source to stop a running turn and reports bytes copied", async () => {

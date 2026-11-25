@@ -4,6 +4,7 @@ CREATE TABLE session_transfers (
     transfer_id     TEXT NOT NULL,
     dest_host_id    TEXT NOT NULL DEFAULT '',
     dest_label      TEXT NOT NULL DEFAULT '',
+    dest_project_id TEXT NOT NULL DEFAULT '',
     dest_session_id TEXT NOT NULL DEFAULT '',
     created_at      TIMESTAMP NOT NULL
 );

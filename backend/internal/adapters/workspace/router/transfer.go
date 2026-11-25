@@ -29,10 +29,10 @@ func (w *Workspace) CheckTransfer(ctx context.Context, info ports.WorkspaceInfo)
 }
 
 // PushTransfer delegates to the Git adapter.
-func (w *Workspace) PushTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef string) (string, error) {
+func (w *Workspace) PushTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef string) (string, bool, error) {
 	t, err := w.gitTransfer()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	return t.PushTransfer(ctx, info, preservedRef, remotePreservedRef)
 }
