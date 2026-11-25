@@ -24,6 +24,7 @@ import { Pressable } from "../ui/pressable";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { isRenderableDiagram, renderMermaidDiagram, type DiagramTheme } from "../../lib/mermaid-diagram";
 import { CopyButton } from "./CopyButton";
+import { CHAT_BOX_CLASS, ChatBoxHeader } from "./ChatFileCard";
 
 function readTheme(): DiagramTheme {
 	if (typeof document !== "undefined") {
@@ -139,12 +140,11 @@ export const MermaidBlock = memo(function MermaidBlock({
 	const showingDiagram = svg !== undefined && !showSource;
 
 	return (
-		<div data-chat-find-exclude="" className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
-			<div data-excerpt-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
-				<span className="text-caption text-muted-foreground">
-					mermaid
-				</span>
-				{interactive ? <div className="ml-auto flex items-center gap-1.5">
+		<div data-chat-find-exclude="" className={cn(CHAT_BOX_CLASS, "group/code my-2.5")}>
+			<ChatBoxHeader
+				data-excerpt-exclude=""
+				label="mermaid"
+				extra={interactive ? <div className="flex items-center gap-1.5">
 					{svg !== undefined ? (
 						<div
 							role="group"
@@ -178,12 +178,12 @@ export const MermaidBlock = memo(function MermaidBlock({
 						</div>
 					) : null}
 					<div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">
-						<CopyButton text={code} label="Copy diagram source" />
+						<CopyButton compact size="icon-xs" text={code} label="Copy diagram source" className="[&_svg]:size-3.5" />
 					</div>
 				</div> : null}
-			</div>
+			/>
 			{showingDiagram ? (
-				<div className="overflow-x-auto bg-background px-3 py-3">
+				<div className="overflow-x-auto px-3 pt-1 pb-3">
 					{/* The SVG string is sanitized in `lib/mermaid-diagram.ts`
 					    (mermaid strict mode plus DOMPurify; scripts and
 					    active-content tags forbidden, `foreignObject` labels
@@ -204,7 +204,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 					/>
 				</div>
 			) : (
-				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
+				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 pt-1 pb-3">
 					<code className="font-mono text-xs leading-[1.6] text-foreground">{code}</code>
 				</pre>
 			)}

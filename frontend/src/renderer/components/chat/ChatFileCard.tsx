@@ -10,7 +10,7 @@
  * old and new text with no hunk range, so it has no gutter rather than a guessed one.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { highlightSync } from "../../lib/code-highlight";
 import { languageForPath, splitHastByLine, type DiffRun, type LineToken } from "../../lib/diff-highlight";
@@ -44,6 +44,48 @@ export function fileCardPath(path: string, hints: { cwd?: string; summary?: stri
 	return normalized.replace(/^\/(?:Users|home)\/[^/]+/, "~");
 }
 
+/**
+ * The frame every box in a step's details shares: the chat's own canvas behind a
+ * faint outline, so a box reads as part of the conversation rather than a panel
+ * laid on it. File and diff cards, the Shell card and a tool's JSON all use it.
+ */
+export const CHAT_BOX_CLASS =
+	"chat-code mt-1 mb-1 flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-background";
+
+/**
+ * A box's header: its mark, its label, anything the box adds (a diff's counts), and
+ * copy. The mark and the copy icon are one size, so the row reads as one line.
+ */
+export function ChatBoxHeader({
+	icon,
+	label,
+	title,
+	extra,
+	copyText,
+	copyLabel,
+	...rest
+}: {
+	icon?: ReactNode;
+	label: ReactNode;
+	title?: string;
+	extra?: ReactNode;
+	copyText?: string | (() => string);
+	copyLabel?: string;
+} & Omit<HTMLAttributes<HTMLDivElement>, "title">) {
+	return (
+		<div {...rest} data-chat-box-header="" className="flex min-h-10 min-w-0 items-center gap-2.5 pr-2 pl-3 pt-1">
+			{icon}
+			<span className="flex min-w-0 flex-1 text-control leading-5 text-muted-foreground" title={title}>
+				{label}
+			</span>
+			{extra}
+			{copyText !== undefined && copyLabel ? (
+				<CopyButton compact size="icon-xs" text={copyText} label={copyLabel} className="[&_svg]:size-3.5" />
+			) : null}
+		</div>
+	);
+}
+
 function FileCard({
 	kind,
 	path,
@@ -68,20 +110,17 @@ function FileCard({
 	footer?: ReactNode;
 }) {
 	return (
-		<div
-			data-chat-file-card={kind}
-			className="chat-code mt-1 mb-1 flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface"
-		>
-			<div className="flex min-h-10 min-w-0 items-center gap-2.5 pr-2 pl-3 pt-1">
-				<ChatFileIcon path={path} className="size-4" />
-				<span data-chat-file-card-name="" className="flex min-w-0 flex-1 text-control leading-5" title={label}>
-					<WorkspacePathSegments path={label} nameClassName="text-foreground/90" />
-				</span>
-				{additions !== undefined && deletions !== undefined ? (
+		<div data-chat-file-card={kind} className={CHAT_BOX_CLASS}>
+			<ChatBoxHeader
+				icon={<ChatFileIcon path={path} className="size-4" />}
+				label={<span data-chat-file-card-name="" className="flex min-w-0"><WorkspacePathSegments path={label} nameClassName="text-foreground/90" /></span>}
+				title={label}
+				extra={additions !== undefined && deletions !== undefined ? (
 					<ChangeCounts additions={additions} deletions={deletions} className="text-xs" />
 				) : null}
-				<CopyButton compact size="icon-xs" text={copyText} label={copyLabel} className="[&_svg]:size-3.5" />
-			</div>
+				copyText={copyText}
+				copyLabel={copyLabel}
+			/>
 			<div data-no-swipe-nav="" className="scrollbar-none max-h-80 overflow-auto pt-1 pb-3 font-mono text-xs leading-normal">
 				<div className="w-max min-w-full">{children}</div>
 			</div>

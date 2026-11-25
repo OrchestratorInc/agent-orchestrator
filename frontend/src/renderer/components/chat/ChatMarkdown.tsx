@@ -86,6 +86,7 @@ import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
+import { CHAT_BOX_CLASS, ChatBoxHeader } from "./ChatFileCard";
 import { ChatFileIcon, FileChip } from "./ChatFileIcon";
 import { LinkSiteChipContent, LinkSiteIcon, linkSiteLabel } from "./MessageLinks";
 import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
@@ -310,33 +311,36 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 	return (
 		<div
 			{...positions}
-			className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface"
+			className={cn(CHAT_BOX_CLASS, "group/code my-2.5")}
 			data-wrap={wrap ? "true" : "false"}
 		>
-			<div data-excerpt-exclude="" data-chat-find-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
-				<span className="text-caption text-muted-foreground">
-					{language || "text"}
-				</span>
-				{/* Always shown, like every box's copy. */}
-				<div className="ml-auto flex items-center gap-0.5">
-					<Button
-						type="button"
-						variant="quiet"
-						size="icon-sm"
-						onClick={() => {
-							preferredWrap = !wrap;
-							setWrap(!wrap);
-						}}
-						aria-pressed={wrap}
-						aria-label="Wrap long lines"
-						title="Wrap long lines"
-					>
-						<WrapText aria-hidden="true" className="size-3" />
-					</Button>
-					<CopyButton text={code} label="Copy code" />
-				</div>
-			</div>
-			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
+			<ChatBoxHeader
+				data-excerpt-exclude=""
+				data-chat-find-exclude=""
+				label={language || "text"}
+				extra={
+					// Always shown, like every box's copy.
+					<div className="flex items-center gap-0.5">
+						<Button
+							type="button"
+							variant="quiet"
+							size="icon-xs"
+							onClick={() => {
+								preferredWrap = !wrap;
+								setWrap(!wrap);
+							}}
+							aria-pressed={wrap}
+							aria-label="Wrap long lines"
+							title="Wrap long lines"
+							className="[&_svg]:size-3.5"
+						>
+							<WrapText aria-hidden="true" />
+						</Button>
+						<CopyButton compact size="icon-xs" text={code} label="Copy code" className="[&_svg]:size-3.5" />
+					</div>
+				}
+			/>
+			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 pt-1 pb-3">
 				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} />
 				</code>
@@ -371,7 +375,7 @@ const StreamCode = memo(function StreamCode({ text }: { text: string }) {
 const StreamCopy = memo(function StreamCopy() {
 	const ref = useRef<HTMLSpanElement>(null);
 	const code = () => ref.current?.closest('[data-markdown="code-block"]')?.querySelector("pre code")?.textContent?.replace(/\n$/, "") ?? "";
-	return <span ref={ref}><CopyButton text={code} label="Copy code" /></span>;
+	return <span ref={ref}><CopyButton compact size="icon-xs" text={code} label="Copy code" className="[&_svg]:size-3.5" /></span>;
 });
 
 const STREAM_ISLANDS: ReactiveIslands = {

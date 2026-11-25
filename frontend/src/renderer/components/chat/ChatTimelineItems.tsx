@@ -36,6 +36,8 @@ import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	ToolBoxJson,
+	ToolBoxText,
 	Bot,
 	ArrowRight,
 	ArrowRightLeft,
@@ -143,7 +145,7 @@ import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, U
 import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
-import { FileDiffCard, FileReadCard, fileCardPath, readFileLines } from "./ChatFileCard";
+import { CHAT_BOX_CLASS, ChatBoxHeader, FileDiffCard, FileReadCard, fileCardPath, readFileLines } from "./ChatFileCard";
 import { ChatFileIcon } from "./ChatFileIcon";
 import { LinkSiteChipContent, MESSAGE_LINKS_MIN, MessageLinksButton, MessageLinksList, messageWebLinks } from "./MessageLinks";
 import { PULL_REQUEST_CHIP_CLASS } from "./PullRequestLink";
@@ -2300,9 +2302,12 @@ function GenericActivityBody({ activity, commandTitled = false }: {
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
 				// deliberately keeps only the category.
-				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
-					{detail.command}
-				</pre>
+				<div className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader label="Command" copyText={ranCommand(detail) ?? detail.command} copyLabel="Copy command" />
+					<pre data-no-swipe-nav="" className="scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-foreground">
+						{ranCommand(detail) ?? detail.command}
+					</pre>
+				</div>
 			) : null}
 			{!isFileChange && (detail?.reason || detail?.text) ? (
 				<div className="px-1" style={{ "--chat-readable-font-size": "var(--text-caption)" } as CSSProperties}>
@@ -2443,12 +2448,12 @@ function CommandExploreBody({ activity, showCommand = true }: { activity: Conver
 			) : null}
 
 			{hasShell ? (
-				<div data-command-shell="" className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-surface">
-					<div className="flex min-h-8 items-center gap-2 pr-1.5 pl-3 pt-1">
-						<SquareTerminal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-						<span className="flex-1 text-xs text-muted-foreground">Shell</span>
-						{detail?.output ? <CopyButton compact size="icon-xs" text={outputText} label="Copy output" className="[&_svg]:size-3" /> : null}
-					</div>
+				<div data-command-shell="" className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader
+						label="Shell"
+						copyText={detail?.output ? outputText : undefined}
+						copyLabel="Copy output"
+					/>
 					{detail?.terminalInput ? (
 						<div className={cn("px-3 py-2", detail?.output && "pb-0")}>
 							<TerminalInput
@@ -2502,13 +2507,12 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 	const shown = useMemo(() => caretNotation(text), [text]);
 	return (
 		<div className="flex flex-col gap-1">
-			<span className="flex items-center gap-1.5 text-caption text-muted-foreground/70">
-				<Keyboard aria-hidden="true" className="size-3" />
-				Agent typed
-			</span>
-			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
-				{shown}
-			</pre>
+			<div className={cn(CHAT_BOX_CLASS, "my-0")}>
+				<ChatBoxHeader icon={<Keyboard aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />} label="Agent typed" />
+				<pre data-no-swipe-nav="" className="scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-accent">
+					{shown}
+				</pre>
+			</div>
 			{truncated ? (
 				<p className="text-micro text-muted-foreground/70">
 					Orchestrator stopped recording keystrokes at its cap; more were sent.
@@ -2592,8 +2596,8 @@ function CommandOutput({
 				className={cn(
 					"scrollbar-none max-h-64 overflow-auto font-mono text-xs leading-normal text-muted-foreground",
 					embedded
-						? "cursor-chat-explore-output px-3 pt-0.5 pb-2"
-						: "border border-border bg-background px-2.5 py-2",
+						? "cursor-chat-explore-output px-3 pt-1 pb-3"
+						: "rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5",
 				)}
 			>
 				{preview}
@@ -3130,11 +3134,12 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 			{present(detail?.content) ? <ToolContent value={detail?.content} /> : null}
 			{detail?.progress ? (
-				<div className="flex flex-col gap-1">
-					<span className="text-caption text-muted-foreground/70">
-						Progress
-					</span>
-					<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
+				<div data-tool-box="progress" className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader
+						icon={<ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+						label="Progress"
+					/>
+					<pre className="scrollbar-none max-h-40 overflow-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-muted-foreground">
 						{detail.progress}
 					</pre>
 				</div>
@@ -3212,7 +3217,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 								</p>
 							))}
 							{view.text ? (
-								<pre className="scrollbar-none max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-muted-foreground">
+								<pre className="scrollbar-none m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground">
 									{view.text}
 								</pre>
 							) : null}
@@ -3227,23 +3232,24 @@ function AOToolRow({ view }: { view: AOToolView }) {
 
 function ToolContent({ value }: { value: unknown }) {
 	const text = normalizeToolCode(toolContentText(value));
-	if (text) {
-		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
-		return (
-			<pre data-no-swipe-nav="" className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
-				<code className="block whitespace-pre font-mono text-caption leading-relaxed text-muted-foreground">
-					{ text }
+	if (text && looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
+	const json = text ? undefined : truncationNote(value) ?? formatJson(value);
+	return (
+		<div data-tool-box="output" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={text
+					? <ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+					: <ToolBoxJson aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label="Output"
+				copyText={text || json}
+				copyLabel="Copy output"
+			/>
+			<pre data-no-swipe-nav="" className="scrollbar-none max-h-64 overflow-auto whitespace-pre px-3 pt-1 pb-3">
+				<code className={cn("block whitespace-pre font-mono text-xs leading-normal", text ? "text-muted-foreground" : "text-foreground")}>
+					{text || json}
 				</code>
 			</pre>
-		);
-	}
-	const truncated = truncationNote(value);
-	return (
-		<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-			<code className="font-mono text-caption leading-[1.55] text-foreground">
-				{truncated ?? formatJson(value)}
-			</code>
-		</pre>
+		</div>
 	);
 }
 
@@ -3263,35 +3269,43 @@ function looksLikeUnifiedDiff(text: string): boolean {
 
 function ToolDiffCode({ text }: { text: string }) {
 	return (
-		<div className="chat-code max-h-64 overflow-auto rounded-lg border border-border bg-background px-0 py-1 font-mono text-caption leading-[1.55]">
-			{ text.split("\n").map((line, index) => {
-				const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
-				const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
-				const content = kind === "context" ? line : line.slice(1);
-				return (
-					<div
-						key={`${index}-${line}`}
-						data-tool-diff-row=""
-						className={cn(
-							"flex min-w-max whitespace-pre px-2.5",
-							kind === "add" && "bg-success/10",
-							kind === "del" && "bg-error/10",
-						)}
-					>
-						<span
-							aria-hidden="true"
+		<div data-tool-box="output" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={<ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label="Output"
+				copyText={text}
+				copyLabel="Copy output"
+			/>
+			<div className="max-h-64 overflow-auto px-0 pt-1 pb-3 font-mono text-caption leading-[1.55]">
+				{ text.split("\n").map((line, index) => {
+					const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
+					const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
+					const content = kind === "context" ? line : line.slice(1);
+					return (
+						<div
+							key={`${index}-${line}`}
+							data-tool-diff-row=""
 							className={cn(
-								"w-4 shrink-0 select-none text-center",
-								kind === "add" && "text-success",
-								kind === "del" && "text-error",
+								"flex min-w-max whitespace-pre px-2.5",
+								kind === "add" && "bg-success/10",
+								kind === "del" && "bg-error/10",
 							)}
 						>
-							{marker}
-						</span>
-						<span className="whitespace-pre text-foreground/90">{content}</span>
-					</div>
-				);
-			})}
+							<span
+								aria-hidden="true"
+								className={cn(
+									"w-4 shrink-0 select-none text-center",
+									kind === "add" && "text-success",
+									kind === "del" && "text-error",
+								)}
+							>
+								{marker}
+							</span>
+							<span className="whitespace-pre text-foreground/90">{content}</span>
+						</div>
+					);
+				})}
+			</div>
 		</div>
 	);
 }
@@ -3320,17 +3334,18 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 	const text = useMemo(() => (capped ? "" : formatJson(value)), [capped, value]);
 
 	return (
-		<div className="flex flex-col gap-1">
-			<span className="text-caption text-muted-foreground/70">
-				{label}
-			</span>
+		<div data-tool-box="json" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={<ToolBoxJson aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label={label}
+				copyText={capped ? undefined : text}
+				copyLabel={`Copy ${label.toLowerCase()}`}
+			/>
 			{capped ? (
-				<p className="border border-border bg-background px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">
-					{capped}
-				</p>
+				<p className="px-3 pt-1 pb-3 text-xs leading-relaxed text-muted-foreground">{capped}</p>
 			) : (
-				<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-					<code className="font-mono text-caption leading-[1.55] text-foreground">
+				<pre data-no-swipe-nav="" className="scrollbar-none max-h-56 overflow-auto px-3 pt-1 pb-3">
+					<code className="font-mono text-xs leading-normal text-foreground">
 						<HighlightedCode code={text} language="json" />
 					</code>
 				</pre>
@@ -3761,7 +3776,7 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			</div>
 			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
 			{output && expanded ? (
-				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground select-text">{output}</pre>
+				<pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground select-text">{output}</pre>
 			) : null}
 		</div>
 	);
@@ -4038,9 +4053,12 @@ export function ApprovalCard({
 				{/* Markdown like the reply, so its code, paths and links read as their chips. */}
 				<ChatMarkdown text={detail?.reason ?? approvalPrompt(subjectKind)} className="text-sm leading-[1.4] text-foreground/90" />
 
-				<pre className="mt-2 scrollbar-none max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/45 px-2.5 py-1.5 font-mono text-xs leading-[1.45] text-muted-foreground">
-					{detail?.rawCommand ?? command}
-				</pre>
+				<div className={cn(CHAT_BOX_CLASS, "mt-2 mb-0")}>
+					<ChatBoxHeader label="Command" copyText={detail?.rawCommand ?? command} copyLabel="Copy command" />
+					<pre className="scrollbar-none m-0 max-h-32 overflow-auto whitespace-pre-wrap break-words px-3 pt-1 pb-3 font-mono text-xs leading-normal text-muted-foreground">
+						{detail?.rawCommand ?? command}
+					</pre>
+				</div>
 
 				<div className="mt-2 flex flex-wrap justify-end gap-1.5">
 					{denyDecision ? (

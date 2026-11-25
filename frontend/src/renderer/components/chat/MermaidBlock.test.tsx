@@ -1,9 +1,20 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { MermaidBlock } from "./MermaidBlock";
+import { TooltipProvider } from "../ui/tooltip";
+
+/** Code blocks carry icon buttons, whose tooltips need the app's provider. */
+function render(ui: ReactElement, options?: RenderOptions) {
+	const Outer = options?.wrapper;
+	return rtlRender(ui, {
+		...options,
+		wrapper: ({ children }) => <TooltipProvider>{Outer ? <Outer>{children}</Outer> : children}</TooltipProvider>,
+	});
+}
 
 // The engine chunk is heavy and needs real SVG layout APIs jsdom lacks, so
 // these pin the boundary: the block calls render once per settled diagram,

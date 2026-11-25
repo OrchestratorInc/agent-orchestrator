@@ -157,7 +157,9 @@ import {
 	Edit as MynaEdit,
 } from "@mynaui/icons-react";
 import {
+	AlignLeft as LucideAlignLeft,
 	ArrowDownUp as LucideArrowDownUp,
+	Braces as LucideBraces,
 	FileText as LucideFileText,
 	Globe as LucideGlobe,
 	Search as LucideSearch,
@@ -400,6 +402,10 @@ export const RunKindOther = fromLucide(LucideWrench, "run-kind-other");
 export const RunKindRead = fromLucide(LucideFileText, "run-kind-read");
 export const RunKindSearch = fromLucide(LucideSearch, "run-kind-search");
 export const ToolQuestion = fromLucide(LucideMessageCircleQuestionMark, "tool-question");
+
+// Marks on a chat tool box's header: a call's JSON (arguments, result) and its text output.
+export const ToolBoxJson = fromLucide(LucideBraces, "tool-box-json");
+export const ToolBoxText = fromLucide(LucideAlignLeft, "tool-box-text");
 export const History = fromLucide(LucideHistory, "history");
 export const Hourglass = fromLucide(LucideHourglass, "hourglass");
 export const House = fromMyna(MynaHome, "house");

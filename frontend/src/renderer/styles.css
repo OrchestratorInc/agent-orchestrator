@@ -2314,9 +2314,9 @@ textarea,
 .chat-md-stream [data-markdown="th"] { @apply border-b border-border px-2.5 py-1.5 text-left font-medium text-muted-foreground; }
 .chat-md-stream [data-markdown="td"] { @apply border-b border-border/60 px-2.5 py-1.5 align-top; }
 .chat-md-stream :not(pre) > [data-markdown="code"] { @apply rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code; }
-.chat-md-stream [data-markdown="code-block"] { @apply my-2.5 overflow-hidden rounded-lg border border-border bg-surface; }
-.chat-md-stream [data-markdown="code-header"] { @apply flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1 text-caption text-muted-foreground; min-height: calc(var(--size-control-md) + 0.5rem + 1px); }
-.chat-md-stream [data-markdown="code-block"] pre { @apply scrollbar-none m-0 overflow-x-auto px-3 py-2.5; }
+.chat-md-stream [data-markdown="code-block"] { @apply my-2.5 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-background; }
+.chat-md-stream [data-markdown="code-header"] { @apply flex min-h-10 items-center gap-2.5 pt-1 pr-2 pl-3 text-control leading-5 text-muted-foreground; }
+.chat-md-stream [data-markdown="code-block"] pre { @apply scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3; }
 .chat-md-stream [data-markdown="code-header"] > span:last-child { @apply ml-auto flex items-center; }
 .chat-md-stream pre > [data-markdown="code"] { @apply font-mono text-xs leading-[1.6] text-foreground; }
 .chat-md-stream [data-animated="true"] { animation: stream-char-in 300ms ease backwards; }
