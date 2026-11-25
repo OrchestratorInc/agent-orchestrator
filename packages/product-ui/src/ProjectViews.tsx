@@ -410,19 +410,23 @@ export function ProjectSettingsRow({
 }
 
 export function ProjectSettingsInputRow({
+	describedBy,
 	editIcon,
 	editLabel,
 	icon,
 	id,
+	invalid,
 	label,
 	onChange,
 	placeholder,
 	value,
 }: {
+	describedBy?: string;
 	editIcon?: ReactNode;
 	editLabel: string;
 	icon?: ReactNode;
 	id: string;
+	invalid?: boolean;
 	label: string;
 	onChange: (value: string) => void;
 	placeholder?: string;
@@ -456,6 +460,8 @@ export function ProjectSettingsInputRow({
 					ref={inputRef}
 					id={id}
 					aria-label={label}
+					aria-describedby={describedBy}
+					aria-invalid={invalid || undefined}
 					className="settings-inline-edit-input"
 					value={value}
 					onChange={(event) => onChange(event.target.value)}
@@ -468,6 +474,7 @@ export function ProjectSettingsInputRow({
 					type="button"
 					className="settings-inline-edit-trigger"
 					aria-label={editLabel}
+					aria-describedby={describedBy}
 					onClick={() => setEditing(true)}
 				>
 					<span className="settings-row-value" title={value || placeholder}>

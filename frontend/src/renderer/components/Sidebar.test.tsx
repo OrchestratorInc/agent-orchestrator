@@ -3354,11 +3354,12 @@ describe("Sidebar", () => {
 		const marker = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<SVGElement | HTMLElement>("[data-session-status]");
 
-		expect(marker("input task")).toHaveAttribute("data-session-marker", "attention");
-		expect(marker("input task")).toHaveClass("text-destructive");
+		expect(marker("input task")).toHaveAttribute("data-session-marker", "input");
+		expect(marker("input task")).toHaveClass("icon-question-mark", "text-status-in-review");
+		expect(marker("input task")).not.toHaveClass("text-destructive");
 		expect(marker("input task")).not.toHaveClass("rounded-full");
 		expect(marker("ci task")).toHaveAttribute("data-session-marker", "attention");
-		expect(marker("ci task")).toHaveClass("text-destructive");
+		expect(marker("ci task")).toHaveClass("icon-circle-alert", "text-destructive");
 	});
 
 	it("gives Scratchpad rows the same status icons and age as project rows", () => {
@@ -3381,7 +3382,7 @@ describe("Sidebar", () => {
 
 		expect(dot("idle chat")).toHaveAttribute("data-session-idle", "idle");
 		expect(dot("working chat")).toHaveAttribute("data-session-spinner");
-		expect(dot("input chat")).toHaveAttribute("data-session-marker", "attention");
+		expect(dot("input chat")).toHaveAttribute("data-session-marker", "input");
 		expect(row("idle chat").closest("[data-session-row]")?.querySelector("[data-session-message-age]")).toBeInTheDocument();
 		expect(document.querySelector("[data-scratchpad-section] img")).toBeNull();
 	});
@@ -3403,13 +3404,13 @@ describe("Sidebar", () => {
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 	});
 
-	it("replaces the folder with a warning when a collapsed project needs attention", () => {
+	it("replaces the folder with a question mark when a collapsed project waits on the user", () => {
 		useUiStore.setState({ projectAvatars: false });
 		renderSidebar({
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
 		});
-		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="input"]')).toHaveClass("icon-question-mark", "text-status-in-review");
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
@@ -3434,7 +3435,7 @@ describe("Sidebar", () => {
 		expect(dot("read task")).not.toHaveClass("bg-muted-foreground/60");
 	});
 
-	it("badges a collapsed project's icon like the orchestrator button: attention, then working, then an unread finished turn", () => {
+	it("badges a collapsed project's icon like the orchestrator button: a question, then working, then an unread finished turn", () => {
 		useUiStore.setState({ projectAvatars: false });
 		useSessionReadStore.setState({ baseline: 0, readAt: {} });
 		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
@@ -3457,8 +3458,8 @@ describe("Sidebar", () => {
 
 		cleanup();
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working, input] }] });
-		expect(projectMarker()).toHaveAttribute("data-project-marker", "attention");
-		expect(projectMarker()).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "input");
+		expect(projectMarker()).toHaveClass("icon-question-mark", "text-status-in-review");
 	});
 
 	it("keeps the open session read while its project is collapsed", () => {

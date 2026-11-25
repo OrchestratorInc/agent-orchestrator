@@ -7267,6 +7267,62 @@ describe("ChatWorkspace shell tabs", () => {
 		);
 	});
 
+	// #8607: switching back to Chat (Ctrl+Tab or a tab click) returns the caret to the composer.
+	describe("composer focus on returning to the Chat tab", () => {
+		const common = { session: chatSession, shellTerminals: shells, onSelectChat: vi.fn() };
+		const composer = () => screen.getByLabelText("Message the agent");
+		const blurAll = () => (document.activeElement as HTMLElement | null)?.blur();
+
+		it("focuses the composer when Chat comes back from a shell", () => {
+			const view = render(<ChatWorkspace {...common} snapshot={idleSnapshot()} shellTarget={shellTarget("shell-1")} />);
+			act(() => blurAll());
+			expect(document.activeElement).toBe(document.body);
+			view.rerender(<ChatWorkspace {...common} snapshot={idleSnapshot()} />);
+			expect(document.activeElement).toBe(composer());
+		});
+
+		it("moves focus from the tab strip and from a workspace file tab", () => {
+			const view = render(<ChatWorkspace {...common} snapshot={idleSnapshot()} workspaceActiveTabKey="file:README.md" />);
+			const chatTab = screen.getAllByRole("tab")[0]!;
+			act(() => chatTab.focus());
+			view.rerender(<ChatWorkspace {...common} snapshot={idleSnapshot()} />);
+			expect(document.activeElement).toBe(composer());
+		});
+
+		it("does not steal focus from another input", () => {
+			const view = render(
+				<>
+					<input aria-label="Elsewhere" />
+					<ChatWorkspace {...common} snapshot={idleSnapshot()} shellTarget={shellTarget("shell-1")} />
+				</>,
+			);
+			const elsewhere = screen.getByLabelText("Elsewhere");
+			act(() => elsewhere.focus());
+			view.rerender(
+				<>
+					<input aria-label="Elsewhere" />
+					<ChatWorkspace {...common} snapshot={idleSnapshot()} />
+				</>,
+			);
+			expect(document.activeElement).toBe(elsewhere);
+		});
+
+		it("does not focus a disabled composer", () => {
+			const view = render(<ChatWorkspace {...common} snapshot={idleSnapshot()} newWorkDisabled shellTarget={shellTarget("shell-1")} />);
+			act(() => blurAll());
+			view.rerender(<ChatWorkspace {...common} snapshot={idleSnapshot()} newWorkDisabled />);
+			expect(composer()).toHaveAttribute("aria-disabled", "true");
+			expect(document.activeElement).not.toBe(composer());
+		});
+
+		it("does not refocus on re-renders while Chat stays in front", () => {
+			const view = render(<ChatWorkspace {...common} snapshot={idleSnapshot()} />);
+			act(() => blurAll());
+			view.rerender(<ChatWorkspace {...common} snapshot={idleSnapshot()} />);
+			expect(document.activeElement).toBe(document.body);
+		});
+	});
+
 	it("passes the routed shell target straight to the terminal pane", () => {
 		render(
 			<ChatWorkspace
