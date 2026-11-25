@@ -404,52 +404,47 @@ function DevicePicker({
 	const devices = status.devices
 		.filter((device) => device.platform === platform)
 		.sort((a, b) => Number(b.booted) - Number(a.booted) || a.name.localeCompare(b.name));
-	const { icon: Logo, name } = platformMeta[platform];
+	const { name } = platformMeta[platform];
+	// The same page header as the guide one step away: Back, the platform, a hint.
 	return (
-		<div className="board-scrollbar flex h-full flex-col gap-3 overflow-y-auto p-3">
-			<div className="flex items-center gap-1">
-				<Button aria-label={t("device.back")} onClick={onBack} size="icon-sm" type="button" variant="quiet">
-					<ChevronLeft aria-hidden="true" className="size-icon-sm" />
-				</Button>
-				<Logo aria-hidden="true" className="size-icon-md text-muted-foreground" />
-				<span className="ml-1 text-sm font-medium text-foreground">{t(name)}</span>
+		<DevicePage back={{ label: t("device.back"), onClick: onBack }} description={t("device.pickHint")} fill title={t(name)}>
+			<div className="flex flex-col gap-3">
+				{error ? <p className="text-xs text-destructive">{error}</p> : null}
+				{/* Devices that could not be listed are not an empty machine: say why. */}
+				{status.error ? <p className="text-xs text-destructive [overflow-wrap:anywhere]">{shortHomePaths(status.error)}</p> : null}
+				{devices.length === 0 ? (
+					status.error ? null : <PanelMessage compact>{t(platform === "ios" ? "device.noIosDevices" : "device.noAndroidDevices")}</PanelMessage>
+				) : (
+					<ul className="shrink-0 divide-y divide-border overflow-hidden rounded-md bg-settings-row">
+						{devices.map((device) => {
+							const owner = heldBy.get(device.id);
+							const takenByOther = owner !== undefined && owner !== sessionId;
+							return (
+								<li className="flex min-h-9 items-center gap-2 px-3 py-1.5" key={device.id}>
+									<div className="min-w-0 flex-1">
+										<p className="truncate text-sm text-foreground">{device.name}</p>
+										<p className="truncate text-xs text-muted-foreground">
+											{[device.version, takenByOther ? <SessionTitle key="owner" sessionId={owner} /> : device.booted ? t("device.running") : undefined]
+												.filter(Boolean)
+												.flatMap((part, index) => (index === 0 ? [part] : [" · ", part]))}
+										</p>
+									</div>
+									<Button
+										disabled={takenByOther || opening !== undefined}
+										onClick={() => onOpen(device)}
+										size="sm"
+										type="button"
+										variant="secondary"
+									>
+										{opening === device.id ? t("device.opening") : t("device.open")}
+									</Button>
+								</li>
+							);
+						})}
+					</ul>
+				)}
 			</div>
-			<p className="text-xs text-muted-foreground">{t("device.pickHint")}</p>
-			{error ? <p className="text-xs text-destructive">{error}</p> : null}
-			{/* Devices that could not be listed are not an empty machine: say why. */}
-			{status.error ? <p className="text-xs text-destructive [overflow-wrap:anywhere]">{shortHomePaths(status.error)}</p> : null}
-			{devices.length === 0 ? (
-				status.error ? null : <PanelMessage compact>{t(platform === "ios" ? "device.noIosDevices" : "device.noAndroidDevices")}</PanelMessage>
-			) : (
-				<ul className="shrink-0 divide-y divide-border overflow-hidden rounded-md bg-settings-row">
-					{devices.map((device) => {
-						const owner = heldBy.get(device.id);
-						const takenByOther = owner !== undefined && owner !== sessionId;
-						return (
-							<li className="flex min-h-9 items-center gap-2 px-3 py-1.5" key={device.id}>
-								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm text-foreground">{device.name}</p>
-									<p className="truncate text-xs text-muted-foreground">
-										{[device.version, takenByOther ? <SessionTitle key="owner" sessionId={owner} /> : device.booted ? t("device.running") : undefined]
-											.filter(Boolean)
-											.flatMap((part, index) => (index === 0 ? [part] : [" · ", part]))}
-									</p>
-								</div>
-								<Button
-									disabled={takenByOther || opening !== undefined}
-									onClick={() => onOpen(device)}
-									size="sm"
-									type="button"
-									variant="secondary"
-								>
-									{opening === device.id ? t("device.opening") : t("device.open")}
-								</Button>
-							</li>
-						);
-					})}
-				</ul>
-			)}
-		</div>
+		</DevicePage>
 	);
 }
 
