@@ -1009,7 +1009,7 @@
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",
 	"cues.typeName.command": "Command",
-	"daemon.hint.binaryMissing": "npm run build:daemon을 실행하여 데몬을 다시 빌드하세요.",
+	"daemon.hint.binaryMissing": "Orchestrator를 다시 설치하여 백그라운드 서비스를 복원하세요.",
 	"daemon.hint.conflict": "충돌하는 데몬을 중지한 뒤 데스크톱 앱을 다시 시작하세요.",
 	"daemon.hint.default": "npm run dev를 실행한 터미널에서 자세한 내용을 확인하세요.",
 	"daemon.hint.notConfigured": "AO_DAEMON_COMMAND를 설정하거나 소스 체크아웃에서 데스크톱 앱을 실행하세요.",
