@@ -5610,6 +5610,7 @@
 	"move.finishGaveUp": "O Orchestrator parou de tentar arquivar uma sessão que foi movida para o Orchestrator Cloud. Arquive-a neste computador.",
 	"move.sessionMoving": "Esta sessão está sendo movida para outro computador, então não aceita mensagens e o agente dela continua parado. Reinicie o agente para mantê-la no Orchestrator Cloud.",
 	"move.workerTooOld": "O worker do Orchestrator Cloud desta sessão é antigo demais para movê-la. Reinicie a sessão para atualizá-lo e depois mova-a.",
+	"move.agentStillRunning": "O Orchestrator Cloud não conseguiu confirmar que o agente parou: alguns processos dele ainda estavam em execução, então nada foi commitado nem enviado. Tente novamente.",
 	"moveHere.menuItem": "Mover para este computador…",
 	"moveHere.title": "Mover {{title}} para este computador",
 	"moveHere.project": "Projeto",

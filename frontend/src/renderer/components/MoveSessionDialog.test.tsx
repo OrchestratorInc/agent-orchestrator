@@ -652,6 +652,22 @@ describe("moving a Cloud session to this computer", () => {
 		expect(screen.queryByText("worker too old (CP text)")).toBeNull();
 	});
 
+	it("says the Cloud agent did not stop, with nothing pushed, and offers Try again", async () => {
+		cloud.exportSessionMove.mockRejectedValueOnce(new CloudCpError("agent did not stop (CP text)", { status: 409, code: "MOVE_AGENT_STILL_RUNNING" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText(
+			"Orchestrator Cloud could not confirm the agent had stopped: some of its processes were still running, so nothing was committed or pushed. Try again.",
+		)).toBeTruthy();
+		expect(screen.queryByText("agent did not stop (CP text)")).toBeNull();
+		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/sessions/move/import")).toHaveLength(0);
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
+		// Trying again is safe: it moves.
+		await user.click(screen.getByRole("button", { name: "Try again" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+	});
+
 	it("keeps the Cloud session when it was used again after the move, and says so", async () => {
 		useUnfinishedMoveStore.setState({ moves: [] });
 		cloud.exportSessionMove.mockResolvedValue({ ...(await cloud.exportSessionMove.getMockImplementation()?.()), moveId: "exp-1" });

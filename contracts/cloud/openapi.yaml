@@ -2077,9 +2077,12 @@ paths:
           description: >-
             MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
             restarting the session updates it. Refused before the worker is
-            asked, so nothing stopped, committed or pushed. Other refusals of
-            the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer
-            409 too, with their code.
+            asked, so nothing stopped, committed or pushed.
+            MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not
+            be confirmed stopped, so nothing was committed or pushed; trying
+            again is safe (it ends them first). Other refusals of the move
+            (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too,
+            with their code.
           content:
             application/json:
               schema:
@@ -2150,9 +2153,12 @@ paths:
           description: >-
             MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
             restarting the session updates it. Refused before the worker is
-            asked, so nothing stopped, committed or pushed. Other refusals of
-            the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer
-            409 too, with their code.
+            asked, so nothing stopped, committed or pushed.
+            MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not
+            be confirmed stopped, so nothing was committed or pushed; trying
+            again is safe (it ends them first). Other refusals of the move
+            (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too,
+            with their code.
           content:
             application/json:
               schema:

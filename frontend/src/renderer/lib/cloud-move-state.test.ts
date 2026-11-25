@@ -14,6 +14,10 @@ describe("withMoveStateText", () => {
 		expect(withMoveStateText(new CloudCpError("old worker (CP text)", { status: 409, code: "MOVE_WORKER_TOO_OLD" }))).toMatchObject({
 			message: "This session's Orchestrator Cloud worker is too old to move it. Restart the session to update it, then move it.",
 		});
+		expect(withMoveStateText(new CloudCpError("still running (CP text)", { status: 409, code: "MOVE_AGENT_STILL_RUNNING" }))).toMatchObject({
+			code: "MOVE_AGENT_STILL_RUNNING",
+			message: "Orchestrator Cloud could not confirm the agent had stopped: some of its processes were still running, so nothing was committed or pushed. Try again.",
+		});
 	});
 
 	it("leaves every other error as it is", () => {
