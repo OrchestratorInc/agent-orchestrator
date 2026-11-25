@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -1170,6 +1171,59 @@ func TestCommitChatSpawnRollsBackProviderBoundaryWhenOwnerWriteFails(t *testing.
 		t.Fatalf("provider owner after rollback = handle %q generation %q, want %q/%q",
 			gotSession.Metadata.ProviderConversationID, gotSession.Metadata.ControllerGeneration,
 			sourceHandle, sourceGeneration)
+	}
+}
+
+func TestOpenNativeConversationRejectsReplacedOrchestrator(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "chat-replaced")
+	old := sampleRecord("chat-replaced")
+	old, err := s.CreateSession(ctx, old)
+	if err != nil {
+		t.Fatalf("Create old session: %v", err)
+	}
+	newer, err := s.CreateSession(ctx, sampleRecord("chat-replaced"))
+	if err != nil {
+		t.Fatalf("Create newer session: %v", err)
+	}
+	if _, err := s.CreateConversation(ctx, "project-conversation",
+		domain.ConversationScopeProject, old.ProjectID, newer.ID, testNow); err != nil {
+		t.Fatalf("CreateConversation newer: %v", err)
+	}
+
+	_, err = s.OpenNativeConversation(ctx, "unused", domain.ConversationScopeProject, old.ProjectID, old.ID, testNow)
+	if !errors.Is(err, ports.ErrProjectConversationReplaced) {
+		t.Fatalf("OpenNativeConversation error = %v, want ErrProjectConversationReplaced", err)
+	}
+}
+
+func TestOpenNativeConversationWithDeletedOwnerIsNotReplaced(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "chat-orphaned")
+	old, err := s.CreateSession(ctx, sampleRecord("chat-orphaned"))
+	if err != nil {
+		t.Fatalf("Create old session: %v", err)
+	}
+	// Only a seed session (no workspace yet) can be deleted outright.
+	seed := sampleRecord("chat-orphaned")
+	seed.Metadata = domain.SessionMetadata{}
+	gone, err := s.CreateSession(ctx, seed)
+	if err != nil {
+		t.Fatalf("Create owner session: %v", err)
+	}
+	if _, err := s.CreateConversation(ctx, "project-conversation",
+		domain.ConversationScopeProject, old.ProjectID, gone.ID, testNow); err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if deleted, err := s.DeleteSession(ctx, gone.ID); err != nil || !deleted {
+		t.Fatalf("DeleteSession owner: deleted=%t err=%v", deleted, err)
+	}
+
+	_, err = s.OpenNativeConversation(ctx, "unused", domain.ConversationScopeProject, old.ProjectID, old.ID, testNow)
+	if err == nil || errors.Is(err, ports.ErrProjectConversationReplaced) {
+		t.Fatalf("OpenNativeConversation error = %v, want a plain ownership error", err)
 	}
 }
 
