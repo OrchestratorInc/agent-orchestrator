@@ -36,7 +36,7 @@ describe("chat turn summary styling", () => {
 
 	it("folds a settled turn's work behind the Worked for row and keeps its state above the list", () => {
 		expect(source).toContain("partitionTurnItems(items, group.turn)");
-		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem }), [editDraft, edits, openWorked, room, roomItem, roomKey]);");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem, sentAt }), [editDraft, edits, openWorked, room, roomItem, roomKey, sentAt]);");
 		expect(source).toContain("extraData={rowState}");
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
@@ -115,15 +115,17 @@ describe("a sent message", () => {
 	it("shows at once, and a steer gets room below it inside the running turn", () => {
 		expect(source).toContain("const optimistic = optimisticSentItem(anchor, newestSequence(snapshot.items));");
 		expect(source).toContain("if (!anchor?.text || snapshot.items.some((item) => matchesSend(item, anchor))) return readable;");
-		expect(source).toContain("? <View key={row.key} onLayout={placeRoom(row.items[0].id)}>{renderItem(row.items[0])}</View>");
-		expect(source).toContain("if (room && roomItem && placedItem === roomItem) onRoomPlaced?.();");
+		expect(source).toContain("? <View key={row.key} onLayout={placeRoom}>{renderItem(row.items[0])}</View>");
+		expect(source).toContain("if (room && roomSend !== undefined && placedSend === roomSend) onRoomPlaced?.();");
+		// Kept per send: the real steer replacing its early copy keeps the measured place.
+		expect(source).toContain("setPlaced((current) => current?.send === roomSend && current.y === y ? current : { send: roomSend, y });");
 	});
 
 	// The send button closes the keyboard: the room is laid out for none.
 	// A steer folded behind "Worked for" (or drawn inside the fold) gives no
 	// offset: the room it measured earlier would leave a gap below the turn.
 	it("starts the room at the message only while its row is drawn in the turn", () => {
-		expect(source).toContain("const roomOffset = drawn && placed && placed.item === roomItem ? placed.y : 0;");
+		expect(source).toContain("const roomOffset = drawn && placed && placed.send === roomSend ? placed.y : 0;");
 		expect(source).toContain("const roomStyle = roomStyleFor(drawsRoomItem([partition.prompt, partition.settled ? [] : partition.work, partition.notices, partition.final]));");
 		expect(source).toContain("{renderRows(partition.work, false)}</FoldBody>");
 	});
@@ -500,7 +502,7 @@ describe("state in words", () => {
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");
-		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem }), [editDraft, edits, openWorked, room, roomItem, roomKey]);");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem, sentAt }), [editDraft, edits, openWorked, room, roomItem, roomKey, sentAt]);");
 	});
 });
 

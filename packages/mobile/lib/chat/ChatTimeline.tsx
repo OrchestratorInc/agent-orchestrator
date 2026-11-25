@@ -429,7 +429,7 @@ function Timeline({
 	// leaving the conversation with the draft. A JS back listener never hears
 	// predictive back on Android, so this guards the screen's removal instead.
 	usePreventRemove(editing, cancelEdit);
-	const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem }), [editDraft, edits, openWorked, room, roomItem, roomKey]);
+	const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem, sentAt }), [editDraft, edits, openWorked, room, roomItem, roomKey, sentAt]);
 	const jumpViewPosition = 0.18;
 	// Where the native scrollToEnd lands: its content inset is the keyboard's room.
 	const endOffset = () => {
@@ -851,6 +851,7 @@ function Timeline({
 								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 								room={group.key === roomKey ? room : undefined}
 								roomItem={group.key === roomKey ? roomItem : undefined}
+								roomSend={group.key === roomKey ? sentAt : undefined}
 								onRoomPlaced={roomPlaced}
 							/>}
 						/>
@@ -877,7 +878,7 @@ function Timeline({
  * useStableGroups) and its handlers stable, so a streamed word re-renders the
  * turn it lands in and leaves every other turn on screen alone.
  */
-const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup, room, roomItem, onRoomPlaced }: {
+const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup, room, roomItem, roomSend, onRoomPlaced }: {
 	group: ConversationGroup;
 	sessionId: string;
 	conversationId: string;
@@ -903,30 +904,37 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	room?: number;
 	/** The sent message the room starts at: the turn's prompt, or a steer partway down. */
 	roomItem?: string;
+	/**
+	 * The send the room is for (its `at`). The message's place is kept per send,
+	 * not per row: a steer's early copy and the real steer share this turn, and
+	 * the swap keeps the place measured until the real row reports its own.
+	 */
+	roomSend?: number;
 	/** Told once the room below `roomItem` is laid out, so the list can move to it. */
 	onRoomPlaced?(): void;
 }) {
 	// Where the sent message sits in the turn, measured, so the room starts at it.
-	const [placed, setPlaced] = useState<{ item: string; y: number } | undefined>(undefined);
+	const [placed, setPlaced] = useState<{ send: number; y: number } | undefined>(undefined);
 	// Laid out with the turn, so what fills it in moves nothing below or above.
 	// The room starts at the message only while its row is drawn in the turn
 	// itself: a settled turn folds a steer away (or draws it inside the fold),
 	// and its old offset would leave a gap below the turn.
 	const roomStyleFor = (drawn: boolean) => {
-		const roomOffset = drawn && placed && placed.item === roomItem ? placed.y : 0;
+		const roomOffset = drawn && placed && placed.send === roomSend ? placed.y : 0;
 		return room ? { minHeight: roomOffset + room } : undefined;
 	};
 	const drawsRoomItem = (lists: ConversationItem[][]) => Boolean(roomItem) && lists.some((list) => list.some((item) => item.id === roomItem));
-	const placeRoom = (item: string) => (event: LayoutChangeEvent) => {
+	const placeRoom = (event: LayoutChangeEvent) => {
+		if (roomSend === undefined) return;
 		const y = Math.round(event.nativeEvent.layout.y);
-		setPlaced((current) => current?.item === item && current.y === y ? current : { item, y });
+		setPlaced((current) => current?.send === roomSend && current.y === y ? current : { send: roomSend, y });
 	};
 	// After the commit that laid the room out at the measured message.
-	const placedItem = placed?.item;
+	const placedSend = placed?.send;
 	const placedY = placed?.y;
 	useEffect(() => {
-		if (room && roomItem && placedItem === roomItem) onRoomPlaced?.();
-	}, [onRoomPlaced, placedItem, placedY, room, roomItem]);
+		if (room && roomSend !== undefined && placedSend === roomSend) onRoomPlaced?.();
+	}, [onRoomPlaced, placedSend, placedY, room, roomSend]);
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
@@ -942,7 +950,7 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	const renderRows = (list: ConversationItem[], measured = true) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
 		: measured && row.items[0].id === roomItem
-			? <View key={row.key} onLayout={placeRoom(row.items[0].id)}>{renderItem(row.items[0])}</View>
+			? <View key={row.key} onLayout={placeRoom}>{renderItem(row.items[0])}</View>
 			: renderItem(row.items[0], row.key));
 	const renderItem = (item: ConversationItem, key?: string) => <TimelineItem key={key} item={item} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={item.turnId && editableTurns?.has(item.turnId) ? onEditMessage : undefined} editor={editorFor(item)} answeredBelow={answeredBelow} />;
 	if (startup) {
