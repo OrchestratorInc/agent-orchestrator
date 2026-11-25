@@ -14,8 +14,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionfork"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/filesnapshot"
 )
 
 func TestDirForkSeedsManagesOnlySessionFolders(t *testing.T) {

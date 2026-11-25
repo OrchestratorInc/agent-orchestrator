@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/filesnapshot"
 )
 
 // forkSnapshots also makes the turns of agents whose forks can start from an
@@ -104,7 +104,7 @@ func (c *Controller) restoreFiles(ctx context.Context, turnID, planID string) (f
 	if len(restore.Changes) == 0 {
 		return restore, nil
 	}
-	if err := restore.Save(ctx, filesnapshot.BeforeRollbackRef(c.sessionID, turnID)); err != nil {
+	if err := restore.Save(ctx, filesnapshot.BeforeRollbackRef(string(c.sessionID), turnID)); err != nil {
 		return filesnapshot.Restore{}, fmt.Errorf("save files before restoring %s: %w", turnID, err)
 	}
 	if err := restore.Apply(ctx); err != nil {
@@ -123,7 +123,7 @@ func planFileRestore(ctx context.Context, workspace string, session domain.Sessi
 	// gets the same budget instead of holding the preview or the rollback.
 	planCtx, cancel := context.WithTimeout(ctx, fileSnapshotBudget)
 	defer cancel()
-	restore, err := filesnapshot.Plan(planCtx, workspace, filesnapshot.Ref(session, turnID))
+	restore, err := filesnapshot.Plan(planCtx, workspace, filesnapshot.Ref(string(session), turnID))
 	switch {
 	case err != nil && ctx.Err() == nil && errors.Is(planCtx.Err(), context.DeadlineExceeded):
 		return restore, "reading the worktree's files took too long", nil
@@ -165,7 +165,7 @@ func (c *Controller) snapshotFiles(ctx context.Context, turnIDs []string) {
 	}
 	refs := make([]string, len(turnIDs))
 	for i, turnID := range turnIDs {
-		refs[i] = filesnapshot.Ref(c.sessionID, turnID)
+		refs[i] = filesnapshot.Ref(string(c.sessionID), turnID)
 	}
 	captureCtx, cancel := context.WithTimeout(ctx, fileSnapshotBudget)
 	defer cancel()

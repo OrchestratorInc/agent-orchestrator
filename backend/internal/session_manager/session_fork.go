@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/forkseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/forkseed"
 )
 
 // forkSeedApplier writes a fork source's captured files into the fork.

@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/filesnapshot"
 )
 
 const (
@@ -771,7 +771,7 @@ func (w *Workspace) deleteFileSnapshots(ctx context.Context, info ports.Workspac
 	}
 	repo, err := w.repoPathForInfo(info)
 	if err == nil {
-		err = filesnapshot.DeleteAll(ctx, repo, filesnapshot.SessionPrefix(info.SessionID))
+		err = filesnapshot.DeleteAll(ctx, repo, filesnapshot.SessionPrefix(string(info.SessionID)))
 	}
 	if err != nil {
 		w.logf("gitworktree: delete file snapshots for session %s: %v", info.SessionID, err)

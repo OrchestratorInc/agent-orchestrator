@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -60,19 +59,19 @@ const snapshotsPrefix = "refs/ao/snapshots/"
 const snapshotSubject = "ao file snapshot of "
 
 // SessionPrefix is the ref namespace holding one session's snapshots.
-func SessionPrefix(session domain.SessionID) string {
-	return snapshotsPrefix + string(session) + "/"
+func SessionPrefix(session string) string {
+	return snapshotsPrefix + session + "/"
 }
 
 // Ref names the snapshot taken before a session's turn.
-func Ref(session domain.SessionID, turnID string) string {
+func Ref(session, turnID string) string {
 	return SessionPrefix(session) + turnID
 }
 
 // BeforeRollbackRef names the record of the worktree just before a rollback
 // restored the snapshot of turnID, so what the restore overwrote stays
 // reachable instead of being left to garbage collection.
-func BeforeRollbackRef(session domain.SessionID, turnID string) string {
+func BeforeRollbackRef(session, turnID string) string {
 	return SessionPrefix(session) + "before-rollback/" + turnID
 }
 
@@ -360,7 +359,7 @@ func DeleteOrphans(ctx context.Context, repo string, worktrees []string) error {
 		if keep[session] {
 			continue
 		}
-		if err := DeleteAll(ctx, repo, SessionPrefix(domain.SessionID(session))); err != nil {
+		if err := DeleteAll(ctx, repo, SessionPrefix(session)); err != nil {
 			return err
 		}
 	}
