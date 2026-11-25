@@ -27,6 +27,7 @@ export function conversationErrorIsPermanent(code: string | undefined, reviewer 
 		"CHAT_DRIVER_INCOMPATIBLE",
 		"CHAT_AUTH_REQUIRED",
 		"CHAT_RESUME_FAILED",
+		"CHAT_USAGE_LIMITED",
 		"CHAT_CONTROLLER_NOT_READY",
 	]).has(code);
 }
@@ -61,6 +62,7 @@ export function conversationActionError(error: unknown): string {
 		case "CHAT_DRIVER_UNAVAILABLE": return "The agent CLI is unavailable on the Orchestrator host. Install it or open the worktree shell.";
 		case "CHAT_DRIVER_INCOMPATIBLE": return "The installed agent CLI is not compatible with Orchestrator Chat. Update it, then resume this session.";
 		case "CHAT_RESUME_FAILED": return "Orchestrator could not resume this agent. The conversation and worktree are preserved.";
+		case "CHAT_USAGE_LIMITED": return "This account reached its usage limit. Switch the chat to another account, or resume after the limit resets.";
 		case "CHAT_PROVIDER_REFUSED": return daemonDetail(error) ?? "The provider refused this action.";
 		case "CHAT_EDIT_BUSY": return "Stop the current turn before editing an earlier message.";
 		case "CHAT_EDIT_UNSUPPORTED": return "This agent cannot branch an earlier message.";

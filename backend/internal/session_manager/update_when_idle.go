@@ -273,7 +273,9 @@ func (m *Manager) resumeAfterUpdate(ctx context.Context, id domain.SessionID) er
 		if rec.HibernatedAt == nil && m.chat != nil && m.chat.HasLiveChatController(id) {
 			return nil
 		}
-		if err := m.WakeHibernatedChat(ctx, id); err != nil {
+		if err := m.WakeHibernatedChat(ctx, id); errors.Is(err, ports.ErrChatAccountMoveStarted) {
+			return nil
+		} else if err != nil {
 			return err
 		}
 		// Messages sent while it was stopped stayed queued; deliver them now,

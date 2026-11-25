@@ -253,9 +253,10 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	// A chat asleep, or still waking, has no source agent to hand over from
 	// yet. It is woken first, as a message to it would be.
 	if !s.HasLiveChatController(id) {
-		err := s.wakeHibernated(ctx, id)
+		wakeCtx := context.WithValue(ctx, noUsageLimitMove{}, true)
+		err := s.wakeHibernated(wakeCtx, id)
 		if errors.Is(err, ErrNoController) && !stored.IsTerminated && s.resumeAgent != nil {
-			resumeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			resumeCtx, cancel := context.WithTimeout(wakeCtx, 60*time.Second)
 			err = s.resumeAgent(resumeCtx, id)
 			cancel()
 			if err != nil {

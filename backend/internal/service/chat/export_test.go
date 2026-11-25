@@ -1,6 +1,9 @@
 package chat
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // SetNativeHistoryLoadAttemptLimit shortens the per-attempt provider load bound
 // for tests and returns a restore function.
@@ -37,4 +40,9 @@ func SetForcedHandoffInterruptLimit(limit time.Duration) (restore func()) {
 	previous := forcedHandoffInterruptLimit
 	forcedHandoffInterruptLimit = limit
 	return func() { forcedHandoffInterruptLimit = previous }
+}
+
+// ForProviderSwitch marks ctx as a provider switch's wake.
+func ForProviderSwitch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noUsageLimitMove{}, true)
 }
