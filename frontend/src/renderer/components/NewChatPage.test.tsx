@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
+import { takeComposerHandoff } from "../lib/chat-context-bus";
 import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
 import type { ApprovalMode, ChatModel } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
@@ -209,6 +210,51 @@ describe("NewChatPage", () => {
 		}));
 	});
 
+	it("hands a follow-up typed while the session is created to the session's composer", async () => {
+		let resolve!: (sessionId: string) => void;
+		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));
+		renderPage();
+		// The box takes typing while the session is created, as its placeholder says.
+		expect(h.workspace?.followUpWhileOpening).toBe(true);
+		const takeDraft = vi.fn(() => ({ text: "Also add tests", send: true }));
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft: vi.fn(), takeDraft };
+
+		let sent!: Promise<unknown>;
+		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")); });
+		await act(async () => {
+			resolve("sess-1");
+			await sent;
+		});
+
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "sess-1" } })));
+		expect(takeDraft).toHaveBeenCalledOnce();
+		expect(takeComposerHandoff("sess-1")).toEqual({ text: "Also add tests", send: true });
+	});
+
+	it("keeps a follow-up typed while a refused brief started, below the brief it returns", async () => {
+		h.launch.mockRejectedValue(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
+		renderPage();
+		const setDraft = vi.fn();
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft, takeDraft: () => ({ text: "Also add tests", send: true }) };
+
+		await act(async () => {
+			// The composer puts the refused brief back as the send rejects.
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => {
+				writeChatComposerText(draftScope, "Fix the build");
+			});
+		});
+
+		await waitFor(() => expect(setDraft).toHaveBeenCalledWith("Fix the build\n\nAlso add tests"));
+		expect(h.navigate).not.toHaveBeenCalled();
+		expect(takeComposerHandoff("sess-1")).toBeUndefined();
+	});
+
+	it("keeps a Cloud task's box shut while it starts: its session takes no follow-up from here", () => {
+		h.isCloudProject = true;
+		renderPage();
+		expect(h.workspace?.followUpWhileOpening).toBe(false);
+	});
+
 	it("starts a cloud project's task on the page, with its approval mode and without attachments", async () => {
 		h.isCloudProject = true;
 		h.launch.mockResolvedValue("cloud-sess-1");
@@ -248,9 +294,9 @@ describe("NewChatPage", () => {
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
 	});
 
-	// A Cloud standalone agent starts without files: its own project comes
-	// with its session, so a start the files did not reach would leave it behind.
-	it("offers files on a Cloud project's task where the control plane takes them, and not on a Cloud standalone agent", () => {
+	// A Cloud session of its own takes files as a project's task does: they
+	// ride the first message of its Chat session.
+	it("offers files on a Cloud project's task and on a Cloud session where the control plane takes them", () => {
 		h.isCloudProject = true;
 		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
 		renderPage();
@@ -259,10 +305,18 @@ describe("NewChatPage", () => {
 		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
 		cleanup();
 		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
-		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.holdAttachments).toBe(true);
+		expect(h.workspace?.cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
+	});
+
+	it("says why a Cloud session takes no files where the control plane takes none", () => {
+		h.isCloudProject = true;
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["standalone_agents"], maxAttachmentBytes: undefined };
+		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
 		expect(h.workspace?.cloudAttachments).toBeUndefined();
 		// A draft that brought files from another target keeps them, with why this one takes none.
-		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a standalone agent. Remove them to continue.");
+		expect(h.workspace?.attachmentsRefusal).toBe("File attachments are not supported for cloud tasks yet.");
 	});
 
 	// A send whose answer was lost keeps the files it went with until its

@@ -1361,9 +1361,10 @@ func containsSubsequence(values, needle []string) bool {
 	return false
 }
 
-// bypassNudgeGuard is the per-session flag-settings defaultMode that keeps
-// Claude's auto-mode default dialog out of a bypassPermissions launch.
-const bypassNudgeGuard = `{"permissions":{"defaultMode":"bypassPermissions"}}`
+// bypassNudgeGuard is the per-session flag settings of a bypassPermissions
+// launch: the defaultMode that keeps Claude's auto-mode default dialog out, and
+// the accepted bypass-permissions confirmation no one answers in AO (#6484).
+const bypassNudgeGuard = `{"permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true}`
 
 // An explicit AO permission mode also rides as the flag-settings defaultMode,
 // which suppresses Claude's "Make auto mode your default permission mode?"
@@ -1404,6 +1405,11 @@ func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
 					continue
 				}
 				guard := `{"permissions":{"defaultMode":"` + tt.mode + `"}}`
+				if tt.mode == "bypassPermissions" {
+					// Bypass also skips Claude's one-time confirmation, which no one
+					// answers in an AO terminal (#6484); no other mode sets it.
+					guard = bypassNudgeGuard
+				}
 				if !containsSubsequence(cmd, []string{"--permission-mode", tt.mode, "--settings", guard}) {
 					t.Fatalf("%s %#v: missing --permission-mode %s with --settings %s", name, cmd, tt.mode, guard)
 				}
@@ -1429,7 +1435,7 @@ func TestLaunchSettingsShareOneSettingsFlagWithTheNudgeGuard(t *testing.T) {
 			flags++
 		}
 	}
-	want := `{"autoCompactEnabled":true,"autoCompactWindow":1000000,"permissions":{"defaultMode":"bypassPermissions"},"ultracode":true}`
+	want := `{"autoCompactEnabled":true,"autoCompactWindow":1000000,"permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true,"ultracode":true}`
 	if flags != 1 || !containsSubsequence(cmd, []string{"--settings", want}) {
 		t.Fatalf("launch %#v: want one --settings %s", cmd, want)
 	}

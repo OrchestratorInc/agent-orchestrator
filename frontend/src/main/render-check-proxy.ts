@@ -136,7 +136,9 @@ async function decide({ host, port }: Target, network: RenderNetwork): Promise<D
 	return { kind: "connect", addresses };
 }
 
-class ClosedError extends Error {}
+class ClosedError extends Error {
+	readonly code: string = "CLOSED_ERROR";
+}
 
 /**
  * Collects what a client sends and hands it out in exact lengths, so the

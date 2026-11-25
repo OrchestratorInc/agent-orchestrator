@@ -482,7 +482,7 @@ func TestDeriveKanbanPresentationAOChangesRequestedNeedsActiveWorker(t *testing.
 		{name: "idle worker after delivered feedback requests changes", activity: contract.ActivityIdle, autoFix: true, want: contract.DisplayChangesRequested},
 		{name: "idle worker without auto fix requests changes", activity: contract.ActivityIdle, want: contract.DisplayChangesRequested},
 		{name: "active worker with auto fix addresses comments", activity: contract.ActivityActive, autoFix: true, want: contract.DisplayAddressingComments},
-		{name: "active worker without auto fix is working", activity: contract.ActivityActive, want: contract.DisplayWorking},
+		{name: "active worker without auto fix addresses comments", activity: contract.ActivityActive, want: contract.DisplayAddressingComments},
 		{name: "a running reviewer outranks the idle changes request", activity: contract.ActivityIdle, autoFix: true, running: true, want: contract.DisplayReviewing},
 		{name: "failing CI keeps its precedence", activity: contract.ActivityIdle, autoFix: true, ci: contract.CIFailing, want: contract.DisplayCIFailing},
 		{name: "blocked worker still needs attention", activity: contract.ActivityBlocked, autoFix: true, want: contract.DisplayBlocked},
@@ -820,6 +820,25 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			pr: contract.KanbanPRFacts{
 				URL:            "pr/1",
 				Review:         contract.ReviewChangesRequest,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name:    "external changes request stays in review despite auto review",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name: "external changes request stays in review despite mergeable snapshot",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest, Mergeability: contract.MergeMergeable,
 				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
 			},
 			wantColumn: contract.KanbanNeedsReview,
@@ -1205,6 +1224,116 @@ func TestDeriveKanbanPresentationLeastReadyPRSpeaks(t *testing.T) {
 			t.Parallel()
 			if got := present(tt.prs...); got != tt.want {
 				t.Fatalf("presentation = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
+	t.Parallel()
+	merged := time.Unix(1000, 0)
+	before, after := merged.Add(-time.Minute), merged.Add(time.Minute)
+	prompted := func(activity contract.ActivityState, at time.Time) contract.KanbanSessionFacts {
+		session := sessionAt(activity)
+		session.HumanPromptAt = at
+		return session
+	}
+	done := contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMerged}
+	building := func(status contract.DisplayStatus) contract.KanbanPresentation {
+		return contract.KanbanPresentation{Column: contract.KanbanBuilding, DisplayStatus: status}
+	}
+	tests := []struct {
+		name    string
+		session contract.KanbanSessionFacts
+		prs     []contract.KanbanPRFacts
+		want    contract.KanbanPresentation
+	}{
+		{
+			name:    "merged and untouched stays done",
+			session: prompted(contract.ActivityIdle, before),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    done,
+		},
+		{
+			name:    "never prompted stays done",
+			session: sessionAt(contract.ActivityIdle),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    done,
+		},
+		{
+			name:    "a prompt after the merge is building again once idle",
+			session: prompted(contract.ActivityIdle, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    building(contract.DisplayIdle),
+		},
+		{
+			name:    "a resumed worker reads as working",
+			session: prompted(contract.ActivityActive, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    building(contract.DisplayWorking),
+		},
+		{
+			name:    "a resumed worker waiting on input needs input",
+			session: prompted(contract.ActivityWaitingInput, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    building(contract.DisplayNeedsInput),
+		},
+		{
+			name:    "a closed pr resumes the same way",
+			session: prompted(contract.ActivityIdle, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Closed: true, SettledAt: merged}},
+			want:    building(contract.DisplayIdle),
+		},
+		{
+			name:    "an unknown settle time keeps the session done",
+			session: prompted(contract.ActivityIdle, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true}},
+			want:    done,
+		},
+		{
+			name:    "a pr that merged after the prompt keeps the session done",
+			session: prompted(contract.ActivityIdle, after),
+			prs: []contract.KanbanPRFacts{
+				{URL: "pr/1", Merged: true, SettledAt: merged},
+				{URL: "pr/2", Merged: true, SettledAt: after.Add(time.Minute)},
+			},
+			want: done,
+		},
+		{
+			name:    "a prompt after every pr settled resumes",
+			session: prompted(contract.ActivityIdle, after.Add(2*time.Minute)),
+			prs: []contract.KanbanPRFacts{
+				{URL: "pr/1", Merged: true, SettledAt: merged},
+				{URL: "pr/2", Closed: true, SettledAt: after.Add(time.Minute)},
+			},
+			want: building(contract.DisplayIdle),
+		},
+		{
+			name: "earlier artifact output does not hold a resumed session in validating",
+			session: func() contract.KanbanSessionFacts {
+				session := prompted(contract.ActivityIdle, after)
+				session.HasArtifactOutput = true
+				return session
+			}(),
+			prs:  []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want: building(contract.DisplayIdle),
+		},
+		{
+			name:    "a live pr still speaks for a resumed session",
+			session: prompted(contract.ActivityIdle, after),
+			prs: []contract.KanbanPRFacts{
+				{URL: "pr/1", Merged: true, SettledAt: merged},
+				{URL: "pr/2", Mergeability: contract.MergeMergeable},
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := contract.DeriveKanbanPresentation(tc.session, tc.prs, time.Unix(3600, 0), testGrace)
+			if got != tc.want {
+				t.Fatalf("presentation = %+v, want %+v", got, tc.want)
 			}
 		})
 	}

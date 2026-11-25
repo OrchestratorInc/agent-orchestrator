@@ -6,7 +6,7 @@ import { cn } from "../../lib/utils";
 // The app's one action button. Rows, cards and tabs use `Pressable` instead.
 // See DESIGN.md → Buttons.
 //
-// - Filled variants use an inset bevel without an outer shadow. Pressing
+// - Filled variants use an inset bevel and a faint outer shadow. Pressing
 //   deepens the background without moving the button.
 // - Ghost-family variants (ghost, quiet, destructive-ghost) share the sidebar
 //   row's hover pill: a fill inset 4px that grows to the button's edge on hover

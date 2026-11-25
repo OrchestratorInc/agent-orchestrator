@@ -58,23 +58,29 @@ builds stamp the Electron main and renderer bundles with Sentry debug IDs and
 upload their source maps to the ao-electron project; the maps are not shipped
 in the app. An event may carry the debug ID of each app bundle in its stack and
 the bundle's app URL (`app://renderer/assets/...` or `app:///.vite/build/...`),
-never an install path. Local
-filesystem paths, full URLs, and raw exception messages are removed before sending.
+never an install path. Desktop and mobile Sentry reports use the application
+error code when available. Uncoded JavaScript engine errors such as TypeError,
+ReferenceError, RangeError, SyntaxError, and DOMException can include the first
+line of the message after paths, URLs, emails, identifiers, quoted values, and
+numbers are removed, capped at 120 characters. Message text is withheld when
+its quoted parts cannot be separated reliably. Long engine messages and other
+uncoded errors use a computed title. All uncoded errors group by a short
+SHA-256 hash of the locally normalized first line.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.
 Preload installs main-world error and rejection handlers before renderer imports
 and reads the consent policy itself. An import failure can therefore report even
-when the renderer never starts. Early reports contain fixed text, a standard
-exception type, and validated asset locations only. Once the renderer starts,
+when the renderer never starts. Early reports use the same error codes and message rules, with a standard
+exception type and validated asset locations. Once the renderer starts,
 the same listeners hand off to its normal reporter. Early captures are not
 replayed through the later renderer boundaries.
 Router error boundaries and query/mutation cache callbacks also report unexpected
-client failures. Query keys, mutation inputs, route parameters and error text are
-not sent. API failures retain a local ownership marker through message wrapping,
+client failures. The sender excludes query keys, mutation inputs and route
+parameters. API failures retain a local ownership marker through message wrapping,
 so these callbacks do not duplicate the API client's report or escalate expected
 API state. Repeated observations of the same exception object are reported once.
 Background side-chat restore and snapshot failures use the same main-owned
-consent gate, with fixed titles and no launch-state payload. Expected connection,
+consent gate and message rules, with no launch-state payload. Expected connection,
 authentication, cancellation and stale-attachment states stay out. Repeated
 recovery reports are limited to five per minute and 200 per UTC day.
 Turning off Share error events drains the sender and removes that queue before
@@ -96,11 +102,9 @@ analytics opt-out boundary. No failed mobile Sentry send is persisted for retry.
 The sender checks consent both before capture and immediately before network
 send, so an event still queued when opt-out arrives is discarded.
 
-Mobile Sentry receives fixed error titles and categories, safe stack line
-numbers with generic frame names, release version and build number, and the
-production or preview environment. It receives no raw error message, URL,
-request body, repository or workspace path, project or session identifier,
-credential, or account identity. Its `user.id` is the authenticated paired
+Mobile Sentry sends application codes and applies the same normalized first-line display rule for JavaScript engine errors. Other uncoded errors contribute only a hash of the cleaned-up text. It also receives the error category, safe stack line numbers with generic
+frame names, release version and build number, and the production or preview
+environment. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
 desktop installation ID only. It is absent before pairing, during repair, and
 after unpairing or a failed identity refresh. The phone retains its separate
 PostHog identity across those changes. A paired Sentry error can therefore be
@@ -183,6 +187,19 @@ Orchestrator.inc sends structured events in a few broad categories:
   (`duration_ms`) and the names and line numbers of the four innermost code
   functions that held it (`caller`). It never includes file paths, database
   contents, or message text
+- Daemon startup time: once the daemon's API starts listening,
+  `ao.daemon.ready` sends `startup_ms`, the milliseconds from the daemon
+  process starting, split into back-to-back steps that add up to it:
+  `prepare_ms`, `lock_wait_ms` (waiting for a previous daemon to release the
+  data directory), `store_open_ms` (opening and migrating the database),
+  `lifecycle_setup_ms`, `chat_setup_ms`, `session_setup_ms`,
+  `install_recovery_ms` (agent installs left by a previous run),
+  `services_setup_ms`, `codex_recovery_ms`, `startup_reconcile_ms` (the
+  session safety check that must finish before the API opens), and
+  `listen_ms`. When the restore that starts alongside the API ends,
+  `ao.daemon.startup_reconciled` sends `reconcile_ms` split into
+  `chat_hosts_ms`, `reviewer_recovery_ms`, `sessions_ms`, and `runtime_ms`.
+  Both carry durations only
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and
   daemon events carry the operating system name (`$os`) and version
@@ -664,6 +681,242 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## UI usage
+
+When desktop product telemetry is enabled, Orchestrator.inc records which parts
+of the interface people look at and use, so we can tell which surfaces earn
+their space, which controls nobody finds, and where people get stuck. The
+properties specific to these events are only the closed values listed here,
+control ids, counts and durations. Like every desktop event, they also carry
+the shared context described under What Orchestrator.inc sends, such as
+`install_id` and `days_since_install`. They never include text you typed or
+clicked, a file name, path, URL, session or project name, chat content, error
+message, click position, window size, DOM path, or screenshot. There is no
+heatmap and no session replay.
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.surfaces.viewed` | A surface stays on screen for a second. At most once per surface per UTC day | `surface`, `opened_by` |
+| `ao.features.first_used` | The first deliberate use of a feature on this install. At most once per feature | `feature` |
+| `ao.ui.usage_summary` | Every 45 to 60 minutes of app time, or at the next launch when a window ended while the app was closed. Not sent when nothing was counted | Window fields, counters, `surfaces`, `controls` (below) |
+| `ao.ui.error_shown` | A user-visible error renders: an error toast, the daemon banner, a failed chat turn, or a composer send failure. The same error shown again within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface`, `error_code` |
+| `ao.ui.rage_clicked` | The first rage click on a surface each UTC day | `surface` |
+
+### Closed values
+
+- `surface` is one of `sidebar`, `topbar` (the top bar and its tabs), `chat`
+  (the transcript), `composer`, `new_chat`, `board`, `pr_tab`,
+  `inspector_summary`, `inspector_reviews`, `inspector_browser`,
+  `inspector_device`, `inspector_computer_use`, `inspector_files`, `inspector_artifacts`, `inspector_side_chat`,
+  `inspector_subagents`, `inspector_background_tasks`, `cmdk`,
+  `notifications_panel`, `archive_modal`,
+  `model_picker`, `slash_menu`, `mention_menu`, `split_view`, `terminal`,
+  `onboarding`, `toast`, or a settings page: `settings_general`,
+  `settings_agents`, `settings_teams`, `settings_billing`, `settings_browser`,
+  `settings_computer_use`, `settings_coder`, `settings_remote_hosts`,
+  `settings_mobile`, `settings_shortcuts`, `settings_diagnostics`,
+  `settings_updates`, `settings_help`, or `settings_project`. A settings page
+  added later reports as `settings_general` until it is listed.
+- `opened_by` is `click`, `keyboard` (Enter, Space, Escape, Tab or an arrow key
+  on a focused control), `shortcut` (a key chord or a swipe gesture), `cmdk`
+  (a Cmd+K command), `restore` (on screen within 10 seconds of launch, such as
+  a restored layout), or `auto` (opened by the app, with no input in the 1.5
+  seconds before).
+- `feature` is `cmdk`, `slash_menu`, `mention_menu`, `model_change`,
+  `attachment`, `steer`, `queue`, `keyboard_send`, `split_pane`,
+  `terminal_tab`, `side_chat`, `board`, `pin_session`, `archive_modal`,
+  `dictation`, `swipe_navigation`, `notifications_panel`, `inspector_summary`,
+  `inspector_reviews`, `inspector_browser`, `inspector_device`, `inspector_computer_use`,
+  `inspector_files`, `inspector_artifacts`, `inspector_subagents`, or
+  `inspector_background_tasks`. Opening a surface counts as
+  using its feature only when you opened it (`opened_by` is not `restore` or
+  `auto`). The marker is kept in the app's local storage, so an install that
+  used a feature before this release reports it again the first time it is
+  used after updating; read `first_used` as "first use since this release" for
+  those installs.
+- `presentation` is `toast`, `banner`, `inline`, or `dialog`.
+- `error_kind` is `toast` (any error toast), `daemon_unavailable`,
+  `chat_turn_failed`, `composer_send_failed`, or `other`.
+- `error_code` is one of a closed list, never a message: a daemon failure
+  (`NOT_CONFIGURED`, `DAEMON_UNREACHABLE`, `BINARY_MISSING`, `SPAWN_FAILED`,
+  `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
+  `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
+  `PROVIDER_KEY_MISSING`, or `USAGE_LIMIT` when the agent's account hit its
+  usage limit). Any other chat turn failure is named by matching its error text,
+  in the app, against fixed patterns: `QUOTA_EXCEEDED`, `RATE_LIMITED`,
+  `PROVIDER_OVERLOADED`, `CONTEXT_TOO_LONG`, `MODEL_UNAVAILABLE`,
+  `NETWORK_ERROR`, `TIMED_OUT`, `PROVIDER_SERVER_ERROR`, `AGENT_NOT_INSTALLED`,
+  `AGENT_EXITED`, or `CONTENT_REFUSED`. The error text itself is never sent. A
+  failed composer send is one of the app's own reasons (`ANNOTATION_LIMIT`,
+  `EXCERPT_TOO_LONG`, `MESSAGE_TOO_LONG`, `FILE_REFERENCES_UNSUPPORTED`,
+  `ATTACHMENTS_UNAVAILABLE`, `ATTACHMENT_UNREADABLE`, `COMPACT_UNAVAILABLE`,
+  `COMPACT_FAILED`, `CONTINUE_FAILED`, `QUEUE_SAVE_FAILED`, `SEND_FAILED`,
+  `SEND_REJECTED`, `UNSENT_RETRY_FAILED`) or the API code that refused the send,
+  in upper case (`AGENT_SWITCH_FAILED`, `TASK_CREATE_FAILED`,
+  `SESSION_RESTORE_FAILED`, `CHAT_FILE_REFERENCE_INVALID`,
+  `CHAT_ANNOTATION_LIMIT`, `CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED`,
+  `VALIDATION_ERROR`, `INVALID_BODY`, `CHAT_MESSAGE_EMPTY`, `INVALID_RESOURCE`,
+  `UNSUPPORTED_ATTACHMENT_TYPE`, `INVALID_ATTACHMENT_DATA`,
+  `ATTACHMENT_TOO_LARGE`, `TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`,
+  `SESSION_NOT_FOUND`, `SESSION_MODE_MISMATCH`, `CHAT_CONTROLLER_NOT_READY`,
+  `CHAT_RESUME_FAILED`, `CHAT_INTERFACE_TRANSITION`, `CHAT_OPEN_ELSEWHERE`,
+  `COMPOSER_LOCKED`, `COMPOSER_LEASE_LOST`, `CHAT_EXCERPT_INVALID`,
+  `CHAT_EXCERPT_STALE`, `CHAT_SIDE_UNAVAILABLE`, `CHAT_SIDE_UNSUPPORTED`,
+  `CHAT_SIDE_ANCHOR_UNAVAILABLE`, `CHAT_SIDE_INVALID_REQUEST`,
+  `CHAT_SIDE_NOT_READY`, `CHAT_SIDE_RECREATE_REQUIRED`, `CHAT_SIDE_CLOSED`,
+  `CHAT_SIDE_IDEMPOTENCY_CONFLICT`). Any other code is dropped, and it is
+  omitted when there is none or no pattern matches.
+- `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
+  for a toast, the surface you used in the 10 seconds before it. It is omitted
+  when neither is known.
+- A failed chat turn is reported when it renders within two minutes of failing,
+  once per turn while the app runs, so opening an old chat does not report its
+  past failures.
+
+### `ao.ui.usage_summary`
+
+Window fields:
+
+| Property | Meaning |
+| --- | --- |
+| `measurement_schema_version` | `2`. In `1`, `shortcut_count` counted every key chord the page saw rather than app shortcuts, and there was no `shortcuts` list |
+| `window_id` | A random UUID for this window, not tied to anything else |
+| `window_duration_seconds` | Wall time from the window's start to the send |
+| `active_seconds` | Time the window was focused and visible, with input in the last 5 minutes |
+| `flush_reason` | `interval`, or `startup` for a window that ended while the app was closed |
+
+Counters (a counter that stayed at 0 is left out):
+
+| Property | Counts |
+| --- | --- |
+| `session_switch_count` | Switches from one open session to another |
+| `switch_from_<source>_count` | Those switches by where they started. `<source>` is `sidebar`, `tab`, `cmdk`, `shortcut`, `notification`, `board`, `swipe`, `archive`, or `other` (no input in the 1.5 seconds before) |
+| `send_count`, `send_keyboard_count`, `send_button_count` | Messages sent from a composer, all and by Enter or the send button |
+| `steer_count`, `queue_count` | Sends that steered a running turn or were queued behind it |
+| `send_with_attachment_count` | Sends with at least one attachment |
+| `attachment_add_paste_count`, `attachment_add_drop_count`, `attachment_add_picker_count` | Attachments added by paste, drag and drop, or the file picker |
+| `composer_draft_discarded_count` | A draft of 10 or more characters erased without sending while the composer had focus |
+| `model_picker_change_count` | Model changes made in the composer's model picker |
+| `cmdk_open_count`, `cmdk_pick_count`, `cmdk_abandon_count` | Cmd+K opens, opens that ran a command, and opens closed without one |
+| `model_picker_open_count`, `model_picker_abandon_count` | Model picker opens and opens closed without a change |
+| `slash_menu_open_count`, `slash_menu_pick_count`, `slash_menu_abandon_count` | The composer's `/` menu |
+| `mention_menu_open_count`, `mention_menu_pick_count`, `mention_menu_abandon_count` | The composer's `@` menu |
+| `notifications_panel_open_count` | Notification panel opens |
+| `click_count`, `keyboard_activation_count` | Pointer clicks, and clicks made with Enter or Space on a focused control |
+| `shortcut_count` | App shortcuts run by their key chord, all of them (each one is in `shortcuts`). Running one from Cmd+K or the menu bar is not counted here |
+| `hover_click_count`, `hover_only_count` | On controls with a hover card or preview: clicks after hovering for at least 500 ms, and hovers of 500 ms or more that ended without a click |
+| `rage_click_count` | Rage clicks (below) |
+| `dead_click_count` | Dead clicks (below) |
+| `error_shown_count`, `error_toast_count` | User-visible errors, all and toasts only |
+| `retry_click_count` | Clicks on a Retry control after a failure |
+
+`surfaces` is a list with one entry per surface that had any activity in the
+window. Each entry has `surface` and any of these that are above 0:
+
+| Property | Meaning |
+| --- | --- |
+| `visible_seconds` | Time the surface was on screen while the window was active |
+| `focused_seconds` | Time keyboard focus was inside the surface while the window was active |
+| `open_count` | Times it came on screen. A surface back on screen within a second of leaving it, such as a panel that re-renders, is the same open. Menus and pickers count every open |
+| `pick_count`, `abandon_count` | For menus and pickers (`cmdk`, `model_picker`, `slash_menu`, `mention_menu`, `notifications_panel`, `archive_modal`): closes after a choice, and closes without one |
+| `dismiss_count` | Explicit dismissals, such as closing a toast |
+| `dead_click_count`, `rage_click_count` | Dead and rage clicks inside it |
+| `error_count`, `retry_count` | Errors attributed to it and Retry clicks inside it |
+
+`controls` is a list with one entry per named control used in the window.
+Each entry has `control_id` and any of `click_count`, `keyboard_count`,
+`shortcut_count`, `hover_click_count`, `hover_only_count`, and
+`rage_click_count` that are above 0. `shortcut_count` is the key chord of the
+shortcut that does the same thing as the control, so clicks and shortcuts can
+be compared: `topbar.new_task` (`new-session`), `sidebar.settings`
+(`open-settings`), `sidebar.collapse` (`toggle-sidebar`), `topbar.inspector`
+(`toggle-inspector`), `topbar.open_orchestrator` (`open-orchestrator`),
+`topbar.open_editor` (`open-in-editor`), `sidebar.session_archive`
+(`archive-session`), `composer.model_picker` (`model-picker`),
+`composer.dictation` (`dictate`), `tab.close` (`close-shell-terminal`),
+`sidebar.session_row` (the session switching shortcuts) and `tab.select`
+(`previous-tab`, `next-tab`). `control_id` is a stable product name from a fixed list, not a DOM path or
+label:
+
+- Sidebar: `sidebar.home`, `sidebar.collapse`, `sidebar.new_project`,
+  `sidebar.settings`, `sidebar.connect_mobile`, `sidebar.project_row`,
+  `sidebar.project_toggle`, `sidebar.project_new_session`,
+  `sidebar.project_orchestrator`, `sidebar.project_menu`, `sidebar.project_unpin`, `sidebar.session_row`,
+  `sidebar.session_pin`, `sidebar.session_archive`,
+  `sidebar.archived_sessions`
+- Tabs and top bar: `tab.select`, `tab.close`, `tab.new`,
+  `topbar.notifications`, `topbar.inspector`, `topbar.new_task`,
+  `topbar.open_board`, `topbar.open_orchestrator`, `topbar.open_editor`
+- Composer: `composer.send`, `composer.stop`, `composer.attach`,
+  `composer.model_picker`, `composer.dictation`
+- Chat: `chat.retry`
+- Inspector tabs: `inspector.tab_summary`, `inspector.tab_reviews`,
+  `inspector.tab_browser`, `inspector.tab_device`, `inspector.tab_computer_use`, `inspector.tab_files`, `inspector.tab_artifacts`,
+  `inspector.tab_side_chat`, `inspector.tab_subagents`,
+  `inspector.tab_background_tasks`
+- Board: `board.card`
+- Toasts and banners: `toast.action`, `toast.dismiss`, `daemon_banner.retry`
+
+Hover counts are kept for `sidebar.session_row`, `tab.select`, and
+`board.card`. Retry clicks are `chat.retry` and `daemon_banner.retry`.
+
+`shortcuts` is a list with one entry per app shortcut used in the window. Each
+entry has `shortcut_id` and any of `key_count` (run by its key chord) and
+`cmdk_count` (run from Cmd+K) that are above 0. Which keys were pressed, and
+any custom binding, are never sent. Running a shortcut's action from the menu
+bar is not counted. `shortcut_id` is the shortcut's id in the keyboard
+shortcuts list: `find-in-chat`, `add-selection-to-chat`, `new-session`,
+`command-palette`, `quick-open-file`, `open-settings`, `keyboard-shortcuts`,
+`previous-session`, `next-session`, `jump-to-session`,
+`previous-attention-session`, `next-attention-session`, `history-back`,
+`history-forward`, `previous-tab`, `next-tab`, `new-shell-terminal`,
+`split-shell-terminal`, `split-shell-terminal-down`, `close-shell-terminal`,
+`reopen-closed-tab`, `archive-session`, `open-in-editor`,
+`copy-session-path`, `model-picker`, `dictate`, `open-orchestrator`,
+`toggle-sidebar`, `toggle-inspector`, `toggle-terminal`, `toggle-diff`, or
+`toggle-browser-devtools`. A session switch made by a shortcut counts as
+`switch_from_shortcut_count`.
+
+### Definitions
+
+- A rage click is the fourth pointer click on the same element within one
+  second. A burst is counted once, however long it lasts. Double and triple
+  clicks that select text, in a field or on text they leave selected, restart
+  the count, so selecting words quickly is not a rage click.
+- A dead click is a single pointer click inside a surface that lands on
+  nothing interactive (no button, link, field, tab, menu item, terminal, named
+  control or other focusable element), shows neither a pointer nor a text
+  cursor, does not select text, and is not on a scrollbar. Double clicks are
+  never dead, since they usually select text. A click that only closes an open
+  menu, popover or list, or that the app handles and cancels, is not dead.
+- Visible and focused time stop counting after 5 minutes with no input, and
+  while the window is hidden or not focused. A surface that is mounted but
+  hidden, such as a chat kept alive in the background, is not on screen.
+
+### Limits and the opt-out
+
+Counting happens in memory and is saved to the app's local storage every five
+minutes and when the window closes. Turning off Share usage analytics drops
+everything counted so far, removes the saved window and stops counting. The
+daily view, rage-click and first-use markers are kept only so the same value
+is not sent twice. The kill switch in `AO_TELEMETRY_DISABLED_EVENTS` silences
+any of these events by name; silencing all five also stops the counting.
+`ao.ui.error_shown` is sent at most once per 5 minutes for the same kind,
+presentation, surface and code, and also uses the standard renderer caps of 5
+per minute and 200 per day. The once-per-day and once-per-install events skip the per-minute cap,
+since several can be sent together at launch, and keep the daily cap.
+
+The listeners are passive and attached once to the document, so they cannot
+delay a click, scroll or key press. Telling which surface or control was used
+walks up the DOM from the event target and reads no layout. Each press looks
+up open menus and popovers with one selector query, also without reading
+layout. Hover is checked
+at most once per animation frame, for the last element the mouse entered. The
+only layout read is for a click on nothing interactive: the clicked element's
+box and cursor, read after the click's frame has painted, to tell a dead click
+from a scrollbar or a pointer-cursor element. App shortcuts are reported by
+the main process as one small message per press, sent with the shortcut itself.
+
 ## UI responsiveness
 
 When product telemetry is enabled, the desktop app sends launch timings in
@@ -673,35 +926,44 @@ milliseconds, buckets, and the closed values listed here; like every event,
 they also carry the shared context described above, such as `app_version` and
 `install_id`. They never include a
 session, project or file name, path, URL, message text, script URL, function
-name, element text, or CSS selector, and the summary does not say which session
-a measurement came from.
+name, element id, text or attribute, or CSS selector, and the summary does not
+say which session a measurement came from. The only names they carry are the
+app's own: a browser entry point type such as `BUTTON.onclick`, and the name
+of one of the app's code bundles such as `SessionView`.
 
 | Event | When it is sent | Performance properties |
 | --- | --- | --- |
-| `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
+| `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms`, and on a `first` or `cold` launch `to_app_ready_ms`, `to_window_shown_ms`, `to_server_spawn_ms`, `to_server_ready_ms`, `server_reused` |
 | `ao.usage.ui_performance` | At the end of each window, 45 to 60 minutes of elapsed time (random in that range) that includes idle and hidden time, so a window can hold much less use than that. A window cut short by quitting is kept and sent at the next launch if its end has passed, otherwise when the rest of it runs out. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
 
 Properties on `ao.launches.timed`:
 
-- `launch_kind` is `cold` (a new app process), `warm` (a window reopened while
-  the app kept running), or `update` (the first cold launch on a new
-  `app_version`).
+- `launch_kind` is `first` (a new app process that found no database, the
+  first run on this data directory), `cold` (a new app process), `warm` (a
+  window reopened while the app kept running), or `update` (the first cold
+  launch on a new `app_version`).
 - `to_visible_ms` is the time from the start of the launch to the window's
   first contentful paint. `to_usable_ms` is the time to the frame that first
   shows the sidebar with live sessions, the same frame the desktop log's
   "launch timing" line ends at. A cold launch starts when the app process
   starts; a warm one when the window is requested.
+- A `first` or `cold` launch also sends the app's steps on the way, in ms
+  from the app process starting: `to_app_ready_ms` (Electron ready),
+  `to_window_shown_ms`, `to_server_spawn_ms` (the daemon process started) and
+  `to_server_ready_ms` (the daemon's API answered). `server_reused` is true
+  when the app attached to a daemon that was already running instead of
+  starting one. A step that had not happened is left out.
 - A launch whose window was hidden after it first appeared but before it
   became usable (the user minimized it or switched away) sends `launch_kind`
   only. Hiding it after it became usable keeps the timings. The window is
   created hidden and shown once the page loads; that wait is part of the
   launch.
 - A window closed before it became usable sends the event as it closes,
-  without `to_usable_ms`.
+  without `to_usable_ms` or the app's steps.
 
 Properties on `ao.usage.ui_performance`:
 
-- Window: `measurement_schema_version` (2), `flush_reason` (`interval` or
+- Window: `measurement_schema_version` (3), `flush_reason` (`interval` or
   `startup`), `window_seconds` (elapsed time while the app was running, so a
   window kept across a quit leaves out the time the app was closed; never less
   than `active_seconds`),
@@ -729,14 +991,32 @@ Properties on `ao.usage.ui_performance`:
   40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
   fallback, not a measured duration.
 - Frozen frames: `long_frame_count` (frames that took over 50 ms),
-  `long_frame_blocking_ms` (their total blocking time), and
-  `long_frame_top_cause`, the kind of work that took longest inside them:
-  `rendering` (style, layout and paint), a script's invoker type
-  (`event-listener`, `user-callback` for timers and animation frames,
-  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`), or
-  `other`, the rest of those frames' time. The browser credits only scripts
-  that ran over 5 ms, so shorter scripts count as `other`. Version 1 summaries
-  put rendering-only frames under `other`.
+  `long_frame_blocking_ms` (their total blocking time), `long_frame_ms` (their
+  total duration), `long_frame_max_ms` (the longest one), and
+  `long_frame_no_script_count` (those the browser listed no script for). Each
+  frame's time is split by phase into causes, and each cause's total is sent
+  as `long_frame_<cause>_ms` with dashes as underscores, such as
+  `long_frame_frame_callbacks_ms`: before rendering starts, each script the
+  browser listed counts under its invoker type (`event-listener`,
+  `user-callback` for timers and animation frames, `resolve-promise`,
+  `reject-promise`, `classic-script`, `module-script`), less the style and
+  layout it forced (`forced-layout`), and the rest of that time is `unlisted`;
+  from the start of rendering to style and layout, listed scripts count the
+  same way and the rest is `frame-callbacks` (animation frame and observer
+  callbacks); style, layout and paint is `rendering`, less listed scripts that
+  ran inside it (such as ResizeObserver callbacks), which count under their
+  invoker type. The browser lists only
+  scripts over 5 ms, so `unlisted` holds shorter scripts (React splits its work
+  into slices of about 5 ms), garbage collection, parsing, other browser work,
+  and gaps between tasks. `long_frame_top_cause` names the cause with the most
+  time. `long_frame_top_invoker` is the entry point whose listed scripts took
+  longest, reduced to its interface or HTML tag and member, such as
+  `Window.requestAnimationFrame`, `MessagePort.onmessage` or `BUTTON.onclick`,
+  with no ids, attributes or URLs; script loads are not named.
+  `long_frame_top_bundle` is the app code bundle whose listed scripts took
+  longest, such as `SessionView`, and is left out for code from anywhere else.
+  Version 2 summaries put `unlisted` and `frame-callbacks` time under `other`,
+  and version 1 also put rendering there.
 - Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
   messages were not in memory, from the click to the frame that shows them.
 - Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
@@ -1006,6 +1286,8 @@ Product telemetry is designed not to include:
 - API keys, access tokens, passwords, or other credentials
 - Names, or email addresses other than the one on your signed-in AO Cloud
   account (invitee emails are never sent)
+- Screen recordings, session replays, screenshots, pointer coordinates, or
+  the text of anything you click or hover
 
 The explicit account fields are the GitHub owner segment, your authenticated
 GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
@@ -1212,9 +1494,9 @@ codes answered as 4xx or 503, background failures, and handler or background
 goroutine panics; and Electron main capture of process crashes, handled
 daemon, update and IPC failures, uncaught exceptions, unhandled rejections,
 reportable renderer errors, and installs and sign-ins that broke during
-onboarding (see "Onboarding errors in Sentry"). Sentry
-receives fixed failure or panic labels and allowlisted error codes instead of
-raw error messages. It groups HTTP faults by registered route and stable error
+onboarding (see "Onboarding errors in Sentry"). Daemon events use fixed failure
+or panic labels and allowlisted error codes. The daemon groups HTTP faults by
+registered route and stable error
 code, or by a bounded cause type when no code exists. Ordinary Go errors carry
 no synthetic throw stack. Recovered panics retain the interrupted AO function.
 Agent relaunches group by operation and failure step, with a fixed step tag
@@ -1222,11 +1504,10 @@ and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
 error provides evidence. Panic events keep function and line information, but
 remove stack paths, request data, project, session, repository and branch
-names, and panic text. Electron exception titles use a standard error type and
-a fixed function name or bounded bundle location; renderer API titles use a
-fixed error code or category.
-Both have scrubbed exception values and the same
-installation ID as Sentry `user.id`.
+names, and panic text. Electron issues use application codes, eligible engine
+messages, or a computed title based on the type, location, and category.
+Uncoded messages group by a hash of the locally normalized text.
+Daemon and Electron events use the same installation ID as Sentry `user.id`.
 Canceled requests, plain transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. A 503 caused by a server deadline or
 a registered daemon fault code is reportable. Registered route templates remain
@@ -1394,6 +1675,7 @@ renamed event. Events not listed keep their names.
 | `ao.renderer.artifact_create_succeeded` | `ao.artifacts.session_started` |
 | `ao.renderer.artifact_create_failed` | `ao.artifacts.session_start_failed` |
 | (new) | other `ao.artifacts.*` events (see "Artifacts") |
+| (new) | `ao.surfaces.viewed`, `ao.features.first_used`, `ao.ui.usage_summary`, `ao.ui.error_shown`, `ao.ui.rage_clicked` (see "UI usage") |
 
 
 ## Questions or corrections

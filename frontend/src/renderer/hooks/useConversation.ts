@@ -23,12 +23,14 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
+import { appI18n } from "../i18n";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -71,6 +73,7 @@ type WireActivity = components["schemas"]["ConversationActivityResponse"];
 type WireImageContent = components["schemas"]["ConversationImageContentRequest"];
 type WireResourceContent = components["schemas"]["ConversationResourceContentRequest"];
 type WireExcerptReference = components["schemas"]["ConversationExcerptReferenceRequest"];
+type WireConfigOption = components["schemas"]["ConversationConfigOptionResponse"];
 
 export interface ConversationSendInput {
 	text: string;
@@ -98,6 +101,7 @@ export interface ConversationSwitchDisplay {
 
 /** A send whose agent switch was refused or failed, so the message never left. */
 export class ProviderSwitchFailed extends Error {
+	readonly code: string = "PROVIDER_SWITCH_FAILED_ERROR";
 	constructor(readonly reason: unknown) {
 		super(apiErrorMessage(reason));
 	}
@@ -119,6 +123,14 @@ interface ConversationSendMutationInput {
 
 interface ConversationSessionMutationInput {
 	targetSessionId: string;
+}
+
+/** How long Stop shows progress before it can be pressed again for the same turn. */
+const STOP_RETRY_AFTER_MS = 10_000;
+
+interface ConversationInterruptMutationInput extends ConversationSessionMutationInput {
+	/** The running turn the user pressed Stop on; the daemon refuses to stop any other. */
+	turnId?: string;
 }
 
 interface ConversationRetryMutationInput extends ConversationSessionMutationInput {
@@ -201,6 +213,25 @@ function switchEcho(
 	afterSequence: number,
 ): ConversationLocalEcho["providerSwitch"] {
 	return display && targetHarness ? { ...display, targetHarness, afterSequence } : undefined;
+}
+
+/** The message as the transcript shows it while its send is on the way. */
+function sendLocalEcho(clientMessageId: string, input: ConversationSendInput): ConversationLocalEcho {
+	return {
+		clientMessageId,
+		text: input.text,
+		continuation: input.continuation,
+		fileReferences: input.fileReferences,
+		excerpts: input.excerpts?.map((excerpt) => ({
+			id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
+			conversationId: excerpt.conversationId,
+			text: excerpt.text,
+			comment: excerpt.comment,
+			messageId: excerpt.messageId,
+			revision: excerpt.revision,
+		})),
+		createdAt: new Date().toISOString(),
+	};
 }
 
 function addConversationLocalEcho(
@@ -407,6 +438,7 @@ const PERMANENT_CODES = new Set([
 
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
+	savedSnapshot?: ConversationSnapshot;
 	isLoading: boolean;
 	/** Set when the session exists but has no chat conversation to show. */
 	unavailable?: { code: string; message: string };
@@ -434,6 +466,10 @@ function conversationPageQuery(hostId: string | undefined, beforeSequence?: numb
 
 async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
 	return toSnapshot(await fetchConversationWire(sessionId, hostId, conversationPageQuery(hostId, beforeSequence)));
+}
+
+export async function fetchRecentConversation(sessionId: string, hostId?: string): Promise<ConversationSnapshot> {
+	return toSnapshot(await fetchConversationWire(sessionId, hostId, { limit: 200, outputLimit: 64 }));
 }
 
 /** The whole output of one activity, for a page that carries only its head and tail. */
@@ -827,6 +863,11 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		initialData: false,
 		enabled: false,
 	}).data;
+	const saved = useQuery({
+		queryKey: savedConversationQueryKey(sessionId ?? ""),
+		queryFn: async (): Promise<ConversationSnapshot | null> => null,
+		enabled: false,
+	}).data;
 	const query = useInfiniteQuery({
 		...conversationQueryOptions(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
@@ -873,6 +914,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 	return {
 		snapshot: query.data,
+		savedSnapshot: !hostId && query.isLoading && saved ? saved : undefined,
 		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
@@ -925,12 +967,21 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	});
 }
 
+/** Restoring an archived session before its message failed, so the message never left. ChatComposer treats this code as a definitive refusal. */
+const SESSION_RESTORE_FAILED = "SESSION_RESTORE_FAILED";
+
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
- * `turnActive` comes from the caller's snapshot: reading the conversation
- * cache here would re-render every consumer on each streamed chunk.
+ * `turnActive` and `activeTurnId` come from the caller's snapshot: reading the
+ * conversation cache here would re-render every consumer on each streamed chunk.
  */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false, turnActive = false) {
+export function useConversationCommands(
+	sessionId: string | undefined,
+	hostId?: string,
+	terminated = false,
+	turnActive = false,
+	activeTurnId?: string,
+) {
 	const queryClient = useQueryClient();
 	const restoreSession = useRestoreSession();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
@@ -995,19 +1046,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
 			) ?? false;
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
-				clientMessageId: variables.clientMessageId,
-				text: variables.input.text,
-				continuation: variables.input.continuation,
-				fileReferences: variables.input.fileReferences,
-			excerpts: variables.input.excerpts?.map((excerpt) => ({
-				id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
-					conversationId: excerpt.conversationId,
-					text: excerpt.text,
-					comment: excerpt.comment,
-					messageId: excerpt.messageId,
-					revision: excerpt.revision,
-				})),
-				createdAt: new Date().toISOString(),
+				...sendLocalEcho(variables.clientMessageId, variables.input),
 				backgroundWake,
 				queued: turnActive && !backgroundWake,
 				providerSwitch: switchEcho(variables.input.switchDisplay, variables.input.providerSwitch?.targetHarness, newestCachedSequence(queryClient, variables.targetSessionId, hostId)),
@@ -1177,16 +1216,24 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	});
 
 	const interrupt = useMutation({
-		mutationFn: async ({ targetSessionId }: ConversationSessionMutationInput) => {
+		/** Resolves true when the daemon took the Stop, false when there was nothing to stop. */
+		mutationFn: async ({ targetSessionId, turnId }: ConversationInterruptMutationInput): Promise<boolean> => {
 			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/interrupt",
-				{ params: { path: { sessionId: targetSessionId } } },
+				turnId
+					? { params: { path: { sessionId: targetSessionId } }, body: { turnId } }
+					: { params: { path: { sessionId: targetSessionId } } },
 			);
-			if (error) throw error;
+			// Nothing left to stop: the turn already ended, or the one now running is a
+			// later turn this Stop must not touch. That is the answer, not a failure;
+			// the refetch below shows how the turn really ended.
+			if (!error) return true;
+			if (apiErrorCode(error) === "CHAT_NO_ACTIVE_TURN") return false;
+			throw error;
 		},
 		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
-		// A failed interrupt (e.g. CHAT_NO_ACTIVE_TURN) means the cached turn
-		// state is wrong. Refetch so the UI discovers the real state instead of
+		// After any Stop answer, including "nothing left to stop", the cached turn
+		// state may be wrong. Refetch so the UI discovers the real state instead of
 		// keeping a Working bar the user cannot dismiss.
 		onError: (_error, variables) => refreshSessionInBackground(variables.targetSessionId),
 	});
@@ -1199,10 +1246,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			// also brings its worktree back, can start it again.
 			if (terminated) {
 				const restored = await restoreSession(sessionId as string, hostId);
-				if (restored.status !== "success") throw new Error(restored.message);
+				// Restored meanwhile from another window or device: it is live, as asked.
+				const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
+				if (restored.status !== "success" && !alreadyLive) {
+					throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
+				}
 				// Stay pending until the chat reads the live agent: its cached snapshot
-				// still says stopped, which would flash as a crash. The composer stays
-				// locked meanwhile, so nothing here can strand a send.
+				// still says stopped, which would flash as a crash. A send that restored
+				// the session waits on this too, so it reaches the live agent.
 				await invalidateSession(sessionId as string).catch(() => {});
 				return undefined;
 			}
@@ -1308,6 +1359,23 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	 * so a success has to be followed by a refetch rather than an optimistic edit —
 	 * how much was discarded is the daemon's answer, not the client's guess.
 	 */
+	// A steer refusal is about the turn the steer was sent on. It shows only while
+	// the turn current when it came back is still current, and only if that is
+	// the steer's own turn or no turn at all: a refusal that lands after its turn
+	// ended still shows ("send it as a message"), one that lands during a later
+	// turn does not, and any refusal goes once another turn starts. The error
+	// itself is kept, so steerUnsupported stays sticky.
+	const currentTurnIdRef = useRef(activeTurnId);
+	useLayoutEffect(() => {
+		currentTurnIdRef.current = activeTurnId;
+	});
+	const [steerRefusedOn, setSteerRefusedOn] = useState<{ sentOn?: string; arrivedOn?: string }>();
+	// A turn starting ends any refusal from before it. Without this, one that came
+	// back while idle would show again once that turn ends and the chat is idle.
+	useEffect(() => {
+		if (activeTurnId === undefined) return;
+		setSteerRefusedOn((refused) => (refused && refused.arrivedOn !== activeTurnId ? undefined : refused));
+	}, [activeTurnId]);
 	/**
 	 * Guidance delivered INTO the running turn.
 	 *
@@ -1321,6 +1389,11 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
 	const steer = useMutation({
+		onMutate: () => {
+			setSteerRefusedOn(undefined);
+			return { sentOn: currentTurnIdRef.current };
+		},
+		onError: (_error, _input, sent) => setSteerRefusedOn({ sentOn: sent?.sentOn, arrivedOn: currentTurnIdRef.current }),
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/steer",
@@ -1563,11 +1636,33 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		[queryClient, sessionId, stateSessionId],
 	);
+	// The turn this surface already asked to stop. The daemon accepts Stop at once,
+	// but the agent takes a moment to wind the turn down and it shows as running
+	// until then. A second press (or Escape) in that window is the same request, so
+	// it is dropped here instead of reaching the daemon again.
+	const activeStopKey = stateSessionId && activeTurnId ? `${stateSessionId}\u0000${activeTurnId}` : undefined;
+	const stopRequestedRef = useRef<string | undefined>(undefined);
+	const [stopRequestedKey, setStopRequestedKey] = useState<string>();
+	const stoppingTurn = activeStopKey !== undefined && stopRequestedKey === activeStopKey;
+	const releaseStop = useCallback((key: string) => {
+		if (stopRequestedRef.current !== key) return;
+		stopRequestedRef.current = undefined;
+		setStopRequestedKey(undefined);
+	}, []);
+	// An agent that accepted the cancel but never ends the turn must not leave Stop
+	// disabled for good. After a while the button works again, so the user can retry.
+	useEffect(() => {
+		if (!stopRequestedKey) return;
+		const timer = setTimeout(() => releaseStop(stopRequestedKey), STOP_RETRY_AFTER_MS);
+		return () => clearTimeout(timer);
+	}, [releaseStop, stopRequestedKey]);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
 	const sendCode = apiErrorCode(send.error);
 	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) && sendCode !== undefined && !HOST_UNREACHABLE_CODES.has(sendCode) ? send.error : undefined;
-	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
+	// A failed Stop is only news while the turn it was aimed at is still running.
+	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId &&
+		(!interrupt.variables?.turnId || interrupt.variables.turnId === activeTurnId);
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
@@ -1591,11 +1686,21 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
-			return send.mutateAsync({
-				targetSessionId: sessionId,
-				clientMessageId,
-				input: normalizedInput,
-			});
+			const variables = { targetSessionId: sessionId, clientMessageId, input: normalizedInput };
+			if (!terminated) return send.mutateAsync(variables);
+			// An archived chat is restored by sending to it. The message shows at once,
+			// as any send's does, and goes out only after the restore succeeded, so it
+			// lands after it. A failed restore sent nothing: the composer gets the draft
+			// back with the reason, and the session stays archived.
+			addConversationLocalEcho(queryClient, stateKey(sessionId), sendLocalEcho(clientMessageId, normalizedInput));
+			return resume.mutateAsync().then(
+				() => send.mutateAsync(variables),
+				(error: unknown) => {
+					releaseConversationDispatch(queryClient, stateKey(sessionId), clientMessageId);
+					releaseConversationLocalEcho(queryClient, stateKey(sessionId), clientMessageId);
+					throw error;
+				},
+			);
 		},
 		pendingAcceptedTurnId:
 			trackedDispatch?.state === "accepted" ? trackedDispatch.turnId : undefined,
@@ -1624,7 +1729,28 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			action: "accept" | "decline" | "cancel",
 			content?: Record<string, unknown>,
 		) => resolveInput.mutateAsync({ requestId, action, content }),
-		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
+		interrupt: () => {
+			if (!sessionId) return;
+			const key = activeStopKey;
+			if (key) {
+				if (stopRequestedRef.current === key) return;
+				stopRequestedRef.current = key;
+				setStopRequestedKey(key);
+			}
+			interrupt.mutate({ targetSessionId: sessionId, turnId: activeTurnId }, {
+				// Nothing was stopping: the turn had not started, or it already ended.
+				// The refetch shows which, and Stop stays usable if it is still there.
+				onSuccess: (stopped) => {
+					if (key && !stopped) releaseStop(key);
+				},
+				// The Stop did not land, so the turn is still the user's to stop.
+				onError: () => {
+					if (key) releaseStop(key);
+				},
+			});
+		},
+		/** Stop landed for the running turn, which the agent is still winding down. */
+		stoppingTurn,
 		resumeAgent: () => resume.mutateAsync(),
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
@@ -1785,7 +1911,10 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		 * send-instead cases produce copy: `CHAT_STEER_UNSUPPORTED` is answered by
 		 * hiding the control entirely, since the harness will never accept one.
 		 */
-		steerRefusal: steerRefusal(steer.error),
+		steerRefusal: steerRefusedOn && steerRefusedOn.arrivedOn === activeTurnId &&
+			(steerRefusedOn.arrivedOn === undefined || steerRefusedOn.arrivedOn === steerRefusedOn.sentOn)
+			? steerRefusal(steer.error)
+			: undefined,
 		/**
 		 * A harness that cannot steer at all. Learned from the daemon's typed refusal
 		 * rather than from the harness name, and sticky for the life of the surface: the
@@ -1939,6 +2068,10 @@ function offersValue(options: ChatConfigOption[], optionId: string, value: ChatC
 	return !("value" in value) || option.type !== "select" || option.choices.some((choice) => choice.value === value.value);
 }
 
+function toChatConfigOptions(options: WireConfigOption[] | undefined): ChatConfigOption[] {
+	return (options ?? []).map((option) => ({ ...option, currentBoolean: option.currentBoolean ?? undefined, choices: option.choices ?? [] }));
+}
+
 export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "", hostId);
@@ -1995,7 +2128,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 				throw error;
 			}
 			snapshotRefreshed.current = false;
-			return (data?.options ?? []) as ChatConfigOption[];
+			return toChatConfigOptions(data?.options);
 		},
 	});
 	const mutation = useMutation({
@@ -2061,6 +2194,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// agent's answer to that earlier pick dropped the option or this value (a new model
 		// with other efforts), sending it would only be refused, so it is dropped instead.
 		const confirmed = writes.current.confirmed;
+		if (confirmed && "value" in value && confirmed.some((option) => option.id === optionId && option.type === "select" && option.choices.length === 0)) {
+			throw new Error(appI18n.t("chat.configOption.noChoices"));
+		}
 		if (confirmed && !offersValue(confirmed, optionId, value)) return { controllerEpoch, options: confirmed };
 		// A read already in flight when the user picked would otherwise land
 		// after this mutation's setQueryData and put the pre-change catalog
@@ -2081,7 +2217,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			},
 		);
 		if (error) throw error;
-		const options = (data?.options ?? []) as ChatConfigOption[];
+		const options = toChatConfigOptions(data?.options);
 		writes.current.confirmed = options;
 		return { controllerEpoch, options };
 	}
@@ -2213,6 +2349,26 @@ export function emptySkillsSettled(firstEmptyAt: number | undefined, updatedAt: 
 	return firstEmptyAt !== undefined && updatedAt - firstEmptyAt >= EMPTY_SKILLS_GRACE_MS;
 }
 
+const clientsWithoutPathsRoute = new WeakSet<object>();
+
+export async function fetchWorkspaceFilePaths(sessionId: string, hostId?: string, signal?: AbortSignal) {
+	const client = clientForSessionHost(hostId);
+	if (!clientsWithoutPathsRoute.has(client)) {
+		const result = await client.GET("/api/v1/sessions/{sessionId}/workspace/paths", { params: { path: { sessionId } }, signal });
+		if (apiErrorCode(result.error) !== "ROUTE_NOT_FOUND") return result;
+		clientsWithoutPathsRoute.add(client);
+	}
+	const files = await client.GET("/api/v1/sessions/{sessionId}/workspace/files", { params: { path: { sessionId } }, signal });
+	return {
+		...files,
+		data: files.data && {
+			sessionId: files.data.sessionId,
+			paths: files.data.files.filter((file) => file.status !== "deleted").map((file) => file.path),
+			truncated: files.data.truncated,
+		},
+	};
+}
+
 /**
  * Every path in the session worktree, for @-mention completion.
  *
@@ -2235,22 +2391,13 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 		// Remote sessions use their owning daemon instead of the local event stream.
 		refetchInterval: (query) => hostId && !isMissingWorkspaceError(query.state.error) ? 30 * 1000 : false,
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }: { signal: AbortSignal }): Promise<{ paths: string[]; truncated: boolean }> => {
 			const missing = knownMissingWorkspace(sessionId as string, hostId);
 			if (missing) throw missing;
 			const epoch = workspaceRecoveryEpoch(sessionId as string, hostId);
-			const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", {
-				params: { path: { sessionId: sessionId as string } },
-			});
+			const { data, error, response } = await fetchWorkspaceFilePaths(sessionId as string, hostId, signal);
 			if (error) throw recordWorkspaceResult(sessionId as string, hostId, error, response, "Unable to load workspace files", epoch);
-			return {
-				// A deleted path cannot be read, so offering it would insert a
-				// reference the agent then fails to resolve.
-				paths: (data?.files ?? [])
-					.filter((file) => file.status !== "deleted")
-					.map((file) => file.path),
-				truncated: Boolean(data?.truncated),
-			};
+			return { paths: data?.paths ?? [], truncated: Boolean(data?.truncated) };
 		},
 	});
 	useEffect(() => {

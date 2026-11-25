@@ -19,6 +19,8 @@ import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
+import { UpdateScreen } from "../lib/UpdateScreen";
+import { UpdateRouteKeeper } from "../lib/UpdateRouteKeeper";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
@@ -180,6 +182,8 @@ function Shell() {
 			<TelemetryManager />
 			<PushManager />
 			<UpdatesManager />
+			<UpdateScreen />
+			<UpdateRouteKeeper />
 			<StoreUpdateManager />
 			<OnboardingGate />
 			{/* Reopens the last screen after the phone closed the app in the background. */}
@@ -220,6 +224,7 @@ function Shell() {
 				{/* An Orchestrator Cloud session's sandbox shell, the cloud's worktree shell. */}
 				<Stack.Screen name="cloud/terminal" options={{ title: "Shell", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="device/[id]" options={{ title: "Device", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="shared-artifact" options={{ title: "Shared artifact", ...GLASS_HEADER_OPTIONS }} />

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PerformanceAccumulator, discardPerformanceWindow, percentile, renderDuration } from "./performance-telemetry";
+import { PerformanceAccumulator, discardPerformanceWindow, percentile } from "./performance-telemetry";
 
 type Capture = (event: string, properties: Record<string, unknown>) => Promise<void>;
 
@@ -99,39 +99,89 @@ describe("PerformanceAccumulator", () => {
 		expect(state.summary.longest).toEqual([]);
 	});
 
-	it("sums long frame blocking time and names the cause that blocked longest", async () => {
+	it("splits a long frame into its phases and names the cause, entry point and bundle that took longest", async () => {
 		const accumulator = create();
 		accumulator.activity();
-		accumulator.recordLongFrame(40, [{ invokerType: "event-listener", duration: 70 }, { invokerType: "user-callback", duration: 20 }]);
-		accumulator.recordLongFrame(30, [{ invokerType: "user-callback", duration: 60 }, { invokerType: "https://example.com/app.js", duration: 5 }]);
-		accumulator.recordLongFrame(10, []);
+		// A 120 ms frame: tasks until 80, frame callbacks until 100, then style, layout and paint.
+		accumulator.recordLongFrame({
+			startTime: 0,
+			duration: 120,
+			blockingDuration: 70,
+			renderStart: 80,
+			styleAndLayoutStart: 100,
+			scripts: [
+				{ invokerType: "event-listener", invoker: "BUTTON#send.onclick", sourceURL: "app://renderer/assets/SessionView-BHqaR3Jk.js", startTime: 5, duration: 40, forcedStyleAndLayoutDuration: 10 },
+				{ invokerType: "user-callback", invoker: "Window.requestAnimationFrame", sourceURL: "app://renderer/assets/index-AbCd_f12.js", startTime: 82, duration: 12 },
+			],
+		});
 		now += 10_000;
 		await accumulator.flush();
 
-		expect(flushed()).toMatchObject({ long_frame_count: 3, long_frame_blocking_ms: 80, long_frame_top_cause: "user-callback" });
+		expect(flushed()).toMatchObject({
+			measurement_schema_version: 3,
+			long_frame_count: 1,
+			long_frame_blocking_ms: 70,
+			long_frame_ms: 120,
+			long_frame_max_ms: 120,
+			long_frame_no_script_count: 0,
+			long_frame_unlisted_ms: 40,
+			long_frame_event_listener_ms: 30,
+			long_frame_forced_layout_ms: 10,
+			long_frame_user_callback_ms: 12,
+			long_frame_frame_callbacks_ms: 8,
+			long_frame_rendering_ms: 20,
+			long_frame_top_cause: "unlisted",
+			long_frame_top_invoker: "BUTTON.onclick",
+			long_frame_top_bundle: "SessionView",
+		});
 	});
 
-	it("names rendering when style, layout and paint outweigh scripts", async () => {
+	it("takes a script that runs during style and layout out of rendering, not frame callbacks", async () => {
 		const accumulator = create();
 		accumulator.activity();
-		// Frames with no script long enough to be credited: rendering work only.
-		accumulator.recordLongFrame(10, [], 55);
-		accumulator.recordLongFrame(12, [], 58);
-		accumulator.recordLongFrame(30, [{ invokerType: "event-listener", duration: 70 }], 8);
+		// Tasks until 110, frame callbacks until 120, then a 60 ms ResizeObserver-style callback inside rendering.
+		accumulator.recordLongFrame({
+			startTime: 100,
+			duration: 100,
+			renderStart: 110,
+			styleAndLayoutStart: 120,
+			scripts: [{ invokerType: "user-callback", startTime: 130, duration: 60 }],
+		});
 		now += 10_000;
 		await accumulator.flush();
 
-		expect(flushed()).toMatchObject({ long_frame_count: 3, long_frame_top_cause: "rendering", measurement_schema_version: 2 });
+		expect(flushed()).toMatchObject({ long_frame_unlisted_ms: 10, long_frame_user_callback_ms: 60, long_frame_frame_callbacks_ms: 10, long_frame_rendering_ms: 20 });
 	});
 
-	it("puts a frame's uncredited time under other, so a sliver of rendering cannot win", async () => {
+	it("names rendering when style, layout and paint outweigh the rest", async () => {
 		const accumulator = create();
 		accumulator.activity();
-		accumulator.recordLongFrame(50, [], 2, 100);
+		accumulator.recordLongFrame({ startTime: 0, duration: 60, renderStart: 2, styleAndLayoutStart: 5 });
+		accumulator.recordLongFrame({ startTime: 100, duration: 70, renderStart: 104, styleAndLayoutStart: 110 });
 		now += 10_000;
 		await accumulator.flush();
 
-		expect(flushed()).toMatchObject({ long_frame_top_cause: "other" });
+		expect(flushed()).toMatchObject({ long_frame_count: 2, long_frame_no_script_count: 2, long_frame_max_ms: 70, long_frame_rendering_ms: 115, long_frame_top_cause: "rendering" });
+		expect(flushed()).not.toHaveProperty("long_frame_top_invoker");
+	});
+
+	it("keeps URLs and element details out of entry point and bundle names", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		accumulator.recordLongFrame({
+			startTime: 0,
+			duration: 100,
+			scripts: [
+				{ invokerType: "classic-script", invoker: "https://example.com/app.js", sourceURL: "https://example.com/app.js", duration: 50 },
+				{ invokerType: "event-listener", invoker: "IMG[src=https://example.com/a.png].onload", sourceURL: "blob:app://renderer/1234", duration: 20 },
+				{ invokerType: "a-future-type", duration: 25 },
+			],
+		});
+		now += 10_000;
+		await accumulator.flush();
+
+		expect(flushed()).toMatchObject({ long_frame_classic_script_ms: 50, long_frame_event_listener_ms: 20, long_frame_unlisted_ms: 30, long_frame_top_invoker: "IMG.onload" });
+		expect(flushed()).not.toHaveProperty("long_frame_top_bundle");
 	});
 
 	it("never reports a window shorter than its active time after the clock is set back", async () => {
@@ -145,14 +195,14 @@ describe("PerformanceAccumulator", () => {
 		expect(flushed()).toMatchObject({ active_seconds: 240, window_seconds: 240 });
 	});
 
-	it("drops a window saved by the version 1 format", async () => {
+	it("drops a window saved by an earlier format", async () => {
 		const first = create();
 		first.activity();
 		first.recordOpen({ isSwitch: true, cached: true, chatLoaded: false, visibleMs: 20, usableMs: 100 });
 		now += 60_000;
 		first.pause();
 		const saved = JSON.parse(localStorage.getItem("ao.telemetry.performance.v1") ?? "{}");
-		localStorage.setItem("ao.telemetry.performance.v1", JSON.stringify({ ...saved, version: 1 }));
+		localStorage.setItem("ao.telemetry.performance.v1", JSON.stringify({ ...saved, version: 2 }));
 
 		now += 61 * 60_000;
 		const second = create();
@@ -255,17 +305,5 @@ describe("percentile", () => {
 		expect(percentile([], 0.75)).toBeUndefined();
 		expect(percentile([10], 0.75)).toBe(10);
 		expect(percentile([40, 10, 30, 20], 0.75)).toBe(30);
-	});
-});
-
-describe("renderDuration", () => {
-	it("measures from style and layout to the end of the frame, not from requestAnimationFrame", () => {
-		// A 120 ms frame: rendering starts at 40 with a requestAnimationFrame script, style and layout at 90.
-		expect(renderDuration({ startTime: 0, duration: 120, styleAndLayoutStart: 90 })).toBe(30);
-	});
-
-	it("is 0 for a frame that did not render", () => {
-		expect(renderDuration({ startTime: 0, duration: 80, styleAndLayoutStart: 0 })).toBe(0);
-		expect(renderDuration({ startTime: 0, duration: 80 })).toBe(0);
 	});
 });
