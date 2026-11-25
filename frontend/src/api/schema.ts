@@ -6770,7 +6770,7 @@ export interface components {
         ControllersAddAgentAccountAPIKeyRequest: {
             apiKey: string;
             /** @enum {string} */
-            color?: "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink";
+            color?: "" | "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink";
             name?: string;
             /** @enum {string} */
             provider: "claude";

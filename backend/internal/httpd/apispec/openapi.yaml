@@ -19888,6 +19888,7 @@ components:
           type: string
         color:
           enum:
+          - ""
           - red
           - orange
           - amber

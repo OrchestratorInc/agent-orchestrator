@@ -4861,7 +4861,7 @@ type AddAgentAccountAPIKeyRequest struct {
 	Name   string `json:"name,omitempty"`
 	APIKey string `json:"apiKey"`
 	// Color is an optional palette id; empty means none.
-	Color string `json:"color,omitempty" enum:"red,orange,amber,green,teal,blue,violet,pink"`
+	Color string `json:"color,omitempty" enum:",red,orange,amber,green,teal,blue,violet,pink"`
 }
 
 // UpdateAgentAccountRequest changes an account's name and color. A missing
