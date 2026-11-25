@@ -76,7 +76,9 @@ export function AgentModelField({
 	// older control plane, opencode's credential-scoped list), never after a
 	// failed read: its models may not run in Cloud.
 	const localWanted = !cloudOrgId || listsLocalModelsForCloud(cloud.gap, agentId, projectId);
-	const query = useQuery({ ...agentModelsQueryOptions(agentId, projectId, hostId), enabled: localWanted });
+	// This replaces the query options' own `enabled`, so keep its agent check: with
+	// no agent resolved yet there are no models to ask for, only an error.
+	const query = useQuery({ ...agentModelsQueryOptions(agentId, projectId, hostId), enabled: localWanted && agentId !== "" });
 	const catalog: AgentModelCatalog | undefined = cloudListed
 		? cloudCatalogAsAgentCatalog(agentId, cloudListed)
 		: localWanted ? query.data : undefined;
