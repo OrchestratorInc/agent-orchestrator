@@ -324,14 +324,16 @@ export function CloudReviewerPicker({
 		return installed && installed.status !== "ready" ? t("agentSwitch.notInstalled") : "";
 	};
 	const status = value ? statusFor(value) : "";
+	// aria-label replaces the pill's text, so it carries the agent and status too.
+	const accessibleName = value ? [`${ariaLabel}: ${agentLabel(value)}`, status].filter(Boolean).join(", ") : ariaLabel;
 
 	return (
 		<OptionMenu open={open} onOpenChange={(next) => setOpen(next && !disabled)} modal={false}>
 			<OptionMenuTrigger
 				variant="ghost"
 				disabled={disabled}
-				aria-label={ariaLabel}
-				title={ariaLabel}
+				aria-label={accessibleName}
+				title={accessibleName}
 				className={cn(CHAT_PICKER_TRIGGER_CLASS, "ml-auto min-w-0 max-w-full")}
 				showCaret={false}
 			>
