@@ -6,6 +6,7 @@ import { readAttachmentNames } from "../../lib/chat-attachment-names";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { ChatImage, ChatImageAttachmentRow } from "./ChatImage";
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { useChatFileOpen } from "./ChatMarkdown";
