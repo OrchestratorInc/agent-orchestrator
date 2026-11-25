@@ -57,3 +57,20 @@ func TestClientConnectionsDeclareControl(t *testing.T) {
 		})
 	}
 }
+
+// TestInputWriteFailsWhenHostStopsReading: a pty-host that stops reading must
+// fail a send rather than block its caller, which may hold a lock.
+func TestInputWriteFailsWhenHostStopsReading(t *testing.T) {
+	client, host := net.Pipe()
+	defer func() { _ = client.Close(); _ = host.Close() }()
+	done := make(chan error, 1)
+	go func() { done <- writeInputFrame(client, []byte("task"), 50*time.Millisecond) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("write to a host that never reads succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("write to a host that never reads did not time out")
+	}
+}

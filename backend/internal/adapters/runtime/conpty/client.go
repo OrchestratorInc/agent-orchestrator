@@ -26,7 +26,10 @@ const (
 
 	dialTimeout      = 3 * time.Second
 	getOutputTimeout = 3 * time.Second
-	isAliveTimeout   = 2 * time.Second
+	// inputWriteTimeout bounds each terminal-input write, so a pty-host that
+	// stops reading fails the send instead of blocking its caller forever.
+	inputWriteTimeout = 3 * time.Second
+	isAliveTimeout    = 2 * time.Second
 )
 
 // dialHost opens a TCP connection to addr with a deadline. Callers close it.
@@ -62,6 +65,14 @@ func armClientDeadline(ctx context.Context, conn net.Conn, timeout time.Duration
 	return func() { _ = stop() }
 }
 
+// writeInputFrame writes one frame, failing once timeout passes without the
+// host reading it.
+func writeInputFrame(conn net.Conn, frame []byte, timeout time.Duration) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
+	_, err := conn.Write(frame)
+	return err
+}
+
 // clientSendMessage chunks message by 512 runes and sends each as a
 // MsgTerminalInput frame with 15ms gaps, then pauses 300ms and sends "\r".
 // Mirrors ptyHostSendMessage from pty-client.ts.
@@ -71,7 +82,7 @@ func clientSendMessage(addr, message string) error {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	if _, err := conn.Write(withControl(nil)); err != nil {
+	if err := writeInputFrame(conn, withControl(nil), inputWriteTimeout); err != nil {
 		return err
 	}
 
@@ -86,7 +97,7 @@ func clientSendMessage(addr, message string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := conn.Write(frame); err != nil {
+		if err := writeInputFrame(conn, frame, inputWriteTimeout); err != nil {
 			return err
 		}
 		// Inter-chunk delay only between chunks, not after the last one.
@@ -106,8 +117,7 @@ func clientSendMessage(addr, message string) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(frame)
-	return err
+	return writeInputFrame(conn, frame, inputWriteTimeout)
 }
 
 func clientSendInput(addr, input string) error {
@@ -120,8 +130,7 @@ func clientSendInput(addr, input string) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(withControl(frame))
-	return err
+	return writeInputFrame(conn, withControl(frame), inputWriteTimeout)
 }
 
 // clientGetOutput sends MsgGetOutputReq and reads frames until MsgGetOutputRes.

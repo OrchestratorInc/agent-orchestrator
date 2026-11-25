@@ -736,6 +736,9 @@ func (p *pendingDeliveries) drop(handleID string) {
 }
 
 // deliver runs send only while delivery is still the handle's current one.
+// The send stays under the lock so drop cannot interleave with it; runtimes
+// bound their writes, so a stalled terminal host fails the send instead of
+// holding the lock.
 func (p *pendingDeliveries) deliver(handleID string, delivery *pendingDelivery, send func() error) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
