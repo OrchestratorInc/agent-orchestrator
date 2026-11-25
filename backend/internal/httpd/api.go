@@ -78,8 +78,8 @@ type APIDeps struct {
 	TelemetryIdentity ports.TelemetryIdentityStore
 	// TelemetryLocal serves `ao telemetry log|status|on|off` over loopback. Nil
 	// leaves those routes unmounted.
-	TelemetryLocal *TelemetryLocal
-	LifetimeSessions  func(context.Context) (int64, error)
+	TelemetryLocal   *TelemetryLocal
+	LifetimeSessions func(context.Context) (int64, error)
 	// DaemonVersion is this daemon's release, reported to a paired phone.
 	DaemonVersion string
 	Mobile        *controllers.MobileController

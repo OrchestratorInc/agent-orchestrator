@@ -85,6 +85,7 @@ vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: fixtures.select, 
 vi.mock("./inAppUpdates", () => ({ checkStore: fixtures.checkStore, openOrStartUpdate: fixtures.openOrStartUpdate }));
 vi.mock("./storeUpdatePrompt", () => ({ promptStoreUpdate: fixtures.prompt }));
 vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
+vi.mock("./telemetry/runtime", () => ({ loadUserMobileOptOut: async () => false, setUserMobileOptOut: vi.fn(async () => undefined) }));
 vi.mock("./push", () => ({
 	getPushStatus: async () => fixtures.pushStatus,
 	openNotificationSettings: vi.fn(), registerForPush: vi.fn(), unregisterFromPush: vi.fn(),
@@ -159,7 +160,19 @@ function row(root: ReactTestInstance, label: string) {
 describe("Settings", () => {
 	it("has no Developer section in a release build", async () => {
 		const root = await renderSettings();
-		expect(root.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Account", "Machines", "Preferences", "Updates", "Support"]);
+		expect(root.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Account", "Machines", "Preferences", "Privacy", "Updates", "Support"]);
+	});
+
+	// The phone's own analytics opt-out, available without any pairing.
+	it("offers Share usage analytics in Privacy and saves the phone's own opt-out", async () => {
+		const runtime = await import("./telemetry/runtime");
+		const root = await renderSettings();
+		const privacy = root.findAllByType("SettingsSection" as never).find((node) => node.props.title === "Privacy")!;
+		const row = privacy.findByType("SettingsToggleRow" as never);
+		await act(async () => {});
+		expect(row.props.label).toBe("Share usage analytics");
+		act(() => row.props.onValueChange(false));
+		expect(runtime.setUserMobileOptOut).toHaveBeenCalledWith(true);
 	});
 
 	// Last, and saying plainly that it is only in development builds.
