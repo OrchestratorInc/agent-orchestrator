@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -69,6 +70,7 @@ type fakeDelivery struct {
 	key, message string
 	err          error
 	sent         chan struct{}
+	onSend       func()
 }
 
 func (d *fakeDelivery) SendSemantic(_ context.Context, id domain.SessionID, message, key string) error {
@@ -76,6 +78,9 @@ func (d *fakeDelivery) SendSemantic(_ context.Context, id domain.SessionID, mess
 	d.id = id
 	d.message = message
 	d.key = key
+	if d.onSend != nil {
+		d.onSend()
+	}
 	if d.sent != nil {
 		close(d.sent)
 	}
@@ -242,6 +247,101 @@ func TestCoordinatorKeepsRecipientAfterLostAcknowledgement(t *testing.T) {
 	}
 }
 
+// The recipient is saved before the send, so a daemon that stops after the
+// orchestrator accepted the notice still retries to that same orchestrator.
+func TestCoordinatorPinsRecipientBeforeSending(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	s := &fakeStore{
+		row:      domain.WorkerTurnFailure{TurnID: "turn-pin", ProjectID: "p"},
+		sessions: []domain.SessionRecord{{ID: "first", Kind: domain.KindOrchestrator, CreatedAt: now}},
+	}
+	var pinnedAtSend domain.SessionID
+	d := &fakeDelivery{onSend: func() { pinnedAtSend = s.row.TargetSessionID }}
+	c := New(s, d, nil)
+	c.now = func() time.Time { return now }
+	if err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if pinnedAtSend != "first" {
+		t.Fatalf("recipient pinned at send = %q, want first", pinnedAtSend)
+	}
+}
+
+// Only a pin this attempt made is dropped on a refusal. An older pin may
+// follow an uncertain send, so a later refusal must not move the notice.
+func TestCoordinatorKeepsEarlierPinAfterRefusal(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	s := &fakeStore{
+		row: domain.WorkerTurnFailure{TurnID: "turn-old-pin", ProjectID: "p", TargetSessionID: "original"},
+		sessions: []domain.SessionRecord{
+			{ID: "original", Kind: domain.KindOrchestrator, CreatedAt: now},
+			{ID: "newer", Kind: domain.KindOrchestrator, CreatedAt: now.Add(time.Hour)},
+		},
+	}
+	d := &fakeDelivery{err: errors.New("composer busy")}
+	c := New(s, d, nil)
+	c.now = func() time.Time { return now }
+	if err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("expected refused delivery")
+	}
+	if d.id != "original" || s.row.TargetSessionID != "original" {
+		t.Fatalf("sent to %s, pinned %q", d.id, s.row.TargetSessionID)
+	}
+}
+
+// An orchestrator whose start failed refuses every message, so the notice goes
+// to an older working one instead of retrying the failed one forever.
+func TestCoordinatorSkipsOrchestratorWhoseStartFailed(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	s := &fakeStore{
+		row: domain.WorkerTurnFailure{TurnID: "turn-provision", ProjectID: "p"},
+		sessions: []domain.SessionRecord{
+			{ID: "working", Kind: domain.KindOrchestrator, CreatedAt: now},
+			{ID: "failed-start", Kind: domain.KindOrchestrator, CreatedAt: now.Add(time.Hour),
+				ProvisionState: domain.SessionProvisionFailed},
+		},
+	}
+	d := &fakeDelivery{}
+	c := New(s, d, nil)
+	c.now = func() time.Time { return now }
+	if err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !s.accepted || d.id != "working" {
+		t.Fatalf("accepted=%v sent to %s", s.accepted, d.id)
+	}
+}
+
+// The backoff counts from when the attempt ended, not when it started.
+func TestCoordinatorSchedulesRetryAfterTheAttemptEnds(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	now := start
+	s := &fakeStore{
+		row:      domain.WorkerTurnFailure{TurnID: "turn-slow", ProjectID: "p", Attempts: 10},
+		sessions: []domain.SessionRecord{{ID: "o", Kind: domain.KindOrchestrator, CreatedAt: start}},
+	}
+	d := &fakeDelivery{err: errors.New("refused"), onSend: func() { now = start.Add(4 * time.Minute) }}
+	c := New(s, d, nil)
+	c.now = func() time.Time { return now }
+	if err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("expected refused delivery")
+	}
+	if want := start.Add(9 * time.Minute); !s.next.Equal(want) {
+		t.Fatalf("next attempt = %s, want %s", s.next, want)
+	}
+}
+
+func TestFailureMessageCutsLongNamesAtACharacterBoundary(t *testing.T) {
+	name := strings.Repeat("a", maxNameBytes-1) + "é and more"
+	message := failureMessage(domain.WorkerTurnFailure{TurnID: "t", SessionID: "s", DisplayName: name})
+	if !utf8.ValidString(message) {
+		t.Fatalf("message is not valid UTF-8: %q", message)
+	}
+	if !strings.Contains(message, "Worker "+strings.Repeat("a", maxNameBytes-1)+" (") {
+		t.Fatalf("name not cut before the split character: %q", message)
+	}
+}
+
 func TestCoordinatorRetainsFailureWhenOrchestratorUnsupported(t *testing.T) {
 	now := time.Now().UTC()
 	s := &fakeStore{row: domain.WorkerTurnFailure{TurnID: "turn-2", ProjectID: "p"}, sessions: []domain.SessionRecord{
@@ -265,6 +365,8 @@ func TestCoordinatorProcessesPendingRowOnStartup(t *testing.T) {
 	}}
 	d := &fakeDelivery{sent: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
+	// Stops the worker even if the test fails before the explicit cancel.
+	t.Cleanup(cancel)
 	c := New(s, d, nil)
 	done := c.Start(ctx)
 	select {

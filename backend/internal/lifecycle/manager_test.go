@@ -4100,12 +4100,22 @@ func TestFailedChatTurnNotifiesOnceAndNextTurnResolves(t *testing.T) {
 	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
 	m.clock = func() time.Time { return now }
 	st.sessions["mer-1"] = domain.SessionRecord{
-		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Mode: domain.SessionModeChat,
+		Metadata:      domain.SessionMetadata{ControllerGeneration: "gen-current"},
 		Activity:      domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-time.Minute)},
 		FirstSignalAt: now.Add(-time.Minute),
 	}
 	ctx := context.Background()
-	failed := ports.ActivitySignal{Valid: true, State: domain.ActivityWaitingInput, Event: "chat.turn.failed"}
+	// A failure reported by a replaced controller is fenced out.
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityWaitingInput, Event: "chat.turn.failed", ControllerGeneration: "gen-stale",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.intents) != 0 {
+		t.Fatalf("stale controller notified: %+v", sink.intents)
+	}
+	failed := ports.ActivitySignal{Valid: true, State: domain.ActivityWaitingInput, Event: "chat.turn.failed", ControllerGeneration: "gen-current"}
 	for i := 0; i < 2; i++ {
 		if err := m.ApplyActivitySignal(ctx, "mer-1", failed); err != nil {
 			t.Fatal(err)
@@ -4115,7 +4125,7 @@ func TestFailedChatTurnNotifiesOnceAndNextTurnResolves(t *testing.T) {
 		t.Fatalf("failed-turn notification intents = %+v", sink.intents)
 	}
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
-		Valid: true, State: domain.ActivityActive, Event: "chat.turn.started",
+		Valid: true, State: domain.ActivityActive, Event: "chat.turn.started", ControllerGeneration: "gen-current",
 	}); err != nil {
 		t.Fatal(err)
 	}

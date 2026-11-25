@@ -73,8 +73,13 @@ func TestFailedPrimaryWorkerTurnEnqueuesOnceAndHoldsQueue(t *testing.T) {
 	if !strings.Contains(rows[0].ErrorMessage, "-32603") {
 		t.Fatalf("lost error: %q", rows[0].ErrorMessage)
 	}
-	if !hasActivitySignal(h.activity.snapshot(), domain.ActivityWaitingInput, "chat.turn.failed") {
-		t.Fatal("failed worker turn did not become waiting_input")
+	// The outbox row commits before afterProject reports the activity, so wait.
+	activityDeadline := time.Now().Add(3 * time.Second)
+	for !hasActivitySignal(h.activity.snapshot(), domain.ActivityWaitingInput, "chat.turn.failed") {
+		if time.Now().After(activityDeadline) {
+			t.Fatal("failed worker turn did not become waiting_input")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	h.conv.emit(failed)
 	time.Sleep(50 * time.Millisecond)

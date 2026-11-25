@@ -1830,14 +1830,17 @@ func (s sessionConversationService) StopTurn(ctx context.Context, id domain.Sess
 }
 
 // turnFailureDelivery tells the failure coordinator which send errors leave
-// acceptance uncertain, so it pins the recipient only then.
+// acceptance uncertain, so it keeps the recipient pinned for those. The text
+// match mirrors reportSemanticDelivery, for an unobserved submission whose
+// sentinel did not survive the error chain.
 type turnFailureDelivery struct {
 	sessions reportSemanticSession
 }
 
 func (d turnFailureDelivery) SendSemantic(ctx context.Context, id domain.SessionID, message, idempotencyKey string) error {
 	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
-	if errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) {
+	if errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) ||
+		(err != nil && strings.Contains(err.Error(), sessionmanager.ErrPromptSubmissionUnobserved.Error())) {
 		return fmt.Errorf("%w: %w", turnfailuresvc.ErrUnacknowledgedDelivery, err)
 	}
 	return err

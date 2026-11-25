@@ -10,14 +10,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-const pollInterval = 2 * time.Second
+const (
+	pollInterval = 2 * time.Second
+	maxNameBytes = 80
+)
 
 // ErrUnacknowledgedDelivery marks a send that may have reached the orchestrator
-// even though AO did not see it accepted. Only such a send pins the recipient.
+// even though AO did not see it accepted. Its recipient stays pinned.
 var ErrUnacknowledgedDelivery = errors.New("prompt submission was not observed")
 
 // Store is the durable failed-turn and session lookup surface.
@@ -87,12 +91,14 @@ func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 // RunDue processes one durable event. The stable delivery key makes a retry
 // safe when AO loses the response after the orchestrator accepted the message.
 //
-// The recipient is chosen afresh on every attempt and pinned only once a send
-// may have been accepted (it succeeded, or its outcome is uncertain): semantic
-// deduplication is per session, so a retry of that send must go to the same
-// orchestrator or it could be accepted twice. A send that was definitively
-// refused pins nothing, so the next attempt can reach a replacement. A pin is released once its orchestrator is terminated or replaced. It
-// may already hold the notice, but it can no longer act on it, and its
+// Semantic deduplication is per session, so every send that might be accepted
+// is pinned to its recipient first: a retry after a lost reply or a daemon
+// restart then goes to the same orchestrator and cannot be accepted twice. A
+// pin this attempt made is dropped again when the send is definitively
+// refused, so the next attempt can pick whichever orchestrator is newest.
+//
+// A pin is also released once its orchestrator is terminated or replaced. That
+// session may already hold the notice, but it can no longer act on it, and its
 // replacement must not wait forever behind it.
 func (c *Coordinator) RunDue(ctx context.Context) error {
 	c.mu.Lock()
@@ -100,15 +106,14 @@ func (c *Coordinator) RunDue(ctx context.Context) error {
 	if c.store == nil || c.delivery == nil {
 		return fmt.Errorf("worker turn failure delivery is not configured")
 	}
-	now := c.now().UTC()
-	rows, err := c.store.ListDueWorkerTurnFailures(ctx, now, 1)
+	rows, err := c.store.ListDueWorkerTurnFailures(ctx, c.now().UTC(), 1)
 	if err != nil || len(rows) == 0 {
 		return err
 	}
 	failure := rows[0]
 	live, newest, err := c.orchestrators(ctx, failure.ProjectID)
 	if err != nil {
-		return c.deferFailure(ctx, failure, now, "orchestrator lookup failed", err)
+		return c.deferFailure(ctx, failure, "orchestrator lookup failed", err)
 	}
 	target := failure.TargetSessionID
 	if target != "" && !live[target] {
@@ -122,39 +127,34 @@ func (c *Coordinator) RunDue(ctx context.Context) error {
 		}
 		target = ""
 	}
-	pinned := target != ""
-	if !pinned {
-		target = newest
-	}
+	pinnedHere := false
 	if target == "" {
-		return c.deferFailure(ctx, failure, now, "no active orchestrator", nil)
-	}
-	key := "worker-turn-failed:" + failure.TurnID
-	sendErr := c.delivery.SendSemantic(ctx, target, failureMessage(failure), key)
-	if sendErr == nil {
-		// Pin before acknowledging: if the acknowledgement is lost, the retry
-		// must reach the orchestrator that already accepted the message.
-		if !pinned {
-			if _, err := c.store.BindWorkerTurnFailureTarget(ctx, failure.TurnID, target); err != nil {
-				return err
-			}
+		if newest == "" {
+			return c.deferFailure(ctx, failure, "no active orchestrator", nil)
 		}
-		return c.store.AcknowledgeWorkerTurnFailure(ctx, failure.TurnID, c.now().UTC())
-	}
-	if !pinned && uncertainDelivery(sendErr) {
-		bound, err := c.store.BindWorkerTurnFailureTarget(ctx, failure.TurnID, target)
+		bound, err := c.store.BindWorkerTurnFailureTarget(ctx, failure.TurnID, newest)
 		if err != nil {
 			return err
 		}
 		if !bound {
+			// Accepted or pinned meanwhile; re-read the row on the next pass.
 			return nil
 		}
+		target, pinnedHere = newest, true
 	}
-	return c.deferFailure(ctx, failure, now, "semantic delivery was not accepted", sendErr)
-}
-
-func uncertainDelivery(err error) bool {
-	return errors.Is(err, ErrUnacknowledgedDelivery) || strings.Contains(err.Error(), ErrUnacknowledgedDelivery.Error())
+	key := "worker-turn-failed:" + failure.TurnID
+	sendErr := c.delivery.SendSemantic(ctx, target, failureMessage(failure), key)
+	if sendErr == nil {
+		return c.store.AcknowledgeWorkerTurnFailure(ctx, failure.TurnID, c.now().UTC())
+	}
+	// Only a pin this attempt made is known never to have carried an accepted
+	// send. An older pin may follow an uncertain send, so it stays.
+	if pinnedHere && !errors.Is(sendErr, ErrUnacknowledgedDelivery) {
+		if _, err := c.store.ReleaseWorkerTurnFailureTarget(ctx, failure.TurnID, target); err != nil {
+			return err
+		}
+	}
+	return c.deferFailure(ctx, failure, "semantic delivery was not accepted", sendErr)
 }
 
 // orchestrators returns the project's live orchestrators and the newest of them.
@@ -166,7 +166,10 @@ func (c *Coordinator) orchestrators(ctx context.Context, project domain.ProjectI
 	live := map[domain.SessionID]bool{}
 	var newest domain.SessionRecord
 	for _, session := range sessions {
-		if session.Kind != domain.KindOrchestrator || session.IsTerminated || session.Activity.State == domain.ActivityExited {
+		// A session whose start failed refuses every message, so it can never
+		// be the recipient even when it is the newest.
+		if session.Kind != domain.KindOrchestrator || session.IsTerminated || session.Activity.State == domain.ActivityExited ||
+			session.ProvisionState == domain.SessionProvisionFailed {
 			continue
 		}
 		live[session.ID] = true
@@ -177,8 +180,11 @@ func (c *Coordinator) orchestrators(ctx context.Context, project domain.ProjectI
 	return live, newest.ID, nil
 }
 
-func (c *Coordinator) deferFailure(ctx context.Context, failure domain.WorkerTurnFailure, now time.Time, reason string, cause error) error {
-	if err := c.store.RetryWorkerTurnFailure(ctx, failure.TurnID, now.Add(retryDelay(failure.Attempts)), reason); err != nil {
+// deferFailure counts the backoff from when the attempt ended, so a slow send
+// does not use up its own retry delay.
+func (c *Coordinator) deferFailure(ctx context.Context, failure domain.WorkerTurnFailure, reason string, cause error) error {
+	next := c.now().UTC().Add(retryDelay(failure.Attempts))
+	if err := c.store.RetryWorkerTurnFailure(ctx, failure.TurnID, next, reason); err != nil {
 		return err
 	}
 	return cause
@@ -221,8 +227,13 @@ func failureReason(f domain.WorkerTurnFailure) string {
 
 func failureMessage(f domain.WorkerTurnFailure) string {
 	name := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(f.DisplayName, "\n", " "), "\r", " "))
-	if len(name) > 80 {
-		name = name[:80]
+	if len(name) > maxNameBytes {
+		// Cut at a character boundary so the notice stays valid UTF-8.
+		cut := maxNameBytes
+		for cut > 0 && !utf8.RuneStart(name[cut]) {
+			cut--
+		}
+		name = name[:cut]
 	}
 	if name == "" {
 		name = string(f.SessionID)
