@@ -13,9 +13,9 @@ import (
 func TestMigrateAppliesRenumberedStorageManagementOverItsEarlierVersion(t *testing.T) {
 	const (
 		earlierVersion = int64(20261113130000000)
-		current        = "migrations/20261114133306000_storage_management.sql"
+		current        = "migrations/20261125092225000_storage_management.sql"
 	)
-	db := openMigratedDatabaseCopy(t, 20261114072016988)
+	db := openMigratedDatabaseCopy(t, 20261124180938781)
 
 	contents, err := migrationsFS.ReadFile(current)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestMigrateAppliesRenumberedStorageManagementOverItsEarlierVersion(t *testi
 	if rows != 1 || backupDays != 30 {
 		t.Fatalf("storage_settings rows=%d backup_days=%d, want 1 row keeping 30", rows, backupDays)
 	}
-	for _, version := range []int64{earlierVersion, 20261114133306000} {
+	for _, version := range []int64{earlierVersion, 20261125092225000} {
 		var applied int
 		if err := db.QueryRow(`
 SELECT COALESCE((

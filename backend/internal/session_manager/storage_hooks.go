@@ -174,9 +174,9 @@ func (m *Manager) restoreOffloadedDependencies(ctx context.Context, rec domain.S
 	}
 	var setupErr error
 	if needsSetup {
-		setupCtx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
-		setupErr = m.provisionWorkspace(setupCtx, project, rec.Metadata.WorkspacePath)
-		cancel()
+		// An existing session: it keeps the attribution choice it started
+		// with, and Setup gets its own time budget.
+		setupErr = m.provisionRecreatedWorkspace(ctx, project, rec.ID, rec.Metadata.WorkspacePath)
 		if setupErr != nil {
 			m.logger.Warn("restore offloaded dependencies: setup failed", "sessionID", rec.ID, "error", setupErr)
 		}
