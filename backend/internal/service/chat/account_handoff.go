@@ -219,22 +219,16 @@ func (s *Service) failQueueIfResumeMoveFails(id domain.SessionID, transitionID s
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), accountHandoffWindow)
-	defer cancel()
+	ctx := context.Background()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	for {
+	for range tick.C {
 		transition, found, err := store.GetSessionInterfaceTransition(ctx, transitionID)
 		if err == nil && (!found || transition.Phase.Terminal()) {
 			if transition.Phase != domain.SessionInterfaceTransitionCompleted && !s.HasLiveChatController(id) {
 				s.failQueuedTurns(ctx, id, "could not wake the agent: its account is at its usage limit and the move to another account did not finish")
 			}
 			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
 		}
 	}
 }
