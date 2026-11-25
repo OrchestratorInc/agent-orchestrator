@@ -332,6 +332,17 @@ func writeBrowserMessage(ctx context.Context, c *websocket.Conn, messageType web
 	return c.Write(writeCtx, messageType, payload)
 }
 
+// browserLiveCommandAllowed lists what a phone may send the desktop: input,
+// navigation and tabs, and its answers to what the page asked (a sign-in and
+// the files for a file input). The desktop advertises which of those it takes.
+func browserLiveCommandAllowed(commandType string) bool {
+	switch commandType {
+	case "input", "navigate", "tab", "auth", "files":
+		return true
+	}
+	return false
+}
+
 type browserLiveCommand struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
@@ -350,7 +361,7 @@ func (h *BrowserLiveHub) readBrowserCommands(ctx context.Context, c *websocket.C
 		if err := json.Unmarshal(payload, &command); err != nil {
 			return c.Close(websocket.StatusInvalidFramePayloadData, "invalid browser command")
 		}
-		if command.Type != "input" && command.Type != "navigate" && command.Type != "tab" {
+		if !browserLiveCommandAllowed(command.Type) {
 			return c.Close(websocket.StatusPolicyViolation, "unsupported browser command")
 		}
 		commandCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

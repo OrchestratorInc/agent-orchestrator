@@ -7,7 +7,7 @@ import { useTheme, useThemeState } from "../ThemeProvider";
 import { font, stateOpacity } from "../tokens";
 import { answerAuth, answerDialog, answerSelect, askTitle, authMessage } from "./browserAsk";
 import { browserAskCopy as copy, type BrowserAskSheetProps } from "./BrowserAskSheet.types";
-import { answerWithFiles, fileSources } from "./browserAskAlerts";
+import { answerWithFiles, fileSources, filesAnswer } from "./browserAskAlerts";
 
 export type { BrowserAskSheetProps } from "./BrowserAskSheet.types";
 
@@ -112,7 +112,7 @@ function FileSourceDialog({ dialog, answer, pickers }: { dialog: Extract<Browser
 	// chosen, the dialog goes and only the picker answers.
 	const chosen = useRef(false);
 	const [picking, setPicking] = useState(false);
-	const none = () => { if (!chosen.current) answer({ type: "files", payload: { files: [], folder: dialog.folder } }); };
+	const none = () => { if (!chosen.current) answer(filesAnswer(dialog, [])); };
 	if (picking) return null;
 	return (
 		<Frame title={askTitle(dialog)} onDismiss={none} dismiss={<Button label={copy.cancel} onClick={none} />}>

@@ -7,7 +7,7 @@ import { useThemeState } from "../ThemeProvider";
 import type { BrowserCommand, BrowserDialog } from "../browserTransport";
 import { answerAuth, answerDialog, answerSelect, askTitle, authMessage } from "./browserAsk";
 import { browserAskCopy as copy, type BrowserAskSheetProps } from "./BrowserAskSheet.types";
-import { answerWithFiles, fileSources } from "./browserAskAlerts";
+import { answerWithFiles, fileSources, filesAnswer } from "./browserAskAlerts";
 
 export type { BrowserAskSheetProps } from "./BrowserAskSheet.types";
 
@@ -97,7 +97,7 @@ function FileSourceChoices({ dialog, answer, pickers }: { dialog: Extract<Browse
 	// Choosing a source dismisses the dialog too, while its picker is still
 	// open: only a dismissal with no source chosen cancels the input.
 	const chosen = useRef(false);
-	const none = () => { if (!chosen.current) answer({ type: "files", payload: { files: [], folder: dialog.folder } }); };
+	const none = () => { if (!chosen.current) answer(filesAnswer(dialog, [])); };
 	return (
 		<Choices title={askTitle(dialog)} onDismiss={none}>
 			{fileSources(dialog).map((source) => (
@@ -110,7 +110,7 @@ function FileSourceChoices({ dialog, answer, pickers }: { dialog: Extract<Browse
 					}}
 				/>
 			))}
-			<Button label={copy.cancel} role="cancel" onPress={() => answer({ type: "files", payload: { files: [], folder: dialog.folder } })} />
+			<Button label={copy.cancel} role="cancel" onPress={() => answer(filesAnswer(dialog, []))} />
 		</Choices>
 	);
 }

@@ -62,8 +62,11 @@ import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
 import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
+import { LiveAsks } from "./browser-live-asks";
 import type {
 	BrowserLiveSink,
+	BrowserRemoteAuth,
+	BrowserRemoteFiles,
 	BrowserLiveState,
 	BrowserRemoteInput,
 	BrowserRemoteNavigation,
@@ -494,6 +497,12 @@ type BrowserPopupOptions = Electron.BrowserWindowConstructorOptions & {
 };
 
 export type BrowserViewHostOptions = {
+  // Where a phone's files for a watched page's file input are kept, under AO's
+  // data directory. Without it, the phone is not asked for files or sign-ins.
+  liveUploadDir?: string;
+  // The desktop's own file chooser, for an input the desktop user opened while
+  // a phone watches (file choosers are intercepted then).
+  showFileChooser?: (options: { multiple: boolean; folder: boolean }) => Promise<string[]>;
   // Whether a tab's URL is AO's own agent-browser viewer (a connected remote
   // host's): only those may report the remote page a tab shows.
   isAgentBrowserUrl?: (url: string) => boolean;
@@ -580,6 +589,8 @@ export type BrowserViewHost = {
 	stopLiveStream: (sessionId: string, streamId: number) => Promise<void>;
 	stopAllLiveStreams: () => Promise<void>;
 	handleRemoteInput: (sessionId: string, input: BrowserRemoteInput) => Promise<void>;
+	handleRemoteAuth: (sessionId: string, answer: BrowserRemoteAuth) => Promise<void>;
+	handleRemoteFiles: (sessionId: string, files: BrowserRemoteFiles) => Promise<void>;
 	handleRemoteNavigation: (sessionId: string, input: BrowserRemoteNavigation) => Promise<void>;
 	handleRemoteTab: (sessionId: string, input: BrowserRemoteTabAction) => Promise<void>;
 	openLivePreview: (sessionId: string, url: string) => Promise<void>;
@@ -635,6 +646,8 @@ type BrowserEntry = {
   // Compared by identity: an older, aborted load of the same URL must not clear
   // a newer one.
   pendingNavigation?: { url: string };
+  // The live stream's handler for this tab's Page events (file choosers, dialogs).
+  onPageEvent?: (method: string, params: Record<string, unknown>) => void;
   findState: BrowserFindState & { requestId?: number };
   annotationEnabled: boolean;
   annotationSessions: Map<
@@ -710,12 +723,18 @@ type BrowserSessionEntry = {
   };
   nativeOperationQueue: Promise<void>;
   devtoolsPlacement: BrowserDevToolsPlacement;
+	// What the page asked the phone, kept between its streams (LiveAsks.detach).
+	liveAsks?: LiveAsks;
 	live?: {
 		streamId: number;
 		sink: BrowserLiveSink;
 		screencast?: BrowserScreencast;
 		tabId?: string;
 		lastStateKey?: string;
+		// What the page asks the phone (file choosers, sign-ins).
+		asks?: LiveAsks;
+		// The phone's last click or key, which may have opened a file chooser.
+		lastInputAt?: number;
 	};
   // Bounded browser diagnostics exposed only through an explicit errors query.
   signals: {
@@ -1469,6 +1488,27 @@ export function createBrowserViewHost(
       }, 0);
     };
     wireAutomationEvents(view.webContents, entry);
+    entry.onPageEvent = (method, params) => {
+      if (isCurrentEntry()) handleLivePageEvent(session, entry, method, params);
+    };
+    // HTTP sign-in, while a phone watches this tab: asked on the phone, and the
+    // answer goes to the page once. Otherwise Electron's default (cancel) holds.
+    view.webContents.on?.("login", (event: Electron.Event, details: { url: string }, authInfo: { isProxy: boolean; realm?: string }, callback: (username?: string, password?: string) => void) => {
+      const live = session.live;
+      if (!isCurrentEntry() || !live?.asks || authInfo.isProxy || session.activeTabId !== entry.tabId) return;
+      event.preventDefault();
+      let origin = "";
+      try {
+        origin = new URL(details.url).origin;
+      } catch {
+        callback();
+        return;
+      }
+      live.asks.authRequired({ origin, ...(authInfo.realm ? { realm: authInfo.realm } : {}) }, (username, password) => {
+        if (username === undefined) callback();
+        else callback(username, password);
+      });
+    });
     // The preview is a separate WebContentsView, so renderer-window keydown
     // listeners never see keys typed here. Forward application shortcuts to the
     // shell renderer so they still work with the panel focused.
@@ -3119,6 +3159,9 @@ export function createBrowserViewHost(
 		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
 		session.live = undefined;
 		if (live?.screencast) void live.screencast.stop();
+		// The phone's files and any waiting sign-in go with the session.
+		void session.liveAsks?.dispose();
+		session.liveAsks = undefined;
     const partitionToClear =
       session.profileId === null ? session.profilePartition : undefined;
     session.signals.entries.length = 0;
@@ -4189,7 +4232,39 @@ export function createBrowserViewHost(
 			}),
 			width: bounds.width,
 			height: bounds.height,
+			...(session.live?.asks ? { asks: ["auth", "files"] as Array<"auth" | "files"> } : {}),
 		};
+	}
+
+	function handleLivePageEvent(session: BrowserSessionEntry, entry: BrowserEntry, method: string, params: Record<string, unknown>): void {
+		const live = session.live;
+		if (method === "Page.javascriptDialogOpening") {
+			if (live && live.tabId === entry.tabId) live.sink.notice?.("The page is asking something on the desktop. Answer it there.");
+			return;
+		}
+		if (method !== "Page.fileChooserOpened") return;
+		const backendNodeId = Number(params.backendNodeId);
+		const multiple = params.mode === "selectMultiple";
+		const debug = entry.view.webContents.debugger;
+		const setFiles = async (files: string[]) => {
+			if (!files.length || !debug?.isAttached()) return;
+			await debug.sendCommand("DOM.setFileInputFiles", { files, backendNodeId });
+		};
+		// A chooser the phone opened (its click just before) goes to the phone;
+		// one the desktop user opened gets the desktop's own.
+		const fromPhone = live?.asks && live.tabId === entry.tabId && Date.now() - (live.lastInputAt ?? 0) < PHONE_CHOOSER_MS;
+		if (!fromPhone) {
+			// The desktop user's own chooser keeps its folder mode.
+			void describeFileInput(entry, backendNodeId)
+				.then(({ folder }) => options.showFileChooser?.({ multiple, folder }))
+				.then((files) => setFiles(files ?? []))
+				.catch(() => undefined);
+			return;
+		}
+		void describeFileInput(entry, backendNodeId).then(({ accept, folder }) => {
+			if (session.live !== live) return;
+			live!.asks!.chooserOpened({ setFiles }, { multiple, accept, folder });
+		});
 	}
 
 	function emitLiveState(session: BrowserSessionEntry): BrowserLiveState {
@@ -4241,6 +4316,8 @@ export function createBrowserViewHost(
 			await cast.stop();
 			return;
 		}
+		// Its Page domain is on now; a phone that watches is asked for files.
+		if (live.asks) interceptFileChoosers(entry, true);
 		emitLiveState(session);
 	}
 
@@ -4248,7 +4325,15 @@ export function createBrowserViewHost(
 		if (!Number.isSafeInteger(streamId) || streamId <= 0) throw browserError("INVALID_ARGUMENT", "streamId is invalid");
 		const session = await ensureSessionReady(sessionId);
 		if (session.live) await stopLiveCapture(session);
-		session.live = { streamId, sink };
+		// A chooser the phone was answering outlives a short gap between its
+		// streams (the system picker ends one), so the next stream takes it over.
+		let asks: LiveAsks | undefined;
+		if (options.liveUploadDir) {
+			asks = session.liveAsks && !session.liveAsks.disposed ? session.liveAsks : new LiveAsks({ uploadDir: options.liveUploadDir }, sink);
+			asks.attach(sink);
+			session.liveAsks = asks;
+		}
+		session.live = { streamId, sink, ...(asks ? { asks } : {}) };
 		syncBackgroundThrottling(session);
 		// Report an empty browser immediately, even before a hidden renderer
 		// finishes preparing capture. The phone must not wait for a blank frame.
@@ -4273,6 +4358,8 @@ export function createBrowserViewHost(
 		live.screencast = undefined;
 		syncBackgroundThrottling(session);
 		if (!session.visible) applySessionBounds(session, activeEntry(session));
+		live.asks?.detach();
+		for (const entry of session.tabs.values()) interceptFileChoosers(entry, false);
 		return screencast?.stop();
 	}
 
@@ -4313,10 +4400,26 @@ export function createBrowserViewHost(
 		}
 	}
 
+	async function handleRemoteAuth(sessionId: string, answer: BrowserRemoteAuth): Promise<void> {
+		const session = await ensureSessionReady(sessionId);
+		if (!session.live) throw browserError("BROWSER_REMOTE_NOT_VIEWED", "Remote browser stream is not active");
+		if (typeof answer?.origin !== "string") throw browserError("INVALID_ARGUMENT", "Sign-in answer is invalid");
+		session.live.asks?.answerAuth(answer);
+	}
+
+	async function handleRemoteFiles(sessionId: string, files: BrowserRemoteFiles): Promise<void> {
+		const session = await ensureSessionReady(sessionId);
+		assertRemoteWritable(session);
+		const asks = session.live?.asks;
+		if (!asks) throw browserError("BROWSER_REMOTE_NOT_VIEWED", "Remote browser stream is not active");
+		await asks.receiveFiles(files);
+	}
+
 	async function handleRemoteInput(sessionId: string, input: BrowserRemoteInput): Promise<void> {
 		const session = await ensureSessionReady(sessionId);
 		const scrollOnly = input.kind === "wheel";
 		assertRemoteWritable(session, scrollOnly);
+		if (!scrollOnly && session.live) session.live.lastInputAt = Date.now();
 		await queueNativeOperation(session, async () => {
 			assertRemoteWritable(session, scrollOnly);
 			const entry = activeEntry(session);
@@ -5115,6 +5218,8 @@ export function createBrowserViewHost(
 		stopLiveStream,
 		stopAllLiveStreams,
 		handleRemoteInput,
+		handleRemoteAuth,
+		handleRemoteFiles,
 		handleRemoteNavigation,
 		handleRemoteTab,
 		openLivePreview,
@@ -6255,11 +6360,40 @@ function hostOf(url: string): string {
   }
 }
 
+/** Its accept types and whether it takes a folder, from the input's attributes. */
+/** How long after a phone's click a file chooser counts as the phone's. */
+const PHONE_CHOOSER_MS = 3_000;
+
+async function describeFileInput(entry: BrowserEntry, backendNodeId: number): Promise<{ accept: string; folder: boolean }> {
+  const described = { accept: "", folder: false };
+  try {
+    const result = await entry.view.webContents.debugger.sendCommand("DOM.describeNode", { backendNodeId }) as { node?: { attributes?: string[] } };
+    const attributes = result?.node?.attributes ?? [];
+    for (let index = 0; index + 1 < attributes.length; index += 2) {
+      const name = attributes[index]!.toLowerCase();
+      if (name === "accept") described.accept = attributes[index + 1]!.slice(0, 200);
+      if (name === "webkitdirectory") described.folder = true;
+    }
+  } catch {
+    // The chooser still opens, taking any file.
+  }
+  return described;
+}
+
+// While a phone watches, a file input's chooser is the phone's to answer (or
+// the desktop's own dialog, for the desktop user): Chromium's own never opens.
+function interceptFileChoosers(entry: BrowserEntry, enabled: boolean): void {
+  const debug = entry.view.webContents.debugger;
+  if (!debug?.isAttached()) return;
+  void Promise.resolve(debug.sendCommand("Page.setInterceptFileChooserDialog", { enabled })).catch(() => undefined);
+}
+
 function wireAutomationEvents(
   contents: BrowserWebContents,
   entry: BrowserEntry,
 ): void {
   contents.debugger?.on("message", (_event, method, params) => {
+    entry.onPageEvent?.(method, params as Record<string, unknown>);
     handleNetworkDebuggerEvent(
       entry,
       method,

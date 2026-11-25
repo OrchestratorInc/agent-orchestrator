@@ -285,3 +285,88 @@ describe("browser live transport", () => {
 		expect(browserJPEGDataURI(Uint8Array.from([0xff, 0xd8, 0xff]).buffer)).toBe("data:image/jpeg;base64,/9j/");
 	});
 });
+
+describe("what the desktop page asks", () => {
+	class OpenSocket {
+		static OPEN = 1;
+		static instance: OpenSocket;
+		readyState = 1;
+		binaryType = "";
+		sent: unknown[] = [];
+		onopen: (() => void) | null = null;
+		onerror: (() => void) | null = null;
+		onclose: (() => void) | null = null;
+		onmessage: ((event: { data: unknown }) => void) | null = null;
+		constructor() { OpenSocket.instance = this; }
+		send(data: string) { this.sent.push(JSON.parse(data)); }
+		close() {}
+		message(m: object) { this.onmessage?.({ data: JSON.stringify(m) }); }
+	}
+	const config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" };
+	const statePage = { url: "https://a.example/", title: "A", loading: false, canGoBack: false, canGoForward: false, activeTabId: "t1", tabs: [], width: 1280, height: 800 };
+
+	function connected(readFile?: (uri: string) => Promise<Uint8Array>) {
+		vi.stubGlobal("WebSocket", OpenSocket);
+		const transport = new LocalBrowserTransport(config, "s1", readFile ? { readFile } : undefined);
+		const handlers = { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDialog: vi.fn(), onDialogClosed: vi.fn() };
+		transport.connect(handlers);
+		return { transport, handlers, socket: OpenSocket.instance };
+	}
+
+	it("takes sign-ins and files only from a desktop that says it asks them", async () => {
+		const { transport, socket } = connected();
+		expect(transport.capabilities).toMatchObject({ auth: false, files: false });
+		transport.send({ type: "auth", payload: { origin: "https://a.example", cancel: true } });
+		expect(socket.sent).toEqual([]);
+		socket.message({ type: "state", payload: { ...statePage, asks: ["auth", "files"] } });
+		await Promise.resolve();
+		expect(transport.capabilities).toMatchObject({ auth: true, files: true, select: false, dialogs: false });
+		transport.send({ type: "auth", payload: { origin: "https://a.example", username: "ada", password: "pw" } });
+		expect(socket.sent).toEqual([{ type: "auth", payload: { origin: "https://a.example", username: "ada", password: "pw" } }]);
+	});
+
+	it("passes on the desktop's asks, their closing and its notices", async () => {
+		const { socket, handlers } = connected();
+		socket.message({ type: "ask", payload: { kind: "auth", origin: "https://a.example", realm: "Staff", failed: false } });
+		socket.message({ type: "ask", payload: { kind: "filechooser", id: "c1", multiple: true, accept: "image/*", folder: false } });
+		socket.message({ type: "ask", payload: { kind: "unknown" } });
+		// A chooser that names nothing can't be answered, so it isn't asked.
+		socket.message({ type: "ask", payload: { kind: "filechooser", multiple: false, accept: "", folder: false } });
+		socket.message({ type: "askClosed" });
+		socket.message({ type: "notice", message: "The page is asking something on the desktop. Answer it there." });
+		await Promise.resolve();
+		expect(handlers.onDialog.mock.calls).toEqual([
+			[{ kind: "auth", origin: "https://a.example", realm: "Staff", failed: false }],
+			[{ kind: "filechooser", id: "c1", multiple: true, accept: "image/*", folder: false }],
+		]);
+		expect(handlers.onDialogClosed).toHaveBeenCalledTimes(1);
+		expect(handlers.onStatus).toHaveBeenLastCalledWith("open", "The page is asking something on the desktop. Answer it there.");
+	});
+
+	it("sends picked files in chunks the daemon accepts, then says they are done", async () => {
+		const big = new Uint8Array(70_000).map((_, i) => i % 251);
+		const readFile = vi.fn(async (uri: string) => (uri.endsWith("a") ? new TextEncoder().encode("hello") : big));
+		const { transport, socket } = connected(readFile);
+		socket.message({ type: "state", payload: { ...statePage, asks: ["files"] } });
+		await Promise.resolve();
+		transport.send({ type: "files", payload: { folder: false, chooser: "c1", files: [{ uri: "file:///a", name: "a.txt" }, { uri: "file:///b", name: "b.bin" }] } });
+		await vi.waitFor(() => expect(socket.sent.at(-1)).toEqual({ type: "files", payload: { action: "done", chooser: "c1", count: 2 } }));
+		const chunks = socket.sent.slice(0, -1) as Array<{ payload: { chooser: string; file: number; name: string; offset: number; data: string } }>;
+		expect(chunks.every((chunk) => chunk.payload.chooser === "c1")).toBe(true);
+		expect(chunks.map((c) => [c.payload.file, c.payload.offset])).toEqual([[0, 0], [1, 0], [1, 32768], [1, 65536]]);
+		for (const chunk of chunks) expect(JSON.stringify(chunk).length).toBeLessThan(64 << 10);
+		const rebuilt = chunks.filter((c) => c.payload.file === 1).flatMap((c) => [...Buffer.from(c.payload.data, "base64")]);
+		expect(rebuilt).toEqual([...big]);
+		expect(Buffer.from(chunks[0]!.payload.data, "base64").toString()).toBe("hello");
+	});
+
+	it("cancels the desktop's chooser for no files, or files it can't read", async () => {
+		const { transport, socket } = connected(async () => { throw new TypeError("gone"); });
+		socket.message({ type: "state", payload: { ...statePage, asks: ["files"] } });
+		await Promise.resolve();
+		transport.send({ type: "files", payload: { folder: false, chooser: "c1", files: [] } });
+		transport.send({ type: "files", payload: { folder: false, chooser: "c2", files: [{ uri: "file:///x", name: "x" }] } });
+		await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+		expect(socket.sent).toEqual([{ type: "files", payload: { action: "cancel", chooser: "c1" } }, { type: "files", payload: { action: "cancel", chooser: "c2" } }]);
+	});
+});
