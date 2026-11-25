@@ -202,8 +202,11 @@ function ReviewPRBlockView({
 	const resolvedComments = comments.filter((comment) => !reviewCommentIsOpen(comment));
 	const shown = view === "open" ? openComments : resolvedComments;
 	const isSent = (comment: ReviewComment) => comment.delivered || sent.has(comment.sentKey);
+	// An approval asks nothing of the worker: it can still be sent by hand, but
+	// Send all skips it and it starts folded.
+	const isApproval = (comment: ReviewComment) => comment.kind === "summary" && comment.verdict === "approved";
 	// Only a comment with text can be sent, one at a time or all together.
-	const unsent = openComments.filter((comment) => Boolean(comment.body) && !isSent(comment) && !sending.current.has(comment.sentKey));
+	const unsent = openComments.filter((comment) => Boolean(comment.body) && !isApproval(comment) && !isSent(comment) && !sending.current.has(comment.sentKey));
 	const markSent = (keys: string[]) => useReviewSentStore.getState().markSent(sentStoreKey, keys);
 	const hold = (keys: string[], held: boolean) => {
 		for (const key of keys) {
@@ -213,7 +216,7 @@ function ReviewPRBlockView({
 		rerender();
 	};
 	const awaitingSend = (comment: ReviewComment) =>
-		Boolean(actions.onSend) && reviewCommentIsOpen(comment) && Boolean(comment.body) && !isSent(comment);
+		Boolean(actions.onSend) && reviewCommentIsOpen(comment) && Boolean(comment.body) && !isApproval(comment) && !isSent(comment);
 	const isExpanded = (comment: ReviewComment) => expandedHere.get(comment.key) ?? (view === "open" && awaitingSend(comment));
 	const meta = block.repository ? `#${block.number} · ${block.repository}` : `#${block.number}`;
 

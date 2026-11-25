@@ -4557,6 +4557,39 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getAllByRole("status", { name: "Sent to agent" })).toHaveLength(2);
   });
 
+  it("leaves an approval folded and out of Send all", async () => {
+    serveProviderPR(prSummary(3, "open", {
+      threads: [mayaThread("PRRT_1", "src/a.ts", 3, "First fix.")],
+      review: {
+        decision: "approved",
+        hasUnresolvedHumanComments: true,
+        reviews: [{
+          reviewerId: "linus",
+          verdict: "approved",
+          submittedAt: "2026-06-16T11:00:00Z",
+          reviewUrl: "https://github.com/acme/repo/pull/3#pullrequestreview-789",
+          body: "LGTM, ship it.",
+          autoInjectReview: false,
+        }],
+        unresolvedBy: [],
+      },
+    }));
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    const approval = await commentRowWith("LGTM, ship it.");
+    const header = within(approval).getAllByRole("button").find((button) => button.hasAttribute("aria-expanded") && !button.hasAttribute("aria-haspopup"));
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(screen.getByRole("button", { name: "Pull request actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Send all open to agent" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/send")).toHaveLength(1));
+    const message = postCallsFor("/api/v1/sessions/{sessionId}/send")[0]![1].body.message as string;
+    expect(message).toContain("First fix.");
+    expect(message).not.toContain("LGTM, ship it.");
+    expect(within(approval).queryByRole("status", { name: "Sent to agent" })).not.toBeInTheDocument();
+  });
+
   it("asks a provider reviewer to review again from the Reviewers menu", async () => {
     serveProviderPR(prSummary(3, "open", {
       review: {
