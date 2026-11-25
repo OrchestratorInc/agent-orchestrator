@@ -5816,6 +5816,8 @@
 	"artifactComments.title": "Комментарии",
 	"artifactComments.openCount": "открыто: {{n}}",
 	"artifactComments.close": "Закрыть комментарии",
+	"artifactComments.unsupported": "На этой странице нельзя указать её часть.",
+	"artifactComments.resolvedSection": "Решённые ({{n}})",
 	"artifactComments.publishedVersion": "Показана опубликованная версия (v{{version}})",
 	"artifactComments.newPlaceholder": "Добавить комментарий…",
 	"artifactComments.comment": "Комментировать",

@@ -5477,6 +5477,8 @@
 	"artifactComments.title": "コメント",
 	"artifactComments.openCount": "未解決 {{n}} 件",
 	"artifactComments.close": "コメントを閉じる",
+	"artifactComments.unsupported": "このページでは部分を指定できません。",
+	"artifactComments.resolvedSection": "解決済み ({{n}})",
 	"artifactComments.publishedVersion": "公開版を表示中 (v{{version}})",
 	"artifactComments.newPlaceholder": "コメントを追加…",
 	"artifactComments.comment": "コメント",

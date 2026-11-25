@@ -35,8 +35,11 @@ export function isPendingId(id: string): boolean {
 function withPending(snapshot: ArtifactCommentsSnapshot, pending: readonly PendingWrite[]): ArtifactCommentsSnapshot {
 	if (pending.length === 0) return snapshot;
 	const you = { id: snapshot.you.userId, name: "" };
+	// A poll that lands before a write's response already has its row: no second copy.
+	const saved = new Set(snapshot.threads.flatMap((thread) => thread.comments.map((comment) => comment.clientId)));
 	let threads = snapshot.threads;
 	for (const write of pending) {
+		if (write.kind !== "status" && saved.has(write.clientId)) continue;
 		if (write.kind === "thread") {
 			const threadId = PENDING_ID_PREFIX + write.clientId;
 			const comment: ArtifactComment = { id: threadId, threadId, author: you, clientId: write.clientId, body: write.body, createdAt: write.at, editedAt: null, deleted: false };
@@ -70,6 +73,8 @@ export function isLostAccess(error: unknown): boolean {
  * Read once when a published file opens (the header count) and again when
  * the window regains focus; while `panelOpen`, also every 30 seconds while
  * the document is visible, and right after each of this person's writes.
+ * Opening the panel adds an observer, which reads at once (nothing is ever
+ * fresh), so there is no separate read for it.
  * Nothing streams. Writes show at once and are replaced by the saved row.
  */
 export function useArtifactComments(slug: string | null, { panelOpen = false, enabled = true }: { panelOpen?: boolean; enabled?: boolean } = {}) {
@@ -97,11 +102,6 @@ export function useArtifactComments(slug: string | null, { panelOpen = false, en
 			return { snapshot: result.snapshot, etag: result.etag };
 		},
 	});
-	// Opening the panel reads at once rather than waiting for the next poll.
-	const refetch = query.refetch;
-	useEffect(() => {
-		if (panelOpen && slug) void refetch();
-	}, [panelOpen, refetch, slug]);
 
 	const [pending, setPending] = useState<PendingWrite[]>([]);
 	useEffect(() => setPending([]), [slug]);
@@ -174,7 +174,7 @@ export function useArtifactComments(slug: string | null, { panelOpen = false, en
 		isLoading: query.isPending && query.fetchStatus !== "idle",
 		error: query.error,
 		lostAccess: isLostAccess(query.error),
-		refetch,
+		refetch: query.refetch,
 		...actions,
 	};
 }

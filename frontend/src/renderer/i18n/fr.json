@@ -5652,6 +5652,8 @@
 	"artifactComments.title": "Commentaires",
 	"artifactComments.openCount": "{{n}} ouverts",
 	"artifactComments.close": "Fermer les commentaires",
+	"artifactComments.unsupported": "Cette page ne permet pas de désigner ses parties.",
+	"artifactComments.resolvedSection": "Résolus ({{n}})",
 	"artifactComments.publishedVersion": "Version publiée affichée (v{{version}})",
 	"artifactComments.newPlaceholder": "Ajouter un commentaire…",
 	"artifactComments.comment": "Commenter",

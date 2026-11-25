@@ -5457,6 +5457,8 @@
 	"artifactComments.title": "Yorumlar",
 	"artifactComments.openCount": "{{n}} açık",
 	"artifactComments.close": "Yorumları kapat",
+	"artifactComments.unsupported": "Bu sayfa, bölümlerini işaret etmeyi desteklemiyor.",
+	"artifactComments.resolvedSection": "Çözülenler ({{n}})",
 	"artifactComments.publishedVersion": "Yayımlanan sürüm gösteriliyor (v{{version}})",
 	"artifactComments.newPlaceholder": "Yorum ekle…",
 	"artifactComments.comment": "Yorum yap",

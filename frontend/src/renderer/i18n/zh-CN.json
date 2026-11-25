@@ -5459,6 +5459,8 @@
 	"artifactComments.title": "评论",
 	"artifactComments.openCount": "{{n}} 条未解决",
 	"artifactComments.close": "关闭评论",
+	"artifactComments.unsupported": "此页面不支持指向其中的部分。",
+	"artifactComments.resolvedSection": "已解决 ({{n}})",
 	"artifactComments.publishedVersion": "正在显示已发布的版本 (v{{version}})",
 	"artifactComments.newPlaceholder": "添加评论…",
 	"artifactComments.comment": "评论",

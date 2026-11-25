@@ -5477,6 +5477,8 @@
 	"artifactComments.title": "댓글",
 	"artifactComments.openCount": "열린 항목 {{n}}개",
 	"artifactComments.close": "댓글 닫기",
+	"artifactComments.unsupported": "이 페이지는 부분 지정을 지원하지 않습니다.",
+	"artifactComments.resolvedSection": "해결됨 ({{n}})",
 	"artifactComments.publishedVersion": "게시된 버전 표시 중 (v{{version}})",
 	"artifactComments.newPlaceholder": "댓글 추가…",
 	"artifactComments.comment": "댓글",

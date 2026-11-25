@@ -5457,6 +5457,8 @@
 	"artifactComments.title": "Comments",
 	"artifactComments.openCount": "{{n}} open",
 	"artifactComments.close": "Close comments",
+	"artifactComments.unsupported": "This page doesn't support pointing at parts of it.",
+	"artifactComments.resolvedSection": "Resolved ({{n}})",
 	"artifactComments.publishedVersion": "Showing the published version (v{{version}})",
 	"artifactComments.newPlaceholder": "Add a comment…",
 	"artifactComments.comment": "Comment",

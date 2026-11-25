@@ -5477,6 +5477,8 @@
 	"artifactComments.title": "Kommentare",
 	"artifactComments.openCount": "{{n}} offen",
 	"artifactComments.close": "Kommentare schließen",
+	"artifactComments.unsupported": "Auf Teile dieser Seite kann nicht gezeigt werden.",
+	"artifactComments.resolvedSection": "Erledigt ({{n}})",
 	"artifactComments.publishedVersion": "Die veröffentlichte Version wird angezeigt (v{{version}})",
 	"artifactComments.newPlaceholder": "Kommentar hinzufügen…",
 	"artifactComments.comment": "Kommentieren",

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+	ARTIFACT_COMMENTS_BRIDGE_READY_TIMEOUT_MS,
 	ARTIFACT_COMMENTS_CONNECT,
 	ARTIFACT_COMMENTS_PROTOCOL_VERSION,
 	parseBridgeToViewerMessage,
@@ -42,9 +43,14 @@ export function commentBridgeTheme(): { accent: string; tint: string } {
  * load of the frame it hands the bridge a private MessagePort, and from then
  * on uses only that port: window messages from the frame (or anything else)
  * are never read. Messages carry positions only, never comment text.
+ *
+ * `unsupported` turns true when a load brings no `ready` (for this protocol)
+ * within ARTIFACT_COMMENTS_BRIDGE_READY_TIMEOUT_MS: the page's own policy
+ * blocked the bridge, say, so nothing on it can be pointed at.
  */
 export function useCommentBridge(frame: HTMLIFrameElement | null, handlers: CommentBridgeHandlers) {
 	const portRef = useRef<MessagePort | null>(null);
+	const [unsupported, setUnsupported] = useState(false);
 	const readyRef = useRef(false);
 	// What the bridge should currently show, replayed after each (re)connect.
 	const stateRef = useRef<{ mode?: ViewerToBridgeMessage; anchors?: ViewerToBridgeMessage; select?: ViewerToBridgeMessage }>({});
@@ -57,9 +63,15 @@ export function useCommentBridge(frame: HTMLIFrameElement | null, handlers: Comm
 
 	useEffect(() => {
 		if (!frame) return;
+		let readyTimer: ReturnType<typeof setTimeout> | undefined;
 		const connect = () => {
 			portRef.current?.close();
 			readyRef.current = false;
+			clearTimeout(readyTimer);
+			setUnsupported(false);
+			readyTimer = setTimeout(() => {
+				if (!readyRef.current) setUnsupported(true);
+			}, ARTIFACT_COMMENTS_BRIDGE_READY_TIMEOUT_MS);
 			const target = frame.contentWindow;
 			if (!target) return;
 			const channel = new MessageChannel();
@@ -70,6 +82,8 @@ export function useCommentBridge(frame: HTMLIFrameElement | null, handlers: Comm
 				if (message.type === "ready") {
 					if (message.protocol !== ARTIFACT_COMMENTS_PROTOCOL_VERSION) return;
 					readyRef.current = true;
+					clearTimeout(readyTimer);
+					setUnsupported(false);
 					channel.port1.postMessage({ type: "theme", ...commentBridgeTheme() } satisfies ViewerToBridgeMessage);
 					const { mode, anchors, select } = stateRef.current;
 					for (const replay of [mode, anchors, select]) if (replay) channel.port1.postMessage(replay);
@@ -87,6 +101,7 @@ export function useCommentBridge(frame: HTMLIFrameElement | null, handlers: Comm
 		frame.addEventListener("load", connect);
 		return () => {
 			frame.removeEventListener("load", connect);
+			clearTimeout(readyTimer);
 			portRef.current?.close();
 			portRef.current = null;
 			readyRef.current = false;
@@ -108,5 +123,5 @@ export function useCommentBridge(frame: HTMLIFrameElement | null, handlers: Comm
 		post(message);
 	}, [post]);
 
-	return { setMode, setAnchors, select };
+	return { setMode, setAnchors, select, unsupported };
 }

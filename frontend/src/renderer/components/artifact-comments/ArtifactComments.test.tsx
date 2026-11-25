@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode, Ref } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -102,13 +102,13 @@ function renderWorkspace(client: FakeClient, { outdated = false, withSession = t
 }
 
 /** Connects the frame's bridge, as the share host's script would, and returns its end of the port. */
-async function connectBridge(): Promise<MessagePort> {
+async function connectBridge({ ready = true }: { ready?: boolean } = {}): Promise<MessagePort> {
 	const frame = screen.getByTestId("published-frame") as HTMLIFrameElement;
 	const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
 	act(() => { frame.dispatchEvent(new Event("load")); });
 	const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0];
 	port.onmessage = (event: MessageEvent) => { bridgeReceived.push(event.data); };
-	port.postMessage({ type: "ready", protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION });
+	if (ready) port.postMessage({ type: "ready", protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION });
 	return port;
 }
 
@@ -289,6 +289,45 @@ describe("ArtifactCommentsWorkspace", () => {
 		expect(screen.queryByTestId("published-frame")).not.toBeInTheDocument();
 	});
 
+	it("marks an Esc it handles, so full screen doesn't also leave", async () => {
+		const { port } = await ready(fakeClient());
+		const popover = await openElement(port);
+		const notPrevented = fireEvent.keyDown(within(popover).getByRole("button", { name: "Close comments" }), { key: "Escape" });
+		expect(notPrevented).toBe(false);
+		await waitFor(() => expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument());
+		port.close();
+	});
+
+	it("lists every thread read-only, with a notice, on a page whose bridge never answers", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const resolved = thread({ id: "t3", status: "resolved", resolvedBy: aditi, resolvedAt: "2026-11-23T10:00:00Z", anchor: newAnchor, comments: [{ id: "c7", threadId: "t3", clientId: "k7", author: sam, body: "Fixed the wording.", createdAt: "2026-11-23T08:30:00Z", editedAt: null, deleted: false }] });
+		const client = fakeClient(snapshot({ threads: [...twoThreads(), resolved] }));
+		const { onClose } = renderWorkspace(client);
+		await waitFor(() => expect(client.listArtifactShareComments).toHaveBeenCalled());
+		const port = await connectBridge({ ready: false });
+		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
+		await act(async () => { await vi.advanceTimersByTimeAsync(3_100); });
+
+		const list = await screen.findByRole("complementary", { name: "Comments" });
+		expect(within(list).getByRole("status")).toHaveTextContent("This page doesn't support pointing at parts of it.");
+		// Under the text each was left on; every open thread shows in full.
+		expect(within(list).getByText("Cloudflare staging setup for shared video streaming")).toBeInTheDocument();
+		expect(within(list).getByText(/staging only/)).toBeInTheDocument();
+		expect(within(list).getByText("Title is too long for the sidebar.")).toBeInTheDocument();
+		// Read-only: no reply, resolve, send or ⋯ menu.
+		for (const name of ["Reply", "Resolve", "Reopen", "Send to agent", "Comment actions"]) {
+			expect(within(list).queryByRole("button", { name })).not.toBeInTheDocument();
+		}
+		expect(within(list).queryByText("Fixed the wording.")).not.toBeInTheDocument();
+		await userEvent.click(within(list).getByRole("button", { name: /Resolved \(1\) · Show/ }));
+		expect(within(list).getByText("Fixed the wording.")).toBeInTheDocument();
+
+		// ✕ leaves comment mode: there is nothing else to do on this page.
+		await userEvent.click(within(list).getByRole("button", { name: "Close comments" }));
+		expect(onClose).toHaveBeenCalledTimes(1);
+		port.close();
+	});
+
 	it("opens the reply box from Reply, and closes it on Esc while empty or once the reply posts", async () => {
 		const client = fakeClient();
 		client.replyArtifactShareThread.mockResolvedValue({ id: "c9", threadId: "t1", clientId: "k9", author: aditi, body: "Done", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false });
@@ -324,6 +363,45 @@ describe("ArtifactCommentsWorkspace", () => {
 		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
 		expect(box).toHaveValue("On it");
 		expect(client.replyArtifactShareThread).toHaveBeenCalledWith("cf-staging-x7", "t1", { body: "On it", clientId: expect.any(String) });
+		port.close();
+	});
+});
+
+describe("ArtifactCommentsPanel: a retry after an edit", () => {
+	it("posts an edited reply under a new client id, so a lost first answer can't swallow the edit", async () => {
+		const client = fakeClient();
+		client.replyArtifactShareThread.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ id: "c9", threadId: "t1", clientId: "k9", author: aditi, body: "On it, today", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false });
+		const { port } = await ready(client);
+		const popover = await openElement(port);
+		await userEvent.click(await within(popover).findByRole("button", { name: "Reply" }));
+		const box = within(popover).getByRole("textbox", { name: "Reply…" });
+		await userEvent.type(box, "On it{Enter}");
+		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
+		await userEvent.type(box, ", today");
+		await userEvent.click(within(popover).getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(client.replyArtifactShareThread).toHaveBeenCalledTimes(2));
+		const [first, second] = client.replyArtifactShareThread.mock.calls.map(([, , input]) => input);
+		expect(second.body).toBe("On it, today");
+		expect(second.clientId).not.toBe(first.clientId);
+		port.close();
+	});
+
+	it("posts an edited new comment under a new client id", async () => {
+		const client = fakeClient();
+		client.createArtifactShareThread.mockRejectedValue(new Error("offline"));
+		const { port } = await ready(client);
+		port.postMessage({ type: "pick", anchor: newAnchor });
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		const box = within(popover).getByRole("textbox", { name: "Add a comment…" });
+		await userEvent.type(box, "Which account?");
+		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
+		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
+		await userEvent.type(box, " Staging?");
+		await userEvent.click(within(popover).getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(2));
+		const [first, second] = client.createArtifactShareThread.mock.calls.map(([, input]) => input);
+		expect(second.body).toBe("Which account? Staging?");
+		expect(second.clientId).not.toBe(first.clientId);
 		port.close();
 	});
 });
@@ -520,17 +598,50 @@ describe("useArtifactComments", () => {
 		expect(result.current.openCount).toBe(1);
 	});
 
-	it("polls every 30 seconds only while the panel is open", async () => {
+	it("reads once when the panel opens, then every 30 seconds only while it is open", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const client = fakeClient();
-		const { rerender } = renderHook(({ open }) => useArtifactComments("cf-staging-x7", { panelOpen: open }), { wrapper: wrap(client), initialProps: { open: false } });
+		// The header's count reads always; opening comments adds the panel's own reader.
+		function Viewer({ open }: { open: boolean }) {
+			useArtifactComments("cf-staging-x7");
+			return open ? <Panel /> : null;
+		}
+		function Panel() {
+			useArtifactComments("cf-staging-x7", { panelOpen: true });
+			return null;
+		}
+		const Wrapper = wrap(client);
+		const { rerender } = render(<Wrapper><Viewer open={false} /></Wrapper>);
 		await waitFor(() => expect(client.listArtifactShareComments).toHaveBeenCalledTimes(1));
 		await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
 		expect(client.listArtifactShareComments).toHaveBeenCalledTimes(1);
-		rerender({ open: true });
+		rerender(<Wrapper><Viewer open /></Wrapper>);
 		await waitFor(() => expect(client.listArtifactShareComments).toHaveBeenCalledTimes(2));
-		await act(async () => { await vi.advanceTimersByTimeAsync(30_500); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+		// One read for opening, not a second that cancels the first.
+		expect(client.listArtifactShareComments).toHaveBeenCalledTimes(2);
+		expect(client.listArtifactShareComments.mock.calls.every(([, options]) => !options?.signal?.aborted)).toBe(true);
+		await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
 		await waitFor(() => expect(client.listArtifactShareComments).toHaveBeenCalledTimes(3));
+	});
+
+	it("shows your new comment once when a read lands before the write's answer", async () => {
+		const client = fakeClient();
+		let answer: (value: ArtifactCommentThread) => void = () => undefined;
+		client.createArtifactShareThread.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		const { result } = renderHook(() => useArtifactComments("cf-staging-x7"), { wrapper: wrap(client) });
+		await waitFor(() => expect(result.current.snapshot).toBeDefined());
+		const copies = () => result.current.snapshot!.threads.flatMap((one) => one.comments).filter((comment) => comment.body === "Which account?").length;
+		let posting: Promise<unknown> = Promise.resolve();
+		act(() => { posting = result.current.createThread(newAnchor, "Which account?", "k-dup"); });
+		await waitFor(() => expect(copies()).toBe(1));
+		const saved = thread({ id: "t9", anchor: newAnchor, comments: [{ id: "c9", threadId: "t9", clientId: "k-dup", author: aditi, body: "Which account?", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false }] });
+		client.listArtifactShareComments.mockResolvedValue({ notModified: false, snapshot: snapshot({ threads: [thread(), saved] }), etag: "\"r42-v3\"" });
+		await act(async () => { await result.current.refetch(); });
+		expect(copies()).toBe(1);
+		answer(saved);
+		await act(async () => { await posting; });
+		expect(copies()).toBe(1);
 	});
 });
 
@@ -554,6 +665,28 @@ describe("useCommentBridge", () => {
 		await waitFor(() => expect(onPick).toHaveBeenCalledWith({ path: "body>p:1", tag: "p", textHash: "0123456789abcdef", excerpt: "Intro" }));
 		// Theme goes over right after ready.
 		await waitFor(() => expect(bridgeSide.mock.calls.some(([event]) => (event as MessageEvent).data.type === "theme")).toBe(true));
+		port.close();
+		frame.remove();
+	});
+
+	it("says the page is unsupported when no ready comes within 3 seconds of a load, and not once one does", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const frame = document.createElement("iframe");
+		document.body.append(frame);
+		const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
+		const { result } = renderHook(() => useCommentBridge(frame, {}));
+		act(() => { frame.dispatchEvent(new Event("load")); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(2_900); });
+		expect(result.current.unsupported).toBe(false);
+		await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+		expect(result.current.unsupported).toBe(true);
+		// A reload whose bridge answers clears it.
+		act(() => { frame.dispatchEvent(new Event("load")); });
+		expect(result.current.unsupported).toBe(false);
+		const port = (post.mock.calls[1] as unknown as [unknown, string, MessagePort[]])[2][0];
+		port.postMessage({ type: "ready", protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION });
+		await act(async () => { await vi.advanceTimersByTimeAsync(3_500); });
+		expect(result.current.unsupported).toBe(false);
 		port.close();
 		frame.remove();
 	});

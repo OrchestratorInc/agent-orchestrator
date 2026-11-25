@@ -186,7 +186,11 @@ function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body:
 					autoFocus
 					className="board-scrollbar max-h-32 min-h-6 w-full resize-none border-0 bg-transparent py-0.5 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 					maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
-					onChange={(event) => setText(event.target.value)}
+					onChange={(event) => {
+						// Edited after a failed post: a new id, so a retry can't come back as the first text.
+						if (failed) clientId.current = crypto.randomUUID();
+						setText(event.target.value);
+					}}
 					onKeyDown={onKeyDown}
 					placeholder={t("artifactComments.replyPlaceholder")}
 					rows={1}
@@ -207,10 +211,11 @@ function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body:
 }
 
 /** One comment: its author row (with the ⋯ menu and anything the thread adds), text, and "edited". */
-function CommentItem({ aside, comment, comments, reply, viewer }: {
+function CommentItem({ aside, comment, comments, readOnly = false, reply, viewer }: {
 	aside?: ReactNode;
 	comment: ArtifactComment;
 	comments: ArtifactCommentsState;
+	readOnly?: boolean;
 	reply: boolean;
 	viewer: Viewer;
 }) {
@@ -222,9 +227,9 @@ function CommentItem({ aside, comment, comments, reply, viewer }: {
 	const [busy, setBusy] = useState(false);
 	const own = comment.author?.id === viewer.userId;
 	const pending = isPendingId(comment.id);
-	const canEdit = own && !comment.deleted && !pending;
+	const canEdit = own && !comment.deleted && !pending && !readOnly;
 	// The ⋯ menu: Edit and Delete on your own comments; the owner may delete any.
-	const canDelete = (own || viewer.isOwner) && !comment.deleted && !pending;
+	const canDelete = (own || viewer.isOwner) && !comment.deleted && !pending && !readOnly;
 	const run = async (action: () => Promise<unknown>, done: () => void) => {
 		setBusy(true);
 		setError(null);
@@ -332,8 +337,10 @@ function ThreadLine({ onExpand, thread, viewer }: { onExpand: () => void; thread
 	);
 }
 
-function ThreadView({ comments, sendTarget, thread, viewer, version }: {
+function ThreadView({ comments, readOnly = false, sendTarget, thread, viewer, version }: {
 	comments: ArtifactCommentsState;
+	/** Only its comments: no reply, resolve, send or ⋯ menu. */
+	readOnly?: boolean;
 	sendTarget?: ArtifactCommentsSendTarget;
 	thread: ArtifactCommentThread;
 	viewer: Viewer;
@@ -347,7 +354,7 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	const pending = isPendingId(thread.id);
 	const resolved = thread.status === "resolved";
 	// Send to agent: the app's owner only, and only when the session that made the file is here.
-	const canSend = viewer.isOwner && Boolean(sendTarget) && !pending && !resolved;
+	const canSend = viewer.isOwner && Boolean(sendTarget) && !pending && !resolved && !readOnly;
 	const setStatus = (status: "open" | "resolved") => {
 		setStatusError(false);
 		comments.setStatus(thread.id, status).catch(() => setStatusError(true));
@@ -369,12 +376,12 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	return (
 		<div className="flex flex-col gap-2 py-2.5 first:pt-0 last:pb-0" data-thread-id={thread.id}>
 			{visibleComments(thread).map((comment, index) => (
-				<CommentItem aside={index === 0 ? aside : undefined} comment={comment} comments={comments} key={comment.id} reply={index > 0} viewer={viewer} />
+				<CommentItem aside={index === 0 ? aside : undefined} comment={comment} comments={comments} key={comment.id} readOnly={readOnly} reply={index > 0} viewer={viewer} />
 			))}
-			{replying && !resolved && !pending ? (
+			{replying && !resolved && !pending && !readOnly ? (
 				<ReplyBox onClose={() => setReplying(false)} onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)} />
 			) : null}
-			{!pending ? (
+			{!pending && !readOnly ? (
 				<div className="flex items-center gap-1">
 					{!resolved && !replying ? (
 						<Button onClick={() => setReplying(true)} size="xs" type="button" variant="secondary">{t("artifactComments.reply")}</Button>
@@ -402,6 +409,31 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 			) : null}
 		</div>
 	);
+}
+
+/**
+ * The popover's natural height, as it changes: its frame (header, borders)
+ * plus all of its content, so placement can size it without a cap.
+ */
+function useNaturalHeight(onNaturalHeight: ((height: number) => void) | undefined) {
+	const asideRef = useRef<HTMLElement>(null);
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const contentRef = useRef<HTMLDivElement>(null);
+	const onNaturalHeightRef = useRef(onNaturalHeight);
+	onNaturalHeightRef.current = onNaturalHeight;
+	useEffect(() => {
+		const aside = asideRef.current;
+		const scroll = scrollRef.current;
+		const content = contentRef.current;
+		if (!aside || !scroll || !content || typeof ResizeObserver === "undefined") return;
+		const report = () => onNaturalHeightRef.current?.(aside.offsetHeight - scroll.clientHeight + content.scrollHeight);
+		const observer = new ResizeObserver(report);
+		observer.observe(aside);
+		observer.observe(content);
+		report();
+		return () => observer.disconnect();
+	}, []);
+	return { asideRef, contentRef, scrollRef };
 }
 
 export type ArtifactCommentsPanelProps = {
@@ -490,24 +522,7 @@ export function ArtifactCommentsPanel({
 		onClose();
 	};
 
-	// The natural height: the popover's frame (header, borders) plus all of its content.
-	const asideRef = useRef<HTMLElement>(null);
-	const scrollRef = useRef<HTMLDivElement>(null);
-	const contentRef = useRef<HTMLDivElement>(null);
-	const onNaturalHeightRef = useRef(onNaturalHeight);
-	onNaturalHeightRef.current = onNaturalHeight;
-	useEffect(() => {
-		const aside = asideRef.current;
-		const scroll = scrollRef.current;
-		const content = contentRef.current;
-		if (!aside || !scroll || !content || typeof ResizeObserver === "undefined") return;
-		const report = () => onNaturalHeightRef.current?.(aside.offsetHeight - scroll.clientHeight + content.scrollHeight);
-		const observer = new ResizeObserver(report);
-		observer.observe(aside);
-		observer.observe(content);
-		report();
-		return () => observer.disconnect();
-	}, []);
+	const { asideRef, contentRef, scrollRef } = useNaturalHeight(onNaturalHeight);
 
 	const threadView = (thread: ArtifactCommentThread) => (
 		<ThreadView comments={comments} key={thread.id} sendTarget={sendTarget} thread={thread} version={version} viewer={viewer} />
@@ -518,7 +533,11 @@ export function ArtifactCommentsPanel({
 			aria-label={t("artifactComments.title")}
 			className={cn("flex w-[340px] flex-col", className)}
 			onKeyDown={(event) => {
-				if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLTextAreaElement)) onClose();
+				if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLTextAreaElement)) {
+					// Handled here: full screen's own Esc leaves it alone.
+					event.preventDefault();
+					onClose();
+				}
 			}}
 			ref={asideRef}
 			style={style}
@@ -569,9 +588,89 @@ export function ArtifactCommentsPanel({
 						<NewCommentBox
 							draft={draft}
 							onCancel={cancel}
-							onChange={(text) => updateDraft(element.path, { text })}
+							onChange={(text) => updateDraft(element.path, draft.failed ? { text, clientId: crypto.randomUUID() } : { text })}
 							onSubmit={() => void post()}
 						/>
+					) : null}
+				</div>
+			</div>
+		</aside>
+	);
+}
+
+/**
+ * Comments on a page the comments bridge can't run in (its own policy blocks
+ * the script, say): nothing on it can be pointed at, so every thread is
+ * listed, read-only, under the text it was left on, with a notice saying why.
+ */
+export function ArtifactCommentsReadOnlyList({ className, comments, groups, onClose, onNaturalHeight, style }: {
+	comments: ArtifactCommentsState;
+	groups: ArtifactCommentGroups;
+	/** Leaves comment mode: there is nothing else to do here. */
+	onClose: () => void;
+	className?: string;
+	style?: CSSProperties;
+	onNaturalHeight?: (height: number) => void;
+}) {
+	const { t } = useTranslation();
+	const snapshot = comments.snapshot;
+	const viewer: Viewer = snapshot?.you ?? { userId: "", isOwner: false };
+	const version = snapshot?.version ?? 0;
+	const [showResolved, setShowResolved] = useState(false);
+	const { asideRef, contentRef, scrollRef } = useNaturalHeight(onNaturalHeight);
+	const open = [...groups.open, ...groups.unanchored];
+	const resolvedCount = groups.resolved.reduce((n, group) => n + group.threads.length, 0);
+	const section = (group: (typeof open)[number]) => (
+		<section className="flex flex-col gap-1.5" data-testid="artifact-comments-readonly-group" key={group.path}>
+			<p className="truncate border-l-2 border-border pl-2 text-caption text-muted-foreground">{group.anchor.excerpt}</p>
+			<div className="flex flex-col divide-y divide-border">
+				{group.threads.map((thread) => (
+					<ThreadView comments={comments} key={thread.id} readOnly thread={thread} version={version} viewer={viewer} />
+				))}
+			</div>
+		</section>
+	);
+	return (
+		<aside
+			aria-label={t("artifactComments.title")}
+			className={cn("flex w-[340px] flex-col", className)}
+			onKeyDown={(event) => {
+				if (event.key === "Escape" && !event.defaultPrevented) {
+					event.preventDefault();
+					onClose();
+				}
+			}}
+			ref={asideRef}
+			style={style}
+		>
+			<div className="flex h-10 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-3">
+				<h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{t("artifactComments.title")}</h2>
+				<Button aria-label={t("artifactComments.close")} onClick={onClose} size="icon-sm" type="button" variant="quiet">
+					<X aria-hidden="true" className="size-icon-sm" />
+				</Button>
+			</div>
+			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto" ref={scrollRef}>
+				<div className="flex flex-col gap-3 p-2.5" ref={contentRef}>
+					<p className="text-caption text-muted-foreground" role="status">{t("artifactComments.unsupported")}</p>
+					{!snapshot && comments.error ? (
+						<div className="flex flex-col items-center gap-2 p-4 text-center text-xs text-muted-foreground" role="alert">
+							{t("artifactComments.loadError")}
+							<RetryButton onClick={() => void comments.refetch()} />
+						</div>
+					) : null}
+					{open.map(section)}
+					{resolvedCount > 0 ? (
+						<div className={cn("flex flex-col gap-3", open.length > 0 && "border-t border-border pt-2.5")}>
+							<button
+								aria-expanded={showResolved}
+								className="text-left text-caption text-logo-accent-text hover:underline"
+								onClick={() => setShowResolved((current) => !current)}
+								type="button"
+							>
+								{t("artifactComments.resolvedSection", { n: resolvedCount })} · {showResolved ? t("artifactComments.hide") : t("artifactComments.show")}
+							</button>
+							{showResolved ? groups.resolved.map(section) : null}
+						</div>
 					) : null}
 				</div>
 			</div>

@@ -6,7 +6,7 @@ import { SharedArtifactFrame } from "../SharedArtifactFrame";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PanelMessage } from "../WorkspaceDiffView";
-import { ArtifactCommentsPanel } from "./ArtifactCommentsPanel";
+import { ArtifactCommentsPanel, ArtifactCommentsReadOnlyList } from "./ArtifactCommentsPanel";
 import {
 	artifactCommentMarkers,
 	groupArtifactCommentThreads,
@@ -18,6 +18,8 @@ import {
 import type { ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { useArtifactComments } from "./useArtifactComments";
 import { useCommentBridge } from "./useCommentBridge";
+
+const POPOVER_CLASS = "absolute top-2 right-2 z-overlay max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) transition-[top] duration-150 ease-out motion-reduce:transition-none animate-popover-in";
 
 /** Files whose published page takes comments: Markdown and HTML. */
 export function artifactCommentsKind(path: string): ArtifactCommentsPickKind | null {
@@ -69,7 +71,8 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
  * with comments carry a count; the page outlines what's under the pointer.
  * Clicking an element's count opens a popover beside it with that element's
  * comments; clicking the element itself opens one with a box for a new
- * comment on it; nothing else pops up. Comments
+ * comment on it; nothing else pops up. On a page the bridge can't run in,
+ * every thread is listed read-only instead, with a notice saying why. Comments
  * belong to the published version, so the local file is not shown meanwhile;
  * a notice says so when the local file has changed since publishing.
  */
@@ -107,7 +110,7 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 			else setElement(null);
 		},
 	});
-	const { setAnchors, setMode, select } = bridge;
+	const { setAnchors, setMode, select, unsupported } = bridge;
 	useEffect(() => setMode({ type: "mode", on: true, kind }), [kind, setMode]);
 
 	const threads = comments.snapshot?.threads;
@@ -167,9 +170,18 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 			) : null}
 			<div className="relative min-h-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
 				<SharedArtifactFrame frameRef={setFrame} linkId={slug} onShown={shown} title={title} />
-				{element ? (
+				{unsupported ? (
+					<ArtifactCommentsReadOnlyList
+						className={POPOVER_CLASS}
+						comments={comments}
+						groups={groups}
+						onClose={onClose}
+						onNaturalHeight={setPopoverHeight}
+						style={placement ? { top: placement.top, maxHeight: placement.maxHeight } : undefined}
+					/>
+				) : element ? (
 					<ArtifactCommentsPanel
-						className="absolute top-2 right-2 z-overlay max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) transition-[top] duration-150 ease-out motion-reduce:transition-none animate-popover-in"
+						className={POPOVER_CLASS}
 						comments={comments}
 						element={element}
 						groups={groups}
