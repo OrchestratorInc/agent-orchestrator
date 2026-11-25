@@ -376,7 +376,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Returns every comment thread on one version of a share link, with its comments oldest first, for a signed-in person who can open the link: its owner, anyone for a public link, or, for a private link, someone it is shared with by verified email, team or workspace. Any other link, private or not there at all, returns 404, the same as viewArtifactShare, and access is checked before anything else, so someone who loses access gets 404 on their next poll. version defaults to the link's current version; an older version is readable, and a version the link never had returns 409 artifact_share_version_unknown. The response carries an ETag of "r<revision>-v<version>": revision goes up on every comment write on the link (new thread, reply, edit, delete, resolve, reopen, sent to agent) and version when the owner republishes different bytes. Send it back in If-None-Match and an unchanged list answers 304 with no body. Clients poll this at most every 30 seconds while the comments panel is open. Authors are named by display name only, never email. */
+        /** @description Returns every comment thread on one version of a share link, with its comments oldest first, for a signed-in person who can open the link: its owner, anyone for a public link, or, for a private link, someone it is shared with by verified email, team or workspace. Any other link, private or not there at all, returns 404, the same as viewArtifactShare, and access is checked before anything else, so someone who loses access gets 404 on their next poll. version defaults to the link's current version; an older version is readable, and a version the link never had returns 409 artifact_share_version_unknown. The response carries an ETag of "r<revision>-v<version>", where version is the version read: revision goes up on every comment write on the link (new thread, reply, edit, delete, resolve, reopen, sent to agent). Send it back in If-None-Match and an unchanged list answers 304 with no body. Without the version parameter the version read is the current one, so a republish with different bytes changes the ETag and the next poll gets 200 with the new version. With version pinned, the ETag names only that version: a 304 means its threads are unchanged, and says nothing about currentVersion, which a client learns only from a 200 (or from an unpinned read). Clients poll this at most every 30 seconds while the comments panel is open. Authors are named by display name only, never email. */
         get: operations["listArtifactShareComments"];
         put?: never;
         post?: never;
@@ -5475,7 +5475,7 @@ export interface components {
         ArtifactShareCommentsSnapshot: {
             /** @description The version these threads are on. */
             version: number;
-            /** @description The link's current version. */
+            /** @description The link's current version when this snapshot was made. A 304 on a pinned version does not refresh it. */
             currentVersion: number;
             /**
              * Format: int64
@@ -7349,10 +7349,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every thread on the version, with its comments. */
+            /** @description Every thread on the version read, with its comments, and the link's currentVersion as of this response. */
             200: {
                 headers: {
-                    /** @description "r<revision>-v<version>", quoted. */
+                    /** @description "r<revision>-v<version>", quoted; version is the version read, not necessarily the current one. */
                     ETag?: string;
                     [name: string]: unknown;
                 };
@@ -7360,7 +7360,7 @@ export interface operations {
                     "application/json": components["schemas"]["ArtifactShareCommentsSnapshot"];
                 };
             };
-            /** @description Nothing changed since the If-None-Match ETag. */
+            /** @description The threads on the version read are unchanged since the If-None-Match ETag. For a pinned version this does not cover currentVersion: the cached snapshot's currentVersion may be older than the link's. */
             304: {
                 headers: {
                     /** @description The same ETag the client sent. */
