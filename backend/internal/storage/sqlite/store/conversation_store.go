@@ -4489,6 +4489,9 @@ func (s *Store) loadConversationSnapshotRange(
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
+	if err := s.dropMovedAccountResets(ctx, snapshot.Turns); err != nil {
+		return ConversationSnapshot{}, err
+	}
 	// SQL returns newest-first so LIMIT is useful; the API contract remains
 	// oldest-first inside each page.
 	for i := len(messageRows) - 1; i >= 0; i-- {
@@ -4655,6 +4658,9 @@ func (s *Store) LoadConversationSnapshot(
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
+	if err := s.dropMovedAccountResets(ctx, snapshot.Turns); err != nil {
+		return ConversationSnapshot{}, err
+	}
 	for _, row := range messageRows {
 		snapshot.Messages = append(snapshot.Messages, messageToDomain(row))
 	}
@@ -4662,6 +4668,25 @@ func (s *Store) LoadConversationSnapshot(
 		snapshot.Activities = append(snapshot.Activities, activityToDomain(row))
 	}
 	return snapshot, nil
+}
+
+func (s *Store) dropMovedAccountResets(ctx context.Context, turns []domain.ConversationTurn) error {
+	for i := range turns {
+		limit := turns[i].UsageLimit
+		if limit == nil || limit.ResetsAt == nil {
+			continue
+		}
+		changed, err := s.qr.SessionAgentAccountChangedSince(ctx, gen.SessionAgentAccountChangedSinceParams{
+			SessionID: turns[i].HandledBySessionID, RequestedAt: turns[i].RequestedAt,
+		})
+		if err != nil {
+			return fmt.Errorf("read turn account binding: %w", err)
+		}
+		if changed {
+			limit.ResetsAt = nil
+		}
+	}
+	return nil
 }
 
 func (s *Store) conversationRetriedSources(ctx context.Context, conversationID string) (map[string]bool, error) {
