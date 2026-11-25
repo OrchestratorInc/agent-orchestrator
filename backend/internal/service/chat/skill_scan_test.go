@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,6 +17,23 @@ func writeFile(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type pluginInstall struct {
+	Scope       string `json:"scope"`
+	InstallPath string `json:"installPath"`
+	ProjectPath string `json:"projectPath,omitempty"`
+}
+
+// writeInstalledPlugins writes Claude's installed_plugins.json. Marshalled rather
+// than spliced, so a Windows path's backslashes stay valid JSON.
+func writeInstalledPlugins(t *testing.T, config string, plugins map[string][]pluginInstall) {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"version": 2, "plugins": plugins})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(config, "plugins", "installed_plugins.json"), string(data))
 }
 
 func skillNames(skills []ports.ChatSkill) []string {
@@ -42,9 +60,10 @@ func TestScanSkillsListsClaudeSkillsWithoutASession(t *testing.T) {
 	off := filepath.Join(config, "plugins", "cache", "m", "warp", "1.0.0")
 	writeFile(t, filepath.Join(on, "skills", "figma-use", "SKILL.md"), "---\ndescription: Use Figma\n---\n")
 	writeFile(t, filepath.Join(off, "skills", "warp-thing", "SKILL.md"), "---\ndescription: Off\n---\n")
-	writeFile(t, filepath.Join(config, "plugins", "installed_plugins.json"), `{"version":2,"plugins":{
-		"figma@m":[{"scope":"user","installPath":"`+on+`"}],
-		"warp@m":[{"scope":"user","installPath":"`+off+`"}]}}`)
+	writeInstalledPlugins(t, config, map[string][]pluginInstall{
+		"figma@m": {{Scope: "user", InstallPath: on}},
+		"warp@m":  {{Scope: "user", InstallPath: off}},
+	})
 	writeFile(t, filepath.Join(config, "settings.json"), `{"enabledPlugins":{"figma@m":true,"warp@m":false}}`)
 
 	got := ScanSkills("claude-code", workspace, home)
@@ -76,7 +95,7 @@ func TestScanSkillsNamesPluginSkillsByTheirManifest(t *testing.T) {
 	install := filepath.Join(config, "plugins", "cache", "m", "ce", "1.0.0")
 	writeFile(t, filepath.Join(install, ".claude-plugin", "plugin.json"), `{"name":"compound-engineering"}`)
 	writeFile(t, filepath.Join(install, "skills", "ce-plan", "SKILL.md"), "---\ndescription: Plan\n---\n")
-	writeFile(t, filepath.Join(config, "plugins", "installed_plugins.json"), `{"plugins":{"ce@m":[{"scope":"user","installPath":"`+install+`"}]}}`)
+	writeInstalledPlugins(t, config, map[string][]pluginInstall{"ce@m": {{Scope: "user", InstallPath: install}}})
 	writeFile(t, filepath.Join(config, "settings.json"), `{"enabledPlugins":{"ce@m":true}}`)
 
 	if names := skillNames(ScanSkills("claude-code", workspace, home)); len(names) != 1 || names[0] != "compound-engineering:ce-plan" {
@@ -113,9 +132,10 @@ func TestScanSkillsLeavesProjectPluginsOutOfOtherChats(t *testing.T) {
 	config := filepath.Join(home, ".claude")
 	install := filepath.Join(config, "plugins", "cache", "m", "local", "1.0.0")
 	writeFile(t, filepath.Join(install, "skills", "only-here", "SKILL.md"), "---\ndescription: Local\n---\n")
-	writeFile(t, filepath.Join(config, "plugins", "installed_plugins.json"),
-		`{"plugins":{"local@m":[{"scope":"project","installPath":"`+install+`","projectPath":"`+project+`"}],
-		"blank@m":[{"scope":"local","installPath":"`+install+`"}]}}`)
+	writeInstalledPlugins(t, config, map[string][]pluginInstall{
+		"local@m": {{Scope: "project", InstallPath: install, ProjectPath: project}},
+		"blank@m": {{Scope: "local", InstallPath: install}},
+	})
 	writeFile(t, filepath.Join(config, "settings.json"), `{"enabledPlugins":{"local@m":true,"blank@m":true}}`)
 
 	if names := skillNames(ScanSkills("claude-code", project, home)); len(names) != 1 || names[0] != "local:only-here" {
@@ -174,9 +194,10 @@ func TestScanSkillsDeduplicatesPluginsByTheirResolvedName(t *testing.T) {
 	writeFile(t, filepath.Join(a, "skills", "one", "SKILL.md"), "---\ndescription: One\n---\n")
 	writeFile(t, filepath.Join(b, ".claude-plugin", "plugin.json"), `{"name":"c"}`)
 	writeFile(t, filepath.Join(b, "skills", "two", "SKILL.md"), "---\ndescription: Two\n---\n")
-	writeFile(t, filepath.Join(config, "plugins", "installed_plugins.json"), `{"plugins":{
-		"a@m":[{"scope":"user","installPath":"`+a+`"}],
-		"b@m":[{"scope":"user","installPath":"`+b+`"}]}}`)
+	writeInstalledPlugins(t, config, map[string][]pluginInstall{
+		"a@m": {{Scope: "user", InstallPath: a}},
+		"b@m": {{Scope: "user", InstallPath: b}},
+	})
 	writeFile(t, filepath.Join(config, "settings.json"), `{"enabledPlugins":{"a@m":true,"b@m":true}}`)
 
 	names := skillNames(ScanSkills("claude-code", workspace, home))
