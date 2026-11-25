@@ -31,7 +31,7 @@ func BundleChain(ctx context.Context, gitDir, ref, parentRef, out string) ([]str
 		}
 		args = append(args, "--not", parentRef)
 	}
-	if _, err := inGitDir(ctx, gitDir, args...); err != nil {
+	if err := inGitDir(ctx, gitDir, args...); err != nil {
 		return nil, err
 	}
 	return gitbundle.Prerequisites(out)
@@ -48,14 +48,14 @@ func FetchChain(ctx context.Context, gitDir string, bundles []string) error {
 			return fmt.Errorf("read snapshot bundle: %w", err)
 		}
 		for _, commit := range prerequisites {
-			if _, err := inGitDir(ctx, gitDir, "cat-file", "-e", commit+"^{commit}"); err != nil {
+			if err := inGitDir(ctx, gitDir, "cat-file", "-e", commit+"^{commit}"); err != nil {
 				return fmt.Errorf("%w: %s needs %s", ErrChainBroken, bundle, commit)
 			}
 		}
-		if _, err := inGitDir(ctx, gitDir, "bundle", "verify", "--quiet", bundle); err != nil {
+		if err := inGitDir(ctx, gitDir, "bundle", "verify", "--quiet", bundle); err != nil {
 			return err
 		}
-		if _, err := inGitDir(ctx, gitDir, "fetch", "--quiet", "--no-write-fetch-head", "--no-prune", bundle, snapshotsPrefix+"*:"+snapshotsPrefix+"*"); err != nil {
+		if err := inGitDir(ctx, gitDir, "fetch", "--quiet", "--no-write-fetch-head", "--no-prune", bundle, snapshotsPrefix+"*:"+snapshotsPrefix+"*"); err != nil {
 			return err
 		}
 	}
@@ -65,11 +65,12 @@ func FetchChain(ctx context.Context, gitDir string, bundles []string) error {
 // inGitDir runs git against the git directory gitDir from an empty folder.
 // Run from inside a git directory, a ref's name is also the path of its loose
 // ref file there, so git can't tell the revision from the file.
-func inGitDir(ctx context.Context, gitDir string, args ...string) (string, error) {
+func inGitDir(ctx context.Context, gitDir string, args ...string) error {
 	cwd, err := os.MkdirTemp("", "ao-file-snapshot-*")
 	if err != nil {
-		return "", fmt.Errorf("create a folder to run git in: %w", err)
+		return fmt.Errorf("create a folder to run git in: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(cwd) }()
-	return git(ctx, cwd, []string{"GIT_DIR=" + gitDir}, nil, args...)
+	_, err = git(ctx, cwd, []string{"GIT_DIR=" + gitDir}, nil, args...)
+	return err
 }
