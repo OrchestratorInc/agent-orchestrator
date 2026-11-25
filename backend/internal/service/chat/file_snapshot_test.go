@@ -330,3 +330,56 @@ func TestForksDontSnapshotAnAgentThatOnlyForksItsLatestTurn(t *testing.T) {
 		t.Fatalf("artifacts were kept %d times, want none", artifactSnapshots)
 	}
 }
+
+// A standalone agent's plain folder keeps its snapshots in a store outside
+// it, so rolling a turn back restores its files like a git worktree's, and
+// nothing is ever written into the folder but the files themselves.
+func TestRollbackWithFilesRestoresAPlainFolder(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "folder")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	filesnapshot.SetDetachedStores(func(path string) (string, bool) {
+		return filepath.Join(root, "stores", "s.git"), filepath.Clean(path) == workspace
+	})
+	t.Cleanup(func() { filesnapshot.SetDetachedStores(nil) })
+	recorder := newHistoryRecorder()
+	h := newGitHarness(t, recorder, workspace)
+	ctx := context.Background()
+
+	completeTurn(t, h, "first", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	writeWorkspaceFile(t, workspace, "a.txt", "first turn\n")
+	second := completeTurn(t, h, "second", "provider-turn-2")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+	writeWorkspaceFile(t, workspace, "a.txt", "second turn\n")
+	writeWorkspaceFile(t, workspace, "added.txt", "second turn\n")
+
+	preview, err := h.svc.RollbackPreview(ctx, testSession, second)
+	if err != nil {
+		t.Fatalf("RollbackPreview: %v", err)
+	}
+	want := []filesnapshot.Change{
+		{Path: "a.txt", Kind: filesnapshot.ChangeReverted},
+		{Path: "added.txt", Kind: filesnapshot.ChangeRemoved},
+	}
+	if preview.Unavailable != "" || !reflect.DeepEqual(preview.Changes, want) {
+		t.Fatalf("preview = %+v, want restorable %+v", preview, want)
+	}
+	if _, err := h.svc.Rollback(ctx, testSession, second, preview.PlanID); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if got := readWorkspaceFile(t, workspace, "a.txt"); got != "first turn\n" {
+		t.Fatalf("a.txt = %q, want the first turn's edit", got)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "added.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("added.txt survived the rollback: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, ".git")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("snapshots wrote .git into the plain folder: %v", err)
+	}
+}

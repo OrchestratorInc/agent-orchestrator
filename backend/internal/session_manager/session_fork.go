@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/forkseed"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
@@ -61,6 +62,9 @@ func (gitForkSeeds) DiscardChanges(ctx context.Context, worktree string) error {
 // copies in the source's uncommitted and untracked files. A worktree that was
 // created is returned with any error, so the caller rolls it back.
 func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
+	if fork.SeedDir != "" {
+		return m.createPlainForkWorkspace(ctx, fork, cfg)
+	}
 	if fork.StartPoint == "" {
 		return ports.WorkspaceInfo{}, nil, errors.New("session fork: missing start point")
 	}
@@ -92,13 +96,62 @@ func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork
 	}
 	if fork.SourceWorkspace != "" {
 		cloned, err := cloneForkDependencies(ctx, fork.SourceWorkspace, ws.Path)
-		if err != nil && !errors.Is(err, errCloneUnsupported) {
+		if err != nil && !errors.Is(err, dirseed.ErrCloneUnsupported) {
 			m.logger.Warn("session fork: clone dependencies; setup will install them", "workspace", ws.Path, "err", err)
 		} else if len(cloned) > 0 {
 			m.logger.Info("session fork: cloned dependencies", "workspace", ws.Path, "folders", cloned)
 		}
 	}
 	return ws, nil, nil
+}
+
+// createPlainForkWorkspace makes a plain-folder fork's workspace and moves
+// the copy of its original's files into it. A plain folder is never removed
+// while it has files, so there are no starting files to record. A folder that was created is
+// returned with any error, so the caller rolls it back.
+func (m *Manager) createPlainForkWorkspace(ctx context.Context, fork *ports.SpawnFork, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
+	ws, err := m.workspace.Create(ctx, cfg)
+	if err != nil {
+		return ws, nil, err
+	}
+	if err := dirseed.Apply(ctx, fork.SeedDir, ws.Path); err != nil {
+		// The folder was empty a moment ago, so anything in it came from the
+		// seed. Emptied, the caller's rollback removes it; a plain folder with
+		// files is otherwise kept as the session's work. The reaper removes a
+		// seed that is left behind.
+		clearFolder(ws.Path)
+		_ = dirseed.Delete(fork.SeedDir)
+		return ws, nil, fmt.Errorf("session fork: copy source files: %w", err)
+	}
+	m.markForkWorkspace(ws.Path)
+	if err := m.restoreAttachments(ctx, cfg.SessionID, ws); err != nil {
+		m.logger.Warn("session fork: place attachments in the fork", "workspace", ws.Path, "err", err)
+	}
+	// An older turn's snapshot leaves dependency folders out; a copy of the
+	// folder as it is already has them, and those are left alone.
+	if fork.SourceWorkspace != "" {
+		if _, err := cloneForkDependencies(ctx, fork.SourceWorkspace, ws.Path); err != nil && !errors.Is(err, dirseed.ErrCloneUnsupported) {
+			m.logger.Warn("session fork: clone dependencies", "workspace", ws.Path, "err", err)
+		}
+	}
+	return ws, nil, nil
+}
+
+// clearFolder removes everything inside dir, keeping dir itself.
+func clearFolder(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+	}
+}
+
+// plainFolderProject reports whether a session's workspace is a plain folder
+// with no git repository: a standalone agent's, or a Scratch project's.
+func plainFolderProject(project domain.ProjectRecord, rec domain.SessionRecord) bool {
+	return projectKindForSession(project, rec.ProjectID) == domain.ProjectKindScratch
 }
 
 // copyForkFiles copies the source's artifacts into the fork's artifact
@@ -388,10 +441,13 @@ type forkOrigin struct {
 	// workspace is the original's worktree, which the copied conversation
 	// names.
 	workspace string
+	// plain marks a fork of a plain folder: a copy of the original's folder,
+	// with no branch of its own.
+	plain bool
 }
 
-func withForkOrigin(ctx context.Context, sourceID domain.SessionID, title, workspace string) context.Context {
-	return context.WithValue(ctx, forkOriginKey{}, forkOrigin{sourceID: sourceID, title: title, workspace: workspace})
+func withForkOrigin(ctx context.Context, sourceID domain.SessionID, title, workspace string, plain bool) context.Context {
+	return context.WithValue(ctx, forkOriginKey{}, forkOrigin{sourceID: sourceID, title: title, workspace: workspace, plain: plain})
 }
 
 type forkLineageReader interface {
@@ -415,6 +471,11 @@ func (m *Manager) forkBoundaryPrompt(ctx context.Context, id domain.SessionID) s
 		if source, found, err := m.store.GetSession(ctx, fork.SourceSessionID); err == nil && found {
 			origin.workspace = source.Metadata.WorkspacePath
 		}
+		if rec, found, err := m.store.GetSession(ctx, id); err == nil && found {
+			if project, err := m.loadProject(ctx, rec.ProjectID); err == nil {
+				origin.plain = plainFolderProject(project, rec)
+			}
+		}
 	}
 	if origin.sourceID == "" {
 		return ""
@@ -422,6 +483,9 @@ func (m *Manager) forkBoundaryPrompt(ctx context.Context, id domain.SessionID) s
 	title := ""
 	if origin.title != "" {
 		title = fmt.Sprintf(" (%q)", origin.title)
+	}
+	if origin.plain {
+		return plainForkBoundaryPrompt(origin, title, id)
 	}
 	worktree := ""
 	if path := strings.TrimSpace(origin.workspace); path != "" {
@@ -434,6 +498,24 @@ This session is a fork of Orchestrator session %s%s. It started with that sessio
 The original's pull requests belong to the original session. Don't push to their branches, comment on them, request reviews of them, or claim them. If this work needs a PR, open a new one from this session's branch; target the original's branch when this work builds on it.
 
 Plans and tasks from before the fork are background. Continue only what the user asks in this session, and report progress as this session, not as the original.`, origin.sourceID, title, id, worktree)
+}
+
+// plainForkBoundaryPrompt is the fork note for a copy of a plain folder. The
+// folder may hold a repository the original cloned, still on the original's
+// branch, whose pull requests AO never tracked, so the fork is told to branch
+// before committing rather than given a list of PRs to leave alone.
+func plainForkBoundaryPrompt(origin forkOrigin, title string, id domain.SessionID) string {
+	folder := ""
+	if path := strings.TrimSpace(origin.workspace); path != "" {
+		folder = fmt.Sprintf(" The original's folder is `%s`, and the conversation you copied names paths in it. Those files are the original's: never read, write, or run commands in that folder. The same files are in this session's own folder, your working directory; use the same relative paths there.", path)
+	}
+	return fmt.Sprintf(`## Session Fork
+
+This session is a fork of Orchestrator session %s%s. It started with that session's conversation and a copy of its folder, but it is a separate session (%s) with its own folder and artifact folder. Work only in this session's own folder; never edit the original's.%s
+
+Any git repository in this folder is a copy of the original's: it is still checked out on the original's branch, with the same remotes. The branches the original pushed and the pull requests it opened belong to the original session. Before you commit, create a new branch, and never push to the original's branches, comment on its pull requests, or request reviews of them. If this work needs a pull request, open a new one from your own branch.
+
+Plans and tasks from before the fork are background. Continue only what the user asks in this session, and report progress as this session, not as the original.`, origin.sourceID, title, id, folder)
 }
 
 func (m *Manager) isSessionFork(ctx context.Context, id domain.SessionID) bool {
@@ -527,6 +609,11 @@ func (m *Manager) dropInheritedForkChanges(ctx context.Context, rec domain.Sessi
 	if err != nil || !found {
 		return false
 	}
+	// A plain folder has no git to tell inherited changes from the fork's
+	// own; everything in it is kept.
+	if project, err := m.loadProject(ctx, rec.ProjectID); err != nil || plainFolderProject(project, rec) {
+		return false
+	}
 	source, found, err := m.store.GetSession(ctx, fork.SourceSessionID)
 	if err != nil || !found || source.IsTerminated {
 		return false
@@ -546,11 +633,13 @@ func (m *Manager) dropInheritedForkChanges(ctx context.Context, rec domain.Sessi
 // after restore recreated it. Archiving drops a fork's inherited changes when
 // it never touched them, so the worktree can be removed; they live on under
 // the fork's starting-files ref until it is deleted.
-func (m *Manager) restoreForkStartingFiles(ctx context.Context, id domain.SessionID, worktree string) {
-	if worktree == "" || !m.isSessionFork(ctx, id) {
+func (m *Manager) restoreForkStartingFiles(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord, worktree string) {
+	// A plain-folder fork keeps no starting files: its folder is never
+	// removed while it has any.
+	if worktree == "" || plainFolderProject(project, rec) || !m.isSessionFork(ctx, rec.ID) {
 		return
 	}
-	if _, err := m.forkSeeds.RestoreBase(ctx, worktree, forkseed.BaseRef(string(id))); err != nil {
-		m.logger.Warn("session fork: put starting files back after restore", "session", id, "err", err)
+	if _, err := m.forkSeeds.RestoreBase(ctx, worktree, forkseed.BaseRef(string(rec.ID))); err != nil {
+		m.logger.Warn("session fork: put starting files back after restore", "session", rec.ID, "err", err)
 	}
 }

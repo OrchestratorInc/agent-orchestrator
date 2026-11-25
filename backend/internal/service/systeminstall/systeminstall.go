@@ -2218,9 +2218,10 @@ func (s *Service) planWinget(target Target, id string) Plan {
 		}
 		return plan
 	}
-	command := []string{"winget", "install", "-e", "--id", id}
+	// Pin the community source so a fresh Windows profile never opens msstore's
+	// interactive source-agreement prompt in this background process.
+	command := []string{"winget", "install", "-e", "--id", id, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 	if IsAgentTarget(target) {
-		command = append(command, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
 		return Plan{Target: target, Command: command, Method: "winget", Package: id}
 	}
 	return Plan{Target: target, Command: command}

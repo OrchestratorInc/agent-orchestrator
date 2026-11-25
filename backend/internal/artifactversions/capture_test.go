@@ -503,7 +503,7 @@ func TestRegistrationBeforeFirstScanKeepsRenamedDeliverable(t *testing.T) {
 				}
 				svc := sessionsvc.NewWithDeps(sessionsvc.Deps{Store: h.store, DataDir: h.cap.dataDir})
 				for range 2 {
-					if _, err := svc.RegisterArtifacts(h.ctx, h.sess.ID, []string{from}); err != nil {
+					if _, err := svc.RegisterArtifacts(h.ctx, h.sess.ID, "", []string{from}); err != nil {
 						t.Fatal(err)
 					}
 				}

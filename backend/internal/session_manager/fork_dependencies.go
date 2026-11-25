@@ -2,11 +2,12 @@ package sessionmanager
 
 import (
 	"context"
-	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
 )
 
 // forkDependencyDirs are the dependency folders a fork clones from its
@@ -17,12 +18,10 @@ var forkDependencyDirs = map[string]bool{"node_modules": true, ".venv": true}
 // forkDependencyDepth bounds how deep a monorepo's packages are searched.
 const forkDependencyDepth = 4
 
-var errCloneUnsupported = errors.New("copy-on-write clone is not supported")
-
 // cloneForkDependencies clones the original's dependency folders into the
 // fork with copy-on-write, so a large node_modules costs almost no time or
 // disk. A folder the fork already has is left alone. Where clones aren't
-// supported it returns errCloneUnsupported, and setup installs as usual.
+// supported it returns dirseed.ErrCloneUnsupported, and setup installs as usual.
 func cloneForkDependencies(ctx context.Context, src, dst string) ([]string, error) {
 	var cloned []string
 	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
@@ -53,7 +52,7 @@ func cloneForkDependencies(ctx context.Context, src, dst string) ([]string, erro
 			// The fork has no such package folder; nothing to put it in.
 			return filepath.SkipDir
 		}
-		if cloneErr := cloneTree(path, target); cloneErr != nil {
+		if cloneErr := dirseed.CloneTree(path, target); cloneErr != nil {
 			return cloneErr
 		}
 		cloned = append(cloned, rel)

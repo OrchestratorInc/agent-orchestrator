@@ -42,7 +42,7 @@ func continuationRows() ConversationRows {
 
 func TestStoppedContinuationContextUsesCurrentTask(t *testing.T) {
 	rows := continuationRows()
-	reminder := stoppedContinuationContext(rows)
+	reminder := continuationContext(rows, ContinuableTurnID(rows.Turns), "", "")
 	for _, want := range []string{rows.Messages[2].Text, "Keep the", "avoid repeating completed work", "check current state"} {
 		if !strings.Contains(reminder, want) {
 			t.Fatalf("context omits %q: %s", want, reminder)
@@ -53,6 +53,14 @@ func TestStoppedContinuationContextUsesCurrentTask(t *testing.T) {
 	}
 }
 
+func TestContinuationContextStartsFromAReorderedTurn(t *testing.T) {
+	rows := continuationRows()
+	rows.Turns[0], rows.Turns[1] = rows.Turns[1], rows.Turns[0]
+	if got := continuationContext(rows, "old", "task", "both tasks"); !strings.Contains(got, "both tasks") {
+		t.Fatalf("context = %q, want the quoted requests", got)
+	}
+}
+
 func TestStoppedContinuationContextRepeatedStopsKeepOriginalRequest(t *testing.T) {
 	rows := continuationRows()
 	rows.Turns = append(rows.Turns, domain.ConversationTurn{ID: "continued", State: domain.TurnStateInterrupted, ProviderTurnID: "p-continued"})
@@ -60,7 +68,7 @@ func TestStoppedContinuationContextRepeatedStopsKeepOriginalRequest(t *testing.T
 		domain.ConversationMessage{ID: "continued-user", TurnID: "continued", Sequence: 5, Role: domain.MessageRoleUser, Text: "PREVIOUS_ENRICHED_CONTINUE_CONTEXT", Continuation: true},
 		domain.ConversationMessage{ID: "continued-answer", TurnID: "continued", Sequence: 6, Role: domain.MessageRoleAssistant, Text: "3. Keep each branch"},
 	)
-	reminder := stoppedContinuationContext(rows)
+	reminder := continuationContext(rows, ContinuableTurnID(rows.Turns), "", "")
 	if !strings.Contains(reminder, rows.Messages[2].Text) || !strings.Contains(reminder, "Keep each branch") ||
 		strings.Contains(reminder, "PREVIOUS_ENRICHED_CONTINUE_CONTEXT") {
 		t.Fatalf("repeated continue lost its original task or nested old context: %s", reminder)
@@ -80,7 +88,7 @@ func TestStoppedContinuationContextIgnoresWithdrawnWork(t *testing.T) {
 		domain.ConversationMessage{ID: "queued-message", TurnID: "queued", Sequence: 8, Role: domain.MessageRoleUser, Text: "UNDISPATCHED_TASK"},
 		domain.ConversationMessage{ID: "late-old-answer", TurnID: "old", Sequence: 9, Role: domain.MessageRoleAssistant, Text: "LATE_OLD_RESPONSE"},
 	)
-	reminder := stoppedContinuationContext(rows)
+	reminder := continuationContext(rows, ContinuableTurnID(rows.Turns), "", "")
 	if reminder == "" || strings.Contains(reminder, "UNDONE_RESPONSE") || strings.Contains(reminder, "LATE_OLD_RESPONSE") || strings.Contains(reminder, "UNDISPATCHED_TASK") {
 		t.Fatalf("withdrawn work changed continuation context: %s", reminder)
 	}
@@ -91,7 +99,7 @@ func TestStoppedContinuationContextDoesNotResurrectOlderStop(t *testing.T) {
 		t.Run(string(state), func(t *testing.T) {
 			rows := continuationRows()
 			rows.Turns = append(rows.Turns, domain.ConversationTurn{ID: "new", State: state, ProviderTurnID: "p-new"})
-			if got := stoppedContinuationContext(rows); got != "" {
+			if got := continuationContext(rows, ContinuableTurnID(rows.Turns), "", ""); got != "" {
 				t.Fatalf("new %s task resurrected older stop: %s", state, got)
 			}
 		})
@@ -105,7 +113,7 @@ func TestStoppedContinuationContextProviderStartedTurn(t *testing.T) {
 	rows.Messages = append(rows.Messages,
 		domain.ConversationMessage{ID: "goal-answer", TurnID: "goal", Sequence: 5, Role: domain.MessageRoleAssistant, Text: "GOAL_PROGRESS"},
 	)
-	reminder := stoppedContinuationContext(rows)
+	reminder := continuationContext(rows, ContinuableTurnID(rows.Turns), "", "")
 	if !strings.Contains(reminder, "TASK_DONE") || !strings.Contains(reminder, "GOAL_PROGRESS") || strings.Contains(reminder, "unrelated") {
 		t.Fatalf("provider-started turn should continue the latest real request: %s", reminder)
 	}
@@ -114,7 +122,7 @@ func TestStoppedContinuationContextProviderStartedTurn(t *testing.T) {
 func TestStoppedContinuationContextBeforeOutput(t *testing.T) {
 	rows := continuationRows()
 	rows.Messages = rows.Messages[:3]
-	reminder := stoppedContinuationContext(rows)
+	reminder := continuationContext(rows, ContinuableTurnID(rows.Turns), "", "")
 	if !strings.Contains(reminder, "TASK_DONE") || strings.Contains(reminder, "partialResponseTail") {
 		t.Fatalf("stop before output should retain the request without inventing a response: %s", reminder)
 	}
@@ -128,7 +136,7 @@ func TestStoppedContinuationContextBoundsUnicodeAndOmitsPrivateActivity(t *testi
 		{TurnID: "task", Kind: domain.ActivityKindReasoning, Summary: "PRIVATE_REASONING"},
 		{TurnID: "task", Kind: domain.ActivityKindCommand, Summary: "COMMAND_TO_REPLAY"},
 	}
-	reminder := stoppedContinuationContext(rows)
+	reminder := continuationContext(rows, ContinuableTurnID(rows.Turns), "", "")
 	for _, want := range []string{"REQUEST_START", "REQUEST_END", "RESPONSE_END", "requestTruncated", "responseTailTruncated"} {
 		if !strings.Contains(reminder, want) {
 			t.Fatalf("bounded context omits %q", want)
@@ -148,12 +156,12 @@ func TestContinuableTurnIDSurvivesProviderScopeChange(t *testing.T) {
 	rows := continuationRows()
 	started := time.Now()
 	rows.Turns[1].StartedAt, rows.Turns[1].ProviderTurnID = &started, ""
-	if ContinuableTurnID(rows.Turns) != "task" || !strings.Contains(stoppedContinuationContext(rows), "TASK_DONE") {
+	if ContinuableTurnID(rows.Turns) != "task" || !strings.Contains(continuationContext(rows, ContinuableTurnID(rows.Turns), "", ""), "TASK_DONE") {
 		t.Fatal("provider scope change lost the dispatched stopped task")
 	}
 	rows.Turns[1].State = domain.TurnStateCompleted
 	rows.Turns = append(rows.Turns, domain.ConversationTurn{ID: "swept", State: domain.TurnStateInterrupted})
-	if ContinuableTurnID(rows.Turns) != "" || stoppedContinuationContext(rows) != "" {
+	if ContinuableTurnID(rows.Turns) != "" || continuationContext(rows, ContinuableTurnID(rows.Turns), "", "") != "" {
 		t.Fatal("a swept queue resurrected completed work")
 	}
 }

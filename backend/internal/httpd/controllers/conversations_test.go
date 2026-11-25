@@ -343,10 +343,16 @@ func TestConversationSnapshotCarriesHumanPromptFactWithoutPagedMessage(t *testin
 		SessionID:    domain.SessionID("p1-1"),
 		Turns: []domain.ConversationTurn{
 			{ID: "human", State: domain.TurnStateFailed, HasHumanPrompt: true, RequestedAt: now},
-			{ID: "automation", State: domain.TurnStateFailed, RequestedAt: now},
+			{ID: "automation", State: domain.TurnStateFailed, HasEventPrompt: true, RequestedAt: now},
 		},
 	})
 	turns := body["turns"].([]any)
+	if got := turns[1].(map[string]any)["hasEventPrompt"]; got != true {
+		t.Errorf("event prompt fact = %#v, want true despite absent paged messages", got)
+	}
+	if got := turns[0].(map[string]any)["hasEventPrompt"]; got != nil && got != false {
+		t.Errorf("human turn's event prompt fact = %#v, want absent or false", got)
+	}
 	if got := turns[0].(map[string]any)["hasHumanPrompt"]; got != true {
 		t.Errorf("human prompt fact = %#v, want true despite absent paged messages", got)
 	}
