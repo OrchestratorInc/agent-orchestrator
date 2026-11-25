@@ -63,6 +63,16 @@ func TestVerifyNativeCheckpointReportsUnsettledAfterASlowRead(t *testing.T) {
 	}
 }
 
+func TestVerifyNativeCheckpointStartsNoReadAfterTheWindow(t *testing.T) {
+	withSettleWindow(t, 150*time.Millisecond)
+	verifier := &slowCheckpointVerifier{read: 120 * time.Millisecond, results: []error{unsettledCheckpoint(), nil}}
+
+	_, err := verifyNativeCheckpoint(context.Background(), verifier, ports.NativeCheckpointRequest{})
+	if !errors.Is(err, ports.ErrChatHistoryUnsettled) || verifier.calls != 1 {
+		t.Fatalf("verifyNativeCheckpoint error = %v after %d reads; want unsettled after 1 read", err, verifier.calls)
+	}
+}
+
 func TestVerifyNativeCheckpointBoundsAStalledRead(t *testing.T) {
 	previous := nativeHistoryLoadAttemptLimit
 	nativeHistoryLoadAttemptLimit = 20 * time.Millisecond

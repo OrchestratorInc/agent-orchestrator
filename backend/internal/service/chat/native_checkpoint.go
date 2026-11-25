@@ -25,15 +25,15 @@ func verifyNativeCheckpoint(ctx context.Context, verifier ports.NativeCheckpoint
 		if !errors.Is(err, ports.ErrChatHistoryUnsettled) {
 			return ports.NativeCheckpointBoundary{}, err
 		}
-		if !time.Now().Before(deadline) {
-			return ports.NativeCheckpointBoundary{}, fmt.Errorf("wait for native checkpoint: %w: %w", err, context.DeadlineExceeded)
-		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ports.NativeCheckpointBoundary{}, fmt.Errorf("wait for native checkpoint: %w: %w", err, ctx.Err())
 		case <-timer.C:
+		}
+		if !time.Now().Before(deadline) {
+			return ports.NativeCheckpointBoundary{}, fmt.Errorf("wait for native checkpoint: %w: %w", err, context.DeadlineExceeded)
 		}
 	}
 }
