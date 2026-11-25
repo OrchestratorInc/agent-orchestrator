@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -66,7 +67,6 @@ func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.Usag
 	if r.logins != nil {
 		confirmed = r.logins.ConfirmedLogins()
 	}
-	readings = withOrgs(readings)
 	out.Logins = limitLogins(readings, heldLogins(readings, saved, confirmed), until)
 	return out, nil
 }
@@ -77,6 +77,8 @@ type loginKey struct {
 	provider domain.AgentAccountProvider
 	who      string
 	org      string
+	// A Claude reading without an org ID belongs to its recording account.
+	account string
 }
 
 func loginOf(provider domain.AgentAccountProvider, email, org, accountID string) loginKey {
@@ -84,83 +86,47 @@ func loginOf(provider domain.AgentAccountProvider, email, org, accountID string)
 	if who == "" {
 		who = "account:" + accountID
 	}
-	return loginKey{provider, who, strings.TrimSpace(org)}
+	return loginKey{provider: provider, who: who, org: strings.TrimSpace(org)}
 }
 
 func readingLogin(reading domain.AgentLimitReading) loginKey {
-	return loginOf(reading.Provider, reading.Email, reading.OrgID, reading.AccountID)
+	key := loginOf(reading.Provider, reading.Email, reading.OrgID, reading.AccountID)
+	if key.provider == domain.AgentAccountProviderClaude && key.org == "" {
+		key.account = reading.AccountID
+	}
+	return key
 }
 
-// withOrgs gives a reading that recorded no organization, one taken before
-// readings kept it, the organization its account later read for the same
-// login, or else that login's only organization. With neither it stays
-// without one.
-func withOrgs(readings []domain.AgentLimitReading) []domain.AgentLimitReading {
-	type accountLogin struct {
-		account string
-		login   loginKey
-	}
-	byAccount := map[accountLogin]domain.AgentLimitReading{}
-	orgs := map[loginKey]map[string]bool{}
-	for _, reading := range readings {
-		key := readingLogin(reading)
-		if key.org == "" {
-			continue
-		}
-		org := key.org
-		key.org = ""
-		if last, seen := byAccount[accountLogin{reading.AccountID, key}]; !seen || reading.ReadAt.After(last.ReadAt) {
-			byAccount[accountLogin{reading.AccountID, key}] = reading
-		}
-		if orgs[key] == nil {
-			orgs[key] = map[string]bool{}
-		}
-		orgs[key][org] = true
-	}
-	out := make([]domain.AgentLimitReading, len(readings))
-	for i, reading := range readings {
-		out[i] = reading
-		if strings.TrimSpace(reading.OrgID) != "" {
-			continue
-		}
-		key := readingLogin(reading)
-		if last, seen := byAccount[accountLogin{reading.AccountID, key}]; seen {
-			out[i].OrgID = last.OrgID
-		} else if len(orgs[key]) == 1 {
-			for org := range orgs[key] {
-				out[i].OrgID = org
-			}
-		}
-	}
-	return out
+func (key loginKey) id() string {
+	identity := fmt.Sprintf("%q %q %q %q", key.provider, key.who, key.org, key.account)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
 }
 
 // heldBy is each held login with the accounts that hold it now.
-type heldBy map[loginKey]map[string]bool
-
-func (h heldBy) add(key loginKey, account string) {
-	if h[key] == nil {
-		h[key] = map[string]bool{}
-	}
-	h[key][account] = true
+type heldBy struct {
+	byLogin   map[loginKey]map[string]bool
+	byAccount map[string]loginKey
 }
 
-// holders returns the accounts that hold the given login now, or nil when no
-// account does. A login whose organization is unknown on either side matches
-// the same email address in any organization.
-func (h heldBy) holders(key loginKey) map[string]bool {
-	var out map[string]bool
-	for held, accounts := range h {
-		if held.provider == key.provider && held.who == key.who && (held.org == key.org || held.org == "" || key.org == "") {
-			if out == nil {
-				out = map[string]bool{}
-			}
-			for account := range accounts {
-				out[account] = true
-			}
-		}
+func (h heldBy) add(key loginKey, account string) {
+	if h.byLogin[key] == nil {
+		h.byLogin[key] = map[string]bool{}
 	}
-	return out
+	h.byLogin[key][account] = true
+	h.byAccount[account] = key
+}
+
+// An organization is held by a matching login. An unattributed Claude group
+// stays visible only while its own account still holds the same email.
+func (h heldBy) holders(key loginKey) map[string]bool {
+	if key.account == "" {
+		return h.byLogin[key]
+	}
+	held, ok := h.byAccount[key.account]
+	if ok && held.provider == key.provider && held.who == key.who {
+		return map[string]bool{key.account: true}
+	}
+	return nil
 }
 
 func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount, confirmed map[string]domain.AgentAccountIdentityCheck) heldBy {
@@ -171,7 +137,7 @@ func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount
 	for _, account := range saved {
 		accounts[account.ID] = account
 	}
-	held := heldBy{}
+	held := heldBy{byLogin: map[loginKey]map[string]bool{}, byAccount: map[string]loginKey{}}
 	for id, identity := range confirmed {
 		account, exists := accounts[id]
 		if !exists || !identity.SignedIn {
@@ -192,7 +158,7 @@ func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount
 		}
 	}
 	for id, reading := range latest {
-		held.add(readingLogin(reading), id)
+		held.add(loginOf(reading.Provider, reading.Email, reading.OrgID, id), id)
 	}
 	return held
 }
@@ -204,20 +170,20 @@ func limitLogins(readings []domain.AgentLimitReading, held heldBy, now time.Time
 			continue
 		}
 		key := readingLogin(reading)
-		if held.holders(key) == nil {
-			continue
-		}
 		byLogin[key] = append(byLogin[key], reading)
 	}
 	logins := make([]domain.UsageLimitLogin, 0, len(byLogin))
 	for key, group := range byLogin {
+		holders := held.holders(key)
+		if len(holders) == 0 {
+			continue
+		}
 		sort.SliceStable(group, func(i, j int) bool { return group[i].ReadAt.Before(group[j].ReadAt) })
 		// The login is shown as the account that read it last among those that
 		// hold it now: an account that read it and has since moved to another
 		// organization no longer stands for it. When no holder has read it, the
 		// first holder by account ID stands for it.
 		latest := group[len(group)-1]
-		holders := held.holders(key)
 		account := ""
 		for i := len(group) - 1; i >= 0; i-- {
 			if holders[group[i].AccountID] {
@@ -232,7 +198,10 @@ func limitLogins(readings []domain.AgentLimitReading, held heldBy, now time.Time
 				}
 			}
 		}
-		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: account, Windows: []domain.UsageLimitSpan{}}
+		login := domain.UsageLimitLogin{
+			LoginID: key.id(), OrganizationUnknown: key.account != "", Provider: latest.Provider,
+			Email: latest.Email, AccountID: account, Windows: []domain.UsageLimitSpan{},
+		}
 		for i := len(group) - 1; i >= 0 && login.Plan == ""; i-- {
 			login.Plan = group[i].Plan
 		}
@@ -257,7 +226,10 @@ func limitLogins(readings []domain.AgentLimitReading, held heldBy, now time.Time
 		if logins[i].Email != logins[j].Email {
 			return logins[i].Email < logins[j].Email
 		}
-		return logins[i].AccountID < logins[j].AccountID
+		if logins[i].AccountID != logins[j].AccountID {
+			return logins[i].AccountID < logins[j].AccountID
+		}
+		return logins[i].LoginID < logins[j].LoginID
 	})
 	return logins
 }

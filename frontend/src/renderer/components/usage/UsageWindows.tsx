@@ -14,6 +14,11 @@ const STALE_MS = HOUR_MS;
 
 type Sessions = { login: UsageLimitLogin; spans: UsageLimitSpan[] };
 
+function loginKey(login: UsageLimitLogin): string {
+	// Older hosts omit the history ID.
+	return login.loginId ?? JSON.stringify([login.provider, login.email, login.accountId]);
+}
+
 export function UsageWindows({ history, now }: { history: UsageLimitWindows; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const locale = i18n.language;
@@ -53,7 +58,7 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 				<section aria-labelledby="usage-windows-weekly" className="flex flex-col gap-4">
 					<SectionHeading id="usage-windows-weekly" title={t("usage.windows.allowance")} help={t("usage.windows.allowanceHelp")} />
 					<div className="grid gap-8 lg:grid-cols-2">
-						{weekly.map(({ login, span }) => <WeeklyAllowance key={`${login.provider}:${login.email}:${span.windowId}`} login={login} span={span} now={now} dateTime={dateTime} />)}
+						{weekly.map(({ login, span }) => <WeeklyAllowance key={JSON.stringify([loginKey(login), span.windowId, span.resetsAt])} login={login} span={span} now={now} dateTime={dateTime} />)}
 					</div>
 				</section>
 			) : null}
@@ -151,7 +156,7 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 			<SectionHeading id="usage-windows-timeline" title={t("usage.windows.timeline")} help={t("usage.windows.timelineHelp")} />
 			<div className="grid grid-cols-[minmax(0,13rem)_minmax(0,1fr)] gap-x-4 gap-y-2">
 				{sessions.map(({ login, spans }) => (
-					<div key={`${login.provider}:${login.email}:${login.accountId}`} className="contents">
+					<div key={loginKey(login)} className="contents">
 						<LoginName login={login} />
 						<div className="relative h-11 overflow-hidden rounded-md bg-muted/60">
 							{midnights.map((ms) => <div key={ms} aria-hidden="true" className="absolute inset-y-0 border-s border-border/70" style={{ insetInlineStart: at(ms) }} />)}
@@ -166,7 +171,7 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 								const used = Math.min(100, window.peakUsedPercent);
 								const pace = window.state === "open" ? spanPace(window) : null;
 								return (
-									<Tooltip key={window.resetsAt}>
+									<Tooltip key={JSON.stringify([window.windowId, window.resetsAt])}>
 										<TooltipTrigger asChild>
 											<div
 												tabIndex={0}

@@ -10640,6 +10640,8 @@ export interface components {
         UsageLimitLogin: {
             accountId: string;
             email?: string;
+            loginId?: string;
+            organizationUnknown?: boolean;
             plan?: string;
             /** @enum {string} */
             provider: "claude" | "codex";

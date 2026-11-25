@@ -12,11 +12,13 @@ type UsageLimitHistory struct {
 
 // UsageLimitLogin is one subscription login.
 type UsageLimitLogin struct {
-	Provider  AgentAccountProvider `json:"provider" enum:"claude,codex"`
-	Email     string               `json:"email,omitempty"`
-	Plan      string               `json:"plan,omitempty"`
-	AccountID string               `json:"accountId"`
-	Windows   []UsageLimitSpan     `json:"windows"`
+	LoginID             string               `json:"loginId,omitempty" doc:"Stable opaque identifier for this history group, independent of the account currently representing it."`
+	OrganizationUnknown bool                 `json:"organizationUnknown,omitempty" doc:"These readings lack an organization ID and are grouped by recording account."`
+	Provider            AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	Email               string               `json:"email,omitempty"`
+	Plan                string               `json:"plan,omitempty"`
+	AccountID           string               `json:"accountId"`
+	Windows             []UsageLimitSpan     `json:"windows"`
 }
 
 // Usage limit span states.

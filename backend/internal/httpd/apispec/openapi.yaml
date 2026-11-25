@@ -29819,6 +29819,10 @@ components:
           type: string
         email:
           type: string
+        loginId:
+          type: string
+        organizationUnknown:
+          type: boolean
         plan:
           type: string
         provider:
