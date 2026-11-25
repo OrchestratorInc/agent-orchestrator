@@ -472,7 +472,8 @@ describe("ArtifactCommentsPanel: one element's comments", () => {
 		expect(within(folded).getByText("1 reply")).toBeInTheDocument();
 		await userEvent.click(folded);
 		expect(threadIds()).toEqual([["t2", true], ["t1", false]]);
-		expect(within(within(popover).getByRole("button", { expanded: false, name: /too long/ })).getByText("No replies")).toBeInTheDocument();
+		// No replies: no reply count at all.
+		expect(within(popover).getByRole("button", { expanded: false, name: /too long/ }).textContent).not.toMatch(/repl/i);
 		port.close();
 	});
 

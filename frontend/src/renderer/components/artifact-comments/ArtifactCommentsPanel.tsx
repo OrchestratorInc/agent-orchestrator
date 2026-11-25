@@ -332,9 +332,8 @@ function ThreadLine({ onExpand, thread, viewer }: { onExpand: () => void; thread
 					{first.deleted ? t("artifactComments.deleted") : first.body}
 				</span>
 			</span>
-			<span className="pl-6 text-caption text-muted-foreground">
-				{replies > 0 ? t("artifactComments.replies", { count: replies }) : t("artifactComments.noReplies")}
-			</span>
+			{/* Nothing when there are no replies yet. */}
+			{replies > 0 && <span className="pl-6 text-caption text-muted-foreground">{t("artifactComments.replies", { count: replies })}</span>}
 		</button>
 	);
 }
