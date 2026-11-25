@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { X } from "@/components/app-icons";
 import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
 import { mediaCrossOrigin } from "../../lib/file-media";
-import { cn } from "../../lib/utils";
+import { VideoPlayer } from "../VideoPlayer";
 
 /**
  * An attached image or video at full size over a dimmed window: its name and
@@ -39,7 +39,12 @@ export function AttachmentLightbox({
 	const pressStartedOutside = useRef(false);
 	const mediaClass = "block max-h-[calc(100svh-8rem)] max-w-[calc(100vw-8rem)] rounded-xl object-contain shadow-[0_24px_64px_-16px_rgb(0_0_0/0.6)]";
 	const bare = kind === "video"
-		? <video crossOrigin={mediaCrossOrigin(src)} controls autoPlay playsInline src={src} aria-label={name} onError={onError} className={cn(mediaClass, "bg-black")} />
+		? (
+			// The player fills its box, so the box is sized to the window.
+			<div className="h-[calc(100svh-8rem)] w-[min(64rem,calc(100vw-8rem))] overflow-hidden rounded-xl bg-black shadow-[0_24px_64px_-16px_rgb(0_0_0/0.6)]">
+				<VideoPlayer crossOrigin={mediaCrossOrigin(src)} label={name} onError={onError} src={src} />
+			</div>
+		)
 		: <img crossOrigin={mediaCrossOrigin(src)} src={src} alt={name} onError={onError} className={mediaClass} />;
 	return (
 		<DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>

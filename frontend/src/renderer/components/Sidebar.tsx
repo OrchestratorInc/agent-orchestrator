@@ -35,6 +35,7 @@ import {
 	Pin,
 	PinOff,
 	Plus,
+	QuestionMark,
 	Search,
 	Settings,
 	Smartphone,
@@ -155,7 +156,7 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
-import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
+import { applyOrder, EMPTY_GROUP_ORDER, type GroupOrder, isPinnedWorker, orderGroupSessions, pinnedFirst, pruneGroupOrder, splitGroupOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -220,7 +221,7 @@ const FOOTER_ICON_BUTTON_CLASS = cn(
 // and session rows.
 const SIDEBAR_ROW_CLASS = "h-8 gap-2 [&_svg]:size-icon-md";
 
-// Search + Pinned/Projects section chrome: same type, icon, and row size.
+// Search + Sessions/Projects section chrome: same type, icon, and row size.
 const SECTION_ROW_CLASS =
 	"flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-muted-foreground [&_svg]:size-icon-md [&_svg]:shrink-0";
 
@@ -390,6 +391,20 @@ const SIDEBAR_SESSIONS_LIMIT = 5;
 const SECTION_SCROLLER_CLASS =
 	"scrollbar-none overflow-y-auto overflow-x-hidden overscroll-contain group-data-[collapsible=icon]:overflow-visible";
 
+/** How many of a group's ordered sessions are pinned: they lead the list. */
+function leadingPinnedCount(sessions: readonly WorkspaceSession[]): number {
+	const index = sessions.findIndex((session) => !isPinnedWorker(session));
+	return index === -1 ? sessions.length : index;
+}
+
+/** A group's saved drag order. When a listed session gains or loses its pin,
+ *  it leaves the saved part it was in, so a repin sorts by pin time again. */
+function useGroupOrder(visibleSessions: readonly WorkspaceSession[]) {
+	const [order, setOrder] = useState<GroupOrder>(EMPTY_GROUP_ORDER);
+	useEffect(() => setOrder((current) => pruneGroupOrder(current, visibleSessions)), [visibleSessions]);
+	return [order, setOrder] as const;
+}
+
 /** Caps a sidebar list at `limit` behind Show more/less. The cap lifts on its
  *  own when the active item sits past it, until the user collapses it again. */
 function useShowMoreCap<T extends { id: string }>(
@@ -470,11 +485,11 @@ function readExpandedProjectIds(): ReadonlySet<string> {
 }
 
 const sectionsStorageKey = "ao.sidebar.sections";
-type SidebarSection = "pinned" | "projects" | "scratchpad";
+type SidebarSection = "projects" | "scratchpad";
 
 /** Saved open state per section. A missing entry means open. */
 function readSectionsOpen(): Record<SidebarSection, boolean> {
-	const open = { pinned: true, projects: true, scratchpad: true };
+	const open = { projects: true, scratchpad: true };
 	if (typeof window === "undefined" || !window.localStorage) return open;
 	try {
 		const saved: unknown = JSON.parse(window.localStorage.getItem(sectionsStorageKey) ?? "null");
@@ -587,23 +602,32 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// Rows showing the red alert sit above the rest, but only in the default
-// order: once the user has dragged rows into their own order, it wins. Stable,
-// so the order still holds within each group.
+// A marker that asks the user to act now: the agent's question, or the red alert.
+function isUrgentMarker(marker: ReturnType<typeof getSessionRowIndicator>): boolean {
+	return marker === "input" || marker === "attention";
+}
+
+// Rows with a question or the red alert sit above the rest, but only in the
+// default order: once the user has dragged rows into their own order, it wins.
+// Stable, so the order still holds within each group.
 function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
 	if (hasManualOrder) return sessions;
-	const flagged = sessions.filter((session) => getSessionRowIndicator(session) === "attention");
+	const flagged = sessions.filter((session) => isUrgentMarker(getSessionRowIndicator(session)));
 	if (flagged.length === 0 || flagged.length === sessions.length) return sessions;
 	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
 }
 
 // The icons a row or a collapsed project can show, plus the working
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
-// Each state has its own glyph, so colour is never the only difference: a red
-// alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge. A row's blue spinner (working) and its dot are
-// drawn by SessionActivityGlyph.
+// Each state has its own glyph, so colour is never the only difference: an
+// amber question mark is the agent asking you something, a red alert is
+// something to fix (CI, conflicts, changes requested), an amber alert (the
+// same amber, a different shape) is a person's review next, a green pull
+// request is ready to merge. A question is not an error, so it never takes the
+// red. A row's blue spinner (working) and its dot are drawn by
+// SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
+	input: { Icon: QuestionMark, tone: "text-status-in-review" },
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
 	review: { Icon: CircleAlert, tone: "text-status-in-review" },
@@ -826,7 +850,6 @@ export const Sidebar = memo(function Sidebar({
 	}, [importedProjects]);
 	// Section disclosure: every section header collapses its own body.
 	// Header clicks are saved. Opening a section to reveal the active session is not.
-	const [pinnedOpen, setPinnedOpen] = useState(() => readSectionsOpen().pinned);
 	const [projectsOpen, setProjectsOpen] = useState(() => readSectionsOpen().projects);
 	const [scratchpadOpen, setScratchpadOpen] = useState(() => readSectionsOpen().scratchpad);
 	const toggleSection = (section: SidebarSection, open: boolean, setOpen: (open: boolean) => void) => {
@@ -861,6 +884,24 @@ export const Sidebar = memo(function Sidebar({
 				return next;
 			});
 		}
+		// A remote project keeps its own collapse state. Open it for a worker row;
+		// an orchestrator has no row, so its project stays as the user left it.
+		const remoteHostId = selection.activeRemoteHostId;
+		const remoteProjectId = selection.activeRemoteProjectId;
+		const remoteSession = remoteHostId && remoteProjectId
+			? remoteWorkspaces
+				.find((workspace) => workspace.hostId === remoteHostId && workspace.id === remoteProjectId)
+				?.sessions.find((session) => session.id === selection.activeRemoteSessionId)
+			: undefined;
+		if (remoteHostId && remoteProjectId && remoteSession && !isOrchestratorSession(remoteSession)) {
+			const remoteKey = sessionUiKey(remoteProjectId, remoteHostId);
+			setCollapsedRemoteProjects((prev) => {
+				if (!prev.has(remoteKey)) return prev;
+				const next = new Set(prev);
+				next.delete(remoteKey);
+				return next;
+			});
+		}
 		let frame = 0;
 		let attempts = 0;
 		const reveal = () => {
@@ -875,7 +916,6 @@ export const Sidebar = memo(function Sidebar({
 			// that hold it, once, then retry. An orchestrator has no row (its
 			// button sits on the project row), so it must not open Scratchpad.
 			if (attempts === 0) {
-				if (pinnedSessions.some((session) => session.id === activeSessionKey)) setPinnedOpen(true);
 				if (standaloneWorkspace.sessions.some((session) => session.id === activeSessionKey)) {
 					setScratchpadOpen(true);
 				} else {
@@ -955,12 +995,18 @@ export const Sidebar = memo(function Sidebar({
 		};
 	}, [t, workspaces]);
 	const projectAvatars = useProjectAvatars(projectWorkspaces);
+	// A pinned session lives under its project, so a project that holds one
+	// stays listed rather than hiding behind Show more.
+	const projectLimit = useMemo(() => Math.max(SIDEBAR_INITIAL_SECTION_LIMIT, projectWorkspaces.reduce(
+		(count, workspace, index) => workspace.sessions.some((session) => isPinnedWorker(session) && session.isTerminated !== true) ? index + 1 : count,
+		0,
+	)), [projectWorkspaces]);
 	const {
 		listed: visibleWorkspaces,
 		hiddenCount: hiddenProjectCount,
 		showAll: showAllProjects,
 		toggleShowAll: toggleShowAllProjects,
-	} = useShowMoreCap(projectWorkspaces, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeProjectId, isIconRail);
+	} = useShowMoreCap(projectWorkspaces, projectLimit, selection.activeProjectId, isIconRail);
 	const projectContentOpen = (projectWorkspaces.length > 0 || remoteHosts.length > 0) && (projectsOpen || isIconRail);
 	const projectIds = useMemo(
 		() => projectWorkspaces.map((workspace) => workspace.id),
@@ -1048,50 +1094,6 @@ export const Sidebar = memo(function Sidebar({
 		if (next) setProjectOrder(next);
 		handleProjectDragEnd();
 	}, [handleProjectDragEnd, projectIds, setProjectOrder]);
-
-	const pinnedSessions = useMemo(
-		() => [...workspaces, ...remoteWorkspaces]
-			.flatMap((w) => workerSessions(w.sessions))
-			.filter((s) => s.isPinned && s.isTerminated !== true)
-			.sort((a, b) => {
-				const aTime = a.pinnedAt ? new Date(a.pinnedAt).getTime() : 0;
-				const bTime = b.pinnedAt ? new Date(b.pinnedAt).getTime() : 0;
-				return bTime - aTime;
-			}),
-		[workspaces, remoteWorkspaces],
-	);
-
-	const openPinnedSession = useLatestCallback((target: WorkspaceSession) => {
-		if (target.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
-		if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
-		else selection.goSession(target.workspaceId, target.id);
-	});
-	// Pinned rows are memoized; the route is read when a kill lands, so a route
-	// change does not re-render them.
-	const handlePinnedSessionKilled = useLatestCallback(
-		(killedSession: WorkspaceSession) => {
-			if (killedSession.hostId) {
-				if (selection.activeRemoteHostId !== killedSession.hostId || selection.activeRemoteSessionId !== killedSession.id) return;
-				const workspace = remoteWorkspaces.find((candidate) => candidate.hostId === killedSession.hostId && candidate.id === killedSession.workspaceId);
-				const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id);
-				if (nextRoute.target === "session") void remoteNavigate(sessionNavigateTarget(killedSession.workspaceId, nextRoute.sessionId, killedSession.hostId));
-				else if (killedSession.workspaceId === STANDALONE_WORKSPACE_ID) selection.goHome();
-				else onOpenRemoteProject(killedSession.hostId, killedSession.workspaceId);
-				return;
-			}
-			if (selection.activeSessionId !== killedSession.id) return;
-			const workspace = workspaces.find((w) => w.id === killedSession.workspaceId);
-			const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id);
-			if (nextRoute.target === "session") {
-				selection.goSession(killedSession.workspaceId, nextRoute.sessionId);
-			} else if (workspace?.standaloneAgent) {
-				// A Cloud standalone agent has no board to fall back to.
-				selection.goHome();
-			} else {
-				selection.goProject(killedSession.workspaceId);
-			}
-		},
-	);
 
 	return (
 		// Pinned sidebars start below shell chrome.
@@ -1207,37 +1209,6 @@ export const Sidebar = memo(function Sidebar({
 						/>
 					</SidebarMenuItem>
 				</SidebarMenu>
-
-				{/* Pinned — collapsible; hidden when empty. */}
-				{pinnedSessions.length > 0 && (
-					<div className="sidebar-expanded-chrome flex shrink-0 flex-col group-data-[collapsible=icon]:hidden">
-						<SectionDisclosure
-							label={t("shell.pinned")}
-							open={pinnedOpen}
-							onToggle={() => toggleSection("pinned", pinnedOpen, setPinnedOpen)}
-							className="mb-1"
-						/>
-						<SectionBody open={pinnedOpen}>
-							<SidebarMenuSub
-								className="sidebar-expanded-chrome mx-0 ml-0 translate-x-0 gap-0.5 border-l-0 px-0 py-0.5 mb-2"
-								data-testid="pinned-session-list"
-							>
-								{pinnedSessions.map((session) => (
-									<PinnedSessionRow
-										key={sessionUiKey(session.id, session.hostId)}
-										session={session}
-										active={session.hostId
-											? selection.activeRemoteHostId === session.hostId && selection.activeRemoteSessionId === session.id
-											: selection.activeSessionId === session.id}
-										hostLabel={session.hostId ? remoteHosts.find((host) => host.hostId === session.hostId)?.label ?? session.hostId : undefined}
-										onKilled={handlePinnedSessionKilled}
-										onOpenSession={openPinnedSession}
-									/>
-								))}
-							</SidebarMenuSub>
-						</SectionBody>
-					</div>
-				)}
 			</div>
 
 			<SidebarContent className="scrollbar-none gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
@@ -1618,7 +1589,7 @@ const ProjectItem = memo(function ProjectItem({
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
 	// What a collapsed project signals, strongest first: a session waiting on the
-	// user (the alert replaces the icon), then one whose agent is working, then a
+	// user (the question mark replaces the icon), then one whose agent is working, then a
 	// finished turn the user has not opened (both a corner dot on the icon, like
 	// the orchestrator button's).
 	const readAt = useSessionReadStore((state) => state.readAt);
@@ -1634,7 +1605,7 @@ const ProjectItem = memo(function ProjectItem({
 		if (Number.isFinite(updated)) markRead(sessionReadKey(viewedSession), updated);
 	}, [markRead, viewedSession]);
 	const projectActivity = useMemo(() => {
-		if (projectNeedsInput) return "attention" as const;
+		if (projectNeedsInput) return "input" as const;
 		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
 		if (indicators.includes("working")) return "working" as const;
 		const read = { readAt, baseline: readBaseline };
@@ -1644,26 +1615,27 @@ const ProjectItem = memo(function ProjectItem({
 			? ("unread" as const)
 			: null;
 	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
-	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
+	const [sessionOrder, setSessionOrder] = useGroupOrder(visibleSessions);
+	// Pinned sessions lead the project's own list; the rest float attention
+	// until the user drags an order of their own.
 	const sessions = useMemo(
-		() => {
-			const ordered = applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start");
-			return floatAttention(ordered, sessionOrder.length > 0);
-		},
+		() => orderGroupSessions(visibleSessions, sessionOrder, (rest) => floatAttention(rest, sessionOrder.pinned.length + sessionOrder.rest.length > 0)),
 		[sessionOrder, visibleSessions],
 	);
+	const pinnedCount = leadingPinnedCount(sessions);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
 		const sessionIds = sessions.map((session) => session.id);
 		useSidebarOrderStore.getState().setSessionOrder(projectKey, sessionIds);
 		return () => useSidebarOrderStore.getState().clearSessionOrder(projectKey);
 	}, [projectKey, sessions]);
+	// Pins are never behind Show more: the cap lists at least all of them.
 	const {
 		listed: listedSessions,
 		hiddenCount: hiddenSessionCount,
 		showAll: showAllSessions,
 		toggleShowAll: toggleShowAllSessions,
-	} = useShowMoreCap(sessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
+	} = useShowMoreCap(sessions, Math.max(SIDEBAR_PROJECT_SESSION_LIMIT, pinnedCount), selection.activeSessionId);
 	useLayoutEffect(() => {
 		const header = projectHeaderRef.current;
 		const content = projectSessionsRef.current;
@@ -1694,7 +1666,7 @@ const ProjectItem = memo(function ProjectItem({
 			// Only the listed slice is draggable, so keep the still-hidden tail
 			// behind it rather than letting applyOrder float it to the front.
 			const listed = new Set(next);
-			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
+			setSessionOrder(splitGroupOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)], sessions));
 		},
 		[sessions],
 	);
@@ -2035,8 +2007,8 @@ const ProjectItem = memo(function ProjectItem({
 											className="relative inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
-											{!expanded && projectActivity === "attention" ? (
-												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
+											{!expanded && projectActivity === "input" ? (
+												<SessionMarkerIcon data-project-marker="input" marker="input" />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
 											{!expanded && (projectActivity === "working" || projectActivity === "unread") ? (
 												<ReplyBadge data-project-marker={projectActivity} reply={projectActivity} surface="sidebar" />
@@ -2055,8 +2027,8 @@ const ProjectItem = memo(function ProjectItem({
 											<ChevronRight />
 										</span>
 									</span>
-									{/* Collapsed icon rail: the project icon, with a red badge when a session
-									    waits on the user. The session list is hidden here, so the badge
+									{/* Collapsed icon rail: the project icon, with an amber badge when a
+									    session waits on the user. The session list is hidden here, so the badge
 									    shows whether or not the project is expanded. */}
 									<span
 										aria-hidden="true"
@@ -2065,8 +2037,8 @@ const ProjectItem = memo(function ProjectItem({
 										<ProjectIcon avatarUrl={avatarUrl} className="size-5" expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />
 										{projectNeedsInput ? (
 											<span
-												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-destructive ring-2 ring-sidebar"
-												data-project-marker="attention"
+												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-status-in-review ring-2 ring-sidebar"
+												data-project-marker="input"
 											/>
 										) : null}
 									</span>
@@ -2170,6 +2142,7 @@ const ProjectItem = memo(function ProjectItem({
 													<Button
 														size="icon-xs"
 														variant="quiet"
+														data-telemetry-id="sidebar.project_orchestrator"
 														aria-current={orchestratorActive ? "page" : undefined}
 														aria-label={orchestratorReplyLabel(
 															orchestrator
@@ -2344,11 +2317,10 @@ function ScratchpadSection({
 		() => sortedWorkerSessions(workspace.sessions).filter(scratchpadListsSession),
 		[workspace.sessions],
 	);
-	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
-	const sessions = useMemo(
-		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
-		[sessionOrder, visibleSessions],
-	);
+	const [sessionOrder, setSessionOrder] = useGroupOrder(visibleSessions);
+	// Projectless pinned sessions lead this list, as a project's lead its own.
+	const sessions = useMemo(() => orderGroupSessions(visibleSessions, sessionOrder), [sessionOrder, visibleSessions]);
+	const pinnedCount = leadingPinnedCount(sessions);
 	// Publish the order shown here so keyboard navigation follows it.
 	const scratchpadKey = sessionUiKey(workspace.id, workspace.hostId);
 	useEffect(() => {
@@ -2356,12 +2328,13 @@ function ScratchpadSection({
 		useSidebarOrderStore.getState().setSessionOrder(scratchpadKey, sessionIds);
 		return () => useSidebarOrderStore.getState().clearSessionOrder(scratchpadKey);
 	}, [scratchpadKey, sessions]);
+	// Pins are never behind Show more: the cap lists at least all of them.
 	const {
 		listed: listedSessions,
 		hiddenCount: hiddenSessionCount,
 		showAll,
 		toggleShowAll,
-	} = useShowMoreCap(sessions, SIDEBAR_SESSIONS_LIMIT, selection.activeSessionId, isCollapsed);
+	} = useShowMoreCap(sessions, Math.max(SIDEBAR_SESSIONS_LIMIT, pinnedCount), selection.activeSessionId, isCollapsed);
 	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
 	// With every session archived, the section keeps one row: the way to them,
@@ -2374,7 +2347,7 @@ function ScratchpadSection({
 			// Only the listed slice is draggable, so keep the still-hidden tail
 			// behind it rather than letting applyOrder float it to the front.
 			const listed = new Set(next);
-			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
+			setSessionOrder(splitGroupOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)], sessions));
 		},
 		[sessions],
 	);
@@ -2523,25 +2496,7 @@ function ScratchpadSection({
 	);
 }
 
-const PinnedSessionRow = memo(function PinnedSessionRow({
-	session,
-	active,
-	hostLabel,
-	onKilled,
-	onOpenSession,
-}: {
-	session: WorkspaceSession;
-	active: boolean;
-	hostLabel?: string;
-	onKilled?: (session: WorkspaceSession) => void;
-	onOpenSession: (session: WorkspaceSession) => void;
-}) {
-	const onOpen = useCallback(() => onOpenSession(session), [onOpenSession, session]);
-	return <SessionRow session={session} active={active} hostLabel={hostLabel} indented={false} onKilled={onKilled} onOpen={onOpen} />;
-});
-
-// A session row inside its project's drag context. The Pinned section renders
-// plain SessionRows instead: that list is ordered by pin time, not by hand.
+// A session row inside its group's drag context.
 const SortableSessionRow = memo(function SortableSessionRow({
 	session,
 	active,
@@ -2631,7 +2586,13 @@ function SessionReorderList({
 	const onDragEnd = useCallback(({ active, over }: DragEndEvent) => {
 		const sessionId = String(active.id);
 		dragClickGuard.markDragEnded(sessionId);
-		if (!over) {
+		const pinnedById = (id: string) => {
+			const session = sessions.find((candidate) => candidate.id === id);
+			return session ? isPinnedWorker(session) : false;
+		};
+		// Pins lead their group, so a drop across the pin boundary would land and
+		// then jump back. Treat it as a cancel and let the row glide home.
+		if (!over || pinnedById(sessionId) !== pinnedById(String(over.id))) {
 			setListDragging(false);
 			setDropTransitionDisabledId(null);
 			return;
@@ -2648,7 +2609,7 @@ function SessionReorderList({
 			setDropTransitionDisabledId(sessionId);
 		});
 		requestAnimationFrame(() => setDropTransitionDisabledId(null));
-	}, [dragClickGuard, onReorder, sessionIds]);
+	}, [dragClickGuard, onReorder, sessionIds, sessions]);
 
 	const onDragCancel = useCallback(() => {
 		setListDragging(false);
@@ -2891,7 +2852,7 @@ const SessionRow = memo(function SessionRow({
 							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
+								(session.isPinned || (session.lastInteractionAt ?? session.lastUserMessageAt)) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions focus-visible-in-session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
@@ -2938,7 +2899,7 @@ const SessionRow = memo(function SessionRow({
 										"min-w-0 flex-1 truncate",
 										// Only a session that needs you reads at full brightness; the
 										// rest sit back, so the list has a clear lead.
-										active || marker === "attention"
+										active || isUrgentMarker(marker)
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
 										shimmer && "relative",
@@ -3052,6 +3013,25 @@ const SessionActions = memo(function SessionActions({
 		terminateSession({ ...session, deleteArtifacts });
 	};
 
+	const pinned = session.isPinned === true;
+	const pinButton = session.cloud?.shared ? null : (
+		<Button
+			size="icon-xs"
+			variant="quiet"
+			data-telemetry-id="sidebar.session_pin"
+			aria-label={pinned ? t("shell.unpinSession") : t("shell.pinSession")}
+			className={SESSION_ACTION_CLASS}
+			onClick={(event) => {
+				event.stopPropagation();
+				pinned ? unpinSession(session) : pinSession(session);
+			}}
+			type="button"
+		>
+			{/* The same pin as a pinned project's unpin button. */}
+			<Pin aria-hidden="true" />
+		</Button>
+	);
+
 	return (
 		<div
 			className="pointer-events-none absolute inset-y-0 right-0 z-chrome"
@@ -3068,21 +3048,7 @@ const SessionActions = memo(function SessionActions({
 				)}
 				data-session-action-buttons=""
 			>
-				{session.cloud?.shared ? null : <Button
-							size="icon-xs"
-							variant="quiet"
-							data-telemetry-id="sidebar.session_pin"
-							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-							className={SESSION_ACTION_CLASS}
-							onClick={(event) => {
-								event.stopPropagation();
-								session.isPinned ? unpinSession(session) : pinSession(session);
-							}}
-							type="button"
-						>
-							{/* The same pin as a pinned project's unpin button. */}
-							<Pin aria-hidden="true" />
-						</Button>}
+				{pinned ? null : pinButton}
 				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
 				{session.cloud?.shared ? null : (
 					<SessionArchiveDialog
@@ -3113,11 +3079,30 @@ const SessionActions = memo(function SessionActions({
 						}
 					/>
 				)}
+				{/* A pinned row keeps its pin in the last slot, where its resting
+				    mark sits, so hovering adds archive beside it without moving it. */}
+				{pinned ? pinButton : null}
 			</div>
-			<SessionMessageAge session={session} />
+			{pinned ? <SessionPinMark /> : <SessionMessageAge session={session} />}
 		</div>
 	);
 });
+
+/** A pinned row's resting mark, in the time's place: the same pin, at the same
+ *  spot, as the hover bar's unpin button that replaces it. */
+function SessionPinMark() {
+	return (
+		<span
+			aria-hidden="true"
+			className={cn(ROW_ACTIONS_CLASS, "z-[1] text-muted-foreground opacity-100 focus-visible-in-session-row:opacity-0")}
+			data-session-pin-mark=""
+		>
+			<span className={cn(SESSION_ACTION_CLASS, "inline-flex size-control-sm items-center justify-center")}>
+				<Pin />
+			</span>
+		</span>
+	);
+}
 
 // AO account sign-in is shared by Cloud execution and remote hosts.
 function CloudSignInRow({ tabIndex }: { tabIndex: number }) {

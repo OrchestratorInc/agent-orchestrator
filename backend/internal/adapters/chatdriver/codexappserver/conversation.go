@@ -27,9 +27,9 @@ import (
 const eventBuffer = 4096
 
 // approvalWait bounds how long the provider is left blocked on an unanswered
-// request. Codex holds its turn until the client replies, so an approval nobody
+// approval. Codex holds its turn until the client replies, so an approval nobody
 // resolves would hang the session indefinitely. On expiry AO refuses rather than
-// deciding on the user's behalf.
+// deciding on the user's behalf. Questions have no such bound (see inputDeadline).
 const approvalWait = 30 * time.Minute
 
 // errConversationClosed reports a decision arriving after the controller ended.
@@ -238,6 +238,8 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
+			var threadStatus *ports.ChatEvent
+			ev, threadStatus = usageLimits.threadStatus(ev, threadID)
 			var visible bool
 			ev, visible = citations.formatEvent(threadID, ev)
 			if !visible {
@@ -312,6 +314,9 @@ func (c *conversation) pump() {
 				c.mu.Unlock()
 			}
 			c.emit(ev)
+			if threadStatus != nil {
+				c.emit(*threadStatus)
+			}
 		}
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go

@@ -123,6 +123,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onShortcutPressed: unsubscribe,
 					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
@@ -275,6 +276,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
 					takeResourceSummary: async () => null,
+					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -380,6 +382,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
@@ -487,6 +491,13 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					startHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 				},
 				cloud: {
 					getSession: async () => null,
@@ -1146,6 +1157,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onShortcutPressed: unsubscribe,
 					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
@@ -1294,6 +1306,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
 					takeResourceSummary: async () => null,
+					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -1400,6 +1413,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
@@ -1494,6 +1509,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					startHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 				},
 				cloud: {
 					getSession: async () => null,

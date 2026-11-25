@@ -7,10 +7,13 @@ import { artifactContentUrl } from "../lib/artifact-content-url";
 import { useArtifactZoomTarget } from "../lib/artifact-zoom";
 import { mediaCrossOrigin, type FileMediaKind } from "../lib/file-media";
 import { PdfPreview } from "./PdfPreview";
+import { VideoPlayer } from "./VideoPlayer";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { ZoomableImage } from "./ZoomableImage";
 
-export function FileMediaPreview({ hostId, kind, path, sessionId, source, version, side = "after" }: {
+export function FileMediaPreview({ active = true, hostId, kind, path, sessionId, source, version, side = "after" }: {
+	/** False while the pane is mounted but hidden, such as an inactive file tab: a video pauses then. */
+	active?: boolean;
 	side?: "before" | "after";
  hostId?: string;
 	kind: FileMediaKind;
@@ -62,7 +65,7 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 			) : kind === "image" ? (
 				<img crossOrigin={crossOrigin} alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
 			) : kind === "video" ? (
-				<video crossOrigin={crossOrigin} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
+				<VideoPlayer active={active} crossOrigin={crossOrigin} label={path} onError={onError} src={src} />
 			) : (
 				<audio crossOrigin={crossOrigin} aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
 			)}
