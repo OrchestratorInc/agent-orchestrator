@@ -8,6 +8,8 @@ const THUMB_H = 22;
 const TRACK_H = THUMB_H;
 // How long a sent level is held on screen while the agent has not reported it.
 const SENT_HOLD_MS = 2500;
+// How far a press moves before it is a drag; a shorter one is a click, which eases to the nearest level.
+const DRAG_SLOP_PX = 3;
 
 /** Where a level's centre sits on the track: inset by half a thumb at each end, so the thumb stays inside. */
 function centre(percent: number): string {
@@ -54,6 +56,8 @@ export function EffortSlider({
 		return () => window.clearTimeout(timer);
 	}, [sent]);
 	const trackRef = useRef<HTMLDivElement>(null);
+	// Where a press on the track started, until it moves far enough to be a drag.
+	const pressX = useRef<number | undefined>(undefined);
 	const index = drag !== undefined ? Math.round(drag * last) : sent ?? Math.max(chosen, 0);
 	const shown = drag !== undefined || sent !== undefined || chosen >= 0 ? choices[index] : undefined;
 	const percent = drag !== undefined ? drag * 100 : (index / last) * 100;
@@ -84,13 +88,15 @@ export function EffortSlider({
 			aria-valuetext={valueLabel(shown)}
 			aria-orientation="horizontal"
 			disabled={disabled}
-			// The row stays open on a click or Enter: the level is set on the track or with Left and Right.
+			// The row stays open on a click or Enter: the level is set on the track, with Left and Right,
+			// or with Home and End for the lowest and highest.
 			onSelect={(event) => event.preventDefault()}
 			onKeyDown={(event) => {
-				if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+				const next = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: last }[event.key];
+				if (next === undefined) return;
 				event.preventDefault();
 				event.stopPropagation();
-				commit(Math.min(Math.max(index + (event.key === "ArrowRight" ? 1 : -1), 0), choices.length - 1));
+				commit(Math.min(Math.max(next, 0), choices.length - 1));
 			}}
 			// No hover or highlight fill like the other rows: the slider is not picked by clicking the row.
 			// A keyboard visit rings the thumb instead.
@@ -106,22 +112,29 @@ export function EffortSlider({
 			<div
 				ref={trackRef}
 				aria-hidden="true"
-				className={cn("relative touch-none", disabled && "opacity-50")}
+				className={cn("relative touch-none", disabled && "opacity-50", drag !== undefined && "cursor-grabbing")}
 				style={{ height: THUMB_H }}
 				onPointerDown={(event) => {
 					if (disabled || event.button !== 0) return;
 					event.currentTarget.setPointerCapture(event.pointerId);
-					setDrag(alongAt(event));
+					pressX.current = event.clientX;
 				}}
 				onPointerMove={(event) => {
-					if (event.currentTarget.hasPointerCapture(event.pointerId)) setDrag(alongAt(event));
+					if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+					// The thumb follows the pointer only once the press has moved: a click does not jump it there.
+					if (drag === undefined && Math.abs(event.clientX - (pressX.current ?? event.clientX)) < DRAG_SLOP_PX) return;
+					setDrag(alongAt(event));
 				}}
 				onPointerUp={(event) => {
 					if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
 					event.currentTarget.releasePointerCapture(event.pointerId);
+					pressX.current = undefined;
 					commit(Math.round(alongAt(event) * last));
 				}}
-				onPointerCancel={() => setDrag(undefined)}
+				onPointerCancel={() => {
+					pressX.current = undefined;
+					setDrag(undefined);
+				}}
 			>
 				<div className="absolute inset-x-0 top-1/2 -translate-y-1/2 overflow-hidden rounded-[3px] bg-interactive-active" style={{ height: TRACK_H }}>
 					{/* The filled part, up to the thumb's centre: a lighter grey than the bar, or the ultra colours. */}
@@ -143,6 +156,7 @@ export function EffortSlider({
 						// The brightest part of the slider, in either theme, with a hairline edge.
 						"absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[3px] border-[0.5px] border-(--color-border-strong) bg-white shadow-[0_1px_2px_rgb(0_0_0/0.2)] group-focus-visible/effort:ring-2 group-focus-visible/effort:ring-ring/60",
 						drag === undefined && "motion-safe:transition-[left] motion-safe:duration-150",
+						!disabled && (drag === undefined ? "cursor-grab" : "cursor-grabbing"),
 						chosen < 0 && drag === undefined && sent === undefined && "opacity-70",
 					)}
 					style={{

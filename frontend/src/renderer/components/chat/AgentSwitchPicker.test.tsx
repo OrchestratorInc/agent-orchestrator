@@ -101,6 +101,15 @@ describe("AgentModelPicker", () => {
 		expect(current.onPickEffort).not.toHaveBeenCalled();
 		await user.keyboard("{ArrowRight}");
 		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
+		// Home and End jump to the lowest and highest level, and keep the menu's highlight on the slider.
+		// The lowest here is High, the level already running, so Home sends nothing.
+		await user.keyboard("{Home}");
+		expect(effort).toHaveAttribute("aria-valuetext", "High");
+		expect(effort).toHaveFocus();
+		await user.keyboard("{End}");
+		expect(current.onPickEffort).toHaveBeenCalledTimes(2);
+		expect(current.onPickEffort).toHaveBeenLastCalledWith("max");
+		expect(effort).toHaveFocus();
 		await user.keyboard("{Enter}");
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
@@ -191,6 +200,30 @@ describe("AgentModelPicker", () => {
 		expect(slider).toHaveAttribute("aria-valuetext", "Max");
 		// The agent never reports Max (it refused), so its own level, High, shows again.
 		await vi.waitFor(() => expect(slider).toHaveAttribute("aria-valuetext", "High"), { timeout: 4000 });
+	});
+
+	it("eases a click on the track to the nearest level instead of jumping the thumb to the pointer", async () => {
+		const user = userEvent.setup();
+		const { current } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const slider = screen.getByRole("slider", { name: "Effort" });
+		const track = slider.querySelector<HTMLElement>('[aria-hidden="true"]')!;
+		track.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 18, right: 200, bottom: 18, x: 0, y: 0, toJSON: () => ({}) });
+		let captured = false;
+		track.setPointerCapture = () => { captured = true; };
+		track.hasPointerCapture = () => captured;
+		track.releasePointerCapture = () => { captured = false; };
+		const thumb = track.lastElementChild as HTMLElement;
+		const before = thumb.style.left;
+		expect(thumb).toHaveClass("cursor-grab");
+		fireEvent.pointerDown(track, { button: 0, clientX: 190, pointerId: 1 });
+		// A press, or a jitter under the drag threshold, leaves the thumb where it is.
+		fireEvent.pointerMove(track, { button: 0, clientX: 191, pointerId: 1 });
+		expect(thumb.style.left).toBe(before);
+		fireEvent.pointerUp(track, { button: 0, clientX: 191, pointerId: 1 });
+		// Released, it eases to the nearest level rather than following the pointer there.
+		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
+		expect(thumb).toHaveClass("motion-safe:transition-[left]");
 	});
 
 	it("lists Claude's newest models first and keeps the older releases below them", async () => {
@@ -696,6 +729,9 @@ describe("AgentModelPicker", () => {
 			const user = userEvent.setup();
 			open(undefined, false, "claude-code", { fast: false, onToggleFast: vi.fn(), ultracode: false, onToggleUltracode: vi.fn() });
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			// A screen reader gets the same hint without hovering.
+			expect(screen.getByRole("menuitemcheckbox", { name: "Ultracode" })).toHaveAccessibleDescription(/Claude Code's own workflows, at any effort level/);
+			expect(screen.getByRole("menuitemcheckbox", { name: "Fast mode" })).toHaveAccessibleDescription(/Faster replies from the same model/);
 			await user.hover(screen.getByRole("menuitemcheckbox", { name: "Ultracode" }));
 			expect(await screen.findByRole("tooltip")).toHaveTextContent("Claude Code's own workflows, at any effort level");
 			await user.hover(screen.getByRole("menuitemcheckbox", { name: "Fast mode" }));
@@ -784,11 +820,14 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		const compact = screen.getByRole("radiogroup", { name: "Auto-compact" });
 		expect(compact.parentElement).toContainElement(screen.getByRole("menuitemcheckbox", { name: "Fast mode" }));
+		expect(within(compact).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Auto", "200k", "500k", "1M"]);
+		await user.click(within(compact).getByRole("radio", { name: "500k" }));
+		expect(onChange).toHaveBeenLastCalledWith("500k");
 		await user.click(within(compact).getByRole("radio", { name: "1M" }));
-		expect(onChange).toHaveBeenCalledWith("1m");
+		expect(onChange).toHaveBeenLastCalledWith("1m");
 	});
 
-	it("keeps Fast mode and auto-compact in place, disabled, for an agent without them", async () => {
+	it("hides Fast mode and keeps auto-compact in place, disabled, for an agent without them", async () => {
 		const user = userEvent.setup();
 		render(
 			<QueryClientProvider client={new QueryClient()}>
@@ -800,10 +839,7 @@ describe("AgentModelPicker", () => {
 			</QueryClientProvider>,
 		);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const fast = screen.getByRole("menuitemcheckbox", { name: "Fast mode" });
-		expect(fast).toHaveAttribute("aria-checked", "false");
-		expect(fast).toHaveAttribute("data-disabled");
-		expect(fast).toHaveAttribute("aria-description", "Not available for this model");
+		expect(screen.queryByRole("menuitemcheckbox", { name: "Fast mode" })).not.toBeInTheDocument();
 		const compact = screen.getByRole("radiogroup", { name: "Auto-compact" });
 		expect(compact).toHaveAttribute("aria-disabled", "true");
 		expect(within(compact).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Auto"]);

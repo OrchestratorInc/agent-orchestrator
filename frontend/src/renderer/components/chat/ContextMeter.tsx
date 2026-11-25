@@ -13,6 +13,7 @@
  */
 
 import { useState, type ReactElement, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
 import { Button } from "../ui/button";
@@ -210,6 +211,7 @@ function ReadoutCard({ trigger, compact, children }: { trigger: ReactElement; co
 }
 
 function CompactButton({ onCompact, blockedReason }: CompactControl) {
+	const { t } = useTranslation();
 	const close = useHoverCardDismiss();
 	const [pending, setPending] = useState(false);
 	const [failed, setFailed] = useState(false);
@@ -232,12 +234,12 @@ function CompactButton({ onCompact, blockedReason }: CompactControl) {
 					}
 				}}
 			>
-				{pending ? "Compacting…" : "Compact now"}
+				{pending ? t("contextMeter.compacting") : t("contextMeter.compactNow")}
 			</Button>
 			{blockedReason ? (
 				<p className="text-muted-foreground">{blockedReason}</p>
 			) : failed ? (
-				<p role="alert" className="text-destructive">Conversation history could not be compacted. Try again.</p>
+				<p role="alert" className="text-destructive">{t("contextMeter.compactFailed")}</p>
 			) : null}
 		</div>
 	);

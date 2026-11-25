@@ -602,6 +602,16 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
 		}
 	}
+	// A starting choice the agent cannot take is refused, not dropped, so the
+	// caller is not left believing it took effect.
+	if cfg.Harness != "" {
+		if problem := domain.AutoCompactWindowProblem(cfg.Harness, cfg.AutoCompactWindow); problem != "" {
+			return domain.Session{}, 0, 0, apierr.Invalid("AUTO_COMPACT_WINDOW_UNSUPPORTED", problem, nil)
+		}
+		if cfg.FastMode && !domain.CanUseFastMode(cfg.Harness) {
+			return domain.Session{}, 0, 0, apierr.Invalid("FAST_MODE_UNSUPPORTED", fmt.Sprintf("%s has no Fast mode", cfg.Harness), nil)
+		}
+	}
 	if s.agentReadiness != nil && cfg.Harness != "" {
 		readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(cfg.Harness), domain.AgentReadinessPurposeLaunch)
 		if err != nil {

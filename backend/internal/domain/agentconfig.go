@@ -53,7 +53,7 @@ type AgentLaunchOptions struct {
 	FastModeOff bool `json:"fastModeOff,omitempty"`
 	// Ultracode starts Claude Code with Ultracode on.
 	Ultracode bool `json:"ultracode,omitempty"`
-	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or "1m".
+	// AutoCompactWindow is where Claude Code compacts on its own: "200k", "500k" or "1m".
 	// "off" turns compaction off on agents that can (see CanTurnOffAutoCompact).
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 	// HandoffNote is a terminal switch target's note, kept until the target has
@@ -63,7 +63,7 @@ type AgentLaunchOptions struct {
 }
 
 // AutoCompactTokens is each compaction window choice as a token count.
-var AutoCompactTokens = map[string]int{"200k": 200_000, "1m": 1_000_000}
+var AutoCompactTokens = map[string]int{"200k": 200_000, "500k": 500_000, "1m": 1_000_000}
 
 // AutoCompactOff turns an agent's own compaction off, on agents that can (OpenCode).
 const AutoCompactOff = "off"
@@ -71,6 +71,34 @@ const AutoCompactOff = "off"
 // CanTurnOffAutoCompact reports whether AutoCompactOff reaches the harness when it starts.
 func CanTurnOffAutoCompact(harness AgentHarness) bool {
 	return harness == HarnessOpenCode || harness == HarnessOpenCodeV2
+}
+
+// AutoCompactWindowProblem says why harness cannot take an auto-compaction
+// choice, or returns "" when it can. Empty, the agent's own default, suits
+// every agent.
+func AutoCompactWindowProblem(harness AgentHarness, window string) string {
+	switch {
+	case window == "":
+		return ""
+	case AutoCompactTokens[window] > 0:
+		if harness == HarnessClaudeCode {
+			return ""
+		}
+		return fmt.Sprintf("auto-compaction window %q is for Claude Code; %s takes none", window, harness)
+	case window == AutoCompactOff:
+		if CanTurnOffAutoCompact(harness) {
+			return ""
+		}
+		return fmt.Sprintf("%s cannot turn auto-compaction off", harness)
+	default:
+		return fmt.Sprintf("auto-compaction window %q is not one of 200k, 500k, 1m, off", window)
+	}
+}
+
+// CanUseFastMode reports whether a Fast mode choice reaches harness. Only
+// Codex reads it.
+func CanUseFastMode(harness AgentHarness) bool {
+	return harness == HarnessCodex
 }
 
 // IsZero reports whether the config carries no settings, so storage can persist

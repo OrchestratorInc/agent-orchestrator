@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
@@ -3162,6 +3163,16 @@ func (s *Service) setTurnSettings(ctx context.Context, controller *Controller, o
 		return domain.ConversationSettings{}, ErrReviewerPermissionsFixed
 	}
 	settings.OpenCodeMode = previous.OpenCodeMode
+	// A choice the agent cannot take is refused. Only a change is checked, so a
+	// value saved before this check existed does not block every later change.
+	if settings.AutoCompactWindow != previous.AutoCompactWindow {
+		if problem := domain.AutoCompactWindowProblem(controller.harness, settings.AutoCompactWindow); problem != "" {
+			return domain.ConversationSettings{}, apierr.Invalid("AUTO_COMPACT_WINDOW_UNSUPPORTED", problem, nil)
+		}
+	}
+	if settings.FastMode && !previous.FastMode && !domain.CanUseFastMode(controller.harness) {
+		return domain.ConversationSettings{}, apierr.Invalid("FAST_MODE_UNSUPPORTED", fmt.Sprintf("%s has no Fast mode", controller.harness), nil)
+	}
 	if err := controller.SetSettings(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}

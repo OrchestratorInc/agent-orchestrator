@@ -21647,6 +21647,7 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
           - "off"
           type: string
@@ -21966,6 +21967,7 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
           - "off"
           type: string
@@ -24450,6 +24452,7 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
           - "off"
           type: string
@@ -27442,6 +27445,7 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
           - "off"
           type: string

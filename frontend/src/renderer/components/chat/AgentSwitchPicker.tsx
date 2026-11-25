@@ -6,8 +6,8 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, DoubleZap, Loader2, Settings2, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
-import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { AgentZap, Brain, ChevronRight, Loader2, Settings2, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
+import { Fragment, memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
@@ -65,7 +65,7 @@ export interface PendingAgentSwitch {
 	thinking?: boolean;
 	/** Run Claude Code with Ultracode: set at launch in a terminal, asked per message in chat. */
 	ultracode?: boolean;
-	/** Sent with the switch: Claude Code's compaction window, "200k" or "1m", or "off" for OpenCode's. */
+	/** Sent with the switch: Claude Code's compaction window, "200k", "500k" or "1m", or "off" for OpenCode's. */
 	autoCompactWindow?: TurnSettings["autoCompactWindow"];
 	/** The permission mode picked for the agent. Unset starts it in the chat's, or its strictest. */
 	approvalMode?: ApprovalMode;
@@ -519,8 +519,8 @@ export function AgentModelPicker({
 			shownCompact.onChange(value);
 		},
 	};
-	// Fast mode and auto-compact are always here, in one row, so every agent's menu has the same shape;
-	// one the agent does not have is shown off and disabled.
+	// Fast mode, Ultracode and auto-compact share one row. Fast mode and Ultracode show only where the
+	// model offers them; auto-compact is always there, shown off and disabled where the agent lacks it.
 	const showToggles = settable && !waiting && (!modelsProblem || source.fast !== undefined || source.thinking !== undefined);
 	const notOffered = t("agentSwitch.notOffered");
 	const settingsGroups = [
@@ -528,18 +528,19 @@ export function AgentModelPicker({
 		showToggles ? (
 			<>
 				<div className="flex items-center gap-1">
-					<IconToggle
-						icon={Zap}
-						label={t("agentSwitch.fastMode")}
-						checked={source.fast ?? false}
-						onChange={source.fast === undefined ? undefined : withPick(source.onToggleFast)}
-						hint={t("agentSwitch.fastModeHint")}
-						note={source.fast === undefined ? notOffered : undefined}
-					/>
+					{source.fast !== undefined ? (
+						<IconToggle
+							icon={Zap}
+							label={t("agentSwitch.fastMode")}
+							checked={source.fast}
+							onChange={withPick(source.onToggleFast)}
+							hint={t("agentSwitch.fastModeHint")}
+						/>
+					) : null}
 					{/* Claude Code's Ultracode is a mode beside Fast mode, not a level on the effort slider. */}
 					{source.ultracode !== undefined ? (
 						<IconToggle
-							icon={DoubleZap}
+							icon={AgentZap}
 							iconClassName="h-3.5 w-auto"
 							label={t("agentSwitch.ultracode")}
 							checked={source.ultracode}
@@ -589,7 +590,7 @@ export function AgentModelPicker({
 				{terminal ? <ChevronRight aria-hidden="true" className="ml-auto size-icon-sm shrink-0 text-muted-foreground" /> : (
 					<>
 						{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
-						{shownUltracode ? <DoubleZap aria-label={t("agentSwitch.ultracode")} className="ultra-icon h-3 w-auto shrink-0 fill-current" /> : null}
+						{shownUltracode ? <AgentZap aria-label={t("agentSwitch.ultracode")} className="ultra-icon h-3 w-auto shrink-0 fill-current" /> : null}
 						{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
 						{shownEffort ? <span className={cn("shrink-0", ultraEffort ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
 						{mark}
@@ -855,28 +856,24 @@ export function ToggleRow({ label, checked, onChange, title, className }: { labe
 }
 
 /**
- * A mode as an icon button (Fast mode's lightning, Ultracode's double bolt): filled and lit when on, an
+ * A mode as an icon button (Fast mode's lightning, Ultracode's agent and bolt): filled and lit when on, an
  * outline when off. It is still a menu row, so the arrow keys reach it and Enter toggles it without
- * closing the menu.
+ * closing the menu. The icon alone does not say what the mode is, so hovering names it and says what
+ * it does, and a screen reader reads the same hint as the row's description.
  */
-/**
- * A mode switched on and off by its icon alone. Hovering names it and says what it does,
- * since the icon by itself does not.
- */
-function IconToggle({ icon: Icon, label, hint, note, checked, onChange, onClassName = "text-foreground", iconClassName = "size-3.5" }: {
+function IconToggle({ icon: Icon, label, hint, checked, onChange, onClassName = "text-foreground", iconClassName = "size-3.5" }: {
 	icon: AppIcon;
 	/** The icon's size: square by default; a wider icon gives a height and lets its width follow. */
 	iconClassName?: string;
 	label: string;
 	/** What the mode does, under its name in the tooltip. */
 	hint: string;
-	/** Why it cannot be switched here, if it cannot. */
-	note?: string;
 	checked: boolean;
 	onChange?: (next: boolean) => void;
 	/** The icon's colour when on. */
 	onClassName?: string;
 }) {
+	const hintId = useId();
 	return (
 		<TooltipProvider delayDuration={300}>
 			<Tooltip>
@@ -885,7 +882,7 @@ function IconToggle({ icon: Icon, label, hint, note, checked, onChange, onClassN
 						role="menuitemcheckbox"
 						aria-checked={checked}
 						aria-label={label}
-						aria-description={note ?? hint}
+						aria-describedby={hintId}
 						disabled={!onChange}
 						onSelect={(event) => { event.preventDefault(); onChange?.(!checked); }}
 						className={cn(
@@ -894,12 +891,13 @@ function IconToggle({ icon: Icon, label, hint, note, checked, onChange, onClassN
 						)}
 					>
 						<Icon aria-hidden="true" className={cn(iconClassName, checked && "fill-current")} />
+						{/* The tooltip is only there on hover, so the hint a screen reader reads is kept in the row. */}
+						<span id={hintId} className="sr-only">{hint}</span>
 					</OptionMenuItem>
 				</TooltipTrigger>
 				<TooltipContent side="top" sideOffset={4} hideArrow className="max-w-60">
 					<span className="block font-medium text-foreground">{label}</span>
 					<span className="block text-muted-foreground">{hint}</span>
-					{note ? <span className="mt-1 block text-muted-foreground">{note}</span> : null}
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
@@ -1088,12 +1086,12 @@ export interface AutoCompactControl {
 }
 
 const AUTO_COMPACT_CHOICES: Record<AutoCompactKind, ReadonlyArray<{ value: TurnSettings["autoCompactWindow"]; label: string }>> = {
-	window: [{ value: undefined, label: "Auto" }, { value: "200k", label: "200k" }, { value: "1m", label: "1M" }],
+	window: [{ value: undefined, label: "Auto" }, { value: "200k", label: "200k" }, { value: "500k", label: "500k" }, { value: "1m", label: "1M" }],
 	toggle: [{ value: undefined, label: "Auto" }, { value: "off", label: "Off" }],
 };
 
 /**
- * The agent's choices (Auto, 200k and 1M for Claude Code; Auto and Off for OpenCode) as one segmented
+ * The agent's choices (Auto, 200k, 500k and 1M for Claude Code; Auto and Off for OpenCode) as one segmented
  * control beside Fast mode, named for screen readers and its tooltip without a visible label, so the row fits. An agent AO cannot set it for shows
  * only Auto, disabled. A value the agent has no choice for (another agent's window) reads as Auto.
  */

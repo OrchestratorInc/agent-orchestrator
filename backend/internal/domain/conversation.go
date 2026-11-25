@@ -573,8 +573,8 @@ type ConversationSettings struct {
 	// OpenCodeMode is the provider-owned mode explicitly selected through ACP.
 	// It is separate from approval policy and restored before accepting turns.
 	OpenCodeMode string `json:"openCodeMode,omitempty"`
-	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or
-	// "1m". "off" turns OpenCode's compaction off. Empty leaves it to the agent.
+	// AutoCompactWindow is where Claude Code compacts on its own: "200k",
+	// "500k" or "1m". "off" turns OpenCode's compaction off. Empty leaves it to the agent.
 	// It is read when the agent starts.
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 }

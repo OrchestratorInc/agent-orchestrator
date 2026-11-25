@@ -111,7 +111,7 @@ type SpawnConfig struct {
 	// Fork makes this spawn a copy of another session. Nil for ordinary spawns.
 	Fork *SpawnFork
 	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
-	// and auto-compaction ("200k", "1m" or "off"), saved with its new
+	// and auto-compaction ("200k", "500k", "1m" or "off"), saved with its new
 	// conversation. They are chat settings, not launch options: a terminal
 	// session ignores them.
 	FastMode          bool
