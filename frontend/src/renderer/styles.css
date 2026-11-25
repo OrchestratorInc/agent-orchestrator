@@ -7298,7 +7298,7 @@ body.is-pane-dragging webview {
 }
 
 /* ---------------------------------------------------------------------------
- * Interface v2 (Developer mode preview, on by default there; Settings >
+ * Interface v2 (Developer mode preview, off by default; Settings >
  * General). Every rule below is scoped under html[data-new-desktop-ui], which
  * `lib/new-desktop-ui.ts` sets before first paint, so with the flag off the
  * app is exactly the UI above. It sits last so it wins ties without

@@ -641,7 +641,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	autoUpdateRemoteHosts: getLocalStorage()?.getItem(autoUpdateRemoteHostsStorageKey) === "true",
 	diagnostics: initialDiagnostics(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
-	newDesktopUi: getLocalStorage()?.getItem(newDesktopUiStorageKey) !== "false",
+	newDesktopUi: getLocalStorage()?.getItem(newDesktopUiStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
