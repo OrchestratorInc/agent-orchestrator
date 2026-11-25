@@ -43,6 +43,8 @@ const (
 var (
 	// Classify decides whether target needs approval under mode.
 	Classify = rules.Classify
+	// ClassifyDialog judges accepting a page dialog.
+	ClassifyDialog = rules.ClassifyDialog
 	// ValidMode reports whether m is a known mode.
 	ValidMode = rules.ValidMode
 	// Site returns the host a page URL belongs to.
