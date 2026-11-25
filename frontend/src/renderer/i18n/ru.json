@@ -5853,6 +5853,7 @@
 	"artifactComments.lostAccessHint": "Попросите того, кто ею поделился.",
 	"artifactComments.loadError": "Не удалось загрузить комментарии.",
 	"artifactComments.sendToAgent": "Отправить агенту",
+	"artifactComments.send": "Отправить",
 	"artifactComments.sendAgain": "Отправить снова",
 	"artifactComments.sentAt": "Отправлено агенту · {{time}}",
 	"artifactComments.sendDescription": "Агент, создавший этот файл, получит эту ветку сообщением.",

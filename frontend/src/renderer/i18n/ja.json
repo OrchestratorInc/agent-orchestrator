@@ -5514,6 +5514,7 @@
 	"artifactComments.lostAccessHint": "共有した人に問い合わせてください。",
 	"artifactComments.loadError": "コメントを読み込めませんでした。",
 	"artifactComments.sendToAgent": "エージェントに送信",
+	"artifactComments.send": "送信",
 	"artifactComments.sendAgain": "再送信",
 	"artifactComments.sentAt": "エージェントに送信済み · {{time}}",
 	"artifactComments.sendDescription": "このファイルを作成したエージェントが、このスレッドをメッセージとして受け取ります。",

@@ -5689,6 +5689,7 @@
 	"artifactComments.lostAccessHint": "Peça a quem compartilhou.",
 	"artifactComments.loadError": "Não foi possível carregar os comentários.",
 	"artifactComments.sendToAgent": "Enviar ao agente",
+	"artifactComments.send": "Enviar",
 	"artifactComments.sendAgain": "Enviar novamente",
 	"artifactComments.sentAt": "Enviado ao agente · {{time}}",
 	"artifactComments.sendDescription": "O agente que criou este arquivo receberá esta conversa como mensagem.",

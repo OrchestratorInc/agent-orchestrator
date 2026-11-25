@@ -75,7 +75,7 @@ export function SendThreadToAgentDialog({ markSent, onOpenChange, open, target, 
 		<ConfirmDialog
 			busy={busy}
 			busyLabel={t("artifactComments.sending")}
-			confirmLabel={t("artifactComments.sendToAgent")}
+			confirmLabel={t("artifactComments.send")}
 			description={t("artifactComments.sendDescription")}
 			error={error}
 			onConfirm={() => void confirm()}
@@ -85,14 +85,14 @@ export function SendThreadToAgentDialog({ markSent, onOpenChange, open, target, 
 		>
 			<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
 				<dt className="text-muted-foreground">{t("artifactComments.sendSession")}</dt>
-				<dd className="min-w-0 truncate text-foreground" data-testid="send-to-agent-session">{sessionName}</dd>
+				<dd className="min-w-0 truncate font-semibold text-foreground" data-testid="send-to-agent-session">{sessionName}</dd>
 				<dt className="text-muted-foreground">{t("artifactComments.sendFile")}</dt>
 				<dd className="min-w-0 truncate text-foreground">{t("artifactComments.sendFileVersion", { name: target.name, version })}</dd>
 			</dl>
 			<ul aria-label={t("artifactComments.title")} className="board-scrollbar flex max-h-40 flex-col gap-1.5 overflow-y-auto rounded-md border border-border p-2 text-xs">
 				{thread.comments.map((comment) => (
 					<li className="whitespace-pre-wrap break-words text-foreground" key={comment.id}>
-						<span className="font-medium">{authorLabel(comment.author)}: </span>
+						<span className="font-semibold">{authorLabel(comment.author)}: </span>
 						{comment.deleted ? <span className="text-muted-foreground">{t("artifactComments.deleted")}</span> : comment.body}
 					</li>
 				))}

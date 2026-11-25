@@ -31,11 +31,11 @@ function resolveColor(value: string): string {
 	return color || value;
 }
 
-/** The accent the bridge draws with, and its ~14% tint, from tokens.css. */
+/** The accent the bridge draws with (the Orchestrate blue, as on the comment badge) and its ~14% tint. */
 export function commentBridgeTheme(): { accent: string; tint: string } {
 	return {
-		accent: resolveColor("var(--bridge-accent, var(--primary))"),
-		tint: resolveColor("color-mix(in oklch, var(--bridge-accent, var(--primary)) 14%, transparent)"),
+		accent: resolveColor("var(--color-brand-logo)"),
+		tint: resolveColor("color-mix(in oklch, var(--color-brand-logo) 14%, transparent)"),
 	};
 }
 

@@ -5496,6 +5496,7 @@
 	"artifactComments.lostAccessHint": "请联系分享者。",
 	"artifactComments.loadError": "无法加载评论。",
 	"artifactComments.sendToAgent": "发送给智能体",
+	"artifactComments.send": "发送",
 	"artifactComments.sendAgain": "再次发送",
 	"artifactComments.sentAt": "已发送给智能体 · {{time}}",
 	"artifactComments.sendDescription": "创建此文件的智能体将以消息形式收到此讨论。",

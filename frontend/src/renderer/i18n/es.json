@@ -5689,6 +5689,7 @@
 	"artifactComments.lostAccessHint": "Pídeselo a quien lo compartió.",
 	"artifactComments.loadError": "No se pudieron cargar los comentarios.",
 	"artifactComments.sendToAgent": "Enviar al agente",
+	"artifactComments.send": "Enviar",
 	"artifactComments.sendAgain": "Enviar de nuevo",
 	"artifactComments.sentAt": "Enviado al agente · {{time}}",
 	"artifactComments.sendDescription": "El agente que creó este archivo recibirá este hilo como mensaje.",

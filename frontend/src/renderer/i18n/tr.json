@@ -5494,6 +5494,7 @@
 	"artifactComments.lostAccessHint": "Paylaşan kişiye sorun.",
 	"artifactComments.loadError": "Yorumlar yüklenemedi.",
 	"artifactComments.sendToAgent": "Ajana gönder",
+	"artifactComments.send": "Gönder",
 	"artifactComments.sendAgain": "Yeniden gönder",
 	"artifactComments.sentAt": "Ajana gönderildi · {{time}}",
 	"artifactComments.sendDescription": "Bu dosyayı oluşturan ajan bu konuyu mesaj olarak alacak.",

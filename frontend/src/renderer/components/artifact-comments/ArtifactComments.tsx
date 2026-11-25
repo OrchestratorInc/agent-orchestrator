@@ -49,7 +49,7 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
 					{openCount > 0 ? (
 						<span
 							aria-hidden="true"
-							className="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-center text-[10px] leading-3.5 font-medium text-primary-foreground tabular-nums"
+							className="pointer-events-none absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-logo-accent px-1 text-center text-[10px] leading-3.5 font-medium text-logo-accent-foreground tabular-nums"
 							data-testid="artifact-comments-count"
 						>
 							{openCount}

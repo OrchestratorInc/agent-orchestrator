@@ -5689,6 +5689,7 @@
 	"artifactComments.lostAccessHint": "Demandez à la personne qui l'a partagé.",
 	"artifactComments.loadError": "Impossible de charger les commentaires.",
 	"artifactComments.sendToAgent": "Envoyer à l'agent",
+	"artifactComments.send": "Envoyer",
 	"artifactComments.sendAgain": "Renvoyer",
 	"artifactComments.sentAt": "Envoyé à l'agent · {{time}}",
 	"artifactComments.sendDescription": "L'agent qui a créé ce fichier recevra ce fil sous forme de message.",

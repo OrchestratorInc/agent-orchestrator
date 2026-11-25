@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowUp, Check, ChevronDown, ChevronRight, MoreHorizontal, RotateCcw, Send, X } from "@/components/app-icons";
-import { formatRelativeTime } from "../../lib/usage-format";
+import { ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, MoreHorizontal, RotateCcw, Send, X } from "@/components/app-icons";
+import { formatTimeTerse } from "../../lib/format-time";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
@@ -11,6 +11,7 @@ import {
 	ARTIFACT_COMMENT_MAX_BODY_LENGTH,
 	type ArtifactComment,
 	type ArtifactCommentAnchor,
+	type ArtifactCommentAuthor,
 	type ArtifactCommentGroup,
 	type ArtifactCommentGroups,
 	type BridgeAnchorPosition,
@@ -28,6 +29,26 @@ function initials(name: string): string {
 	return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : parts[0]?.[1] ?? "")).toUpperCase() || "?";
 }
 
+/** Same hues as ProjectIcon's letter tiles, solid, so each commenter keeps one colour. */
+const AVATAR_COLORS = [
+	"bg-orange-500",
+	"bg-emerald-600",
+	"bg-sky-600",
+	"bg-violet-500",
+	"bg-pink-500",
+	"bg-teal-600",
+	"bg-amber-600",
+	"bg-indigo-500",
+	"bg-lime-600",
+	"bg-fuchsia-500",
+] as const;
+
+export function artifactCommentAvatarColor(seed: string): string {
+	let hash = 0;
+	for (let index = 0; index < seed.length; index++) hash = (hash * 31 + seed.charCodeAt(index)) | 0;
+	return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
 function useAuthorName() {
 	const { t } = useTranslation();
 	const label = useArtifactCommentAuthorLabel();
@@ -36,31 +57,94 @@ function useAuthorName() {
 		comment.author?.id === viewer.userId && !comment.author.name.trim() ? t("artifactComments.you") : label(comment.author);
 }
 
-function useRelative() {
-	const { i18n } = useTranslation();
-	return (iso: string) => formatRelativeTime(iso, new Date(), i18n.resolvedLanguage ?? "en");
-}
-
-function Avatar({ name }: { name: string }) {
+function Avatar({ author, name }: { author: ArtifactCommentAuthor | null; name: string }) {
 	return (
-		<span aria-hidden="true" className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-muted text-[9px] font-medium text-muted-foreground">
+		<span
+			aria-hidden="true"
+			className={cn("inline-flex size-[18px] shrink-0 items-center justify-center rounded-full text-[8px] font-semibold text-white", artifactCommentAvatarColor(author?.id ?? name))}
+			data-testid="artifact-comment-avatar"
+		>
 			{initials(name)}
 		</span>
 	);
 }
 
+/** Avatar, name and "· 2h"; anything after it sits at the row's end. */
+function AuthorRow({ children, comment, viewer }: { children?: ReactNode; comment: ArtifactComment; viewer: Viewer }) {
+	const authorName = useAuthorName();
+	const name = authorName(comment, viewer);
+	return (
+		<div className="flex min-h-5 items-center gap-1.5 text-xs">
+			<Avatar author={comment.author} name={name} />
+			<span className="min-w-0 truncate font-semibold text-foreground">{name}</span>
+			<span className="shrink-0 text-muted-foreground tabular-nums">· {formatTimeTerse(comment.createdAt)}</span>
+			<span className="flex-1" />
+			{children}
+		</div>
+	);
+}
+
+/** A thread's comments as shown: deleted replies drop out; a deleted first comment leaves "Comment deleted". */
+function visibleComments(thread: ArtifactCommentThread): ArtifactComment[] {
+	return thread.comments.filter((comment, index) => index === 0 || !comment.deleted);
+}
+
+function repliesOf(thread: ArtifactCommentThread): number {
+	return Math.max(0, visibleComments(thread).length - 1);
+}
+
+/** A new comment being written on one element. Kept by the panel, so a refresh or a failed post never loses it. */
+export type NewCommentDraft = { text: string; failed: boolean; sending: boolean; clientId: string };
+
 /**
- * A comment or reply box. Enter sends and Shift+Enter adds a line. A failed
- * send keeps the text with Retry; the same client id is reused so a retry
- * never saves the comment twice.
+ * The new-comment box: one bordered box holding the text, the post error and
+ * Cancel / Comment. A failed post keeps the text with Retry, under the same
+ * client id, so a retry never saves the comment twice.
  */
-function CommentComposer({ autoFocus, onCancel, onSubmit, placeholder, variant }: {
-	autoFocus?: boolean;
-	onCancel?: () => void;
-	onSubmit: (body: string, clientId: string) => Promise<unknown>;
-	placeholder: string;
-	variant: "new" | "reply";
+function NewCommentBox({ draft, onCancel, onChange, onSubmit }: {
+	draft: NewCommentDraft;
+	onCancel: () => void;
+	onChange: (text: string) => void;
+	onSubmit: () => void;
 }) {
+	const { t } = useTranslation();
+	return (
+		<div className="flex flex-col gap-1.5 rounded-md border border-logo-accent bg-background p-2" data-testid="artifact-comments-new">
+			<textarea
+				aria-label={t("artifactComments.newPlaceholder")}
+				autoFocus
+				className="board-scrollbar max-h-40 min-h-10 w-full resize-none border-0 bg-transparent text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+				maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
+				onChange={(event) => onChange(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+						event.preventDefault();
+						onSubmit();
+					} else if (event.key === "Escape") {
+						event.stopPropagation();
+						onCancel();
+					}
+				}}
+				placeholder={t("artifactComments.newPlaceholder")}
+				rows={2}
+				value={draft.text}
+			/>
+			{draft.failed ? (
+				<p className="flex items-center gap-1 text-caption text-destructive" role="alert">
+					{t("artifactComments.postFailed")}
+					<Button className="text-destructive" onClick={onSubmit} size="none" type="button" variant="link">{t("artifactComments.retry")}</Button>
+				</p>
+			) : null}
+			<div className="flex justify-end gap-1">
+				<Button onClick={onCancel} size="xs" type="button" variant="quiet">{t("artifactComments.cancel")}</Button>
+				<Button disabled={!draft.text.trim() || draft.sending} onClick={onSubmit} size="xs" type="button" variant="primary">{t("artifactComments.comment")}</Button>
+			</div>
+		</div>
+	);
+}
+
+/** The chat-style reply box: Enter sends, Shift+Enter adds a line, and the accent arrow sends. */
+function ReplyBox({ onSubmit }: { onSubmit: (body: string, clientId: string) => Promise<unknown> }) {
 	const { t } = useTranslation();
 	const [text, setText] = useState("");
 	const [failed, setFailed] = useState(false);
@@ -86,56 +170,44 @@ function CommentComposer({ autoFocus, onCancel, onSubmit, placeholder, variant }
 		if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
 			event.preventDefault();
 			void submit();
-		} else if (event.key === "Escape" && onCancel) {
-			event.stopPropagation();
-			onCancel();
 		}
 	};
 	return (
-		<div className="flex flex-col gap-1.5">
-			<div className="flex items-end gap-1 rounded-md bg-input/50 px-2 py-1">
+		<div className="flex flex-col gap-1">
+			<div className="flex items-end gap-1 rounded-md border border-border bg-background py-1 pr-1 pl-2.5 focus-within:border-logo-accent">
 				<textarea
-					aria-label={placeholder}
-					autoFocus={autoFocus}
-					className="board-scrollbar max-h-32 min-h-7 w-full resize-none border-0 bg-transparent py-1 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+					aria-label={t("artifactComments.replyPlaceholder")}
+					className="board-scrollbar max-h-32 min-h-6 w-full resize-none border-0 bg-transparent py-0.5 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 					maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
 					onChange={(event) => setText(event.target.value)}
 					onKeyDown={onKeyDown}
-					placeholder={placeholder}
-					rows={variant === "new" ? 2 : 1}
+					placeholder={t("artifactComments.replyPlaceholder")}
+					rows={1}
 					value={text}
 				/>
-				{variant === "reply" ? (
-					<Button aria-label={t("artifactComments.sendReply")} disabled={!text.trim() || sending} onClick={() => void submit()} shape="pill" size="icon-xs" type="button" variant="primary">
-						<ArrowUp aria-hidden="true" className="size-3.5" />
-					</Button>
-				) : null}
+				<Button aria-label={t("artifactComments.sendReply")} disabled={!text.trim() || sending} onClick={() => void submit()} size="icon-xs" type="button" variant="primary">
+					<ArrowUp aria-hidden="true" className="size-3.5" />
+				</Button>
 			</div>
 			{failed ? (
 				<p className="flex items-center gap-1 text-caption text-destructive" role="alert">
 					{t("artifactComments.postFailed")}
-					<Button className="h-auto p-0 text-caption" onClick={() => void submit()} size="sm" type="button" variant="link">{t("artifactComments.retry")}</Button>
+					<Button className="text-destructive" onClick={() => void submit()} size="none" type="button" variant="link">{t("artifactComments.retry")}</Button>
 				</p>
-			) : null}
-			{variant === "new" ? (
-				<div className="flex justify-end gap-1.5">
-					{onCancel ? <Button onClick={onCancel} size="sm" type="button" variant="secondary">{t("artifactComments.cancel")}</Button> : null}
-					<Button disabled={!text.trim() || sending} onClick={() => void submit()} size="sm" type="button" variant="primary">{t("artifactComments.comment")}</Button>
-				</div>
 			) : null}
 		</div>
 	);
 }
 
-function CommentItem({ comment, comments, reply, viewer }: {
+/** One comment: its author row (with the ⋯ menu and anything the thread adds), text, and "edited". */
+function CommentItem({ aside, comment, comments, reply, viewer }: {
+	aside?: ReactNode;
 	comment: ArtifactComment;
 	comments: ArtifactCommentsState;
 	reply: boolean;
 	viewer: Viewer;
 }) {
 	const { t } = useTranslation();
-	const authorName = useAuthorName();
-	const relative = useRelative();
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(comment.body);
 	const [confirmDelete, setConfirmDelete] = useState(false);
@@ -144,8 +216,8 @@ function CommentItem({ comment, comments, reply, viewer }: {
 	const own = comment.author?.id === viewer.userId;
 	const pending = isPendingId(comment.id);
 	const canEdit = own && !comment.deleted && !pending;
+	// The ⋯ menu: Edit and Delete on your own comments; the owner may delete any.
 	const canDelete = (own || viewer.isOwner) && !comment.deleted && !pending;
-	const name = authorName(comment, viewer);
 	const run = async (action: () => Promise<unknown>, done: () => void) => {
 		setBusy(true);
 		setError(null);
@@ -159,48 +231,49 @@ function CommentItem({ comment, comments, reply, viewer }: {
 		}
 	};
 	if (comment.deleted) {
-		return <p className={cn("text-xs italic text-muted-foreground", reply && "ml-2.5 border-l-2 border-border pl-2")}>{t("artifactComments.deleted")}</p>;
+		return (
+			<p className={cn("text-xs italic text-muted-foreground", reply && "ml-2.5 border-l-2 border-border pl-2.5")} data-comment-id={comment.id}>
+				{t("artifactComments.deleted")}
+			</p>
+		);
 	}
 	return (
-		<div className={cn("flex flex-col gap-1", reply && "ml-2.5 border-l-2 border-border pl-2", pending && "opacity-70")} data-comment-id={comment.id}>
-			<div className="flex items-center gap-1.5 text-xs">
-				<Avatar name={name} />
-				<span className="min-w-0 truncate font-medium text-foreground">{name}</span>
-				<span className="shrink-0 text-muted-foreground">· {relative(comment.createdAt)}</span>
-				{comment.editedAt ? <span className="shrink-0 text-muted-foreground">· {t("artifactComments.edited")}</span> : null}
-				<span className="flex-1" />
+		<div className={cn("flex flex-col gap-1", reply && "ml-2.5 border-l-2 border-border pl-2.5", pending && "opacity-70")} data-comment-id={comment.id}>
+			<AuthorRow comment={comment} viewer={viewer}>
+				{aside}
 				{canEdit || canDelete ? (
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
-							<Button aria-label={t("artifactComments.commentActions")} size="icon-xs" type="button" variant="quiet">
+							<Button aria-label={t("artifactComments.commentActions")} className="-my-1" size="icon-xs" type="button" variant="quiet">
 								<MoreHorizontal aria-hidden="true" className="size-3.5" />
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end">
 							{canEdit ? <DropdownMenuItem onSelect={() => { setDraft(comment.body); setEditing(true); }}>{t("artifactComments.edit")}</DropdownMenuItem> : null}
-							{canDelete ? <DropdownMenuItem onSelect={() => setConfirmDelete(true)}>{t("artifactComments.delete")}</DropdownMenuItem> : null}
+							{canDelete ? <DropdownMenuItem onSelect={() => setConfirmDelete(true)} variant="destructive">{t("artifactComments.delete")}</DropdownMenuItem> : null}
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
-			</div>
+			</AuthorRow>
 			{editing ? (
-				<div className="flex flex-col gap-1.5">
+				<div className="flex flex-col gap-1.5 rounded-md border border-logo-accent bg-background p-2">
 					<textarea
 						aria-label={t("artifactComments.edit")}
 						autoFocus
-						className="board-scrollbar min-h-12 w-full resize-none rounded-md bg-input/50 px-2 py-1 text-sm text-foreground outline-none"
+						className="board-scrollbar min-h-10 w-full resize-none border-0 bg-transparent text-sm leading-5 text-foreground outline-none"
 						maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
 						onChange={(event) => setDraft(event.target.value)}
 						value={draft}
 					/>
-					<div className="flex justify-end gap-1.5">
-						<Button disabled={busy} onClick={() => setEditing(false)} size="sm" type="button" variant="secondary">{t("artifactComments.cancel")}</Button>
-						<Button disabled={busy || !draft.trim()} onClick={() => void run(() => comments.edit(comment.id, draft.trim()), () => setEditing(false))} size="sm" type="button" variant="primary">{t("artifactComments.save")}</Button>
+					<div className="flex justify-end gap-1">
+						<Button disabled={busy} onClick={() => setEditing(false)} size="xs" type="button" variant="quiet">{t("artifactComments.cancel")}</Button>
+						<Button disabled={busy || !draft.trim()} onClick={() => void run(() => comments.edit(comment.id, draft.trim()), () => setEditing(false))} size="xs" type="button" variant="primary">{t("artifactComments.save")}</Button>
 					</div>
 				</div>
 			) : (
-				<p className="whitespace-pre-wrap break-words text-sm text-foreground">{comment.body}</p>
+				<p className="whitespace-pre-wrap break-words text-sm leading-5 text-foreground">{comment.body}</p>
 			)}
+			{comment.editedAt && !editing ? <p className="text-caption text-muted-foreground">{t("artifactComments.edited")}</p> : null}
 			{error && !confirmDelete ? <p className="text-caption text-destructive" role="alert">{error}</p> : null}
 			<ConfirmDialog
 				busy={busy}
@@ -214,6 +287,25 @@ function CommentItem({ comment, comments, reply, viewer }: {
 				title={t("artifactComments.deleteTitle")}
 			/>
 		</div>
+	);
+}
+
+/** A thread folded to its first comment, cut to two lines, and its reply count. */
+function ThreadSummary({ thread, viewer }: { thread: ArtifactCommentThread; viewer: Viewer }) {
+	const { t } = useTranslation();
+	const first = thread.comments[0];
+	if (!first) return null;
+	const replies = repliesOf(thread);
+	return (
+		<span className="flex flex-col gap-1">
+			<AuthorRow comment={first} viewer={viewer} />
+			<span className={cn("line-clamp-2 whitespace-pre-wrap break-words text-sm leading-5", first.deleted ? "italic text-muted-foreground" : "text-foreground")}>
+				{first.deleted ? t("artifactComments.deleted") : first.body}
+			</span>
+			<span className="text-caption text-muted-foreground">
+				{replies > 0 ? t("artifactComments.replies", { count: replies }) : t("artifactComments.noReplies")}
+			</span>
+		</span>
 	);
 }
 
@@ -231,7 +323,7 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	const pending = isPendingId(thread.id);
 	const resolved = thread.status === "resolved";
 	// Send to agent: the app's owner only, and only when the session that made the file is here.
-	const canSend = viewer.isOwner && Boolean(sendTarget) && !pending;
+	const canSend = viewer.isOwner && Boolean(sendTarget) && !pending && !resolved;
 	const setStatus = (status: "open" | "resolved") => {
 		setStatusError(false);
 		comments.setStatus(thread.id, status).catch(() => setStatusError(true));
@@ -239,35 +331,38 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	const sentTime = thread.sentToAgentAt
 		? new Intl.DateTimeFormat(i18n.resolvedLanguage ?? "en", { hour: "2-digit", minute: "2-digit" }).format(new Date(thread.sentToAgentAt))
 		: null;
+	// On the first comment's row: who resolved it, or when it went to the agent.
+	const aside = resolved ? (
+		<span className="min-w-0 shrink-[3] truncate rounded-sm border border-border px-1.5 text-caption text-muted-foreground">
+			{t("artifactComments.resolvedBy", { name: authorLabel(thread.resolvedBy) })}
+		</span>
+	) : sentTime ? (
+		<span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground" data-testid="artifact-comments-sent">
+			<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+			<span className="truncate">{t("artifactComments.sentAt", { time: sentTime })}</span>
+		</span>
+	) : null;
 	return (
-		<div className="flex flex-col gap-2 py-2 first:pt-0 last:pb-0" data-thread-id={thread.id}>
-			{resolved ? (
-				<p className="text-caption text-muted-foreground">{t("artifactComments.resolvedBy", { name: authorLabel(thread.resolvedBy) })}</p>
-			) : null}
-			{sentTime ? <p className="text-caption text-muted-foreground">{t("artifactComments.sentAt", { time: sentTime })}</p> : null}
-			{thread.comments.map((comment, index) => (
-				<CommentItem comment={comment} comments={comments} key={comment.id} reply={index > 0} viewer={viewer} />
+		<div className="flex flex-col gap-2 py-2.5 first:pt-0 last:pb-0" data-thread-id={thread.id}>
+			{visibleComments(thread).map((comment, index) => (
+				<CommentItem aside={index === 0 ? aside : undefined} comment={comment} comments={comments} key={comment.id} reply={index > 0} viewer={viewer} />
 			))}
 			{!resolved && !pending ? (
-				<CommentComposer
-					onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)}
-					placeholder={t("artifactComments.replyPlaceholder")}
-					variant="reply"
-				/>
+				<ReplyBox onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)} />
 			) : null}
 			{!pending ? (
 				<div className="flex items-center gap-1">
 					{resolved ? (
-						<Button onClick={() => setStatus("open")} size="sm" type="button" variant="secondary">
-							<RotateCcw aria-hidden="true" className="size-3.5" />{t("artifactComments.reopen")}
+						<Button onClick={() => setStatus("open")} size="xs" type="button" variant="secondary">
+							<RotateCcw aria-hidden="true" className="size-3" />{t("artifactComments.reopen")}
 						</Button>
 					) : (
-						<Button onClick={() => setStatus("resolved")} size="sm" type="button" variant="secondary">
-							<Check aria-hidden="true" className="size-3.5" />{t("artifactComments.resolve")}
+						<Button onClick={() => setStatus("resolved")} size="xs" type="button" variant="secondary">
+							<Check aria-hidden="true" className="size-3" />{t("artifactComments.resolve")}
 						</Button>
 					)}
 					{canSend && sendTarget ? (
-						<Button className="text-muted-foreground" onClick={() => setSendOpen(true)} size="sm" type="button" variant="quiet">
+						<Button onClick={() => setSendOpen(true)} size="xs" type="button" variant="quiet">
 							<Send aria-hidden="true" className="size-3.5" />
 							{thread.sentToAgentAt ? t("artifactComments.sendAgain") : t("artifactComments.sendToAgent")}
 						</Button>
@@ -282,7 +377,11 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	);
 }
 
-/** One element's card: collapsed to its first comment, or expanded to all its threads. */
+/**
+ * One element's card. Collapsed: the oldest thread's first comment, cut to two
+ * lines, then "+N more" when the element has several threads, else its reply
+ * count; never a thread count. Expanded: an accent border around the content.
+ */
 function GroupCard({ children, expanded, group, onToggle, viewer }: {
 	children?: ReactNode;
 	expanded: boolean;
@@ -291,42 +390,40 @@ function GroupCard({ children, expanded, group, onToggle, viewer }: {
 	viewer: Viewer;
 }) {
 	const { t } = useTranslation();
-	const authorName = useAuthorName();
-	const relative = useRelative();
-	const first = group.threads[0]?.comments[0];
-	const replies = Math.max(0, (group.threads[0]?.comments.length ?? 1) - 1);
-	const name = first ? authorName(first, viewer) : "";
+	const thread = group.threads[0];
+	const first = thread?.comments[0];
+	const replies = thread ? repliesOf(thread) : 0;
+	if (expanded) {
+		return (
+			<section className="rounded-lg border border-logo-accent bg-card p-2.5" data-expanded="true" data-group-path={group.path}>
+				{children}
+			</section>
+		);
+	}
 	return (
-		<section
-			aria-label={first ? `${name}: ${first.body.slice(0, 80)}` : undefined}
-			className={cn("rounded-lg border bg-card p-2.5", expanded ? "border-primary" : "border-border")}
-			data-group-path={group.path}
-		>
+		<section className="rounded-lg border border-border bg-card" data-group-path={group.path}>
 			<button
-				aria-expanded={expanded}
-				className="flex w-full flex-col gap-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+				aria-expanded={false}
+				className="flex w-full flex-col gap-1 rounded-lg p-2.5 text-left outline-none hover:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
 				onClick={onToggle}
 				type="button"
 			>
-				{expanded ? null : first ? (
+				{first ? (
 					<>
-						<span className="flex items-center gap-1.5 text-xs">
-							<Avatar name={name} />
-							<span className="min-w-0 truncate font-medium text-foreground">{name}</span>
-							<span className="shrink-0 text-muted-foreground">· {relative(first.createdAt)}</span>
-						</span>
-						<span className="line-clamp-2 whitespace-pre-wrap break-words text-sm text-foreground">
+						<AuthorRow comment={first} viewer={viewer} />
+						<span className={cn("line-clamp-2 whitespace-pre-wrap break-words text-sm leading-5", first.deleted ? "italic text-muted-foreground" : "text-foreground")}>
 							{first.deleted ? t("artifactComments.deleted") : first.body}
 						</span>
-						<span className="text-caption text-muted-foreground">
-							{group.threads.length > 1
-								? t("artifactComments.moreThreads", { n: group.threads.length - 1 })
-								: replies > 0 ? t("artifactComments.replies", { count: replies }) : t("artifactComments.noReplies")}
-						</span>
+						{group.threads.length > 1 ? (
+							<span className="text-caption text-logo-accent-text">{t("artifactComments.moreThreads", { n: group.threads.length - 1 })}</span>
+						) : (
+							<span className="text-caption text-muted-foreground">
+								{replies > 0 ? t("artifactComments.replies", { count: replies }) : t("artifactComments.noReplies")}
+							</span>
+						)}
 					</>
 				) : null}
 			</button>
-			{expanded ? <div className="flex flex-col divide-y divide-border">{children}</div> : null}
 		</section>
 	);
 }
@@ -348,7 +445,7 @@ export type ArtifactCommentsPanelProps = {
 /**
  * The comments panel beside the published artifact: one card per commented
  * element in document order, the expanded element's threads, the new comment
- * box for a picked element, then resolved and not-found threads.
+ * box for a picked element, then not-found and resolved threads.
  */
 export function ArtifactCommentsPanel({
 	bridgeStatus,
@@ -369,6 +466,44 @@ export function ArtifactCommentsPanel({
 	const [showResolved, setShowResolved] = useState(false);
 	const [shownResolvedPath, setShownResolvedPath] = useState<string | null>(null);
 	const resolvedByPath = useMemo(() => new Map(groups.resolved.map((group) => [group.path, group])), [groups.resolved]);
+	// New comments being written, by element: they outlive the box, which moves
+	// when the posted copy turns a new element's box into its group.
+	const [drafts, setDrafts] = useState<Record<string, NewCommentDraft>>({});
+	const draftFor = (path: string): NewCommentDraft => drafts[path] ?? { text: "", failed: false, sending: false, clientId: "" };
+	const updateDraft = (path: string, patch: Partial<NewCommentDraft>) => setDrafts((current) => {
+		const base = current[path] ?? { text: "", failed: false, sending: false, clientId: crypto.randomUUID() };
+		return { ...current, [path]: { ...base, ...patch } };
+	});
+	const dropDraft = (path: string) => setDrafts((current) => {
+		const { [path]: _dropped, ...rest } = current;
+		return rest;
+	});
+	const cancelDraft = (path: string) => {
+		dropDraft(path);
+		onCancelPick();
+	};
+	const postDraft = async (anchor: ArtifactCommentAnchor, expandAfter: boolean) => {
+		const draft = drafts[anchor.path];
+		const text = draft?.text.trim();
+		if (!draft || !text || draft.sending) return;
+		updateDraft(anchor.path, { sending: true, failed: false });
+		try {
+			await comments.createThread(anchor, text, draft.clientId);
+			dropDraft(anchor.path);
+			onCancelPick();
+			if (expandAfter) onExpand(anchor.path);
+		} catch {
+			updateDraft(anchor.path, { sending: false, failed: true });
+		}
+	};
+	const newCommentBox = (anchor: ArtifactCommentAnchor, expandAfter: boolean) => (
+		<NewCommentBox
+			draft={draftFor(anchor.path)}
+			onCancel={() => cancelDraft(anchor.path)}
+			onChange={(text) => updateDraft(anchor.path, { text })}
+			onSubmit={() => void postDraft(anchor, expandAfter)}
+		/>
+	);
 	// A picked element with no open threads gets a new group at its place in the page.
 	const pickedIsNew = picked !== null && !groups.open.some((group) => group.path === picked.path);
 	const entries = useMemo(() => {
@@ -389,10 +524,14 @@ export function ArtifactCommentsPanel({
 	}, [expandedPath, groups.open, onExpand, pickedIsNew, resolvedByPath]);
 
 	const header = (
-		<div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3">
-			<h2 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+		<div className="flex h-10 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-3">
+			<h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
 				{t("artifactComments.title")}
-				{snapshot ? <span className="text-muted-foreground"> · {t("artifactComments.versionLabel", { version })}{comments.openCount > 0 ? ` · ${t("artifactComments.openCount", { n: comments.openCount })}` : ""}</span> : null}
+				{snapshot ? (
+					<span className="font-normal text-muted-foreground">
+						{" · "}{t("artifactComments.versionLabel", { version })}{comments.openCount > 0 ? ` · ${t("artifactComments.openCount", { n: comments.openCount })}` : ""}
+					</span>
+				) : null}
 			</h2>
 			<Button aria-label={t("artifactComments.close")} onClick={onClose} size="icon-sm" type="button" variant="quiet">
 				<X aria-hidden="true" className="size-icon-sm" />
@@ -400,101 +539,104 @@ export function ArtifactCommentsPanel({
 		</div>
 	);
 
+	const threadViews = (threads: ArtifactCommentThread[]) => (
+		<div className="flex flex-col divide-y divide-border">
+			{threads.map((thread) => (
+				<ThreadView comments={comments} key={thread.id} sendTarget={sendTarget} thread={thread} version={version} viewer={viewer} />
+			))}
+		</div>
+	);
+
 	let body: ReactNode;
 	if (!snapshot) {
 		body = comments.error ? (
-			<div className="flex flex-col items-center gap-2 p-6 text-center text-xs text-muted-foreground" role="alert">
+			<div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground" role="alert">
 				{t("artifactComments.loadError")}
 				<RetryButton onClick={() => void comments.refetch()} />
 			</div>
 		) : null;
-	} else {
-		const threadViews = (threads: ArtifactCommentThread[]) => threads.map((thread) => (
-			<ThreadView comments={comments} key={thread.id} sendTarget={sendTarget} thread={thread} version={version} viewer={viewer} />
-		));
+	} else if (entries.length === 0 && groups.resolved.length === 0 && groups.unanchored.length === 0) {
 		body = (
-			<div className="flex flex-col gap-2 p-3">
-				{bridgeStatus === "unsupported" ? <p className="text-caption text-muted-foreground" role="status">{t("artifactComments.unsupported")}</p> : null}
-				{entries.length === 0 && groups.resolved.length === 0 && groups.unanchored.length === 0 ? (
-					<p className="py-6 text-center text-xs text-muted-foreground">
-						{t("artifactComments.empty")}
-						{bridgeStatus !== "unsupported" ? <><br />{t("artifactComments.emptyHint")}</> : null}
-					</p>
-				) : null}
+			<div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
+				{bridgeStatus === "unsupported" ? <p role="status">{t("artifactComments.unsupported")}</p> : null}
+				<p data-testid="artifact-comments-empty">
+					{t("artifactComments.empty")}
+					{bridgeStatus !== "unsupported" ? <><br />{t("artifactComments.emptyHint")}</> : null}
+				</p>
+			</div>
+		);
+	} else {
+		body = (
+			<div className="flex flex-col gap-2 p-2.5">
+				{bridgeStatus === "unsupported" ? <p className="px-0.5 text-caption text-muted-foreground" role="status">{t("artifactComments.unsupported")}</p> : null}
 				{entries.map((entry) => {
 					if (entry.kind === "new") {
 						return (
-							<section className="rounded-lg border border-primary bg-card p-2.5" data-group-path={entry.anchor.path} key={`new:${entry.anchor.path}`}>
-								<CommentComposer
-									autoFocus
-									key={entry.anchor.path}
-									onCancel={onCancelPick}
-									onSubmit={async (body, clientId) => {
-										await comments.createThread(entry.anchor, body, clientId);
-										onCancelPick();
-										onExpand(entry.anchor.path);
-									}}
-									placeholder={t("artifactComments.newPlaceholder")}
-									variant="new"
-								/>
+							<section className="rounded-lg border border-logo-accent bg-card p-2.5" data-group-path={entry.anchor.path} key={`new:${entry.anchor.path}`}>
+								{newCommentBox(entry.anchor, true)}
 							</section>
 						);
 					}
 					const { group } = entry;
 					const expanded = expandedPath === group.path;
 					const resolvedHere = resolvedByPath.get(group.path);
+					const composing = picked?.path === group.path;
 					return (
-						<GroupCard expanded={expanded} group={group} key={group.path} onToggle={() => onExpand(expanded ? null : group.path)} viewer={viewer}>
-							{picked?.path === group.path ? (
-								<div className="py-2 first:pt-0">
-									<CommentComposer
-										autoFocus
-										key={group.path}
-										onCancel={onCancelPick}
-										onSubmit={async (body, clientId) => { await comments.createThread(picked, body, clientId); onCancelPick(); }}
-										placeholder={t("artifactComments.newPlaceholder")}
-										variant="new"
-									/>
+						<GroupCard expanded={expanded} group={group} key={group.path} onToggle={() => onExpand(group.path)} viewer={viewer}>
+							{composing ? (
+								// Writing on an element that has threads: the box on top, what's been said below it.
+								<div className="flex flex-col gap-2.5">
+									{newCommentBox(picked, false)}
+									<div className="flex flex-col divide-y divide-border">
+										{group.threads.map((thread) => (
+											<div className="py-2.5 first:pt-0 last:pb-0" key={thread.id}><ThreadSummary thread={thread} viewer={viewer} /></div>
+										))}
+									</div>
 								</div>
-							) : null}
-							{threadViews(group.threads)}
-							{resolvedHere ? (
-								<div className="flex flex-col gap-2 py-2 last:pb-0">
-									<button
-										className="text-left text-caption text-muted-foreground hover:text-foreground"
-										onClick={() => setShownResolvedPath(shownResolvedPath === group.path ? null : group.path)}
-										type="button"
-									>
-										{t("artifactComments.resolvedOnElement", { n: resolvedHere.threads.length })} · {shownResolvedPath === group.path ? t("artifactComments.hide") : t("artifactComments.show")}
-									</button>
-									{shownResolvedPath === group.path ? threadViews(resolvedHere.threads) : null}
-								</div>
-							) : null}
+							) : (
+								<>
+									{threadViews(group.threads)}
+									{resolvedHere ? (
+										<div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5">
+											<button
+												className="text-left text-caption text-logo-accent-text hover:underline"
+												onClick={() => setShownResolvedPath(shownResolvedPath === group.path ? null : group.path)}
+												type="button"
+											>
+												{t("artifactComments.resolvedOnElement", { n: resolvedHere.threads.length })} · {shownResolvedPath === group.path ? t("artifactComments.hide") : t("artifactComments.show")}
+											</button>
+											{shownResolvedPath === group.path ? threadViews(resolvedHere.threads) : null}
+										</div>
+									) : null}
+								</>
+							)}
 						</GroupCard>
 					);
 				})}
+				{groups.unanchored.length > 0 ? (
+					<div className="flex flex-col gap-2">
+						<p className="px-0.5 text-caption text-muted-foreground">{t("artifactComments.unanchored")}</p>
+						{groups.unanchored.map((group) => (
+							<section className="rounded-lg border border-border bg-card p-2.5" data-unanchored-path={group.path} key={group.path}>{threadViews(group.threads)}</section>
+						))}
+					</div>
+				) : null}
 				{groups.resolved.length > 0 ? (
 					<div className="flex flex-col gap-2">
 						<button
 							aria-expanded={showResolved}
-							className="flex items-center gap-1 text-left text-xs text-muted-foreground hover:text-foreground"
+							className="flex items-center gap-1 rounded-md px-0.5 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
 							onClick={() => setShowResolved((current) => !current)}
 							type="button"
 						>
-							{t("artifactComments.resolvedSection", { n: groups.resolvedCount })}
+							<span className="flex-1">{t("artifactComments.resolvedSection", { n: groups.resolvedCount })}</span>
 							{showResolved ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
 						</button>
 						{showResolved ? groups.resolved.map((group) => (
-							<section className="flex flex-col divide-y divide-border rounded-lg border border-border bg-card p-2.5" data-resolved-path={group.path} key={group.path}>
+							<section className="rounded-lg border border-border bg-card p-2.5" data-resolved-path={group.path} key={group.path}>
 								{threadViews(group.threads)}
 							</section>
 						)) : null}
-					</div>
-				) : null}
-				{groups.unanchored.length > 0 ? (
-					<div className="flex flex-col gap-2">
-						<p className="text-xs text-muted-foreground">{t("artifactComments.unanchored")}</p>
-						<section className="flex flex-col divide-y divide-border rounded-lg border border-border bg-card p-2.5">{threadViews(groups.unanchored.flatMap((group) => group.threads))}</section>
 					</div>
 				) : null}
 			</div>
@@ -510,7 +652,7 @@ export function ArtifactCommentsPanel({
 			}}
 		>
 			{header}
-			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto">{body}</div>
+			<div className="board-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto">{body}</div>
 		</aside>
 	);
 }

@@ -5514,6 +5514,7 @@
 	"artifactComments.lostAccessHint": "공유한 사람에게 요청하세요.",
 	"artifactComments.loadError": "댓글을 불러오지 못했습니다.",
 	"artifactComments.sendToAgent": "에이전트에 보내기",
+	"artifactComments.send": "보내기",
 	"artifactComments.sendAgain": "다시 보내기",
 	"artifactComments.sentAt": "에이전트에 보냄 · {{time}}",
 	"artifactComments.sendDescription": "이 파일을 만든 에이전트가 이 스레드를 메시지로 받습니다.",

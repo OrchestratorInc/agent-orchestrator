@@ -101,6 +101,19 @@ function renderWorkspace(client: FakeClient, { outdated = false, withSession = t
 	return { onClose };
 }
 
+/** Connects the frame's bridge, as the share host's script would, and returns its end of the port. */
+async function connectBridge(): Promise<MessagePort> {
+	const frame = screen.getByTestId("published-frame") as HTMLIFrameElement;
+	const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
+	act(() => { frame.dispatchEvent(new Event("load")); });
+	const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0];
+	port.onmessage = () => undefined;
+	port.postMessage({ type: "ready", protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION });
+	return port;
+}
+
+const newAnchor = { path: "body>main:1>p:2", tag: "p", textHash: "0123456789abcdef", excerpt: "Staging first." };
+
 async function expandFirstGroup() {
 	const card = await screen.findByRole("button", { expanded: false, name: /staging only/ });
 	await userEvent.click(card);
@@ -164,7 +177,7 @@ describe("ArtifactCommentsWorkspace", () => {
 		const note = within(dialog).getByLabelText("Note (optional)");
 		expect(note).toHaveAttribute("maxLength", "2000");
 		await userEvent.type(note, "Rename the title.");
-		await userEvent.click(within(dialog).getByRole("button", { name: "Send to agent" }));
+		await userEvent.click(within(dialog).getByRole("button", { name: "Send" }));
 
 		await waitFor(() => expect(client.markArtifactShareThreadSent).toHaveBeenCalledWith("cf-staging-x7", "t1"));
 		const [message] = mocks.send.mock.calls[0];
@@ -185,7 +198,7 @@ describe("ArtifactCommentsWorkspace", () => {
 		await expandFirstGroup();
 		await userEvent.click(screen.getByRole("button", { name: "Send to agent" }));
 		const dialog = await screen.findByRole("dialog");
-		await userEvent.click(within(dialog).getByRole("button", { name: "Send to agent" }));
+		await userEvent.click(within(dialog).getByRole("button", { name: "Send" }));
 		expect(await within(dialog).findByRole("alert")).toHaveTextContent("The session isn't running.");
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
 		expect(client.markArtifactShareThreadSent).not.toHaveBeenCalled();
@@ -231,6 +244,92 @@ describe("ArtifactCommentsWorkspace", () => {
 		expect(await screen.findByText("Couldn't post.")).toBeInTheDocument();
 		expect(box).toHaveValue("On it");
 		expect(client.replyArtifactShareThread).toHaveBeenCalledWith("cf-staging-x7", "t1", { body: "On it", clientId: expect.any(String) });
+	});
+});
+
+describe("ArtifactCommentsPanel cards and threads", () => {
+	it("opens a box at a new element's place and keeps a failed post's text with Retry under the same client id", async () => {
+		const client = fakeClient();
+		client.createArtifactShareThread
+			.mockRejectedValueOnce(new Error("offline"))
+			.mockResolvedValueOnce(thread({ id: "t9", anchor: newAnchor, comments: [{ id: "c9", threadId: "t9", clientId: "k9", author: aditi, body: "Which account?", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false }] }));
+		renderWorkspace(client);
+		await screen.findByRole("button", { expanded: false, name: /staging only/ });
+		const port = await connectBridge();
+		port.postMessage({ type: "pick", anchor: newAnchor });
+		const box = await screen.findByRole("textbox", { name: "Add a comment…" });
+		// Never a copy of the element's text.
+		expect(screen.queryByText("Staging first.")).not.toBeInTheDocument();
+		await userEvent.type(box, "Which account?");
+		await userEvent.click(screen.getByRole("button", { name: "Comment" }));
+		expect(await screen.findByText("Couldn't post.")).toBeInTheDocument();
+		expect(screen.getByRole("textbox", { name: "Add a comment…" })).toHaveValue("Which account?");
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(2));
+		const [first, second] = client.createArtifactShareThread.mock.calls.map(([, input]) => input);
+		expect(second).toEqual(first);
+		expect(first).toMatchObject({ version: 3, anchor: newAnchor, body: "Which account?" });
+		await waitFor(() => expect(screen.queryByRole("textbox", { name: "Add a comment…" })).not.toBeInTheDocument());
+		port.close();
+	});
+
+	it("shows an element's threads folded below the box when writing on it", async () => {
+		renderWorkspace(fakeClient());
+		await screen.findByRole("button", { expanded: false, name: /staging only/ });
+		const port = await connectBridge();
+		port.postMessage({ type: "pick", anchor: thread().anchor });
+		expect(await screen.findByRole("textbox", { name: "Add a comment…" })).toBeInTheDocument();
+		expect(screen.getByText("1 reply")).toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+		expect(screen.queryByText("Yes, will add.")).not.toBeInTheDocument();
+		port.close();
+	});
+
+	it("collapses an element with several threads to its first comment and +N more, with no thread count", async () => {
+		const other = thread({ id: "t2", createdAt: "2026-11-23T09:30:00Z", comments: [{ id: "c3", threadId: "t2", clientId: "k3", author: sam, body: "Title is too long for the sidebar.", createdAt: "2026-11-23T09:30:00Z", editedAt: null, deleted: false }] });
+		renderWorkspace(fakeClient(snapshot({ threads: [thread(), other] })));
+		const card = await screen.findByRole("button", { expanded: false, name: /staging only/ });
+		expect(within(card).getByText("+1 more")).toBeInTheDocument();
+		expect(within(card).queryByText(/thread/i)).not.toBeInTheDocument();
+		expect(within(card).queryByText("Title is too long for the sidebar.")).not.toBeInTheDocument();
+	});
+
+	it("labels resolved threads with who resolved them and offers Reopen, never Send to agent", async () => {
+		renderWorkspace(fakeClient(snapshot({ threads: [thread({ status: "resolved", resolvedBy: aditi, resolvedAt: "2026-11-23T10:00:00Z" })] })));
+		await userEvent.click(await screen.findByRole("button", { name: /Resolved \(1\)/ }));
+		expect(screen.getByText("Resolved by Aditi")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Send to agent|Send again/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+	});
+
+	it("drops deleted replies, leaves Comment deleted for a deleted first comment, and marks edits", async () => {
+		const base = thread();
+		renderWorkspace(fakeClient(snapshot({ threads: [thread({
+			comments: [
+				{ ...base.comments[0], body: "", deleted: true },
+				{ ...base.comments[1], editedAt: "2026-11-23T09:30:00Z" },
+				{ id: "c3", threadId: "t1", clientId: "k3", author: sam, body: "", createdAt: "2026-11-23T09:40:00Z", editedAt: null, deleted: true },
+			],
+		})] })));
+		const card = await screen.findByRole("button", { expanded: false, name: /Comment deleted/ });
+		expect(within(card).getByText("1 reply")).toBeInTheDocument();
+		await userEvent.click(card);
+		expect(screen.getAllByText("Comment deleted")).toHaveLength(1);
+		expect(document.querySelector('[data-comment-id="c3"]')).toBeNull();
+		expect(screen.getByText("edited")).toBeInTheDocument();
+	});
+
+	it("offers the owner Delete, in red, on someone else's comment and Edit only on their own", async () => {
+		renderWorkspace(fakeClient());
+		await expandFirstGroup();
+		const [samMenu, ownMenu] = screen.getAllByRole("button", { name: "Comment actions" });
+		await userEvent.click(samMenu);
+		expect(screen.queryByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveClass("text-destructive");
+		await userEvent.keyboard("{Escape}");
+		await userEvent.click(ownMenu);
+		expect(await screen.findByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
 	});
 });
 

@@ -5494,6 +5494,7 @@
 	"artifactComments.lostAccessHint": "Ask the person who shared it.",
 	"artifactComments.loadError": "Couldn't load comments.",
 	"artifactComments.sendToAgent": "Send to agent",
+	"artifactComments.send": "Send",
 	"artifactComments.sendAgain": "Send again",
 	"artifactComments.sentAt": "Sent to agent · {{time}}",
 	"artifactComments.sendDescription": "The agent that made this file will get this thread as a message.",
