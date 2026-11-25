@@ -8245,31 +8245,49 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 	// spacer holds their room. When they leave, the spacer closes at once and the
 	// prompts travel down with the heading, tucking behind the composer's top edge
 	// (the stack clips below it) as they fade; coming back, they rise out of it.
-	const promptsRef = useRef<HTMLDivElement>(null);
+	//
+	// Their height comes from an invisible copy that is always laid out, so the
+	// stack's full room is known from the first frame even when a restored draft
+	// keeps the prompts hidden, and it never changes as typing hides or shows them.
+	// The composer keeps that room above it, so it stays put.
+	const headingRef = useRef<HTMLHeadingElement>(null);
+	const ghostRef = useRef<HTMLUListElement>(null);
 	const [promptsHeight, setPromptsHeight] = useState(0);
 	useLayoutEffect(() => {
-		const node = promptsRef.current;
-		if (!promptsOpen || !node) return;
-		setPromptsHeight(node.offsetHeight);
-		const observer = new ResizeObserver(() => setPromptsHeight(node.offsetHeight));
-		observer.observe(node);
+		const heading = headingRef.current;
+		const ghost = ghostRef.current;
+		if (!heading || !ghost) return;
+		const measure = () => {
+			setPromptsHeight(ghost.offsetHeight);
+			onRoom(heading.offsetHeight + (Number.parseFloat(getComputedStyle(heading).marginBottom) || 0) + ghost.offsetHeight);
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(heading);
+		observer.observe(ghost);
 		return () => observer.disconnect();
-	}, [promptsOpen]);
-	// The stack's height with the prompts shown is the room the composer keeps above
-	// it. Measured only then, so typing never changes it and the composer stays put.
-	const stackRef = useRef<HTMLDivElement>(null);
-	useLayoutEffect(() => {
-		const node = stackRef.current;
-		if (!promptsOpen || !node) return;
-		const report = () => onRoom(node.offsetHeight);
-		report();
-		const observer = new ResizeObserver(report);
-		observer.observe(node);
-		return () => observer.disconnect();
-	}, [promptsOpen, onRoom]);
+	}, [onRoom]);
+	const chips = (onClick?: (text: string) => void) => prompts.map(({ prompt, chip, icon: Icon }) => (
+		<li key={prompt}>
+			<Button
+				type="button"
+				variant="quiet"
+				shape="pill"
+				title={onClick ? t(prompt) : undefined}
+				tabIndex={onClick ? undefined : -1}
+				className="welcome-prompt-suggestion border-border"
+				disabled={unavailable}
+				onClick={onClick ? () => onClick(t(prompt)) : undefined}
+			>
+				<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
+				<span className="whitespace-nowrap">{t(chip)}</span>
+			</Button>
+		</li>
+	));
 	return (
-		<div ref={stackRef} className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
+		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
 			<motion.h1
+				ref={headingRef}
 				layout={reducedMotion ? false : "position"}
 				transition={{ layout: WELCOME_SETTLE }}
 				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
@@ -8280,10 +8298,12 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 				{heading}
 			</motion.h1>
 			<div aria-hidden="true" className="w-full shrink-0" style={{ height: promptsOpen ? promptsHeight : 0 }} />
+			<ul ref={ghostRef} aria-hidden="true" className="invisible absolute inset-x-0 bottom-0 flex flex-wrap justify-center gap-2 pb-4">
+				{chips()}
+			</ul>
 			<AnimatePresence initial={false}>
 				{promptsOpen ? (
 					<motion.div
-						ref={promptsRef}
 						key="welcome-prompts"
 						className="pointer-events-auto absolute inset-x-0 bottom-0"
 						initial={{ opacity: 0, y: promptsHeight }}
@@ -8294,22 +8314,7 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 					>
 						{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
 						<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
-							{prompts.map(({ prompt, chip, icon: Icon }) => (
-								<li key={prompt}>
-									<Button
-										type="button"
-										variant="quiet"
-										shape="pill"
-										title={t(prompt)}
-										className="welcome-prompt-suggestion border-border"
-										disabled={unavailable}
-										onClick={() => onPick(t(prompt))}
-									>
-										<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
-										<span className="whitespace-nowrap">{t(chip)}</span>
-									</Button>
-								</li>
-							))}
+							{chips(onPick)}
 						</ul>
 					</motion.div>
 				) : null}
