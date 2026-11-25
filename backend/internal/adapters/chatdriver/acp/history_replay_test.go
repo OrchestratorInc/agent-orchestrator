@@ -381,6 +381,11 @@ func TestACPReplayAcceptsUpdatesDuringDrain(t *testing.T) {
 	if err := conv.SessionUpdate(context.Background(), replayAgentChunk("session-1", "live", "after replay")); err != nil {
 		t.Fatal(err)
 	}
+	// Output with no AO turn is the agent's own cycle, which first reports the
+	// agent as working.
+	if event := <-conv.events; event.Kind != ports.ChatEventProviderState {
+		t.Fatalf("live event = %+v, want provider.state", event)
+	}
 	select {
 	case event := <-conv.events:
 		if event.Kind != ports.ChatEventMessageDelta || event.Delta != "after replay" {

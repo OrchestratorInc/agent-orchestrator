@@ -14,6 +14,10 @@ export const PUSH_SETTLE_FALLBACK_MS = 800;
  * For holding back a heavy mount that would otherwise land mid-slide: the
  * native stack runs its animation on the UI thread, and mounting a large view
  * tree there stalls the slide, which then jumps to its end.
+ *
+ * A light body is better drawn a frame after the push starts (`useAfterPush`):
+ * waiting the whole slide delays it by ~600 ms. The chat page picks between
+ * the two in `useChatPushTiming`.
  */
 export function usePushSettled(): boolean {
 	const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();

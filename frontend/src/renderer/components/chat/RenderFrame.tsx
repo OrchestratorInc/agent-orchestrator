@@ -1,9 +1,11 @@
 import { apiErrorException } from "../../lib/api-error-exception";
 import { ChevronRight, Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { subscribeArtifactFileChanges } from "../../lib/artifact-file-events";
 import { aoBridge } from "../../lib/bridge";
 import {
 	clampRenderHeight,
@@ -212,6 +214,11 @@ function RenderAction({ label, children, ...props }: ButtonProps & { label: stri
 	);
 }
 
+/** The daemon route of one session artifact file, as a chat artifact card records it. */
+function artifactFileRoute(sessionId: string, path: string): string {
+	return `/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 /** Where the render is served: its remote host's render origin, or this computer's daemon. */
 function renderUrl(page: FramePage): string {
 	return page.remoteUrl ?? `${getApiBaseUrl()}${page.path}`;
@@ -314,6 +321,18 @@ function RenderSource({ url }: { url: string }) {
 	);
 }
 
+/**
+ * Follows a local session's artifact directory while a card's page is missing
+ * from the session's list. A chat event brings the card, not the list, so a page
+ * the agent has just reported can be missing from a list read moments earlier;
+ * the stream rereads the list as it connects and on each change.
+ */
+function FollowArtifactList({ sessionId }: { sessionId: string }) {
+	const queryClient = useQueryClient();
+	useEffect(() => subscribeArtifactFileChanges(sessionId, queryClient), [sessionId, queryClient]);
+	return null;
+}
+
 /** Opens the artifact in the session's contextual Artifacts tab. */
 function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; path: string; onOpen: () => void }) {
 	const { t } = useTranslation();
@@ -353,17 +372,22 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 		if (foldKey !== undefined) rememberFold(foldKey, next);
 	};
 	const remoteHost = useChatRemoteHost();
-	const artifactFiles = useChatArtifactFiles();
-	const localArtifact = "artifact" in props && !artifactFiles?.cloud && !remoteHost;
+	const chatArtifacts = useChatArtifactFiles();
+	const cloud = Boolean(chatArtifacts?.cloud);
+	const localArtifact = "artifact" in props && !cloud && !remoteHost;
 	const render = "render" in props ? props.render : undefined;
 	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
 	const remoteUrl = useRemoteRenderUrl(render?.path);
+	// A page renamed since its card was recorded is read from where it is now.
+	const artifactPath = "artifact" in props
+		? links && links.path !== props.artifact.path ? artifactFileRoute(links.sessionId, links.path) : props.artifact.url
+		: undefined;
 	const page: FramePage =
 		"render" in props
 			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title), remoteUrl: remoteUrl ?? undefined }
 			: {
 					title: props.artifact.name,
-					path: props.artifact.url,
+					path: artifactPath ?? props.artifact.url,
 					height: ARTIFACT_FRAME_HEIGHT,
 					fileName: props.artifact.name,
 					scrollable: true,
@@ -391,6 +415,16 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 		);
 	}
 	if (remoteHost && !remoteUrl) return <div aria-busy="true" style={{ height: clampRenderHeight(page.height) }} />;
+	// A local chat frames an artifact only from its inline origin: the daemon
+	// refuses frames on the artifact-files route the card records
+	// (ORIGIN_FORBIDDEN). A card whose page the session no longer lists, deleted
+	// since it was shown, says so rather than framing that refusal; one listed
+	// without an inline page (renamed to another kind of file) points to the
+	// Artifacts tab.
+	const unavailable = "artifact" in props && !cloud && !page.frameUrl;
+	// A page deleted while its dialog is open closes the dialog too, which would
+	// otherwise frame that refusal.
+	if (unavailable && expanded) setExpanded(false);
 	const save = () => {
 		setSaving(true);
 		saveRender(page)
@@ -472,7 +506,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 						/>
 					</Pressable>
 					{links && "artifact" in props ? (
-						<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => undefined} />
+						<OpenInPanelAction sessionId={links.sessionId} path={links.path} onOpen={() => undefined} />
 					) : null}
 				</div>
 			) : null}
@@ -485,14 +519,21 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 					inert={folded}
 					className="overflow-hidden"
 				>
-					<ArtifactFindScope identity={page.path} enabled={localArtifact && !expanded && !folded} findState={findState} onFindStateChange={setFindState} className="relative min-w-0">
-						{frameMounted ? <RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} /> : null}
+					<ArtifactFindScope identity={page.path} enabled={localArtifact && !unavailable && !expanded && !folded} findState={findState} onFindStateChange={setFindState} className="relative min-w-0">
+						{!frameMounted ? null : unavailable ? (
+							<>
+								<p className="py-2 text-xs text-muted-foreground">{t(links ? "chat.artifact.notInline" : "chat.artifact.unavailable")}</p>
+								{!links && chatArtifacts ? <FollowArtifactList sessionId={chatArtifacts.sessionId} /> : null}
+							</>
+						) : (
+							<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
+						)}
 					</ArtifactFindScope>
 				</motion.div>
 			) : (
 				<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
 			)}
-			{folded ? null : (
+			{folded || unavailable ? null : (
 				<div
 					className={cn(
 						"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
@@ -549,7 +590,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 							</RenderAction>
 						) : null}
 						{links && "artifact" in props ? (
-							<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => setExpanded(false)} />
+							<OpenInPanelAction sessionId={links.sessionId} path={links.path} onOpen={() => setExpanded(false)} />
 						) : null}
 						{browserPanelAction}
 						{opensStandalone ? (
