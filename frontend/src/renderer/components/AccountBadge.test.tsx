@@ -29,8 +29,13 @@ describe("AccountBadge", () => {
 		expect(letters).toHaveClass("bg-muted", "text-foreground");
 	});
 
-	it("keeps the chip's 14px logo size", () => {
+	it("draws one bordered segment with the 14px logo, a divider, then the letters", () => {
 		const { container } = render(<AccountBadge provider="claude" name="Work" />);
-		expect(container.firstElementChild).toHaveClass("h-3.5");
+		const segment = container.firstElementChild as HTMLElement;
+		expect(segment).toHaveClass("border", "rounded-[4px]");
+		const [logoCell, lettersCell] = Array.from(segment.children) as HTMLElement[];
+		expect(logoCell.firstElementChild).toHaveClass("size-3.5");
+		expect(lettersCell).toHaveClass("border-l");
+		expect(lettersCell).toHaveTextContent("WO");
 	});
 });
