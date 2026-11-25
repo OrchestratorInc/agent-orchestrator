@@ -5659,14 +5659,14 @@ func TestListPRSummariesSuppressesFailingChecksUnlessCIFailing(t *testing.T) {
 	}
 }
 
-func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
+func TestListPRSummariesListsCurrentCancelledChecksWhenCIFailing(t *testing.T) {
 	cases := []struct {
 		name string
 		ci   domain.CIState
 		want []string
 	}{
-		{name: "failing lists only real failures", ci: domain.CIFailing, want: []string{"build"}},
-		{name: "unknown lists cancelled checks", ci: domain.CIUnknown, want: []string{"lint"}},
+		{name: "failing lists failures and cancellations", ci: domain.CIFailing, want: []string{"build", "lint"}},
+		{name: "unknown lists nothing", ci: domain.CIUnknown},
 		{name: "pending lists nothing", ci: domain.CIPending},
 	}
 	for _, tc := range cases {
@@ -5684,7 +5684,7 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}}}
 			stList.checks[prURL] = []domain.PullRequestCheck{
 				{Name: "build", CommitHash: "new-sha", Status: domain.PRCheckFailed, Conclusion: "failure"},
-				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled"},
+				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled", URL: "https://github.com/acme/repo/actions/runs/2"},
 			}
 
 			got, err := (&Service{store: stList}).ListPRSummaries(context.Background(), "mer-1")
@@ -5693,6 +5693,9 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}
 			if names := failingCheckNames(got[0].CI.FailingChecks); !sameStrings(names, tc.want) {
 				t.Fatalf("listed checks = %v, want %v", names, tc.want)
+			}
+			if tc.ci == domain.CIFailing && got[0].CI.FailingChecks[1].URL != "https://github.com/acme/repo/actions/runs/2" {
+				t.Fatalf("cancelled check link = %q", got[0].CI.FailingChecks[1].URL)
 			}
 		})
 	}
@@ -6802,5 +6805,23 @@ func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
 	}
 	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
 		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
+	}
+}
+
+// An imported chat whose agent CLI changed between import and first open shows
+// the adapter's version message, not the generic "check the daemon log".
+func TestResumeAgentShowsImportVersionMessage(t *testing.T) {
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	versionErr := &ports.ImportRefusedError{Message: "droid: session import supports only verified version 0.251.0"}
+	cause := sessionmanager.RelaunchError{Step: "prepare_import", Err: fmt.Errorf("prepare imported session: %w", versionErr)}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: &fakeTelemetrySink{}})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_IMPORT_RESUME_FAILED" || apiErr.Message != versionErr.Message {
+		t.Fatalf("err = %#v, want SESSION_IMPORT_RESUME_FAILED with the version message", err)
 	}
 }

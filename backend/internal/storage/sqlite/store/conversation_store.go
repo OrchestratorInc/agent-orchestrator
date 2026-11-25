@@ -619,6 +619,12 @@ func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionReco
 		}); err != nil {
 			return fmt.Errorf("clear switched conversation model reroute: %w", err)
 		}
+		// The old provider's view of its thread says nothing about the new one.
+		if err := q.UpdateConversationThreadState(ctx, gen.UpdateConversationThreadStateParams{
+			ThreadStateJson: sql.NullString{}, ID: branch.ConversationID,
+		}); err != nil {
+			return fmt.Errorf("clear switched conversation thread state: %w", err)
+		}
 		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID})
 		if err != nil {
 			return fmt.Errorf("allocate provider switch activity sequence: %w", err)
@@ -1789,6 +1795,39 @@ func (s *Store) SettleTurnWithFailureCode(
 		if err := finalizeCompletedTurnPlan(ctx, q, turn, now); err != nil {
 			return err
 		}
+	}
+	if state == domain.TurnStateFailed && turn.State != domain.TurnStateFailed {
+		return moveEventAutoResume(ctx, q, turn, errMessage, usageLimitResetsAt, now)
+	}
+	return nil
+}
+
+func moveEventAutoResume(ctx context.Context, q *gen.Queries, turn gen.ConversationTurn, errMessage string, resetsAt, now time.Time) error {
+	limit := domain.ParseConversationUsageLimit(errMessage, &now)
+	if limit == nil {
+		return nil
+	}
+	armed, err := q.SelectSupersededArmedEventTurn(ctx, turn.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("read armed event before %s: %w", turn.ID, err)
+	}
+	newResetsAt := armed.UsageLimitResetsAt
+	if !resetsAt.IsZero() {
+		newResetsAt = timeToNullTime(resetsAt)
+	} else if limit.ResetsAt != nil {
+		newResetsAt = timeToNullTime(*limit.ResetsAt)
+	}
+	if _, err := q.SetConversationTurnAutoResume(ctx, gen.SetConversationTurnAutoResumeParams{
+		ID: turn.ID, ConversationID: turn.ConversationID, ResetsAt: newResetsAt, Enabled: 1,
+	}); err != nil {
+		return fmt.Errorf("arm newer event %s: %w", turn.ID, err)
+	}
+	if _, err := q.SetConversationTurnAutoResume(ctx, gen.SetConversationTurnAutoResumeParams{
+		ID: armed.ID, ConversationID: turn.ConversationID,
+	}); err != nil {
+		return fmt.Errorf("release superseded event %s: %w", armed.ID, err)
 	}
 	return nil
 }
@@ -4419,7 +4458,7 @@ func (s *Store) loadConversationSnapshotRange(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
-	humanPromptTurns, err := s.conversationHumanPromptTurns(ctx, conversationID)
+	promptOrigins, err := s.conversationPromptOrigins(ctx, conversationID)
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
@@ -4445,7 +4484,8 @@ func (s *Store) loadConversationSnapshotRange(
 		}
 		turn := turnToDomain(row)
 		turn.HasRetryAttempt = retriedSources[turn.ID]
-		turn.HasHumanPrompt = humanPromptTurns[turn.ID]
+		turn.HasHumanPrompt = promptOrigins[turn.ID][domain.MessageOriginHuman]
+		turn.HasEventPrompt = promptOrigins[turn.ID][domain.MessageOriginAutomation]
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
@@ -4579,7 +4619,7 @@ func (s *Store) LoadConversationSnapshot(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
-	humanPromptTurns, err := s.conversationHumanPromptTurns(ctx, conversationID)
+	promptOrigins, err := s.conversationPromptOrigins(ctx, conversationID)
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
@@ -4610,7 +4650,8 @@ func (s *Store) LoadConversationSnapshot(
 	for _, row := range turnRows {
 		turn := turnToDomain(row)
 		turn.HasRetryAttempt = retriedSources[turn.ID]
-		turn.HasHumanPrompt = humanPromptTurns[turn.ID]
+		turn.HasHumanPrompt = promptOrigins[turn.ID][domain.MessageOriginHuman]
+		turn.HasEventPrompt = promptOrigins[turn.ID][domain.MessageOriginAutomation]
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
@@ -4635,14 +4676,17 @@ func (s *Store) conversationRetriedSources(ctx context.Context, conversationID s
 	return sources, nil
 }
 
-func (s *Store) conversationHumanPromptTurns(ctx context.Context, conversationID string) (map[string]bool, error) {
-	rows, err := s.qr.SelectConversationHumanPromptTurnIDs(ctx, conversationID)
+func (s *Store) conversationPromptOrigins(ctx context.Context, conversationID string) (map[string]map[domain.MessageOrigin]bool, error) {
+	rows, err := s.qr.SelectConversationPromptOrigins(ctx, conversationID)
 	if err != nil {
-		return nil, fmt.Errorf("select conversation human prompts: %w", err)
+		return nil, fmt.Errorf("select conversation prompt origins: %w", err)
 	}
-	turns := make(map[string]bool, len(rows))
-	for _, turnID := range rows {
-		turns[turnID] = true
+	turns := make(map[string]map[domain.MessageOrigin]bool, len(rows))
+	for _, row := range rows {
+		if turns[row.TurnID] == nil {
+			turns[row.TurnID] = map[domain.MessageOrigin]bool{}
+		}
+		turns[row.TurnID][row.Origin] = true
 	}
 	return turns, nil
 }
@@ -5099,7 +5143,7 @@ type retryProviderInputItem struct {
 	ContentCount int    `json:"contentCount,omitempty"`
 }
 
-// RetryPrompt returns the durable human prompt of a failed turn, for
+// RetryPrompt returns the durable prompt of a failed turn, for
 // re-dispatching it as a new turn. The content is loaded from AO's own rows
 // rather than from a client request that could be stale or substituted.
 func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) (domain.RetryPrompt, error) {
@@ -5117,6 +5161,7 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		Text:                row.Text,
 		ProviderInputText:   row.ProviderInputText,
 		Origin:              row.Origin,
+		AuthoredByUser:      row.AuthoredByUser != 0,
 		DeliveryContentJSON: row.DeliveryContentJson,
 		ActiveLineage:       row.ActiveLineage,
 	}

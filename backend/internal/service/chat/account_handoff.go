@@ -168,7 +168,11 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 
 // MoveUsageLimitedSession starts moving a session whose resume a usage limit
 // refused to the account with the most room, reporting whether a move started.
+// A wake moves only a chat someone has open, so an event or an update never does.
 func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
+	if s.isWaking(id) && !s.hasChatView(id) {
+		return false
+	}
 	s.handoffMu.Lock()
 	deps := s.handoff
 	s.handoffMu.Unlock()
@@ -429,7 +433,7 @@ func actionableUsageLimitTurn(ctx context.Context, turns Store, source domain.Co
 	if source.State != domain.TurnStateFailed || source.RolledBackAt != nil || source.UsageLimit == nil {
 		return fmt.Errorf("%w: this turn is not an actionable usage-limit failure", ErrUsageLimitAutoResumeInvalid)
 	}
-	return validateUsageLimitRetry(ctx, turns, store, source)
+	return validateUsageLimitRetry(ctx, turns, store, source, false)
 }
 
 func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {

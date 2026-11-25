@@ -199,7 +199,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, ReplacedNotice, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -1059,7 +1059,7 @@ function ChatWorkspaceContent({
 	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
 		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
-		latestSettledTurn.hasHumanPrompt
+		(latestSettledTurn.hasHumanPrompt || latestSettledTurn.hasEventPrompt)
 		? latestSettledTurn : undefined;
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
@@ -6324,6 +6324,8 @@ const TurnGroup = memo(function TurnGroup({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
 		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
+	// A review round arrives as one message per comment; it draws as one event.
+	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6446,6 +6448,7 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
+			reviewBurst={bursts.get(run.items[0]!.id)}
 			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
@@ -6732,6 +6735,7 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
+	reviewBurst,
 }: {
 	item: ConversationItem;
 	harness?: string;
@@ -6774,6 +6778,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
+	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
+	reviewBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6789,7 +6795,7 @@ function TimelineItem({
 		}
 		// A continue after a stop reaches the agent as a message, but the user did
 		// not write it: mark where the turn picked back up instead of a bubble.
-		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
+		if (item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
 		// worker relay, and is attributed differently. So is one an outside tool
 		// sent through the API, which AO can store as the human's.
@@ -6829,9 +6835,11 @@ function TimelineItem({
 				/>
 			);
 		}
+		// An earlier message of its review burst draws this one.
+		if (reviewBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
