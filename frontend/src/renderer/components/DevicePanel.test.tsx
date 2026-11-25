@@ -187,6 +187,27 @@ describe("DevicePanel", () => {
 		expect(screen.getByText("Install Xcode from the Mac App Store.")).toBeInTheDocument();
 	});
 
+	it("goes to the install guides from a failed setup once nothing can run", async () => {
+		mockApi({
+			deviceStatus: status({
+				state: "error",
+				error: "device hub exited during startup",
+				devices: [],
+				leases: [],
+				platforms: [
+					{ platform: "ios", available: false, reason: "Install Xcode and an iOS Simulator runtime (Xcode Settings → Components)." },
+					{ platform: "android", available: false, reason: "Install the Android SDK (platform-tools and emulator) or set ANDROID_HOME." },
+				],
+			}),
+		});
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
+		// The daemon would refuse a setup with nothing to run it for.
+		expect(postMock).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "iOS, Needs setup" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Android, Needs setup" })).toBeInTheDocument();
+	});
+
 	it("sets up the tools when a platform becomes ready after its guide", async () => {
 		let deviceStatus = status({
 			enabled: false,

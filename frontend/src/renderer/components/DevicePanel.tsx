@@ -82,8 +82,9 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 	const lease = useSessionDevice(sessionId, isActive, true);
 	// Where the user is in the tab: choosing a platform, its devices, or its setup guide.
 	const [view, setView] = useState<DeviceView>({ kind: "choose" });
-	// Nothing can run yet, so there are no tools to install: Set up walks
-	// straight to the platforms and their install guides instead.
+	// Nothing can run yet, so there are no tools to install: Set up (or Retry
+	// after a failed setup) walks straight to the platforms and their install
+	// guides instead.
 	const [exploring, setExploring] = useState(false);
 	// Releasing a device goes back to that platform's list, not the chooser.
 	const leasedPlatform = lease.data?.device.platform;
@@ -145,7 +146,6 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 		);
 	}
 	const current = status.data;
-	const off = !current.enabled || current.state === "off";
 	const canRun = current.platforms.some((platform) => platform.available);
 	const platformOf = (key: DevicePlatform) => current.platforms.find((platform) => platform.platform === key);
 
@@ -172,7 +172,7 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 	}
 	// With the tools in place, or nothing able to run yet (so there is nothing to
 	// install the tools for), the next step is choosing a platform.
-	if (current.state === "ready" || (off && exploring)) {
+	if (current.state === "ready" || (exploring && current.state !== "installing")) {
 		return (
 			<PlatformChooser
 				onChoose={(platform) => {
@@ -196,7 +196,7 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 			action={
 				<Button
 					disabled={installing}
-					onClick={() => (off && !canRun ? setExploring(true) : setup.mutate())}
+					onClick={() => (canRun ? setup.mutate() : setExploring(true))}
 					size="sm"
 					type="button"
 					variant="secondary"
