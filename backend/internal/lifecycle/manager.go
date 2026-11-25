@@ -737,7 +737,7 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
-	kimiChild := m.kimiChildSignalLocked(id, rec.Harness, s, now)
+	kimiChild := m.kimiChildSignalLocked(rec, s, now)
 	if kimiChild.consumed {
 		m.mu.Unlock()
 		return nil

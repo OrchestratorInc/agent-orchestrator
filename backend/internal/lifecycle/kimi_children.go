@@ -47,10 +47,18 @@ type kimiChildOutcome struct {
 // The caller holds m.mu and has already passed every ownership fence, so a
 // superseded runtime's hooks never change the count. A count left by an
 // earlier launch or controller is dropped as soon as the current owner
-// reports, so it cannot swallow the new runtime's own failure.
-func (m *Manager) kimiChildSignalLocked(id domain.SessionID, harness domain.AgentHarness, s ports.ActivitySignal, now time.Time) kimiChildOutcome {
-	if harness != domain.HarnessKimi {
+// reports, so it cannot swallow the new runtime's own failure. A StopFailure
+// from an earlier turn is dropped before it can change the count.
+func (m *Manager) kimiChildSignalLocked(rec domain.SessionRecord, s ports.ActivitySignal, now time.Time) kimiChildOutcome {
+	if rec.Harness != domain.HarnessKimi {
 		return kimiChildOutcome{}
+	}
+	id := rec.ID
+	if s.Event == "stop-failure" && staleTerminalStop(rec, s) {
+		// A failure from before the latest prompt belongs to an earlier
+		// turn. Counting it would close one of this turn's children, and
+		// applying it would idle a parent that is working.
+		return kimiChildOutcome{consumed: true}
 	}
 	owner := s.LaunchID + "\x00" + s.ControllerGeneration
 	st, ok := m.kimiChildren[id]

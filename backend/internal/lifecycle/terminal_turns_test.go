@@ -221,6 +221,38 @@ func TestKimiEarlierLaunchChildCountDoesNotSwallowStopFailure(t *testing.T) {
 	}
 }
 
+// A StopFailure from an earlier turn that reaches AO late must not close one
+// of this turn's children, or the child's own failure would idle the parent.
+func TestKimiEarlierTurnStopFailureDoesNotCloseACurrentChild(t *testing.T) {
+	start := time.Unix(1_000, 0).UTC()
+	store := &turnRecordingStore{fakeStore: newFakeStore()}
+	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch"}}
+	manager := New(store, nil)
+	manager.clock = func() time.Time { return start.Add(time.Minute) }
+	apply := func(at time.Duration, signal ports.ActivitySignal) {
+		t.Helper()
+		signal.Valid, signal.LaunchID, signal.ExpectedHarness = signal.State != "", "launch", domain.HarnessKimi
+		signal.AgentSessionID, signal.Timestamp = "kimi-1", start.Add(at)
+		if err := manager.ApplyActivitySignal(context.Background(), "s-1", signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply(0, ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"})
+	apply(20*time.Second, ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the exporter"})
+	apply(21*time.Second, ports.ActivitySignal{Event: "subagent-start"})
+	// The first turn's failure, stamped before the second prompt, lands now.
+	apply(10*time.Second, ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityActive {
+		t.Fatalf("activity after the earlier turn's stop-failure = %q, want active", got)
+	}
+	// The current child fails; the parent keeps working.
+	apply(30*time.Second, ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityActive {
+		t.Fatalf("activity after the current child's stop-failure = %q, want active", got)
+	}
+}
+
 // A child that is cancelled or times out reports neither SubagentStop nor
 // StopFailure, so its count stays open and the parent's own StopFailure is
 // taken for the child's. The observer is then asked to read the screen early;
