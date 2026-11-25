@@ -192,6 +192,7 @@ type AppSetting struct {
 	AccountHandoff       bool
 	LimitHistory         bool
 	CommitAttribution    bool
+	IdleCompaction       string
 }
 
 type Automation struct {

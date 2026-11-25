@@ -38,3 +38,6 @@ WHERE id = 1;
 
 -- name: SetAccountHandoff :exec
 UPDATE app_settings SET account_handoff = ?, updated_at = ? WHERE id = 1;
+
+-- name: SetIdleCompaction :exec
+UPDATE app_settings SET idle_compaction = ?, updated_at = ? WHERE id = 1;

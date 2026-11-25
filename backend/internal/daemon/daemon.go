@@ -741,6 +741,8 @@ func Run(buildVersion string) (retErr error) {
 	// The mode-aware messenger, so a Chat original is told as a chat message.
 	sessionForkSvc := wireSessionFork(cfg.DataDir, store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
+	// Read at each decision, so controllers restored before this line follow it.
+	chatSvc.SetIdleCompaction(settingsSvc.IdleCompaction)
 	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
 		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
 	}

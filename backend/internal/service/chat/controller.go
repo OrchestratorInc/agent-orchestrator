@@ -286,6 +286,20 @@ type Controller struct {
 	sendingTurnID string
 	// A compact request can be accepted before its provider turn starts.
 	compactionPending bool
+	// idleProbe reads the idle compaction mode and this conversation's prompt
+	// cache position; nil for harnesses without that behavior.
+	idleProbe idleCompactionProbe
+	// idleCompactedFor is the request the latest automatic compaction answered,
+	// so one idle spell compacts at most once.
+	idleCompactedFor time.Time
+	// idleCompacting marks an automatic compaction in flight. Its completion
+	// releases the queue whatever its outcome.
+	idleCompacting bool
+	// lastTurnEndedAt is when this controller last saw a turn end. A send soon
+	// after finds the cache warm without reading the transcript.
+	lastTurnEndedAt time.Time
+	// onTurnIdle plans the beforeCacheExpires timer after a turn ends.
+	onTurnIdle func(domain.SessionID, idleCompactionProbe, string)
 	// Provider calls keep automatic hibernation out without blocking explicit Kill.
 	operations int
 	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
@@ -1689,6 +1703,11 @@ func (c *Controller) sendLocked(
 			return domain.ConversationTurn{}, err
 		}
 	}
+	if queueWhenBusy && !queuedAhead && !c.busy() {
+		// A message reaching a cold Claude conversation compacts it first and
+		// waits in the queue for the compaction to finish.
+		c.compactBeforeDispatchLocked(ctx, msg.Text)
+	}
 	shouldQueue := queueWhenBusy && (c.busy() || queuedAhead)
 	markedSending := false
 	if !shouldQueue {
@@ -2404,6 +2423,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	}
 
 	take := limit
+	var next domain.QueuedTurn
 	for {
 		preview, err := c.store.ListQueuedBatch(ctx, c.conversation.ID, limit)
 		if errors.Is(err, domain.ErrNoQueuedTurn) {
@@ -2425,7 +2445,12 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 			}
 			return err
 		}
+		next = preview[0]
 		break
+	}
+	if c.compactBeforeDispatchLocked(ctx, next.Text) {
+		// The compaction's completion drains this batch.
+		return nil
 	}
 	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, take, c.now())
 	if errors.Is(err, domain.ErrNoQueuedTurn) {
@@ -4087,9 +4112,20 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// the queue so it cannot cascade through the same outage (issue #4861). A
 		// prompt the host's watchdog failed for silence is not an outage: the
 		// provider never answered, so the queued messages get their own turns.
-		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
+		// An automatic compaction releases the queue even when it failed: the
+		// message behind it would have been sent without it.
+		idleCompaction := c.finishIdleCompaction()
+		c.mu.Lock()
+		c.lastTurnEndedAt = now
+		c.mu.Unlock()
+		releaseQueue := idleCompaction || settledTurnState(event) == domain.TurnStateCompleted ||
 			errors.Is(event.Err, ports.ErrChatPromptStalled)
 		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
+		// A compaction is never followed by another; a drained message plans
+		// again when its own turn ends.
+		if !idleCompaction && c.onTurnIdle != nil && c.reviewID == "" && c.idleProbe != nil && !c.busy() {
+			c.onTurnIdle(c.sessionID, c.idleProbe, c.conv.ProviderConversationID())
+		}
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:
@@ -4108,6 +4144,7 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		settled := c.compactionPending && c.pendingTurnID == ""
 		if settled {
 			c.compactionPending = false
+			c.idleCompacting = false
 			c.state = ports.ChatControllerReady
 		}
 		c.mu.Unlock()

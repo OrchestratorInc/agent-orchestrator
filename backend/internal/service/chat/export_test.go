@@ -1,6 +1,12 @@
 package chat
 
-import "time"
+import (
+	"context"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
 
 // SetNativeHistoryLoadAttemptLimit shortens the per-attempt provider load bound
 // for tests and returns a restore function.
@@ -38,3 +44,26 @@ func SetForcedHandoffInterruptLimit(limit time.Duration) (restore func()) {
 	forcedHandoffInterruptLimit = limit
 	return func() { forcedHandoffInterruptLimit = previous }
 }
+
+// SetIdleCompactionState makes the controller read a fixed idle compaction
+// mode and prompt cache position, as Claude's transcript would report them.
+func (c *Controller) SetIdleCompactionState(mode domain.IdleCompactionMode, state ports.PromptCacheState) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	c.idleProbe = func(context.Context, string) (domain.IdleCompactionMode, ports.PromptCacheState, bool) {
+		return mode, state, true
+	}
+}
+
+// IdleCompactionDue exposes the on-return decision for tests.
+func IdleCompactionDue(state ports.PromptCacheState, now time.Time) bool {
+	return idleCompactionDue(state, now)
+}
+
+// IdleCompactionWindow exposes the beforeCacheExpires window for tests.
+func IdleCompactionWindow(state ports.PromptCacheState) (start, end time.Time, ok bool) {
+	return idleCompactionWindow(state)
+}
+
+// IsCompactCommand exposes the /compact detection for tests.
+func IsCompactCommand(text string) bool { return isCompactCommand(text) }

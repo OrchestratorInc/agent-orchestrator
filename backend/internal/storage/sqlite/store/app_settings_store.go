@@ -37,7 +37,9 @@ type AppSettings struct {
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
 	AccountHandoff       bool
-	UpdatedAt            time.Time
+	// IdleCompaction is when an idle Claude Chat compacts its history.
+	IdleCompaction domain.IdleCompactionMode
+	UpdatedAt      time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -60,6 +62,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		CommitAttribution:    row.CommitAttribution,
 		SessionRetentionDays: int(row.SessionRetentionDays),
 		AccountHandoff:       row.AccountHandoff,
+		IdleCompaction:       domain.NormalizeIdleCompaction(row.IdleCompaction),
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -141,6 +144,22 @@ func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Ti
 		UpdatedAt:      now,
 	}); err != nil {
 		return fmt.Errorf("set account handoff: %w", err)
+	}
+	return nil
+}
+
+// SetIdleCompaction stores when an idle Claude Chat compacts its history.
+func (s *Store) SetIdleCompaction(ctx context.Context, mode domain.IdleCompactionMode, now time.Time) error {
+	if !mode.Valid() {
+		return fmt.Errorf("invalid idle compaction mode %q", mode)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetIdleCompaction(ctx, gen.SetIdleCompactionParams{
+		IdleCompaction: string(mode),
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set idle compaction: %w", err)
 	}
 	return nil
 }

@@ -31,6 +31,7 @@ type Store interface {
 	SetCommitAttribution(ctx context.Context, enabled bool, now time.Time) error
 	SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error
 	SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error
+	SetIdleCompaction(ctx context.Context, mode domain.IdleCompactionMode, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -53,7 +54,10 @@ type Snapshot struct {
 	// default, keeps it.
 	SessionRetentionDays int
 	AccountHandoff       bool
-	UpdatedAt            time.Time
+	// IdleCompaction is when an idle Claude Chat compacts its history
+	// (Settings, Advanced). onReturn by default.
+	IdleCompaction domain.IdleCompactionMode
+	UpdatedAt      time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -155,6 +159,28 @@ func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
 // SetAccountHandoff turns the usage-limit account handoff on or off.
 func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
+}
+
+// IdleCompaction reports when an idle Claude Chat compacts its history. An
+// unreadable store resolves to the default, which never adds a request the
+// user did not cause.
+func (s *Service) IdleCompaction(ctx context.Context) domain.IdleCompactionMode {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	if err != nil || !snapshot.IdleCompaction.Valid() {
+		return domain.IdleCompactionOnReturn
+	}
+	return snapshot.IdleCompaction
+}
+
+// SetIdleCompaction chooses when an idle Claude Chat compacts its history.
+func (s *Service) SetIdleCompaction(ctx context.Context, mode domain.IdleCompactionMode) (Snapshot, error) {
+	if !mode.Valid() {
+		return Snapshot{}, apierr.Invalid("IDLE_COMPACTION_INVALID", "mode must be onReturn, beforeCacheExpires or off", nil)
+	}
+	if err := s.store.SetIdleCompaction(ctx, mode, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.Get(ctx)

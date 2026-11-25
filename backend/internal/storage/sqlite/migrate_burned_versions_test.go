@@ -293,6 +293,7 @@ var shippedMigrations = map[int64]string{
 	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
+	20261125171413046: "20261125171413046_app_settings_idle_compaction.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

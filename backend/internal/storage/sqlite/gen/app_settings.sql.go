@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days, account_handoff, limit_history, commit_attribution FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days, account_handoff, limit_history, commit_attribution, idle_compaction FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -34,6 +34,7 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.AccountHandoff,
 		&i.LimitHistory,
 		&i.CommitAttribution,
+		&i.IdleCompaction,
 	)
 	return i, err
 }
@@ -137,6 +138,20 @@ type SetHarnessDefaultParams struct {
 
 func (q *Queries) SetHarnessDefault(ctx context.Context, arg SetHarnessDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setHarnessDefault, arg.HarnessPath, arg.Config, arg.UpdatedAt)
+	return err
+}
+
+const setIdleCompaction = `-- name: SetIdleCompaction :exec
+UPDATE app_settings SET idle_compaction = ?, updated_at = ? WHERE id = 1
+`
+
+type SetIdleCompactionParams struct {
+	IdleCompaction string
+	UpdatedAt      time.Time
+}
+
+func (q *Queries) SetIdleCompaction(ctx context.Context, arg SetIdleCompactionParams) error {
+	_, err := q.db.ExecContext(ctx, setIdleCompaction, arg.IdleCompaction, arg.UpdatedAt)
 	return err
 }
 
