@@ -10,6 +10,22 @@ function renderPlayer(props: Partial<Parameters<typeof VideoPlayer>[0]> = {}) {
 	return screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
 }
 
+/** The events a browser sends for a double-click, 80 ms apart, on fake timers. */
+function doubleClick(video: HTMLVideoElement) {
+	fireEvent.click(video, { detail: 1 });
+	act(() => vi.advanceTimersByTime(80));
+	fireEvent.click(video, { detail: 2 });
+	fireEvent.doubleClick(video, { detail: 2 });
+}
+
+/** Lets the player offer fullscreen; afterEach removes it again. */
+function stubFullscreen() {
+	Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+	const requestFullscreen = vi.fn(() => Promise.resolve());
+	HTMLElement.prototype.requestFullscreen = requestFullscreen;
+	return requestFullscreen;
+}
+
 /** jsdom has no media pipeline: give the element a length and announce it. */
 function loadMetadata(video: HTMLVideoElement, duration: number) {
 	Object.defineProperty(video, "duration", { configurable: true, value: duration });
@@ -28,7 +44,12 @@ describe("VideoPlayer", () => {
 			this.dispatchEvent(new Event("pause"));
 		});
 	});
-	afterEach(() => vi.restoreAllMocks());
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;
+		delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
+	});
 
 	it("replaces the native controls with its own", () => {
 		const video = renderPlayer({ crossOrigin: "anonymous" });
@@ -77,7 +98,7 @@ describe("VideoPlayer", () => {
 		}
 	});
 
-	it("plays and pauses from the button and from clicking the video", async () => {
+	it("plays and pauses from the button", async () => {
 		const user = userEvent.setup();
 		const video = renderPlayer();
 		await user.click(screen.getByRole("button", { name: "Play" }));
@@ -85,54 +106,84 @@ describe("VideoPlayer", () => {
 		Object.defineProperty(video, "paused", { configurable: true, value: false });
 		await user.click(screen.getByRole("button", { name: "Pause" }));
 		expect(pause).toHaveBeenCalledTimes(1);
+	});
+
+	it("toggles playback a moment after a single click on the video", () => {
+		vi.useFakeTimers();
+		const video = renderPlayer();
+		Object.defineProperty(video, "paused", { configurable: true, value: false });
+		fireEvent.click(video, { detail: 1 });
+		// It waits to see whether a second click makes this a double-click.
+		act(() => vi.advanceTimersByTime(249));
+		expect(pause).not.toHaveBeenCalled();
+		act(() => vi.advanceTimersByTime(1));
+		expect(pause).toHaveBeenCalledTimes(1);
+	});
+
+	it("toggles at once on a keyboard or assistive click", () => {
+		const video = renderPlayer();
+		fireEvent.click(video, { detail: 0 });
+		expect(play).toHaveBeenCalledTimes(1);
+	});
+
+	it("enters fullscreen on a double-click without pausing a playing clip", () => {
+		vi.useFakeTimers();
+		const requestFullscreen = stubFullscreen();
+		const video = renderPlayer();
+		Object.defineProperty(video, "paused", { configurable: true, value: false });
+		const pauseEvents = vi.fn();
+		video.addEventListener("pause", pauseEvents);
+		doubleClick(video);
+		act(() => vi.advanceTimersByTime(1000));
+		expect(requestFullscreen).toHaveBeenCalledTimes(1);
+		expect(pauseEvents).not.toHaveBeenCalled();
+		expect(pause).not.toHaveBeenCalled();
+		expect(play).not.toHaveBeenCalled();
+	});
+
+	it("enters fullscreen on a double-click without starting a paused clip", () => {
+		vi.useFakeTimers();
+		const requestFullscreen = stubFullscreen();
+		const video = renderPlayer();
+		doubleClick(video);
+		act(() => vi.advanceTimersByTime(1000));
+		expect(requestFullscreen).toHaveBeenCalledTimes(1);
+		expect(play).not.toHaveBeenCalled();
+		expect(pause).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+	});
+
+	it("restores playback after a double-click slower than the click delay", () => {
+		vi.useFakeTimers();
+		const requestFullscreen = stubFullscreen();
+		const video = renderPlayer();
+		loadMetadata(video, 2);
+		video.currentTime = 1.92;
+		fireEvent.click(video, { detail: 1 });
+		// The system still counts the second click as a double-click, but the
+		// first one has already started playback.
+		act(() => vi.advanceTimersByTime(350));
+		expect(play).toHaveBeenCalledTimes(1);
+		video.currentTime = 2;
+		fireEvent.click(video, { detail: 2 });
+		fireEvent.doubleClick(video, { detail: 2 });
+		expect(requestFullscreen).toHaveBeenCalledTimes(1);
+		expect(pause).toHaveBeenCalledTimes(1);
+		expect(video.currentTime).toBe(1.92);
+	});
+
+	it("drops a pending click when its pane is hidden before the click delay ends", () => {
+		vi.useFakeTimers();
+		const view = render(<VideoPlayer label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
+		const video = screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
+		Object.defineProperty(video, "paused", { configurable: true, value: false });
+		fireEvent.click(video, { detail: 1 });
+		view.rerender(<VideoPlayer active={false} label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
+		expect(pause).toHaveBeenCalledTimes(1);
 		Object.defineProperty(video, "paused", { configurable: true, value: true });
-		await user.click(video);
-		expect(play).toHaveBeenCalledTimes(2);
-	});
-
-	it("enters fullscreen on a double-click without toggling playback", async () => {
-		const user = userEvent.setup();
-		Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
-		const requestFullscreen = vi.fn(() => Promise.resolve());
-		HTMLElement.prototype.requestFullscreen = requestFullscreen;
-		try {
-			const video = renderPlayer();
-			loadMetadata(video, 2);
-			video.currentTime = 1.92;
-			await user.dblClick(video);
-			expect(requestFullscreen).toHaveBeenCalledTimes(1);
-			// The first click started playback; the double-click put it back.
-			expect(play).toHaveBeenCalledTimes(1);
-			expect(pause).toHaveBeenCalledTimes(1);
-			expect(video.currentTime).toBe(1.92);
-			expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
-		} finally {
-			delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;
-			delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
-		}
-	});
-
-	it("restores playback after a slow double-click the system still recognizes", async () => {
-		Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
-		const requestFullscreen = vi.fn(() => Promise.resolve());
-		HTMLElement.prototype.requestFullscreen = requestFullscreen;
-		try {
-			const video = renderPlayer();
-			loadMetadata(video, 2);
-			video.currentTime = 1.92;
-			fireEvent.click(video, { detail: 1 });
-			await new Promise((resolve) => setTimeout(resolve, 350));
-			video.currentTime = 2;
-			fireEvent.click(video, { detail: 2 });
-			fireEvent.doubleClick(video, { detail: 2 });
-			expect(requestFullscreen).toHaveBeenCalledTimes(1);
-			expect(play).toHaveBeenCalledTimes(1);
-			expect(pause).toHaveBeenCalledTimes(1);
-			expect(video.currentTime).toBe(1.92);
-		} finally {
-			delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled;
-			delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
-		}
+		// The click must not start the video behind whatever now covers it.
+		act(() => vi.advanceTimersByTime(1000));
+		expect(play).not.toHaveBeenCalled();
 	});
 
 	it("leaves keys typed in the fullscreen speed menu to the menu", async () => {

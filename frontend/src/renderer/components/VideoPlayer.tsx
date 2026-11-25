@@ -12,6 +12,11 @@ const SKIP_SECONDS = 5;
 const VOLUME_STEP = 0.05;
 /** Videos start at half volume, so one with loud audio does not blast when it autoplays. */
 const DEFAULT_VOLUME = 0.5;
+/**
+ * How long a single click on the video waits for a second click before it
+ * toggles playback, so a double-click goes fullscreen without a pause.
+ */
+const CLICK_DELAY_MS = 250;
 /** Controls a narrow player leaves out; see the controls row. */
 const COMPACT_HIDDEN = "@max-[26rem]:hidden";
 
@@ -58,8 +63,15 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const seekTrackRef = useRef<HTMLDivElement>(null);
 	// What playback looked like before the latest single click on the video, so
-	// a double-click can put it back.
+	// a double-click slower than CLICK_DELAY_MS can put it back.
 	const beforeClick = useRef<{ paused: boolean; time: number } | null>(null);
+	// The single click waiting to see whether it starts a double-click.
+	const clickTimer = useRef<number | null>(null);
+	const cancelPendingClick = useCallback(() => {
+		if (clickTimer.current === null) return;
+		window.clearTimeout(clickTimer.current);
+		clickTimer.current = null;
+	}, []);
 	const [playing, setPlaying] = useState(false);
 	const [time, setTime] = useState(0);
 	const [duration, setDuration] = useState(0);
@@ -101,12 +113,17 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 	useEffect(() => {
 		const shown = visible && !wasVisible.current;
 		wasVisible.current = visible;
+		// A click made just before the pane was hidden must not start it behind the cover.
+		if (!visible) cancelPendingClick();
 		const video = videoRef.current;
 		if (!video) return;
 		if (!visible) {
 			if (!video.paused) video.pause();
 		} else if (shown && video.paused && (video.played?.length ?? 0) === 0) void Promise.resolve(video.play()).catch(() => {});
-	}, [visible]);
+	}, [cancelPendingClick, visible]);
+
+	// Nor may it reach a new file version's element, or fire after unmount.
+	useEffect(() => cancelPendingClick, [cancelPendingClick, src]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -219,20 +236,33 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 				key={src}
 				loop={loop}
 				onClick={(event) => {
-					// A single click toggles at once; the second click of a double-click
-					// leaves playback to the double-click handler.
+					// A keyboard or assistive click (detail 0) cannot start a double-click.
+					if (event.detail === 0) {
+						togglePlay();
+						return;
+					}
+					// The second click of a double-click is left to the double-click handler.
 					if (event.detail > 1) return;
+					// The first click waits briefly, so a double-click never pauses or
+					// starts playback on its way to fullscreen.
 					const video = event.currentTarget;
 					beforeClick.current = { paused: video.paused || video.ended, time: video.currentTime };
-					togglePlay();
+					cancelPendingClick();
+					clickTimer.current = window.setTimeout(() => {
+						clickTimer.current = null;
+						togglePlay();
+					}, CLICK_DELAY_MS);
 				}}
 				onDoubleClick={(event) => {
-					// The browser recognizes a double-click at the system's own speed, after
-					// its first click already toggled playback: undo that, then go fullscreen.
 					const before = beforeClick.current;
 					beforeClick.current = null;
 					const video = event.currentTarget;
-					if (before?.paused) {
+					if (clickTimer.current !== null) {
+						// The usual case: the first click is still waiting, so playback never changed.
+						cancelPendingClick();
+					} else if (before?.paused) {
+						// The browser recognizes a double-click at the system's own speed, which
+						// can be slower than CLICK_DELAY_MS: undo the first click's toggle.
 						video.pause();
 						video.currentTime = before.time;
 						setTime(before.time);
