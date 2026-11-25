@@ -113,6 +113,9 @@ export class LocalBrowserTransport implements BrowserTransport {
 	private async handleMessage(data: unknown): Promise<void> {
 		if (typeof data === "string") {
 			const message = JSON.parse(data) as { type?: string; payload?: BrowserLiveState; code?: string; message?: string };
+			// Newer daemons say they are there every 2 s, so a still page's
+			// silence can be told apart from a dead stream.
+			this.handlers.onAlive?.({ heartbeat: message.type === "heartbeat" });
 			if (message.type === "state" && message.payload) this.handlers.onState(toViewState(message.payload));
 			if (message.type === "error") {
 				const detail = message.message ?? message.code ?? "Browser host error";
@@ -131,6 +134,7 @@ export class LocalBrowserTransport implements BrowserTransport {
 				: null;
 		if (buffer) {
 			const frame = decodeBrowserFrame(buffer);
+			this.handlers.onAlive?.({ heartbeat: false });
 			// Host errors can be recoverable while the WebSocket remains connected.
 			// A later valid frame proves the stream is healthy again, so remove the
 			// blocking error state without forcing the user to reconnect.

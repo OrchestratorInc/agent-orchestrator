@@ -27,6 +27,11 @@ const (
 	browserFrameVersion  = byte(1)
 	browserFrameJPEG     = byte(1)
 	browserLiveHeartbeat = 30 * time.Second
+	// browserLiveAppHeartbeat is how often the stream says it is there. A
+	// still page sends nothing and WebSocket pings are invisible to the
+	// phone's JavaScript; a heartbeat lets it tell a quiet page from a dead
+	// stream within a few seconds.
+	browserLiveAppHeartbeat = 2 * time.Second
 )
 
 type browserLiveBroker interface {
@@ -51,11 +56,13 @@ type BrowserLiveHub struct {
 	mu           sync.Mutex
 	leases       map[string]context.CancelFunc
 	loopbackBase string
+	// heartbeatEvery paces the stream's heartbeat message.
+	heartbeatEvery time.Duration
 }
 
 // NewBrowserLiveHub creates the authenticated LAN WebSocket bridge.
 func NewBrowserLiveHub(broker browserLiveBroker, sessions browserLiveSessionReader, enabled func() bool, log *slog.Logger) *BrowserLiveHub {
-	return &BrowserLiveHub{broker: broker, sessions: sessions, enabled: enabled, log: loggerOrDefault(log), leases: map[string]context.CancelFunc{}}
+	return &BrowserLiveHub{broker: broker, sessions: sessions, enabled: enabled, log: loggerOrDefault(log), leases: map[string]context.CancelFunc{}, heartbeatEvery: browserLiveAppHeartbeat}
 }
 
 // SetLoopbackBaseURL records the daemon's own loopback origin. The desktop
@@ -266,6 +273,12 @@ func (h *BrowserLiveHub) watchPreview(ctx context.Context, sessionID string) {
 func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Conn, events, frames <-chan browserstream.Event) error {
 	heartbeat := time.NewTicker(browserLiveHeartbeat)
 	defer heartbeat.Stop()
+	every := h.heartbeatEvery
+	if every <= 0 {
+		every = browserLiveAppHeartbeat
+	}
+	appHeartbeat := time.NewTicker(every)
+	defer appHeartbeat.Stop()
 	for {
 		var event browserstream.Event
 		var ok bool
@@ -282,6 +295,11 @@ func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Co
 				err := c.Ping(pingCtx)
 				cancel()
 				if err != nil {
+					return err
+				}
+				continue
+			case <-appHeartbeat.C:
+				if err := writeBrowserMessage(ctx, c, websocket.MessageText, []byte(`{"type":"heartbeat"}`)); err != nil {
 					return err
 				}
 				continue

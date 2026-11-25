@@ -234,6 +234,28 @@ describe("browser live transport", () => {
 		expect(onState).toHaveBeenCalledWith({ ...state, control: "none", focusedEditable: null });
 	});
 
+	it("reports every message as alive, and the daemon's heartbeat as one", async () => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+			constructor() { FakeWebSocket.instance = this; }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const onAlive = vi.fn();
+		const onState = vi.fn();
+		const client = new BrowserLiveClient({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1", { onStatus: vi.fn(), onState, onFrame: vi.fn(), onAlive });
+		client.connect();
+		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "heartbeat" }) });
+		await Promise.resolve();
+		expect(onAlive).toHaveBeenLastCalledWith({ heartbeat: true });
+		expect(onState).not.toHaveBeenCalled();
+		FakeWebSocket.instance.onmessage?.({ data: encodedFrame() });
+		await Promise.resolve();
+		expect(onAlive).toHaveBeenLastCalledWith({ heartbeat: false });
+	});
+
 	it("drops a command the desktop can't carry", () => {
 		class FakeWebSocket {
 			static OPEN = 1;

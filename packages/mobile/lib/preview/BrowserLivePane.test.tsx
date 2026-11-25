@@ -20,13 +20,16 @@ const fixtures = vi.hoisted(() => ({
 	errorStatus: null as number | null,
 	platform: { OS: "android" },
 	clients: [] as Array<{ handlers: Handlers; sent: unknown[]; closed: boolean }>,
+	appState: null as ((state: string) => void) | null,
+	network: null as ((state: { isConnected: boolean }) => void) | null,
 }));
 
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		Image: host("Image"), View: host("View"),
+		Image: host("Image"), View: host("View"), Text: host("Text"),
+		AppState: { addEventListener: (_event: string, listener: (state: string) => void) => { fixtures.appState = listener; return { remove: () => { fixtures.appState = null; } }; } },
 		Platform: fixtures.platform,
 		StyleSheet: { create: (styles: unknown) => styles, absoluteFill: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } },
 	};
@@ -56,6 +59,9 @@ vi.mock("react-native-reanimated", async () => {
 		withTiming: (value: unknown) => value,
 	};
 });
+vi.mock("expo-network", () => ({
+	addNetworkStateListener: (listener: (state: { isConnected: boolean }) => void) => { fixtures.network = listener; return { remove: () => { fixtures.network = null; } }; },
+}));
 vi.mock("react-native-worklets", () => ({ scheduleOnRN: (run: (...args: unknown[]) => void, ...args: unknown[]) => run(...args) }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }) }));
 vi.mock("expo-router", async () => {
@@ -310,7 +316,10 @@ describe("live browser states", () => {
 		expect(alert.findByType("EmptyState" as never).props).toMatchObject({ title: "Couldn't connect to the browser", message: "Another phone is controlling this browser." });
 		await act(async () => alert.findByType("Button" as never).props.onPress());
 		expect(fixtures.clients).toHaveLength(2);
-		expect(fixtures.clients[0].closed).toBe(true);
+		// The failed stream is kept a moment for its probe; leaving the pane closes both.
+		act(() => { screen.unmount(); });
+		expect(fixtures.clients.every((record) => record.closed)).toBe(true);
+		screen = create(<></>);
 	});
 
 	it("offers Open URL when nothing is open on the desktop", async () => {
@@ -544,15 +553,132 @@ describe("transport contract", () => {
 		expect(fake.record.sent.at(-1)).toMatchObject({ payload: { kind: "pointer", x: 1, y: 1 } });
 	});
 
-	it("shows an error when an active transport reports it closed", async () => {
-		const fake = fakeTransport();
-		await act(async () => { screen = create(<BrowserLivePane sessionID="cloud-1" transport={fake.factory} />); });
-		await act(async () => {
-			fake.record.handlers!.onStatus("open");
-			fake.record.handlers!.onState(page);
-		});
-		await act(async () => { fake.record.handlers!.onStatus("closed"); });
-		expect(nodes("EmptyState").map((node) => node.props.title)).toContain("Couldn't connect to the browser");
+	it("reconnects by itself when an open stream closes, saying so instead of failing", async () => {
+		vi.useFakeTimers();
+		try {
+			const fake = fakeTransport();
+			let made = 0;
+			const factory = () => { made++; return fake.transport; };
+			await act(async () => { screen = create(<BrowserLivePane sessionID="cloud-1" transport={factory} />); });
+			await act(async () => {
+				fake.record.handlers!.onStatus("open");
+				fake.record.handlers!.onState(page);
+			});
+			await act(async () => { fake.record.handlers!.onStatus("closed"); });
+			expect(nodes("EmptyState").map((node) => node.props.title)).toContain("Reconnecting…");
+			expect(nodes("EmptyState").map((node) => node.props.title)).not.toContain("Couldn't connect to the browser");
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(made).toBe(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps the last frame under a Reconnecting… pill, untouchable, until the stream is back", async () => {
+		vi.useFakeTimers();
+		try {
+			await render();
+			await open();
+			await showFrame();
+			await act(async () => { client().handlers.onStatus("error", "The browser stream ended."); });
+			expect(nodes("Image")).toHaveLength(1);
+			expect(nodes("Text").map((node) => node.props.children)).toContain("Reconnecting…");
+			expect(gesture("tap").enabled).toBe(false);
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(fixtures.clients).toHaveLength(2);
+			// The new stream is open and alive, but its first frame hasn't come:
+			// the image on screen is the old page, so a tap could hit anything.
+			await open();
+			await act(async () => { (client().handlers as { onAlive?(info: { heartbeat: boolean }): void }).onAlive?.({ heartbeat: true }); });
+			expect(gesture("tap").enabled).toBe(false);
+			expect(gesture("pan").enabled).toBe(false);
+			await showFrame();
+			expect(nodes("Text").map((node) => node.props.children)).not.toContain("Reconnecting…");
+			expect(gesture("tap").enabled).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("a failover address saying sharing is off doesn't end the stream: it reconnects and resumes on the primary", async () => {
+		vi.useFakeTimers();
+		try {
+			const onDisabled = vi.fn();
+			const primary = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+			const failover = { host: "10.0.0.9", httpPort: "61498", muxPort: "61498", password: "test" };
+			const view = () => <BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} onDisabled={onDisabled} />;
+			fixtures.config = primary;
+			await act(async () => { screen = create(view()); });
+			await open();
+			await showFrame();
+			// The primary drops; the app moves to the host's other address.
+			fixtures.config = failover;
+			await act(async () => { screen.update(view()); });
+			const onFailover = client();
+			await act(async () => { onFailover.handlers.onStatus("error"); onFailover.handlers.onDisabled?.(); });
+			expect(onDisabled).not.toHaveBeenCalled();
+			expect(nodes("Image")).toHaveLength(1);
+			expect(nodes("Text").map((node) => node.props.children)).toContain("Reconnecting…");
+			// It keeps trying with backoff rather than stopping.
+			const before = fixtures.clients.length;
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(fixtures.clients.length).toBe(before + 1);
+			// The primary is back: the stream resumes there.
+			fixtures.config = primary;
+			await act(async () => { screen.update(view()); });
+			await open();
+			await showFrame();
+			expect(nodes("Text").map((node) => node.props.children)).not.toContain("Reconnecting…");
+			expect(gesture("tap").enabled).toBe(true);
+			expect(onDisabled).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("once the stream opens on the new address, that address saying sharing is off is final", async () => {
+		const onDisabled = vi.fn();
+		const primary = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+		const other = { host: "10.0.0.9", httpPort: "61498", muxPort: "61498", password: "test" };
+		const view = () => <BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} onDisabled={onDisabled} />;
+		fixtures.config = primary;
+		await act(async () => { screen = create(view()); });
+		await open();
+		fixtures.config = other;
+		await act(async () => { screen.update(view()); });
+		// B opens: it is now where the stream lives.
+		await open();
+		await showFrame();
+		// The person turns sharing off on the desktop while B is selected.
+		await act(async () => { client().handlers.onStatus("error"); client().handlers.onDisabled?.(); });
+		expect(onDisabled).toHaveBeenCalledTimes(1);
+	});
+
+	it("the primary itself saying sharing is off still stops for good", async () => {
+		const onDisabled = vi.fn();
+		await act(async () => { screen = create(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} onDisabled={onDisabled} />); });
+		await open();
+		await showFrame();
+		await act(async () => { client().handlers.onStatus("error"); client().handlers.onDisabled?.(); });
+		expect(onDisabled).toHaveBeenCalledTimes(1);
+	});
+
+	it("closes the stream in the background and reconnects on return", async () => {
+		await render();
+		await open();
+		await act(async () => { fixtures.appState?.("background"); });
+		expect(client().closed).toBe(true);
+		expect(fixtures.clients).toHaveLength(1);
+		await act(async () => { fixtures.appState?.("active"); });
+		expect(fixtures.clients).toHaveLength(2);
+		expect(client().closed).toBe(false);
+	});
+
+	it("reconnects at once when the network comes back", async () => {
+		await render();
+		await act(async () => { client().handlers.onStatus("error", "offline"); });
+		await act(async () => { fixtures.network?.({ isConnected: true }); });
+		expect(fixtures.clients).toHaveLength(2);
 	});
 
 	it("the pane keeps the local transport's capabilities: pointer input always reaches it", async () => {
