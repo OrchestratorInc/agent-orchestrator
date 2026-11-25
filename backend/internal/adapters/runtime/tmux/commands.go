@@ -178,6 +178,11 @@ func deleteBufferArgs(name string) []string {
 	return []string{"delete-buffer", "-b", name}
 }
 
+// listBufferNamesArgs lists every paste buffer's name, one per line.
+func listBufferNamesArgs() []string {
+	return []string{"list-buffers", "-F", "#{buffer_name}"}
+}
+
 // sendEnterArgs builds args for `tmux send-keys -t <id> Enter` to submit the
 // queued input.
 func sendEnterArgs(id string) []string {

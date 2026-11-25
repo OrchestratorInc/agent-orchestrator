@@ -293,6 +293,9 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := deleteBufferArgs("buf"), []string{"delete-buffer", "-b", "buf"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("deleteBufferArgs = %#v, want %#v", got, want)
 	}
+	if got, want := listBufferNamesArgs(), []string{"list-buffers", "-F", "#{buffer_name}"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("listBufferNamesArgs = %#v, want %#v", got, want)
+	}
 	if got, want := sendEnterArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "Enter"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendEnterArgs = %#v, want %#v", got, want)
 	}
@@ -2326,6 +2329,9 @@ func TestSendMessageCancelWhileStagingStrandsNothing(t *testing.T) {
 	r, fr := newTestRuntime(5)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	buffer := nextSendBuffer("sess-1")
+	// set-buffer, set-buffer (cancelled), list-buffers.
+	fr.outputs = [][]byte{nil, nil, []byte("buffer0\n" + buffer + "\n")}
 	fr.hook = func(runCtx context.Context, call int) error {
 		if call == 2 {
 			cancel()
@@ -2341,7 +2347,10 @@ func TestSendMessageCancelWhileStagingStrandsNothing(t *testing.T) {
 	if countCalls(fr, "paste-buffer") != 0 || countCalls(fr, "send-keys") != 0 {
 		t.Fatalf("calls = %#v, want no paste and no Enter after a staging cancel", fr.calls)
 	}
-	if got, want := fr.calls[len(fr.calls)-1].args, deleteBufferArgs(fr.calls[0].args[2]); !reflect.DeepEqual(got, want) {
+	if got, want := fr.calls[2].args, listBufferNamesArgs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("call 2 = %#v, want %#v", got, want)
+	}
+	if got, want := fr.calls[len(fr.calls)-1].args, deleteBufferArgs(buffer); !reflect.DeepEqual(got, want) {
 		t.Fatalf("last call = %#v, want %#v", got, want)
 	}
 }
@@ -2350,6 +2359,9 @@ func TestSendMessageCancelWhileStagingStrandsNothing(t *testing.T) {
 // reported, its buffer is dropped, and no Enter follows it.
 func TestSendMessagePasteFailureDeletesBufferAndSkipsEnter(t *testing.T) {
 	r, fr := newTestRuntime(0)
+	buffer := nextSendBuffer("sess-1")
+	// set-buffer, paste-buffer (fails), list-buffers.
+	fr.outputs = [][]byte{nil, nil, []byte(buffer + "\n")}
 	pasteErr := errors.New("paste failed")
 	fr.hook = func(_ context.Context, call int) error {
 		if call == 2 {
@@ -2365,9 +2377,38 @@ func TestSendMessagePasteFailureDeletesBufferAndSkipsEnter(t *testing.T) {
 	if countCalls(fr, "send-keys") != 0 {
 		t.Fatalf("calls = %#v, want no Enter after a failed paste", fr.calls)
 	}
-	if got, want := fr.calls[len(fr.calls)-1].args, deleteBufferArgs(fr.calls[0].args[2]); !reflect.DeepEqual(got, want) {
+	if got, want := fr.calls[len(fr.calls)-1].args, deleteBufferArgs(buffer); !reflect.DeepEqual(got, want) {
 		t.Fatalf("last call = %#v, want %#v", got, want)
 	}
+}
+
+// TestSendMessageCleanupSkipsAbsentBuffer: when the send's buffer does not
+// exist (a paste-buffer -d consumed it before reporting an error), cleanup
+// must not call delete-buffer. Older tmux deletes the newest buffer, which
+// may be the user's own, when the named one is missing.
+func TestSendMessageCleanupSkipsAbsentBuffer(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	// set-buffer, paste-buffer (fails), list-buffers without this send's buffer.
+	fr.outputs = [][]byte{nil, nil, []byte("buffer0\n")}
+	pasteErr := errors.New("paste timed out")
+	fr.hook = func(_ context.Context, call int) error {
+		if call == 2 {
+			return pasteErr
+		}
+		return nil
+	}
+
+	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "hello"); !errors.Is(err, pasteErr) {
+		t.Fatalf("SendMessage error = %v, want %v", err, pasteErr)
+	}
+	if got := countCalls(fr, "delete-buffer"); got != 0 {
+		t.Fatalf("delete-buffer calls = %d, want 0 for an absent buffer; calls = %#v", got, fr.calls)
+	}
+}
+
+// nextSendBuffer predicts the buffer name the next SendMessage stages into.
+func nextSendBuffer(id string) string {
+	return "ao-send-" + id + "-" + strconv.FormatUint(pasteBufferSeq.Load()+1, 10)
 }
 
 func TestSendMessageCompletionBudgetCoversPasteAndEnter(t *testing.T) {
@@ -2390,8 +2431,10 @@ func TestSendMessageCancellationBeforeFirstChunkAborts(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SendMessage error = %v, want context.Canceled", err)
 	}
-	if len(fr.calls) != 2 || fr.calls[1].args[0] != "delete-buffer" {
-		t.Fatalf("calls = %#v, want first chunk attempt then delete-buffer", fr.calls)
+	// The first set-buffer never ran, so no buffer exists and none may be
+	// deleted: the existence check finds nothing.
+	if len(fr.calls) != 2 || !reflect.DeepEqual(fr.calls[1].args, listBufferNamesArgs()) {
+		t.Fatalf("calls = %#v, want first chunk attempt then list-buffers only", fr.calls)
 	}
 }
 

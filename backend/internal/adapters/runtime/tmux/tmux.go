@@ -1058,8 +1058,24 @@ var pasteBufferSeq atomic.Uint64
 
 // deleteSendBuffer drops a staged send buffer after an aborted send. It is
 // best effort: a leftover buffer holds text but never reaches a pane.
+//
+// It deletes only a buffer that exists. On older tmux (3.2 among them),
+// delete-buffer -b with an unknown name falls back to the newest buffer, and
+// a legacy-socket session shares the machine's tmux server with the user's
+// own copy buffers. The name can be absent when the first set-buffer failed
+// before creating it, or when a paste-buffer -d that reported an error had
+// already consumed it.
 func (r *Runtime) deleteSendBuffer(ctx context.Context, id, buffer string) {
-	_, _ = r.runForSession(ctx, id, deleteBufferArgs(buffer)...)
+	out, err := r.runForSession(ctx, id, listBufferNamesArgs()...)
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(name) == buffer {
+			_, _ = r.runForSession(ctx, id, deleteBufferArgs(buffer)...)
+			return
+		}
+	}
 }
 
 // Interrupt sends Ctrl-C to the foreground process without destroying the tmux
