@@ -3272,6 +3272,8 @@
 	"settings.diagnosticsToggleHint": "Muestra el uso de memoria y CPU en las tarjetas de sesión y el tablero, y la página de diagnóstico.",
 	"settings.splitPanes": "Paneles divididos",
 	"settings.splitPanesHint": "Arrastra una pestaña a un borde del panel central para mostrarla junto a la actual. Cuando se lo pides, los agentes de tus sesiones también pueden dividir paneles y ejecutar comandos en terminales.",
+	"settings.newDesktopUi": "Interfaz v2",
+	"settings.newDesktopUiHint": "Un panel central más oscuro, pestañas y menús desplegables planos, un compositor con borde, y hovers y menús instantáneos.",
 	"settings.prView": "Vista de PR",
 	"settings.prViewHint": "Abre un pull request en su propia pestaña, con su descripción, comentarios, comprobaciones y pila.",
 	"settings.chromeAgents.label": "Usar agentes en mi Chrome",

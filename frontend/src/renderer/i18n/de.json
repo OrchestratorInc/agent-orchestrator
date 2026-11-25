@@ -3203,6 +3203,8 @@
 	"settings.diagnosticsToggleHint": "Speicher- und CPU-Auslastung auf Sitzungskarten und im Board sowie die Diagnoseseite anzeigen.",
 	"settings.splitPanes": "Geteilte Bereiche",
 	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen. Wenn du sie darum bittest, können Agenten in deinen Sitzungen auch Bereiche teilen und Befehle in Terminals ausführen.",
+	"settings.newDesktopUi": "Oberfläche v2",
+	"settings.newDesktopUiHint": "Ein dunklerer mittlerer Bereich, flache Tabs und Dropdowns, ein umrandeter Eingabebereich sowie sofortige Hover-Effekte und Menüs.",
 	"settings.prView": "PR-Ansicht",
 	"settings.prViewHint": "Einen Pull Request in einem eigenen Tab öffnen, mit Beschreibung, Kommentaren, Checks und Stack.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",
