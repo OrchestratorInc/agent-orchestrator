@@ -35,23 +35,39 @@ function omitted(count: number): string {
 	return `- … ${count} more comment${count === 1 ? "" : "s"} omitted …`;
 }
 
-/** Keeps the first comment and the latest ones that fit in `budget` characters. */
+// How much of the first comment a long thread always keeps, so the latest
+// comments can take the rest of the room before the first is shortened.
+const MIN_FIRST_COMMENT_LENGTH = 200;
+const MIN_LINE_LENGTH = 40;
+
+const lineCost = (line: string) => line.length + 1;
+
+/**
+ * Keeps the first comment and the latest ones that fit in `budget`
+ * characters. Room for the latest is reserved before the first comment is
+ * shortened, and the latest is itself shortened when nothing else fits.
+ */
 function threadLines(comments: readonly ArtifactComment[], budget: number): string[] {
 	const lines = comments.map(commentLine);
-	const total = lines.reduce((sum, line) => sum + line.length + 1, 0);
-	if (total <= budget) return lines;
+	if (lines.reduce((sum, line) => sum + lineCost(line), 0) <= budget) return lines;
 
-	const first = lines[0];
+	const [first, ...rest] = lines;
+	if (rest.length === 0) return [compactText(first, Math.max(MIN_LINE_LENGTH, budget - 1))];
+
+	// The first comment's floor and the longest omission marker are held back.
+	let room = budget - Math.min(lineCost(first), MIN_FIRST_COMMENT_LENGTH + 1) - lineCost(omitted(rest.length));
 	const tail: string[] = [];
-	// Room for the first comment and the omission marker.
-	let used = first.length + 1 + omitted(lines.length).length + 1;
-	for (let index = lines.length - 1; index > 0; index -= 1) {
-		if (used + lines[index].length + 1 > budget) break;
-		used += lines[index].length + 1;
-		tail.unshift(lines[index]);
+	for (let index = rest.length - 1; index >= 0; index -= 1) {
+		if (lineCost(rest[index]) > room) break;
+		room -= lineCost(rest[index]);
+		tail.unshift(rest[index]);
 	}
-	const skipped = lines.length - 1 - tail.length;
-	const head = used > budget ? compactText(first, Math.max(40, budget - (used - first.length))) : first;
+	if (tail.length === 0) tail.push(compactText(rest[rest.length - 1], Math.max(MIN_LINE_LENGTH, room - 1)));
+
+	const skipped = rest.length - tail.length;
+	const used = tail.reduce((sum, line) => sum + lineCost(line), 0) + (skipped > 0 ? lineCost(omitted(skipped)) : 0);
+	const headRoom = budget - used - 1;
+	const head = first.length <= headRoom ? first : compactText(first, Math.max(MIN_LINE_LENGTH, headRoom));
 	return skipped > 0 ? [head, omitted(skipped), ...tail] : [head, ...tail];
 }
 

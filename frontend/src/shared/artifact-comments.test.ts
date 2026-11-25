@@ -286,4 +286,35 @@ describe("formatArtifactCommentMessage", () => {
 		expect(message).toContain("[truncated]");
 		expect(message.endsWith("They will republish it.")).toBe(true);
 	});
+
+	it("shortens the first comment, not the latest, when a large frame leaves little room", () => {
+		const bigFrame = {
+			...designThread,
+			anchor: { path: `body${">p:1".repeat(99)}`, tag: "p", textHash: "9f2c00112233aabb", excerpt: "e".repeat(120) },
+		};
+		const artifact = { path: `docs/${"d".repeat(495)}`, version: 1 };
+		const note = "n".repeat(1800);
+		const message = formatArtifactCommentMessage(
+			{ ...bigFrame, comments: [comment("1", "f".repeat(1200)), comment("2", "latest", aditi)] },
+			artifact,
+			note,
+		);
+		expect(message.length).toBeLessThanOrEqual(MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH);
+		expect(message).toContain("- Aditi: latest");
+		expect(message).toMatch(/- Sam: f+ \[truncated\]/);
+		expect(message).not.toContain("omitted");
+		expect(message).toContain(`Owner's note: ${note}`);
+		expect(message.endsWith("They will republish it.")).toBe(true);
+
+		// When even the latest doesn't fit whole, it's shortened rather than dropped.
+		const long = formatArtifactCommentMessage(
+			{ ...bigFrame, comments: [comment("1", "f".repeat(1200)), comment("2", "m".repeat(1200)), comment("3", "z".repeat(1200), aditi)] },
+			artifact,
+			note,
+		);
+		expect(long.length).toBeLessThanOrEqual(MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH);
+		expect(long).toMatch(/- Aditi: z+ \[truncated\]/);
+		expect(long).toContain("- … 1 more comment omitted …");
+		expect(long.endsWith("They will republish it.")).toBe(true);
+	});
 });
