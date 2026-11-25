@@ -378,13 +378,13 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// fingerprint is its SHA-256, which the renderer already has from the
 	// session's artifact list, and the control plane refuses to share another
 	// version. Only when the renderer did not name it is the list read here.
-	const inspectCloudFile = async (file: CloudSessionShareFile, refresh = false): Promise<CloudShareInspection> => {
+	const inspectCloudFile = async (file: CloudSessionShareFile, refresh = false, linkOnly = false): Promise<CloudShareInspection> => {
 		const key = await cloudRecordKey(deps.records, file.baseUrl, file);
 		const listed = refresh || !file.fingerprint ? await cloudSessionArtifactVersion(deps, file.baseUrl, file) : undefined;
 		const name = listed?.name ?? (file.path.split("/").pop() || file.path);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
-		const pageFiles = shareId ? await deps.records.publishedPageFiles(key) : undefined;
+		const pageFiles = shareId && !linkOnly ? await deps.records.publishedPageFiles(key) : undefined;
 		return {
 			name,
 			...(listed ? { size: listed.size } : {}),
@@ -714,7 +714,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		requireMainFrame(event);
 		const file = shareFileArgument(value);
 		const linkOnly = (options as { linkOnly?: unknown } | undefined)?.linkOnly === true;
-		if (isCloudFile(file)) return inspectCloudFile(file);
+		if (isCloudFile(file)) return inspectCloudFile(file, false, linkOnly);
 		if (isHostFile(file)) return inspectHostFile(file, linkOnly);
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
 		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);

@@ -461,6 +461,8 @@ describe("cloudShare IPC", () => {
 			// gone.png was missing when the page was published.
 			files.set("site/gone.png", "png");
 			expect((await inspect()).pageFilesChanged).toBe(true);
+			// A delete that unpublishes the link reads the link alone.
+			await expect(invoke("cloudShare:inspect", page, { linkOnly: true })).resolves.not.toHaveProperty("pageFilesChanged");
 		});
 
 		it("publishes the page alone, and says so, to a control plane that predates a page's files", async () => {
