@@ -4881,6 +4881,16 @@ export interface components {
             forkedFrom?: components["schemas"]["SessionForkOrigin"];
             /** @description The sessions forked from this one, oldest first. */
             forks?: components["schemas"]["SessionForkSummary"][];
+            /** @description For a fork, the original's pull requests, shown read-only: a fork never owns, pushes to or comments on them. Omitted when there are none. */
+            sourcePRs?: components["schemas"]["SessionForkSourcePR"][];
+        };
+        /** @description One of a fork's original's pull requests. */
+        SessionForkSourcePR: {
+            /** Format: uri */
+            url: string;
+            number: number;
+            merged: boolean;
+            closed: boolean;
         };
         /** @description Why a session can't be forked now. message is suitable to show as-is. The codes and messages match the desktop daemon's where the meaning is the same: FORK_ORCHESTRATOR, FORK_SOURCE_TERMINATED, FORK_SOURCE_BUSY, FORK_SOURCE_PREPARING, FORK_TURN_NOT_FINISHED, FORK_AGENT_UNSUPPORTED, FORK_NATIVE_SESSION_MISSING, FORK_TURN_FILES_MISSING ("The files from this turn weren't saved, so it can't be forked."), FORK_OLDER_TURN_UNSUPPORTED, FORK_WORKSPACE_UNMANAGED and FORK_TURN_HAS_REPOSITORY ("This turn's files include a git repository, so it can be forked only from its latest turn."). Cloud adds FORK_SOURCE_PAUSED ("Open this session to wake it, then fork it."), FORK_WORKER_UNSUPPORTED ("This session's workspace runs an older Orchestrator worker. Restart the session to fork it."), FORK_TURN_FILES_EXPIRED ("This turn's saved files were removed after 200 newer turns, so it can't be forked.") and FORK_AGENT_TOOLS_MISSING. Clients must tolerate codes added later and show message. */
         SessionForkRefusal: {

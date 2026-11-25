@@ -9206,6 +9206,30 @@ components:
           description: The sessions forked from this one, oldest first.
           items:
             $ref: "#/components/schemas/SessionForkSummary"
+        sourcePRs:
+          type: array
+          description: >-
+            For a fork, the original's pull requests, shown read-only: a fork
+            never owns, pushes to or comments on them. Omitted when there are
+            none.
+          items:
+            $ref: "#/components/schemas/SessionForkSourcePR"
+    SessionForkSourcePR:
+      type: object
+      additionalProperties: false
+      required: [url, number, merged, closed]
+      description: One of a fork's original's pull requests.
+      properties:
+        url:
+          type: string
+          format: uri
+        number:
+          type: integer
+          minimum: 1
+        merged:
+          type: boolean
+        closed:
+          type: boolean
     SessionForkRefusal:
       type: object
       additionalProperties: false
