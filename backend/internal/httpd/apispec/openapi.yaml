@@ -24278,6 +24278,13 @@ components:
           type: string
         transcript:
           $ref: '#/components/schemas/ControllersMoveTranscriptInfo'
+        withheld:
+          description: Secret environment files (.env, .env.<name>, not .env.example)
+            with changes the move leaves out. They stay on this computer and never
+            reach origin or Orchestrator Cloud.
+          items:
+            type: string
+          type: array
       required:
       - branch
       - changes

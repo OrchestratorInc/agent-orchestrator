@@ -5448,6 +5448,8 @@
 	"move.noteUploaded": "一条包含对话近期消息的笔记会上传到 Orchestrator Cloud。",
 	"move.untracked": "未跟踪",
 	"move.untrackedNote": "?? 表示未跟踪的文件。它们也会被提交并推送，请检查其中是否包含机密信息。",
+	"move.withheld": "保留在这台电脑上",
+	"move.withheldNote": ".env 等机密环境文件永远不会被推送。以下文件会保留在这台电脑上，不会移动到 Orchestrator Cloud：",
 	"move.movedToCloud": "已移动到 Orchestrator Cloud",
 	"move.movedToCloudHelp": "此会话在 Orchestrator Cloud 中继续，因此无法在这里恢复。",
 	"move.openInCloud": "在 Orchestrator Cloud 中打开",

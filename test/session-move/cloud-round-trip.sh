@@ -302,7 +302,9 @@ step "seed $ORIGIN_URL and clone it for the local daemon"
 git init -q "$W/seed"
 printf 'hello\n' > "$W/seed/README.md"
 printf 'package app\n' > "$W/seed/app.go"
-printf '.env\n' > "$W/seed/.gitignore"
+# .env is not ignored: an untracked secret file, as many repositories have
+# one, which a move must still never push (FAKE_SECRET below).
+printf '*.log\n' > "$W/seed/.gitignore"
 git -C "$W/seed" add -A && git -C "$W/seed" commit -qm seed && git -C "$W/seed" push -q "$GIT_URL" main
 git clone -q "$GIT_URL" "$W/local/app"
 git -C "$W/local/app" remote set-url origin "$ORIGIN_URL"
@@ -355,7 +357,22 @@ printf '[url "%s"]\n\tinsteadOf = %s\n' "$GIT_URL" "$ORIGIN_URL" >> "$GIT_CONFIG
 
 BRANCH=feat/move
 # SNAPSHOT prints "<blob id> <path>" for every file on disk that git does not ignore.
-SNAPSHOT='cd "$1" && git ls-files -co --exclude-standard --deduplicate | sort | while IFS= read -r f; do [ -e "$f" ] || continue; printf "%s %s\n" "$(git hash-object -- "$f")" "$f"; done'
+# Secret environment files (.env, .env.<name>, not a template) never move,
+# so they are left out of the comparison and checked on their own.
+SNAPSHOT='cd "$1" && git ls-files -co --exclude-standard --deduplicate | sort | while IFS= read -r f; do [ -e "$f" ] || continue; case "${f##*/}" in .env|.env.*) case "${f##*/}" in *.example|*.sample|*.template) ;; *) continue ;; esac ;; esac; printf "%s %s\n" "$(git hash-object -- "$f")" "$f"; done'
+# FAKE_SECRET is planted in an untracked .env before each move from here.
+FAKE_SECRET=AO_FAKE_SECRET=round-trip-not-a-secret
+# check_origin_clean fails if origin's branch holds a secret environment file
+# or either side's .env content.
+check_origin_clean() {
+	local files found rc=0
+	files=$(compose exec -T gitserver git -C /git/acme/app.git ls-tree -r --name-only "refs/heads/$BRANCH") || fail "read origin's $BRANCH"
+	found=$(printf '%s\n' "$files" | awk -F/ '{print $NF}' | grep -E '^\.env(\..+)?$' | grep -vE '\.(example|sample|template)$' || true)
+	[[ -z "$found" ]] || fail "origin's $BRANCH holds $found"
+	compose exec -T gitserver git -C /git/acme/app.git grep -q -e round-trip-not-a-secret -e CLOUD_SECRET "refs/heads/$BRANCH" || rc=$?
+	((rc == 1)) || fail "origin's $BRANCH holds a .env value (git grep exit $rc)"
+	echo "  origin $BRANCH: no .env and no .env value"
+}
 worktree_for() { git -C "$W/local/app" worktree list --porcelain | awk -v want="branch refs/heads/$BRANCH" '/^worktree /{p=substr($0,10)} $0==want{print p}'; }
 remote_tip() { git ls-remote "$GIT_URL" "refs/heads/$BRANCH" | cut -f1; }
 session_state() { api GET "/sessions/$1" | json "d['session']['activity']['state']"; }
@@ -396,7 +413,7 @@ check_cloud() { # session want-tip want-snapshot-file
 	[[ "$(cloud_exec 'git -C "$1" symbolic-ref --short HEAD' "$CLOUD_REPO")" == "$BRANCH" ]] || fail "Cloud checkout is not on $BRANCH"
 	cloud_exec "$SNAPSHOT" "$CLOUD_REPO" > "$W/got.snap"
 	diff -u "$3" "$W/got.snap" || fail "Cloud files differ from the source"
-	cloud_exec 'test ! -e "$1/.env"' "$CLOUD_REPO" || fail "the ignored .env reached Cloud"
+	cloud_exec 'test ! -e "$1/.env" && ! grep -rqF round-trip-not-a-secret --exclude-dir=.git "$1"' "$CLOUD_REPO" || fail "this machine's untracked .env reached Cloud"
 	echo "  Cloud $CONTAINER: $BRANCH at ${2:0:12}, $(wc -l < "$3" | tr -d ' ') files identical, .env left behind"
 }
 check_local() { # want-tip want-snapshot-file
@@ -405,7 +422,7 @@ check_local() { # want-tip want-snapshot-file
 	[[ "$(git -C "$wt" rev-parse HEAD)" == "$1" ]] || fail "local $BRANCH is $(git -C "$wt" rev-parse HEAD), want $1"
 	sh -c "$SNAPSHOT" _ "$wt" > "$W/got.snap"
 	diff -u "$2" "$W/got.snap" || fail "local files differ from Cloud"
-	[[ "$(cat "$wt/.env" 2>/dev/null)" != "CLOUD_SECRET=1" ]] || fail "Cloud's ignored .env reached the local worktree"
+	! grep -rqF -e CLOUD_SECRET -e round-trip-not-a-secret --exclude-dir=.git "$wt" || fail "a .env value reached the local worktree $wt"
 	echo "  local $wt: $BRANCH at ${1:0:12}, $(wc -l < "$2" | tr -d ' ') files identical"
 }
 
@@ -567,6 +584,11 @@ PY
 	cid=$(echo "$out" | json "d['session']['id']") || { echo "$out"; fail "Cloud create"; }
 	out=$(api POST "/sessions/$sid/move/complete" "{\"moveId\":\"$move\",\"orgId\":\"$ORG\",\"sessionId\":\"$cid\"}")
 	[[ "$(echo "$out" | json "d['session']['movedTo']['sessionId']")" == "$cid" ]] || { echo "$out"; fail "local complete"; }
+	# The untracked .env stays here, in the worktree the archive keeps for it,
+	# which no longer holds the branch.
+	grep -qxF "$FAKE_SECRET" "$wt/.env" || fail "the untracked .env did not stay in $wt"
+	! git -C "$wt" symbolic-ref -q HEAD >/dev/null || fail "the archived worktree $wt still holds $BRANCH"
+	check_origin_clean
 	check_cloud "$cid" "$tip" "$W/want.snap"
 	check_cloud_conversation "$aid" "$wt"
 	NEXT=$cid
@@ -603,6 +625,7 @@ PY
 	[[ "$(echo "$out" | json "len(d.get('warnings') or [])")" == 0 ]] || { echo "$out"; fail "local import warned"; }
 	check_local "$tip" "$W/want.snap"
 	check_local_conversation "$aid" "$CLOUD_REPO" "$project_dir"
+	check_origin_clean
 	cloud DELETE "/orgs/$ORG/sessions/$cid" >/dev/null
 	NEXT=$sid
 }
@@ -613,7 +636,8 @@ work_local() { # hop
 	git -C "$wt" commit -qam "local work, hop $1"
 	printf 'local edit, hop %s\n' "$1" >> "$wt/README.md"
 	mkdir -p "$wt/notes" && printf 'new locally, hop %s\n' "$1" > "$wt/notes/hop-$1.md"
-	printf 'LOCAL_SECRET=1\n' > "$wt/.env"
+	printf '%s\n' "$FAKE_SECRET" > "$wt/.env"
+	printf 'noise\n' > "$wt/debug.log"
 }
 work_cloud() { # hop
 	cloud_exec 'cd "$1" && printf "package app // committed in Cloud, hop %s\n" "$2" > app.go &&

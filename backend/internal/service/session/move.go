@@ -193,7 +193,9 @@ type MovePreview struct {
 	// the move creates gets; "" when it cannot be resolved.
 	DefaultBranch string
 	Changes       []sessionmove.Change
-	Transcript    MoveTranscriptInfo
+	// Withheld lists the secret environment files that stay on this computer.
+	Withheld   []string
+	Transcript MoveTranscriptInfo
 }
 
 // MoveTranscriptInfo says whether a move would carry the agent's conversation.
@@ -238,7 +240,7 @@ func (s *Service) PreviewMove(ctx context.Context, id domain.SessionID) (MovePre
 	if err := sessionmove.CheckPush(ctx, wt, c, sessionmove.GitHubFileLimit); err != nil {
 		return MovePreview{}, s.moveAPIError(ctx, err)
 	}
-	return MovePreview{Branch: c.Branch, DefaultBranch: defaultBranch, Changes: c.Changes, Transcript: s.moveTranscriptInfo(ctx, rec, project)}, nil
+	return MovePreview{Branch: c.Branch, DefaultBranch: defaultBranch, Changes: c.Changes, Withheld: c.Withheld, Transcript: s.moveTranscriptInfo(ctx, rec, project)}, nil
 }
 
 // moveSource loads a session that can move to AO Cloud and its project.
@@ -443,6 +445,13 @@ func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in Move
 		}
 	}
 	if !rec.IsTerminated {
+		// The branch continues in AO Cloud. A worktree the archive keeps for
+		// files the move left here (an untracked .env) must not hold it.
+		if wt := rec.Metadata.WorkspacePath; wt != "" {
+			if err := sessionmove.ReleaseBranch(ctx, wt); err != nil {
+				s.moveLog().WarnContext(ctx, "move: release the branch in the moved worktree", "session", id, "err", err)
+			}
+		}
 		if _, err := s.manager.RequestKill(ctx, id); err != nil {
 			return domain.Session{}, toAPIError(err)
 		}

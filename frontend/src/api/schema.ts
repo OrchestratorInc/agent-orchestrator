@@ -8464,6 +8464,8 @@ export interface components {
             /** @description The repository's default branch: the project's configured one, else origin's. Absent when neither is known. */
             defaultBranch?: string;
             transcript: components["schemas"]["ControllersMoveTranscriptInfo"];
+            /** @description Secret environment files (.env, .env.<name>, not .env.example) with changes the move leaves out. They stay on this computer and never reach origin or Orchestrator Cloud. */
+            withheld?: string[];
         };
         NotificationEnvelope: {
             notification: components["schemas"]["NotificationResponse"];

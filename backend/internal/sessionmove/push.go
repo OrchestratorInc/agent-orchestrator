@@ -70,6 +70,16 @@ func PushBranch(ctx context.Context, worktree string, c Capture, maxFileBytes in
 	return err
 }
 
+// ReleaseBranch detaches the worktree's HEAD where it stands, so the branch a
+// move handed to AO Cloud is no longer checked out here. Files the move left
+// behind, such as an untracked .env, stay as they are; the archive then keeps
+// the worktree for them without holding the branch, and the session can move
+// back here later.
+func ReleaseBranch(ctx context.Context, worktree string) error {
+	_, err := runGit(ctx, worktree, nil, nil, "switch", "--quiet", "--detach")
+	return err
+}
+
 // CheckPush returns the refusal PushBranch would give c before pushing: Git
 // LFS files, files over maxFileBytes, or submodule commits not on their
 // remote, in commits origin does not have.

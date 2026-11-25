@@ -353,6 +353,16 @@ it("lists every uncommitted file, marks the untracked ones, and says the whole c
 	expect(screen.queryByText(/more$/)).toBeNull();
 });
 
+it("says which secret environment files stay on this computer and won't move", async () => {
+	daemon.preview = { data: { branch: "feat/x", changes: [{ path: "README.md", status: "modified" }], withheld: [".env", "config/.env.local"] } };
+	renderDialog();
+	expect(await screen.findByText(/Secret environment files such as \.env are never pushed\. These stay on this computer/)).toBeTruthy();
+	const list = screen.getByRole("list", { name: "Stays on this computer" });
+	expect(Array.from(list.querySelectorAll("li")).map((li) => li.textContent)).toEqual([".env", "config/.env.local"]);
+	// They are not among the files the move pushes.
+	expect(screen.getByRole("list", { name: "Uncommitted files" }).textContent).not.toContain(".env");
+});
+
 it("saves the move before Cloud's create, so a relaunch finishes it under the same id", async () => {
 	daemon.posts = moveReplies;
 	// The app quits while the create is in flight.

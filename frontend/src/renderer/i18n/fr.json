@@ -5634,6 +5634,8 @@
 	"move.noteUploaded": "Une note avec les messages récents de la conversation est envoyée vers Orchestrator Cloud.",
 	"move.untracked": "Non suivi",
 	"move.untrackedNote": "?? marque les fichiers non suivis. Ils sont aussi commités et poussés : vérifiez qu'ils ne contiennent pas de secrets.",
+	"move.withheld": "Reste sur cet ordinateur",
+	"move.withheldNote": "Les fichiers d'environnement secrets comme .env ne sont jamais poussés. Ceux-ci restent sur cet ordinateur et ne seront pas déplacés vers Orchestrator Cloud :",
 	"move.movedToCloud": "Déplacée vers Orchestrator Cloud",
 	"move.movedToCloudHelp": "Cette session continue dans Orchestrator Cloud, elle ne peut donc pas être restaurée ici.",
 	"move.openInCloud": "Ouvrir dans Orchestrator Cloud",

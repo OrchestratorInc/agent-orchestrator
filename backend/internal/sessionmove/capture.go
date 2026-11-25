@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -43,6 +45,10 @@ type Capture struct {
 	// Submodules lists submodules checked out at a commit other than Base's.
 	// The target can check them out only if that commit is on their remote.
 	Submodules []string
+	// Withheld lists secret environment files (IsSecretEnvFileName) with
+	// changes the commit leaves out: an untracked or newly staged one, or local
+	// edits to one Base has. They stay in this worktree and never reach origin.
+	Withheld []string
 }
 
 // Tip is the commit the target's branch ends at.
@@ -112,6 +118,9 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 	if err := resetPaths(ctx, wt, env, base, opts.Exclude); err != nil {
 		return Capture{}, err
 	}
+	if c.Withheld, err = withholdSecretEnvFiles(ctx, wt, env, base); err != nil {
+		return Capture{}, err
+	}
 	tree, err := runGit(ctx, wt, env, nil, "write-tree")
 	if err != nil {
 		return Capture{}, err
@@ -145,6 +154,82 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 		c.Changes[i].Untracked = c.Changes[i].Status == 'A' && untracked[c.Changes[i].Path]
 	}
 	return c, nil
+}
+
+// secretEnvPathspecs select the files IsSecretEnvFileName may name, at any depth.
+var secretEnvPathspecs = []string{"--", ":(top,glob)**/.env", ":(top,glob)**/.env.*"}
+
+// withholdSecretEnvFiles takes secret environment files back out of the
+// staged temp index, as AO Cloud's worker does for its own moves: one Base
+// has returns to Base's entry, so its local edits stay out, and any other is
+// removed. It returns those whose staged entry it changed.
+func withholdSecretEnvFiles(ctx context.Context, wt string, env []string, base string) ([]string, error) {
+	out, err := runGit(ctx, wt, env, nil, append([]string{"ls-files", "--stage", "-z"}, secretEnvPathspecs...)...)
+	if err != nil {
+		return nil, err
+	}
+	staged := map[string]string{}
+	var paths []string
+	for _, record := range strings.Split(out, "\x00") {
+		meta, file, ok := strings.Cut(record, "\t")
+		fields := strings.Fields(meta)
+		if !ok || len(fields) != 3 || !IsSecretEnvFileName(path.Base(file)) {
+			continue
+		}
+		if _, seen := staged[file]; !seen {
+			paths = append(paths, file)
+		}
+		staged[file] = fields[0] + " " + fields[1]
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	committed := map[string]string{}
+	tree, err := runGit(ctx, wt, nil, nil, append([]string{"ls-tree", "-r", "-z", "--full-tree", base, "--"}, paths...)...)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range strings.Split(tree, "\x00") {
+		// "<mode> blob <object>\t<path>"
+		meta, file, ok := strings.Cut(entry, "\t")
+		if fields := strings.Fields(meta); ok && len(fields) == 3 {
+			committed[file] = fields[0] + " " + fields[2]
+		}
+	}
+	var withheld []string
+	for _, file := range paths {
+		if committed[file] != staged[file] {
+			withheld = append(withheld, file)
+		}
+	}
+	if len(withheld) == 0 {
+		return nil, nil
+	}
+	sort.Strings(withheld)
+	return withheld, resetPaths(ctx, wt, env, base, withheld)
+}
+
+// IsSecretEnvFileName reports whether a file's base name is a secret
+// environment file a move never pushes: .env, or .env.<name> such as
+// .env.local or .env.production.local, but not a template ending in
+// .example, .sample or .template. It is AO Cloud's rule
+// (workerexec.IsSecretEnvFileName), so both directions leave the same files.
+func IsSecretEnvFileName(name string) bool {
+	suffix, ok := strings.CutPrefix(name, ".env")
+	if !ok || strings.IndexFunc(name, func(r rune) bool { return !isSecretNameRune(r) }) >= 0 {
+		return false
+	}
+	if suffix == "" {
+		return true
+	}
+	if suffix[0] != '.' || len(suffix) == 1 {
+		return false
+	}
+	return suffix != ".example" && suffix != ".sample" && suffix != ".template"
+}
+
+func isSecretNameRune(r rune) bool {
+	return r == '_' || r == '-' || r == '.' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
 }
 
 // untrackedPaths lists the worktree's untracked files that are not ignored,

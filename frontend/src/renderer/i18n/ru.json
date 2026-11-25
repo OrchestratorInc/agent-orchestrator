@@ -5764,6 +5764,8 @@
 	"move.noteUploaded": "В Orchestrator Cloud загружается заметка с последними сообщениями разговора.",
 	"move.untracked": "Не отслеживается",
 	"move.untrackedNote": "?? отмечает неотслеживаемые файлы. Они тоже коммитятся и отправляются, поэтому проверьте, нет ли в них секретов.",
+	"move.withheld": "Остаётся на этом компьютере",
+	"move.withheldNote": "Секретные файлы окружения, такие как .env, никогда не отправляются. Эти файлы остаются на этом компьютере и не будут перенесены в Orchestrator Cloud:",
 	"move.movedToCloud": "Перемещено в Orchestrator Cloud",
 	"move.movedToCloudHelp": "Эта сессия продолжается в Orchestrator Cloud, поэтому её нельзя восстановить здесь.",
 	"move.openInCloud": "Открыть в Orchestrator Cloud",

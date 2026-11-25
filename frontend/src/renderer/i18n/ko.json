@@ -5466,6 +5466,8 @@
 	"move.noteUploaded": "대화의 최근 메시지를 담은 메모가 Orchestrator Cloud에 업로드됩니다.",
 	"move.untracked": "추적되지 않음",
 	"move.untrackedNote": "??는 추적되지 않는 파일을 나타냅니다. 이 파일들도 커밋되고 푸시되므로 비밀 정보가 없는지 확인하세요.",
+	"move.withheld": "이 컴퓨터에 남는 파일",
+	"move.withheldNote": ".env 같은 비밀 환경 파일은 푸시되지 않습니다. 다음 파일은 이 컴퓨터에 남고 Orchestrator Cloud로 이동하지 않습니다:",
 	"move.movedToCloud": "Orchestrator Cloud로 이동함",
 	"move.movedToCloudHelp": "이 세션은 Orchestrator Cloud에서 계속되므로 여기에서 복원할 수 없습니다.",
 	"move.openInCloud": "Orchestrator Cloud에서 열기",

@@ -5017,6 +5017,7 @@ type MovePreviewResponse struct {
 	Branch        string             `json:"branch"`
 	DefaultBranch string             `json:"defaultBranch,omitempty" description:"The repository's default branch: the project's configured one, else origin's. Absent when neither is known."`
 	Changes       []MoveChange       `json:"changes"`
+	Withheld      []string           `json:"withheld,omitempty" description:"Secret environment files (.env, .env.<name>, not .env.example) with changes the move leaves out. They stay on this computer and never reach origin or Orchestrator Cloud."`
 	Transcript    MoveTranscriptInfo `json:"transcript"`
 }
 

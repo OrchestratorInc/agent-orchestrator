@@ -300,6 +300,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 									<dd className="text-settings-label">{changes.length || t("move.uncommittedNone")}</dd>
 								</dl>
 								<UncommittedList changes={changes} />
+								<WithheldList files={preview.data?.withheld ?? []} />
 								<p className="text-sm text-settings-muted">
 									{changes.length > 0 ? t("move.consequence", { branch }) : t("move.consequenceClean", { branch })}
 								</p>
@@ -401,6 +402,24 @@ function UncommittedList({ changes }: { changes: { path: string; status: keyof t
 			</ul>
 			{anyUntracked ? <p className="text-sm text-warning">{t("move.untrackedNote")}</p> : null}
 		</>
+	);
+}
+
+/** The secret environment files a move leaves on this computer; they are never pushed. */
+function WithheldList({ files }: { files: string[] }) {
+	const { t } = useTranslation();
+	if (files.length === 0) return null;
+	return (
+		<div className="space-y-1">
+			<p className="text-sm text-settings-label">{t("move.withheldNote")}</p>
+			<ul className="settings-thin-scrollbar flex max-h-24 flex-col gap-0.5 overflow-y-auto font-mono text-xs text-settings-muted" aria-label={t("move.withheld")}>
+				{files.map((file) => (
+					<li key={file} className="break-all">
+						{file}
+					</li>
+				))}
+			</ul>
+		</div>
 	);
 }
 

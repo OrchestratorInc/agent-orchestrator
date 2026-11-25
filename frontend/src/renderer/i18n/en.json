@@ -5446,6 +5446,8 @@
 	"move.noteUploaded": "A note with the conversation's recent messages is uploaded to Orchestrator Cloud.",
 	"move.untracked": "Untracked",
 	"move.untrackedNote": "?? marks untracked files. They are committed and pushed too, so check them for secrets.",
+	"move.withheld": "Stays on this computer",
+	"move.withheldNote": "Secret environment files such as .env are never pushed. These stay on this computer and won't move to Orchestrator Cloud:",
 	"move.movedToCloud": "Moved to Orchestrator Cloud",
 	"move.movedToCloudHelp": "This session continues in Orchestrator Cloud, so it can't be restored here.",
 	"move.openInCloud": "Open in Orchestrator Cloud",

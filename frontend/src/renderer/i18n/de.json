@@ -5466,6 +5466,8 @@
 	"move.noteUploaded": "Eine Notiz mit den letzten Nachrichten der Unterhaltung wird in die Orchestrator Cloud hochgeladen.",
 	"move.untracked": "Nicht verfolgt",
 	"move.untrackedNote": "?? kennzeichnet nicht verfolgte Dateien. Sie werden ebenfalls committet und gepusht, prüfe sie also auf Geheimnisse.",
+	"move.withheld": "Bleibt auf diesem Computer",
+	"move.withheldNote": "Geheime Umgebungsdateien wie .env werden nie gepusht. Diese bleiben auf diesem Computer und werden nicht in die Orchestrator Cloud verschoben:",
 	"move.movedToCloud": "In die Orchestrator Cloud verschoben",
 	"move.movedToCloudHelp": "Diese Sitzung läuft in der Orchestrator Cloud weiter und kann daher hier nicht wiederhergestellt werden.",
 	"move.openInCloud": "In der Orchestrator Cloud öffnen",

@@ -5486,6 +5486,8 @@
 	"move.noteUploaded": "Konuşmanın son mesajlarını içeren bir not Orchestrator Cloud'a yüklenir.",
 	"move.untracked": "İzlenmiyor",
 	"move.untrackedNote": "?? izlenmeyen dosyaları işaretler. Bunlar da commit edilip gönderilir, bu yüzden gizli bilgi içermediklerinden emin olun.",
+	"move.withheld": "Bu bilgisayarda kalır",
+	"move.withheldNote": ".env gibi gizli ortam dosyaları asla gönderilmez. Bunlar bu bilgisayarda kalır ve Orchestrator Cloud'a taşınmaz:",
 	"move.movedToCloud": "Orchestrator Cloud'a taşındı",
 	"move.movedToCloudHelp": "Bu oturum Orchestrator Cloud'da devam ediyor, bu yüzden burada geri yüklenemez.",
 	"move.openInCloud": "Orchestrator Cloud'da aç",

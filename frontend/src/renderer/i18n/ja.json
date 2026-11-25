@@ -5466,6 +5466,8 @@
 	"move.noteUploaded": "会話の最近のメッセージを含むメモが Orchestrator Cloud にアップロードされます。",
 	"move.untracked": "未追跡",
 	"move.untrackedNote": "?? は未追跡のファイルを示します。これらもコミットされてプッシュされるため、機密情報が含まれていないか確認してください。",
+	"move.withheld": "このコンピューターに残るファイル",
+	"move.withheldNote": ".env などの機密の環境ファイルはプッシュされません。次のファイルはこのコンピューターに残り、Orchestrator Cloud には移動しません:",
 	"move.movedToCloud": "Orchestrator Cloud に移動しました",
 	"move.movedToCloudHelp": "このセッションは Orchestrator Cloud で続いているため、ここでは復元できません。",
 	"move.openInCloud": "Orchestrator Cloud で開く",
