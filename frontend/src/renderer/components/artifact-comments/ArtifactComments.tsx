@@ -70,9 +70,9 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
  * published version, so the local file is not shown while they are open; a
  * notice says so when the local file has changed since publishing.
  *
- * With no comments yet nothing pops up: comment mode is on (the button stays
- * pressed and the page outlines what's under the pointer), and the popover
- * opens once an element is picked.
+ * With no comments yet it is comment mode only: the button stays pressed and
+ * the page outlines what's under the pointer, with no popover and no empty
+ * hint; the popover opens once an element is picked.
  */
 export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget, slug, title }: {
 	kind: ArtifactCommentsPickKind;
@@ -132,9 +132,9 @@ export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget,
 		);
 	}
 	const version = comments.snapshot?.currentVersion;
-	// Shown once there is something to show: threads, a picked element, a load
-	// error, or a page whose parts can't be picked (which says so).
-	const showPopover = (threads?.length ?? 0) > 0 || picked !== null || (Boolean(comments.error) && !comments.snapshot) || bridge.status === "unsupported";
+	// Comment mode only until there is something to show: threads, a picked
+	// element, or a load error. No comments yet: no popover and no empty hint.
+	const showPopover = (threads?.length ?? 0) > 0 || picked !== null || (Boolean(comments.error) && !comments.snapshot);
 	return (
 		<div className="flex h-full min-h-0 flex-col" data-testid="artifact-comments-workspace">
 			{outdated && version !== undefined ? (

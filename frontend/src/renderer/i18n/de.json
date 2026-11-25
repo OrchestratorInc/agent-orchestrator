@@ -5495,7 +5495,6 @@
 	"artifactComments.resolvedOnElement": "{{n}} erledigt bei diesem Element",
 	"artifactComments.show": "Anzeigen",
 	"artifactComments.hide": "Ausblenden",
-	"artifactComments.collapseThread": "Thread einklappen",
 	"artifactComments.resolvedBy": "Erledigt von {{name}}",
 	"artifactComments.unanchored": "Dieser Teil der Seite wurde nicht gefunden",
 	"artifactComments.edited": "bearbeitet",

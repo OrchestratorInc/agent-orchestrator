@@ -5475,7 +5475,6 @@
 	"artifactComments.resolvedOnElement": "Bu öğede {{n}} çözüldü",
 	"artifactComments.show": "Göster",
 	"artifactComments.hide": "Gizle",
-	"artifactComments.collapseThread": "Konuyu daralt",
 	"artifactComments.resolvedBy": "{{name}} çözdü",
 	"artifactComments.unanchored": "Sayfanın bu bölümü bulunamadı",
 	"artifactComments.edited": "düzenlendi",

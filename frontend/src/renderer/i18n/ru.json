@@ -5834,7 +5834,6 @@
 	"artifactComments.resolvedOnElement": "Решено для этого элемента: {{n}}",
 	"artifactComments.show": "Показать",
 	"artifactComments.hide": "Скрыть",
-	"artifactComments.collapseThread": "Свернуть ветку",
 	"artifactComments.resolvedBy": "Решено: {{name}}",
 	"artifactComments.unanchored": "Не удалось найти эту часть страницы",
 	"artifactComments.edited": "изменено",

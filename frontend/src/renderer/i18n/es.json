@@ -5670,7 +5670,6 @@
 	"artifactComments.resolvedOnElement": "{{n}} resueltos en este elemento",
 	"artifactComments.show": "Mostrar",
 	"artifactComments.hide": "Ocultar",
-	"artifactComments.collapseThread": "Contraer hilo",
 	"artifactComments.resolvedBy": "Resuelto por {{name}}",
 	"artifactComments.unanchored": "No se encontró esta parte de la página",
 	"artifactComments.edited": "editado",

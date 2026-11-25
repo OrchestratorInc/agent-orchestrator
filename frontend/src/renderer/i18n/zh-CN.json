@@ -5477,7 +5477,6 @@
 	"artifactComments.resolvedOnElement": "此元素上已解决 {{n}} 条",
 	"artifactComments.show": "显示",
 	"artifactComments.hide": "隐藏",
-	"artifactComments.collapseThread": "收起讨论",
 	"artifactComments.resolvedBy": "由 {{name}} 解决",
 	"artifactComments.unanchored": "找不到页面的这一部分",
 	"artifactComments.edited": "已编辑",
