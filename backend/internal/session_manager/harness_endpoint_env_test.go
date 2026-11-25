@@ -94,10 +94,10 @@ func TestRuntimeEnvKeepsAccountKeyAwayFromCustomEndpoint(t *testing.T) {
 				t.Fatalf("%s: account key reached the endpoint via %s: %v", style, key, env)
 			}
 		}
-		// A key the project sets keeps its project value even after the
-		// account step changed it.
-		project, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{"ANTHROPIC_BASE_URL": "https://project.example.com"}, "", "claude-code")
-		if err != nil || project["ANTHROPIC_BASE_URL"] != "https://project.example.com" {
+		// A same-origin project URL keeps its value through the account step.
+		const projectURL = "https://gateway.example.com/v2"
+		project, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{"ANTHROPIC_BASE_URL": projectURL}, "", "claude-code")
+		if err != nil || project["ANTHROPIC_BASE_URL"] != projectURL {
 			t.Fatalf("%s: project base URL = %q, err=%v", style, project["ANTHROPIC_BASE_URL"], err)
 		}
 		keyVar := map[harnessendpoint.AuthStyle]string{harnessendpoint.AuthBearer: "ANTHROPIC_AUTH_TOKEN", harnessendpoint.AuthAPIKey: "ANTHROPIC_API_KEY"}[style]
@@ -124,7 +124,8 @@ func TestRuntimeEnvKeepsCaseVariantProjectEndpointKey(t *testing.T) {
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		agentAccounts: savedAPIKeyAccount{},
 	}
-	env, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{"anthropic_base_url": "https://project.example.com"}, "", "claude-code")
+	const projectURL = "https://gateway.example.com/v2"
+	env, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{"anthropic_base_url": projectURL}, "", "claude-code")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestRuntimeEnvKeepsCaseVariantProjectEndpointKey(t *testing.T) {
 			values = append(values, value)
 		}
 	}
-	if len(values) != 1 || values[0] != "https://project.example.com" {
+	if len(values) != 1 || values[0] != projectURL {
 		t.Fatalf("base URL entries = %q, want only the project value", values)
 	}
 }
