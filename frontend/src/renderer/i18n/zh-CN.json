@@ -4699,6 +4699,8 @@
 	"usage.windows.recordingSince": "读数开始于 {{value}}。",
 	"usage.windows.timeline": "5 小时窗口",
 	"usage.windows.allowance": "本周额度",
+	"usage.windows.organizationUnknown": "未记录组织",
+	"usage.windows.accountLabel": "账号 {{id}}",
 	"usage.windows.onPace": "按此速度，重置时约为 {{value}}",
 	"usage.windows.runsOut": "按此速度将在 {{value}} 用完",
 	"usage.windows.notReadSince": "自 {{value}} 起未读取",

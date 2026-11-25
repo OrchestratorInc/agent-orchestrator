@@ -180,7 +180,7 @@ func TestLimitHistoryKeepsLoginsThatShareAnEmailApart(t *testing.T) {
 	reader = NewLimitHistoryReader(store, fakeConfirmedLogins{
 		"acct-max":      {},
 		"acct-team":     {},
-		"device-claude": {SignedIn: true, Email: "same@example.com", OrgID: "org-team"},
+		"device-claude": {SignedIn: true, Email: "same@example.com", OrgID: "org-team", OrgName: "Acme"},
 	})
 	reader.now = func() time.Time { return now }
 	history, err := reader.History(context.Background(), 7)
@@ -190,6 +190,25 @@ func TestLimitHistoryKeepsLoginsThatShareAnEmailApart(t *testing.T) {
 	if len(history.Logins) != 1 || history.Logins[0].Plan != "team" ||
 		history.Logins[0].AccountID != "device-claude" || history.Logins[0].LoginID != teamLoginID {
 		t.Fatalf("logins = %+v, want only the signed-in team seat", history.Logins)
+	}
+	if history.Logins[0].OrganizationName != "Acme" {
+		t.Fatalf("organization name = %q, want the confirmed organization's name", history.Logins[0].OrganizationName)
+	}
+
+	// An account confirmed in another organization does not name this one.
+	reader = NewLimitHistoryReader(store, fakeConfirmedLogins{
+		"acct-team":     {SignedIn: true, Email: "same@example.com", OrgID: "org-team"},
+		"device-claude": {SignedIn: true, Email: "same@example.com", OrgID: "org-personal", OrgName: "Personal"},
+	})
+	reader.now = func() time.Time { return now }
+	history, err = reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	for _, login := range history.Logins {
+		if login.LoginID == teamLoginID && login.OrganizationName != "" {
+			t.Fatalf("team login named %q by an account in another organization", login.OrganizationName)
+		}
 	}
 }
 

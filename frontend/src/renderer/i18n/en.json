@@ -4700,6 +4700,8 @@
 	"usage.windows.recordingSince": "Readings start {{value}}.",
 	"usage.windows.timeline": "Five-hour windows",
 	"usage.windows.allowance": "This week's allowance",
+	"usage.windows.organizationUnknown": "Organization not recorded",
+	"usage.windows.accountLabel": "Account {{id}}",
 	"usage.windows.onPace": "on pace for about {{value}} at the reset",
 	"usage.windows.runsOut": "at this pace it runs out {{value}}",
 	"usage.windows.notReadSince": "not read since {{value}}",

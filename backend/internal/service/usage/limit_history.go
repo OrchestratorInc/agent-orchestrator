@@ -67,7 +67,7 @@ func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.Usag
 	if r.logins != nil {
 		confirmed = r.logins.ConfirmedLogins()
 	}
-	out.Logins = limitLogins(readings, heldLogins(readings, saved, confirmed), until)
+	out.Logins = limitLogins(readings, heldLogins(readings, saved, confirmed), confirmed, until)
 	return out, nil
 }
 
@@ -163,7 +163,7 @@ func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount
 	return held
 }
 
-func limitLogins(readings []domain.AgentLimitReading, held heldBy, now time.Time) []domain.UsageLimitLogin {
+func limitLogins(readings []domain.AgentLimitReading, held heldBy, confirmed map[string]domain.AgentAccountIdentityCheck, now time.Time) []domain.UsageLimitLogin {
 	byLogin := map[loginKey][]domain.AgentLimitReading{}
 	for _, reading := range readings {
 		if reading.ResetsAt == nil {
@@ -201,6 +201,11 @@ func limitLogins(readings []domain.AgentLimitReading, held heldBy, now time.Time
 		login := domain.UsageLimitLogin{
 			LoginID: key.id(), OrganizationUnknown: key.account != "", Provider: latest.Provider,
 			Email: latest.Email, AccountID: account, Windows: []domain.UsageLimitSpan{},
+		}
+		// The organization is named by the account standing for the login, when
+		// that account is confirmed in this very organization.
+		if identity, ok := confirmed[account]; ok && key.org != "" && strings.TrimSpace(identity.OrgID) == key.org {
+			login.OrganizationName = strings.TrimSpace(identity.OrgName)
 		}
 		for i := len(group) - 1; i >= 0 && login.Plan == ""; i-- {
 			login.Plan = group[i].Plan

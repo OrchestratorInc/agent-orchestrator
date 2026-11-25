@@ -5130,6 +5130,8 @@
 	"usage.windows.recordingSince": "Показания начинаются {{value}}.",
 	"usage.windows.timeline": "Пятичасовые окна",
 	"usage.windows.allowance": "Лимит на эту неделю",
+	"usage.windows.organizationUnknown": "Организация не записана",
+	"usage.windows.accountLabel": "Аккаунт {{id}}",
 	"usage.windows.onPace": "в таком темпе около {{value}} к сбросу",
 	"usage.windows.runsOut": "в таком темпе закончится {{value}}",
 	"usage.windows.notReadSince": "не считывалось с {{value}}",

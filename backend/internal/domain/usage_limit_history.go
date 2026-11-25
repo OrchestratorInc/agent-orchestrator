@@ -14,6 +14,7 @@ type UsageLimitHistory struct {
 type UsageLimitLogin struct {
 	LoginID             string               `json:"loginId,omitempty" doc:"Stable opaque identifier for this history group, independent of the account currently representing it."`
 	OrganizationUnknown bool                 `json:"organizationUnknown,omitempty" doc:"These readings lack an organization ID and are grouped by recording account."`
+	OrganizationName    string               `json:"organizationName,omitempty" doc:"Name of the organization this login belongs to, when the account representing it reported one."`
 	Provider            AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	Email               string               `json:"email,omitempty"`
 	Plan                string               `json:"plan,omitempty"`

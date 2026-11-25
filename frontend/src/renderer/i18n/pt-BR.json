@@ -4846,6 +4846,8 @@
 	"usage.windows.recordingSince": "As leituras começam em {{value}}.",
 	"usage.windows.timeline": "Janelas de cinco horas",
 	"usage.windows.allowance": "Cota desta semana",
+	"usage.windows.organizationUnknown": "Organização não registrada",
+	"usage.windows.accountLabel": "Conta {{id}}",
 	"usage.windows.onPace": "neste ritmo, cerca de {{value}} na redefinição",
 	"usage.windows.runsOut": "neste ritmo acaba em {{value}}",
 	"usage.windows.notReadSince": "sem leituras desde {{value}}",

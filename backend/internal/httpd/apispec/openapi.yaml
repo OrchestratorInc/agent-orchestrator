@@ -29821,6 +29821,8 @@ components:
           type: string
         loginId:
           type: string
+        organizationName:
+          type: string
         organizationUnknown:
           type: boolean
         plan:

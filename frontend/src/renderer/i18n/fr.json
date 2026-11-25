@@ -4846,6 +4846,8 @@
 	"usage.windows.recordingSince": "Relevés depuis le {{value}}.",
 	"usage.windows.timeline": "Fenêtres de cinq heures",
 	"usage.windows.allowance": "Quota de la semaine",
+	"usage.windows.organizationUnknown": "Organisation non enregistrée",
+	"usage.windows.accountLabel": "Compte {{id}}",
 	"usage.windows.onPace": "à ce rythme, environ {{value}} à la réinitialisation",
 	"usage.windows.runsOut": "à ce rythme, épuisé le {{value}}",
 	"usage.windows.notReadSince": "aucun relevé depuis le {{value}}",

@@ -4717,6 +4717,8 @@
 	"usage.windows.recordingSince": "読み取りの開始: {{value}}",
 	"usage.windows.timeline": "5 時間ウィンドウ",
 	"usage.windows.allowance": "今週の割り当て",
+	"usage.windows.organizationUnknown": "組織は未記録",
+	"usage.windows.accountLabel": "アカウント {{id}}",
 	"usage.windows.onPace": "このペースならリセット時に約 {{value}}",
 	"usage.windows.runsOut": "このペースでは {{value}} に使い切ります",
 	"usage.windows.notReadSince": "{{value}} 以降は読み取りなし",
