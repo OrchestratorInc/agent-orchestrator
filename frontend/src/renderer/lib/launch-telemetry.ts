@@ -129,8 +129,11 @@ export async function launchProperties(
 		}),
 	]);
 	window.clearTimeout(timer);
+	// Main's steps are measured from process start, so only a cold launch has
+	// them. The close handler stays on while they are read, so a window closed
+	// meanwhile still reports the launch, once.
+	const steps = !sentOnClose && start.kind === "cold" ? await readLaunchSteps() : {};
 	window.removeEventListener("pagehide", onPageHide);
 	if (sentOnClose) return undefined;
-	// Main's steps are measured from process start, so only a cold launch has them.
-	return properties(usableAt, start.kind === "cold" ? await readLaunchSteps() : {});
+	return properties(usableAt, steps);
 }

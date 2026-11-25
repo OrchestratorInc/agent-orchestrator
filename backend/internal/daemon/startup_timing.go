@@ -53,19 +53,22 @@ var (
 type startupSteps struct {
 	now   func() time.Time
 	start time.Time
-	last  time.Time
-	ms    map[string]int64
+	// lastMs is when the previous step ended, in whole milliseconds since start.
+	lastMs int64
+	ms     map[string]int64
 }
 
 func newStartupSteps(start time.Time, now func() time.Time) *startupSteps {
-	return &startupSteps{now: now, start: start, last: start, ms: map[string]int64{}}
+	return &startupSteps{now: now, start: start, ms: map[string]int64{}}
 }
 
-// done ends the step that ran since the previous one ended.
+// done ends the step that ran since the previous one ended. Steps are the gaps
+// between whole-millisecond end times, so rounding never makes them add up to
+// less than the total.
 func (s *startupSteps) done(step string) {
-	at := s.now()
-	s.ms[step+"_ms"] += at.Sub(s.last).Milliseconds()
-	s.last = at
+	endMs := s.now().Sub(s.start).Milliseconds()
+	s.ms[step+"_ms"] += endMs - s.lastMs
+	s.lastMs = endMs
 }
 
 // payload is each step and the total under totalKey, in milliseconds.
@@ -74,7 +77,7 @@ func (s *startupSteps) payload(totalKey string) map[string]any {
 	for key, ms := range s.ms {
 		out[key] = ms
 	}
-	out[totalKey] = s.last.Sub(s.start).Milliseconds()
+	out[totalKey] = s.lastMs
 	return out
 }
 

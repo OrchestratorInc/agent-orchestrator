@@ -981,7 +981,9 @@ Properties on `ao.usage.ui_performance`:
   layout it forced (`forced-layout`), and the rest of that time is `unlisted`;
   from the start of rendering to style and layout, listed scripts count the
   same way and the rest is `frame-callbacks` (animation frame and observer
-  callbacks); style, layout and paint is `rendering`. The browser lists only
+  callbacks); style, layout and paint is `rendering`, less listed scripts that
+  ran inside it (such as ResizeObserver callbacks), which count under their
+  invoker type. The browser lists only
   scripts over 5 ms, so `unlisted` holds shorter scripts (React splits its work
   into slices of about 5 ms), garbage collection, parsing, other browser work,
   and gaps between tasks. `long_frame_top_cause` names the cause with the most

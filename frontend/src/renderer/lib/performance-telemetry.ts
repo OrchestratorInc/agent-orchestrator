@@ -281,7 +281,8 @@ export class PerformanceAccumulator {
 	 * forced ("forced-layout"), and the rest of those tasks under "unlisted".
 	 * From the start of rendering to style and layout: listed scripts the same
 	 * way and the rest under "frame-callbacks". Style, layout and paint:
-	 * "rendering". The browser lists only scripts over 5 ms.
+	 * "rendering", less listed scripts that ran inside it (such as
+	 * ResizeObserver callbacks). The browser lists only scripts over 5 ms.
 	 */
 	recordLongFrame(frame: LongFrame): void {
 		const summary = this.state.summary;
@@ -302,6 +303,7 @@ export class PerformanceAccumulator {
 		const scripts = frame.scripts ?? [];
 		let listedInTasks = 0;
 		let listedInCallbacks = 0;
+		let listedInRendering = 0;
 		for (const script of scripts) {
 			const ms = Math.max(0, script.duration);
 			const forced = Math.min(ms, Math.max(0, script.forcedStyleAndLayoutDuration ?? 0));
@@ -309,14 +311,17 @@ export class PerformanceAccumulator {
 			// A type this code does not know is still task time no cause names.
 			add(SCRIPT_CAUSES.includes(type) ? (type as Cause) : "unlisted", ms - forced);
 			add("forced-layout", forced);
-			if (rendered && (script.startTime ?? frame.startTime) >= tasksEnd) listedInCallbacks += ms;
+			// Each script comes out of the phase it ran in.
+			const scriptStart = script.startTime ?? frame.startTime;
+			if (rendered && scriptStart >= styleStart && styleStart < end) listedInRendering += ms;
+			else if (rendered && scriptStart >= tasksEnd) listedInCallbacks += ms;
 			else listedInTasks += ms;
 			if (!URL_INVOKER_TYPES.includes(type)) addName(summary.invokers, invokerName(script.invoker), ms);
 			addName(summary.bundles, bundleName(script.sourceURL), ms);
 		}
 		add("unlisted", tasksEnd - frame.startTime - listedInTasks);
 		if (rendered) add("frame-callbacks", styleStart - tasksEnd - listedInCallbacks);
-		add("rendering", end - styleStart);
+		add("rendering", end - styleStart - listedInRendering);
 		summary.longFrames += 1;
 		summary.longFrameBlockingMs += Math.max(0, frame.blockingDuration ?? 0);
 		summary.longFrameMs += duration;

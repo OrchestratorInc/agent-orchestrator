@@ -136,6 +136,23 @@ describe("PerformanceAccumulator", () => {
 		});
 	});
 
+	it("takes a script that runs during style and layout out of rendering, not frame callbacks", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		// Tasks until 110, frame callbacks until 120, then a 60 ms ResizeObserver-style callback inside rendering.
+		accumulator.recordLongFrame({
+			startTime: 100,
+			duration: 100,
+			renderStart: 110,
+			styleAndLayoutStart: 120,
+			scripts: [{ invokerType: "user-callback", startTime: 130, duration: 60 }],
+		});
+		now += 10_000;
+		await accumulator.flush();
+
+		expect(flushed()).toMatchObject({ long_frame_unlisted_ms: 10, long_frame_user_callback_ms: 60, long_frame_frame_callbacks_ms: 10, long_frame_rendering_ms: 20 });
+	});
+
 	it("names rendering when style, layout and paint outweigh the rest", async () => {
 		const accumulator = create();
 		accumulator.activity();

@@ -29,6 +29,21 @@ func TestStartupStepsAddUpToTheTotal(t *testing.T) {
 	}
 }
 
+func TestStartupStepsKeepFractionalMillisecondsInTheSteps(t *testing.T) {
+	start := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	now := start
+	steps := newStartupSteps(start, func() time.Time { return now })
+	now = now.Add(1500 * time.Microsecond)
+	steps.done(stepPrepare)
+	now = now.Add(1500 * time.Microsecond)
+	steps.done(stepLockWait)
+
+	got := steps.payload(daemonReadyTotal)
+	if got["prepare_ms"] != int64(1) || got["lock_wait_ms"] != int64(2) || got["startup_ms"] != int64(3) {
+		t.Fatalf("payload = %v, want prepare_ms 1, lock_wait_ms 2, startup_ms 3", got)
+	}
+}
+
 // These are the keys the PostHog payload allowlist lets through (see
 // TestDaemonStartupPayloadAllowlistCoversEveryStep); a step missing there
 // would export stripped.
