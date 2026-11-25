@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'ao.mobile'
+version = '1.0.0'
+
+android {
+  namespace "ao.mobile.devicestream"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+dependencies {
+  // The same HTTP stack React Native and the app already ship.
+  implementation "com.squareup.okhttp3:okhttp:4.12.0"
+}
