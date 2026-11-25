@@ -970,6 +970,8 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 /** Restoring an archived session before its message failed, so the message never left. ChatComposer treats this code as a definitive refusal. */
 const SESSION_RESTORE_FAILED = "SESSION_RESTORE_FAILED";
 
+const restoresInFlight = new Map<string, Promise<void>>();
+
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
  * `turnActive` and `activeTurnId` come from the caller's snapshot: reading the
@@ -1245,11 +1247,19 @@ export function useConversationCommands(
 			// The daemon refuses to resume a terminated session. Only a restore, which
 			// also brings its worktree back, can start it again.
 			if (terminated) {
-				const restored = await restoreSession(sessionId as string, hostId);
-				// Restored meanwhile from another window or device: it is live, as asked.
-				const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
-				if (restored.status !== "success" && !alreadyLive) {
-					throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
+				const key = `${hostId ?? "local"}:${sessionId}`;
+				const restore = restoreSession(sessionId as string, hostId).then((restored) => {
+					// Restored meanwhile from another window or device: it is live, as asked.
+					const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
+					if (restored.status !== "success" && !alreadyLive) {
+						throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
+					}
+				});
+				restoresInFlight.set(key, restore);
+				try {
+					await restore;
+				} finally {
+					restoresInFlight.delete(key);
 				}
 				// Stay pending until the chat reads the live agent: its cached snapshot
 				// still says stopped, which would flash as a crash. A send that restored
@@ -2425,6 +2435,7 @@ export function useStageAttachments(sessionId: string | undefined, hostId?: stri
 			// A file too large to inline is streamed from disk to this session's
 			// daemon first, and the request names the upload.
 			const wire = await toWireAttachments(attachments, hostId, signal);
+			await restoresInFlight.get(`${hostId ?? "local"}:${sessionId}`);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
 				// The daemon names staged files itself; only the bytes go.

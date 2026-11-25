@@ -926,7 +926,10 @@ export const ChatComposer = memo(function ChatComposer({
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
 	const stripConcealed = steerInFlight && sendConcealed;
-	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const sentAttachmentIds = durableDelivery?.draft?.attachments.map((attachment) => attachment.id) ?? [];
+	const stripAttachments = (stripConcealed ? [] : optimisticSend || nextDraftHasChanged
+		? fileAttachments.attachments.filter((attachment) => !sentAttachmentIds.includes(attachment.id))
+		: [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		// A cloud file's reference is no daemon path: it previews from its bytes
@@ -950,6 +953,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const acceptedClearFailed = composerMutation.accepted?.result.ok === false;
 	const draftMutationPending =
 		submitting || composerMutation.pending || acceptedMutationWaiting || Boolean(durableDelivery);
+	const attachBlocked = fileAttachments.preparing || (draftMutationPending && !optimisticSend);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -1167,7 +1171,7 @@ export const ChatComposer = memo(function ChatComposer({
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
-			if (result.draft.composer.attachments.length === 0) {
+			if (result.draft.composer.attachments.length === 0 && !fileAttachments.preparing) {
 				fileAttachments.clear();
 			} else {
 				for (const attachment of fileAttachments.getAttachments()) {
@@ -2437,8 +2441,12 @@ export const ChatComposer = memo(function ChatComposer({
 		});
 	}
 
+	function acceptsFiles(): boolean {
+		return canAttach && !attachBlocked && !(submitInFlight.current && !optimisticSend);
+	}
+
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
+		if (!acceptsFiles()) return;
 		const clipboard = event.clipboardData;
 		const files = Array.from(clipboard?.files ?? []);
 		if (files.length === 0) return;
@@ -2450,12 +2458,8 @@ export const ChatComposer = memo(function ChatComposer({
 		attachFiles(files);
 	}
 
-	function acceptsDroppedFiles(): boolean {
-		return canAttach && !fileAttachments.preparing && !draftMutationPending && !submitInFlight.current;
-	}
-
 	function acceptDroppedFiles(files: File[]): boolean {
-		if (!acceptsDroppedFiles() || files.length === 0) return false;
+		if (!acceptsFiles() || files.length === 0) return false;
 		uiUsage.attachmentAdded("drop");
 		attachFiles(files);
 		return true;
@@ -2470,8 +2474,8 @@ export const ChatComposer = memo(function ChatComposer({
 
 	// Files dropped anywhere in the window, outside any drop zone of their own,
 	// land here when this is the nearest composer (see composer-drop-targets).
-	const dropHandlersRef = useRef({ accepts: acceptsDroppedFiles, attach: acceptDroppedFiles });
-	dropHandlersRef.current = { accepts: acceptsDroppedFiles, attach: acceptDroppedFiles };
+	const dropHandlersRef = useRef({ accepts: acceptsFiles, attach: acceptDroppedFiles });
+	dropHandlersRef.current = { accepts: acceptsFiles, attach: acceptDroppedFiles };
 	const dropTarget = useMemo<ComposerDropTarget>(() => ({
 		element: () => formRef.current,
 		accepts: () => dropHandlersRef.current.accepts(),
@@ -2582,7 +2586,7 @@ export const ChatComposer = memo(function ChatComposer({
 			onSubmit={(event) => void submit(event, steersDraft, "button")}
 			data-telemetry-surface="composer"
 				onDragOver={(event) => {
-					if (!canAttach || submitInFlight.current) return;
+					if (!canAttach || (submitInFlight.current && !optimisticSend)) return;
 					event.preventDefault();
 					setDragging(true);
 				}}
@@ -2685,7 +2689,7 @@ export const ChatComposer = memo(function ChatComposer({
 											} else fileAttachments.remove(file.id);
 											editor.current?.focus();
 											}}
-											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+											disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked}
 											aria-label={`Remove ${file.name}`}
 										>
 											<X aria-hidden="true" className="size-3" />
@@ -2826,9 +2830,9 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={controlsDisabled}
+									disabled={Boolean(disabled) || (submitting && !optimisticSend)}
 									onChange={(event) => {
-										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
+										if (!disabled && acceptsFiles()) {
 											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
 											attachFiles(Array.from(event.target.files ?? []));
 										}
@@ -2849,7 +2853,7 @@ export const ChatComposer = memo(function ChatComposer({
 										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
-											disabled={controlsDisabled}
+											disabled={Boolean(disabled) || (submitting && !optimisticSend)}
 											aria-label="Add"
 											title="Add files or change mode"
 											className={cn("size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", GHOST_PILL_CLASS)}
@@ -2870,7 +2874,7 @@ export const ChatComposer = memo(function ChatComposer({
 												icon={Paperclip}
 												title="Files"
 												description="Attach files to this message"
-												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+												disabled={queuedEditRecovery || attachBlocked}
 												onSelect={() => filePicker.current?.click()}
 											/>
 											{addMenuItems}
@@ -2883,7 +2887,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="quiet"
 										size="icon-sm"
 										shape="pill"
-										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked}
 										onClick={() => filePicker.current?.click()}
 										data-telemetry-id="composer.attach"
 										aria-label="Attach a file"

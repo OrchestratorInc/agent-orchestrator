@@ -59,6 +59,7 @@ const {
 	workspacePathsState: { paths: [] as string[] },
 	conversationCommandState: {
 		busy: false,
+		resumingAgent: false,
 		send: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
@@ -326,6 +327,7 @@ beforeEach(() => {
 	conversationState.loadOlder = vi.fn();
 	conversationCommandState.send = vi.fn().mockResolvedValue({});
 	conversationCommandState.busy = false;
+	conversationCommandState.resumingAgent = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
 	conversationCommandState.echoBeforeSend.mockReset();
@@ -352,10 +354,15 @@ describe("SessionChatSurface recovery", () => {
 		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false, undefined]);
 	});
 
-	it("takes files only once an archived session is back", () => {
+	it("takes files in an archived session once the restore its message runs is under way", () => {
 		const client = new QueryClient();
-		const view = render(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		const archived = { ...session, isTerminated: true };
+		const view = render(<Wrapper client={client}><SessionChatSurface session={archived} /></Wrapper>);
 		expect(sideMocks.stageAttachments).toBeUndefined();
+		conversationCommandState.resumingAgent = true;
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...archived }} /></Wrapper>);
+		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
+		conversationCommandState.resumingAgent = false;
 		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
 	});

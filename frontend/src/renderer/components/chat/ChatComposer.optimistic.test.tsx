@@ -105,6 +105,33 @@ describe("optimistic message delivery", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
+	it("takes a file for the next message during a send and keeps it when that send lands first", async () => {
+		const sessionId = "optimistic-next-message-file";
+		const pending = pendingSend();
+		let finishStaging!: (paths: string[]) => void;
+		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		expect(screen.getByRole("button", { name: "Attach a file" })).toBeEnabled();
+		const next = new File([new Uint8Array([137, 80, 78, 71])], "next.png", { type: "image/png" });
+		fireEvent.paste(field, { clipboardData: { files: [next], items: [], getData: () => "", setData: () => undefined } });
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+
+		await act(async () => pending.resolve());
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		await act(async () => finishStaging([".ao/attachments/next.png"]));
+
+		await screen.findByLabelText("Remove next.png");
+		expect(readChatSessionDraft(sessionId).composer.attachments.map((attachment) => attachment.path)).toEqual([".ao/attachments/next.png"]);
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls[1][0]).toContain(".ao/attachments/next.png");
+	});
+
 	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {
 		const sessionId = "optimistic-repeat-enter";
 		const pending = pendingSend();

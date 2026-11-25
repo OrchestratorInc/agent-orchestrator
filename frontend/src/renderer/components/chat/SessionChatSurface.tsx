@@ -951,8 +951,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
 				// An archived session's worktree is gone until the restore its first message
-				// runs, so files are taken once it is back, as an archived Cloud chat does.
-				onStageAttachments={sessionIsActive(session) ? stageAttachments : undefined}
+				// runs, so files are taken once that restore is under way and staged once it is back.
+				onStageAttachments={sessionIsActive(session) || commands.resumingAgent ? stageAttachments : undefined}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it
