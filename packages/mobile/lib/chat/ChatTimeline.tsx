@@ -920,7 +920,10 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	// itself: a settled turn folds a steer away (or draws it inside the fold),
 	// and its old offset would leave a gap below the turn.
 	const roomStyleFor = (drawn: boolean) => {
-		const roomOffset = drawn && placed && placed.send === roomSend ? placed.y : 0;
+		// A send not measured yet keeps the last place measured in this turn: a
+		// later steer always sits below an earlier one, so the room never shrinks
+		// under the list before the new row reports. The move still waits for it.
+		const roomOffset = drawn && placed ? placed.y : 0;
 		return room ? { minHeight: roomOffset + room } : undefined;
 	};
 	const drawsRoomItem = (lists: ConversationItem[][]) => Boolean(roomItem) && lists.some((list) => list.some((item) => item.id === roomItem));

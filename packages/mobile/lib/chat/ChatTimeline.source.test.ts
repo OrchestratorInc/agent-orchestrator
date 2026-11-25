@@ -125,7 +125,7 @@ describe("a sent message", () => {
 	// A steer folded behind "Worked for" (or drawn inside the fold) gives no
 	// offset: the room it measured earlier would leave a gap below the turn.
 	it("starts the room at the message only while its row is drawn in the turn", () => {
-		expect(source).toContain("const roomOffset = drawn && placed && placed.send === roomSend ? placed.y : 0;");
+		expect(source).toContain("const roomOffset = drawn && placed ? placed.y : 0;");
 		expect(source).toContain("const roomStyle = roomStyleFor(drawsRoomItem([partition.prompt, partition.settled ? [] : partition.work, partition.notices, partition.final]));");
 		expect(source).toContain("{renderRows(partition.work, false)}</FoldBody>");
 	});
