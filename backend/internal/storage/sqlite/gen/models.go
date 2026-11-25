@@ -22,6 +22,7 @@ type AgentAccount struct {
 	Kind      string
 	Name      string
 	KeyHint   string
+	Color     sql.NullString
 }
 
 type AgentAccountDefault struct {

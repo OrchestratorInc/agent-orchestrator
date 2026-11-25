@@ -995,6 +995,52 @@ paths:
       summary: Sign an account out and remove it
       tags:
       - agents
+    patch:
+      operationId: updateAgentAccount
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAgentAccountRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Rename an account and set or clear its color
+      tags:
+      - agents
   /api/v1/agents/accounts/{accountId}/api-key:
     put:
       operationId: replaceAgentAccountAPIKey
@@ -17029,6 +17075,17 @@ components:
       type: object
     AgentAccountResponse:
       properties:
+        color:
+          enum:
+          - red
+          - orange
+          - amber
+          - green
+          - teal
+          - blue
+          - violet
+          - pink
+          type: string
         createdAt:
           format: date-time
           type:
@@ -19828,6 +19885,17 @@ components:
     ControllersAddAgentAccountAPIKeyRequest:
       properties:
         apiKey:
+          type: string
+        color:
+          enum:
+          - red
+          - orange
+          - amber
+          - green
+          - teal
+          - blue
+          - violet
+          - pink
           type: string
         name:
           type: string
@@ -28139,6 +28207,26 @@ components:
           - boolean
       required:
       - enabled
+      type: object
+    UpdateAgentAccountRequest:
+      properties:
+        color:
+          enum:
+          - red
+          - orange
+          - amber
+          - green
+          - teal
+          - blue
+          - violet
+          - pink
+          type:
+          - "null"
+          - string
+        name:
+          type:
+          - "null"
+          - string
       type: object
     UpdateArtifactFileRequest:
       properties:
