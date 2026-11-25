@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -319,6 +320,53 @@ func TestTickCollapsesExistingPendingBacklog(t *testing.T) {
 	}
 	if len(store.runs) != 6 || len(spawner.calls) != 0 {
 		t.Fatalf("runs=%d spawns=%d, want no new row and no spawn while blocked", len(store.runs), len(spawner.calls))
+	}
+}
+
+// A backlog longer than one page is fully collapsed in one pass, so no extra
+// run is left pending to be dispatched once the retained run's gate opens
+// before the automation falls due again.
+func TestTickCollapsesPendingBacklogLongerThanOnePage(t *testing.T) {
+	base := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	now := base.Add(200 * time.Hour)
+	store := newSchedulerStore()
+	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", RRuleText: "DTSTART:20260801T000000Z\nRRULE:FREQ=HOURLY", Timezone: "UTC", Enabled: true, NextRunAt: now}
+	runID, sessionID := domain.AutomationRunID("run-busy"), domain.SessionID("session-busy")
+	store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", ScheduledFor: base.Add(-time.Hour), SessionID: &sessionID, Status: domain.AutomationRunRunning}
+	firstSignal := base
+	store.sessions[sessionID] = domain.SessionRecord{ID: sessionID, AutomationRunID: &runID, FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityBlocked, LastActivityAt: firstSignal.Add(time.Minute)}}
+	const backlog = pendingPageSize + 1
+	for i := 0; i < backlog; i++ {
+		id := domain.AutomationRunID(fmt.Sprintf("run-backlog-%03d", i))
+		store.runs[id] = domain.AutomationRun{ID: id, AutomationID: "automation-1", ScheduledFor: base.Add(time.Duration(i) * time.Hour), Status: domain.AutomationRunPending}
+	}
+	spawner := &recordingSpawner{store: store}
+	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	pending := store.runsWithStatus("automation-1", domain.AutomationRunPending)
+	if len(pending) != 1 || pending[0].ID != "run-backlog-000" {
+		t.Fatalf("pending = %d runs (first %v), want only run-backlog-000", len(pending), pending)
+	}
+	if skipped := store.runsWithStatus("automation-1", domain.AutomationRunFailed); len(skipped) != backlog-1 {
+		t.Fatalf("skipped = %d, want %d", len(skipped), backlog-1)
+	}
+
+	// The busy session settles; tick again before the next occurrence.
+	session := store.sessions[sessionID]
+	session.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
+	store.sessions[sessionID] = session
+	now = now.Add(10 * time.Minute)
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if len(spawner.calls) != 1 || spawner.calls[0].AutomationRunID == nil || *spawner.calls[0].AutomationRunID != "run-backlog-000" {
+		t.Fatalf("spawns = %#v, want only the retained run dispatched", spawner.calls)
+	}
+	if left := store.runsWithStatus("automation-1", domain.AutomationRunPending); len(left) != 0 {
+		t.Fatalf("pending after dispatch = %d, want 0", len(left))
 	}
 }
 

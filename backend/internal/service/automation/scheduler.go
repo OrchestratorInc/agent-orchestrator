@@ -18,9 +18,8 @@ const (
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
 	maxRunErrorBytes  = 512
-	// pendingScanLimit bounds one coalescing pass; a larger legacy backlog
-	// drains over the following ticks.
-	pendingScanLimit  = 100
+	// pendingPageSize is the page size used to read a pending backlog.
+	pendingPageSize   = 100
 	skippedRunMessage = "Skipped: an earlier occurrence of this automation was still waiting to run"
 )
 
@@ -142,24 +141,26 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 // marks any others as skipped. It reports whether a pending run remains, in
 // which case no new occurrence needs to be queued.
 func (s *Service) coalescePendingRuns(ctx context.Context, store schedulerStore, id domain.AutomationID, now time.Time) (bool, error) {
+	// Read every page before changing anything: skipping rows while paging
+	// would shift the offsets, and any extra left pending could be claimed
+	// before this automation falls due again.
 	status := domain.AutomationRunPending
-	filter := domain.AutomationRunFilter{AutomationID: id, Status: &status, Limit: pendingScanLimit}
-	page, err := store.ListAutomationRuns(ctx, filter)
-	if err != nil {
-		return false, err
-	}
-	// Runs list newest first. Keep the oldest, which is the one a claim takes
-	// next, so read the oldest page when the backlog is longer than one page.
-	if page.Total > int64(len(page.Items)) {
-		filter.Offset = page.Total - pendingScanLimit
-		if page, err = store.ListAutomationRuns(ctx, filter); err != nil {
+	filter := domain.AutomationRunFilter{AutomationID: id, Status: &status, Limit: pendingPageSize}
+	var pending []domain.AutomationRun
+	for {
+		page, err := store.ListAutomationRuns(ctx, filter)
+		if err != nil {
 			return false, err
 		}
+		pending = append(pending, page.Items...)
+		filter.Offset += int64(len(page.Items))
+		if len(page.Items) == 0 || filter.Offset >= page.Total {
+			break
+		}
 	}
-	if len(page.Items) == 0 {
+	if len(pending) == 0 {
 		return false, nil
 	}
-	pending := append([]domain.AutomationRun(nil), page.Items...)
 	sort.Slice(pending, func(i, j int) bool {
 		if !pending[i].ScheduledFor.Equal(pending[j].ScheduledFor) {
 			return pending[i].ScheduledFor.Before(pending[j].ScheduledFor)
