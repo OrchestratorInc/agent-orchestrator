@@ -2350,6 +2350,12 @@ type AgentModelsQuery struct {
 	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
 }
 
+// AgentSkillsQuery names the project whose own skill folders are scanned
+// alongside the user's.
+type AgentSkillsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Project whose skill folders are read before the user's. Omitted scans only the user's own skills."`
+}
+
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a device-wide model catalog.
 type AgentModelsRefreshQuery struct {
