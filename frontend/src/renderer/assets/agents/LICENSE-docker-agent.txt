@@ -1,0 +1,10 @@
+Docker Agent brand marks from docker/docker-agent docs/assets
+(commit e4d121b9b315305685b1e6d796e9e6945200413c):
+docker-mark.svg as docker-agent-light.svg, docker-mark-white.svg as
+docker-agent-dark.svg. Unmodified.
+
+The repository is licensed under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+
+Docker and the Docker logo are trademarks of Docker, Inc.; they are used here
+only to identify the Docker Agent harness.

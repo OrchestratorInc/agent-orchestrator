@@ -13,10 +13,14 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
+import { RouteRestorer } from "../lib/RouteRestorer";
+import { startReviewPersistence } from "../lib/files/reviewPersistence";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
+import { UpdateScreen } from "../lib/UpdateScreen";
+import { UpdateRouteKeeper } from "../lib/UpdateRouteKeeper";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
@@ -60,6 +64,7 @@ const PICKER_SHEETS = [
 	{ name: "sheets/model", title: "Model" },
 	{ name: "sheets/files-branch", title: "Branch" },
 	{ name: "sheets/files-changes", title: "Changes" },
+	{ name: "sheets/account", title: "Account" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar
@@ -90,7 +95,7 @@ export const unstable_settings = { initialRouteName: "(tabs)" };
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
-	// The app's family (DM Sans, after T3 Code), loaded before anything else
+	// The app's family (DM Sans), loaded before anything else
 	// draws: rendering the tree first would paint one frame of SF Pro and then
 	// swap every label under it.
 	//
@@ -148,6 +153,8 @@ export default function RootLayout() {
 }
 
 function Shell() {
+	// Unsent review comments survive the phone closing the app (see reviewPersistence).
+	useEffect(() => { void startReviewPersistence(); }, []);
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const navigationTheme = useMemo(
@@ -175,8 +182,12 @@ function Shell() {
 			<TelemetryManager />
 			<PushManager />
 			<UpdatesManager />
+			<UpdateScreen />
+			<UpdateRouteKeeper />
 			<StoreUpdateManager />
 			<OnboardingGate />
+			{/* Reopens the last screen after the phone closed the app in the background. */}
+			<RouteRestorer />
 			{/* The navigator paints surfaces of its own, and it reads them from *its*
 			    theme, not from the palette above. Two of those surfaces are visible
 			    only while a page moves: the stack's own container, which shows
@@ -213,8 +224,10 @@ function Shell() {
 				{/* An Orchestrator Cloud session's sandbox shell, the cloud's worktree shell. */}
 				<Stack.Screen name="cloud/terminal" options={{ title: "Shell", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="device/[id]" options={{ title: "Device", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="shared-artifact" options={{ title: "Shared artifact", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version", ...GLASS_HEADER_OPTIONS }} />
 				{/* The conversation's "⋯", a bottom sheet over the chat. iOS opens it
 				    at full height, where every action fits: at three quarters
@@ -303,23 +316,6 @@ function Shell() {
 						}}
 					/>
 				))}
-				{/* The composer's skill and file picker searches in a native bar on
-				    iOS, under the title the page sets ("Skills", "Worktree files").
-				    Android searches in the sheet's body. */}
-				<Stack.Screen
-					name="sheets/composer-picker"
-					options={{
-						presentation: "formSheet",
-						sheetAllowedDetents: [0.6, 0.95],
-						sheetInitialDetentIndex: 0,
-						sheetGrabberVisible: true,
-						sheetCornerRadius,
-						headerShown: Platform.OS === "ios",
-						title: "Insert",
-						headerStyle: { backgroundColor: t.bgSurface },
-						contentStyle: { backgroundColor: t.bgSurface },
-					}}
-				/>
 				{/* A new Orchestrator Cloud project: on iOS a form sheet with a native
 				    bar, Cancel and Create in it, as the machine-name sheet has. On
 				    Android a page under the stack's top app bar, as manual connect

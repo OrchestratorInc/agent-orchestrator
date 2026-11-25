@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
+import { takeComposerHandoff } from "../lib/chat-context-bus";
 import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
-import type { ApprovalMode } from "../types/conversation";
+import type { ApprovalMode, ChatModel } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
+import type { PickerSource } from "./chat/AgentSwitchPicker";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
 import { useUiStore } from "../stores/ui-store";
@@ -21,9 +23,14 @@ const h = vi.hoisted(() => ({
 	error: undefined as string | undefined,
 	status: undefined as string | undefined,
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
+	remoteLoadError: undefined as string | undefined,
+	remoteLoadErrorAction: undefined as { label: string; onClick: () => void } | undefined,
+	canSubmit: true,
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 	harness: "codex",
+	chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }] as ChatModel[],
+	model: "gpt-6",
 	approvalMode: "auto" as ApprovalMode,
 	approvalModes: undefined as ApprovalMode[] | undefined,
 	modelWarning: undefined as string | undefined,
@@ -35,6 +42,15 @@ const h = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => h.navigate,
 	useRouter: () => ({ preloadRoute: async () => undefined, history: { canGoBack: () => false, back: vi.fn() } }),
+}));
+// What the settings bar's agent and model picker is given; the picker is tested on its own.
+const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+vi.mock("./chat/AgentSwitchPicker", async (original) => ({
+	...await original<typeof import("./chat/AgentSwitchPicker")>(),
+	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+		modelPicker.current = current;
+		return null;
+	},
 }));
 vi.mock("./settings/MobileDevicesSection", () => ({ mobileDevicesQueryKey: ["mobile-devices"], fetchDevices: async () => [] }));
 vi.mock("./chat/ChatWorkspace", () => ({
@@ -52,17 +68,20 @@ vi.mock("./TaskComposer", () => ({
 		error: h.error,
 		status: h.status,
 		errorAction: h.errorAction,
+		remoteLoadError: h.remoteLoadError,
+		remoteLoadErrorAction: h.remoteLoadErrorAction,
 		submitMode: undefined,
 		isCloudProject: h.isCloudProject,
-		canSubmit: true,
+		canSubmit: h.canSubmit,
 		catalogProjectId: "proj-1",
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
+		notePreparationUsed: () => undefined,
 		modelWarning: h.modelWarning,
 		modelWarningRetries: h.modelWarningRetries,
-		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
-		turnSettings: { model: "gpt-6", reasoningEffort: "high", approvalMode: h.approvalMode },
+		chatModels: h.chatModels,
+		turnSettings: { model: h.model, reasoningEffort: "high", approvalMode: h.approvalMode },
 		approvalModes: h.approvalModes,
 		chooseTurnSettings: vi.fn(),
 		agent: { value: h.harness },
@@ -100,9 +119,15 @@ beforeEach(() => {
 	h.error = undefined;
 	h.status = undefined;
 	h.errorAction = undefined;
+	h.remoteLoadError = undefined;
+	h.remoteLoadErrorAction = undefined;
+	h.canSubmit = true;
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	h.harness = "codex";
+	h.chatModels = [{ id: "gpt-6", displayName: "GPT-6", default: true }];
+	h.model = "gpt-6";
+	modelPicker.current = undefined;
 	h.approvalMode = "auto";
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
@@ -185,6 +210,51 @@ describe("NewChatPage", () => {
 		}));
 	});
 
+	it("hands a follow-up typed while the session is created to the session's composer", async () => {
+		let resolve!: (sessionId: string) => void;
+		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));
+		renderPage();
+		// The box takes typing while the session is created, as its placeholder says.
+		expect(h.workspace?.followUpWhileOpening).toBe(true);
+		const takeDraft = vi.fn(() => ({ text: "Also add tests", send: true }));
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft: vi.fn(), takeDraft };
+
+		let sent!: Promise<unknown>;
+		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")); });
+		await act(async () => {
+			resolve("sess-1");
+			await sent;
+		});
+
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "sess-1" } })));
+		expect(takeDraft).toHaveBeenCalledOnce();
+		expect(takeComposerHandoff("sess-1")).toEqual({ text: "Also add tests", send: true });
+	});
+
+	it("keeps a follow-up typed while a refused brief started, below the brief it returns", async () => {
+		h.launch.mockRejectedValue(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
+		renderPage();
+		const setDraft = vi.fn();
+		h.workspace!.composerRef!.current = { focus: vi.fn(), isEmpty: () => false, setDraft, takeDraft: () => ({ text: "Also add tests", send: true }) };
+
+		await act(async () => {
+			// The composer puts the refused brief back as the send rejects.
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => {
+				writeChatComposerText(draftScope, "Fix the build");
+			});
+		});
+
+		await waitFor(() => expect(setDraft).toHaveBeenCalledWith("Fix the build\n\nAlso add tests"));
+		expect(h.navigate).not.toHaveBeenCalled();
+		expect(takeComposerHandoff("sess-1")).toBeUndefined();
+	});
+
+	it("keeps a Cloud task's box shut while it starts: its session takes no follow-up from here", () => {
+		h.isCloudProject = true;
+		renderPage();
+		expect(h.workspace?.followUpWhileOpening).toBe(false);
+	});
+
 	it("starts a cloud project's task on the page, with its approval mode and without attachments", async () => {
 		h.isCloudProject = true;
 		h.launch.mockResolvedValue("cloud-sess-1");
@@ -224,9 +294,9 @@ describe("NewChatPage", () => {
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
 	});
 
-	// A Cloud standalone agent starts without files: its own project comes
-	// with its session, so a start the files did not reach would leave it behind.
-	it("offers files on a Cloud project's task where the control plane takes them, and not on a Cloud standalone agent", () => {
+	// A Cloud session of its own takes files as a project's task does: they
+	// ride the first message of its Chat session.
+	it("offers files on a Cloud project's task and on a Cloud session where the control plane takes them", () => {
 		h.isCloudProject = true;
 		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
 		renderPage();
@@ -235,10 +305,18 @@ describe("NewChatPage", () => {
 		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
 		cleanup();
 		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
-		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.holdAttachments).toBe(true);
+		expect(h.workspace?.cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
+	});
+
+	it("says why a Cloud session takes no files where the control plane takes none", () => {
+		h.isCloudProject = true;
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["standalone_agents"], maxAttachmentBytes: undefined };
+		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
 		expect(h.workspace?.cloudAttachments).toBeUndefined();
 		// A draft that brought files from another target keeps them, with why this one takes none.
-		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a standalone agent. Remove them to continue.");
+		expect(h.workspace?.attachmentsRefusal).toBe("File attachments are not supported for cloud tasks yet.");
 	});
 
 	// A send whose answer was lost keeps the files it went with until its
@@ -384,6 +462,33 @@ describe("NewChatPage", () => {
 		h.errorAction = { label: "Open Agent Harnesses", onClick: openSettings };
 		act(() => page.refresh());
 		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
+	});
+
+	it("offers Harness settings beside the no-agent message", () => {
+		const openSettings = vi.fn();
+		h.remoteLoadError = "No agent is ready. Set one up in Settings.";
+		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		renderPage();
+		expect(screen.getByRole("alert")).toHaveTextContent(h.remoteLoadError);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the Harness settings action after a send is refused for having no agent", async () => {
+		const openSettings = vi.fn();
+		h.canSubmit = false;
+		h.remoteLoadError = "No agent is ready. Set one up in Settings.";
+		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		renderPage();
+		let refusal: unknown;
+		await act(async () => {
+			refusal = await Promise.resolve(h.workspace?.onSend?.("Set up my project", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(refusal).toMatchObject({ message: h.remoteLoadError });
+		// The composer shows the refused send's reason, so the notice keeps only the action.
+		expect(screen.queryByText(h.remoteLoadError)).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
 		expect(openSettings).toHaveBeenCalledOnce();
 	});
@@ -604,5 +709,57 @@ describe("New Chat permission menu capabilities", () => {
 		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
 		expect(screen.queryByRole("button", { name: "Approval policy for the next turn" })).toBeNull();
 		expect(screen.queryByText("Auto-approve")).toBeNull();
+	});
+});
+
+describe("New Chat model menu", () => {
+	// This computer's Claude Code defaults to Fable, so its saved bar describes its
+	// Default row as Fable 5.2 beside a Fable 5.2 row of its own.
+	const rememberLocalClaudeBar = () => rememberChatSettingsTemplate("claude-code", undefined, { options: [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "default", choices: [
+			{ value: "default", name: "Default (recommended)", description: "Fable 5.2" },
+			{ value: "sonnet", name: "Sonnet 5.5" },
+			{ value: "fable", name: "Fable 5.2" },
+			{ value: "opus", name: "Opus 5.5" },
+		] },
+	] });
+	const catalog: ChatModel[] = [
+		{ id: "sonnet", displayName: "Sonnet 5.5", default: true },
+		{ id: "fable", displayName: "Fable 5.2", default: false },
+		{ id: "opus", displayName: "Opus 5.5", default: false },
+	];
+
+	it("lists Cloud's own models for a Cloud task, not this computer's saved Claude Code bar", () => {
+		h.harness = "claude-code";
+		h.isCloudProject = true;
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		rememberLocalClaudeBar();
+		const queryClient = renderPage();
+		// Drawn from Cloud's catalog, as the session's own bar is, not from this computer's agent.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
+			props: expect.objectContaining({ models: catalog, configOptions: undefined }),
+		}) } }));
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
+			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
+		]);
+		expect(modelPicker.current?.modelId).toBe("sonnet");
+	});
+
+	it("keeps the model this computer's agent defaults to in a local task's menu", () => {
+		h.harness = "claude-code";
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		rememberLocalClaudeBar();
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		// Drawn from the agent's saved controls, which a new task can start with.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
+			props: expect.objectContaining({ configOptions: [expect.objectContaining({ id: "model", currentValue: "sonnet" })] }),
+		}) } }));
+		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
+			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
+		]);
 	});
 });

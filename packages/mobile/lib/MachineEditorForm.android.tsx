@@ -3,7 +3,7 @@ import { fillMaxWidth } from "@expo/ui/jetpack-compose/modifiers";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { ACCOUNT_MANAGED_NOTE } from "./environmentView";
-import { FormPasswordField, FormTextField, FormToggle } from "./formFields";
+import { FormPasswordField, FormTextField } from "./formFields";
 import type { Host as PairedHost } from "./hosts";
 import { MachineSymbolPicker } from "./MachineSymbolPicker";
 import type { Theme } from "./theme";
@@ -84,13 +84,6 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 									editable={!saving}
 									error={failure?.field === "password" ? failure.message : undefined}
 									testID={`environment-password-${host.id}`}
-								/>
-								<FormToggle
-									label="Use TLS"
-									value={Boolean(draft.config.secure)}
-									onValueChange={editor.setSecure}
-									disabled={saving}
-									testID={`environment-tls-${host.id}`}
 								/>
 							</Column>
 						</Host>

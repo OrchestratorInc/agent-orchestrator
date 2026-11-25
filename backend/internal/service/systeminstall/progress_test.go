@@ -5,7 +5,10 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func trackOutput(chunks ...string) *Progress {
@@ -108,6 +111,85 @@ func TestProgressTrackerMovesToInstallingWhenAScriptReportsSuccess(t *testing.T)
 	progress := trackOutput(head, "[SUCCESS] OpenHands CLI v1.14.0 installed successfully!\n", "[INFO] Version information:\n")
 	if progress.Phase != ProgressInstalling || progress.Percent != nil {
 		t.Fatalf("after the success line = %+v, want installing with no percent", progress)
+	}
+}
+
+func TestProgressTrackerLetsVendorOutputDriveThePhaseAfterBootstrapLines(t *testing.T) {
+	bootstrap := "[installer] Downloading installer (attempt 1/3).\n" +
+		"[installer] Retrying download in 1s (attempt 2/3).\n" +
+		"[installer] Downloading installer (attempt 2/3).\n" +
+		"[installer] Installing harness.\n"
+	if progress := trackOutput(bootstrap); progress != nil {
+		t.Fatalf("after bootstrap lines = %+v, want no progress from log lines", progress)
+	}
+	// Captured from https://install.openhands.dev/install.sh without a TTY.
+	if progress := trackOutput(bootstrap, "[INFO] Downloading OpenHands CLI v1.14.0...\n"); progress.Phase != ProgressDownloading {
+		t.Fatalf("after the vendor download line phase = %q, want downloading", progress.Phase)
+	}
+	progress := trackOutput(bootstrap, "[INFO] Downloading OpenHands CLI v1.14.0...\n",
+		"[SUCCESS] OpenHands CLI v1.14.0 installed successfully!\n")
+	if progress.Phase != ProgressInstalling {
+		t.Fatalf("after the vendor success line phase = %q, want installing", progress.Phase)
+	}
+}
+
+func TestProgressTrackerKeepsARecoveredDownloadFailureOutOfTheDetail(t *testing.T) {
+	// Agent installs pass the tracker as both stdout and stderr.
+	tracker := newProgressTracker(io.Discard)
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 1, MaxAttempts: 3})
+	_, _ = tracker.Write([]byte("[installer] Downloading installer (attempt 1/3).\n"))
+	_, _ = tracker.Write([]byte("[installer] download attempt 1/3 elapsed=10s source=https://example.invalid/install.sh: TLS handshake timeout\n"))
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: time.Second})
+	_, _ = tracker.Write([]byte("[installer] Retrying download in 1s (attempt 2/3).\n"))
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{})
+	_, _ = tracker.Write([]byte("[installer] Installing harness.\n"))
+	// A quiet installer prints nothing, so no stale failure may remain.
+	if got := tracker.Snapshot(); got != nil {
+		t.Fatalf("quiet installer after a recovered download = %+v, want no progress", got)
+	}
+}
+
+func TestProgressTrackerCountsDownTheRetryDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tracker := newProgressTracker(io.Discard)
+		tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: 10 * time.Second})
+		if got := tracker.Snapshot(); got.RetryInSeconds != 10 {
+			t.Fatalf("at the start of the wait = %+v, want 10s", got)
+		}
+		time.Sleep(8500 * time.Millisecond)
+		if got := tracker.Snapshot(); got.RetryInSeconds != 2 || got.DownloadAttempt != 2 {
+			t.Fatalf("8.5s into the wait = %+v, want 2s left (rounded up)", got)
+		}
+		time.Sleep(2 * time.Second)
+		if got := tracker.Snapshot(); got.RetryInSeconds != 0 || got.DownloadAttempt != 2 {
+			t.Fatalf("after the wait = %+v, want no delay left", got)
+		}
+		// The next attempt starting clears the deadline.
+		tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3})
+		if got := tracker.Snapshot(); got.RetryInSeconds != 0 {
+			t.Fatalf("next attempt = %+v, want no retry delay", got)
+		}
+	})
+}
+
+func TestProgressTrackerReportsScriptDownloadAsData(t *testing.T) {
+	tracker := newProgressTracker(io.Discard)
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 1, MaxAttempts: 3})
+	if got := tracker.Snapshot(); got == nil || got.DownloadAttempt != 1 || got.DownloadAttempts != 3 || got.RetryInSeconds != 0 || got.Phase != "" {
+		t.Fatalf("first attempt = %+v", got)
+	}
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{Attempt: 2, MaxAttempts: 3, RetryIn: 1500 * time.Millisecond})
+	if got := tracker.Snapshot(); got.DownloadAttempt != 2 || got.RetryInSeconds != 2 {
+		t.Fatalf("retry wait = %+v, want attempt 2 retrying in 2s (rounded up)", got)
+	}
+	// Once the script downloads, the vendor's own output takes over.
+	tracker.ReportInstallScriptDownload(ports.InstallScriptDownload{})
+	if got := tracker.Snapshot(); got != nil {
+		t.Fatalf("after download = %+v, want no progress until the vendor prints", got)
+	}
+	_, _ = tracker.Write([]byte("[INFO] Downloading OpenHands CLI v1.14.0...\n"))
+	if got := tracker.Snapshot(); got.Phase != ProgressDownloading || got.DownloadAttempt != 0 {
+		t.Fatalf("vendor download = %+v", got)
 	}
 }
 

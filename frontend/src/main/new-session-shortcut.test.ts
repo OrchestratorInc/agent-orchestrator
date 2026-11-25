@@ -452,6 +452,36 @@ describe("attachAppShortcuts", () => {
 	});
 
 	it.each([
+		{ key: ";", code: "Semicolon", shift: true },
+		{ key: ":", code: "Semicolon", shift: true },
+		{ key: "^", code: "Equal", shift: false },
+	])("routes the macOS JIS zoom-in alias $key/$code to the focused terminal", (input) => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		let terminalFocused = true;
+		attachAppShortcuts(source, true, target, false, () => ({}), () => false, () => true, undefined, () => terminalFocused);
+
+		expect(source.emit({ key: ";", code: "Semicolon", meta: true }).preventDefault).not.toHaveBeenCalled();
+		expect(source.emit({ ...input, meta: true }).preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, 1);
+
+		terminalFocused = false;
+		expect(source.emit({ ...input, meta: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).toHaveBeenCalledTimes(1);
+	});
+
+	it("honors custom app bindings before the JIS terminal alias", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, true, target, false, () => ({
+			"open-settings": [{ key: ":", ctrl: false, meta: true, shift: true, alt: false }],
+		}), () => false, () => true, undefined, () => true);
+
+		expect(source.emit({ key: ":", code: "Semicolon", meta: true, shift: true }).preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(OPEN_SETTINGS_SHORTCUT_CHANNEL);
+	});
+
+	it.each([
 		["macOS", true, "meta"],
 		["Windows/Linux", false, "control"],
 	] as const)("claims zoom chords for an engaged artifact viewer on %s, ahead of the app's View zoom", (_platform, isMac, modifier) => {

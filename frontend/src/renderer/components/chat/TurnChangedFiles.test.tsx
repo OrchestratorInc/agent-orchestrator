@@ -1,4 +1,4 @@
-import { render as rtlRender, screen } from "@testing-library/react";
+import { render as rtlRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,10 @@ import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+}
+
+function expectCardPath(path: string) {
+	expect(screen.getAllByRole("listitem").some((row) => row.textContent?.includes(path))).toBe(true);
 }
 
 // These cover the two signal rules this surface exists to keep: a changed-file
@@ -48,11 +52,56 @@ describe("TurnChangedFiles", () => {
 	it("shows the bordered summary with files visible", () => {
 		render(<TurnChangedFiles diff={diff()} />);
 		expect(screen.getByText("2 Files Changed")).toBeInTheDocument();
-		expect(screen.getByText("a.ts")).toBeInTheDocument();
-		expect(screen.getByText("new.ts")).toBeInTheDocument();
+		expectCardPath("src/a.ts");
+		expectCardPath("src/new.ts");
 		expect(screen.getByText("+12")).toBeInTheDocument();
 		expect(screen.getByText("+40")).toBeInTheDocument();
 		expect(screen.getByText("−3")).toBeInTheDocument();
+	});
+
+	it.each([true, false])("shows distinct repository paths for changed, created, and renamed files (openable: %s)", async (openable) => {
+		const onOpenFile = vi.fn();
+		render(<TurnChangedFiles diff={{ files: [
+			{ path: "alpha/workspace-test.txt", additions: 1, deletions: 1, status: "modified" },
+			{ path: "beta/workspace-test.txt", additions: 1, deletions: 0, status: "added" },
+			{ path: "alpha/new-name.txt", oldPath: "alpha/old-name.txt", additions: 0, deletions: 0, status: "renamed" },
+		] }} onOpenFile={openable ? onOpenFile : undefined} />);
+		for (const path of ["alpha/workspace-test.txt", "beta/workspace-test.txt", "alpha/new-name.txt"]) {
+			expectCardPath(path);
+			if (openable) {
+				await userEvent.click(screen.getByRole("button", { name: `Open ${path} in Files` }));
+				expect(onOpenFile).toHaveBeenLastCalledWith(path);
+			}
+		}
+	});
+
+	it.each([true, false])("keeps the repository and filename visible around long directories (openable: %s)", async (openable) => {
+		const path = "packages/product-ui/src/components/forms/Button.tsx";
+		render(<TurnChangedFiles diff={{ files: [{ path, additions: 1, deletions: 0, status: "added" }] }} onOpenFile={openable ? vi.fn() : undefined} />);
+		const row = within(screen.getByRole("listitem"));
+		expectCardPath(path);
+		expect(row.getByText("packages/")).toHaveClass("shrink-0");
+		expect(row.getByText("product-ui/src/components/forms/")).toHaveClass("shrink-[100]", "truncate");
+		expect(row.getByText("Button.tsx")).toHaveClass("flex-auto", "truncate");
+		await userEvent.hover(row.getByText("Button.tsx"));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(path);
+	});
+
+	it("shows the repository from the turn's file change when the diff reports only a basename", async () => {
+		const cwd = "/Users/me/.ao/data/worktrees/demo/demo-1";
+		const path = `${cwd}/alpha/workspace-test.txt`;
+		const onOpenFile = vi.fn();
+		render(<TurnChangedFiles
+			diff={{ files: [{ path: "workspace-test.txt", additions: 1, deletions: 0, status: "added" }] }}
+			items={[
+				commandActivity({ cwd, command: "ls" }),
+				{ ...commandActivity({ files: [{ path, status: "added", additions: 1, deletions: 0 }] }), id: "act-2", activityKind: "file_change" },
+			]}
+			onOpenFile={onOpenFile}
+		/>);
+		expectCardPath("alpha/workspace-test.txt");
+		await userEvent.click(screen.getByRole("button", { name: "Open alpha/workspace-test.txt in Files" }));
+		expect(onOpenFile).toHaveBeenCalledWith(path);
 	});
 
 	it("offers Review when a handler is provided", async () => {
@@ -137,7 +186,7 @@ describe("TurnChangedFiles", () => {
 		expect(onOpenFile).toHaveBeenCalledWith(path);
 	});
 
-	it("shows the full path on basename hover", async () => {
+	it("shows the full path on card label hover", async () => {
 		const user = userEvent.setup();
 		render(<TurnChangedFiles diff={diff()} />);
 		await user.hover(screen.getByText("a.ts"));
@@ -221,7 +270,7 @@ describe("TurnChangedFiles", () => {
 			/>,
 		);
 		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
-		expect(screen.getByText("new.ts")).toBeInTheDocument();
+		expectCardPath("src/new.ts");
 		await user.hover(screen.getByText("new.ts"));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/old.ts → src/new.ts");
 	});
@@ -242,10 +291,27 @@ describe("TurnChangedFiles", () => {
 			})),
 		};
 		render(<TurnChangedFiles diff={many} />);
-		expect(screen.getByText("file-0.ts")).toBeInTheDocument();
+		expectCardPath("src/file-0.ts");
 		expect(screen.queryByText("file-5.ts")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
-		expect(screen.getByText("file-5.ts")).toBeInTheDocument();
+		expectCardPath("src/file-5.ts");
+	});
+
+	it("marks each row with its file type's icon, like the Files panel", () => {
+		render(
+			<TurnChangedFiles
+				diff={diff({
+					files: [
+						{ path: "src/Button.tsx", additions: 1, deletions: 0, status: "modified" },
+						{ path: "notes.md", additions: 1, deletions: 0, status: "modified" },
+					],
+				})}
+			/>,
+		);
+		const [tsx, markdown] = screen.getAllByRole("listitem").map((row) => row.querySelector("svg"));
+		expect(tsx).not.toBeNull();
+		expect(markdown).not.toBeNull();
+		expect(tsx!.innerHTML).not.toBe(markdown!.innerHTML);
 	});
 
 	it("marks a running turn's diff as still growing", () => {
@@ -542,7 +608,7 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 		const row = screen.getByRole("button");
-		expect(row).toHaveClass("py-0.5", "gap-1.5", "select-none");
+		expect(row).toHaveClass("py-0.5", "gap-2", "select-none");
 		expect(screen.getByText("Checked git status")).toHaveClass(
 			"text-xs",
 			"font-normal",
@@ -633,7 +699,7 @@ describe("TurnResults", () => {
 		expect(screen.getByText("1 Artifact")).toBeInTheDocument();
 		expect(screen.getByText("Created")).toBeInTheDocument();
 		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
-		expect(screen.getByText("a.ts")).toBeInTheDocument();
+		expectCardPath("src/a.ts");
 		await userEvent.click(screen.getByRole("button", { name: "Open guide.md, created in this turn" }));
 		// By artifact path, never through the workspace-file opener.
 		expect(onOpenArtifact).toHaveBeenCalledWith({ path: "guide.md" });

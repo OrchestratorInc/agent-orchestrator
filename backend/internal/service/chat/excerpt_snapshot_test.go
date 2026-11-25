@@ -164,6 +164,23 @@ func TestNumberedCapturedAnnotationsAndLegacyDelivery(t *testing.T) {
 	}
 }
 
+func TestAnnotationCommentsFollowTheirAnnotation(t *testing.T) {
+	snapshot := &domain.ChatExcerptSnapshot{Version: 1, ReferenceFormat: "numbered-v1", RawText: "quote", CaptureMode: "exact"}
+	first := ports.ChatExcerptReference{ConversationID: "c", MessageID: "m", Text: "quote", Order: 1, Snapshot: snapshot, Comment: "  make this shorter  "}
+	second := ports.ChatExcerptReference{ConversationID: "c", MessageID: "m", Text: "other", Order: 2, Snapshot: &domain.ChatExcerptSnapshot{Version: 1, ReferenceFormat: "numbered-v1", RawText: "other", CaptureMode: "exact"}}
+	text := excerptDeliveryMessage(ports.ChatUserMessage{Text: "go", Content: []ports.ChatContent{snapshotExcerptContent(second), snapshotExcerptContent(first)}}).Text
+	comment := strings.Index(text, "\n---\nUser's comment on annotation 1:\nmake this shorter")
+	if comment < 0 || comment > strings.Index(text, "Annotation 2 — Selected text:") || strings.Count(text, "User's comment") != 1 {
+		t.Fatal(text)
+	}
+	if err := validateExcerptReferences([]ports.ChatExcerptReference{{ConversationID: "c", MessageID: "m", Text: "quote", Comment: strings.Repeat("x", maxExcerptCommentRunes+1)}}, "c"); !errors.Is(err, ErrExcerptInvalid) {
+		t.Fatalf("oversized comment: %v", err)
+	}
+	if err := validateExcerptReferences([]ports.ChatExcerptReference{{ConversationID: "c", MessageID: "m", Text: "quote", Comment: strings.Repeat("あ", maxExcerptCommentRunes)}}, "c"); err != nil {
+		t.Fatalf("multibyte comment at the limit: %v", err)
+	}
+}
+
 func TestCapturedExcerptSideDoesNotResolveSource(t *testing.T) {
 	svc := &Service{}
 	side := domain.SideConversation{ID: "side", MainConversationID: "main"}

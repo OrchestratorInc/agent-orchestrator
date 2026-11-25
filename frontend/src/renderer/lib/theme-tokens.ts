@@ -65,6 +65,7 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 		"--color-brand-logo": p.accent,
 		"--color-brand-logo-bright": bright(p.accent),
 		"--color-brand-logo-foreground": onAccent,
+		"--color-brand-logo-text": p.accent,
 		"--color-text-markdown-code": p.accent,
 		"--color-text-markdown-link": p.accent,
 		"--color-text-markdown-link-hover": bright(p.accent),

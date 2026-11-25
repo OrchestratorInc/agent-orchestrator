@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // ErrSCMHeadChanged indicates that the pull request advanced beyond the head
@@ -65,6 +67,29 @@ type SCMMergeResult struct {
 // SCMMerger mutates pull requests through an SCM provider.
 type SCMMerger interface {
 	MergePullRequest(ctx context.Context, request SCMMergeRequest) (SCMMergeResult, error)
+}
+
+// SCMEnqueueRequest adds PR to its base branch's merge queue. ExpectedHeadSHA
+// is the same compare-and-swap guard SCMMergeRequest carries. NodeID is the
+// provider's opaque PR id when AO already knows it.
+type SCMEnqueueRequest struct {
+	PR              SCMPRRef
+	NodeID          string
+	ExpectedHeadSHA string
+}
+
+// SCMDequeueRequest removes PR from its merge queue.
+type SCMDequeueRequest struct {
+	PR     SCMPRRef
+	NodeID string
+}
+
+// SCMMergeQueuer adds pull requests to and removes them from a base branch's
+// merge queue, where a direct merge is refused. Providers without merge
+// queues return ErrSCMUnsupported.
+type SCMMergeQueuer interface {
+	EnqueuePullRequest(ctx context.Context, request SCMEnqueueRequest) (domain.MergeQueueEntry, error)
+	DequeuePullRequest(ctx context.Context, request SCMDequeueRequest) error
 }
 
 // SCMReviewRequest asks the provider to request another review from Reviewer.

@@ -1,5 +1,6 @@
-import { FilterChip, Host, Icon, LazyRow, Text } from "@expo/ui/jetpack-compose";
-import { testID } from "@expo/ui/jetpack-compose/modifiers";
+import { Box, FilterChip, Host, Icon, LazyRow, Text } from "@expo/ui/jetpack-compose";
+import { background, clip, semantics, Shapes, size, testID } from "@expo/ui/jetpack-compose/modifiers";
+import { freshnessAccessibilityLabel, freshnessColor, freshnessTone } from "./machineFreshness";
 import { haptics } from "./haptics";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -11,6 +12,8 @@ export type { WorkerEnvironmentFilterProps } from "./worker-environment-filter.t
 
 /** Material's filter-chip glyph size. */
 const CHIP_ICON_SIZE = 18;
+/** The freshness dot, the same size as on the rows. */
+const FRESHNESS_DOT = 7;
 
 /**
  * The Workers board's machine filter as a row of Material 3 filter chips: "All
@@ -37,9 +40,12 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 				{workerEnvironmentOptions(environments).map((environment) => {
 					const all = environment.id === ALL_WORKER_ENVIRONMENTS;
 					const selected = environment.id === selectedEnvironmentId;
+					const tone = freshnessTone(environment.freshness);
 					return (
 						<FilterChip
-							key={environment.id}
+							// Keyed by its dot too: Compose took up a trailing slot only when
+							// the chip was built, so a dot that appeared later never drew.
+							key={`${environment.id}:${tone ?? "live"}`}
 							selected={selected}
 							// Choosing the chosen machine again goes back to every environment.
 							onClick={() => select(selected && !all ? ALL_WORKER_ENVIRONMENTS : environment.id)}
@@ -51,12 +57,23 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 							}}
 							// Material outlines only the chips that are not chosen.
 							border={selected ? undefined : { width: 1, color: t.borderDefault }}
-							modifiers={[testID(`worker-environment-chip-${environment.id}`)]}
+							modifiers={[
+								testID(`worker-environment-chip-${environment.id}`),
+								// The dot is a picture; TalkBack hears its state with the name, as
+								// VoiceOver does on iOS. A live chip keeps its label alone.
+								...(tone ? [semantics({ contentDescription: `${environment.label}, ${freshnessAccessibilityLabel(environment.freshness)}` })] : []),
+							]}
 						>
 							{selected ? (
 								<FilterChip.LeadingIcon>
 									<Icon source={materialDrawable("check")} size={CHIP_ICON_SIZE} />
 								</FilterChip.LeadingIcon>
+							) : null}
+							{/* Trailing: Material keeps the leading slot for the check. */}
+							{tone ? (
+								<FilterChip.TrailingIcon>
+									<Box modifiers={[size(FRESHNESS_DOT, FRESHNESS_DOT), clip(Shapes.Circle), background(freshnessColor(t, tone)), testID(`worker-environment-freshness-${environment.id}`)]} />
+								</FilterChip.TrailingIcon>
 							) : null}
 							<FilterChip.Label>
 								<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>

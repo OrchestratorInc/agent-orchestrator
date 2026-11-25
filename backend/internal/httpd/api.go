@@ -42,6 +42,7 @@ type APIDeps struct {
 	Activity           controllers.ActivityRecorder
 	PRRefresh          controllers.PRRefresher
 	NativeSessions     ports.AgentNativeSessionResolver
+	TerminalReplies    ports.AgentResolver // Stop replies from native history; nil disables
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
 	UsageReport        controllers.UsageReportService
@@ -74,12 +75,18 @@ type APIDeps struct {
 	Telemetry ports.EventSink
 	// TelemetryIdentity is the live telemetry identity, served to the phone by
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
-	TelemetryIdentity        ports.TelemetryIdentityStore
-	LifetimeSessions         func(context.Context) (int64, error)
-	Mobile                   *controllers.MobileController
-	BrowserLive              *BrowserLiveHub
-	Browser                  controllers.BrowserService
-	BrowserChrome            controllers.BrowserChromeService
+	TelemetryIdentity ports.TelemetryIdentityStore
+	LifetimeSessions  func(context.Context) (int64, error)
+	Mobile            *controllers.MobileController
+	BrowserLive       *BrowserLiveHub
+	Browser           controllers.BrowserService
+	BrowserChrome     controllers.BrowserChromeService
+	// Panes relays split-pane requests from agents to the desktop window.
+	Panes controllers.PaneService
+	// PaneTerminals lets an agent type into and read its session's shell terminals.
+	PaneTerminals controllers.PaneTerminalService
+	// Devices serves simulators and emulators to sessions; nil answers 501.
+	Devices                  controllers.DeviceService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -90,8 +97,9 @@ type APIDeps struct {
 	HostID string
 	// Endpoints reports how this daemon can currently be reached, for the
 	// phone's endpoint-refresh route.
-	Endpoints controllers.EndpointSource
-	Installer controllers.Installer
+	Endpoints  controllers.EndpointSource
+	HostUpdate controllers.HostUpdater
+	Installer  controllers.Installer
 	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
 	ComputerUse controllers.ComputerUse
 	AgentAuth   controllers.AgentAuthService
@@ -100,6 +108,12 @@ type APIDeps struct {
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
+	// PRPreview reads any GitHub pull request a chat links to; nil leaves
+	// the route answering 501.
+	PRPreview controllers.PRPreviewService
+	// SessionSearch answers the ranked search over past sessions. Nil leaves
+	// the route answering 501; the index itself is built by the daemon.
+	SessionSearch controllers.SessionSearchService
 
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
@@ -171,15 +185,20 @@ type API struct {
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
+	devices       *controllers.DevicesController
 	browser       *controllers.BrowserController
+	panes         *controllers.PanesController
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
+	hostUpdate    *controllers.HostUpdateController
 	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
 	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
+	prPreview     *controllers.PRPreviewController
+	sessionSearch *controllers.SessionSearchController
 	github        *controllers.GitHubController
 	events        *EventsController
 }
@@ -212,6 +231,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Activity:                 deps.Activity,
 			PRRefresh:                deps.PRRefresh,
 			NativeSessions:           deps.NativeSessions,
+			TerminalReplies:          deps.TerminalReplies,
 			DataDir:                  cfg.DataDir,
 			Usage:                    deps.UsageHooks,
 			Attachments:              attachmentstore.New(cfg.DataDir),
@@ -235,18 +255,23 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions)},
+		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions), Models: deps.Agents},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
+		devices:       &controllers.DevicesController{Svc: deps.Devices, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
+		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
+		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
+		prPreview:     &controllers.PRPreviewController{Svc: deps.PRPreview},
+		sessionSearch: &controllers.SessionSearchController{Svc: deps.SessionSearch},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
 		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
@@ -310,6 +335,7 @@ func (a *API) Register(root chi.Router) {
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
+				deviceCommand := middleware.Timeout(max(timeout, deviceCommandBudget))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
@@ -352,11 +378,22 @@ func (a *API) Register(root chi.Router) {
 						upload.ServeHTTP(w, req)
 						return
 					}
+					// Installing a large build, launching through a cold driver, or
+					// shutting a device down outlasts one REST request; cutting the
+					// request off would kill an install halfway.
+					if deviceCommandRoute(req) {
+						deviceCommand.ServeHTTP(w, req)
+						return
+					}
 					// A managed preview carries the dev server's HMR socket and event
 					// streams, and the agent browser its stream socket: both stay open
-					// as long as the page does.
+					// as long as the page does. A file upload streams to disk for as
+					// long as its bytes keep coming; the handler ends one that stalls.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
-						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" {
+						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" ||
+						pattern == "/api/v1/attachment-uploads" ||
+						pattern == "/api/v1/sessions/{sessionId}/device/hub/*" ||
+						pattern == "/api/v1/sessions/{sessionId}/device/open" {
 						next.ServeHTTP(w, req)
 						return
 					}
@@ -388,14 +425,19 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			a.devices.Register(r)
+			a.panes.Register(r)
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
+			a.hostUpdate.Register(r)
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.computerUse.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
+			a.prPreview.Register(r)
+			a.sessionSearch.Register(r)
 			a.github.Register(r)
 			// Sibling REST controllers plug in here.
 		})
@@ -491,4 +533,22 @@ func agentBrowserURL(raw string) *url.URL {
 func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
 	recorder, _ := sessions.(controllers.UserMessageRecorder)
 	return recorder
+}
+
+// deviceCommandBudget covers the device provider's own limits: two minutes for
+// an install, a launch or a button press through the agent driver, and up to
+// three for a shutdown through the hub, after the lease's driver release.
+const deviceCommandBudget = 4 * time.Minute
+
+// deviceCommandRoute reports the device routes that run a provider command
+// inside the request.
+func deviceCommandRoute(req *http.Request) bool {
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions/{sessionId}/device/install",
+		"/api/v1/sessions/{sessionId}/device/launch",
+		"/api/v1/sessions/{sessionId}/device/close",
+		"/api/v1/sessions/{sessionId}/device/button":
+		return true
+	}
+	return false
 }

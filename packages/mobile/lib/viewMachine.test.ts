@@ -52,7 +52,7 @@ describe("an open chat across an app switch", () => {
 	const route = (state: { config: ServerConfig | null; configResolved: boolean; connection: ConnStatus; loading: boolean; selectedHostId?: string | null }) => {
 		const { machine, paired } = viewMachine({ config: state.config, selectedHostId: state.selectedHostId ?? "h1", configResolved: state.configResolved });
 		const listed = sessionRowsForMachine([chat], rowsMachine, machine).find((row) => row.id === chat.id);
-		return sessionRouteView({ listed, paired, connection: state.connection, loading: state.loading, lookup: pending, routeHostId: "h1", currentHostId: state.selectedHostId ?? "h1" });
+		return sessionRouteView({ listed, paired, unreachable: false, connection: state.connection, error: null, errorStatus: null, loading: state.loading, lookup: pending, routeHostId: "h1", currentHostId: state.selectedHostId ?? "h1" });
 	};
 
 	it("stays on the chat screen in every connection state", () => {

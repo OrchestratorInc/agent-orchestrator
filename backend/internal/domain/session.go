@@ -555,6 +555,7 @@ type SessionWait struct {
 
 // SessionBranchState is the session branch's commit and push facts.
 type SessionBranchState struct {
+	Branch string `json:"branch,omitempty"`
 	// Commits is how many commits the branch has on top of its base.
 	Commits int `json:"commits"`
 	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
@@ -728,7 +729,7 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Waiting on base PR,Mergeable,Approved,Merged,Closed without merge,Terminated"`
 	TerminalHandleID string        `json:"terminalHandleId,omitempty"`
 	// TerminalTitle is the title the session's terminal program set, present
 	// only when it should label the session: it is meaningful and no explicit

@@ -17,6 +17,7 @@ import {
 	ARTIFACT_SNAPSHOT_VERSION,
 	type ArtifactSnapshotIdentity,
 	type ArtifactSnapshotJob,
+	isAccountBoundSnapshot,
 	parseArtifactSnapshotJob,
 	parseArtifactSnapshotUrl,
 } from "../shared/artifact-snapshot";
@@ -29,6 +30,7 @@ export const SNAPSHOT_RETRY_MS = 60_000;
 /** More than this waiting in the queue and the oldest request is dropped, so a long scroll cannot pile up work. */
 export const SNAPSHOT_MAX_QUEUED = 64;
 const PRUNE_EVERY_WRITES = 25;
+/** The account-bound folder: Cloud sessions' snapshots and other hosts', both reached only while signed in. */
 const CLOUD_FOLDER = "cloud";
 /** Names the account the Cloud folder belongs to (a hash of its user id), so another account never sees its files. */
 const OWNER_FILE = "cloud-owner";
@@ -38,10 +40,14 @@ export const SNAPSHOT_GAP_MS = 150;
 export type SnapshotRenderer = (job: ArtifactSnapshotJob) => Promise<Buffer>;
 
 /** A file with nothing to draw: asked again it would only fail again, so it is not retried until the app restarts. */
-export class SnapshotUnavailableError extends Error {}
+export class SnapshotUnavailableError extends Error {
+	readonly code: string = "SNAPSHOT_UNAVAILABLE_ERROR";
+}
 
 /** A render that did not happen because nothing is left to show it (the app window closed): not held against its file. */
-export class SnapshotCancelledError extends Error {}
+export class SnapshotCancelledError extends Error {
+	readonly code: string = "SNAPSHOT_CANCELLED_ERROR";
+}
 
 /** What `request` answers when the request was pushed out of a full queue: not a failure, ask again later. */
 export const SNAPSHOT_DROPPED = "dropped" as const;
@@ -154,6 +160,16 @@ export function createArtifactSnapshotStore(options: {
 		await fs.rm(cloudDirectory, { recursive: true, force: true });
 	}
 
+	/**
+	 * Whether the account an account-bound read began for is still the one signed in once it ends:
+	 * a sign-out or another account during the read must not get the earlier account's image.
+	 */
+	function ownerCheck(accountBound: boolean): () => boolean {
+		const owner = cloudOwner;
+		const epoch = cloudEpoch;
+		return () => !accountBound || (epoch === cloudEpoch && owner === cloudOwner);
+	}
+
 	function pump(): void {
 		if (running) return;
 		// The newest first: a card asks once it has been on screen a while, so the last to ask is the one being looked at.
@@ -161,7 +177,7 @@ export function createArtifactSnapshotStore(options: {
 	}
 
 	function enqueue(job: ArtifactSnapshotJob, key: string): Promise<SnapshotResult> {
-		const cloud = Boolean(job.cloud);
+		const cloud = isAccountBoundSnapshot(job);
 		const epoch = cloudEpoch;
 		const signedOut = () => cloud && (epoch !== cloudEpoch || cloudOwner === undefined);
 		return new Promise((resolve) => {
@@ -203,18 +219,23 @@ export function createArtifactSnapshotStore(options: {
 	return {
 		/** The image already cached for the snapshot, or null. */
 		async get(snapshot: ArtifactSnapshotIdentity): Promise<Buffer | null> {
-			if (snapshot.cloud && cloudOwner === undefined) return null;
-			return read(artifactSnapshotKey(snapshot), Boolean(snapshot.cloud));
+			const accountBound = isAccountBoundSnapshot(snapshot);
+			if (accountBound && cloudOwner === undefined) return null;
+			const stillOwner = ownerCheck(accountBound);
+			const bytes = await read(artifactSnapshotKey(snapshot), accountBound);
+			return stillOwner() ? bytes : null;
 		},
 		/**
 		 * The job's image, rendered if it is not cached yet; null when it cannot be rendered,
 		 * SNAPSHOT_DROPPED when the queue was full and the request should be made again.
 		 */
 		async request(job: ArtifactSnapshotJob): Promise<SnapshotResult> {
-			if (job.cloud && cloudOwner === undefined) return null;
+			const accountBound = isAccountBoundSnapshot(job);
+			if (accountBound && cloudOwner === undefined) return null;
 			const key = artifactSnapshotKey(job);
-			const cached = await read(key, Boolean(job.cloud));
-			if (cached) return cached;
+			const stillOwner = ownerCheck(accountBound);
+			const cached = await read(key, accountBound);
+			if (cached) return stillOwner() ? cached : null;
 			const existing = inFlight.get(key);
 			if (existing) return existing;
 			const failed = failedAt.get(key);
@@ -290,15 +311,19 @@ export function registerArtifactSnapshotIpc(deps: { ipcMain: Pick<IpcMain, "hand
  * Serves cached snapshots to the cards' <img>s, so a cached card costs one image load and no
  * script. A snapshot that is not cached yet is a 404, which the card answers by drawing live.
  * The image never changes for a URL (the URL names the file's version and theme), so it may be
- * kept; a miss may not, as the next visit may find the image rendered.
+ * kept, unless it belongs to the signed-in account; a miss may not, as the next visit may find the
+ * image rendered.
  */
 export function registerArtifactSnapshotProtocol(deps: { protocol: Pick<Protocol, "handle">; store: Pick<ArtifactSnapshotStore, "get"> }): void {
 	deps.protocol.handle(ARTIFACT_SNAPSHOT_SCHEME, async (request) => {
 		const snapshot = parseArtifactSnapshotUrl(request.url);
 		const bytes = snapshot ? await deps.store.get(snapshot) : null;
 		if (!bytes) return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
+		// An account's image is never kept by the browser: its URL names no account, so a cached copy
+		// would outlive a sign-out without this handler being asked.
+		const accountBound = Boolean(snapshot && isAccountBoundSnapshot(snapshot));
 		return new Response(new Uint8Array(bytes), {
-			headers: { "content-type": "image/webp", "cache-control": "max-age=31536000, immutable" },
+			headers: { "content-type": "image/webp", "cache-control": accountBound ? "no-store" : "max-age=31536000, immutable" },
 		});
 	});
 }

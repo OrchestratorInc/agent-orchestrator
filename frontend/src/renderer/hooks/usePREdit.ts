@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
@@ -29,7 +30,7 @@ export function usePREdit(pr: SessionPRSummary | undefined, sessionId: string, h
 	const queryClient = useQueryClient();
 	const queryKey = prEditContentQueryKey(pr?.url ?? "", hostId);
 	const fetchContent = async (): Promise<PREditContent> => {
-		if (!pr) throw new Error(t("pr.edit.loadFailed"));
+		if (!pr) throw new AoError("PR_EDIT_LOAD_FAILED", t("pr.edit.loadFailed"));
 		const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/prs/{id}/edit", {
 			params: { path: { id: String(pr.number) }, query: { prUrl: pr.url } },
 		});
@@ -49,14 +50,14 @@ export function usePREdit(pr: SessionPRSummary | undefined, sessionId: string, h
 
 	const save = useMutation({
 		mutationFn: async ({ base, field, value }: { base: string; field: PREditField; value: string }) => {
-			if (!pr) throw new Error(t("pr.edit.saveFailed"));
+			if (!pr) throw new AoError("PR_EDIT_SAVE_FAILED", t("pr.edit.saveFailed"));
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/edit", {
 				params: { path: { id: String(pr.number) } },
 				body: field === "title" ? { prUrl: pr.url, title: value, baseTitle: base } : { prUrl: pr.url, body: value, baseBody: base },
 			});
 			if (error || !data) {
 				if (apiErrorCode(error) === "PR_EDIT_CONFLICT") throw new PREditConflict(t("pr.edit.conflict"));
-				if (apiErrorCode(error) === "PR_EDIT_FORBIDDEN") throw new Error(t("pr.edit.blocked.noPermission"), { cause: error });
+				if (apiErrorCode(error) === "PR_EDIT_FORBIDDEN") throw new AoError("PR_EDIT_FORBIDDEN", t("pr.edit.blocked.noPermission"), { cause: error });
 				throw apiErrorException(error, t("pr.edit.saveFailed"));
 			}
 			return data;

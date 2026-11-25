@@ -57,6 +57,8 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
+	// AsyncTasks advertises the Air extension only for bindings verified to use it.
+	AsyncTasks   bool
 	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
@@ -66,6 +68,8 @@ type Config struct {
 	// RetryStartupExit starts the agent once more if it exits during its first handshake.
 	RetryStartupExit bool
 	Launch           func(context.Context, LaunchConfig) (Launch, error)
+	// ValidateEnvironment checks required native configuration before session allocation.
+	ValidateEnvironment func(context.Context, map[string]string) error
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -101,6 +105,10 @@ type Config struct {
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
+	// SessionModeForAgent picks the mode mapping from the handshake, for a
+	// harness whose ACP servers name their modes differently. It overrides
+	// SessionMode when it returns a mapping.
+	SessionModeForAgent func(acpsdk.InitializeResponse) func(ports.PermissionMode) string
 	// SuppressSessionModes drops the agent's mode surfaces from the
 	// config-option catalog: the legacy session-mode list and any
 	// mode-category config option. It is for agents whose modes are pure
@@ -119,6 +127,10 @@ type Config struct {
 	ImplicitWorkspaceDirectories bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// SplitModelVariant maps a model id the session does not offer onto the base
+	// model it may offer instead, plus the option that selects the variant. Set
+	// it for agents that moved a suffix of their model ids into its own option.
+	SplitModelVariant func(model string) (base string, variant SessionOption, ok bool)
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -151,8 +163,13 @@ type Config struct {
 	// extension, which is enabled when the agent advertises it.
 	SteerRequest *SteerRequest
 	// SteerDrain is for an agent that collects mid-turn guidance itself with
-	// an agent-to-client request. It takes precedence over SteerRequest.
+	// an agent-to-client request. It takes precedence over SteerPrompt and
+	// SteerRequest.
 	SteerDrain *SteerDrain
+	// SteerPrompt is for an agent that takes mid-turn guidance as another
+	// session/prompt on the running session. It takes precedence over
+	// SteerRequest.
+	SteerPrompt *SteerPrompt
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
@@ -198,11 +215,35 @@ type Config struct {
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
 	PlansSpanTurns bool
+	// ToolsOutliveTurn marks an agent whose commands keep running after the
+	// prompt that ran them ends, and whose later update reports how they ended:
+	// `agy acp` hands a command to the background once its WaitMsBeforeAsync
+	// passes and can end the turn while it runs. A tool still in progress at a
+	// normal end_turn is then a background task, not one the turn abandoned, so
+	// it is not failed with the turn.
+	ToolsOutliveTurn bool
+	// HideCommand reports an advertised command that AO keeps out of the `/`
+	// menu. AO sends a picked command as ordinary prompt text, so a built-in
+	// that drives the agent's own terminal UI, or changes a setting AO has its
+	// own control for (Claude's `/model` switches the model behind AO's
+	// picker), misleads there. Agents report no command kind over ACP, so each
+	// binding names its own built-ins; see HideCommands. A hidden command still
+	// counts for capability checks such as compaction, and typing it by hand
+	// still sends it. Nil keeps every command.
+	HideCommand func(acpsdk.AvailableCommand) bool
 	// QuickStop marks a provider whose stop gains nothing from waiting (it never
 	// reacts to stdin closing): a short session/close wait, then a quick signal.
 	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// BackgroundTasks reads native background work without issuing a prompt.
+	BackgroundTasks func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
+	// StopBackgroundTask stops one native background task. Nil when the
+	// provider has no stop control; tasks are then never reported stoppable.
+	StopBackgroundTask func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
+	// BackgroundTaskOutput reads one native background task's recent output.
+	// Nil when the provider keeps none; reads then report it unavailable.
+	BackgroundTaskOutput func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
 	// persist ownership metadata around an opaque provider ID while keeping the
 	// raw value on the ACP wire.
@@ -260,6 +301,7 @@ type Driver struct {
 }
 
 var _ ports.ChatDriver = (*Driver)(nil)
+var _ ports.ChatEnvironmentValidator = (*Driver)(nil)
 
 // New returns an ACP Chat driver from a provider binding.
 func New(cfg Config, log *slog.Logger) *Driver {
@@ -377,9 +419,12 @@ func withoutModeOptions(options []acpsdk.SessionConfigOption) []acpsdk.SessionCo
 func (d *Driver) Harness() domain.AgentHarness { return d.cfg.Harness }
 
 // sessionPolicy picks the mode mapping and permission policy for a launch.
-func (d *Driver) sessionPolicy(cfg LaunchConfig) (func(ports.PermissionMode) string, PermissionPolicy) {
+func (d *Driver) sessionPolicy(
+	cfg LaunchConfig,
+	init acpsdk.InitializeResponse,
+) (func(ports.PermissionMode) string, PermissionPolicy) {
 	if !cfg.ReadOnly || d.cfg.ReadOnly == nil {
-		return d.cfg.SessionMode, d.cfg.PermissionPolicy
+		return d.sessionMode(init), d.cfg.PermissionPolicy
 	}
 	session := d.cfg.ReadOnly(cfg)
 	return func(ports.PermissionMode) string { return session.Mode }, session.PermissionPolicy
@@ -403,6 +448,18 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, err
 	}
 	return cloneCapabilities(d.cfg.Capabilities), nil
+}
+
+// ValidateEnvironment checks launch overrides without starting a provider or
+// writing its configuration. Bindings without required configuration are a no-op.
+func (d *Driver) ValidateEnvironment(ctx context.Context, env map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.cfg.ValidateEnvironment != nil {
+		return d.cfg.ValidateEnvironment(ctx, env)
+	}
+	return nil
 }
 
 // CheckChatInstall reports a missing chat adapter; nil without a cheap check.
@@ -515,7 +572,7 @@ func (d *Driver) openNewSession(
 	if resp.SessionId == "" {
 		return errors.New("ACP session/new returned no session id")
 	}
-	modeFor, permissionFor := d.sessionPolicy(launchCfg)
+	modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
 	conv.start(
 		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 		modeFor, d.cfg.SessionOptions, permissionFor,
@@ -662,7 +719,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 				conv.replaceAvailableCommands(commands)
 			}
 		}
-		modeFor, permissionFor := d.sessionPolicy(launchCfg)
+		modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 			modeFor, d.cfg.SessionOptions, permissionFor,
@@ -672,6 +729,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
 		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+		// The snapshot's current values are the agent's launch defaults; the
+		// provider process is in the state these restored settings describe.
+		conv.markSettingsApplied(ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions})
 		return conv, nil
 	}
 	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
@@ -757,7 +817,7 @@ func (d *Driver) resumeSession(
 		modes = resp.Modes
 	}
 	conv.hasDurableTurns = cfg.HasPriorTurns
-	modeFor, permissionFor := d.sessionPolicy(launchCfg)
+	modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 		modeFor, d.cfg.SessionOptions, permissionFor,
@@ -907,11 +967,16 @@ func (d *Driver) initialize(
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	conv.backgroundTasks = d.cfg.BackgroundTasks
+	conv.stopBackgroundTask = d.cfg.StopBackgroundTask
+	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.hideCommand = d.cfg.HideCommand
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns
+	conv.toolsOutliveTurn = d.cfg.ToolsOutliveTurn
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if d.cfg.ServedModel != nil {
 		servedModel := d.cfg.ServedModel
@@ -919,6 +984,7 @@ func (d *Driver) initialize(
 			return servedModel(ctx, cfg, sessionID, selectedModel)
 		}
 	}
+	conv.splitModelVariant = d.cfg.SplitModelVariant
 	if d.cfg.ValidateModel != nil {
 		validateModel := d.cfg.ValidateModel
 		conv.validateModel = func(ctx context.Context, model string) error {
@@ -956,6 +1022,10 @@ func (d *Driver) initialize(
 
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	airCapabilities := []string{"sessionFailure"}
+	if d.cfg.AsyncTasks {
+		airCapabilities = append(airCapabilities, "asyncTasks")
+	}
 	init, err := conv.conn.Initialize(initCtx, acpsdk.InitializeRequest{
 		Meta: map[string]any{
 			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
@@ -981,7 +1051,7 @@ func (d *Driver) initialize(
 				"jetbrains": map[string]any{
 					"air": map[string]any{
 						"version":      1,
-						"capabilities": []string{"sessionFailure"},
+						"capabilities": airCapabilities,
 					},
 				},
 			},
@@ -1090,6 +1160,17 @@ func cloneCapabilities(in ports.ChatCapabilities) ports.ChatCapabilities {
 		out[capability] = enabled
 	}
 	return out
+}
+
+// sessionMode returns the binding's mode mapping for the agent that answered
+// the handshake.
+func (d *Driver) sessionMode(init acpsdk.InitializeResponse) func(ports.PermissionMode) string {
+	if d.cfg.SessionModeForAgent != nil {
+		if modeFor := d.cfg.SessionModeForAgent(init); modeFor != nil {
+			return modeFor
+		}
+	}
+	return d.cfg.SessionMode
 }
 
 // clientExtensionAliases adds the steering drain's legacy method name, if it

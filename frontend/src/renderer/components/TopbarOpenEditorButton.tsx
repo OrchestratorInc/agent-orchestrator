@@ -111,6 +111,7 @@ export function TopbarOpenEditorButton({
 				<TooltipTrigger asChild>
 					<span className="inline-flex">
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.open_editor"
 							aria-label={waitingLabel
 								?? (workspaceError
 									?? (mainTarget ? t("editor.openInAria", { name: mainTarget.name }) : t("editor.chooseEditor")))}

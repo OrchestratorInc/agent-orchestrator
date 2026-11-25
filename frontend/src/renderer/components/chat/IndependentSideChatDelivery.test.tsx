@@ -5,13 +5,18 @@ import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
+import { resetOptimisticRenamesForTest } from "../../hooks/optimistic-renames";
+import { useUiStore } from "../../stores/ui-store";
+import { aoBridge } from "../../lib/bridge";
+import type { SideCloseRequest } from "../../../shared/side-close";
 
-const { get, post, put, remove, patch } = vi.hoisted(() => ({
+const { get, post, put, remove, patch, closeProtocol } = vi.hoisted(() => ({
 	get: vi.fn(),
 	post: vi.fn(),
 	put: vi.fn(),
 	remove: vi.fn(),
 	patch: vi.fn(),
+	closeProtocol: { status: "closed" as import("../../../shared/side-close").SideCloseStatus },
 }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: get, POST: post, PUT: put, DELETE: remove, PATCH: patch },
@@ -20,8 +25,21 @@ vi.mock("../../lib/api-client", () => ({
 	subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { sideChats: { capture: async () => {}, confirmClose: async () => {}, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
+	aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: {
+		protocolVersion: 1, mode: "desktop", capture: async () => {},
+		requestClose: async (request: SideCloseRequest) => ({
+			protocolVersion: 1, epoch: "test-daemon", revision: 1, recovery: "ready", sessionId: request.sessionId,
+			sides: [{ id: request.sideId, sessionId: request.sessionId, label: request.sideId, operationId: request.requestId, version: request.expectedVersion + 2, status: closeProtocol.status }],
+		}),
+		getCloseState: async (sessionId: string) => ({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [] }),
+		onCloseStateChanged: () => () => {},
+	} },
 }));
+
+beforeEach(() => {
+	closeProtocol.status = "closed";
+	resetOptimisticRenamesForTest();
+});
 
 describe("side delivery draft ownership", () => {
 	let accept: (value: { error?: object }) => void;
@@ -300,6 +318,61 @@ describe("side delivery draft ownership", () => {
 		expect(hook.result.current.sides).toEqual([]);
 		expect(put.mock.calls.length).toBe(savedCount);
 	});
+
+	/** Holds each side list GET until the test answers it; refresh() starts another one the way a close-state change does. */
+	function holdSideLists() {
+		let notifyCloseState!: Parameters<typeof aoBridge.sideChats.onCloseStateChanged>[0];
+		const listen = vi.spyOn(aoBridge.sideChats, "onCloseStateChanged").mockImplementation((listener) => {
+			notifyCloseState = listener;
+			return () => {};
+		});
+		onTestFinished(() => listen.mockRestore());
+		const lists: ((sides: object[]) => void)[] = [];
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation((path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return new Promise((resolve) => lists.push((sides) => resolve({ data: { sides } })));
+			return originalGet(path, ...args);
+		});
+		const refresh = () => notifyCloseState({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId: "session", sides: [] });
+		return { lists, refresh };
+	}
+
+	it("ignores an older empty side list that lands after a newer one", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[1]([{ id: "side", sessionId: "session", state: "ready" }]));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await act(async () => lists[0]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+		expect(hook.result.current.activeId).toBe("side");
+	});
+
+	it("applies a slow side list even after the next poll has started", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[0]([{ id: "side", sessionId: "session", state: "ready" }]));
+		expect(hook.result.current.loaded).toBe(true);
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+	});
+
+	it("keeps a side created while an empty list from before it is in flight", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		await act(async () => lists[0]([]));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		post.mockResolvedValue({ data: { side: { id: "new-side", sessionId: "session", state: "ready" } } });
+		await act(async () => { await hook.result.current.create(undefined, true); });
+		await act(async () => lists[1]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["new-side"]);
+	});
 });
 
 const panelSides = ["side", "other"].map((id, index) => ({
@@ -405,7 +478,7 @@ describe("side panel navigation and recovery", () => {
 			if (options.params.query?.before) return new Promise((resolve) => pending.set(id, resolve));
 			return Promise.resolve(page(id));
 		});
-		render(<SidePanelHarness />);
+		await act(async () => { render(<SidePanelHarness />); });
 		await screen.findByRole("button", { name: "Load earlier messages" });
 		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
 		await waitFor(() => expect(pending.has("side")).toBe(true));
@@ -423,13 +496,19 @@ describe("side panel navigation and recovery", () => {
 	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
 		// The side transcript renders through the main chat's virtualized Timeline.
 		// A viewport taller than every row keeps the whole history mounted, so the
-		// assertions below can read it all.
+		// assertions below can read it all. The content is taller still: a history
+		// that fits the view loads older pages on its own, and this one waits for
+		// the reader's click.
 		const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+		const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
 		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
 		const tall = [
 			vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : clientHeight.call(this);
+			}),
+			vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+				return this.getAttribute("role") === "log" ? 2_000_000 : scrollHeight.call(this);
 			}),
 			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : offsetHeight.call(this);
@@ -523,10 +602,96 @@ describe("side panel navigation and recovery", () => {
 		);
 	});
 
+	describe("renaming a tab", () => {
+		/** Labels the fake daemon stored, read back by the list. */
+		let storedLabels: Record<string, string>;
+		/** While set, list reads wait; each one answers with the labels stored when it began. */
+		let holdLists = false;
+		let heldLists: Array<() => void> = [];
+		const listNow = () => ({ data: { sides: panelSides.map((side) => ({ ...side, label: storedLabels[side.id] ?? side.label })) } });
+		beforeEach(() => {
+			useUiStore.getState().clearGlobalToast();
+			storedLabels = {};
+			holdLists = false;
+			heldLists = [];
+			const normalGet = get.getMockImplementation()!;
+			get.mockImplementation(async (path, options) => {
+				if (path.endsWith("/side-chats")) {
+					const answer = listNow();
+					if (holdLists) return new Promise((resolve) => heldLists.push(() => resolve(answer)));
+					return answer;
+				}
+				return normalGet(path, options);
+			});
+		});
+		const renameFirstTab = async (label: string) => {
+			// A tab takes a rename once its close state has loaded, which can land
+			// after the tab shows; a double-click before then is ignored, so retry.
+			const input = await waitFor(() => {
+				fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
+				return screen.getByRole("textbox", { name: "Rename side chat" });
+			});
+			// Typing and Enter stay synchronous, so the first-frame check below is exact.
+			input.focus();
+			fireEvent.change(input, { target: { value: label } });
+			fireEvent.keyDown(input, { key: "Enter" });
+		};
+
+		it("shows the new label as the editor closes and keeps it through a slow answer and a stale read", async () => {
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation((_path: string, request: { params: { path: { sideId: string } }; body: { label: string } }) => {
+				storedLabels[request.params.path.sideId] = request.body.label;
+				return new Promise((resolve) => (answer = resolve));
+			});
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			await renameFirstTab("Pricing notes");
+			// Same commit as the editor closing: no waiting.
+			expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument();
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+
+			// The 2 s poll reads the list while the rename is in flight. The daemon
+			// has not stored the label yet, so that read has the old one.
+			const stored = storedLabels.side;
+			delete storedLabels.side;
+			holdLists = true;
+			await waitFor(() => expect(heldLists).toHaveLength(1), { timeout: 3_000 });
+			storedLabels.side = stored;
+			// The answer arrives; the read it triggers waits too.
+			await act(async () => answer({}));
+			await waitFor(() => expect(heldLists).toHaveLength(2));
+			// The stale read lands first, then the fresh one.
+			await act(async () => heldLists[0]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "First question" })).not.toBeInTheDocument();
+			await act(async () => heldLists[1]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+		});
+
+		it("rolls a failed rename back to the old label and says so", async () => {
+			// The answer waits until the new label has been checked.
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			await renameFirstTab("Pricing notes");
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			await act(async () => answer({ error: { message: "nope" } }));
+			expect(await screen.findByRole("tab", { name: "First question" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "Pricing notes" })).not.toBeInTheDocument();
+			// Said in a toast too, which shows even after the user moves to another side.
+			expect(useUiStore.getState().globalToasts).toEqual([
+				expect.objectContaining({ title: "Couldn't rename to Pricing notes", tone: "error" }),
+			]);
+		});
+	});
+
 	it("keeps the no-open-side-chat state to one message", async () => {
 		get.mockResolvedValue({ data: { sides: [] } });
 		render(<SidePanelHarness />);
-		await screen.findByText("No side chat opened yet");
+		await screen.findByText("No side chat opened.");
 		expect(screen.queryByText("Explore a quick question without interrupting the main chat."))
 			.not.toBeInTheDocument();
 	});
@@ -557,11 +722,13 @@ describe("side panel navigation and recovery", () => {
 	it("switches tabs by keyboard without losing independent drafts", async () => {
 		const user = userEvent.setup();
 		render(<SidePanelHarness />);
+		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft"));
 		const first = await screen.findByRole("tab", { name: "First question" });
-		first.focus();
+		act(() => first.focus());
 		await user.keyboard("{ArrowRight}");
 		expect(screen.getByRole("tab", { name: "Second question" })).toHaveAttribute("aria-selected", "true");
 		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("Second draft"));
+		expect(screen.getByRole("tab", { name: "Second question" })).toHaveFocus();
 		await user.keyboard("{Home}");
 		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft"));
 	});
@@ -635,7 +802,7 @@ describe("side panel navigation and recovery", () => {
 	it("shows no conversation tab and creates nothing until + is clicked", async () => {
 		get.mockResolvedValue({ data: { sides: [] } });
 		render(<SidePanelHarness />);
-		await screen.findByText("No side chat opened yet");
+		await screen.findByText("No side chat opened.");
 		expect(screen.queryAllByRole("tab")).toHaveLength(0);
 		expect(post).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "New side chat" }));
@@ -649,6 +816,7 @@ describe("side panel navigation and recovery", () => {
 	it("renames with F2 and Enter and cancels with Escape", async () => {
 		patch.mockResolvedValue({});
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "First question" });
 		fireEvent.keyDown(tab, { key: "F2" });
 		const input = screen.getByRole("textbox", { name: "Rename side chat" });
@@ -671,6 +839,7 @@ describe("side panel navigation and recovery", () => {
 	});
 	it("offers only Rename on a tab's right-click menu", async () => {
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "Second question" });
 		fireEvent.contextMenu(tab, { button: 2 });
 		expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeVisible();
@@ -681,6 +850,7 @@ describe("side panel navigation and recovery", () => {
 	it("selects the existing name and commits on blur, discarding empty or unchanged names", async () => {
 		patch.mockResolvedValue({});
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "First question" });
 		fireEvent.doubleClick(tab);
 		const input = screen.getByRole("textbox", { name: "Rename side chat" }) as HTMLInputElement;
@@ -716,14 +886,16 @@ describe("side panel navigation and recovery", () => {
 		expect(screen.getByRole("tab", { name: "First question" })).toHaveAttribute("aria-selected", "true");
 		expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft");
 	});
-	it("keeps the tab and confirmation open when closing fails", async () => {
-		remove.mockResolvedValue({ error: {} });
+	it("dismisses confirmation and retains a read-only warning tab when shutdown is unconfirmed", async () => {
+		closeProtocol.status = "unconfirmed";
 		render(<SidePanelHarness />);
 		await screen.findByLabelText("Side chat question");
 		await userEvent.click(screen.getByRole("button", { name: "Close First question" }));
 		await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-		await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("Send failed"));
-		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not confirm shutdown");
+		expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry close" })).not.toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "First question" })).toBeInTheDocument();
 	});
 

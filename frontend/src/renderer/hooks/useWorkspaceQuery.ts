@@ -20,11 +20,21 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { aoBridge } from "../lib/bridge";
+import { withQueryFields } from "../lib/query-result";
+import { refetchWhenOlderThan } from "../lib/refetch-when-older-than";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
-import { requestRemoteHostsRefresh } from "./useRemoteHosts";
+import { requestRemoteHostCheck } from "./useRemoteHosts";
 import { applyOptimisticSessionKills, optimisticSessionKillsVersion, subscribeOptimisticSessionKills } from "./optimistic-session-kills";
 import { applyOptimisticProjectRemovals, isOptimisticallyRemovedProject, optimisticProjectRemovalsVersion, subscribeOptimisticProjectRemovals } from "./optimistic-project-removals";
+import { renameReadStarted, useOptimisticRenamesVersion } from "./optimistic-renames";
+import {
+	applyOptimisticCloudSessionTitles,
+	applyOptimisticSessionTitles,
+	applyOptimisticSessionViewTitles,
+	withOptimisticCloudSessionTitle,
+	withOptimisticSessionTitle,
+} from "./optimistic-session-titles";
 import { appI18n } from "../i18n";
 import {
 	type PRState,
@@ -66,10 +76,11 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 		mergeability: pr.mergeability,
 		reviewComments: pr.reviewComments,
 		updatedAt: pr.updatedAt,
+		...(pr.stackParent ? { stackParent: pr.stackParent } : {}),
 	};
 }
 
-function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
+export function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
 	return {
 		...(artifact.id ? { id: artifact.id } : {}),
 		kind: artifact.kind,
@@ -116,6 +127,7 @@ export function toWorkspaceSession(
 			? {
 					model: session.reviewerConfig.model ?? undefined,
 					mode: session.reviewerConfig.mode ?? undefined,
+					effort: session.reviewerConfig.effort ?? undefined,
 					permissions: session.reviewerConfig.permissions ?? undefined,
 				}
 			: undefined,
@@ -171,14 +183,14 @@ export const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQue
 export const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
 
-function recheckRemoteHost(hostId: string, status: number): void {
+function recheckRemoteHost(hostId: string, status?: number): void {
 	// 530: Cloudflare answers for a fixed address whose machine is offline.
-	if (![401, 403, 426, 502, 503, 530].includes(status)) return;
+	if (status !== undefined && ![401, 403, 426, 502, 503, 504, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
-	if (last !== undefined && now >= last && now - last < 15_000) return;
+	if (last !== undefined && now >= last && now - last < 2_000) return;
 	lastRemoteHealthRecheck.set(hostId, now);
-	requestRemoteHostsRefresh();
+	requestRemoteHostCheck(hostId);
 }
 export function workspaceStatusesChecking(workspaces: WorkspaceSummary[] | undefined): boolean {
 	return (
@@ -224,6 +236,7 @@ function toLocalWorkspaceSession(
 			? {
 					model: session.reviewerConfig.model ?? undefined,
 					mode: session.reviewerConfig.mode ?? undefined,
+					effort: session.reviewerConfig.effort ?? undefined,
 					permissions: session.reviewerConfig.permissions ?? undefined,
 				}
 			: undefined,
@@ -280,6 +293,9 @@ function toLocalWorkspaceSession(
 type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 
 class DaemonNotReadyError extends Error {
+	get code(): string {
+		return "DAEMON_NOT_READY_ERROR";
+	}
 	constructor() {
 		super("Orchestrator daemon API is not ready");
 		markApiError(this);
@@ -287,13 +303,15 @@ class DaemonNotReadyError extends Error {
 }
 
 async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
+	// A rename confirmed while this read is out shows over what it returns.
+	const readStartedAt = renameReadStarted();
 	if (usesPreviewWorkspaceData) {
 		const fake =
 			typeof window !== "undefined"
 				? (window as unknown as { __aoFakeAgent?: FakeAgentSeam }).__aoFakeAgent
 				: undefined;
 		const snapshot = applyOptimisticProjectRemovals(fake ? fake.snapshot() : mockWorkspaces);
-		return applyOptimisticSessionKills(snapshot) ?? snapshot;
+		return applyOptimisticSessionTitles(applyOptimisticSessionKills(snapshot) ?? snapshot, readStartedAt);
 	}
 	if (!hasTrustedApiBaseUrl()) {
 		throw new DaemonNotReadyError();
@@ -337,11 +355,14 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 		standalone.sessions.length > 0 ? placeStandaloneWorkspaceLast([...projects, standalone]) : projects,
 	);
 	// Pending optimistic kills must survive CDC/refetch while the daemon kill is in flight.
-	return applyOptimisticSessionKills(workspaces) ?? workspaces;
+	return applyOptimisticSessionTitles(applyOptimisticSessionKills(workspaces) ?? workspaces, readStartedAt);
 }
 
 async function fetchRemoteProjects(hostId: string) {
-	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/projects");
+	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/projects").catch((cause: unknown) => {
+		recheckRemoteHost(hostId);
+		throw cause;
+	});
 	if (error) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;
@@ -350,12 +371,16 @@ async function fetchRemoteProjects(hostId: string) {
 }
 
 async function fetchRemoteSessions(hostId: string) {
-	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/sessions");
+	const readStartedAt = renameReadStarted();
+	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/sessions").catch((cause: unknown) => {
+		recheckRemoteHost(hostId);
+		throw cause;
+	});
 	if (error) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;
 	}
-	return Promise.all((data?.sessions ?? []).map(async (session) => ({
+	const sessions = await Promise.all((data?.sessions ?? []).map(async (session) => ({
 		...session,
 		artifactFiles: await Promise.all((session.artifactFiles ?? []).map(async (artifact) => ({
 			...artifact,
@@ -365,6 +390,7 @@ async function fetchRemoteSessions(hostId: string) {
 			inlineUrl: undefined,
 		}))),
 	})));
+	return applyOptimisticSessionViewTitles(sessions, hostId, readStartedAt);
 }
 
 function toRemoteWorkspaces(
@@ -403,8 +429,11 @@ function toRemoteWorkspaces(
 }
 
 async function fetchRemoteWorkspaces(hostId: string): Promise<WorkspaceSummary[]> {
+	// Checked once both reads are in: a rename that starts and lands while the
+	// project list is still loading must not lose to the session list read first.
+	const readStartedAt = renameReadStarted();
 	const [projects, sessions] = await Promise.all([fetchRemoteProjects(hostId), fetchRemoteSessions(hostId)]);
-	return toRemoteWorkspaces(hostId, projects, sessions);
+	return applyOptimisticSessionTitles(toRemoteWorkspaces(hostId, projects, sessions), readStartedAt);
 }
 
 // Shared so route loaders can prefetch via queryClient.ensureQueryData (paired
@@ -422,7 +451,14 @@ export const workspaceQueryOptions = {
 	// /projects + /sessions about 0.75s past "daemon listening" on cold launch.
 	// Fail fast instead; the daemon status change refetches.
 	retry: (failureCount: number, error: Error) => !(error instanceof DaemonNotReadyError) && failureCount < 1,
-	staleTime: 10_000,
+	// The poll below and event invalidations keep this fresh. A finite staleTime
+	// (10 s, under the 15 s poll) made every subscriber arm a timer after each
+	// fetch that fired before the next one, for data that had not changed. With
+	// Infinity TanStack arms none; a mount or a return to the window still
+	// refetches data older than 10 s, as the finite staleTime did on mount.
+	staleTime: Number.POSITIVE_INFINITY,
+	refetchOnMount: refetchWhenOlderThan(10_000),
+	refetchOnWindowFocus: refetchWhenOlderThan(10_000),
 };
 
 export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>
@@ -547,6 +583,7 @@ export function toCloudWorkspaceSession(
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
+			...(session.workerEpoch ? { workerEpoch: session.workerEpoch } : {}),
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
 		},
@@ -566,7 +603,7 @@ export function toCloudWorkspaceSession(
 			...(file.previousPaths?.length ? { previousPaths: file.previousPaths } : {}),
 			...(file.sha256 ? { sha256: file.sha256 } : {}),
 		})),
-		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles && !session.isTerminated ? { artifactFilesPending: true } : {}),
+		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles ? { artifactFilesPending: true } : {}),
 	};
 }
 
@@ -727,16 +764,18 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		refetchInterval: 5000,
 		queryFn: async (): Promise<CloudCpSession[]> => {
 			if (orgId === undefined) return [];
+			const readStartedAt = renameReadStarted();
 			const response = await client.listSessions(orgId, { limit: 100 });
 			// Sessions an earlier build started ahead of a brief and never used.
 			void cleanUpLegacyPreparedCloudSessions(client, orgId);
-			return response.items;
+			return applyOptimisticCloudSessionTitles(response.items, readStartedAt);
 		},
 	});
-	// The list carries only an artifact count. Each live session's files are
-	// read in their own query, once per artifact version, without holding up
-	// the list.
-	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
+	// The list carries only an artifact count. Each session's files are read in
+	// their own query, once per artifact version, without holding up the list.
+	// An archived session's are read too: its artifacts stay listed until the
+	// person deletes them.
+	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0);
 	const fileData = useQueries({
 		queries: withFiles.map((session) => ({
 			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
@@ -752,16 +791,19 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	// A session keeps its last good list while a new version loads or after a
 	// failed read, so its Artifacts tab and open file stay.
 	const lastFiles = useRef(new Map<string, CloudCpSessionArtifact[]>());
+	// A rename in flight shows from the commit that closes its editor.
+	const renameVersion = useOptimisticRenamesVersion();
 	const data = useMemo(() => {
 		if (list.data === undefined) return undefined;
 		const read = new Map(withFiles.map((session, index) => [session.id, fileData[index]] as const));
-		return list.data.map((session) => {
+		return applyOptimisticCloudSessionTitles(list.data.map((session) => {
 			const files = read.get(session.id) ?? lastFiles.current.get(session.id);
 			if (read.get(session.id)) lastFiles.current.set(session.id, read.get(session.id)!);
 			return files && (session.artifactCount ?? 0) > 0 ? { ...session, artifactFiles: files } : session;
-		});
+		}));
+		// renameVersion is read outside React by applyOptimisticCloudSessionTitles.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [list.data, fileData]);
+	}, [list.data, fileData, renameVersion]);
 	return { ...list, data };
 }
 
@@ -825,7 +867,7 @@ async function withSharedArtifactFiles(
 	baseUrl: string,
 	session: CloudCpSession,
 ): Promise<CloudCpSession> {
-	if ((session.artifactCount ?? 0) === 0 || session.isTerminated) return session;
+	if ((session.artifactCount ?? 0) === 0) return session;
 	let reads = sharedArtifactReads.get(queryClient);
 	if (!reads) {
 		reads = { last: new Map(), failed: new Map() };
@@ -941,21 +983,24 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 	const language = useTranslation().i18n.language;
 	const killVersion = useSyncExternalStore(subscribeOptimisticSessionKills, optimisticSessionKillsVersion);
 	const removalVersion = useSyncExternalStore(subscribeOptimisticProjectRemovals, optimisticProjectRemovalsVersion);
+	const renameVersion = useOptimisticRenamesVersion();
 	const dataInputs = useStableArray([
 		hostIds,
 		unpins,
 		language,
 		killVersion,
 		removalVersion,
+		renameVersion,
 		...projects.map((query) => query.data),
 		...sessions.map((query) => query.data),
 	]);
 	const data = useMemo(
 		() => hostIds.flatMap((hostId, index) => projects[index]?.data
-			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
+			? applyOptimisticSessionTitles(toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []))
+				.map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
 		// dataInputs holds every value read here, including the ones the mapping
-		// reads outside React (the language, in-flight kills and removals).
+		// reads outside React (the language, in-flight kills, removals and renames).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[dataInputs],
 	);
@@ -975,10 +1020,14 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
  * session query's key, so session mutations refresh both detail surfaces. */
 export function useRemoteProjectQuery(hostId: string, projectId: string) {
 	const unpins = useRemoteUnpinStore((state) => state.unpins);
+	// A new select per rename change re-runs it, so a rename in flight shows at once.
+	const renameVersion = useOptimisticRenamesVersion();
 	const select = useCallback((workspaces: WorkspaceSummary[]) => {
-		const workspace = workspaces.find((candidate) => candidate.id === projectId);
+		const workspace = applyOptimisticSessionTitles(workspaces).find((candidate) => candidate.id === projectId);
 		return workspace && withRemoteUnpins(workspace, unpins);
-	}, [projectId, unpins]);
+		// renameVersion is read outside React by applyOptimisticSessionTitles.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [projectId, unpins, renameVersion]);
 	return useQuery({
 		queryKey: remoteWorkspaceQueryKey(hostId),
 		queryFn: () => fetchRemoteWorkspaces(hostId),
@@ -986,6 +1035,24 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 		enabled: Boolean(hostId && projectId),
 		retry: 1,
 	});
+}
+
+/** Whether the project list already loaded for this host (the local daemon's,
+ * or a remote host's) has this project. It reads the cache only and never
+ * fetches, so it is false until something else has loaded that list. Cloud
+ * projects are never in these lists. */
+export function useCachedProjectListed(projectId?: string, hostId?: string): boolean {
+	const select = useCallback(
+		(projects: { id: string }[]) => projects.some((project) => project.id === projectId),
+		[projectId],
+	);
+	// Same options as the queries that own these lists: TanStack copies the
+	// options of whichever observer rendered last onto the shared query, so a
+	// bare observer here would drop their retry rules for the next refetch.
+	const listed = useQuery<{ id: string }[], Error, boolean>(hostId
+		? { queryKey: remoteProjectsQueryKey(hostId), queryFn: () => fetchRemoteProjects(hostId), retry: 1, select, enabled: false }
+		: { ...workspaceQueryOptions, select, enabled: false });
+	return Boolean(projectId) && listed.data === true;
 }
 
 /** Every project on one remote host, from the same cache as the board's
@@ -1030,8 +1097,9 @@ export function useCloudSessionQuery(
 			poll && query.state.status !== "error" && !query.state.data?.isTerminated ? 5000 : false,
 		queryFn: async (): Promise<CloudCpSession | undefined> => {
 			if (orgId === undefined) return undefined;
+			const readStartedAt = renameReadStarted();
 			const response = await client.getSession(orgId, sessionId);
-			return response.session;
+			return withOptimisticCloudSessionTitle(response.session, readStartedAt);
 		},
 	});
 	// A session of a project made elsewhere (opened from a link, or right after
@@ -1068,13 +1136,16 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	// The merged list drops pending removals too (a shared project is not in the
 	// own-project list); the version rebuilds it when one starts or ends.
 	const removalVersion = useSyncExternalStore(subscribeOptimisticProjectRemovals, optimisticProjectRemovalsVersion);
+	// A confirmed rename redraws every list in the commit that closes its editor;
+	// the cached lists catch up a tick later (TanStack notifies on a timeout).
+	const renameVersion = useOptimisticRenamesVersion();
 	// Checked where both lists meet, so it runs whichever arrives last: the
 	// session list can resolve before the project list on the first load.
 	useEffect(() => {
 		if (!includeCloud || !ready || orgId === undefined || cloudData === undefined || !cloudSessionData) return;
 		refetchCloudProjectsForUnknownSessions(queryClient, cloudBaseUrl, orgId, cloudSessionData);
 	}, [cloudBaseUrl, cloudData, cloudSessionData, includeCloud, orgId, queryClient, ready]);
-	const data = useMemo(() => {
+	const merged = useMemo(() => {
 		if (!includeCloud) return localData;
 		// Local stays authoritative for loading/error semantics: cloud items only
 		// render once the local list exists, and never replace it.
@@ -1092,7 +1163,10 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// removalVersion is read outside React by applyOptimisticProjectRemovals.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready, removalVersion]);
-	return { ...local, data };
+	// renameVersion is read outside React by applyOptimisticSessionTitles.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	const data = useMemo(() => applyOptimisticSessionTitles(merged), [merged, renameVersion]);
+	return withQueryFields(local, { data });
 }
 
 /**
@@ -1133,6 +1207,7 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 		retry: (attempt, error) => apiErrorCode(error) === "SESSION_NOT_FOUND" && attempt < 4,
 		retryDelay: 250,
 		queryFn: async () => {
+			const readStartedAt = renameReadStarted();
 			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}", {
 				params: { path: { sessionId } },
 			});
@@ -1146,7 +1221,7 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 						id: STANDALONE_WORKSPACE_ID,
 						name: standaloneWorkspaceName(),
 					} satisfies Pick<WorkspaceSummary, "id" | "name">);
-			return toWorkspaceSession(session, project);
+			return withOptimisticSessionTitle(toWorkspaceSession(session, project), readStartedAt);
 		},
 	});
 	const cloud = useCloudProjectsQuery({ enabled: !hostId });
@@ -1183,12 +1258,17 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 			return changed ? next : current;
 		});
 	}, [queryClient, resolvedDirectSession, hostId, localLookupEnabled]);
-	if (hostId) return remote;
-	return {
-		...local,
-		data: local.data ?? resolvedDirectSession ?? cloudSession,
+	// A rename in flight shows from the commit that closes its editor.
+	const renameVersion = useOptimisticRenamesVersion();
+	const found = hostId ? remote.data : (local.data ?? resolvedDirectSession ?? cloudSession);
+	// renameVersion is read outside React by withOptimisticSessionTitle.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	const data = useMemo(() => withOptimisticSessionTitle(found), [found, renameVersion]);
+	if (hostId) return withQueryFields(remote, { data });
+	return withQueryFields(local, {
+		data,
 		isLoading: local.isLoading || direct.isLoading,
-	};
+	});
 }
 
 /**
@@ -1269,7 +1349,7 @@ export function useWorkspaceScope(projectId?: string, sessionId?: string, hostId
 	const data = local.data?.project || local.data?.session || !local.isSuccess
 		? local.data
 		: cloudScope ?? local.data;
-	return hostId ? remote : { ...local, data };
+	return hostId ? remote : withQueryFields(local, { data });
 }
 
 function selectTraySessions(workspaces: WorkspaceSummary[]): TraySessionEntry[] {
@@ -1311,5 +1391,5 @@ export function useWorkspaceTraySessions() {
 		if (local.data === undefined) return undefined;
 		return cloudEntries.length === 0 ? local.data : [...local.data, ...cloudEntries];
 	}, [cloudEntries, local.data]);
-	return { ...local, data };
+	return withQueryFields(local, { data });
 }

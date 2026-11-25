@@ -30,6 +30,7 @@ import {
 	type SpawnAttachmentInput,
 } from "./api";
 import { hostMachineIdentity, isConfigured, machineIdentity, type ServerConfig } from "./config";
+import { createBoardSaver, loadBoard } from "./boardSnapshot";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
 import { fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
@@ -101,6 +102,8 @@ export type SpawnOptions = {
 	effort?: string;
 	/** The worker's starting approval mode; omitted keeps the project's. */
 	approvalMode?: ApprovalMode;
+	/** The subscription account the agent starts on; omitted uses the machine's default. */
+	accountId?: string;
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
@@ -188,9 +191,21 @@ type AppState = {
 	 *
 	 * Deliberately a getter rather than a value: a timestamp that changed on every
 	 * successful tick would re-render every consumer of this store once per poll.
-	 * Read it through useStaleness, which owns the clock.
+	 * Read it through useMachineFreshness or FreshnessLine, which own the clock.
 	 */
 	getLastSyncAt: () => number;
+	/**
+	 * The selected machine's last sync, when `hostId` is the machine that sync
+	 * belongs to; undefined for any other machine, whose snapshot is current.
+	 *
+	 * Unscoped: HostScope and Cloud repoint `currentHostId` and `getLastSyncAt`
+	 * at the machine their screen is about, while freshness is judged for every
+	 * machine at once, and the selected one's snapshot trails its polls. Keyed by
+	 * the owner rather than paired with a host id in the context value, because
+	 * FrozenAppScope holds an old value on a tab off screen: after a switch it
+	 * would name the old machine while the getter read the new one's time.
+	 */
+	getPrimaryLastSyncAt: (hostId: string) => number | undefined;
 	// actions
 	/**
 	 * Races the selected machine's endpoints. Null means none passed the host
@@ -370,6 +385,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	cloudActionsRef.current = {
 		client: cloudState.client, org: cloudState.org, projects: cloudState.projects, connections: cloudState.connections,
 		chatHarnesses: cloudState.chatHarnesses, sessions: cloudState.sessions, upsertSession: cloudState.upsertSession, refreshSessions: cloudState.refreshSessions,
+		upsertProject: cloudState.upsertProject, scoped: cloudState.scoped,
 	};
 	const refreshCloudRef = useRef(cloudState.refresh);
 	refreshCloudRef.current = cloudState.refresh;
@@ -382,6 +398,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [selectedHostName, setSelectedHostName] = useState<string | null>(null);
 	const [activeEndpoints, setActiveEndpoints] = useState<Endpoint[]>([]);
 	const [knownProjects, setKnownProjects] = useState<KnownProjects>(NO_PROJECTS_KNOWN);
+	// Read by a poll to save the projects it kept when /projects did not answer.
+	const knownProjectsRef = useRef(knownProjects);
+	knownProjectsRef.current = knownProjects;
 	const [sessions, setSessions] = useState<DashboardSession[]>([]);
 	const [archive, setArchive] = useState<ArchiveSummary | null>(null);
 	const [orchestrators, setOrchestrators] = useState<OrchestratorLink[]>([]);
@@ -418,6 +437,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// never on every poll tick. openRef tracks the current state; everConnectedRef
 	// tells a fresh launch apart from a later reconnect.
 	const openRef = useRef(false);
+	// The selected machine's last board, saved on the phone after polls and shown
+	// at launch until the first poll answers (see boardSnapshot). `publishedFor`
+	// names the machine a poll has already filled the board for: a saved board
+	// never replaces a live one.
+	const [boardSaver] = useState(() => createBoardSaver());
+	const publishedFor = useRef("");
+	// The unread count last published, for a board saved before this poll's count answers.
+	const unreadRef = useRef(0);
 	// Whether the most recent poll reached the daemon. Distinct from openRef,
 	// which latches on first connect and never clears.
 	const lastTickOkRef = useRef(false);
@@ -430,6 +457,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// what "re-render the board on a change, not on the poll tick" removed. Only
 	// the banner subscribes to the passage of time; the board does not.
 	const lastSyncAtRef = useRef(0);
+	// The machine lastSyncAtRef belongs to, so getPrimaryLastSyncAt never hands
+	// one machine's time to a reader asking about another.
+	const lastSyncOwnerRef = useRef<string | null>(null);
 	// Whether the last failure had no HTTP status — nothing answered at all,
 	// which is what leaving a network looks like.
 	const lastFailUnreachableRef = useRef(false);
@@ -557,7 +587,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setOrchestratorId(null);
 				setStats({});
 				setNotificationsUnread(0);
+				unreadRef.current = 0;
 				lastSyncAtRef.current = 0;
+				lastSyncOwnerRef.current = null;
+				// Nothing live is on the board now: coming back to a machine shows
+				// its saved board again until a poll answers.
+				publishedFor.current = "";
 			}
 			// Let every other paired machine connect while the selected one's
 			// endpoint race is still waiting for an unreachable LAN or tunnel.
@@ -624,6 +659,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (active === pollActiveRef.current) return;
 			pollActiveRef.current = active;
 			if (!active) {
+				// Leaving the app is when the phone may close it: the newest board is
+				// written now (see boardSnapshot).
+				void boardSaver.flush();
 				primaryLoadRef.current?.controller.abort();
 				cancelAccountHostSync();
 				// A LAN address can point at a different machine when the phone wakes,
@@ -686,7 +724,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setOrchestratorId(incoming.orchestratorId);
 			setStats(incoming.stats);
 			setNotificationsUnread(incoming.notificationsUnread);
+			unreadRef.current = incoming.notificationsUnread;
+			// A live board: the saved one must not be laid over it.
+			publishedFor.current = machineIdentity(incoming.config);
 			lastSyncAtRef.current = incoming.lastSyncAt;
+			lastSyncOwnerRef.current = incoming.hostId;
 			setConnection("open");
 			setLoading(false);
 			setError(null);
@@ -863,11 +905,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// A poll that started against the previous pairing must not publish any
 			// of its board state after the user has moved to another machine.
 			if (!isCurrent()) return false;
-			setKnownProjects((prev) => retainProjects(
-				prev,
-				{ machine: machineIdentity(c), projects: sess.projects },
-				machineIdentity(c),
-			));
+			const machine = machineIdentity(c);
+			// /projects failed with no list from this machine known yet (the
+			// first poll since launch): the saved board's list stands in. This
+			// poll publishes the board, so the saved one is never shown after it,
+			// and saving null would wipe that list for the next launch too. A
+			// successful [] stays what this machine has.
+			const known = knownProjectsRef.current;
+			const savedProjects = sess.projects === null && !(known.machine === machine && known.known) && c.hostId
+				? (await loadBoard(hostMachineIdentity(c.hostId)))?.projects ?? null
+				: null;
+			if (!isCurrent()) return false;
+			const answer = { machine, projects: sess.projects ?? savedProjects };
+			setKnownProjects((prev) => retainProjects(prev, answer, machine));
+			// What the board shows: a list /projects failed to send this time is
+			// the one this machine sent before, so that one is what gets saved.
+			const shownProjects = retainProjects(knownProjectsRef.current, answer, machine);
 			setSessions((previous) => reconcileRows(previous, sess.sessions));
 			setArchive((previous) => (sameArchiveSummary(previous, sess.archive) ? previous : sess.archive ?? null));
 			setOrchestrators((previous) => reconcileRows(previous, sess.orchestrators));
@@ -880,6 +933,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			recordLink(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
 			lastTickOkRef.current = true;
 			lastSyncAtRef.current = Date.now();
+			lastSyncOwnerRef.current = c.hostId ?? null;
 			if (!openRef.current) {
 				openRef.current = true;
 				const trigger = everConnectedRef.current ? "reconnect" : "launch";
@@ -893,14 +947,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// in flight. Stop here rather than spending another request that would
 			// re-mark this device live after the user left.
 			if (!isCurrent()) return false;
+			publishedFor.current = machineIdentity(c);
+			// Saved now, not after the unread count: the app can go to the
+			// background while that request runs, and its flush must find this
+			// board. The count updates it once it answers. Saved under the paired
+			// machine's id, the key it is shown and forgotten by: a connection
+			// that names no machine has no board kept, rather than one that
+			// would never be shown or deleted.
+			const saved = c.hostId ? {
+				machine: hostMachineIdentity(c.hostId),
+				savedAt: Date.now(),
+				sessions: sess.sessions,
+				orchestrators: sess.orchestrators,
+				projects: shownProjects.known ? shownProjects.projects : null,
+				archive: sess.archive ?? null,
+				stats: sess.stats,
+				notificationsUnread: unreadRef.current,
+			} : null;
+			if (saved) boardSaver.schedule(saved);
 			try {
 				const page = await getNotifications(c, { status: "unread", limit: 1 }, { signal: controller.signal });
 				if (!isCurrent()) return false;
+				unreadRef.current = page.unreadCount;
 				setNotificationsUnread(page.unreadCount);
 			} catch {
 				if (!isCurrent()) return false;
+				unreadRef.current = 0;
 				setNotificationsUnread(0);
 			}
+			if (saved && saved.notificationsUnread !== unreadRef.current) boardSaver.schedule({ ...saved, notificationsUnread: unreadRef.current });
 			return true;
 		} catch (e) {
 			if (!isCurrent()) return false;
@@ -938,7 +1013,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		} finally {
 			if (isCurrent()) setLoading(false);
 		}
-	}, [reloadConfig, recordLink]);
+	}, [reloadConfig, recordLink, boardSaver]);
+
+	// At launch (and on switching machines), the machine's saved board shows
+	// until a poll answers, instead of an empty board and a loader. Only while
+	// nothing live has been published for it; the first poll reconciles over it.
+	useEffect(() => {
+		if (!selectedHostId) return;
+		const machine = hostMachineIdentity(selectedHostId);
+		if (publishedFor.current === machine) return;
+		let active = true;
+		void loadBoard(machine).then((saved) => {
+			if (!active || !saved || publishedFor.current === machine || selectedHostIdRef.current !== selectedHostId) return;
+			setSessions((current) => current.length ? current : saved.sessions);
+			setOrchestrators((current) => current.length ? current : saved.orchestrators);
+			setArchive((current) => current ?? saved.archive);
+			setStats(saved.stats);
+			setNotificationsUnread(saved.notificationsUnread);
+			unreadRef.current = saved.notificationsUnread;
+			// Only this machine's live list wins over its saved one: another
+			// machine's must not keep this one's from showing.
+			setKnownProjects((current) => current.machine === machine && current.known ? current : { machine, projects: saved.projects ?? [], known: saved.projects !== null });
+			setSessionMachine((current) => current || machine);
+			// The freshness line says how old it is: this machine's sync time, read
+			// through getPrimaryLastSyncAt, which answers only for its owner.
+			if (!lastSyncAtRef.current) {
+				lastSyncAtRef.current = saved.savedAt;
+				lastSyncOwnerRef.current = selectedHostId;
+			}
+		});
+		return () => { active = false; };
+	}, [selectedHostId]);
 
 	const fetchAll = useCallback((afterCurrent = false): Promise<boolean> => {
 		const c = cfgRef.current;
@@ -1193,9 +1298,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const refreshHost = useCallback(async (hostId: string) => {
 		if (!mountedRef.current) return;
 		if (isCloudHost(hostId)) await refreshCloudRef.current();
-		else if (hostId === selectedHostId) await fetchAll(true);
+		else if (hostId === selectedHostId) {
+			// No verified config means its endpoint race failed and its poll has
+			// stopped, so a fetch would return at once and a Retry do nothing. Race
+			// again instead: a config that answers restarts the poll.
+			if (cfgRef.current) await fetchAll(true);
+			else await reloadConfig();
+		}
 		else await otherHosts.refreshHost(hostId);
-	}, [selectedHostId, fetchAll, otherHosts.refreshHost]);
+	}, [selectedHostId, fetchAll, reloadConfig, otherHosts.refreshHost]);
 	const hasCloud = Boolean(cloud);
 	const refreshAll = useCallback(async () => {
 		await Promise.all([
@@ -1212,13 +1323,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
-				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { projectId, prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+				// Standalone on Cloud starts a standalone agent, which brings its own project.
+				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { ...(projectId === STANDALONE_PROJECT ? { standalone: true } : { projectId }), prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -1232,6 +1344,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					model,
 					effort,
 					approvalMode,
+					accountId,
 					mode: resolvedMode,
 					attachments,
 					clientRequestId,
@@ -1334,6 +1447,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Stable for the life of the provider, which is what lets it sit in the memo's
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
+	const getPrimaryLastSyncAt = useCallback(
+		(hostId: string) => (lastSyncOwnerRef.current === hostId ? lastSyncAtRef.current : undefined),
+		[],
+	);
 
 	const value = useMemo<AppState>(
 		() => ({
@@ -1370,6 +1487,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			phoneOffline,
 			phoneNetwork,
 			getLastSyncAt,
+			getPrimaryLastSyncAt,
 			reloadConfig,
 			switchHost,
 			refresh,

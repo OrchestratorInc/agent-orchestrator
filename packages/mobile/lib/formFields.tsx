@@ -27,6 +27,7 @@ import { secondaryForeground } from "./swiftUIStyles";
 import { useTheme } from "./ThemeProvider";
 import { space } from "./tokens";
 import { useNativeTextInput } from "./useNativeTextInput";
+import { useTrackedField } from "./formFocus";
 
 export type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 
@@ -101,10 +102,13 @@ type TextContentType = Parameters<typeof textContentType>[0];
 
 /** The bare input, without its row: a fixed `width` frames it to that size. */
 function InlineTextField(props: FormTextFieldProps & { textContentType?: TextContentType }) {
+	// Joins the form's focus tracking when it has one (see useFormFocus).
+	const tracked = useTrackedField(props.testID ?? props.label);
 	const t = useTheme();
 	const text = useNativeState(props.value);
 	const change = useNativeTextInput(props.value, text, props.onChangeText);
-	const modifiers = inputModifiers(t, props, props.textContentType);
+	// Locked while the form submits, so it can't be focused again before the form closes.
+	const modifiers = inputModifiers(t, tracked?.locked ? { ...props, editable: false } : props, props.textContentType);
 	if (typeof props.width === "number") modifiers.push(frame({ width: props.width }));
 	return (
 		<TextField
@@ -114,6 +118,8 @@ function InlineTextField(props: FormTextFieldProps & { textContentType?: TextCon
 			maxLength={props.maxLength}
 			testID={props.testID}
 			onTextChange={(next) => change(next)}
+			ref={tracked?.ref}
+			onFocusChange={tracked?.onFocusChange}
 			modifiers={modifiers}
 		/>
 	);

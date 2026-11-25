@@ -1,3 +1,6 @@
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
+import type { SendInput } from "../../lib/ui-usage-registry";
+import { surfaceOf } from "../../lib/ui-surfaces";
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
@@ -26,7 +29,8 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
  * of rerendering the surrounding chat surface.
  *
  * Every affordance is conditional on being able to deliver. The `/` menu only opens
- * when the provider actually reported skills, and the attach control only appears
+ * when the provider actually reported skills (or, while they are still being read,
+ * to say so), and the attach control only appears
  * when a caller supplied somewhere to put the bytes — a control that cannot do what
  * it says should not be drawn.
  */
@@ -53,6 +57,7 @@ import {
 	type Ref,
 } from "react";
 import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
 import { DictationMeter } from "./DictationMeter";
@@ -70,6 +75,7 @@ import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-clie
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
 	ComposerEditor,
+	CONSUME_TRIGGER,
 	type ComposerEditorHandle,
 	type ComposerImage,
 	type ComposerEditorSnapshot,
@@ -77,8 +83,10 @@ import {
 	type ComposerTrigger,
 } from "./ComposerEditor";
 import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
+import { composerModelPicker, openComposerModelPicker } from "../../lib/composer-shortcuts";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import {
+	attachmentPayload,
 	isSupportedImageAttachment,
 	useFileAttachments,
 	type FileAttachment,
@@ -126,7 +134,14 @@ import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
+import { subscribeChatComposerReferences, subscribeChatComposerText, takeComposerHandoff, type ComposerHandoff } from "../../lib/chat-context-bus";
+
+/**
+ * AO's own `/model`: it opens the composer's agent and model menu instead of
+ * sending text. An agent's `/model` only printed usage over chat, or switched
+ * the model behind the menu, so AO's command takes its place.
+ */
+const MODEL_COMMAND = "model";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
@@ -136,6 +151,8 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
 	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
+	// An archived chat could not be restored, so its message was never sent.
+	"SESSION_RESTORE_FAILED",
 	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
@@ -152,6 +169,7 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
+	"CHAT_OPEN_ELSEWHERE",
 	// A shared session refused the send because someone else holds its
 	// composer; nothing was accepted, so the text goes back to the draft.
 	"COMPOSER_LOCKED",
@@ -178,6 +196,39 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The band hung on the chat box slides up out from behind it as it comes and
+ * back down behind it as it goes. Only the band moves, and by transform alone:
+ * its space above the box is taken at once, so nothing else is laid out again
+ * while it slides, and the clip at the box's edge hides it there.
+ */
+function isTextEntryFocused(): boolean {
+	const active = document.activeElement;
+	if (!(active instanceof HTMLElement)) return false;
+	return /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) || active.closest('[contenteditable]:not([contenteditable="false"])') !== null;
+}
+
+function ComposerBand({ band }: { band?: ReactNode }) {
+	const reducedMotion = useReducedMotion();
+	return (
+		<AnimatePresence initial={false}>
+			{band ? (
+				<div key="band" className="overflow-hidden">
+					<motion.div
+						className="chat-composer-band-tray"
+						initial={{ y: "100%" }}
+						// --duration-normal (150ms), DESIGN.md's small panel movement.
+						animate={{ y: 0, transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeOut" } }}
+						exit={{ y: "100%", transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeIn" } }}
+					>
+						{band}
+					</motion.div>
+				</div>
+			) : null}
+		</AnimatePresence>
+	);
+}
 
 /** A message entered while the previous one was still being sent. */
 type HeldSubmit = {
@@ -229,6 +280,12 @@ export type ChatComposerHandle = {
 	isEmpty(): boolean;
 	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
 	setDraft(text: string): void;
+	/**
+	 * Takes the typed text for the surface that replaces this one, with whether
+	 * Enter was pressed on exactly that text. The saved draft is cleared, so it
+	 * does not come back here; the box itself is left for the surface to unmount.
+	 */
+	takeDraft(): ComposerHandoff | undefined;
 };
 
 /**
@@ -244,6 +301,9 @@ function useDockEntrance(shown: string | null): boolean {
 	return quiet.current === null;
 }
 
+/** A draft at least this long, erased by hand, counts as discarded. */
+const DISCARDED_DRAFT_MIN_CHARS = 10;
+
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
 	onSend,
@@ -252,6 +312,7 @@ export const ChatComposer = memo(function ChatComposer({
 	queuePlaceholder,
 	disabled,
 	disabledPlaceholder,
+	typingLocked = false,
 	sendBlockedReason,
 	starting,
 	holdAttachments,
@@ -262,6 +323,8 @@ export const ChatComposer = memo(function ChatComposer({
 	approval,
 	elicitation,
 	skills = [],
+	skillsLoading = false,
+	filePathsLoading = false,
 	filePaths = [],
 	filePathsTruncated,
 	onFileQuery,
@@ -271,6 +334,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onSteer,
 	showSteerButton,
 	onInterrupt,
+	stopping,
 	onContinue,
 	canSteer,
 	sendPending,
@@ -289,6 +353,7 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedEditRecovery,
 	commandError,
 	notice,
+	trayBand,
 	queuedDock,
 	onCompact,
 	compacting,
@@ -298,6 +363,7 @@ export const ChatComposer = memo(function ChatComposer({
 	autoFocus = true,
 	draftSessionId,
 	draftSessionIncarnation,
+	handoffSessionId,
 	assetBaseUrl,
 	remoteHost = false,
 	assetSessionId,
@@ -348,6 +414,11 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled?: boolean;
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
+	/**
+	 * Takes no typing and sends nothing, while the box looks exactly as usual; the
+	 * tools around it (attachments, the agent and model pickers) stay usable.
+	 */
+	typingLocked?: boolean;
 	sendBlockedReason?: string;
 	starting?: boolean;
 	/**
@@ -369,6 +440,14 @@ export const ChatComposer = memo(function ChatComposer({
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	/**
+	 * The agent's skills are still being read. `/` then opens on whatever already
+	 * matches (AO's own commands) with a quiet note, rather than staying shut as
+	 * though the agent had none. The note is not a row: Enter and the arrows still
+	 * belong to the editor.
+	 */
+	skillsLoading?: boolean;
+	filePathsLoading?: boolean;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/**
@@ -402,6 +481,8 @@ export const ChatComposer = memo(function ChatComposer({
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
+	/** Stop already landed; the turn is winding down, so Stop shows progress instead of firing again. */
+	stopping?: boolean;
 	/**
 	 * Pick a stopped turn back up when there is no draft to send: the same button
 	 * that stopped it continues it, like play after pause. Present only while the
@@ -436,6 +517,8 @@ export const ChatComposer = memo(function ChatComposer({
 	commandError?: string;
 	/** A notice attached to the form, below queued messages and input requests. */
 	notice?: ReactNode;
+	/** A band hung on top of the chat box (a refused login's); the box itself is not moved or recolored. */
+	trayBand?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
@@ -454,6 +537,12 @@ export const ChatComposer = memo(function ChatComposer({
 	draftSessionId?: string;
 	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
+	/**
+	 * The session whose follow-up from the new chat page this composer takes
+	 * (takeComposerHandoff). Set even where drafts cannot be saved, when
+	 * draftSessionId is not.
+	 */
+	handoffSessionId?: string;
 	/** Host-specific proxy origin for staged attachment reads. */
 	assetBaseUrl?: string;
 	/** The session belongs to a remote host, even if its proxy is disconnected. */
@@ -546,11 +635,18 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const formRef = useRef<HTMLFormElement>(null);
 	const dictation = useDictation({
 		onText: (text) => editor.current?.dictate(text),
 		onEnd: (keep) => editor.current?.endDictation(keep),
 	});
 	const dictating = dictation.phase !== "idle";
+	// A locked box takes no dictating either: a lock that comes while the user
+	// speaks stops listening, keeping the words so far.
+	const detachDictation = dictation.detach;
+	useEffect(() => {
+		if (typingLocked) detachDictation();
+	}, [detachDictation, typingLocked]);
 	// Dictation is in preview: macOS only, behind Developer mode.
 	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
@@ -568,7 +664,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * own Enter. A held message never overtakes a send that did not go through.
 	 * The daemon then queues each one behind the running turn as usual.
 	 */
-	const [heldSubmit, setHeldSubmit] = useState<HeldSubmit | null>(null);
+	const [heldSubmit, setHeldSubmitState] = useState<HeldSubmit | null>(null);
+	// Read outside render (takeDraft) before React commits the state.
+	const heldSubmitRef = useRef<HeldSubmit | null>(null);
+	const setHeldSubmit = useCallback((held: HeldSubmit | null) => {
+		heldSubmitRef.current = held;
+		setHeldSubmitState(held);
+	}, []);
 	// Held during a submit, and decided when that submit settles.
 	const heldDuringSubmit = useRef<HeldSubmit | null>(null);
 	const submitAccepted = useRef(false);
@@ -645,6 +747,8 @@ export const ChatComposer = memo(function ChatComposer({
  const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
 	const unsavedText = useRef<{ text: string; revision: number } | undefined>(undefined);
+	// A handed-off follow-up the session's draft could not save (see the hand-off).
+	const unsavedHandoff = useRef<string | undefined>(undefined);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
 	const restoredAttachments = useMemo<FileAttachment[]>(
 		() =>
@@ -682,12 +786,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const prepareAttachments = useCallback(
 		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
-			const paths = await onStageAttachments(
-				attachments.flatMap(({ mimeType, data, name }) =>
-					data ? [{ mimeType, data, name }] : [],
-				),
-				signal,
-			);
+			// A file too large to inline goes as its handle on disk; the stager
+			// streams it to the daemon (toWireAttachments).
+			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal);
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
 			}
@@ -724,6 +825,24 @@ export const ChatComposer = memo(function ChatComposer({
 		setAttachmentDraftPersistenceError(null);
 		automaticDeliveryRecoveryAttempted.current = undefined;
 	}, [draftScope, draftScopeKey, parkUnsentSends]);
+	// A handed-off follow-up that could not be saved stays in the box and in memory,
+	// like typing whose save failed: beside the save error, or under the in-memory
+	// composer's own storage notice. It runs after the reset above, which starts
+	// the scope with nothing unsaved, and before the restore, which then leaves the
+	// unsaved text alone. Nothing sends it by itself; the person sends it.
+	useEffect(() => {
+		const text = unsavedHandoff.current;
+		if (text === undefined) return;
+		unsavedHandoff.current = undefined;
+		if (draftScope) {
+			unsavedText.current = { text, revision: composerRevision.current };
+			setTextDraftPersistenceError("chat.draft.saveFailed");
+		}
+		textRef.current = text;
+		hasTextRef.current = text.trim().length > 0;
+		setHasText(hasTextRef.current);
+		editor.current?.setText(text);
+	}, [draftScope]);
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
 		initialKey: attachmentScopeKey,
@@ -736,32 +855,59 @@ export const ChatComposer = memo(function ChatComposer({
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
-		onHeldAttachmentsChange(fileAttachments.attachments.flatMap(({ stagedPath, mimeType, data, name }) =>
-			!stagedPath && data ? [{ mimeType, data, name }] : []), fileAttachments.preparing);
+		onHeldAttachmentsChange(fileAttachments.attachments.flatMap((attachment) =>
+			attachment.stagedPath ? [] : attachmentPayload(attachment)), fileAttachments.preparing);
 	}, [fileAttachments.attachments, fileAttachments.preparing, holdAttachments, onHeldAttachmentsChange]);
 
+	// The model menu lives in the settings row, so /model is AO's where one is shown.
+	// A queued message being edited keeps `/model` as text, as it does /compact.
+	const offersModelCommand = Boolean(settings) && !editingQueuedTurnId;
 	const slashCommands = useMemo<ChatSkill[]>(() => {
-		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
-		return [
-			{
+		const offersCompact = Boolean(onCompact) && compactUnavailable !== "This agent cannot compact its history";
+		const own: ChatSkill[] = [
+			...(offersCompact ? [{
 				name: "compact",
 				displayName: "compact",
 				description: "Summarize earlier history to reclaim context",
 				source: "AO",
-			},
-			...skills.filter((skill) => skill.name !== "compact"),
+			}] : []),
+			...(offersModelCommand ? [{
+				name: MODEL_COMMAND,
+				displayName: MODEL_COMMAND,
+				description: "Choose the agent, model and effort",
+				source: "AO",
+			}] : []),
 		];
-	}, [compactUnavailable, onCompact, skills]);
+		if (own.length === 0) return skills;
+		return [...own, ...skills.filter((skill) => !own.some((command) => command.name === skill.name))];
+	}, [compactUnavailable, offersModelCommand, onCompact, skills]);
+
+	// After the key or click that chose /model has finished, so it cannot also
+	// act on the menu that opens.
+	const openModelMenu = useCallback(() => {
+		window.setTimeout(() => {
+			if (formRef.current) openComposerModelPicker(formRef.current);
+		}, 0);
+	}, []);
+	// Read when /model is listed or used, not at render: the settings row may hold
+	// no model menu yet, or show it disabled while the agent starts.
+	const modelMenuUsable = useCallback(
+		() => offersModelCommand && Boolean(formRef.current && composerModelPicker(formRef.current)),
+		[offersModelCommand],
+	);
 
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
 		// An empty candidate list is the whole reason the sigil stays ordinary: with
 		// no commands or skills there is nothing to open, so `/` types a slash.
 		if (currentTrigger.kind === "skill") {
-			return rankSkills(slashCommands, currentTrigger.query);
+			const commands = offersModelCommand && !modelMenuUsable()
+				? slashCommands.filter((skill) => skill.name !== MODEL_COMMAND)
+				: slashCommands;
+			return rankSkills(commands, currentTrigger.query);
 		}
 		return rankFiles(filePaths, currentTrigger.query);
-	}, [slashCommands, filePaths]);
+	}, [slashCommands, filePaths, offersModelCommand, modelMenuUsable]);
 
 	const suggestions: Suggestion[] = useMemo(
 		() => suggestionsFor(trigger),
@@ -773,6 +919,17 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [fileQuery, onFileQuery]);
 
 	const menuOpen = suggestions.length > 0;
+	// Drawn even with nothing to pick while the skills are on their way, so `/` is
+	// never answered with silence. Keyboard handling still follows `menuOpen`.
+	const skillsNote = skillsLoading && trigger?.kind === "skill" && trigger.key !== dismissedKey;
+	const filesNote = filePathsLoading && trigger?.kind === "file" && trigger.key !== dismissedKey;
+	const menuShown = menuOpen || skillsNote || filesNote;
+	const markSlashPick = useTelemetrySurface("slash_menu", Boolean(menuShown && trigger?.kind === "skill"), { choice: true });
+	const markMentionPick = useTelemetrySurface("mention_menu", Boolean(menuShown && trigger?.kind === "file"), { choice: true });
+	useTelemetrySurface("composer");
+	useEffect(() => {
+		if (sendError) uiUsage.errorShown("composer_send_failed", "inline", "composer");
+	}, [sendError]);
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -839,6 +996,7 @@ export const ChatComposer = memo(function ChatComposer({
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
 			!disabled &&
+			!typingLocked &&
 			!sendBlockedReason &&
 			!steerPending &&
 		!savingQueuedEditPending &&
@@ -856,6 +1014,7 @@ export const ChatComposer = memo(function ChatComposer({
 		hasDraft &&
 		(savingQueuedEdit || !busy) &&
 		!disabled &&
+		!typingLocked &&
 		!sendBlockedReason &&
 		!steerPending &&
 		!savingQueuedEditPending &&
@@ -867,6 +1026,13 @@ export const ChatComposer = memo(function ChatComposer({
 	// A plain send while a turn runs is queued, so the button says so instead of
 	// looking identical to an immediate send.
 	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
+	// A send of this box is still on its way. The box clears before the surface
+	// hears of the send (its echo and pending state arrive a task later), and the
+	// turn it starts reaches the snapshot later still, so this is what says a next
+	// message would wait, from the frame the draft clears until the surface's own
+	// willQueue takes over. A failed send ends it with `submitting`.
+	const ownSendInFlight = optimisticSend || (submitting && !savingQueuedEdit);
+	const nextMessageQueues = Boolean(willQueue) || ownSendInFlight;
 	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
 	// turn; the send button only shows it while the modifier is held. When Enter
 	// inserts newlines, Cmd/Ctrl+Enter is the send key, so the modifier delivers
@@ -982,6 +1148,10 @@ export const ChatComposer = memo(function ChatComposer({
 
 		const onWindowFocus = () => {
 			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+			// A click that activates the window can land in another field (the Browser
+			// address bar, a terminal) before this fires; taking focus would send the
+			// user's typing into the composer instead.
+			if (isTextEntryFocused()) return;
 			focusEditor();
 		};
 		const onVisibilityChange = () => {
@@ -1391,6 +1561,35 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [draftScope]);
+	// A follow-up typed on the new chat page while this session was being created
+	// becomes the draft, saved before the restore below loads it into the editor.
+	// Entered there, it is held here and sent once the box can send, which queues
+	// it behind the brief. A draft of the session's own keeps its place: the
+	// follow-up goes below it, for the person to send.
+	// Where drafts cannot be saved (an in-memory composer), it is shown as unsaved
+	// typing instead.
+	useLayoutEffect(() => {
+		const sessionId = draftSessionId ?? handoffSessionId;
+		if (!sessionId) return;
+		const handoff = takeComposerHandoff(sessionId);
+		if (!handoff) return;
+		if (!draftScope) {
+			unsavedHandoff.current = handoff.text;
+			return;
+		}
+		const own = readChatSessionDraft(draftScope).composer;
+		const kept = own.text.trim() ? own.text.replace(/\s+$/, "") : "";
+		const text = kept ? `${kept}\n\n${handoff.text}` : handoff.text;
+		const result = writeChatComposerText(draftScope, text);
+		if (!result.ok) {
+			// Shown once the scope's reset has run (see unsavedHandoff).
+			unsavedHandoff.current = text;
+			return;
+		}
+		composerRevision.current = result.draft.composer.revision;
+		textRef.current = text;
+		if (handoff.send && !kept && !own.delivery) setHeldSubmit({ text, steer: false, own: true });
+	}, [draftScope, draftSessionId, handoffSessionId, setHeldSubmit]);
 	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
 	// draft below what is already typed, ready for the person's own words.
 	useEffect(() => {
@@ -1408,6 +1607,12 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [draftSessionId, draftScope, persistComposerText]);
 
 	const draftCaretRef = useRef<number | undefined>(undefined);
+	// Whether the draft being typed reached DISCARDED_DRAFT_MIN_CHARS, so erasing
+	// it a character at a time still counts as one discard.
+	const draftWorthDiscarding = useRef(false);
+	useEffect(() => {
+		draftWorthDiscarding.current = false;
+	}, [draftScope]);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
@@ -1415,6 +1620,16 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
+		// A real draft erased by hand (not cleared by a send, not a recalled message) was given up on.
+		const trimmed = snapshot.text.trim();
+		if (submitInFlight.current || historyBrowse.current) {
+			draftWorthDiscarding.current = false;
+		} else if (trimmed.length >= DISCARDED_DRAFT_MIN_CHARS) {
+			draftWorthDiscarding.current = true;
+		} else if (!trimmed && previousText.trim() && draftWorthDiscarding.current) {
+			draftWorthDiscarding.current = false;
+			if (surfaceOf(document.activeElement) === "composer") uiUsage.draftDiscarded();
+		}
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
@@ -1469,14 +1684,30 @@ export const ChatComposer = memo(function ChatComposer({
 				if (snapshot) onEditorChange(snapshot);
 				editor.current?.focus();
 			},
+			takeDraft: () => {
+				// The saved draft, not the box: a recalled message is only shown, and a
+				// draft its owner cleared (a launched brief) is not the person's text.
+				const text = unsavedText.current?.text ?? (draftScope ? readChatSessionDraft(draftScope).composer.text : textRef.current);
+				if (!text.trim()) return undefined;
+				// Entered during a send that is still settling, or after it settled.
+				const held = heldDuringSubmit.current ?? heldSubmitRef.current;
+				heldDuringSubmit.current = null;
+				setHeldSubmit(null);
+				persistComposerText("");
+				return { text, send: held?.text === text };
+			},
 		}),
-		[focusEditor, hasDraft, onEditorChange],
+		[draftScope, focusEditor, hasDraft, onEditorChange, persistComposerText, setHeldSubmit],
 	);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
-		editor.current?.insertToken(currentTrigger, value);
+		if (currentTrigger.kind === "skill") markSlashPick();
+		else markMentionPick();
+		const opensModelMenu = currentTrigger.kind === "skill" && value === MODEL_COMMAND && modelMenuUsable();
+		if (opensModelMenu) editor.current?.removeTrigger(currentTrigger);
+		else editor.current?.insertToken(currentTrigger, value);
 		triggerRef.current = undefined;
 		previousTrigger.current = undefined;
 		setTrigger(undefined);
@@ -1484,7 +1715,8 @@ export const ChatComposer = memo(function ChatComposer({
 		setHighlighted(0);
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
-	}, []);
+		if (opensModelMenu) openModelMenu();
+	}, [markMentionPick, markSlashPick, modelMenuUsable, openModelMenu]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1495,6 +1727,8 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!query) return;
 		const exact = slashCommands.find((skill) => skill.name.toLowerCase() === query);
 		if (!exact) return;
+		// /model runs on Enter, like a sent command; typing its name only selects it.
+		if (offersModelCommand && exact.name === MODEL_COMMAND) return;
 
 		// Do not eagerly accept a skill whose full name is also the start of another
 		// skill. The user must still be able to type `/review-pr` when `/review`
@@ -1504,7 +1738,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return name.length > query.length && name.startsWith(query);
 		});
 		if (!hasLongerPrefix) pick(exact.name);
-	}, [dismissedKey, isComposing, pick, slashCommands, trigger]);
+	}, [dismissedKey, isComposing, offersModelCommand, pick, slashCommands, trigger]);
 
 	useLayoutEffect(() => {
 		if (submitting || !restoreFocusAfterSubmission.current) return;
@@ -1517,7 +1751,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [submitting]);
 
 	const completeFromEditor = useCallback(
-		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
+		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | typeof CONSUME_TRIGGER | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
@@ -1526,17 +1760,38 @@ export const ChatComposer = memo(function ChatComposer({
 			const matches = suggestionsFor(currentTrigger);
 			const chosen = matches[Math.min(highlightedRef.current, matches.length - 1)];
 			if (!chosen) return undefined;
+			if (currentTrigger.kind === "skill") markSlashPick();
+			else markMentionPick();
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
+			if (currentTrigger.kind === "skill" && chosen.value === MODEL_COMMAND && modelMenuUsable()) {
+				// The editor removes the typed `/mod…`; nothing is inserted or sent.
+				triggerRef.current = undefined;
+				setTrigger(undefined);
+				setHighlighted(0);
+				openModelMenu();
+				return CONSUME_TRIGGER;
+			}
 			return chosen.value;
 		},
-		[onCompact, skills, suggestionsFor],
+		[markMentionPick, markSlashPick, modelMenuUsable, onCompact, openModelMenu, skills, suggestionsFor],
 	);
 
-	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
+	function submit(event?: FormEvent, forceSteer?: boolean, input?: SendInput): Promise<void> {
 		event?.preventDefault();
 		if (sendBlockedReason) return Promise.resolve();
+		// Only a person's Enter or click on a new message is counted: never a held
+		// draft sent later, a repeat Enter on the message already sending, /model, /compact
+		// or saving an edit to a queued message, which sends nothing new.
+		const countSend = () => {
+			if (savingQueuedEdit) return;
+			const draft = textRef.current.trim();
+			if (draft === "/compact" && onCompact) return;
+			if (input && !typingLocked && (draft || fileAttachments.attachments.length > 0 || contextReferences.length > 0)) {
+				uiUsage.messageSent(input, forceSteer && canSteerDraft ? "steer" : queuesDraft ? "queue" : "send", fileAttachments.attachments.length > 0);
+			}
+		};
 		if (submitInFlight.current) {
 			// React cannot publish the next busy prop until after this event returns. A
 			// repeat Enter on the message being sent joins that submission instead of
@@ -1548,10 +1803,28 @@ export const ChatComposer = memo(function ChatComposer({
 				editorClears.current !== editorClearsAtSubmit.current &&
 				textRef.current.trim()
 			) {
+				// A repeat Enter re-holds the same draft; count it only once.
+				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;
 				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId() };
+				if (!alreadyHeld) countSend();
 			}
 			return submitInFlight.current;
 		}
+		if (typingLocked) return Promise.resolve();
+		// `/model` typed out with the menu dismissed still opens the model menu. With no
+		// usable menu it stays in the box: sent, the agent would only print its usage.
+		if (offersModelCommand && !forceSteer && textRef.current.trim() === `/${MODEL_COMMAND}`) {
+			if (!modelMenuUsable()) return Promise.resolve();
+			// The editor's programmatic clear publishes no change, so the composer
+			// state and the saved draft are cleared here, or /model would come back.
+			clearEditorView();
+			persistComposerText("");
+			draftCaretRef.current = 0;
+			onDraftInput?.("", 0);
+			openModelMenu();
+			return Promise.resolve();
+		}
+		countSend();
 		setHeldSubmit(null);
 		heldDuringSubmit.current = null;
 		submitAccepted.current = false;
@@ -1710,9 +1983,10 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return;
 		}
-		// Held files carry their bytes to the send instead of a staged path.
+		// Held files carry their bytes, or a large one its handle on disk, to the
+		// send instead of a staged path.
 		const heldPayloads = holdAttachments
-			? settledAttachments.flatMap(({ stagedPath, mimeType, data, name }) => !stagedPath && data ? [{ mimeType, data, name }] : [])
+			? settledAttachments.flatMap((attachment) => attachment.stagedPath ? [] : attachmentPayload(attachment))
 			: [];
 		if (hasAttachments && settledPaths.length + heldPayloads.length !== settledAttachments.length) {
 			setSendError("chat.draft.filesUnavailable");
@@ -1990,7 +2264,8 @@ export const ChatComposer = memo(function ChatComposer({
 				setDeliveryRecoveryNotice(null);
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
 				// A failed agent switch is reported in its own strip above the box.
-				setSendError(apiErrorCode(error) === AGENT_SWITCH_FAILED ? null : apiErrorMessage(error));
+				const code = apiErrorCode(error);
+				setSendError(code === AGENT_SWITCH_FAILED ? null : code === "CHAT_OPEN_ELSEWHERE" ? "chat.draft.openElsewhere" : apiErrorMessage(error));
 				return;
 			}
 			console.warn("[chat] send got no answer", { sessionId: draftScope.sessionId, code: apiErrorCode(error) ?? (error instanceof Error ? error.name : "unknown"), retry: prepared.recovered });
@@ -2037,7 +2312,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const parked = parkedUnsentId();
 		if (parked && parked !== heldSubmit.unsentId) return;
 		void submitLatest.current(undefined, heldSubmit.steer && canSteerDraft);
-	}, [canSteerDraft, heldSubmit, heldSubmitReady]);
+	}, [canSteerDraft, heldSubmit, heldSubmitReady, setHeldSubmit]);
 
 	function onEditorEnter(
 		snapshot: ComposerEditorSnapshot,
@@ -2079,7 +2354,7 @@ export const ChatComposer = memo(function ChatComposer({
 				return true;
 			}
 			const wantsSteer = enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft;
-			void submit(undefined, wantsSteer);
+			void submit(undefined, wantsSteer, "keyboard");
 			return true;
 		},
 		[canSteerDraft, canSteerNext, enterSends, fileAttachments, messageByteLimit, onCompact, pick, suggestionsFor],
@@ -2088,9 +2363,14 @@ export const ChatComposer = memo(function ChatComposer({
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
-		if (dictating && !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
+		const typing = !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete");
+		if (dictating && typing) {
 			dictation.detach();
 		}
+		// A notice about files that were not attached names files that are already
+		// gone; typing on moves past it. A paste (Cmd/Ctrl+V) is not typing, so the
+		// notice a paste raises stays.
+		if (typing && fileAttachments.error) fileAttachments.dismissError();
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -2117,6 +2397,14 @@ export const ChatComposer = memo(function ChatComposer({
 				return;
 			}
 		}
+		// The "Loading skills…" note closes the same way a menu does.
+		if (event.key === "Escape" && liveTrigger && ((skillsLoading && liveTrigger.kind === "skill") || (filePathsLoading && liveTrigger.kind === "file")) && liveTrigger.key !== dismissedKeyRef.current) {
+			event.preventDefault();
+			event.stopPropagation();
+			dismissedKeyRef.current = liveTrigger.key;
+			setDismissedKey(dismissedKeyRef.current);
+			return;
+		}
 
 		if ((event.key === "ArrowUp" || event.key === "ArrowDown") && recallSentMessage(event.key === "ArrowUp", event)) {
 			event.preventDefault();
@@ -2139,7 +2427,7 @@ export const ChatComposer = memo(function ChatComposer({
 	function recallSentMessage(older: boolean, event: KeyboardEvent<HTMLDivElement>): boolean {
 		if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isComposing) return false;
 		// A queued edit, a delivery still settling, or a disabled controller owns the text.
-		if (editingQueuedTurnId || queuedEditRecovery || disabled || submitInFlight.current || draftMutationPending) {
+		if (editingQueuedTurnId || queuedEditRecovery || disabled || typingLocked || submitInFlight.current || draftMutationPending) {
 			return false;
 		}
 		// A pasted image holds its place in the draft until staging fills it in.
@@ -2156,6 +2444,8 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start");
 		const snapshot = editor.current?.getSnapshot();
 		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
+		// Stepping back to the saved draft is not erasing anything.
+		draftWorthDiscarding.current = false;
 		if (snapshot) onEditorChange(snapshot);
 		return true;
 	}
@@ -2194,6 +2484,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
+		uiUsage.attachmentAdded("paste");
 		attachFiles(files);
 	}
 
@@ -2204,6 +2495,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (files.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
+		uiUsage.attachmentAdded("drop");
 		attachFiles(files);
 	}
 
@@ -2231,7 +2523,7 @@ export const ChatComposer = memo(function ChatComposer({
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
 		(attachmentsRefusal && fileAttachments.attachments.length > 0 && !durableDelivery ? attachmentsRefusal : null) ??
 		sendError ??
-		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
+		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath && !file.file)
 			? "chat.draft.filesUnavailable" : null) ??
 		commandError;
 	// The strip shows the unsent message, the same message while its retry runs, or a short undo after a discard.
@@ -2242,7 +2534,7 @@ export const ChatComposer = memo(function ChatComposer({
 			text={stripDelivery.draft.text}
 			attachmentCount={stripDelivery.draft.attachments.length}
 			sending={!unsent}
-			retryDisabled={Boolean(busy || disabled || sendBlockedReason || durableDelivery || submitting || composerMutation.pending)}
+			retryDisabled={Boolean(busy || disabled || typingLocked || sendBlockedReason || durableDelivery || submitting || composerMutation.pending)}
 			onRetry={retryUnsent}
 			onDiscard={discardUnsent}
 		/>
@@ -2277,6 +2569,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{unsentStrip}
 					</div>
 				) : null}
+				<ComposerBand band={trayBand} />
 				{notice}
 				{form}
 			</div>
@@ -2300,8 +2593,10 @@ export const ChatComposer = memo(function ChatComposer({
 
 	return withQueueStack(
 		<form
+			ref={formRef}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
-			onSubmit={(event) => void submit(event, steersDraft)}
+			onSubmit={(event) => void submit(event, steersDraft, "button")}
+			data-telemetry-surface="composer"
 				onDragOver={(event) => {
 					if (!canAttach || submitInFlight.current) return;
 					event.preventDefault();
@@ -2333,7 +2628,7 @@ export const ChatComposer = memo(function ChatComposer({
 				className="cursor-chat-composer relative flex cursor-text flex-col gap-1.5 px-3 pt-3 pb-3"
 			>
 				<span aria-hidden="true" className="chat-composer-startup-shimmer" />
-				{menuOpen && trigger ? (
+				{menuShown && trigger ? (
 					<ComposerSuggestMenu
 						id={menuId}
 						kind={trigger.kind}
@@ -2341,6 +2636,7 @@ export const ChatComposer = memo(function ChatComposer({
 						highlighted={activeIndex}
 						onPick={pick}
 						truncated={trigger?.kind === "file" && filePathsTruncated}
+						loadingNote={skillsNote ? "Loading skills…" : filesNote ? "Loading files…" : undefined}
 					/>
 				) : null}
 
@@ -2480,15 +2776,16 @@ export const ChatComposer = memo(function ChatComposer({
 					ref={editor}
 					dictating={dictating}
 					images={composerImages}
-					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
+					promptSuggestion={nextMessageQueues || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
+					readOnly={typingLocked}
 					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"
 					placeholder={
 						disabledPlaceholder ?? (disabled
 							? "The controller is not connected"
-							: willQueue
+							: nextMessageQueues
 								? (queuePlaceholder ?? "Next message you send will be queued")
 								: emptyPlaceholder ?? "Message the agent")
 					}
@@ -2547,6 +2844,7 @@ export const ChatComposer = memo(function ChatComposer({
 									disabled={controlsDisabled}
 									onChange={(event) => {
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
+											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
 											attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
@@ -2602,6 +2900,7 @@ export const ChatComposer = memo(function ChatComposer({
 										shape="pill"
 										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 										onClick={() => filePicker.current?.click()}
+										data-telemetry-id="composer.attach"
 										aria-label="Attach a file"
 										className="shrink-0"
 									>
@@ -2616,7 +2915,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
-							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn">
+							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true, "button")} aria-label="Steer into running turn">
 								Steer
 							</Button>
 						) : null}
@@ -2629,7 +2928,7 @@ export const ChatComposer = memo(function ChatComposer({
 											variant={dictating ? "primary" : "quiet"}
 											size="none"
 											shape="pill"
-											disabled={!dictating && controlsDisabled}
+											disabled={!dictating && (controlsDisabled || typingLocked)}
 											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
 											onClick={() => {
@@ -2637,6 +2936,7 @@ export const ChatComposer = memo(function ChatComposer({
 												dictation.toggle();
 											}}
 											data-shortcut-target="dictate"
+											data-telemetry-id="composer.dictation"
 											aria-label={dictating ? "Finish dictation" : "Dictate"}
 											aria-pressed={dictating}
 											className={cn(
@@ -2663,11 +2963,14 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="primary"
 										size="icon-sm"
 										shape="pill"
-										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										disabled={canStopTurn ? Boolean(stopping) : canContinueTurn ? continuing : !sendActionEnabled}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
-										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
+										aria-label={canStopTurn ? (stopping ? "Stopping turn" : "Stop turn") : canContinueTurn ? "Continue turn" : sendActionLabel}
+										data-telemetry-id={canStopTurn ? "composer.stop" : "composer.send"}
 									>
-										{canStopTurn ? (
+										{canStopTurn && stopping ? (
+											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+										) : canStopTurn ? (
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
@@ -2681,7 +2984,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
+							<TooltipContent side="bottom">{canStopTurn ? (stopping ? "Stopping…" : "Stop turn") : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>

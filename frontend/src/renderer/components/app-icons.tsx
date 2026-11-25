@@ -37,6 +37,7 @@ import {
 	CircleDashed as MynaCircleDashed,
 	Clock3 as MynaClock3,
 	ClockCircle as MynaClockCircle,
+	CloudSolid as MynaCloudSolid,
 	Cloudy as MynaCloudy,
 	Code as MynaCode,
 	Coffee as MynaCoffee,
@@ -150,6 +151,10 @@ import {
 	Music as MynaMusic,
 	Database as MynaDatabase,
 	ChartBar as MynaChartBar,
+	Menu as MynaMenu,
+	DotsVertical as MynaDotsVertical,
+	LayersThree as MynaLayersThree,
+	Edit as MynaEdit,
 } from "@mynaui/icons-react";
 import {
 	ArrowDownUp as LucideArrowDownUp,
@@ -177,6 +182,7 @@ import {
 	GitPullRequestDraft as LucideGitPullRequestDraft,
 	Hammer as LucideHammer,
 	History as LucideHistory,
+	Hourglass as LucideHourglass,
 	Import as LucideImport,
 	Laptop as LucideLaptop,
 	ListChevronsDownUp as LucideListChevronsDownUp,
@@ -212,6 +218,7 @@ import {
 	Ungroup as LucideUngroup,
 	Check as LucideCheck,
 	Ellipsis as LucideEllipsis,
+	GalleryHorizontal as LucideGalleryHorizontal,
 	EllipsisVertical as LucideEllipsisVertical,
 	GripVertical as LucideGripVertical,
 	Pause as LucidePause,
@@ -319,6 +326,8 @@ export const Clock = fromMyna(MynaClockCircle, "clock");
 export const Clock3 = fromMyna(MynaClock3, "clock-3");
 // Myna's plain Cloud is an open arc that reads as clipped; Cloudy is closed.
 export const Cloud = fromMyna(MynaCloudy, "cloud", "full");
+// Filled single cloud for the small Cloud mark on rows; solid glyphs ignore stroke.
+export const CloudFilled = fromMyna(MynaCloudSolid, "cloud-filled", "full");
 export const Code2 = fromMyna(MynaCode, "code-xml");
 export const Coffee = fromMyna(MynaCoffee, "coffee");
 export const Columns2 = fromMyna(MynaColumns, "columns-2");
@@ -354,6 +363,7 @@ export const FolderOpen = fromLucide(LucideFolderOpen, "folder-open");
 export const FolderPlus = fromMyna(MynaFolderPlus, "folder-plus");
 export const FolderTree = fromLucide(LucideFolderTree, "folder-tree");
 export const Folders = fromLucide(LucideFolders, "folders");
+export const GalleryHorizontal = fromLucide(LucideGalleryHorizontal, "gallery-horizontal");
 export const Gauge = fromLucide(LucideGauge, "gauge");
 export const GitBranch = fromMyna(MynaGitBranch, "git-branch");
 export const GitCommitHorizontal = fromMyna(MynaGitCommit, "git-commit-horizontal");
@@ -375,6 +385,7 @@ export const Heading4 = fromMyna(MynaHeading4, "heading-4");
 export const Heading5 = fromMyna(MynaHeading5, "heading-5");
 export const Hammer = fromLucide(LucideHammer, "hammer");
 export const History = fromLucide(LucideHistory, "history");
+export const Hourglass = fromLucide(LucideHourglass, "hourglass");
 export const House = fromMyna(MynaHome, "house");
 export const Image = fromMyna(MynaImage, "image");
 export const Import = fromLucide(LucideImport, "import");
@@ -504,3 +515,12 @@ export const Ungroup = fromLucide(LucideUngroup, "ungroup");
 export const UserPlus = fromMyna(MynaUserPlus, "user-plus");
 export const ZoomIn = fromMyna(MynaSearchPlus, "zoom-in");
 export const ZoomOut = fromMyna(MynaSearchMinus, "zoom-out");
+
+// The onboarding illustrations' icons.
+export const CircleCheckBig = fromMyna(MynaCheckCircle, "circle-check-big");
+export const ListFilter = fromMyna(MynaFilter, "list-filter");
+export const Menu = fromMyna(MynaMenu, "menu");
+export const EllipsisVertical = fromMyna(MynaDotsVertical, "ellipsis-vertical");
+export const Cog = fromMyna(MynaCog, "cog");
+export const Layers = fromMyna(MynaLayersThree, "layers");
+export const SquarePen = fromMyna(MynaEdit, "square-pen");
