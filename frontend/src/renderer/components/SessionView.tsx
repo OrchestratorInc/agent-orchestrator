@@ -1,4 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { DeviceRevealWatcher } from "./DeviceRevealWatcher";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
@@ -27,6 +29,7 @@ import { agentLabel } from "../lib/agent-options";
 import { useCloudAgentSwitch } from "../hooks/useCloudAgentSwitch";
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
+import { MainViewVisibleContext, useMainViewVisible } from "../lib/main-view-visibility";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
@@ -129,8 +132,10 @@ import {
 	useWorkspaceSession,
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
+import { withOptimisticSessionTitle } from "../hooks/optimistic-session-titles";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, requestCloudWorkspaceCheckout, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudWorkerStartingWait, recordCloudWorkspaceStartupEvent } from "../lib/cloud-worker-starting";
 import { FREESTYLE_PROVIDER, SHARE_FEATURE } from "../lib/cloud-offering";
 import { useCloudSessionEventStream } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
@@ -366,6 +371,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 		resumeAfter: () => 0,
 		onEvent: (event) => {
 			if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
+			if (orgId) recordCloudWorkspaceStartupEvent(orgId, sessionId, event);
 			const occurredAt = Date.parse(event.createdAt);
 			if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
 			// sandbox.provisioning only marks the start of workspace creation;
@@ -547,10 +553,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudSessionWorkspace = directCloudWorkspace ?? (isCloudRoute ? routedWorkspace : undefined);
 	const directCloudSession = routeCloudOrgId && cloudRouteSession.data && (!routedWorkspace || isCloudRoute) &&
 		projectId === cloudRouteSession.data.projectId
-		? toCloudWorkspaceSession(cloudRouteSession.data, {
+		? withOptimisticSessionTitle(toCloudWorkspaceSession(cloudRouteSession.data, {
 			id: cloudSessionWorkspace?.id ?? cloudRouteSession.data.projectId,
 			displayName: cloudSessionWorkspace?.name ?? "Cloud project",
-		}, routeCloudOrgId)
+		}, routeCloudOrgId))
 		: undefined;
 	const fallbackSession = !projectId || workspaceSessionQuery.data?.workspaceId === projectId
 		? workspaceSessionQuery.data : undefined;
@@ -780,6 +786,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserPopOutPhase = browserPopOutState.sessionId === sessionId ? browserPopOutState.phase : "docked";
 	const browserPopOutMounted = browserPopOutPhase !== "docked";
 	const browserPoppedOut = browserPopOutPhase === "open";
+	const mainViewVisible = useMainViewVisible();
 	const [browserPopoutTopbarHost, setBrowserPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
 		if (browserPopOutPhase !== "mounting" || !browserPopoutTopbarHost) return;
@@ -925,7 +932,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
 		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
-		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
+		// A worker that just said it is still preparing the workspace is already
+		// doing what this asks; the request would only wait on it. A recorded
+		// startup failure (a checkout or conversation restore) is not being
+		// prepared: it waits for this request, so it is always sent.
+		const startupFailed = cloudStartupProblem(session)?.phase === "failed";
+		if (prepareWorkspace && (startupFailed || !cloudWorkerStartingWait(session.cloud.orgId, session.id))) {
+			await requestCloudWorkspaceCheckout(cloudCpClient, session.cloud.orgId, session.id);
+		}
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
@@ -1069,6 +1083,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Split panes are a Developer mode preview; off, no split is shown and
 	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
+	// Devices are a Developer mode preview: off, no Device tab opens on its own.
+	const devicesEnabled = useDevicesEnabled();
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -1648,6 +1664,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button size="icon-sm"
+						data-telemetry-id="tab.new"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
@@ -1764,6 +1781,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
 	}, [hostId, remoteBase, browserSlotVisible, remoteSessionQuery.refetch]);
 	const terminated = session ? !sessionIsActive(session) : false;
+	// An agent's `ao device open` reveals the Device tab, as `ao preview` reveals
+	// Browser: a lease opened while this session is on screen opens the tab once;
+	// entering a session that already holds one does not.
+	const deviceAvailable = devicesEnabled && Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
+	// A maximized Files or Browser would cover the revealed tab, so both go back
+	// to the inspector first, as opening an artifact does.
+	const revealDevice = useCallback(() => {
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		transitionInspectorView("device");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
@@ -2915,8 +2944,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		);
 	}
 
-	return (
+	const view = (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
+			<DeviceRevealWatcher enabled={deviceAvailable} onReveal={revealDevice} sessionId={sessionId} terminated={terminated} uiSessionId={uiSessionId} />
 			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
@@ -3266,6 +3296,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{session && !session.cloud ? prTabs.open.map((url) => (
 								<div className={cn("absolute inset-0 z-10", url !== activePRUrl && "invisible pointer-events-none [content-visibility:hidden]")} key={url}>
 									<PRTabPane
+										// Not on screen while a maximized Browser or Files covers the workspace.
+										active={url === activePRUrl && !browserPoppedOut && !filesPoppedOut}
 										hostId={hostId}
 										onViewInDiff={handleOpenReviewFile}
 										request={prTabs.request?.url === url ? prTabs.request : undefined}
@@ -3351,6 +3383,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.inspector"
 							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
@@ -3447,6 +3480,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: null}
 		</div>
 	);
+	// The maximized Browser covers the whole app without hiding it, so videos
+	// under it learn to pause from the main-view flag. File panes keep their
+	// own `active`, which also moves focus, so closing the Browser leaves focus
+	// where it was.
+	return <MainViewVisibleContext.Provider value={mainViewVisible && !browserPopOutMounted}>{view}</MainViewVisibleContext.Provider>;
 }
 
 /** The key a terminal target's tab has in the strips and the split layout. */

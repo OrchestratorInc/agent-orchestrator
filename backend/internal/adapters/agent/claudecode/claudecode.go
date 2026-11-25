@@ -211,11 +211,18 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 // claudeLaunchSettingsArgs passes a session's launch choices to Claude Code as
 // settings: Ultracode, and the token count at which it compacts on its own.
 // They share one --settings flag with the auto-mode dialog guard (see
-// autoDefaultNudgeGuardArgs).
+// autoDefaultNudgeGuardArgs) and the bypass-permissions dialog guard.
 func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentruntime.PermissionPolicy) []string {
 	settings := autoDefaultNudgeGuardSettings(policy)
 	if settings == nil {
 		settings = map[string]any{}
+	}
+	if agentruntime.NormalizePermissionPolicy(policy) == agentruntime.PermissionBypassPermissions {
+		// Claude Code asks once before entering bypass-permissions mode. No one
+		// answers that dialog in an AO terminal, so the session would sit on it
+		// with its prompt unread while AO showed it idle (#6484). The mode was
+		// chosen in AO, so it counts as accepted.
+		settings["skipDangerousModePermissionPrompt"] = true
 	}
 	if options.Ultracode {
 		settings["ultracode"] = true

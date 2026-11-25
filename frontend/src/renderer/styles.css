@@ -287,7 +287,11 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	--color-logo-accent: var(--color-brand-logo);
 	--color-logo-accent-bright: var(--color-brand-logo-bright);
 	--color-logo-accent-foreground: var(--color-brand-logo-foreground);
+	--color-logo-accent-text: var(--color-brand-logo-text);
 	--color-markdown-code: var(--color-text-markdown-code);
+	--color-chat-file: var(--color-chat-file-bg);
+	--color-chat-file-hover: var(--color-chat-file-bg-hover);
+	--color-chat-file-foreground: var(--color-chat-file-text);
 	--color-markdown-link: var(--color-text-markdown-link);
 	--color-markdown-link-hover: var(--color-text-markdown-link-hover);
 	--color-secondary: var(--secondary);
@@ -856,7 +860,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 .session-inspector__tab-button[aria-selected="true"],
 :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	inset: 0;
-	border-color: color-mix(in oklab, var(--secondary), #000 5%);
+	border-color: color-mix(in oklab, var(--secondary), #000 13%);
 	background-color: var(--secondary);
 	box-shadow: var(--shadow-control-inset);
 }
@@ -2859,7 +2863,7 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 		pointer-events: auto;
 	}
 
-	.group\/session-row:hover [data-session-message-age] {
+	.group\/session-row:hover :is([data-session-message-age], [data-session-pin-mark]) {
 		opacity: 0;
 	}
 }
@@ -3149,6 +3153,31 @@ html.sidebar-reordering * {
    one already sets the band apart. */
 :root[data-theme="light"] .chat-composer-band-tray {
 	background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+/* Background work rides the composer's top edge: the tray's mirror, with the same
+   inset and fill. It meets the edge rather than tucking under it, for the same
+   see-through reason. It grows in the flow, so the queue's footprint above moves
+   up with it and the queue's floating list can never cover it. */
+.chat-composer-tasks {
+	margin: 0 1rem;
+	padding: 0 0.75rem;
+	border-radius: calc(var(--radius-lg) + 0.375rem) calc(var(--radius-lg) + 0.375rem) 0 0;
+	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+.chat-composer-tasks + .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
+/* Five rows, then the list scrolls inside itself, never the transcript. */
+.chat-composer-tasks-list {
+	max-height: calc(2rem * 5 + 0.25rem);
+	overflow-x: hidden;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	overscroll-behavior: contain;
+	padding-bottom: 0.25rem;
 }
 
 .chat-composer-startup-shimmer {
@@ -6887,43 +6916,6 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 
 .onboarding-preview-window :is(.text-background, .hover\:text-background:hover) {
 	color: var(--solid-bg-primary);
-}
-
-/* Nightly build-info tooltip: a fixed deep-indigo card (theme independent) with a
-   purple-blue mist and a few stars, so the nightly channel reads as its own place. */
-.build-info-nightly {
-	background-color: oklch(0.2 0.05 285);
-	background-image:
-		radial-gradient(1px 1px at 14% 26%, oklch(0.98 0.02 280 / 0.95), transparent),
-		radial-gradient(1px 1px at 38% 72%, oklch(0.98 0.02 280 / 0.7), transparent),
-		radial-gradient(1.5px 1.5px at 62% 20%, oklch(0.98 0.02 280 / 0.9), transparent),
-		radial-gradient(1px 1px at 84% 58%, oklch(0.98 0.02 280 / 0.8), transparent),
-		radial-gradient(1px 1px at 92% 18%, oklch(0.98 0.02 280 / 0.6), transparent),
-		radial-gradient(1px 1px at 52% 88%, oklch(0.98 0.02 280 / 0.55), transparent),
-		radial-gradient(90% 120% at 8% 0%, oklch(0.5 0.2 305 / 0.55), transparent 70%),
-		radial-gradient(90% 120% at 100% 100%, oklch(0.55 0.17 250 / 0.5), transparent 70%);
-	color: oklch(0.96 0.01 285);
-	box-shadow: 0 0 0 1px oklch(0.6 0.15 285 / 0.28), 0 6px 18px oklch(0.15 0.08 285 / 0.45);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-	.build-info-nightly::after {
-		animation: build-info-twinkle 3.6s ease-in-out infinite;
-		background-image:
-			radial-gradient(1px 1px at 28% 40%, oklch(0.98 0.02 280), transparent),
-			radial-gradient(1.5px 1.5px at 74% 78%, oklch(0.98 0.02 280), transparent),
-			radial-gradient(1px 1px at 46% 12%, oklch(0.98 0.02 280), transparent);
-		border-radius: inherit;
-		content: "";
-		inset: 0;
-		pointer-events: none;
-		position: absolute;
-	}
-}
-
-@keyframes build-info-twinkle {
-	0%, 100% { opacity: 0.15; }
-	50% { opacity: 1; }
 }
 
 /* Sidebar hover preview: lift the card off the sidebar. In dark it resolves to

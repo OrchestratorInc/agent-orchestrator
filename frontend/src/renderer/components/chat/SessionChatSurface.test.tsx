@@ -12,6 +12,10 @@ import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
+// Background-task queries have their own hook/component and browser coverage.
+// Keep model-picker API fixtures scoped to the model-picker behavior here.
+vi.mock("../BackgroundTasks", () => ({ SessionBackgroundTasks: () => null }));
+
 const LINK = "http://localhost:5173";
 const REPORT_LINK = "reports/new-report.html";
 
@@ -98,11 +102,14 @@ const sideMocks = vi.hoisted(() => ({
 	activeId: "existing-side" as string | undefined,
 	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
+	stageAttachments: undefined as unknown,
+	settingsReady: undefined as boolean | undefined,
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<unknown>),
 	sentOutsideTranscript: Symbol("chat.sentOutsideTranscript"),
 }));
+const stageAttachmentsMock = vi.hoisted(() => vi.fn());
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
@@ -151,7 +158,7 @@ vi.mock("../../hooks/useConversation", () => ({
 	}),
 	useConversationModels: vi.fn(() => ({ models: [], loaded: true })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
-	useStageAttachments: () => undefined,
+	useStageAttachments: () => stageAttachmentsMock,
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
@@ -181,6 +188,8 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget,
 			onAddToSideChat,
 			onSend,
+			onStageAttachments,
+			settingsReady,
 			composerNotice,
 			importBlock,
 			findRequest,
@@ -188,6 +197,8 @@ vi.mock("./ChatWorkspace", async () => {
 		}: {
 			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
+			onStageAttachments?: unknown;
+			settingsReady?: boolean;
 			onAddToSideChat?: typeof sideMocks.attach;
 			composerNotice?: ReactNode;
 			findRequest?: { id: string; query: string; messageId?: string };
@@ -210,6 +221,8 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget?: { handleId: string };
 		}) => {
 			sideMocks.workspaceSend = onSend;
+			sideMocks.stageAttachments = onStageAttachments;
+			sideMocks.settingsReady = settingsReady;
 			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
@@ -300,6 +313,8 @@ beforeEach(() => {
 	sideMocks.agentSwitch = undefined;
 	sideMocks.activeId = "existing-side";
 	sideMocks.attach = undefined;
+	sideMocks.stageAttachments = undefined;
+	sideMocks.settingsReady = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -335,6 +350,24 @@ describe("SessionChatSurface recovery", () => {
 	])("tells the commands whether %s can only be restored", (_name, target, terminated) => {
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={target} /></Wrapper>);
 		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false, undefined]);
+	});
+
+	it("takes files only once an archived session is back", () => {
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		expect(sideMocks.stageAttachments).toBeUndefined();
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
+	});
+
+	it("shows an archived chat's saved settings before a message restores it", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" }, settings: { model: "gpt-5" } };
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		// A live session's stopped agent has no settings to show.
+		expect(sideMocks.settingsReady).toBe(false);
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		expect(sideMocks.settingsReady).toBe(true);
 	});
 
 	it("tells the commands which turn is active", () => {

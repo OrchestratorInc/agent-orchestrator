@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { getApiBaseUrl, reportingFetch } from "./api-client";
 import { baseUrlForHost } from "./host-clients";
 import { LOCAL_HOST, type HostId } from "./hosts";
@@ -46,7 +47,7 @@ async function postUpload(file: Blob, hostId: HostId | undefined, signal?: Abort
 	}));
 	const body = await response.json().catch(() => undefined) as { uploadId?: string; message?: string } | undefined;
 	if (!response.ok || !body?.uploadId) {
-		throw new Error(body?.message?.trim() || "The file couldn’t be uploaded.");
+		throw new AoError("ATTACHMENT_UPLOAD_FAILED", body?.message?.trim() || "The file couldn’t be uploaded.");
 	}
 	return body.uploadId;
 }

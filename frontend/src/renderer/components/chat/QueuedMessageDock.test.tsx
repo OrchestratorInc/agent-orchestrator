@@ -486,4 +486,3 @@ describe("QueuedMessageDock attachments", () => {
 		expect(row.querySelector("img")).toHaveAttribute("src", "blob:local-shot");
 	});
 });
-

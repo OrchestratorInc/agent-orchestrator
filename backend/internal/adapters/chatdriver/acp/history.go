@@ -16,6 +16,36 @@ import (
 
 const aoInternalReplayMetaKey = "ao.internalReplay"
 
+func (d *Driver) replayNativeHistory(ctx context.Context, c *conversation, cfg LaunchConfig, id string) error {
+	if d.cfg.NativeHistoryReplay == nil {
+		return nil
+	}
+	updates, available, err := d.cfg.NativeHistoryReplay(ctx, cfg, id)
+	if err != nil {
+		return err
+	}
+	if !available {
+		return nil
+	}
+	if len(updates) == 0 {
+		return fmt.Errorf("%w: empty native replay", ports.ErrChatHistoryUnavailable)
+	}
+	for _, update := range updates {
+		if string(update.SessionId) != id {
+			return fmt.Errorf("%w: native replay identity mismatch", ports.ErrChatHistoryUnavailable)
+		}
+	}
+	c.beginHistoryReplay(id)
+	for _, update := range updates {
+		c.captureReplayUpdate(update)
+	}
+	if err := c.drainAndFinishReplay(ctx); err != nil {
+		c.abortHistoryReplay()
+		return err
+	}
+	return nil
+}
+
 // refreshableConversation is returned only when the agent advertised
 // session/load. Calling session/load again on the already resumed ACP connection
 // asks the provider to replay its durable transcript again; it does not start a
@@ -419,7 +449,7 @@ func (c *conversation) finishHistoryTurn(state domain.TurnState) {
 	turnID := c.history.turnID
 	c.historyMu.Unlock()
 
-	c.settleOpenItems(turnID, state)
+	c.settleOpenItems(turnID, nil, state)
 	if state != "" {
 		c.emit(ports.ChatEvent{
 			Kind:           ports.ChatEventTurnCompleted,

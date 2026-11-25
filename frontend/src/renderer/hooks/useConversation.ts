@@ -25,10 +25,12 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
+import { appI18n } from "../i18n";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -71,6 +73,7 @@ type WireActivity = components["schemas"]["ConversationActivityResponse"];
 type WireImageContent = components["schemas"]["ConversationImageContentRequest"];
 type WireResourceContent = components["schemas"]["ConversationResourceContentRequest"];
 type WireExcerptReference = components["schemas"]["ConversationExcerptReferenceRequest"];
+type WireConfigOption = components["schemas"]["ConversationConfigOptionResponse"];
 
 export interface ConversationSendInput {
 	text: string;
@@ -98,6 +101,7 @@ export interface ConversationSwitchDisplay {
 
 /** A send whose agent switch was refused or failed, so the message never left. */
 export class ProviderSwitchFailed extends Error {
+	readonly code: string = "PROVIDER_SWITCH_FAILED_ERROR";
 	constructor(readonly reason: unknown) {
 		super(apiErrorMessage(reason));
 	}
@@ -209,6 +213,25 @@ function switchEcho(
 	afterSequence: number,
 ): ConversationLocalEcho["providerSwitch"] {
 	return display && targetHarness ? { ...display, targetHarness, afterSequence } : undefined;
+}
+
+/** The message as the transcript shows it while its send is on the way. */
+function sendLocalEcho(clientMessageId: string, input: ConversationSendInput): ConversationLocalEcho {
+	return {
+		clientMessageId,
+		text: input.text,
+		continuation: input.continuation,
+		fileReferences: input.fileReferences,
+		excerpts: input.excerpts?.map((excerpt) => ({
+			id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
+			conversationId: excerpt.conversationId,
+			text: excerpt.text,
+			comment: excerpt.comment,
+			messageId: excerpt.messageId,
+			revision: excerpt.revision,
+		})),
+		createdAt: new Date().toISOString(),
+	};
 }
 
 function addConversationLocalEcho(
@@ -415,6 +438,7 @@ const PERMANENT_CODES = new Set([
 
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
+	savedSnapshot?: ConversationSnapshot;
 	isLoading: boolean;
 	/** Set when the session exists but has no chat conversation to show. */
 	unavailable?: { code: string; message: string };
@@ -442,6 +466,10 @@ function conversationPageQuery(hostId: string | undefined, beforeSequence?: numb
 
 async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
 	return toSnapshot(await fetchConversationWire(sessionId, hostId, conversationPageQuery(hostId, beforeSequence)));
+}
+
+export async function fetchRecentConversation(sessionId: string, hostId?: string): Promise<ConversationSnapshot> {
+	return toSnapshot(await fetchConversationWire(sessionId, hostId, { limit: 200, outputLimit: 64 }));
 }
 
 /** The whole output of one activity, for a page that carries only its head and tail. */
@@ -835,6 +863,11 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		initialData: false,
 		enabled: false,
 	}).data;
+	const saved = useQuery({
+		queryKey: savedConversationQueryKey(sessionId ?? ""),
+		queryFn: async (): Promise<ConversationSnapshot | null> => null,
+		enabled: false,
+	}).data;
 	const query = useInfiniteQuery({
 		...conversationQueryOptions(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
@@ -881,6 +914,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 	return {
 		snapshot: query.data,
+		savedSnapshot: !hostId && query.isLoading && saved ? saved : undefined,
 		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
@@ -932,6 +966,9 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 		},
 	});
 }
+
+/** Restoring an archived session before its message failed, so the message never left. ChatComposer treats this code as a definitive refusal. */
+const SESSION_RESTORE_FAILED = "SESSION_RESTORE_FAILED";
 
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
@@ -1009,19 +1046,7 @@ export function useConversationCommands(
 				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
 			) ?? false;
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
-				clientMessageId: variables.clientMessageId,
-				text: variables.input.text,
-				continuation: variables.input.continuation,
-				fileReferences: variables.input.fileReferences,
-			excerpts: variables.input.excerpts?.map((excerpt) => ({
-				id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
-					conversationId: excerpt.conversationId,
-					text: excerpt.text,
-					comment: excerpt.comment,
-					messageId: excerpt.messageId,
-					revision: excerpt.revision,
-				})),
-				createdAt: new Date().toISOString(),
+				...sendLocalEcho(variables.clientMessageId, variables.input),
 				backgroundWake,
 				queued: turnActive && !backgroundWake,
 				providerSwitch: switchEcho(variables.input.switchDisplay, variables.input.providerSwitch?.targetHarness, newestCachedSequence(queryClient, variables.targetSessionId, hostId)),
@@ -1221,10 +1246,14 @@ export function useConversationCommands(
 			// also brings its worktree back, can start it again.
 			if (terminated) {
 				const restored = await restoreSession(sessionId as string, hostId);
-				if (restored.status !== "success") throw new Error(restored.message);
+				// Restored meanwhile from another window or device: it is live, as asked.
+				const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
+				if (restored.status !== "success" && !alreadyLive) {
+					throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
+				}
 				// Stay pending until the chat reads the live agent: its cached snapshot
-				// still says stopped, which would flash as a crash. The composer stays
-				// locked meanwhile, so nothing here can strand a send.
+				// still says stopped, which would flash as a crash. A send that restored
+				// the session waits on this too, so it reaches the live agent.
 				await invalidateSession(sessionId as string).catch(() => {});
 				return undefined;
 			}
@@ -1657,11 +1686,21 @@ export function useConversationCommands(
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
-			return send.mutateAsync({
-				targetSessionId: sessionId,
-				clientMessageId,
-				input: normalizedInput,
-			});
+			const variables = { targetSessionId: sessionId, clientMessageId, input: normalizedInput };
+			if (!terminated) return send.mutateAsync(variables);
+			// An archived chat is restored by sending to it. The message shows at once,
+			// as any send's does, and goes out only after the restore succeeded, so it
+			// lands after it. A failed restore sent nothing: the composer gets the draft
+			// back with the reason, and the session stays archived.
+			addConversationLocalEcho(queryClient, stateKey(sessionId), sendLocalEcho(clientMessageId, normalizedInput));
+			return resume.mutateAsync().then(
+				() => send.mutateAsync(variables),
+				(error: unknown) => {
+					releaseConversationDispatch(queryClient, stateKey(sessionId), clientMessageId);
+					releaseConversationLocalEcho(queryClient, stateKey(sessionId), clientMessageId);
+					throw error;
+				},
+			);
 		},
 		pendingAcceptedTurnId:
 			trackedDispatch?.state === "accepted" ? trackedDispatch.turnId : undefined,
@@ -2029,6 +2068,10 @@ function offersValue(options: ChatConfigOption[], optionId: string, value: ChatC
 	return !("value" in value) || option.type !== "select" || option.choices.some((choice) => choice.value === value.value);
 }
 
+function toChatConfigOptions(options: WireConfigOption[] | undefined): ChatConfigOption[] {
+	return (options ?? []).map((option) => ({ ...option, currentBoolean: option.currentBoolean ?? undefined, choices: option.choices ?? [] }));
+}
+
 export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "", hostId);
@@ -2085,7 +2128,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 				throw error;
 			}
 			snapshotRefreshed.current = false;
-			return (data?.options ?? []) as ChatConfigOption[];
+			return toChatConfigOptions(data?.options);
 		},
 	});
 	const mutation = useMutation({
@@ -2151,6 +2194,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// agent's answer to that earlier pick dropped the option or this value (a new model
 		// with other efforts), sending it would only be refused, so it is dropped instead.
 		const confirmed = writes.current.confirmed;
+		if (confirmed && "value" in value && confirmed.some((option) => option.id === optionId && option.type === "select" && option.choices.length === 0)) {
+			throw new Error(appI18n.t("chat.configOption.noChoices"));
+		}
 		if (confirmed && !offersValue(confirmed, optionId, value)) return { controllerEpoch, options: confirmed };
 		// A read already in flight when the user picked would otherwise land
 		// after this mutation's setQueryData and put the pre-change catalog
@@ -2171,7 +2217,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			},
 		);
 		if (error) throw error;
-		const options = (data?.options ?? []) as ChatConfigOption[];
+		const options = toChatConfigOptions(data?.options);
 		writes.current.confirmed = options;
 		return { controllerEpoch, options };
 	}

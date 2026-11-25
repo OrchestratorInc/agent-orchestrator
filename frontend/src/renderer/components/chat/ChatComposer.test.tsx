@@ -2230,7 +2230,7 @@ describe("slash commands", () => {
 		expect(onSend).not.toHaveBeenCalled();
 		const token = field.querySelector('[data-composer-token="skill"]');
 		expect(token).toHaveTextContent("/review");
-		expect(token).toHaveClass("text-logo-accent");
+		expect(token).toHaveClass("text-logo-accent-text");
 		expect(token).not.toHaveClass("text-accent");
 		expect(field.textContent).toBe("/review ");
 		// The trigger is finished, so the menu closes rather than re-filtering what was

@@ -27,6 +27,12 @@ type ConfirmDialogProps = {
 	/** Defaults to "Cancel"; reversible actions can soften it to "No". */
 	cancelLabel?: string;
 	destructive?: boolean;
+	/**
+	 * Which button takes focus on open (default: confirm). Pass "cancel" when a
+	 * repeated Enter from the control that opened the dialog would discard the
+	 * user's work, so it has to be a deliberate choice.
+	 */
+	initialFocus?: "cancel" | "confirm";
 	/** Options shown between the description and the buttons. */
 	children?: React.ReactNode;
 	/** Starts here rather than on a button, for a dialog with a field to fill. */
@@ -48,6 +54,7 @@ export function ConfirmDialog({
 	confirmAriaLabel,
 	cancelLabel,
 	destructive,
+	initialFocus,
 	children,
 	initialFocusRef,
 	busy,
@@ -78,11 +85,11 @@ export function ConfirmDialog({
 				onClick={(event) => event.stopPropagation()}
 				onContextMenu={(event) => event.stopPropagation()}
 				onOpenAutoFocus={(event) => {
-					// Start on the confirm button, not the close X, so Enter confirms what
-					// the person just asked for; Escape cancels. A disabled button can't
+					// Start on the confirm button (or Cancel when asked), not the close X,
+					// so Enter confirms what the person just asked for; Escape cancels. A disabled button can't
 					// take focus, which would leave it behind the dialog: then Cancel, or
 					// Radix's own choice.
-					const preferred = confirmRef.current;
+					const preferred = initialFocus === "cancel" ? cancelRef.current : confirmRef.current;
 					const target = initialFocusRef?.current ?? (preferred && !preferred.disabled
 						? preferred
 						: [cancelRef.current, confirmRef.current].find((button) => button && !button.disabled));
