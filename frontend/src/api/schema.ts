@@ -6971,10 +6971,15 @@ export interface components {
              * @description The transcript and the subagent transcripts and saved tool output that move with it.
              */
             bytes: number;
+            /**
+             * @description The sidecar folder is over AO Cloud's limits, so the transcript moves without it.
+             * @enum {string}
+             */
+            sidecarUnavailable?: "too_large";
             /** @description Subagent transcripts that move with the conversation. */
             subagents?: number;
             /**
-             * @description Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB.
+             * @description Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB (or AO Cloud's 32 MiB upload limit once gzipped).
              * @enum {string}
              */
             unavailable?: "unsupported" | "not_found" | "too_large";
@@ -6986,6 +6991,11 @@ export interface components {
              * @description The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB.
              */
             sidecarGzip?: string;
+            /**
+             * @description Why the conversation's sidecar folder stays on this computer, when it does.
+             * @enum {string}
+             */
+            sidecarOmitted?: "too_large" | "unreadable";
             /**
              * Format: base64
              * @description The transcript, gzipped and base64-encoded, with this machine's working directory (and Claude Code's project folder) replaced by placeholders AO Cloud's worker fills in.

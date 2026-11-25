@@ -358,6 +358,29 @@ describe("moveSession", () => {
 			expect(result.conversation).toBe("note");
 		});
 
+		it("says why when Cloud refuses the conversation, or its sidecar folder, never silently", async () => {
+			const limit = "Too many uploaded conversations are waiting to be resumed. Finish or cancel a move, or wait a day.";
+			const refused = await moveSession({ sessionId: "app-1", moveId: "m-20", target }, {
+				source: fakeDaemon(replies, []), cloud: cloud(), uploadTranscript: vi.fn(async () => { throw new Error(limit); }),
+			});
+			expect(refused).toMatchObject({ conversation: "note", warnings: [{ kind: "transcript", reason: limit }] });
+
+			const omitted = { ...replies, "/api/v1/sessions/{sessionId}/move/transcript": ok({ agentSessionId: "aid-1", transcriptGzip: btoa("gz"), sidecarOmitted: "too_large" }) };
+			const uploadTranscriptSidecar = vi.fn(async () => {});
+			const withoutSidecar = await moveSession({ sessionId: "app-1", moveId: "m-21", target }, {
+				source: fakeDaemon(omitted, []), cloud: cloud(), uploadTranscript: vi.fn(async () => {}), uploadTranscriptSidecar,
+			});
+			expect(withoutSidecar).toMatchObject({ conversation: "transcript", warnings: [{ kind: "sidecar", reason: "It is over Orchestrator Cloud's upload limit." }] });
+			expect(uploadTranscriptSidecar).not.toHaveBeenCalled();
+
+			const withSidecar = { ...replies, "/api/v1/sessions/{sessionId}/move/transcript": ok({ agentSessionId: "aid-1", transcriptGzip: btoa("gz"), sidecarGzip: btoa("tar") }) };
+			const sidecarFailed = await moveSession({ sessionId: "app-1", moveId: "m-22", target }, {
+				source: fakeDaemon(withSidecar, []), cloud: cloud(), uploadTranscript: vi.fn(async () => {}),
+				uploadTranscriptSidecar: vi.fn(async () => { throw new Error("The body is over 32 MiB."); }),
+			});
+			expect(sidecarFailed).toMatchObject({ conversation: "transcript", warnings: [{ kind: "sidecar", reason: "The body is over 32 MiB." }] });
+		});
+
 		it("moves the handoff note alone when the upload fails", async () => {
 			const cp = cloud();
 			const uploadTranscript = vi.fn(async () => { throw new Error("The file is larger than 32 MiB"); });
@@ -371,7 +394,10 @@ describe("moveSession", () => {
 			const uploadTranscript = vi.fn(async () => {});
 			const source = fakeDaemon({ ...replies, "/api/v1/sessions/{sessionId}/move/transcript": undefined as unknown as Reply }, []);
 			const result = await moveSession({ sessionId: "app-1", moveId: "m-8", target }, { source, cloud: cp, uploadTranscript });
-			expect(result).toEqual({ projectId: "proj-1", sessionId: "cloud-9", conversation: "note" });
+			expect(result).toEqual({
+				projectId: "proj-1", sessionId: "cloud-9", conversation: "note",
+				warnings: [{ kind: "transcript", reason: "This computer's Orchestrator did not answer." }],
+			});
 			expect(uploadTranscript).not.toHaveBeenCalled();
 			expect(cp.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
 		});
@@ -594,6 +620,21 @@ describe("moveSessionHere", () => {
 		const local = fakeDaemon({ "/api/v1/sessions/move/import": ok({ session: { id: "local-9" } }) }, order) as unknown as MoveHereDeps["daemon"];
 		await moveSessionHere(input, { daemon: local, cloud: cloudFake(), onImport: (projectId) => order.push(`saved ${projectId}`) });
 		expect(order).toEqual(["saved proj-1", "/api/v1/sessions/move/import"]);
+	});
+
+	it("deletes only the copy its export left, and keeps a Cloud session used again since", async () => {
+		const exportedWithId = { ...cloudExport, moveId: "exp-1" };
+		const cp = cloudFake({ exportSessionMove: async () => exportedWithId });
+		await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });
+		expect(cp.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1", { moveId: "exp-1" });
+
+		const inUse = cloudFake({
+			exportSessionMove: async () => exportedWithId,
+			deleteSession: async () => { throw new CloudCpError("The session was used after the move.", { status: 409, code: "MOVE_COPY_IN_USE" }); },
+		});
+		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: inUse });
+		expect(result).toMatchObject({ keptInCloud: true, copyInUse: true, exportMoveId: "exp-1" });
+		expect(result.deleteError).toBeUndefined();
 	});
 
 	it("deletes the Cloud session when only a pull request or setting did not carry over", async () => {

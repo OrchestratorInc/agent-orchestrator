@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -171,6 +173,9 @@ type transcriptCommander struct {
 	sizeErr  error
 	id, data string
 	writeErr error
+	// sidecar is the sidecar folder's bytes as the agent would pack them.
+	sidecar    string
+	sidecarErr error
 }
 
 func (c transcriptCommander) CloudTranscriptSize(context.Context, domain.SessionRecord, domain.ProjectRecord) (int64, error) {
@@ -178,11 +183,15 @@ func (c transcriptCommander) CloudTranscriptSize(context.Context, domain.Session
 }
 
 func (c transcriptCommander) CloudSidecarInfo(context.Context, domain.SessionRecord, domain.ProjectRecord) (nativetransfer.ClaudeSidecar, error) {
-	return nativetransfer.ClaudeSidecar{}, nil
+	return nativetransfer.ClaudeSidecar{Bytes: int64(len(c.sidecar)), Subagents: 1}, nil
 }
 
-func (c transcriptCommander) WriteCloudSidecar(context.Context, domain.SessionRecord, domain.ProjectRecord, io.Writer, int64) (bool, error) {
-	return false, nil
+func (c transcriptCommander) WriteCloudSidecar(_ context.Context, _ domain.SessionRecord, _ domain.ProjectRecord, w io.Writer, _ int64) (bool, error) {
+	if c.sidecarErr != nil || c.sidecar == "" {
+		return false, c.sidecarErr
+	}
+	_, err := io.WriteString(w, c.sidecar)
+	return true, err
 }
 
 func (c transcriptCommander) WriteCloudTranscript(_ context.Context, _ domain.SessionRecord, _ domain.ProjectRecord, w io.Writer, _ int64) (string, error) {
@@ -858,5 +867,87 @@ func TestImportMoveTellsTheAgentAboutTheWIPCommit(t *testing.T) {
 		if !strings.HasPrefix(spawned.Prompt, "NOTE") || !strings.Contains(spawned.Prompt, want) {
 			t.Fatalf("prompt = %q, want the note and the WIP commit", spawned.Prompt)
 		}
+	}
+}
+
+// A session moved back keeps the tracker issue and the open pull requests it
+// had here, when AO Cloud's manifest does not send them.
+func TestImportMoveKeepsTheIssueAndPullRequests(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true, IssueID: "acme/app#42",
+		MovedTo: &domain.SessionMove{MoveID: "m-out", OrgID: "org-1", SessionID: "cloud-7"},
+	}
+	st.prs["mer-1"] = []domain.PullRequest{
+		{URL: "https://github.com/acme/app/pull/7", SessionID: "mer-1"},
+		{URL: "https://github.com/acme/app/pull/3", SessionID: "mer-1", Merged: true},
+	}
+	var spawned ports.SpawnConfig
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		spawned = cfg
+		return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+	}}
+	manifest := importManifest(tip)
+	manifest.SourceSessionID = "cloud-7"
+	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-back", Manifest: manifest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spawned.IssueID != "acme/app#42" {
+		t.Fatalf("spawned issue = %q, want acme/app#42", spawned.IssueID)
+	}
+	// The open pull request is claimed for the session (or its claim is warned
+	// about); the merged one is not.
+	claimed := false
+	for _, pr := range st.prs["mer-9"] {
+		claimed = claimed || pr.URL == "https://github.com/acme/app/pull/7"
+	}
+	for _, w := range out.Warnings {
+		claimed = claimed || strings.Contains(w, "https://github.com/acme/app/pull/7")
+		if strings.Contains(w, "pull/3") {
+			t.Fatalf("the merged pull request was carried: %v", out.Warnings)
+		}
+	}
+	if !claimed && st.pr["mer-9"].URL != "https://github.com/acme/app/pull/7" {
+		t.Fatalf("pull request 7 was not carried: prs %v, pr %v, warnings %v", st.prs["mer-9"], st.pr["mer-9"], out.Warnings)
+	}
+}
+
+// What AO Cloud would refuse to take is said before the move, and refused or
+// left out by the move itself, never dropped silently: a conversation over the
+// upload limit once gzipped, and a sidecar folder over it.
+func TestMoveTranscriptKeepsWithinCloudsUploadLimit(t *testing.T) {
+	prev := cloudUploadMaxBytes
+	cloudUploadMaxBytes = 64 << 10
+	t.Cleanup(func() { cloudUploadMaxBytes = prev })
+	noisy := func(n int) string {
+		b := make([]byte, n)
+		_, _ = rand.Read(b)
+		return hex.EncodeToString(b)
+	}
+
+	big := transcriptCommander{id: "aid-1", size: 300 << 10, data: noisy(150 << 10)}
+	if got := transcriptService(big, domain.ActivityIdle).moveTranscriptInfo(context.Background(), domain.SessionRecord{}, domain.ProjectRecord{}); got.Unavailable != "too_large" {
+		t.Fatalf("preview of a conversation over the upload limit = %+v, want too_large", got)
+	}
+	_, err := transcriptService(big, domain.ActivityExited).MoveTranscript(context.Background(), "mer-2")
+	var refused *apierr.Error
+	if !errors.As(err, &refused) || refused.Code != "MOVE_TRANSCRIPT_TOO_LARGE" {
+		t.Fatalf("MoveTranscript err = %v, want MOVE_TRANSCRIPT_TOO_LARGE", err)
+	}
+
+	withSidecar := transcriptCommander{id: "aid-1", size: 100, data: "{}\n", sidecar: noisy(100 << 10)}
+	if got := transcriptService(withSidecar, domain.ActivityIdle).moveTranscriptInfo(context.Background(), domain.SessionRecord{}, domain.ProjectRecord{}); got.Unavailable != "" || got.SidecarUnavailable != "too_large" || got.Subagents != 0 {
+		t.Fatalf("preview of a sidecar over the upload limit = %+v, want the transcript alone and sidecar too_large", got)
+	}
+	out, err := transcriptService(withSidecar, domain.ActivityExited).MoveTranscript(context.Background(), "mer-2")
+	if err != nil || out.SidecarGzip != nil || out.SidecarOmitted != "too_large" {
+		t.Fatalf("MoveTranscript = %d sidecar bytes, omitted %q, %v; want it left out as too_large", len(out.SidecarGzip), out.SidecarOmitted, err)
+	}
+	broken := transcriptCommander{id: "aid-1", size: 100, data: "{}\n", sidecar: "x", sidecarErr: errors.New("permission denied")}
+	if out, err := transcriptService(broken, domain.ActivityExited).MoveTranscript(context.Background(), "mer-2"); err != nil || out.SidecarOmitted != "unreadable" {
+		t.Fatalf("MoveTranscript = omitted %q, %v; want unreadable", out.SidecarOmitted, err)
 	}
 }

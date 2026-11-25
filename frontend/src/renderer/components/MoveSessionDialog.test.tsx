@@ -281,23 +281,34 @@ it("counts the subagents that move with the conversation", async () => {
 	expect(await screen.findByText("Full transcript with 2 subagents, 2 KB")).toBeTruthy();
 });
 
-it("says the conversation moved as a note when its upload fails", async () => {
+it("keeps the dialog open and says why when the conversation could not upload", async () => {
 	daemon.posts = moveReplies;
 	cloud.features = ["session.branch", "session.transcriptImport"];
 	daemon.preview = { data: { branch: "feat/x", changes: [], transcript: { bytes: 2048 } } };
-	uploadCloudTranscript.mockRejectedValue(new Error("Couldn’t reach Orchestrator Cloud."));
+	uploadCloudTranscript.mockRejectedValue(new Error("Too many uploaded conversations are waiting to be resumed. Finish or cancel a move, or wait a day."));
 	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
 	renderDialog();
 	const user = userEvent.setup();
 	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
-	await waitFor(() => expect(navigate).toHaveBeenCalled());
+	expect(await screen.findByText(
+		"The conversation did not move to Orchestrator Cloud (Too many uploaded conversations are waiting to be resumed. Finish or cancel a move, or wait a day.). The session there starts from a summary note; the full conversation stays on this computer.",
+	)).toBeTruthy();
 	expect(cloud.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
-	expect(useUiStore.getState().globalToast?.body).toBe("The conversation moved as a summary note.");
+	expect(navigate).not.toHaveBeenCalled();
+	await user.click(screen.getByRole("button", { name: "Open session" }));
+	expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9");
+});
+
+it("warns before the move when the sidecar folder is over Cloud's upload limit", async () => {
+	cloud.features = ["session.branch", "session.transcriptImport"];
+	daemon.preview = { data: { branch: "feat/x", changes: [], transcript: { bytes: 2048, sidecarUnavailable: "too_large" } } };
+	renderDialog();
+	expect(await screen.findByText("Subagent transcripts and saved tool output are over Orchestrator Cloud's upload limit, so they stay on this computer.")).toBeTruthy();
 });
 
 it.each([
 	["an agent Cloud cannot resume", { bytes: 0, unavailable: "unsupported" }, "Summary note"],
-	["a transcript over 64 MiB", { bytes: 70 << 20, unavailable: "too_large" }, "Summary note: the transcript is over 64 MiB"],
+	["a conversation over Cloud's upload limit", { bytes: 70 << 20, unavailable: "too_large" }, "Summary note: the conversation is over Orchestrator Cloud's upload limit"],
 ])("shows a summary note for %s", async (_, transcript, text) => {
 	cloud.features = ["session.branch", "session.transcriptImport"];
 	daemon.preview = { data: { branch: "feat/x", changes: [], transcript } };
@@ -624,6 +635,32 @@ describe("moving a Cloud session to this computer", () => {
 		expect(cloud.exportSessionMove).toHaveBeenCalledWith("org-1", "cloud-1", { moveId: "exp-1" });
 		expect(daemon.postCalls.find((call) => call.path === "/api/v1/sessions/move/import")?.body).toMatchObject({ moveId: "m-earlier" });
 		expect(useUnsettledMoveHereStore.getState().moves).toEqual({});
+	});
+
+	it("keeps the Cloud session when it was used again after the move, and says so", async () => {
+		useUnfinishedMoveStore.setState({ moves: [] });
+		cloud.exportSessionMove.mockResolvedValue({ ...(await cloud.exportSessionMove.getMockImplementation()?.()), moveId: "exp-1" });
+		cloud.deleteSession.mockRejectedValue(new CloudCpError("The session was used after the move.", { status: 409, code: "MOVE_COPY_IN_USE" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(cloud.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1", { moveId: "exp-1" });
+		expect(useUiStore.getState().globalToast?.body).toContain("The Cloud session was used again after the move, so Orchestrator kept it.");
+		expect(useUnfinishedMoveStore.getState().moves.filter((move) => move.kind === "delete-cloud")).toEqual([]);
+	});
+
+	it("says Cloud could not save the conversation, keeping its session and restarting the agent", async () => {
+		cloud.exportSessionMove.mockRejectedValue(new CloudCpError("The session's branch was pushed, but its latest conversation could not be saved to AO Cloud, so the move stopped. Try again.", {
+			status: 409, code: "MOVE_TRANSCRIPT_NOT_CAPTURED",
+		}));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("Orchestrator Cloud could not save the session's latest conversation, so nothing moved here. The Cloud session is kept and its agent is running again.")).toBeTruthy();
+		expect(screen.getByText(/^feat\/login may already be pushed to GitHub/)).toBeTruthy();
+		expect(cloud.restartSessionAgent).toHaveBeenCalledTimes(1);
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
 	});
 
 	it("keeps the Cloud session when its export leaves out the conversation the preview listed", async () => {

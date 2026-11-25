@@ -43,6 +43,23 @@ PY
 	then :; else status=1; fi
 done < <(git ls-files 'package.json' '*/package.json' | grep -v node_modules)
 
+# 5. No tracked file knows the control plane's private internals: settings
+#    only it reads, its database roles, its deployment's labels, or a script
+#    or checkout of its repository. Code here reaches it through the contract
+#    alone; a test that stands it up (such as the session move round trip)
+#    lives in its repository and runs this one's daemon from there.
+private_names=(
+	AO_CLOUD_DEVELOPMENT_ AO_CLOUD_WORKER_SIGNING_KEY AO_CLOUD_PROVIDER_SECRET_KEY AO_CLOUD_DOCKER_
+	AO_CLOUD_LOCAL_POSTGRES_ AO_CLOUD_LOCAL_MINIO_ AO_CLOUD_LOCAL_UID AO_CLOUD_LOCAL_GID
+	ao_cloud_owner ao_cloud_bootstrap ao_cloud_app
+	scripts/lib/docker-local.sh AO_CONTROL_PLANE ao.docker.namespace
+)
+patterns=()
+for name in "${private_names[@]}"; do patterns+=(-e "$name"); done
+if matches="$(git grep -lF "${patterns[@]}" -- . ':!scripts/check-public-boundary.sh' ':!scripts/check-public-boundary.test.sh' || true)" && [[ -n "$matches" ]]; then
+	fail "files name the control plane's private internals (keep what stands it up in its repository):"$'\n'"$matches"
+fi
+
 if [[ "$status" == 0 ]]; then
 	echo "public boundary: ok"
 fi

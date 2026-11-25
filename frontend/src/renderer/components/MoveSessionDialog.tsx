@@ -17,7 +17,7 @@ import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../lib/cloud-age
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { CloudCpError } from "../lib/cloud-cp";
-import { CLOUD_BRANCH_FEATURE, cloudHarness, localHarness, MoveError, moveSession, moveSessionHere, type MoveDeps, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
+import { CLOUD_BRANCH_FEATURE, cloudHarness, localHarness, MoveError, moveSession, moveSessionHere, TRANSCRIPT_NOT_CAPTURED, type MoveDeps, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget, type MoveWarning } from "../lib/move-session";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { repoKey } from "../lib/repo-key";
 import { cn } from "../lib/utils";
@@ -220,6 +220,9 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 				useUnfinishedMoveStore.getState().add({
 					kind: "complete", host: session.hostId, sessionId: session.id, moveId, orgId: target.orgId, cloudSessionId: moved.sessionId, accountId: userId,
 				});
+			}
+			// What did not move as the dialog said stays on screen until the user opens the session.
+			if (moved.completeError || (moved.warnings?.length ?? 0) > 0) {
 				setResult(moved);
 				return;
 			}
@@ -288,7 +291,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 										</dd>
 									)}
 									<dt className="text-settings-muted">{t("move.conversation")}</dt>
-									<dd className="text-settings-label">
+									<dd className={transcript?.unavailable === "too_large" ? "text-warning" : "text-settings-label"}>
 										{carriesTranscript && transcript
 											? transcript.subagents
 												? t("move.conversationTranscriptSubagents", { count: transcript.subagents, size: formatBytes(transcript.bytes) })
@@ -303,6 +306,9 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 								</dl>
 								<UncommittedList changes={changes} />
 								<WithheldList files={withheld} />
+								{carriesTranscript && transcript?.sidecarUnavailable === "too_large" ? (
+									<p className="text-sm text-warning">{t("move.sidecarTooLarge")}</p>
+								) : null}
 								<p className="text-sm text-settings-muted">
 									{/* The archive keeps a worktree that still holds files (the withheld ones), so it is removed only when none stay. */}
 									{withheld.length > 0
@@ -350,6 +356,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 					{result?.completeError ? (
 						<p role="alert" className="text-sm text-settings-label">{t("move.completeFailed")}</p>
 					) : null}
+					<MoveWarnings warnings={result?.warnings} />
 				</div>
 				<div className={cn(settingsDialogFooterClass, "py-4")}>
 					{result ? (
@@ -411,6 +418,19 @@ function UncommittedList({ changes }: { changes: { path: string; status: keyof t
 			</ul>
 			{anyUntracked ? <p className="text-sm text-warning">{t("move.untrackedNote")}</p> : null}
 		</>
+	);
+}
+
+/** What a move left behind that the dialog had said would move, with Cloud's reason. */
+function MoveWarnings({ warnings }: { warnings?: MoveWarning[] }) {
+	const { t } = useTranslation();
+	if (!warnings?.length) return null;
+	return (
+		<ul role="alert" className="space-y-1 text-sm text-warning">
+			{warnings.map((warning) => (
+				<li key={warning.kind}>{t(warning.kind === "transcript" ? "move.warnTranscript" : "move.warnSidecar", { reason: warning.reason })}</li>
+			))}
+		</ul>
 	);
 }
 
@@ -614,13 +634,15 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 			useUnsettledMoveHereStore.getState().set(hereKey, undefined);
 			if (moved.deleteError) {
 				// The session runs here; deleting the Cloud copy is retried until it lands.
-				useUnfinishedMoveStore.getState().add({ kind: "delete-cloud", orgId, cloudSessionId: session.id, accountId: userId });
+				useUnfinishedMoveStore.getState().add({
+					kind: "delete-cloud", orgId, cloudSessionId: session.id, accountId: userId, ...(moved.exportMoveId ? { exportMoveId: moved.exportMoveId } : {}),
+				});
 				setResult(moved);
 				return;
 			}
 			onClose();
 			navigateToSession(moved.projectId, moved.sessionId);
-			const body = [t("moveHere.doneBody", { title: session.title, project: target?.name ?? repoName.split("/").at(-1) }), ...(moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
+			const body = [t("moveHere.doneBody", { title: session.title, project: target?.name ?? repoName.split("/").at(-1) }), ...(moved.copyInUse ? [t("moveHere.keptInUse")] : moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
 			showGlobalToast(t("moveHere.done"), body.join(" "), { tone: "success" });
 		} catch (failure) {
 			// Kept only while the import here may have started a session, or
@@ -752,6 +774,9 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					{error ? (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
 							<p>{error.message}</p>
+							{error instanceof MoveError && error.code === TRANSCRIPT_NOT_CAPTURED ? (
+								<p className="text-settings-label">{t("moveHere.transcriptNotCaptured")}</p>
+							) : null}
 							{error instanceof MoveError && error.mayBePushed ? (
 								<p className="text-settings-label">{t("moveHere.exportMayBePushed", { branch: error.mayBePushed })}</p>
 							) : null}

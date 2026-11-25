@@ -3142,6 +3142,10 @@ export interface components {
                  * @enum {string}
                  */
                 permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+                /** @description The tracker issue the session works on, which the moved session keeps. */
+                issueId?: string;
+                /** @description URLs of the session's open pull requests, which the moved session claims. */
+                pullRequests?: string[];
             };
             handoffNote: string;
             /** @description The agent's conversation, checkpointed after the push, for the daemon to resume: a Claude Code, Codex, OpenCode or Cursor conversation, as that agent stores it (for OpenCode, its session export document). Absent for another agent or when none was captured. */
@@ -8288,6 +8292,8 @@ export interface operations {
             query?: {
                 /** @description Also delete the session's artifact files. A restored session comes back without them. */
                 deleteArtifacts?: boolean;
+                /** @description Deletes the session only as the copy a move to an AO daemon left: the move/export with this moveId. Refused (409 MOVE_COPY_IN_USE) when the session was restarted or has activity after that export. */
+                moveId?: string;
             };
             header?: never;
             path: {
@@ -8305,6 +8311,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            /** @description MOVE_COPY_IN_USE: the session was used again after the move's export (moveId), so it is kept. Retrying will not delete it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

@@ -17,7 +17,13 @@ import { useCloudCp } from "../hooks/useCloudCp";
  */
 export type UnfinishedMove = (
 	| { kind: "complete"; host?: string; sessionId: string; moveId: string; orgId: string; cloudSessionId: string }
-	| { kind: "delete-cloud"; orgId: string; cloudSessionId: string }
+	| {
+			kind: "delete-cloud";
+			orgId: string;
+			cloudSessionId: string;
+			/** The move's export id: the delete holds only while the Cloud session was not used again since. */
+			exportMoveId?: string;
+	  }
 ) & {
 	addedAt?: number;
 	attempts?: number;
@@ -86,7 +92,7 @@ export const useUnfinishedMoveStore = create<UnfinishedMoveStore>((set, get) => 
  * "retry" when it may work later, or a permanent failure (a refusal such as
  * 403, 409 or 422) with its reason.
  */
-export type FinishOutcome = "done" | "retry" | "other-account" | { failed: string };
+export type FinishOutcome = "done" | "retry" | "other-account" | "kept" | { failed: string };
 
 /** Refusals that retrying will not change. */
 const PERMANENT_STATUSES = new Set([400, 401, 403, 409, 422]);
@@ -121,10 +127,14 @@ export async function finishMove(
 	if (move.accountId && move.accountId !== deps.accountId) return "other-account";
 	if (!deps.cloud) return "retry";
 	try {
-		await deps.cloud.deleteSession(move.orgId, move.cloudSessionId);
+		await (move.exportMoveId
+			? deps.cloud.deleteSession(move.orgId, move.cloudSessionId, { moveId: move.exportMoveId })
+			: deps.cloud.deleteSession(move.orgId, move.cloudSessionId));
 		return "done";
 	} catch (error) {
 		if (error instanceof CloudCpError && error.status === 404) return "done";
+		// Restarted or used after the move: it is the user's again, not a leftover copy.
+		if (error instanceof CloudCpError && error.code === "MOVE_COPY_IN_USE") return "kept";
 		if (error instanceof CloudCpError && permanent(error.status, error.code)) return { failed: error.message };
 		return "retry";
 	}
@@ -169,6 +179,9 @@ export function useFinishUnfinishedMoves() {
 							toldOtherAccount.add(key(move));
 							useUiStore.getState().showGlobalToast(appI18n.t("moveHere.finishOtherAccount"), undefined, { tone: "info" });
 						}
+					} else if (outcome === "kept") {
+						store().remove(move);
+						useUiStore.getState().showGlobalToast(appI18n.t("moveHere.finishKeptInUse"), undefined, { tone: "info" });
 					} else if (outcome === "done") {
 						store().remove(move);
 					} else if (outcome !== "retry") {

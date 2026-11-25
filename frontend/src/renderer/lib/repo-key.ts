@@ -1,7 +1,10 @@
 /**
- * A repository's name however its remote is written (https or SSH, with or
- * without .git): host/namespace/name, lower-cased on GitHub, whose names
- * ignore case. Mirrors the daemon's domain.RepositoryKey. "" when url is not a
+ * A repository's name however its remote is written, as the daemon's
+ * domain.RepositoryKey and AO Cloud's repoKey name it: https, http or SSH (also
+ * git@host:path), with or without a trailing / or .git; the host lower-cased,
+ * without a port or a leading "www.", GitHub's SSH-over-HTTPS host
+ * ssh.github.com as github.com; then /namespace/name, the whole key
+ * lower-cased on GitHub, whose names ignore case. "" when url is not a
  * repository URL.
  */
 export function repoKey(url: string): string {
@@ -22,6 +25,8 @@ export function repoKey(url: string): string {
 	const hostname = parsed.hostname.toLowerCase();
 	const github = ["github.com", "www.github.com", "api.github.com"].includes(hostname) || hostname.endsWith(".github.com") || hostname.endsWith(".ghe.io");
 	if (github && parts.length !== 2) return "";
-	const key = `${parsed.host.toLowerCase()}/${parts.join("/")}`;
+	let host = hostname.replace(/^www\./, "");
+	if (host === "ssh.github.com") host = "github.com";
+	const key = `${host}/${parts.join("/")}`;
 	return github ? key.toLowerCase() : key;
 }

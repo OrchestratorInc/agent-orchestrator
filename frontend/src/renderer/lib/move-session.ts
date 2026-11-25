@@ -17,11 +17,19 @@ export interface MoveTarget {
 
 export type MoveStep = "project" | "clone" | "stop" | "export" | "import" | "complete";
 
+/** Something the move left behind that the dialog had said would move, and why. */
+export interface MoveWarning {
+	kind: "transcript" | "sidecar";
+	reason: string;
+}
+
 export interface MoveResult {
 	projectId: string;
 	sessionId: string;
 	/** The Cloud agent resumes the conversation, or starts from the handoff note. */
 	conversation: "transcript" | "note";
+	/** What did not move as said, such as a conversation Cloud refused to take. */
+	warnings?: MoveWarning[];
 	/** Set when the session runs in AO Cloud but this machine did not record it. */
 	completeError?: string;
 }
@@ -127,6 +135,9 @@ export interface MoveCloudRequest {
 /** Cloud refused a move's export because it could not save the latest conversation. */
 export const TRANSCRIPT_NOT_CAPTURED = "MOVE_TRANSCRIPT_NOT_CAPTURED";
 
+/** Cloud kept a moved session's copy: it was restarted or used after the move's export. */
+export const MOVE_COPY_IN_USE = "MOVE_COPY_IN_USE";
+
 export interface MoveDeps {
 	source: DaemonClient;
 	cloud: Pick<CloudCpClient, "createSession" | "createProject">;
@@ -194,6 +205,8 @@ export async function moveSession(
 
 	const state = deps.cloudRequest ?? {};
 	const settle = "The agent here stays stopped; Try again finishes the move.";
+	// Said after the move: what the conversation upload could not carry.
+	let warnings: MoveWarning[] = [];
 	// While a create of this move may have made the Cloud session, the agent here
 	// must not resume: both could then work on the branch.
 	const rollback = async (step: MoveStep, error: unknown, fallback: string, pushed?: MovePushed): Promise<never> => {
@@ -278,6 +291,7 @@ export async function moveSession(
 			projectId: request.projectId,
 			sessionId: cloudSessionId,
 			conversation: request.transcriptImportId ? "transcript" : "note",
+			...(warnings.length > 0 ? { warnings } : {}),
 			...(completeError ? { completeError } : {}),
 		};
 	};
@@ -314,7 +328,9 @@ export async function moveSession(
 	// The approval mode is a session setting like review and CI: it moves with the session.
 	const approvalMode = sameAgent ? cloudApprovalMode(m.permissions) : undefined;
 	// Cloud resumes a conversation only in the agent that wrote it.
-	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, state.key ?? moveId, target.harness);
+	const carried = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, state.key ?? moveId, target.harness);
+	const transcriptImportId = carried?.importId;
+	warnings = carried?.warnings ?? [];
 	const request: CloudSessionRequest = state.current ?? {
 		projectId,
 		kind: "worker",
@@ -344,25 +360,43 @@ export function localHarness(cloud: string): string {
 
 /**
  * Uploads the stopped agent's conversation for the Cloud session to resume
- * and returns the id createSession names it by. Any failure returns
- * undefined: the session then starts from the handoff note.
+ * and returns the id createSession names it by. A conversation that cannot
+ * move leaves the session to start from the handoff note, and a sidecar folder
+ * that cannot leaves the transcript moving alone; either is returned as a
+ * warning with its reason, never dropped silently.
  */
-async function carryTranscript(deps: MoveDeps, path: { params: { path: { sessionId: string } } }, moveId: string, harness: string): Promise<string | undefined> {
-	if (!deps.uploadTranscript) return undefined;
+async function carryTranscript(
+	deps: MoveDeps,
+	path: { params: { path: { sessionId: string } } },
+	importId: string,
+	harness: string,
+): Promise<{ importId?: string; warnings: MoveWarning[] }> {
+	if (!deps.uploadTranscript) return { warnings: [] };
+	const decode = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+	let transcript;
 	try {
-		const transcript = await deps.source.GET("/api/v1/sessions/{sessionId}/move/transcript", path);
-		if (!transcript.data) return undefined;
-		const gzip = Uint8Array.from(atob(transcript.data.transcriptGzip), (c) => c.charCodeAt(0));
-		await deps.uploadTranscript(moveId, harness, transcript.data.agentSessionId, gzip);
-		const sidecar = transcript.data.sidecarGzip;
-		if (sidecar && deps.uploadTranscriptSidecar) {
-			// The transcript moves even when its sidecar folder cannot.
-			await deps.uploadTranscriptSidecar(moveId, Uint8Array.from(atob(sidecar), (c) => c.charCodeAt(0))).catch(() => undefined);
-		}
-		return moveId;
+		const answer = await deps.source.GET("/api/v1/sessions/{sessionId}/move/transcript", path);
+		if (!answer.data) return { warnings: [{ kind: "transcript", reason: apiErrorMessage(answer.error, "This computer could not read the conversation.") }] };
+		transcript = answer.data;
 	} catch {
-		return undefined;
+		return { warnings: [{ kind: "transcript", reason: "This computer's Orchestrator did not answer." }] };
 	}
+	try {
+		await deps.uploadTranscript(importId, harness, transcript.agentSessionId, decode(transcript.transcriptGzip));
+	} catch (error) {
+		return { warnings: [{ kind: "transcript", reason: apiErrorMessage(error, "The upload failed.") }] };
+	}
+	const warnings: MoveWarning[] = [];
+	if (transcript.sidecarOmitted) {
+		warnings.push({ kind: "sidecar", reason: transcript.sidecarOmitted === "too_large" ? "It is over Orchestrator Cloud's upload limit." : "This computer could not read it." });
+	} else if (transcript.sidecarGzip && deps.uploadTranscriptSidecar) {
+		try {
+			await deps.uploadTranscriptSidecar(importId, decode(transcript.sidecarGzip));
+		} catch (error) {
+			warnings.push({ kind: "sidecar", reason: apiErrorMessage(error, "The upload failed.") });
+		}
+	}
+	return { importId, warnings };
 }
 
 export interface MoveHereDeps {
@@ -410,6 +444,10 @@ export interface MoveHereResult {
 	deleteError?: string;
 	/** The Cloud session is kept: it holds the only full copy of a conversation that did not all move here. */
 	keptInCloud?: true;
+	/** The Cloud session is kept because it was restarted or used after the move's export. */
+	copyInUse?: true;
+	/** The export's id, which deletes the Cloud session only as the copy this move left. */
+	exportMoveId?: string;
 }
 
 /**
@@ -480,6 +518,13 @@ export async function moveSessionHere(
 	} catch (error) {
 		deps.onStep?.("export");
 		if (error instanceof MoveError) throw error;
+		// Cloud pushed but could not save the latest conversation: the Cloud
+		// session is kept and its agent starts again.
+		if (error instanceof CloudCpError && error.code === TRANSCRIPT_NOT_CAPTURED) {
+			deps.onExportMove?.(undefined);
+			throw new MoveError(apiErrorMessage(error, "Orchestrator Cloud could not save the latest conversation."), "export", TRANSCRIPT_NOT_CAPTURED,
+				await restart(), undefined, undefined, input.branch || "the session's branch");
+		}
 		if (error instanceof CloudCpError && error.code === MOVE_EXPORT_TIMED_OUT) {
 			// That export can no longer finish: Try again starts another, which
 			// reuses a WIP commit it pushed.
@@ -545,6 +590,7 @@ export async function moveSessionHere(
 		sessionId: imported.data.session.id,
 		conversation: exported.transcript ? "transcript" : "note",
 		warnings: imported.data.warnings ?? [],
+		...(exported.moveId ? { exportMoveId: exported.moveId } : {}),
 	} as const;
 	// The Cloud session holds the only full copy of a conversation that did not
 	// all move here, or that Cloud's preview listed and its export left out.
@@ -554,8 +600,11 @@ export async function moveSessionHere(
 	deps.onStep?.("complete");
 	let deleteError: string | undefined;
 	try {
-		await deps.cloud.deleteSession(orgId, cloudSessionId);
+		// With the export's id, Cloud deletes the session only as the copy this
+		// move left, and keeps it if it was restarted or used since.
+		await (exported.moveId ? deps.cloud.deleteSession(orgId, cloudSessionId, { moveId: exported.moveId }) : deps.cloud.deleteSession(orgId, cloudSessionId));
 	} catch (error) {
+		if (error instanceof CloudCpError && error.code === MOVE_COPY_IN_USE) return { ...moved, keptInCloud: true, copyInUse: true };
 		// Cloud refuses to delete a session whose latest conversation it could not save.
 		if (error instanceof CloudCpError && error.code === TRANSCRIPT_NOT_CAPTURED) return { ...moved, keptInCloud: true };
 		if (!(error instanceof CloudCpError && error.status === 404)) {

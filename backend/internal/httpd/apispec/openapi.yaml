@@ -20343,12 +20343,19 @@ components:
             output that move with it.
           format: int64
           type: integer
+        sidecarUnavailable:
+          description: The sidecar folder is over AO Cloud's limits, so the transcript
+            moves without it.
+          enum:
+          - too_large
+          type: string
         subagents:
           description: Subagent transcripts that move with the conversation.
           type: integer
         unavailable:
           description: 'Why the conversation would not move: an agent AO Cloud cannot
-            resume, no saved conversation, or over 64 MiB.'
+            resume, no saved conversation, or over 64 MiB (or AO Cloud''s 32 MiB upload
+            limit once gzipped).'
           enum:
           - unsupported
           - not_found
@@ -20366,6 +20373,13 @@ components:
             tool output) as a gzipped tar, base64-encoded, paths replaced the same
             way. Absent when there is none or it is over 64 MiB.
           format: base64
+          type: string
+        sidecarOmitted:
+          description: Why the conversation's sidecar folder stays on this computer,
+            when it does.
+          enum:
+          - too_large
+          - unreadable
           type: string
         transcriptGzip:
           description: The transcript, gzipped and base64-encoded, with this machine's

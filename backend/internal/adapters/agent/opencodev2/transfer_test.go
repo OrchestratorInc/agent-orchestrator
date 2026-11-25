@@ -39,8 +39,42 @@ func TestConversationExportAndImport(t *testing.T) {
 	}
 	calls, _ := os.ReadFile(log)
 	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
-	if len(lines) != 3 || lines[1] != "session delete "+id+" --standalone" ||
-		!strings.HasPrefix(lines[2], "session import ") || !strings.HasSuffix(lines[2], " --directory "+cwd+" --standalone") {
+	// The copy here is read before it is deleted, so a failed import can put it back.
+	if len(lines) != 4 || lines[1] != "session export "+id+" --standalone" || lines[2] != "session delete "+id+" --standalone" ||
+		!strings.HasPrefix(lines[3], "session import ") || !strings.HasSuffix(lines[3], " --directory "+cwd+" --standalone") {
 		t.Fatalf("calls = %q", lines)
+	}
+}
+
+// A moved conversation OpenCode will not import never costs the copy that was
+// here: it is put back, where it ran, and the import reports the failure.
+func TestConversationImportPutsTheEarlierCopyBack(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	const id = "ses_e34d0cd52ffeMzGW05mHN4RIm7"
+	earlier := `{"info":{"id":"` + id + `","location":{"directory":"/w/app-earlier"}},"messages":["earlier"]}`
+	moved := `{"info":{"id":"` + id + `","location":{"directory":"/w/app"}},"messages":["BROKEN"]}`
+	dir, log := t.TempDir(), filepath.Join(t.TempDir(), "calls")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2.0.0; exit; fi\necho \"$*\" >> " + log + "\n" +
+		"if [ \"$2\" = export ]; then printf '%s' '" + earlier + "'; fi\n" +
+		"if [ \"$2\" = import ] && grep -q BROKEN \"$3\"; then echo 'invalid session' >&2; exit 1; fi\n" +
+		"if [ \"$2\" = import ]; then cp \"$3\" " + filepath.Join(dir, "restored.json") + "; fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if _, err := New().ImportConversation(context.Background(), []byte(moved), t.TempDir(), nil); err == nil {
+		t.Fatal("a refused import reported success")
+	}
+	calls, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 4 || lines[1] != "session delete "+id+" --standalone" ||
+		!strings.HasSuffix(lines[3], " --directory /w/app-earlier --standalone") {
+		t.Fatalf("calls = %q, want the earlier copy imported back where it ran", lines)
+	}
+	if restored, err := os.ReadFile(filepath.Join(dir, "restored.json")); err != nil || string(restored) != earlier {
+		t.Fatalf("restored = %q, %v; want the earlier copy", restored, err)
 	}
 }

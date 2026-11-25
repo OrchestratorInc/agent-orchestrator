@@ -1,7 +1,9 @@
 package sessionmanager
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"log/slog"
 	"os"
@@ -211,5 +213,77 @@ func TestSpawnTransferImportsAnOpenCodeConversation(t *testing.T) {
 	}
 	if agent.restoreCalls != 1 || rec.Metadata.AgentSessionID != "ses_1" {
 		t.Fatalf("restore calls %d, recorded %q", agent.restoreCalls, rec.Metadata.AgentSessionID)
+	}
+}
+
+// A move to AO Cloud uploads a copy of the conversation and archives the
+// session here; the conversation itself stays. Its transcript and sidecar
+// folder keep every byte, and the archived record still points at them, which
+// is what restoring, forking and reading its history go by.
+func TestMoveToCloudLeavesTheConversationHere(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	cwd, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "7bc36b37-4693-40b3-ace9-6efddc586895"
+	dirName, err := nativetransfer.ClaudeProjectDirName(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(home, ".claude", "projects", dirName)
+	files := map[string]string{
+		id + ".jsonl":                   `{"type":"user","cwd":"` + cwd + `","sessionId":"` + id + `","message":{"role":"user","content":"remember PELICAN-42"}}` + "\n",
+		id + "/subagents/agent-1.jsonl": `{"type":"user","cwd":"` + cwd + `","message":{"role":"user","content":"sub"}}` + "\n",
+		id + "/tool-results/out.txt":    "large tool output\n",
+	}
+	sums := map[string][32]byte{}
+	for rel, content := range files {
+		path := filepath.Join(project, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sums[rel] = sha256.Sum256([]byte(content))
+	}
+	transcript := filepath.Join(project, id+".jsonl")
+	meta := domain.SessionMetadata{WorkspacePath: cwd, AgentSessionID: id, NativeTranscriptPath: transcript, RuntimeHandleID: "h1"}
+
+	// move/transcript reads the conversation for the upload.
+	reader := &Manager{agents: providerHomeAgents{}, dataDir: t.TempDir(), executable: os.Executable, logger: slog.New(slog.DiscardHandler)}
+	rec := domain.SessionRecord{ID: "mer-1", Harness: domain.HarnessClaudeCode, Metadata: meta}
+	var upload, sidecar bytes.Buffer
+	if _, err := reader.WriteCloudTranscript(context.Background(), rec, domain.ProjectRecord{}, &upload, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := reader.WriteCloudSidecar(context.Background(), rec, domain.ProjectRecord{}, &sidecar, 1<<20); err != nil || !ok {
+		t.Fatalf("sidecar = %v, %v", ok, err)
+	}
+
+	// move/complete archives the session.
+	m, st, _, _ := newManager()
+	live := mkLive("mer-1")
+	live.Harness, live.Metadata = domain.HarnessClaudeCode, meta
+	live.Activity.State = domain.ActivityExited
+	live.MovedTo = &domain.SessionMove{MoveID: "m-1", OrgID: "org-1", SessionID: "cloud-7"}
+	st.sessions["mer-1"] = live
+	if _, err := m.RequestKill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	for rel, want := range sums {
+		data, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(rel)))
+		if err != nil || sha256.Sum256(data) != want {
+			t.Fatalf("%s after the move: %v, changed=%v", rel, err, err == nil)
+		}
+	}
+	archived := st.sessions["mer-1"]
+	if !archived.IsTerminated || archived.Metadata.AgentSessionID != id || archived.Metadata.NativeTranscriptPath != transcript {
+		t.Fatalf("archived record = terminated %v, conversation %q at %q; want it archived and still pointing at %s",
+			archived.IsTerminated, archived.Metadata.AgentSessionID, archived.Metadata.NativeTranscriptPath, transcript)
 	}
 }

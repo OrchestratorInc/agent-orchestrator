@@ -1662,6 +1662,14 @@ paths:
           description: Also delete the session's artifact files. A restored session comes back without them.
           schema:
             type: boolean
+        - name: moveId
+          in: query
+          required: false
+          description: >-
+            Deletes the session only as the copy a move to an AO daemon left:
+            the move/export with this moveId. Refused (409 MOVE_COPY_IN_USE)
+            when the session was restarted or has activity after that export.
+          schema: { type: string, format: uuid }
       responses:
         "202":
           description: Session sandbox deletion was requested; durable history is retained.
@@ -1669,6 +1677,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteSessionResponse"
+        "409":
+          description: >-
+            MOVE_COPY_IN_USE: the session was used again after the move's
+            export (moveId), so it is kept. Retrying will not delete it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
     patch:
@@ -5533,6 +5549,13 @@ components:
               description: >-
                 The session's approval mode, which the moved session
                 keeps. Absent when the session has none of its own.
+            issueId:
+              type: string
+              description: The tracker issue the session works on, which the moved session keeps.
+            pullRequests:
+              type: array
+              items: { type: string }
+              description: URLs of the session's open pull requests, which the moved session claims.
         handoffNote: { type: string }
         transcript:
           type: object

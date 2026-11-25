@@ -139,3 +139,32 @@ func TestRewriteOpenCodeExport(t *testing.T) {
 		t.Error("a document naming no directory was rewritten")
 	}
 }
+
+// A rollout from AO Cloud that cannot be placed never costs the copy here:
+// the earlier rollout, plain or compressed, stays exactly as it was.
+func TestImportCodexKeepsTheEarlierCopyWhenItFails(t *testing.T) {
+	cwd, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := filepath.Join(t.TempDir(), "in.jsonl")
+	// The second record names the sandbox's folder but is not JSON, so it cannot be rewritten.
+	writeFile(t, from, codexRolloutText("/workspace/repository")+`{"type":"response_item","payload":"/workspace/repository/a.go`+"\n")
+	for _, ext := range []string{".jsonl", ".jsonl.zst"} {
+		t.Run(ext, func(t *testing.T) {
+			home := t.TempDir()
+			old := filepath.Join(home, "sessions", "2026", "10", "02", "rollout-2026-10-02T09-00-00-"+codexID)
+			writeFile(t, old+ext, "the earlier conversation")
+			if _, err := ImportCodex(context.Background(), from, CodexImportOptions{Home: home, Cwd: cwd}); err == nil {
+				t.Fatal("an unreadable rollout was placed")
+			}
+			if got, err := os.ReadFile(old + ext); err != nil || string(got) != "the earlier conversation" {
+				t.Fatalf("earlier copy = %q, %v", got, err)
+			}
+			entries, _ := os.ReadDir(filepath.Dir(old))
+			if len(entries) != 1 {
+				t.Fatalf("left %d files beside the earlier copy, want none", len(entries)-1)
+			}
+		})
+	}
+}

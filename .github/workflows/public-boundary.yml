@@ -31,3 +31,6 @@ jobs:
 
       - name: Check the public boundary
         run: scripts/check-public-boundary.sh
+
+      - name: Test the boundary check
+        run: scripts/check-public-boundary.test.sh

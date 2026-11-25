@@ -61,7 +61,7 @@ func (c *SessionMovesController) preview(w http.ResponseWriter, r *http.Request)
 	}
 	envelope.WriteJSON(w, http.StatusOK, MovePreviewResponse{
 		Branch: out.Branch, DefaultBranch: out.DefaultBranch, Changes: changes, Withheld: out.Withheld,
-		Transcript: MoveTranscriptInfo{Bytes: out.Transcript.Bytes, Subagents: out.Transcript.Subagents, Unavailable: out.Transcript.Unavailable},
+		Transcript: MoveTranscriptInfo{Bytes: out.Transcript.Bytes, Subagents: out.Transcript.Subagents, Unavailable: out.Transcript.Unavailable, SidecarUnavailable: out.Transcript.SidecarUnavailable},
 	})
 }
 
@@ -75,7 +75,7 @@ func (c *SessionMovesController) transcript(w http.ResponseWriter, r *http.Reque
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, MoveTranscriptResponse{AgentSessionID: out.AgentSessionID, TranscriptGzip: out.Gzip, SidecarGzip: out.SidecarGzip})
+	envelope.WriteJSON(w, http.StatusOK, MoveTranscriptResponse{AgentSessionID: out.AgentSessionID, TranscriptGzip: out.Gzip, SidecarGzip: out.SidecarGzip, SidecarOmitted: out.SidecarOmitted})
 }
 
 // moveChangeStatus names git's diff status letter.

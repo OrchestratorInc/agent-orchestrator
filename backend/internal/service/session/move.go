@@ -150,15 +150,9 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 
 	// Everything that can fail without pushing runs first, so a failed export
 	// leaves origin and the local branch as they were.
-	list, err := s.store.ListPRsBySession(ctx, id)
+	prs, err := s.openPullRequests(ctx, id)
 	if err != nil {
-		return MoveExport{}, fmt.Errorf("list pull requests of %s: %w", id, err)
-	}
-	var prs []string
-	for _, pr := range list {
-		if !pr.Merged && !pr.Closed {
-			prs = append(prs, pr.URL)
-		}
+		return MoveExport{}, err
 	}
 	out.Manifest = MoveManifest{
 		SourceSessionID: id, SourceLabel: label, RepoKey: repoKey,
@@ -205,13 +199,30 @@ type MoveTranscriptInfo struct {
 	Bytes int64
 	// Subagents counts the subagent transcripts in the sidecar folder.
 	Subagents int
-	// Unavailable is why it would not: "unsupported", "not_found" or "too_large".
+	// Unavailable is why it would not: "unsupported", "not_found" or
+	// "too_large" (over CloudTranscriptMaxBytes, or over AO Cloud's upload
+	// limit once gzipped).
 	Unavailable string
+	// SidecarUnavailable is "too_large" when the sidecar folder is over AO
+	// Cloud's limits: the transcript moves without it.
+	SidecarUnavailable string
 }
 
 // CloudTranscriptMaxBytes is the largest conversation a move carries: AO Cloud
 // keeps a session's transcript up to 64 MiB.
 const CloudTranscriptMaxBytes = 64 << 20
+
+// cloudUploadMaxBytes is the most AO Cloud takes in one upload of a gzipped
+// conversation, or of its gzipped sidecar folder.
+var cloudUploadMaxBytes = 32 << 20
+
+// countingWriter counts what is written through it.
+type countingWriter struct{ n int64 }
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.n += int64(len(p))
+	return len(p), nil
+}
 
 // cloudTranscripts reads a session's agent conversation for a move to AO Cloud.
 type cloudTranscripts interface {
@@ -327,12 +338,21 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 
 	// A session that moved from here to this Cloud session supplies what Cloud
 	// did not send: its name and its approval mode.
+	// It also supplies the tracker issue and the pull requests it had here.
 	if origin, ok := s.sessionMovedTo(ctx, m.SourceSessionID); ok {
 		if m.DisplayName == "" {
 			m.DisplayName = origin.DisplayName
 		}
 		if m.Permissions == "" {
 			m.Permissions = origin.Metadata.Permissions
+		}
+		if m.IssueID == "" {
+			m.IssueID = origin.IssueID
+		}
+		if len(m.PullRequests) == 0 {
+			if prs, err := s.openPullRequests(ctx, origin.ID); err == nil {
+				m.PullRequests = prs
+			}
 		}
 	}
 	// AO Cloud writes paths under the user's home folder with a placeholder.
@@ -595,11 +615,23 @@ func (s *Service) moveTranscriptInfo(ctx context.Context, rec domain.SessionReco
 	case size > CloudTranscriptMaxBytes:
 		return MoveTranscriptInfo{Bytes: size, Unavailable: "too_large"}
 	}
+	// AO Cloud takes the conversation gzipped, up to its upload limit.
+	var gz countingWriter
+	zw := gzip.NewWriter(&gz)
+	if _, err := t.WriteCloudTranscript(ctx, rec, project, zw, CloudTranscriptMaxBytes); err == nil && zw.Close() == nil && gz.n > int64(cloudUploadMaxBytes) {
+		return MoveTranscriptInfo{Bytes: size, Unavailable: "too_large"}
+	}
 	info := MoveTranscriptInfo{Bytes: size}
-	// A sidecar folder that cannot move leaves the transcript moving alone.
-	if sidecar, err := t.CloudSidecarInfo(ctx, rec, project); err == nil && sidecar.Bytes <= CloudTranscriptMaxBytes {
-		info.Bytes += sidecar.Bytes
-		info.Subagents = sidecar.Subagents
+	// A sidecar folder that cannot move leaves the transcript moving alone,
+	// which the app says before the move.
+	if sidecar, err := t.CloudSidecarInfo(ctx, rec, project); err == nil && sidecar.Bytes > 0 {
+		var packed countingWriter
+		if _, err := t.WriteCloudSidecar(ctx, rec, project, &packed, CloudTranscriptMaxBytes); err != nil || packed.n > int64(cloudUploadMaxBytes) {
+			info.SidecarUnavailable = "too_large"
+		} else {
+			info.Bytes += sidecar.Bytes
+			info.Subagents = sidecar.Subagents
+		}
 	}
 	return info
 }
@@ -613,6 +645,9 @@ type MoveTranscript struct {
 	// SidecarGzip is the sidecar folder as a gzipped tar, paths replaced the
 	// same way; nil when there is none or it is over the limit.
 	SidecarGzip []byte
+	// SidecarOmitted says why a sidecar folder the conversation has stays
+	// here: "too_large" (over AO Cloud's limits) or "unreadable".
+	SidecarOmitted string
 }
 
 // MoveTranscript returns a stopped session's agent conversation for a move to
@@ -642,11 +677,19 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 	case err != nil:
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNAVAILABLE", "The agent's conversation could not be read.", map[string]any{"detail": err.Error()})
 	}
+	if buf.Len() > cloudUploadMaxBytes {
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_TOO_LARGE",
+			fmt.Sprintf("The conversation is over Orchestrator Cloud's %d MiB upload limit once compressed.", cloudUploadMaxBytes>>20), nil)
+	}
 	out := MoveTranscript{AgentSessionID: nativeID, Gzip: buf.Bytes()}
 	var sidecar bytes.Buffer
-	if ok, err := t.WriteCloudSidecar(ctx, rec, project, &sidecar, CloudTranscriptMaxBytes); err != nil {
+	switch ok, err := t.WriteCloudSidecar(ctx, rec, project, &sidecar, CloudTranscriptMaxBytes); {
+	case errors.Is(err, nativetransfer.ErrTooLarge), err == nil && sidecar.Len() > cloudUploadMaxBytes:
+		out.SidecarOmitted = "too_large"
+	case err != nil:
 		s.moveLog().WarnContext(ctx, "move: sidecar folder stays behind", "session", id, "err", err)
-	} else if ok {
+		out.SidecarOmitted = "unreadable"
+	case ok:
 		out.SidecarGzip = sidecar.Bytes()
 	}
 	return out, nil
@@ -802,6 +845,22 @@ func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHar
 		err = cerr
 	}
 	return archive, warning, sidecarErr, err
+}
+
+// openPullRequests lists the URLs of a session's pull requests that are
+// neither merged nor closed: the ones a moved session keeps.
+func (s *Service) openPullRequests(ctx context.Context, id domain.SessionID) ([]string, error) {
+	list, err := s.store.ListPRsBySession(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("list pull requests of %s: %w", id, err)
+	}
+	var prs []string
+	for _, pr := range list {
+		if !pr.Merged && !pr.Closed {
+			prs = append(prs, pr.URL)
+		}
+	}
+	return prs, nil
 }
 
 // moveWIPNotice tells the agent the move committed the source's uncommitted

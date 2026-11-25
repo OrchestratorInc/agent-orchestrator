@@ -5024,9 +5024,10 @@ type MovePreviewResponse struct {
 // MoveTranscriptInfo says whether a move would carry the agent's conversation
 // to AO Cloud, which resumes it, or only the handoff note.
 type MoveTranscriptInfo struct {
-	Bytes       int64  `json:"bytes" description:"The transcript and the subagent transcripts and saved tool output that move with it."`
-	Subagents   int    `json:"subagents,omitempty" description:"Subagent transcripts that move with the conversation."`
-	Unavailable string `json:"unavailable,omitempty" enum:"unsupported,not_found,too_large" description:"Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB."`
+	Bytes              int64  `json:"bytes" description:"The transcript and the subagent transcripts and saved tool output that move with it."`
+	Subagents          int    `json:"subagents,omitempty" description:"Subagent transcripts that move with the conversation."`
+	Unavailable        string `json:"unavailable,omitempty" enum:"unsupported,not_found,too_large" description:"Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB (or AO Cloud's 32 MiB upload limit once gzipped)."`
+	SidecarUnavailable string `json:"sidecarUnavailable,omitempty" enum:"too_large" description:"The sidecar folder is over AO Cloud's limits, so the transcript moves without it."`
 }
 
 // MoveTranscriptResponse is a stopped session's agent conversation for AO Cloud.
@@ -5034,6 +5035,7 @@ type MoveTranscriptResponse struct {
 	AgentSessionID string `json:"agentSessionId"`
 	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory (and Claude Code's project folder) replaced by placeholders AO Cloud's worker fills in."`
 	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB."`
+	SidecarOmitted string `json:"sidecarOmitted,omitempty" enum:"too_large,unreadable" description:"Why the conversation's sidecar folder stays on this computer, when it does."`
 }
 
 // MoveChange is one uncommitted path a move would push.

@@ -45,6 +45,15 @@ describe("finishMove", () => {
 		expect(await finishMove(deleteCloud, { daemon: daemon({}).factory, cloud: { deleteSession: timeout } })).toBe("retry");
 	});
 
+	it("deletes only the copy a move left, and keeps one used again since", async () => {
+		const deleted = vi.fn(async () => ({}) as never);
+		const move = { ...deleteCloud, exportMoveId: "exp-1" };
+		expect(await finishMove(move, { daemon: daemon({}).factory, cloud: { deleteSession: deleted } })).toBe("done");
+		expect(deleted).toHaveBeenCalledWith("org-1", "cloud-9", { moveId: "exp-1" });
+		const inUse = vi.fn(async () => { throw new CloudCpError("used again", { status: 409, code: "MOVE_COPY_IN_USE" }); });
+		expect(await finishMove(move, { daemon: daemon({}).factory, cloud: { deleteSession: inUse } })).toBe("kept");
+	});
+
 	it("leaves a Cloud copy alone under another account, never reading its 404 as deleted", async () => {
 		const gone = vi.fn(async () => { throw new CloudCpError("gone", { status: 404 }); });
 		const mine = { ...deleteCloud, accountId: "user-a" };
@@ -101,6 +110,22 @@ describe("useFinishUnfinishedMoves", () => {
 		await waitFor(() => expect(useUnfinishedMoveStore.getState().moves).toEqual([]));
 		expect(useUiStore.getState().globalToast?.body).toBeUndefined();
 		unmount();
+	});
+
+	it("stops retrying and says so once when the Cloud copy was used again", async () => {
+		const deleteSession = vi.fn(async () => { throw new CloudCpError("used again", { status: 409, code: "MOVE_COPY_IN_USE" }); });
+		cloudCp.current = { client: { deleteSession }, userId: "user-a" };
+		useUiStore.setState({ globalToast: null });
+		useUnfinishedMoveStore.setState({ moves: [] });
+		useUnfinishedMoveStore.getState().add({ ...deleteCloud, accountId: "user-a", exportMoveId: "exp-1" });
+		const { unmount } = renderHook(() => useFinishUnfinishedMoves());
+		await waitFor(() => expect(useUnfinishedMoveStore.getState().moves).toEqual([]));
+		expect(useUiStore.getState().globalToast?.title).toBe(
+			"Orchestrator kept the Cloud copy of a session that moved to this computer, because it was used again after the move. Archive it in Orchestrator Cloud if you don't need it.",
+		);
+		expect(deleteSession).toHaveBeenCalledTimes(1);
+		unmount();
+		cloudCp.current = { client: null, userId: "" };
 	});
 
 	it("keeps a move for another account, says so once, and does not count tries", async () => {

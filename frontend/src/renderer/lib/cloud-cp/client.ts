@@ -452,7 +452,8 @@ export interface CloudCpClient {
 	deleteSession(
 		orgId: string,
 		sessionId: string,
-		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean },
+		/** moveId deletes the session only as the copy that move's export left (409 MOVE_COPY_IN_USE otherwise). */
+		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean; moveId?: string },
 	): Promise<CloudCpSessionDeletedResponse>;
 	resumeSession(
 		orgId: string,
@@ -1167,7 +1168,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		cancelSessionReviews: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
 		deleteSession: (orgId, sessionId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}${o?.deleteArtifacts ? "?deleteArtifacts=true" : ""}`, {
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+				query: { deleteArtifacts: o?.deleteArtifacts ? "true" : undefined, moveId: o?.moveId },
 				signal: o?.signal,
 			}),
 		resumeSession: (orgId, sessionId, o) =>
