@@ -670,7 +670,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
 	const plainPasteShortcut = useRef(false);
 	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
-	const cancelledUploads = useRef(new Set<string>());
+	const textPasteUploads = useRef(new Map<string, { cancelled: boolean }>());
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -2481,10 +2481,12 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!textAsFile) return;
 		const pasted = files[files.length - 1]!;
 		const scope = restoredSessionId.current;
-		cancelledUploads.current.delete(pasted.name);
+		const upload = { cancelled: false };
+		textPasteUploads.current.set(pasted.name, upload);
 		const landed = attached.then((added) => {
-			if (added.some((attachment) => attachment.name === pasted.name)) return true;
-			if (!cancelledUploads.current.has(pasted.name) && restoredSessionId.current === scope) editor.current?.appendText(text);
+			if (textPasteUploads.current.get(pasted.name) === upload) textPasteUploads.current.delete(pasted.name);
+			if (upload.cancelled || added.some((attachment) => attachment.name === pasted.name)) return true;
+			if (restoredSessionId.current === scope) editor.current?.appendText(text);
 			return false;
 		});
 		pendingTextPastes.current.add(landed);
@@ -2722,7 +2724,8 @@ export const ChatComposer = memo(function ChatComposer({
 										statusLabel={`Attaching ${file.name}`}
 										cancelLabel={`Cancel attaching ${file.name}`}
 										onCancel={() => {
-											cancelledUploads.current.add(file.name);
+											const upload = textPasteUploads.current.get(file.name);
+											if (upload) upload.cancelled = true;
 											fileAttachments.cancelPending(file.id);
 											editor.current?.focus();
 										}}

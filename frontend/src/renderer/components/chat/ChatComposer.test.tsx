@@ -343,14 +343,30 @@ describe("send keys", () => {
 		await waitFor(() => expect(composerWireText(field)).toBe(`what failed?${"line\n".repeat(1000)}`));
 		expect(onSend).not.toHaveBeenCalled();
 	});
-	it("leaves a long paste out of the box when its upload is cancelled", async () => {
-		const stage = vi.fn((_payloads: unknown, signal?: AbortSignal) => new Promise<string[]>((_resolve, reject) => {
-			signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
-		}));
-		const { field } = renderComposer({ draftSessionId: "composer-paste-cancel", onStageAttachments: stage });
+	it("leaves a long paste out of the box when its upload is cancelled, and sends without it", async () => {
+		let finish: (paths: string[]) => void = () => undefined;
+		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finish = resolve; }));
+		const { field, onSend } = renderComposer({ draftSessionId: "composer-paste-cancel", onStageAttachments: stage });
+		await typeInComposer(field, "go");
 		fireEvent.paste(field, { clipboardData: textClipboard("line\n".repeat(1000)) });
 		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching pasted-text.txt" }));
-		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+		fireEvent.keyDown(field, { key: "Enter" });
+		finish([".ao/attachments/attachment-late.txt"]);
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("go", undefined, expect.any(String)));
+		expect(composerWireText(field)).not.toContain("line");
+	});
+	it("keeps a cancelled long paste out of the box after another paste takes its name", async () => {
+		const stages: Array<(paths: string[]) => void> = [];
+		const stage = vi.fn(() => new Promise<string[]>((resolve) => { stages.push(resolve); }));
+		const { field } = renderComposer({ draftSessionId: "composer-paste-reuse", onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: textClipboard("a".repeat(5000)) });
+		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching pasted-text.txt" }));
+		fireEvent.paste(field, { clipboardData: textClipboard("b".repeat(5000)) });
+		expect(await screen.findByRole("status", { name: "Attaching pasted-text.txt" })).toBeInTheDocument();
+		stages[0]!([".ao/attachments/attachment-a.txt"]);
+		await waitFor(() => expect(stage).toHaveBeenCalledTimes(2));
+		stages[1]!([".ao/attachments/attachment-b.txt"]);
+		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
 		expect(composerWireText(field)).toBe("");
 	});
 	it("leaves a cancelled long paste out of the box when the image beside it fails", async () => {
