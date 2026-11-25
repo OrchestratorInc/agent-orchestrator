@@ -61,6 +61,7 @@ export function preloadXtermTerminal(): void {
 	void loadXtermTerminal().catch(() => undefined);
 }
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
+import { MovedToCloudNote } from "./MovedToCloudNote";
 import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
 import { Button } from "./ui/button";
 import { EndedShellTerminal } from "./EndedShellTerminal";
@@ -1315,7 +1316,9 @@ function AttachedTerminal({
 		session !== undefined &&
 		!isSessionActive &&
 		!sharedCloudSession &&
-		!contentExpired;
+		!contentExpired &&
+		// A session that moved to Orchestrator Cloud continues there; it is not restored here.
+		!session.movedTo;
 
 	const handleReady = useCallback((handle: AttachableTerminal) => {
 		setTerminal(handle);
@@ -1626,7 +1629,10 @@ function TerminalEndedStrip({ canRestore, contentExpired, error, isRestoring, on
 	const terminated = variant === "session" && session && !sessionIsActive(session);
 	const agentExited = variant === "session" && sessionAgentExited(session);
 	const startupFailed = variant === "session" && session?.provisionState === "failed";
-	const heading = reviewDelivered
+	const movedToCloud = variant === "session" && Boolean(session?.movedTo);
+	const heading = movedToCloud
+		? t("move.movedToCloud")
+		: reviewDelivered
 		? t("terminal.reviewCompleted")
 		: startupFailed
 			? t("terminal.startupFailed")
@@ -1659,9 +1665,13 @@ function TerminalEndedStrip({ canRestore, contentExpired, error, isRestoring, on
 					>
 						{heading}
 					</div>
-					<div className="mt-0.5 text-xs text-muted-foreground">
-						{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
-					</div>
+					{movedToCloud && session ? (
+						<MovedToCloudNote session={session} className="mt-0.5" />
+					) : (
+						<div className="mt-0.5 text-xs text-muted-foreground">
+							{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+						</div>
+					)}
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
 				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}

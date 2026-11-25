@@ -273,7 +273,8 @@ export function SessionArchiveModal({
 	};
 
 	const restore = async (session: WorkspaceSession) => {
-		if (!restoreAvailable) return;
+		// A session that moved to Orchestrator Cloud continues there.
+		if (!restoreAvailable || session.movedTo) return;
 		const scope = resetKeyRef.current;
 		const generation = restoreGenerationRef.current;
 		const stillHere = () => generation === restoreGenerationRef.current && resetKeyRef.current === scope;

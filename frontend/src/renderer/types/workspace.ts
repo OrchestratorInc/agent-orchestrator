@@ -230,6 +230,10 @@ export type WorkspaceSession = {
 	autoInjectReview?: boolean;
 	/** Whether CI failures are automatically injected into the worker. */
 	autoInjectCI?: boolean;
+	/** The Orchestrator Cloud session this session moved to; it is archived here and continues there. */
+	movedTo?: { orgId: string; sessionId: string; at?: string };
+	/** The move to Orchestrator Cloud whose export pushed this session and did not finish. */
+	moveStarted?: string;
 	/** ISO timestamp from the daemon — used for relative time in the inspector. */
 	createdAt?: string;
 	/** ISO timestamp from the daemon. */

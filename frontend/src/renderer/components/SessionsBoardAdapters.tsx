@@ -58,6 +58,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
 import { SessionOwnerTag } from "./SessionOwnerTag";
+import { MovedToCloudNote } from "./MovedToCloudNote";
 import { useSessionContentExpired } from "../stores/content-expired-sessions-store";
 
 export function toBoardSessionPresentation(
@@ -213,7 +214,8 @@ export function ArchivedSessionCardAdapter({
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
-					{contentExpired ? null : (
+					{/* A session that moved to Orchestrator Cloud continues there; the footer links to it. */}
+					{contentExpired || session.movedTo ? null : (
 						<ArchiveRestoreButton
 							isDisabled={isRestoreDisabled}
 							isRestoring={isRestoring}
@@ -234,7 +236,13 @@ export function ArchivedSessionCardAdapter({
 					/>
 				) : undefined
 			}
-			footer={<ArchiveRestoreError message={contentExpired ? t("restoreUnavailable.contentExpired") : restoreError} />}
+			footer={
+				session.movedTo ? (
+					<MovedToCloudNote session={session} className="border-t border-border px-2 py-1.5" />
+				) : (
+					<ArchiveRestoreError message={contentExpired ? t("restoreUnavailable.contentExpired") : restoreError} />
+				)
+			}
 			interactive={Boolean(onOpen)}
 			onOpen={onOpen}
 			session={session}

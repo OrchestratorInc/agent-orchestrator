@@ -88,6 +88,21 @@ export function cloudReasoningEffort(local: string | undefined): string | undefi
 /** The body AO Cloud's createSession takes. */
 export type CloudSessionRequest = Parameters<CloudCpClient["createSession"]>[1];
 
+/**
+ * A move's Cloud request across attempts. key is the createSession
+ * idempotency key and the transcript import id: the move id at first, and a
+ * fresh one after Cloud refused a create, since the next request differs.
+ */
+export interface MoveCloudRequest {
+	current?: CloudSessionRequest;
+	key?: string;
+	pushed?: MovePushed;
+	createUnsettled?: boolean;
+}
+
+/** Cloud refused a move's export because it could not save the latest conversation. */
+export const TRANSCRIPT_NOT_CAPTURED = "MOVE_TRANSCRIPT_NOT_CAPTURED";
+
 export interface MoveDeps {
 	source: DaemonClient;
 	cloud: Pick<CloudCpClient, "createSession" | "createProject">;
@@ -103,7 +118,13 @@ export interface MoveDeps {
 	 * asks Cloud for that session before anything else, and nothing resumes the
 	 * agent here.
 	 */
-	cloudRequest?: { current?: CloudSessionRequest; pushed?: MovePushed; createUnsettled?: boolean };
+	cloudRequest?: MoveCloudRequest;
+	/**
+	 * Called with the Cloud request just before each create, so the caller can
+	 * keep it past a quit: a relaunch then finishes this move under the same
+	 * key instead of starting a second Cloud session.
+	 */
+	onCreate?: (pending: { request: CloudSessionRequest; key: string; pushed?: MovePushed }) => void;
 	/**
 	 * Uploads the agent's conversation, gzipped, under importId for the Cloud
 	 * session to resume. Unset when Cloud cannot resume it, which leaves the
@@ -185,9 +206,11 @@ export async function moveSession(
 	const startInCloud = async (request: CloudSessionRequest, pushed?: MovePushed): Promise<MoveResult> => {
 		let cloudSessionId: string | undefined;
 		let failure: unknown;
+		const key = state.key ?? moveId;
+		deps.onCreate?.({ request, key, pushed });
 		for (let attempt = 0; attempt < 2 && cloudSessionId === undefined; attempt++) {
 			try {
-				cloudSessionId = (await deps.cloud.createSession(target.orgId, request, { idempotencyKey: moveId })).session.id;
+				cloudSessionId = (await deps.cloud.createSession(target.orgId, request, { idempotencyKey: key })).session.id;
 			} catch (error) {
 				failure = error;
 				if (cloudRefused(error)) break;
@@ -195,7 +218,14 @@ export async function moveSession(
 			}
 		}
 		if (cloudSessionId === undefined) {
-			if (cloudRefused(failure) && !state.createUnsettled) return rollback("import", failure, "Could not start the session in Orchestrator Cloud", pushed);
+			if (cloudRefused(failure) && !state.createUnsettled) {
+				// Cloud made no session, and the agent here resumes and may go on:
+				// Try again builds a fresh request, with the conversation as it is
+				// then, under a fresh key.
+				state.current = undefined;
+				state.key = crypto.randomUUID();
+				return rollback("import", failure, "Could not start the session in Orchestrator Cloud", pushed);
+			}
 			throw new MoveError(
 				cloudRefused(failure)
 					? `${apiErrorMessage(failure)} An earlier attempt may already have started the session in Orchestrator Cloud. ${settle}`
@@ -258,7 +288,7 @@ export async function moveSession(
 	const sameAgent = target.harness === cloudHarness(m.harness);
 	const effort = sameAgent ? cloudReasoningEffort(m.effort) : undefined;
 	// Cloud resumes a conversation only in the agent that wrote it.
-	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, moveId, target.harness);
+	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, state.key ?? moveId, target.harness);
 	const request: CloudSessionRequest = state.current ?? {
 		projectId,
 		kind: "worker",
@@ -314,6 +344,12 @@ export interface MoveHereDeps {
 	onStep?: (step: MoveStep) => void;
 	/** Called with the project a clone made, so Try again moves into it instead of cloning again. */
 	onCloned?: (projectId: string) => void;
+	/**
+	 * Called with the project just before the import here, so the caller can
+	 * keep the move id past a quit: this computer then returns the session it
+	 * started instead of starting a second one.
+	 */
+	onImport?: (projectId: string) => void;
 }
 
 /** The repository to clone when no project here has it, and the folder to clone it into. */
@@ -347,7 +383,16 @@ export interface MoveHereResult {
  * failure starts the Cloud agent again. moveId makes each call safe to retry.
  */
 export async function moveSessionHere(
-	input: { orgId: string; cloudSessionId: string; projectId?: string; clone?: MoveHereClone; moveId: string; settings: MoveHereSettings },
+	input: {
+		orgId: string;
+		cloudSessionId: string;
+		projectId?: string;
+		clone?: MoveHereClone;
+		moveId: string;
+		settings: MoveHereSettings;
+		/** Cloud's preview listed a conversation: the move must bring it, or keep the Cloud session. */
+		expectTranscript?: boolean;
+	},
 	deps: MoveHereDeps,
 ): Promise<MoveHereResult> {
 	const { orgId, cloudSessionId } = input;
@@ -379,6 +424,7 @@ export async function moveSessionHere(
 	deps.onStep?.("import");
 	const m = exported.manifest;
 	const pushed = { branch: m.branch, tip: m.tip, wip: m.wip };
+	deps.onImport?.(projectId);
 	const importing = deps.daemon.POST("/api/v1/sessions/move/import", {
 		body: {
 			projectId,
@@ -416,13 +462,18 @@ export async function moveSessionHere(
 		conversation: exported.transcript ? "transcript" : "note",
 		warnings: imported.data.warnings ?? [],
 	} as const;
-	if (imported.data.conversationIncomplete) return { ...moved, keptInCloud: true };
+	// The Cloud session holds the only full copy of a conversation that did not
+	// all move here, or that Cloud's preview listed and its export left out.
+	const conversationMissing = Boolean(input.expectTranscript && !exported.transcript);
+	if (imported.data.conversationIncomplete || conversationMissing) return { ...moved, keptInCloud: true };
 
 	deps.onStep?.("complete");
 	let deleteError: string | undefined;
 	try {
 		await deps.cloud.deleteSession(orgId, cloudSessionId);
 	} catch (error) {
+		// Cloud refuses to delete a session whose latest conversation it could not save.
+		if (error instanceof CloudCpError && error.code === TRANSCRIPT_NOT_CAPTURED) return { ...moved, keptInCloud: true };
 		if (!(error instanceof CloudCpError && error.status === 404)) {
 			deleteError = error instanceof Error ? error.message : String(error);
 		}

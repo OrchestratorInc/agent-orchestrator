@@ -11,7 +11,7 @@ import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
 import { uploadCloudTranscript, uploadCloudTranscriptSidecar } from "../lib/cloud-attachments";
-import { unsettledMoveKey, useUnfinishedMoveStore, useUnsettledMoveStore } from "../lib/move-finish";
+import { unsettledMoveHereKey, unsettledMoveKey, useUnfinishedMoveStore, useUnsettledMoveHereStore, useUnsettledMoveStore } from "../lib/move-finish";
 import { agentLabel } from "../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
@@ -54,10 +54,7 @@ const CLOUD_TRANSCRIPT_FEATURE = "session.transcriptImport";
 
 const STEPS: MoveStep[] = ["stop", "export", "import", "complete"];
 
-/** Uncommitted paths listed before the rest are summed up as a count. */
-const LISTED_FILES = 5;
-
-/** git status --short letters, so a deleted file does not read as one that moves. */
+/** git status --short letters, so a deleted file does not read as one that moves; ?? is an untracked file. */
 const STATUS_LETTER = { added: "A", modified: "M", deleted: "D" } as const;
 
 function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession; onClose: () => void }) {
@@ -65,7 +62,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const queryClient = useQueryClient();
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
+	const { client: cloudClient, baseUrl: cloudBaseUrl, userId } = useCloudCp();
 	const { org } = useCloudOrg();
 	const offering = useCloudOffering();
 	const cloudProjects = useCloudProjectsQuery();
@@ -75,16 +72,24 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const [result, setResult] = useState<MoveResult>();
 	const [error, setError] = useState<MoveError | Error>();
 	const moving = step !== undefined && !result && !error;
-	// A move whose Cloud create got no clear answer is kept past this dialog,
-	// so reopening it finishes that move under the same id instead of starting
-	// a second Cloud session. A move for another organization is left alone.
+	// A move whose Cloud create was sent and not settled is kept past this
+	// dialog, and past a quit, so reopening it finishes that move under the same
+	// id instead of starting a second Cloud session. A move for another
+	// organization or account is left alone.
 	const attemptKey = unsettledMoveKey(session.hostId, session.id);
 	const storedAttempt = useRef(useUnsettledMoveStore.getState().moves[attemptKey]).current;
-	const saved = storedAttempt && (!org || storedAttempt.orgId === org.id) ? storedAttempt : undefined;
+	const saved =
+		storedAttempt && (!org || storedAttempt.orgId === org.id) && (!storedAttempt.accountId || !userId || storedAttempt.accountId === userId)
+			? storedAttempt
+			: undefined;
 	// One move per dialog: Try again reuses its id and Cloud request, so a
 	// Cloud session whose response was lost is returned instead of duplicated.
-	const moveId = useRef(saved?.moveId ?? crypto.randomUUID()).current;
-	const cloudRequest = useRef<NonNullable<MoveDeps["cloudRequest"]>>(saved ? { current: saved.request, pushed: saved.pushed, createUnsettled: true } : {}).current;
+	// A move whose export pushed the session and did not finish keeps its id
+	// on this computer too.
+	const moveId = useRef(saved?.moveId ?? session.moveStarted ?? crypto.randomUUID()).current;
+	const cloudRequest = useRef<NonNullable<MoveDeps["cloudRequest"]>>(
+		saved ? { current: saved.request, key: saved.key, pushed: saved.pushed, createUnsettled: true } : {},
+	).current;
 	// A Cloud project the move created; Try again moves into it instead of creating another.
 	// An earlier move being finished goes to the project its request names.
 	const createdProject = useRef<string | undefined>(saved?.projectId ?? saved?.request.projectId);
@@ -194,6 +199,11 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 						createdProject.current = id;
 					},
 					cloudRequest,
+					onCreate: ({ request, key, pushed }) => {
+						useUnsettledMoveStore.getState().set(attemptKey, {
+							moveId, orgId: target.orgId, request, key, pushed, projectId: createdProject.current, accountId: userId,
+						});
+					},
 					...(carriesTranscript
 						? {
 							uploadTranscript: (importId: string, harness: string, agentSessionId: string, gzip: Uint8Array) => uploadCloudTranscript(cloudBaseUrl, target.orgId, importId, harness, agentSessionId, gzip),
@@ -206,7 +216,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 			if (moved.completeError) {
 				// The session runs in Cloud; recording that here is retried until it lands.
 				useUnfinishedMoveStore.getState().add({
-					kind: "complete", host: session.hostId, sessionId: session.id, moveId, orgId: target.orgId, cloudSessionId: moved.sessionId,
+					kind: "complete", host: session.hostId, sessionId: session.id, moveId, orgId: target.orgId, cloudSessionId: moved.sessionId, accountId: userId,
 				});
 				setResult(moved);
 				return;
@@ -221,7 +231,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 			useUnsettledMoveStore.getState().set(
 				attemptKey,
 				cloudRequest.createUnsettled && cloudRequest.current
-					? { moveId, orgId: target.orgId, request: cloudRequest.current, pushed: cloudRequest.pushed, projectId: createdProject.current }
+					? { moveId, orgId: target.orgId, request: cloudRequest.current, key: cloudRequest.key, pushed: cloudRequest.pushed, projectId: createdProject.current, accountId: userId }
 					: undefined,
 			);
 			setError(failure instanceof Error ? failure : new AoError("SESSION_MOVE_FAILED", String(failure)));
@@ -293,6 +303,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 								<p className="text-sm text-settings-muted">
 									{changes.length > 0 ? t("move.consequence", { branch }) : t("move.consequenceClean", { branch })}
 								</p>
+								<p className="text-sm text-settings-muted">{carriesTranscript ? t("move.conversationUploaded") : t("move.noteUploaded")}</p>
 							</>
 						)
 					) : (
@@ -364,18 +375,32 @@ function AgentRow({ session }: { session: WorkspaceSession }) {
 	);
 }
 
-function UncommittedList({ changes }: { changes: { path: string; status: keyof typeof STATUS_LETTER }[] }) {
+/** Every uncommitted path, scrolling past a few lines; untracked files, the ones a user may not expect to push, are marked ??. */
+function UncommittedList({ changes }: { changes: { path: string; status: keyof typeof STATUS_LETTER; untracked?: boolean }[] }) {
 	const { t } = useTranslation();
 	if (changes.length === 0) return null;
+	const anyUntracked = changes.some((change) => change.untracked);
 	return (
-		<ul className="flex flex-col gap-0.5 font-mono text-xs text-settings-muted" aria-label={t("move.uncommitted")}>
-			{changes.slice(0, LISTED_FILES).map((change) => (
-				<li key={change.path} className="break-all">
-					{STATUS_LETTER[change.status]} {change.path}
-				</li>
-			))}
-			{changes.length > LISTED_FILES ? <li className="font-sans">{t("move.uncommittedMore", { count: changes.length - LISTED_FILES })}</li> : null}
-		</ul>
+		<>
+			<ul
+				className="settings-thin-scrollbar flex max-h-40 flex-col gap-0.5 overflow-y-auto font-mono text-xs text-settings-muted"
+				aria-label={t("move.uncommitted")}
+			>
+				{changes.map((change) => (
+					<li key={change.path} className={cn("break-all", change.untracked && "text-warning")}>
+						{change.untracked ? (
+							<abbr title={t("move.untracked")} className="no-underline">
+								??
+							</abbr>
+						) : (
+							STATUS_LETTER[change.status]
+						)}{" "}
+						{change.path}
+					</li>
+				))}
+			</ul>
+			{anyUntracked ? <p className="text-sm text-warning">{t("move.untrackedNote")}</p> : null}
+		</>
 	);
 }
 
@@ -425,7 +450,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const queryClient = useQueryClient();
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const { client: cloudClient } = useCloudCp();
+	const { client: cloudClient, userId } = useCloudCp();
 	const offering = useCloudOffering(true, orgId);
 	const cloudProjects = useCloudProjectsQuery();
 	const localProjects = useQuery(workspaceQueryOptions);
@@ -436,11 +461,16 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const [chosen, setChosen] = useState<string>();
 	const [steps, setSteps] = useState<MoveStep[]>(STEPS);
 	const moving = step !== undefined && !result && !error;
+	// A move whose import here may have started a session is kept past this
+	// dialog, and past a quit, so reopening it finishes that move.
+	const hereKey = unsettledMoveHereKey(orgId, session.id);
+	const savedHere = useRef(useUnsettledMoveHereStore.getState().moves[hereKey]).current;
 	// One move per dialog: Try again reuses its id, so this computer returns
 	// the session it already started instead of starting a second one.
-	const moveId = useRef(crypto.randomUUID()).current;
-	// A project the move cloned; Try again moves into it instead of cloning again.
-	const cloned = useRef<string>(undefined);
+	const moveId = useRef(savedHere?.moveId ?? crypto.randomUUID()).current;
+	// A project the move cloned, or the one an earlier attempt imported into;
+	// Try again moves into it instead of cloning or choosing again.
+	const cloned = useRef<string | undefined>(savedHere?.projectId);
 	// The folder the New project flow last cloned into, as it defaults to.
 	const cloneParent = useRef(window.localStorage.getItem(LAST_CLONE_DESTINATION_KEY) || "~/ao/projects").current;
 
@@ -493,9 +523,12 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 							? t("moveHere.agentNotSetUp", { agent: agent.label })
 							: targets.error
 								? targets.error.message
-								: target?.refusal?.message;
+								: // Finishing an earlier move replays it here; its own session may hold the branch.
+									savedHere
+									? undefined
+									: target?.refusal?.message;
 	// Try again moves into the project the first attempt chose or cloned, so it needs neither.
-	const ready = !loading && !unavailable && (step !== undefined || target !== undefined || cloneInto !== undefined);
+	const ready = !loading && !unavailable && (step !== undefined || savedHere !== undefined || target !== undefined || cloneInto !== undefined);
 	const changes = preview.data?.changes ?? [];
 	const transcript = ["claude-code", "codex", "opencode", "cursor"].includes(session.provider) ? preview.data?.transcript : undefined;
 
@@ -512,6 +545,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					cloudSessionId: session.id,
 					...(projectId ? { projectId } : { clone: { remoteUrl: repositoryUrl, destinationParent: cloneParent, repoKey: repo } }),
 					moveId,
+					expectTranscript: Boolean(preview.data?.transcript),
 					settings: {
 						autoReview: session.autoReviewEnabled ?? false,
 						terminateOnPrMerge: session.terminateOnPrMerge ?? false,
@@ -526,11 +560,15 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					onCloned: (id) => {
 						cloned.current = id;
 					},
+					onImport: (projectId) => {
+						useUnsettledMoveHereStore.getState().set(hereKey, { moveId, projectId });
+					},
 				},
 			);
+			useUnsettledMoveHereStore.getState().set(hereKey, undefined);
 			if (moved.deleteError) {
 				// The session runs here; deleting the Cloud copy is retried until it lands.
-				useUnfinishedMoveStore.getState().add({ kind: "delete-cloud", orgId, cloudSessionId: session.id });
+				useUnfinishedMoveStore.getState().add({ kind: "delete-cloud", orgId, cloudSessionId: session.id, accountId: userId });
 				setResult(moved);
 				return;
 			}
@@ -539,6 +577,9 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 			const body = [t("moveHere.doneBody", { title: session.title, project: target?.name ?? repoName.split("/").at(-1) }), ...(moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
 			showGlobalToast(t("moveHere.done"), body.join(" "), { tone: "success" });
 		} catch (failure) {
+			// Kept only while the import here may have started a session.
+			const unsettled = failure instanceof MoveError && failure.step === "import" && failure.followUp !== undefined;
+			if (!unsettled) useUnsettledMoveHereStore.getState().set(hereKey, undefined);
 			setError(failure instanceof Error ? failure : new AoError("SESSION_MOVE_FAILED", String(failure)));
 		} finally {
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(LOCAL_HOST) });
@@ -577,7 +618,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 									<dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
 										<dt className="text-settings-muted">{t("move.branch")}</dt>
 										<dd className="min-w-0 truncate font-mono text-settings-label">{branch}</dd>
-										{target ? (
+										{savedHere ? null : target ? (
 											<>
 												<dt className="self-center text-settings-muted">{t("moveHere.project")}</dt>
 												<dd className="min-w-0">
@@ -630,6 +671,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 								) : null}
 								{unavailable ? (
 									<p className="text-sm text-settings-muted">{unavailable}</p>
+								) : savedHere ? (
+									<p className="text-sm text-settings-muted">{t("moveHere.finishEarlier")}</p>
 								) : (
 									<>
 										<UncommittedList changes={changes} />

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
-import { cloudReasoningEffort, MoveError, moveSession, moveSessionHere, type MoveDeps, type MoveHereDeps } from "./move-session";
+import { cloudReasoningEffort, MoveError, moveSession, moveSessionHere, TRANSCRIPT_NOT_CAPTURED, type MoveDeps, type MoveHereDeps } from "./move-session";
 
 type Reply = { data?: unknown; error?: unknown };
 
@@ -241,6 +241,22 @@ describe("moveSession", () => {
 		expect(second[2]).toEqual({ idempotencyKey: "m-3" });
 	});
 
+	it("hands each Cloud request over before creating it, so a relaunch can finish the move", async () => {
+		const order: string[] = [];
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		}, []);
+		const cp = cloud(async () => { order.push("create"); return { session: { id: "cloud-9" } }; });
+		const onCreate = vi.fn(() => { order.push("saved"); });
+		await moveSession({ sessionId: "app-1", moveId: "m-2", target }, { source, cloud: cp, onCreate });
+		expect(order).toEqual(["saved", "create"]);
+		expect(onCreate).toHaveBeenCalledWith({
+			request: cp.createSession.mock.calls[0][1], key: "m-2", pushed: { branch: "feat/move", tip: "abc", wip: true },
+		});
+	});
+
 	it("keeps the move when only marking the source fails", async () => {
 		const calls: string[] = [];
 		const source = fakeDaemon({
@@ -323,6 +339,25 @@ describe("moveSession", () => {
 			expect(result).toEqual({ projectId: "proj-1", sessionId: "cloud-9", conversation: "note" });
 			expect(uploadTranscript).not.toHaveBeenCalled();
 			expect(cp.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
+		});
+
+		it("is uploaded again under a fresh id when Try again follows Cloud's refusal", async () => {
+			const uploadTranscript = vi.fn(async () => {});
+			const cloudRequest: MoveDeps["cloudRequest"] = {};
+			const cp = cloud(async () => { throw new CloudCpError("Another session holds feat/move.", { status: 409, code: "branch_in_use" }); });
+			await expect(moveSession({ sessionId: "app-1", moveId: "m-12", target }, { source: fakeDaemon(replies, []), cloud: cp, cloudRequest, uploadTranscript }))
+				.rejects.toMatchObject({ step: "import", rolledBack: true });
+			// The agent here was resumed and may have gone on; the next export's note is newer.
+			const later = { ...replies, "/api/v1/sessions/{sessionId}/move/export": ok({ ...exported, handoffNote: "a later note" }) };
+			cp.createSession.mockImplementation(async () => ({ session: { id: "cloud-9" } }));
+			await moveSession({ sessionId: "app-1", moveId: "m-12", target }, { source: fakeDaemon(later, []), cloud: cp, cloudRequest, uploadTranscript });
+			const [firstId, secondId] = uploadTranscript.mock.calls.map((call) => (call as unknown as string[])[0]);
+			expect(firstId).toBe("m-12");
+			expect(secondId).not.toBe("m-12");
+			const [first, second] = cp.createSession.mock.calls;
+			expect(first[2]).toEqual({ idempotencyKey: "m-12" });
+			expect(second[1]).toMatchObject({ prompt: "a later note", transcriptImportId: secondId });
+			expect(second[2]).toEqual({ idempotencyKey: secondId });
 		});
 
 		it("is not uploaded again when a retry resends the first Cloud request", async () => {
@@ -425,6 +460,36 @@ describe("moveSessionHere", () => {
 		expect(result).toEqual({ projectId: "proj-1", sessionId: "local-9", conversation: "transcript", warnings: [warning], keptInCloud: true });
 		expect(steps).toEqual(["stop", "import"]);
 		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud session when its export leaves out the conversation its preview listed", async () => {
+		const cp = cloudFake({ exportSessionMove: async () => ({ ...cloudExport, transcript: undefined }) });
+		const result = await moveSessionHere({ ...input, expectTranscript: true }, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });
+		expect(result).toMatchObject({ sessionId: "local-9", conversation: "note", keptInCloud: true });
+		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud session when Cloud will not delete it for an unsaved conversation", async () => {
+		const cp = cloudFake({ deleteSession: async () => { throw new CloudCpError("not saved yet", { status: 409, code: TRANSCRIPT_NOT_CAPTURED }); } });
+		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });
+		expect(result).toMatchObject({ sessionId: "local-9", keptInCloud: true });
+		expect(result.deleteError).toBeUndefined();
+	});
+
+	it("starts the Cloud agent again and imports nothing when Cloud could not save the conversation", async () => {
+		const cp = cloudFake({ exportSessionMove: async () => { throw new CloudCpError("Try again.", { status: 409, code: TRANSCRIPT_NOT_CAPTURED }); } });
+		const calls: string[] = [];
+		const error = await moveSessionHere(input, { daemon: daemon(ok(), calls), cloud: cp }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "export", code: TRANSCRIPT_NOT_CAPTURED, rolledBack: true });
+		expect(calls).toEqual([]);
+		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("hands the project over before the import, so a relaunch returns the same session", async () => {
+		const order: string[] = [];
+		const local = fakeDaemon({ "/api/v1/sessions/move/import": ok({ session: { id: "local-9" } }) }, order) as unknown as MoveHereDeps["daemon"];
+		await moveSessionHere(input, { daemon: local, cloud: cloudFake(), onImport: (projectId) => order.push(`saved ${projectId}`) });
+		expect(order).toEqual(["saved proj-1", "/api/v1/sessions/move/import"]);
 	});
 
 	it("deletes the Cloud session when only a pull request or setting did not carry over", async () => {

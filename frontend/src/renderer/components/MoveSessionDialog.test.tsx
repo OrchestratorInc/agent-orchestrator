@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MoveSessionDialog } from "./MoveSessionDialog";
 import { useUiStore } from "../stores/ui-store";
 import { CloudCpError } from "../lib/cloud-cp";
-import { useUnfinishedMoveStore, useUnsettledMoveStore } from "../lib/move-finish";
+import { useUnfinishedMoveStore, useUnsettledMoveHereStore, useUnsettledMoveStore } from "../lib/move-finish";
 import { TooltipProvider } from "./ui/tooltip";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -71,8 +71,8 @@ const moveReplies = {
 	"/api/v1/sessions/{sessionId}/move/complete": { data: {} },
 };
 
-function renderDialog() {
-	useUiStore.setState({ moveSessionTarget: session, globalToast: null });
+function renderDialog(target: WorkspaceSession = session) {
+	useUiStore.setState({ moveSessionTarget: target, globalToast: null });
 	return render(
 		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
 			<TooltipProvider>
@@ -339,6 +339,54 @@ it("keeps recording the move on this computer when that last step fails", async 
 	]);
 });
 
+it("lists every uncommitted file, marks the untracked ones, and says the whole conversation is uploaded", async () => {
+	cloud.features = ["session.branch", "session.transcriptImport"];
+	const changes = Array.from({ length: 7 }, (_, n) => ({ path: `src/file-${n}.go`, status: "modified" }));
+	changes.push({ path: ".env.local", status: "added", untracked: true } as never);
+	daemon.preview = { data: { branch: "feat/x", changes, transcript: { bytes: 2048 } } };
+	renderDialog();
+	expect(await screen.findByText("M src/file-6.go")).toBeTruthy();
+	expect(screen.getByText(".env.local", { exact: false }).closest("li")?.textContent).toBe("?? .env.local");
+	expect(screen.getByTitle("Untracked")).toBeTruthy();
+	expect(screen.getByText("?? marks untracked files. They are committed and pushed too, so check them for secrets.")).toBeTruthy();
+	expect(screen.getByText(/The whole conversation is uploaded to Orchestrator Cloud, including everything the agent read or printed/)).toBeTruthy();
+	expect(screen.queryByText(/more$/)).toBeNull();
+});
+
+it("saves the move before Cloud's create, so a relaunch finishes it under the same id", async () => {
+	daemon.posts = moveReplies;
+	// The app quits while the create is in flight.
+	cloud.createSession.mockImplementationOnce(() => new Promise(() => {})).mockResolvedValueOnce({ session: { id: "cloud-9" } });
+	const first = renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(cloud.createSession).toHaveBeenCalledTimes(1));
+	const saved = useUnsettledMoveStore.getState().moves[":app-1"];
+	expect(saved).toMatchObject({ orgId: "org-1", request: cloud.createSession.mock.calls[0][1] });
+	first.unmount();
+	daemon.postCalls = [];
+
+	renderDialog();
+	expect(await screen.findByText("An earlier move may already have started this session in Orchestrator Cloud. Moving finishes that move.")).toBeTruthy();
+	await user.click(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
+	const [a, b] = cloud.createSession.mock.calls;
+	expect(b).toEqual(a);
+	expect(a[2]).toEqual({ idempotencyKey: saved?.moveId });
+	expect(daemon.postCalls.map((call) => call.path)).toEqual(["/api/v1/sessions/{sessionId}/move/complete"]);
+});
+
+it("moves under the id of a move this computer recorded as pushed", async () => {
+	daemon.posts = moveReplies;
+	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
+	renderDialog({ ...session, moveStarted: "m-recorded" } as WorkspaceSession);
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
+	expect(daemon.postCalls.find((call) => call.path === "/api/v1/sessions/{sessionId}/move/export")?.body).toMatchObject({ moveId: "m-recorded" });
+	expect(cloud.createSession.mock.calls[0][2]).toEqual({ idempotencyKey: "m-recorded" });
+});
+
 describe("moving a Cloud session to this computer", () => {
 	const cloudSession = {
 		id: "cloud-1", title: "Fix login", workspaceId: "cloud-proj", workspaceName: "app", provider: "claude-code", status: "working",
@@ -367,7 +415,9 @@ describe("moving a Cloud session to this computer", () => {
 		cloud.exportSessionMove.mockResolvedValue({
 			manifest: { sourceSessionId: "cloud-1", sourceLabel: "AO Cloud", repoKey: "github.com/acme/app", branch: "feat/login", tip, wip: true, harness: "claude-code" },
 			handoffNote: "moved",
+			transcript: { agentSessionId: "conv-1", projectDir: "/p", transcriptGzip: "H4sI" },
 		});
+		useUnsettledMoveHereStore.setState({ moves: {} });
 		cloud.restartSessionAgent.mockResolvedValue({ requested: true });
 		cloud.deleteSession.mockResolvedValue({ session: { id: "cloud-1", desiredState: "deleted" } });
 		daemon.targets = { data: { targets: [local] } };
@@ -492,5 +542,39 @@ describe("moving a Cloud session to this computer", () => {
 		expect(useUnfinishedMoveStore.getState().moves).toEqual([expect.objectContaining({ kind: "delete-cloud", orgId: "org-1", cloudSessionId: "cloud-1" })]);
 		await user.click(screen.getByRole("button", { name: "Open session" }));
 		expect(navigate).toHaveBeenCalledWith("app", "local-9");
+	});
+	it("keeps the Cloud session when its export leaves out the conversation the preview listed", async () => {
+		cloud.exportSessionMove.mockResolvedValue({
+			manifest: { sourceSessionId: "cloud-1", sourceLabel: "AO Cloud", repoKey: "github.com/acme/app", branch: "feat/login", tip, wip: true, harness: "claude-code" },
+			handoffNote: "moved",
+		});
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.body).toContain("The Cloud session is kept");
+	});
+
+	it("finishes a move here after a relaunch under the same id, though its session now holds the branch", async () => {
+		daemon.posts = { "/api/v1/sessions/move/import": () => { throw new Error("fetch failed"); } };
+		const first = renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText(/may already be starting here/)).toBeTruthy();
+		const firstImport = daemon.postCalls.find((call) => call.path === "/api/v1/sessions/move/import")?.body as { moveId: string; projectId: string };
+		first.unmount();
+
+		// The session the first import started holds the branch here now.
+		daemon.targets = { data: { targets: [{ ...local, refusal: { code: "MOVE_BRANCH_CHECKED_OUT", message: "feat/login is checked out here by Fix login." } }] } };
+		daemon.posts = { "/api/v1/sessions/move/import": { data: { session: { id: "local-9" } } } };
+		daemon.postCalls = [];
+		renderHere();
+		expect(await screen.findByText("An earlier move may already have started this session on this computer. Moving finishes that move.")).toBeTruthy();
+		await user.click(screen.getByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(daemon.postCalls[0]?.body).toMatchObject({ moveId: firstImport.moveId, projectId: firstImport.projectId });
+		expect(cloud.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1");
+		expect(useUnsettledMoveHereStore.getState().moves).toEqual({});
 	});
 });

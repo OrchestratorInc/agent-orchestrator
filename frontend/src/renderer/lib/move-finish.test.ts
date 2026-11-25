@@ -4,9 +4,12 @@ import { useUiStore } from "../stores/ui-store";
 import { CloudCpError } from "./cloud-cp";
 import { MAX_FINISH_AGE_MS, MAX_FINISH_ATTEMPTS, finishExpired, finishMove, useFinishUnfinishedMoves, useUnfinishedMoveStore, type UnfinishedMove } from "./move-finish";
 
-const { completeReply } = vi.hoisted(() => ({ completeReply: { current: {} as { error?: unknown; response?: { status: number } } } }));
+const { completeReply, cloudCp } = vi.hoisted(() => ({
+	completeReply: { current: {} as { error?: unknown; response?: { status: number } } },
+	cloudCp: { current: { client: null as unknown, userId: "" } },
+}));
 vi.mock("./host-clients", () => ({ clientForSessionHost: () => ({ POST: vi.fn(async () => completeReply.current) }) }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: null }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => cloudCp.current }));
 
 const complete: UnfinishedMove = { kind: "complete", sessionId: "app-1", moveId: "m-1", orgId: "org-1", cloudSessionId: "cloud-9" };
 const deleteCloud: UnfinishedMove = { kind: "delete-cloud", orgId: "org-1", cloudSessionId: "cloud-9" };
@@ -40,6 +43,15 @@ describe("finishMove", () => {
 		expect(await finishMove(deleteCloud, { daemon: daemon({}).factory, cloud: { deleteSession: notCaptured } })).toBe("retry");
 		const timeout = vi.fn(async () => { throw new CloudCpError("timeout", { status: 504, code: "WORKER_TIMEOUT" }); });
 		expect(await finishMove(deleteCloud, { daemon: daemon({}).factory, cloud: { deleteSession: timeout } })).toBe("retry");
+	});
+
+	it("leaves a Cloud copy alone under another account, never reading its 404 as deleted", async () => {
+		const gone = vi.fn(async () => { throw new CloudCpError("gone", { status: 404 }); });
+		const mine = { ...deleteCloud, accountId: "user-a" };
+		expect(await finishMove(mine, { daemon: daemon({}).factory, cloud: { deleteSession: gone }, accountId: "user-b" })).toBe("other-account");
+		expect(await finishMove(mine, { daemon: daemon({}).factory, cloud: null, accountId: "" })).toBe("other-account");
+		expect(gone).not.toHaveBeenCalled();
+		expect(await finishMove(mine, { daemon: daemon({}).factory, cloud: { deleteSession: gone }, accountId: "user-a" })).toBe("done");
 	});
 
 	it("deletes the Cloud session a move left, and is done once Cloud no longer has it", async () => {
@@ -89,6 +101,22 @@ describe("useFinishUnfinishedMoves", () => {
 		await waitFor(() => expect(useUnfinishedMoveStore.getState().moves).toEqual([]));
 		expect(useUiStore.getState().globalToast?.body).toBeUndefined();
 		unmount();
+	});
+
+	it("keeps a move for another account, says so once, and does not count tries", async () => {
+		const deleteSession = vi.fn(async () => ({}));
+		cloudCp.current = { client: { deleteSession }, userId: "user-b" };
+		useUiStore.setState({ globalToast: null });
+		useUnfinishedMoveStore.setState({ moves: [] });
+		useUnfinishedMoveStore.getState().add({ ...deleteCloud, accountId: "user-a" });
+		const { unmount } = renderHook(() => useFinishUnfinishedMoves());
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe(
+			"A move to this computer is unfinished for another Orchestrator Cloud account. Sign in to that account to delete its Cloud copy.",
+		));
+		expect(deleteSession).not.toHaveBeenCalled();
+		expect(useUnfinishedMoveStore.getState().moves).toMatchObject([{ accountId: "user-a", attempts: 0 }]);
+		unmount();
+		cloudCp.current = { client: null, userId: "" };
 	});
 
 	it("keeps retrying a move that may still work, counting each try", async () => {

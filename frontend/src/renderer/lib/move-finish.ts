@@ -18,7 +18,16 @@ import { useCloudCp } from "../hooks/useCloudCp";
 export type UnfinishedMove = (
 	| { kind: "complete"; host?: string; sessionId: string; moveId: string; orgId: string; cloudSessionId: string }
 	| { kind: "delete-cloud"; orgId: string; cloudSessionId: string }
-) & { addedAt?: number; attempts?: number };
+) & {
+	addedAt?: number;
+	attempts?: number;
+	/**
+	 * The Orchestrator Cloud account that made the move. A Cloud step runs only
+	 * under it: another account would be refused, or told the session does not
+	 * exist, which must not read as deleted.
+	 */
+	accountId?: string;
+};
 
 const STORAGE_KEY = "ao.move.unfinished";
 const RETRY_MS = 30_000;
@@ -77,7 +86,7 @@ export const useUnfinishedMoveStore = create<UnfinishedMoveStore>((set, get) => 
  * "retry" when it may work later, or a permanent failure (a refusal such as
  * 403, 409 or 422) with its reason.
  */
-export type FinishOutcome = "done" | "retry" | { failed: string };
+export type FinishOutcome = "done" | "retry" | "other-account" | { failed: string };
 
 /** Refusals that retrying will not change. */
 const PERMANENT_STATUSES = new Set([400, 401, 403, 409, 422]);
@@ -91,7 +100,12 @@ function permanent(status: number | undefined, code: string | undefined): boolea
 /** Tries the move's last step once. */
 export async function finishMove(
 	move: UnfinishedMove,
-	deps: { daemon: (host?: string) => Pick<ReturnType<typeof clientForSessionHost>, "POST">; cloud: Pick<CloudCpClient, "deleteSession"> | null },
+	deps: {
+		daemon: (host?: string) => Pick<ReturnType<typeof clientForSessionHost>, "POST">;
+		cloud: Pick<CloudCpClient, "deleteSession"> | null;
+		/** The signed-in Orchestrator Cloud account, "" when signed out. */
+		accountId?: string;
+	},
 ): Promise<FinishOutcome> {
 	if (move.kind === "complete") {
 		const { error, response } = await deps.daemon(move.host).POST("/api/v1/sessions/{sessionId}/move/complete", {
@@ -104,6 +118,7 @@ export async function finishMove(
 		const status = (response as { status?: number } | undefined)?.status;
 		return permanent(status, apiErrorCode(error)) ? { failed: apiErrorMessage(error, "Could not mark the session as moved") } : "retry";
 	}
+	if (move.accountId && move.accountId !== deps.accountId) return "other-account";
 	if (!deps.cloud) return "retry";
 	try {
 		await deps.cloud.deleteSession(move.orgId, move.cloudSessionId);
@@ -131,19 +146,30 @@ function reportGaveUp(move: UnfinishedMove, reason?: string) {
  * has passed, or the step is refused for good; the last two are said once.
  */
 export function useFinishUnfinishedMoves() {
-	const { client } = useCloudCp();
+	const { client, userId } = useCloudCp();
 	const pending = useUnfinishedMoveStore((state) => state.moves.length);
 	useEffect(() => {
 		if (pending === 0) return;
 		let running = false;
+		// Said once per move while another account, or none, is signed in.
+		const toldOtherAccount = new Set<string>();
 		const run = async () => {
 			if (running) return;
 			running = true;
 			try {
 				const store = useUnfinishedMoveStore.getState;
 				for (const move of store().moves) {
-					const outcome = await finishMove(move, { daemon: clientForSessionHost, cloud: client }).catch((): FinishOutcome => "retry");
-					if (outcome === "done") {
+					const outcome = await finishMove(move, { daemon: clientForSessionHost, cloud: client, accountId: client ? userId : "" }).catch((): FinishOutcome => "retry");
+					if (outcome === "other-account") {
+						// Waits for its account without counting tries, but not past a day.
+						if (finishExpired({ ...move, attempts: 0 })) {
+							store().remove(move);
+							reportGaveUp(move);
+						} else if (!toldOtherAccount.has(key(move))) {
+							toldOtherAccount.add(key(move));
+							useUiStore.getState().showGlobalToast(appI18n.t("moveHere.finishOtherAccount"), undefined, { tone: "info" });
+						}
+					} else if (outcome === "done") {
 						store().remove(move);
 					} else if (outcome !== "retry") {
 						store().remove(move);
@@ -162,7 +188,7 @@ export function useFinishUnfinishedMoves() {
 		void run();
 		const timer = window.setInterval(() => void run(), RETRY_MS);
 		return () => window.clearInterval(timer);
-	}, [client, pending]);
+	}, [client, pending, userId]);
 }
 
 /**
@@ -175,9 +201,13 @@ export interface UnsettledMove {
 	moveId: string;
 	orgId: string;
 	request: CloudSessionRequest;
+	/** The createSession idempotency key; the move id when absent. */
+	key?: string;
 	pushed?: MovePushed;
 	/** A Cloud project this move created. */
 	projectId?: string;
+	/** The Orchestrator Cloud account that made the move. */
+	accountId?: string;
 }
 
 const UNSETTLED_KEY = "ao.move.unsettled";
@@ -199,6 +229,39 @@ export const useUnsettledMoveStore = create<UnsettledMoveStore>((set, get) => ({
 		if (move) moves[key] = move;
 		else delete moves[key];
 		save(UNSETTLED_KEY, moves);
+		set({ moves });
+	},
+}));
+
+/**
+ * A move to this computer whose import may have started a session here, kept
+ * past the dialog so a relaunch finishes it under the same move id: this
+ * computer then returns that session instead of starting a second one.
+ */
+export interface UnsettledMoveHere {
+	moveId: string;
+	projectId: string;
+}
+
+const UNSETTLED_HERE_KEY = "ao.move.here";
+
+/** The key a Cloud session's unsettled move here is kept under. */
+export function unsettledMoveHereKey(orgId: string, cloudSessionId: string): string {
+	return `${orgId}:${cloudSessionId}`;
+}
+
+type UnsettledMoveHereStore = {
+	moves: Record<string, UnsettledMoveHere>;
+	set: (key: string, move: UnsettledMoveHere | undefined) => void;
+};
+
+export const useUnsettledMoveHereStore = create<UnsettledMoveHereStore>((set, get) => ({
+	moves: load<Record<string, UnsettledMoveHere>>(UNSETTLED_HERE_KEY, {}),
+	set: (key, move) => {
+		const moves = { ...get().moves };
+		if (move) moves[key] = move;
+		else delete moves[key];
+		save(UNSETTLED_HERE_KEY, moves);
 		set({ moves });
 	},
 }));
