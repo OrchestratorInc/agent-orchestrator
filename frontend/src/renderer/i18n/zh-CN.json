@@ -1912,7 +1912,7 @@
 	"settings.telemetryEvents.unsupported": "此平台不支持可靠的同意写入，因此无法启用。",
 	"settings.telemetryEvents.releaseBlocked": "此版本的安全门已禁用错误报告。",
 	"settings.analytics.label": "共享使用分析",
-	"settings.analytics.description": "使用随机安装 ID 向 PostHog 发送匿名的产品使用事件，不创建用户档案，也不根据 IP 推断位置。只有开启下方选项时才会附带你的 GitHub 用户名和 Cloud 用户 ID；你的邮箱永远不会发送。关闭后，此桌面端、守护进程和所有已配对手机都会停止分析。开启期间，还会从 PostHog 加载用于产品实验的功能开关。运行 `ao telemetry log` 可查看发送的每个事件。",
+	"settings.analytics.description": "使用随机安装 ID 向 PostHog 发送匿名的产品使用事件，不创建用户档案，也不根据 IP 推断位置。只有开启下方选项时才会附带你的 GitHub 用户名和 Cloud 用户 ID；你的邮箱永远不会发送。关闭后，此桌面端、守护进程和所有已配对手机都会停止分析。开启期间，还会从 PostHog 加载用于产品实验的功能开关。运行 `ao telemetry log` 可查看此桌面端及其守护进程发送的事件；不包括手机上的事件。",
 	"settings.analytics.loadFailed": "无法加载分析偏好设置。",
 	"settings.analytics.saveFailed": "无法保存分析偏好设置。",
 	"settings.shareIdentity.label": "包含我的账户身份",

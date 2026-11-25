@@ -1532,6 +1532,9 @@ export async function initTelemetry(): Promise<boolean> {
 		shareIdentity = await Promise.resolve()
 			.then(() => aoBridge.telemetry.getShareIdentity())
 			.catch(() => false);
+		// The first registration ran with sharing assumed off; apply the loaded
+		// preference, so a Cloud user noted before init is attached when shared.
+		if (!analyticsOptedOut) registerBaseProperties();
 		void syncGithubLogin();
 		if (bootstrap.lifetimeSessions === undefined) void syncLifetimeSessions();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog

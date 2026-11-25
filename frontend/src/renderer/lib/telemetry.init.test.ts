@@ -660,6 +660,21 @@ describe("PostHog identity and opt-out", () => {
 		expect(recordExported).not.toHaveBeenCalled();
 	});
 
+	it("attaches a Cloud user noted before init once the loaded preference shares identity", async () => {
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareIdentity: vi.fn(async () => true), getLifetimeSessions: vi.fn(async () => null), claimFirstOpen: vi.fn(async () => "ineligible"), capture: vi.fn(async () => true) },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { identifyCloudUser, initTelemetry } = await import("./telemetry");
+		await identifyCloudUser({ id: "user_01H" });
+		await initTelemetry();
+		const registered = (posthogStub.register.mock.calls as unknown as [Record<string, unknown>][]).map(([props]) => props);
+		expect(registered.at(-1)).toMatchObject({ ao_cloud_user_id: "user_01H" });
+	});
+
 	// The website visitor id a sign-in may carry is never aliased into anything.
 	it("are never linked: no alias and no link event", async () => {
 		mockBridge(async () => bootstrap);

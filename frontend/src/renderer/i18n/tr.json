@@ -1937,7 +1937,7 @@
 	"settings.telemetryEvents.unsupported": "Kalıcı onam kayıtları desteklenmediği için bu platformda etkinleştirme kullanılamıyor.",
 	"settings.telemetryEvents.releaseBlocked": "Hata raporlama bu sürümün güvenlik geçidi tarafından devre dışı bırakıldı.",
 	"settings.analytics.label": "Kullanım analizlerini paylaş",
-	"settings.analytics.description": "Anonim ürün kullanım olaylarını rastgele bir kurulum kimliğiyle, kişi profili ve IP tabanlı konum olmadan PostHog'a gönderir. GitHub kullanıcı adınız ve Cloud kullanıcı kimliğiniz yalnızca aşağıdaki seçeneği açarsanız eklenir; e-postanız asla gönderilmez. Bunu kapatmak bu masaüstünde, daemon'da ve eşlenmiş tüm telefonlarda analitiği durdurur. Açıkken ürün deneyleri için PostHog'dan özellik bayrakları da yüklenir. Gönderilen her olayı görmek için `ao telemetry log` komutunu çalıştırın.",
+	"settings.analytics.description": "Anonim ürün kullanım olaylarını rastgele bir kurulum kimliğiyle, kişi profili ve IP tabanlı konum olmadan PostHog'a gönderir. GitHub kullanıcı adınız ve Cloud kullanıcı kimliğiniz yalnızca aşağıdaki seçeneği açarsanız eklenir; e-postanız asla gönderilmez. Bunu kapatmak bu masaüstünde, daemon'da ve eşlenmiş tüm telefonlarda analitiği durdurur. Açıkken ürün deneyleri için PostHog'dan özellik bayrakları da yüklenir. Bu masaüstünün ve daemon'unun gönderdiği olayları görmek için `ao telemetry log` komutunu çalıştırın; telefon olayları dahil değildir.",
 	"settings.analytics.loadFailed": "Analiz tercihi yüklenemedi.",
 	"settings.analytics.saveFailed": "Analiz tercihi kaydedilemedi.",
 	"settings.shareIdentity.label": "Hesap kimliğimi ekle",

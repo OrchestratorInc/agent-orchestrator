@@ -328,15 +328,23 @@ func TestTelemetryLocalRecordsExportedEventsAndSwitchesTheOptOut(t *testing.T) {
 	}
 	local := telemetryadapter.NewLocalSQLiteSink(store, slog.New(slog.DiscardHandler), 0)
 	cfg := config.Config{DataDir: dataDir, Telemetry: config.TelemetryConfig{Events: true}}
-	tl := newTelemetryLocal(cfg, store, local, ident, true, func(context.Context) bool { return false })
+	discarded := 0
+	tl := newTelemetryLocal(cfg, store, telemetryLocalParts{local: local, discardDaily: func() { discarded++ }}, ident, true, func(context.Context) bool { return false })
 
 	tl.Record(t.Context(), telemetryadapter.ExportedEvent{Event: "ao.routes.viewed", Surface: "desktop", DistinctID: "ins_x", Properties: map[string]any{"surface": "board"}})
+	// Newer, different events: the event filter must reach behind them.
+	for range 3 {
+		tl.Record(t.Context(), telemetryadapter.ExportedEvent{Event: "ao.app.active", Surface: "daemon", Properties: map[string]any{}})
+	}
 	// A raw local event is not an export and must not appear in the log.
 	local.Emit(t.Context(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon", OccurredAt: time.Now(), Payload: map[string]any{"port": 3001}})
 	if err := local.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	events, err := tl.List(t.Context(), time.Unix(0, 0), 10)
+	if all, err := tl.List(t.Context(), time.Unix(0, 0), 10, ""); err != nil || len(all) != 4 {
+		t.Fatalf("unfiltered log = %d events (%v), want 4 exported and no raw local event", len(all), err)
+	}
+	events, err := tl.List(t.Context(), time.Unix(0, 0), 1, "ao.routes.viewed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,6 +360,9 @@ func TestTelemetryLocalRecordsExportedEventsAndSwitchesTheOptOut(t *testing.T) {
 	}
 	if !ident.OptedOut() {
 		t.Fatal("ao telemetry off did not write the shared opt-out marker")
+	}
+	if discarded != 1 {
+		t.Fatalf("daily CLI usage counts discarded %d times on opt-out, want 1", discarded)
 	}
 	if st := tl.Status(t.Context()); !st.OptedOut || st.AnalyticsSending || st.InstallID != "" {
 		t.Fatalf("opted-out status = %#v", st)

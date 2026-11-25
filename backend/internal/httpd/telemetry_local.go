@@ -41,7 +41,9 @@ type TelemetryStatus struct {
 // TelemetryLocal backs the loopback-only `ao telemetry` routes. Every field is
 // required when the struct is supplied.
 type TelemetryLocal struct {
-	List        func(ctx context.Context, since time.Time, limit int) ([]telemetryadapter.ExportedEvent, error)
+	// List returns exported events newest first; a non-empty event keeps only
+	// that name, filtered before limit applies.
+	List        func(ctx context.Context, since time.Time, limit int, event string) ([]telemetryadapter.ExportedEvent, error)
 	Record      func(ctx context.Context, ev telemetryadapter.ExportedEvent)
 	Status      func(ctx context.Context) TelemetryStatus
 	SetOptedOut func(ctx context.Context, optedOut bool) error
@@ -95,7 +97,12 @@ func mountTelemetryLocal(r chi.Router, local *TelemetryLocal) {
 			}
 			since = t
 		}
-		events, err := local.List(req.Context(), since, limit)
+		event := req.URL.Query().Get("event")
+		if event != "" && !exportedEventNamePattern.MatchString(event) {
+			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_EVENT", "event must be an event name", nil)
+			return
+		}
+		events, err := local.List(req.Context(), since, limit, event)
 		if err != nil {
 			envelope.WriteAPIError(w, req, http.StatusInternalServerError, "internal_error", "TELEMETRY_LOG_UNAVAILABLE", "telemetry log could not be read", nil)
 			return

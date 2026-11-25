@@ -270,7 +270,7 @@ Lets your other devices use this machine through its authenticated remote listen
 | `ao import` | Import legacy projects from `~/.agent-orchestrator`; supports `--dry-run`, `--yes`, and `--json`. Unsupported legacy plugin settings are reported as dropped. |
 | `ao completion bash\|zsh\|fish\|powershell` | Generate a shell completion script. |
 | `ao version` / `ao --version` | Print build metadata. |
-| `ao telemetry status\|log\|off\|on` | Show which telemetry is on, list exactly which events and properties were sent (`--since`, `--event`, `--limit`, `--json`), or switch Share usage analytics off/on for the desktop, the daemon and a paired phone. |
+| `ao telemetry status\|log\|off\|on` | Show which telemetry is on, list the events the desktop and daemon handed to or had accepted by PostHog, with their properties (`--since`, `--event`, `--limit`, `--json`; phone events are not included, and desktop events are recorded when handed to PostHog, before delivery is confirmed), or switch Share usage analytics off/on for the desktop, the daemon and a paired phone. |
 
 ## Environment
 

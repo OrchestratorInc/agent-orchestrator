@@ -1966,7 +1966,7 @@
 	"settings.telemetryEvents.unsupported": "A ativação não está disponível nesta plataforma.",
 	"settings.telemetryEvents.releaseBlocked": "Os relatórios de erro estão desativados pelo bloqueio de segurança desta versão.",
 	"settings.analytics.label": "Compartilhar análises de uso",
-	"settings.analytics.description": "Envia eventos de uso anônimos ao PostHog com um ID de instalação aleatório, sem perfis de pessoa nem localização baseada no IP. Seu nome de usuário do GitHub e seu ID de usuário do Cloud só são adicionados se você ativar a opção abaixo; seu e-mail nunca é enviado. Desativar isso interrompe as análises neste desktop, no daemon e em qualquer celular pareado. Enquanto ativado, também carrega feature flags do PostHog para experimentos de produto. Execute `ao telemetry log` para ver cada evento enviado.",
+	"settings.analytics.description": "Envia eventos de uso anônimos ao PostHog com um ID de instalação aleatório, sem perfis de pessoa nem localização baseada no IP. Seu nome de usuário do GitHub e seu ID de usuário do Cloud só são adicionados se você ativar a opção abaixo; seu e-mail nunca é enviado. Desativar isso interrompe as análises neste desktop, no daemon e em qualquer celular pareado. Enquanto ativado, também carrega feature flags do PostHog para experimentos de produto. Execute `ao telemetry log` para ver os eventos que este desktop e o daemon enviaram; eventos do celular não são incluídos.",
 	"settings.analytics.loadFailed": "Não foi possível carregar a preferência de análises.",
 	"settings.analytics.saveFailed": "Não foi possível salvar a preferência de análises.",
 	"settings.shareIdentity.label": "Incluir a identidade da minha conta",

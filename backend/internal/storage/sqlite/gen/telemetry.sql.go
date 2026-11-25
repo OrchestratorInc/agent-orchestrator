@@ -47,20 +47,22 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 const listExportedTelemetryEventsSince = `-- name: ListExportedTelemetryEventsSince :many
 SELECT id, occurred_at, name, source, level, project_id, session_id, request_id, payload_json
 FROM telemetry_event
-WHERE occurred_at >= ? AND source LIKE 'exported:%'
+WHERE occurred_at >= ?1 AND source LIKE 'exported:%'
+  AND (CAST(?2 AS TEXT) = '' OR name = ?2)
 ORDER BY occurred_at DESC
-LIMIT ?
+LIMIT ?3
 `
 
 type ListExportedTelemetryEventsSinceParams struct {
 	OccurredAt time.Time
-	Limit      int64
+	EventName  string
+	RowLimit   int64
 }
 
 // Rows recorded when an event was exported (source "exported:<surface>"),
 // newest first, for `ao telemetry log`.
 func (q *Queries) ListExportedTelemetryEventsSince(ctx context.Context, arg ListExportedTelemetryEventsSinceParams) ([]TelemetryEvent, error) {
-	rows, err := q.db.QueryContext(ctx, listExportedTelemetryEventsSince, arg.OccurredAt, arg.Limit)
+	rows, err := q.db.QueryContext(ctx, listExportedTelemetryEventsSince, arg.OccurredAt, arg.EventName, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

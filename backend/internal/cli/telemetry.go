@@ -39,8 +39,8 @@ func newTelemetryCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "telemetry",
 		Short: "See and control what Orchestrator sends as telemetry",
-		Long: "See and control product telemetry. `status` shows what is on, `log` shows exactly which events and " +
-			"properties were sent, and `off`/`on` switch Share usage analytics for the desktop, the daemon and a " +
+		Long: "See and control product telemetry. `status` shows what is on, `log` shows a local record of the events " +
+			"sent and their properties, and `off`/`on` switch Share usage analytics for the desktop, the daemon and a " +
 			"paired phone. Error reports have their own Settings switch; DO_NOT_TRACK=1 turns off both.",
 	}
 	cmd.AddCommand(newTelemetryStatusCommand(ctx), newTelemetryLogCommand(ctx), newTelemetrySwitchCommand(ctx, "off", true), newTelemetrySwitchCommand(ctx, "on", false))
@@ -116,10 +116,11 @@ func newTelemetryLogCommand(ctx *commandContext) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "log",
-		Short: "Show exactly which telemetry events and properties were sent",
-		Long: "Lists telemetry events this machine sent, newest first, with every property exactly as sent: daemon and " +
-			"CLI events once PostHog accepted them, and desktop app events as they were handed to PostHog. Kept locally " +
-			"for AO_TELEMETRY_RETENTION (30 days by default). Phone events are not included.",
+		Short: "Show a local record of the telemetry events sent and their properties",
+		Long: "Lists a best-effort local record of telemetry events, newest first, with their properties: daemon and " +
+			"CLI events once PostHog acknowledged them, and desktop app events as they were handed to PostHog, before " +
+			"delivery is confirmed. It is not a complete delivery history, and phone events are not included. Kept " +
+			"locally for AO_TELEMETRY_RETENTION (30 days by default).",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if limit < 1 || limit > 1000 {
@@ -129,6 +130,11 @@ func newTelemetryLogCommand(ctx *commandContext) *cobra.Command {
 				return usageError{fmt.Errorf("--since must not be negative")}
 			}
 			query := url.Values{"limit": {fmt.Sprint(limit)}}
+			// Filtered by the daemon before --limit applies, so an older
+			// matching event is still found behind newer ones.
+			if event != "" {
+				query.Set("event", event)
+			}
 			if since > 0 {
 				query.Set("since", time.Now().Add(-since).UTC().Format(time.RFC3339))
 			}
@@ -139,15 +145,6 @@ func newTelemetryLogCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			events := resp.Events
-			if event != "" {
-				kept := events[:0]
-				for _, ev := range events {
-					if ev.Event == event {
-						kept = append(kept, ev)
-					}
-				}
-				events = kept
-			}
 			if asJSON {
 				if events == nil {
 					events = []telemetryLogEvent{}

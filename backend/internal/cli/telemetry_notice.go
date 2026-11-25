@@ -25,7 +25,7 @@ const telemetryDocsURL = "https://github.com/Untrivial-ai/agent-orchestrator/blo
 const telemetryNoticeText = `Orchestrator collects anonymous usage and error telemetry when its daemon runs from the
 desktop app: command names, app version, OS, error codes and a random install ID. It never
 sends your code, prompts, agent output or file paths, and sends your GitHub username or
-Cloud account ID only if you turn that on. See exactly what was sent with
+Cloud account ID only if you turn that on. See a record of what was sent with
 ` + "`ao telemetry log`" + `; opt out with ` + "`ao telemetry off`" + `, in Settings > General > Privacy,
 or with DO_NOT_TRACK=1. Details: ` + telemetryDocsURL + "\n"
 

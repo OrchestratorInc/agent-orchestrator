@@ -1937,7 +1937,7 @@
 	"settings.telemetryEvents.unsupported": "Enabling is unavailable on this platform because durable consent writes are not supported.",
 	"settings.telemetryEvents.releaseBlocked": "Error reporting is disabled by this release's safety gate.",
 	"settings.analytics.label": "Share usage analytics",
-	"settings.analytics.description": "Sends anonymous product usage events to PostHog with a random install ID, without person profiles or IP-based location. Your GitHub username and Cloud user ID are added only if you turn on the option below; your email is never sent. Turning this off stops analytics on this desktop, the daemon and any paired phone. While on, it also loads feature flags from PostHog for product experiments. Run `ao telemetry log` to see every event sent.",
+	"settings.analytics.description": "Sends anonymous product usage events to PostHog with a random install ID, without person profiles or IP-based location. Your GitHub username and Cloud user ID are added only if you turn on the option below; your email is never sent. Turning this off stops analytics on this desktop, the daemon and any paired phone. While on, it also loads feature flags from PostHog for product experiments. Run `ao telemetry log` to see the events this desktop and its daemon sent; phone events are not included.",
 	"settings.analytics.loadFailed": "Could not load the analytics preference.",
 	"settings.analytics.saveFailed": "Could not save the analytics preference.",
 	"settings.shareIdentity.label": "Include my account identity",

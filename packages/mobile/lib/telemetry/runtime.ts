@@ -123,8 +123,11 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		phoneInstallId: cachedInstallId,
 		awaitIdentityMigration: true,
 		allow: allowEvent,
-		// Nothing is captured until loadMobileOptOut() has read the saved preference.
+		// Nothing is captured until loadMobileOptOut() has read the saved preference,
+		// and a desktop that answers first cannot release capture or Sentry consent
+		// before the phone's own switch is known.
 		awaitPreference: true,
+		awaitUserPreference: true,
 		onOptOutChange: (optedOut) => {
 			setMobileSentryConsent(!optedOut);
 			uiUsageTracker?.setEnabled(!optedOut);
@@ -181,13 +184,13 @@ export async function loadMobileOptOut(): Promise<void> {
 			if (!reset) telemetry.resetPhoneIdentity();
 		}
 	}
-	let stored = false;
-	let user = false;
-	try {
-		[stored, user] = (await Promise.all([AsyncStorage.getItem(OPT_OUT_STORAGE_KEY), AsyncStorage.getItem(USER_OPT_OUT_STORAGE_KEY)])).map((value) => value === "1");
-	} catch {
-		/* unreadable storage: stay opted in rather than guess */
-	}
+	// Read independently, so one failure cannot erase the other. An unreadable
+	// desktop marker stays opted in rather than guess, as before; an unreadable
+	// phone switch fails closed for this launch, since the person may have
+	// turned it off and nothing else can confirm otherwise.
+	const [desktopRead, userRead] = await Promise.allSettled([AsyncStorage.getItem(OPT_OUT_STORAGE_KEY), AsyncStorage.getItem(USER_OPT_OUT_STORAGE_KEY)]);
+	const stored = desktopRead.status === "fulfilled" && desktopRead.value === "1";
+	const user = userRead.status !== "fulfilled" || userRead.value === "1";
 	// Both applied in one synchronous step, so capture is released only once
 	// the phone's own switch is known too.
 	telemetry?.setUserOptedOut(user);
@@ -212,8 +215,16 @@ export async function loadUserMobileOptOut(): Promise<boolean> {
  * so it holds across launches.
  */
 export async function setUserMobileOptOut(optedOut: boolean): Promise<void> {
-	telemetry?.setUserOptedOut(optedOut);
-	await (optedOut ? AsyncStorage.setItem(USER_OPT_OUT_STORAGE_KEY, "1") : AsyncStorage.removeItem(USER_OPT_OUT_STORAGE_KEY));
+	// Opting out stops capture before saving; opting back in clears the saved
+	// opt-out first, so a failed write never leaves capture on behind a switch
+	// that shows off.
+	if (optedOut) {
+		telemetry?.setUserOptedOut(true);
+		await AsyncStorage.setItem(USER_OPT_OUT_STORAGE_KEY, "1");
+		return;
+	}
+	await AsyncStorage.removeItem(USER_OPT_OUT_STORAGE_KEY);
+	telemetry?.setUserOptedOut(false);
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */

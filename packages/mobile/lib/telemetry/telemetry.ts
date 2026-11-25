@@ -88,6 +88,12 @@ export type MobileTelemetryOptions = {
 	 * previously opted-out phone must not send in that gap.
 	 */
 	awaitPreference?: boolean;
+	/**
+	 * Hold capture, and the effective opt-out reported to onOptOutChange, until
+	 * setUserOptedOut() has applied the phone's saved switch. A desktop answer
+	 * that arrives first is still recorded and applies once the switch is known.
+	 */
+	awaitUserPreference?: boolean;
 };
 
 export function createMobileTelemetry(
@@ -103,6 +109,7 @@ export function createMobileTelemetry(
 	let optedOut = false;
 	let desktopOptedOut = false;
 	let userOptedOut = false;
+	let userPreferenceKnown = !(options.awaitUserPreference ?? false);
 	let blocked = options.awaitPreference ?? false;
 	let identityPending = options.awaitIdentityMigration ?? false;
 	let liveStateApplied = false;
@@ -162,11 +169,13 @@ export function createMobileTelemetry(
 	const setOptedOut = (next: boolean): void => {
 		desktopOptedOut = next;
 		options.onDesktopOptOutChange?.(next);
+		if (!userPreferenceKnown) return;
 		applyOptOut(userOptedOut || desktopOptedOut);
 	};
 
 	const setUserOptedOut = (next: boolean): void => {
 		userOptedOut = next;
+		userPreferenceKnown = true;
 		applyOptOut(userOptedOut || desktopOptedOut);
 	};
 
@@ -199,7 +208,7 @@ export function createMobileTelemetry(
 
 	const restoreOptOut = (saved: boolean): void => {
 		if (liveStateApplied) {
-			blocked = false;
+			if (userPreferenceKnown) blocked = false;
 			return;
 		}
 		setOptedOut(saved);

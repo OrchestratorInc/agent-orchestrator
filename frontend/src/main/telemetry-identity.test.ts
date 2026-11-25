@@ -441,6 +441,28 @@ describe("TelemetryIdentityController after the app quit mid sign-out", () => {
   });
 });
 
+describe("TelemetryIdentityController marker write ordering", () => {
+	it("lets the last of overlapping identity requests decide the marker and the broadcast", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const share = vi.fn();
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, vi.fn() as never, vi.fn(), share);
+		// Enable then disable without awaiting: the enable's mkdir must not let it land last.
+		await Promise.all([ctl.setShareIdentity(true), ctl.setShareIdentity(false)]);
+		expect(ctl.isSharingIdentity()).toBe(false);
+		expect(share.mock.calls).toEqual([[true], [false]]);
+		await Promise.all([ctl.setShareIdentity(false), ctl.setShareIdentity(true)]);
+		expect(ctl.isSharingIdentity()).toBe(true);
+		expect(share.mock.calls.at(-1)).toEqual([true]);
+	});
+
+	it("orders opt-out writes the same way", async () => {
+		const { ctl, broadcast } = await controller();
+		await Promise.all([ctl.setOptedOut(true), ctl.setOptedOut(false)]);
+		expect(ctl.isOptedOut()).toBe(false);
+		expect(broadcast.mock.calls).toEqual([[true], [false]]);
+	});
+});
+
 describe("TelemetryIdentityController local telemetry log", () => {
 	it("forwards a renderer event to the daemon's exported log, and nothing while opted out", async () => {
 		const { ctl, fetcher } = await controller();

@@ -60,11 +60,13 @@ func (s *Store) ListTelemetryEventsSince(ctx context.Context, since time.Time, l
 }
 
 // ListExportedTelemetryEventsSince returns the rows recorded when an event was
-// exported to PostHog, newest first, capped by limit.
-func (s *Store) ListExportedTelemetryEventsSince(ctx context.Context, since time.Time, limit int64) ([]gen.TelemetryEvent, error) {
+// exported to PostHog, newest first, capped by limit. A non-empty event keeps
+// only that event name, filtered before the limit applies.
+func (s *Store) ListExportedTelemetryEventsSince(ctx context.Context, since time.Time, limit int64, event string) ([]gen.TelemetryEvent, error) {
 	rows, err := s.qr.ListExportedTelemetryEventsSince(ctx, gen.ListExportedTelemetryEventsSinceParams{
 		OccurredAt: since.UTC(),
-		Limit:      limit,
+		EventName:  event,
+		RowLimit:   limit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list exported telemetry events since %s: %w", since.UTC().Format(time.RFC3339), err)

@@ -308,9 +308,7 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	if telemetrymeta.IsRoutineInternalCLICommand(commandPath) {
 		return false
 	}
-	// Inspecting or switching telemetry is never itself reported: `ao telemetry
-	// off` must not send an event on its way to opting out.
-	if commandPath == "ao telemetry" || strings.HasPrefix(commandPath, "ao telemetry ") {
+	if isTelemetryCommandPath(commandPath) {
 		return false
 	}
 	switch commandPath {
@@ -323,6 +321,13 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	default:
 		return true
 	}
+}
+
+// isTelemetryCommandPath reports `ao telemetry` and its subcommands. Inspecting
+// or switching telemetry is never itself reported, as an invocation or as a
+// usage error: `ao telemetry off` must not send an event on its way to opting out.
+func isTelemetryCommandPath(commandPath string) bool {
+	return commandPath == "ao telemetry" || strings.HasPrefix(commandPath, "ao telemetry ")
 }
 
 func (c *commandContext) emitCLIInvoked(ctx context.Context, cmd *cobra.Command) {
@@ -355,6 +360,9 @@ func (c *commandContext) emitCLIUsageError(ctx context.Context, args []string, e
 		return
 	}
 	command, commandPath := usageErrorCommand(args)
+	if isTelemetryCommandPath(commandPath) {
+		return
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	_ = c.postLoopbackJSON(reqCtx, "/internal/telemetry/cli-usage-error", map[string]string{

@@ -1930,7 +1930,7 @@
 	"settings.telemetryEvents.unsupported": "このプラットフォームでは有効化できません。",
 	"settings.telemetryEvents.releaseBlocked": "このリリースの安全ゲートによりエラー報告は無効です。",
 	"settings.analytics.label": "利用状況の分析を共有",
-	"settings.analytics.description": "ランダムなインストールIDとともに匿名の利用イベントをPostHogに送信します。パーソンプロファイルやIPアドレスによる位置情報は使いません。GitHubユーザー名とCloudユーザーIDは下のオプションをオンにした場合のみ追加され、メールアドレスは送信されません。オフにすると、このデスクトップ、デーモン、ペアリングしたスマートフォンでの分析が停止します。オンの間は、製品実験のためにPostHogからフィーチャーフラグも読み込みます。送信されたすべてのイベントは `ao telemetry log` で確認できます。",
+	"settings.analytics.description": "ランダムなインストールIDとともに匿名の利用イベントをPostHogに送信します。パーソンプロファイルやIPアドレスによる位置情報は使いません。GitHubユーザー名とCloudユーザーIDは下のオプションをオンにした場合のみ追加され、メールアドレスは送信されません。オフにすると、このデスクトップ、デーモン、ペアリングしたスマートフォンでの分析が停止します。オンの間は、製品実験のためにPostHogからフィーチャーフラグも読み込みます。このデスクトップとそのデーモンが送信したイベントは `ao telemetry log` で確認できます（スマートフォンのイベントは含まれません）。",
 	"settings.analytics.loadFailed": "分析設定を読み込めませんでした。",
 	"settings.analytics.saveFailed": "分析設定を保存できませんでした。",
 	"settings.shareIdentity.label": "アカウントの識別情報を含める",

@@ -18,10 +18,11 @@ func TestTelemetryLocalRoutes(t *testing.T) {
 	var recorded []telemetryadapter.ExportedEvent
 	var listLimit int
 	var listSince time.Time
+	var listEvent string
 	local := &TelemetryLocal{
 		Status: func(context.Context) TelemetryStatus { return TelemetryStatus{OptedOut: optedOut, RetentionDays: 30} },
-		List: func(_ context.Context, since time.Time, limit int) ([]telemetryadapter.ExportedEvent, error) {
-			listSince, listLimit = since, limit
+		List: func(_ context.Context, since time.Time, limit int, event string) ([]telemetryadapter.ExportedEvent, error) {
+			listSince, listLimit, listEvent = since, limit, event
 			return []telemetryadapter.ExportedEvent{{Event: "ao.app.active", Surface: "daemon", Properties: map[string]any{"client": "cli"}}}, nil
 		},
 		Record:      func(_ context.Context, ev telemetryadapter.ExportedEvent) { recorded = append(recorded, ev) },
@@ -51,9 +52,9 @@ func TestTelemetryLocalRoutes(t *testing.T) {
 		t.Fatalf("opt-out without a value = %d, want 400", rec.Code)
 	}
 
-	rec := do(http.MethodGet, "/internal/telemetry/log?limit=5&since=2026-11-01T00:00:00Z", "", "")
-	if rec.Code != http.StatusOK || listLimit != 5 || !listSince.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("log = %d limit=%d since=%s", rec.Code, listLimit, listSince)
+	rec := do(http.MethodGet, "/internal/telemetry/log?limit=5&since=2026-11-01T00:00:00Z&event=ao.app.active", "", "")
+	if rec.Code != http.StatusOK || listLimit != 5 || listEvent != "ao.app.active" || !listSince.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("log = %d limit=%d since=%s event=%q", rec.Code, listLimit, listSince, listEvent)
 	}
 	var body struct {
 		Events []telemetryadapter.ExportedEvent `json:"events"`
@@ -61,7 +62,7 @@ func TestTelemetryLocalRoutes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Events) != 1 || body.Events[0].Properties["client"] != "cli" {
 		t.Fatalf("log body = %s (%v)", rec.Body, err)
 	}
-	for _, bad := range []string{"?limit=0", "?limit=5000", "?since=yesterday"} {
+	for _, bad := range []string{"?limit=0", "?limit=5000", "?since=yesterday", "?event=has%20space"} {
 		if rec := do(http.MethodGet, "/internal/telemetry/log"+bad, "", ""); rec.Code != http.StatusBadRequest {
 			t.Fatalf("log%s = %d, want 400", bad, rec.Code)
 		}

@@ -55,6 +55,9 @@ func TestTelemetryLogPrintsEveryPropertyAndFilters(t *testing.T) {
 	deps := telemetryDeps(t, func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path == "/internal/telemetry/log" {
 			query = req.URL.RawQuery
+			if req.URL.Query().Get("event") == "ao.routes.viewed" {
+				return jsonResponse(http.StatusOK, `{"events":[{"occurredAt":"2026-11-26T09:00:00Z","event":"ao.routes.viewed","surface":"desktop","properties":{"surface":"board"}}]}`), nil
+			}
 			return jsonResponse(http.StatusOK, `{"events":[
 				{"occurredAt":"2026-11-26T10:00:00Z","event":"ao.app.active","surface":"daemon","distinctId":"ins_1","properties":{"client":"cli","$geoip_disable":true}},
 				{"occurredAt":"2026-11-26T09:00:00Z","event":"ao.routes.viewed","surface":"desktop","properties":{"surface":"board"}}]}`), nil
@@ -76,6 +79,9 @@ func TestTelemetryLogPrintsEveryPropertyAndFilters(t *testing.T) {
 	out, _, err = executeCLI(t, deps, "telemetry", "log", "--event", "ao.routes.viewed", "--json")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(query, "event=ao.routes.viewed") {
+		t.Fatalf("event filter not sent to the daemon: %q", query)
 	}
 	var events []map[string]any
 	if err := json.Unmarshal([]byte(out), &events); err != nil || len(events) != 1 || events[0]["event"] != "ao.routes.viewed" {

@@ -36,24 +36,32 @@ var aggregatedEventNames = []string{
 	"ao.daemon.panic",
 }
 
+// telemetryLocalParts are the pieces `ao telemetry` needs from the sink chain:
+// the local SQLite sink that records exported events (nil when local events are
+// off), and the daily CLI usage summary's Discard (nil when nothing exports), so
+// an opt-out clears counts held in memory, not only the file.
+type telemetryLocalParts struct {
+	local        ports.EventSink
+	discardDaily func()
+}
+
 // newTelemetrySink also returns the live telemetry identity (nil when the data
 // dir is unknown), shared with the remote sink so a sign-in or opt-out seen by
-// the identity routes is what the exporter stamps and honors, and the local
-// SQLite sink (nil when local events are off), which also records every
-// exported event for `ao telemetry log`.
-func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, ports.EventSink, bool) {
+// the identity routes is what the exporter stamps and honors, and the parts
+// `ao telemetry` uses.
+func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, telemetryLocalParts, bool) {
 	if !cfg.Telemetry.Events {
-		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), nil, false
+		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), telemetryLocalParts{}, false
 	}
 	local := telemetryadapter.NewLocalSQLiteSink(store, log, cfg.Telemetry.LocalRetention)
 	if cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
-		return local, standaloneIdentity(cfg, log), local, false
+		return local, standaloneIdentity(cfg, log), telemetryLocalParts{local: local}, false
 	}
 	remote, err := telemetryadapter.NewPostHogSink(cfg.DataDir, cfg.Telemetry.PostHogKey, cfg.Telemetry.PostHogHost,
 		cfg.Telemetry.AppVersion, cfg.Agent, nil, log)
 	if err != nil {
 		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
-		return local, standaloneIdentity(cfg, log), local, false
+		return local, standaloneIdentity(cfg, log), telemetryLocalParts{local: local}, false
 	}
 	// Every event PostHog accepted is written locally exactly as sent, so
 	// `ao telemetry log` shows what left the machine, not the raw local stream.
@@ -91,14 +99,15 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
-	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), local, true
+	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), telemetryLocalParts{local: local, discardDaily: daily.Discard}, true
 }
 
 // newTelemetryLocal backs `ao telemetry log|status|on|off`. The log reads the
 // exported rows in the local event store; renderer events forwarded by Electron
 // main are recorded there too. The opt-out writes the same marker Settings
 // writes, which the desktop, the daemon and a paired phone all honor.
-func newTelemetryLocal(cfg config.Config, store *sqlite.Store, local ports.EventSink, ident ports.TelemetryIdentityStore, remoteActive bool, errorReports func(context.Context) bool) *httpd.TelemetryLocal {
+func newTelemetryLocal(cfg config.Config, store *sqlite.Store, parts telemetryLocalParts, ident ports.TelemetryIdentityStore, remoteActive bool, errorReports func(context.Context) bool) *httpd.TelemetryLocal {
+	local := parts.local
 	retentionDays := int(telemetryadapter.DefaultRetention / (24 * time.Hour))
 	if cfg.Telemetry.LocalRetention >= telemetryadapter.MinRetention {
 		retentionDays = int(cfg.Telemetry.LocalRetention / (24 * time.Hour))
@@ -124,11 +133,11 @@ func newTelemetryLocal(cfg config.Config, store *sqlite.Store, local ports.Event
 	}
 	return &httpd.TelemetryLocal{
 		Status: status,
-		List: func(ctx context.Context, since time.Time, limit int) ([]telemetryadapter.ExportedEvent, error) {
+		List: func(ctx context.Context, since time.Time, limit int, event string) ([]telemetryadapter.ExportedEvent, error) {
 			if store == nil {
 				return nil, nil
 			}
-			rows, err := store.ListExportedTelemetryEventsSince(ctx, since, int64(limit))
+			rows, err := store.ListExportedTelemetryEventsSince(ctx, since, int64(limit), event)
 			if err != nil {
 				return nil, err
 			}
@@ -157,9 +166,13 @@ func newTelemetryLocal(cfg config.Config, store *sqlite.Store, local ports.Event
 			if err := os.WriteFile(marker, []byte("1\n"), 0o600); err != nil {
 				return err
 			}
-			// Matches the desktop's opt-out: counts held for the daily CLI
-			// summary are dropped, not sent after a later opt-in.
-			_ = os.Remove(filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
+			// Counts held for the daily CLI summary are dropped at the opt-out,
+			// in memory and on disk, so a later opt-in cannot send them.
+			if parts.discardDaily != nil {
+				parts.discardDaily()
+			} else {
+				_ = os.Remove(filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
+			}
 			return nil
 		},
 	}

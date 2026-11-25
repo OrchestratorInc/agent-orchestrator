@@ -10,8 +10,9 @@ on **Include my account identity** (off by default). Project, session and
 organization identifiers are sent only as hashes keyed with a private
 per-installation secret.
 
-You can see every event this machine sent, with every property exactly as
-sent, with `ao telemetry log` (see "Seeing exactly what was sent" below), and
+You can see a local record of the events this desktop and its daemon sent,
+with their properties, with `ao telemetry log` (see "Seeing what was sent"
+below), and
 turn telemetry off in Settings > General > Privacy, with `ao telemetry off`,
 or with `DO_NOT_TRACK=1`. The desktop app's first-run screen and the first
 interactive `ao` command each show a short notice saying this.
@@ -1412,7 +1413,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   Its stored phone installation identifier is retained.
   The `distinct_id` is always this anonymous install-scoped identifier, never
   the AO Cloud user ID, signed in or not. On sign-out or account switch the
-  daemon still rotates it, so activity before and after is not joined.
+  daemon rotates it, which starts a new `distinct_id` series. That does not
+  prevent association: events before and after still share `install_id`, so
+  they remain linkable at the installation level, including to any earlier
+  event that carried an opted-in account identifier.
 - Project, session and organization identifiers included in telemetry are
   HMAC-SHA256 hashes keyed with the private `telemetry_hash_salt` described
   above. Hashing hides the plain text while allowing related events on that
@@ -1510,7 +1514,9 @@ disk space for the rewrite.
 Signing in to AO Cloud does not identify you to PostHog. The desktop app hands
 the AO Cloud user ID to the daemon over loopback, which records it
 (`telemetry_bound_user`) so that a later sign-out or account switch rotates
-the anonymous identifier and activity on either side is not joined. Events
+the anonymous identifier and starts a new `distinct_id` series. Events on
+either side still share `install_id`, so they remain associable at the
+installation level. Events
 carry `is_signed_in: true`, and keep the anonymous `distinct_id`. The AO Cloud
 user ID is added as the `ao_cloud_user_id` event property only with Include my
 account identity on. Your email address is never sent to PostHog, by the
@@ -1555,15 +1561,22 @@ still resolves the authenticated GitHub account at start while telemetry is on,
 and tells the desktop only whether a login exists. It does not run that lookup
 at all while Share usage analytics is off.
 
-## Seeing exactly what was sent
+## Seeing what was sent
 
-`ao telemetry log` lists the events this machine sent, newest first, with the
-event name, which part of the app sent it (`daemon` for the daemon and CLI,
-`desktop` for the desktop app), the `distinct_id`, and every property exactly as
-sent. Use `--since 24h`, `--event <name>`, `--limit <n>` (1-1000, default 50) or
-`--json`. Daemon and CLI events are recorded once PostHog accepted them;
-desktop events are recorded as they are handed to PostHog, so an event that
-then fails to send can still appear. Phone events are not included.
+`ao telemetry log` lists, newest first, the event name, which part of the app
+sent it (`daemon` for the daemon and CLI, `desktop` for the desktop app), the
+`distinct_id`, and every property of each recorded event. Use `--since 24h`,
+`--event <name>` (filtered before `--limit` applies), `--limit <n>` (1-1000,
+default 50) or `--json`.
+
+It is a best-effort local record, not a complete delivery history:
+
+- Daemon and CLI events are recorded once PostHog acknowledged them. An event
+  PostHog received but whose response was lost is not recorded.
+- Desktop events are recorded as they are handed to PostHog, before delivery
+  is confirmed, so an event that then fails to send can still appear. If the
+  daemon is unreachable at that moment, the record is skipped.
+- Phone events are not included.
 
 The record lives in the daemon's local telemetry table under `~/.ao`, is kept
 for `AO_TELEMETRY_RETENTION` (30 days by default), and never leaves your

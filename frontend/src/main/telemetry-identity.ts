@@ -56,6 +56,10 @@ export class TelemetryIdentityController {
 	// Stamped on every POST so the daemon can refuse one that was delayed in
 	// transit (a client timeout cannot recall it) until after a newer one landed.
 	private sequence = 0;
+	// Marker writes (opt-out, account identity) run one at a time in request
+	// order, so an earlier request still awaiting mkdir cannot land after a
+	// later one: the file and the broadcast always match the last request.
+	private markerQueue: Promise<unknown> = Promise.resolve();
 
 	constructor(
 		private readonly dataDir: string,
@@ -69,33 +73,43 @@ export class TelemetryIdentityController {
 		return existsSync(path.join(this.dataDir, TELEMETRY_SHARE_IDENTITY_FILE));
 	}
 
-	async setShareIdentity(share: boolean): Promise<boolean> {
-		const file = path.join(this.dataDir, TELEMETRY_SHARE_IDENTITY_FILE);
-		if (share) {
-			await mkdir(this.dataDir, { recursive: true });
-			await writeFile(file, "1\n", { mode: 0o600 });
-		} else {
-			await rm(file, { force: true });
-		}
-		this.broadcastShareIdentity(share);
-		return share;
+	setShareIdentity(share: boolean): Promise<boolean> {
+		return this.serializeMarkerWrite(async () => {
+			const file = path.join(this.dataDir, TELEMETRY_SHARE_IDENTITY_FILE);
+			if (share) {
+				await mkdir(this.dataDir, { recursive: true });
+				await writeFile(file, "1\n", { mode: 0o600 });
+			} else {
+				await rm(file, { force: true });
+			}
+			this.broadcastShareIdentity(share);
+			return share;
+		});
+	}
+
+	private serializeMarkerWrite<T>(write: () => Promise<T>): Promise<T> {
+		const run = this.markerQueue.then(write, write);
+		this.markerQueue = run.catch(() => undefined);
+		return run;
 	}
 
 	isOptedOut(): boolean {
 		return existsSync(path.join(this.dataDir, TELEMETRY_OPT_OUT_FILE));
 	}
 
-	async setOptedOut(optedOut: boolean): Promise<boolean> {
-		const file = path.join(this.dataDir, TELEMETRY_OPT_OUT_FILE);
-		if (optedOut) {
-			await mkdir(this.dataDir, { recursive: true });
-			await writeFile(file, "1\n", { mode: 0o600 });
-			await rm(path.join(this.dataDir, "telemetry", "cli-usage-daily.json"), { force: true });
-		} else {
-			await rm(file, { force: true });
-		}
-		this.broadcast(optedOut);
-		return optedOut;
+	setOptedOut(optedOut: boolean): Promise<boolean> {
+		return this.serializeMarkerWrite(async () => {
+			const file = path.join(this.dataDir, TELEMETRY_OPT_OUT_FILE);
+			if (optedOut) {
+				await mkdir(this.dataDir, { recursive: true });
+				await writeFile(file, "1\n", { mode: 0o600 });
+				await rm(path.join(this.dataDir, "telemetry", "cli-usage-daily.json"), { force: true });
+			} else {
+				await rm(file, { force: true });
+			}
+			this.broadcast(optedOut);
+			return optedOut;
+		});
 	}
 
 	/**
