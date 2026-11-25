@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { RetryButton } from "../WorkspaceDiffView";
 import {
 	ARTIFACT_COMMENT_MAX_BODY_LENGTH,
+	artifactCommentAnchorKind,
 	type ArtifactComment,
 	type ArtifactCommentAnchor,
 	type ArtifactCommentAuthor,
@@ -485,8 +486,10 @@ export function ArtifactCommentsPanel({
 	const threads = openGroup?.threads ?? [];
 	const resolvedThreads = resolvedGroup?.threads ?? [];
 	const anchor = element.anchor;
-	// Lines, an image's point or region, a video's moment: where, in words.
-	const where = artifactCommentAnchorText(t, anchor ?? openGroup?.anchor ?? resolvedGroup?.anchor);
+	// Lines or a video's moment: where, in words. Not an image's point or
+	// region: its pin on the picture shows where.
+	const whereAnchor = anchor ?? openGroup?.anchor ?? resolvedGroup?.anchor;
+	const where = whereAnchor && artifactCommentAnchorKind(whereAnchor) === "image" ? null : artifactCommentAnchorText(t, whereAnchor);
 	// One thread open: the newest, until another is clicked; back to the newest
 	// for another element or once a new thread is posted here.
 	const [openThreadId, setOpenThreadId] = useState<string | null>(null);

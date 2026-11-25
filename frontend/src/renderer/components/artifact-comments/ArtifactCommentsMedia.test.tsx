@@ -125,7 +125,8 @@ describe("comments on an image", () => {
 		fireEvent.pointerDown(overlay, { button: 0, clientX: 100, clientY: 150 });
 		fireEvent.pointerUp(overlay, { button: 0, clientX: 100, clientY: 150 });
 		const popover = await screen.findByRole("complementary", { name: "Comments" });
-		expect(within(popover).getByTestId("artifact-comments-where")).toHaveTextContent("Point near top-left");
+		// No words for where on an image: the pin shows it.
+		expect(within(popover).queryByTestId("artifact-comments-where")).toBeNull();
 		expect(screen.getByTestId("artifact-comments-media-draft")).toBeInTheDocument();
 		await userEvent.type(within(popover).getByRole("textbox", { name: "Add a comment…" }), "Crop this");
 		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
@@ -142,7 +143,7 @@ describe("comments on an image", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Region near bottom-right: 1 open" }));
 		const popover = await screen.findByRole("complementary", { name: "Comments" });
 		expect(within(popover).getByText("Blurry")).toBeInTheDocument();
-		expect(within(popover).getByTestId("artifact-comments-where")).toHaveTextContent("Region near bottom-right");
+		expect(within(popover).queryByTestId("artifact-comments-where")).toBeNull();
 	});
 });
 
