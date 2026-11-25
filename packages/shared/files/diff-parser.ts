@@ -38,7 +38,7 @@ const gitHeaderPrefixes = [
 	"+++ ",
 ];
 
-const hunkHeaderPattern = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+const hunkHeaderPattern = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 // parseUnifiedDiff turns a raw `git diff` string into typed rows with real
 // per-side line numbers. Line endings are normalized first (Windows \r\n and
@@ -52,12 +52,33 @@ export function parseUnifiedDiff(raw: string): DiffRow[] {
 	let oldNo = 0;
 	let newNo = 0;
 	let inHunk = false;
-	for (const line of lines) {
-		if (gitHeaderPrefixes.some((prefix) => line.startsWith(prefix))) continue;
+	// The lines a hunk's header says are still to come on each side, when it says.
+	// While any remain, every line is the file's own, however it starts: a removed
+	// `-- comment` reads `--- comment`, an added `++ x` reads `+++ x`.
+	let oldLeft: number | undefined;
+	let newLeft: number | undefined;
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index]!;
+		const counting = oldLeft !== undefined && newLeft !== undefined && (oldLeft > 0 || newLeft > 0);
+		if (!counting && gitHeaderPrefixes.some((prefix) => line.startsWith(prefix))) {
+			// Outside a hunk it is a header. Inside one whose size is not stated, only a
+			// new file's header ends it: `diff --git`, or a `---` line just before its
+			// `+++` line. Any other header-like line is the file's own.
+			if (!inHunk) continue;
+			if (line.startsWith("diff --git ") || (line.startsWith("--- ") && lines[index + 1]?.startsWith("+++ "))) {
+				inHunk = false;
+				continue;
+			}
+		}
+		// A hunk header is never a file's line (one starts with its marker), so it always
+		// opens a hunk, even after one whose stated size was wrong.
 		if (line.startsWith("@@")) {
 			const hunk = hunkHeaderPattern.exec(line);
 			oldNo = hunk ? Number(hunk[1]) : 1;
-			newNo = hunk ? Number(hunk[2]) : 1;
+			newNo = hunk ? Number(hunk[3]) : 1;
+			// A header that states both sizes is counted; one without them is not.
+			oldLeft = hunk?.[2] !== undefined && hunk[4] !== undefined ? Number(hunk[2]) : undefined;
+			newLeft = hunk?.[2] !== undefined && hunk[4] !== undefined ? Number(hunk[4]) : undefined;
 			inHunk = true;
 			const sectionStart = line.indexOf("@@", 2);
 			const range = sectionStart >= 0 ? line.slice(0, sectionStart + 2) : line;
@@ -72,13 +93,17 @@ export function parseUnifiedDiff(raw: string): DiffRow[] {
 		if (marker === "+") {
 			rows.push({ kind: "add", oldNo: null, newNo, text });
 			newNo += 1;
+			if (newLeft !== undefined) newLeft -= 1;
 		} else if (marker === "-") {
 			rows.push({ kind: "del", oldNo, newNo: null, text });
 			oldNo += 1;
+			if (oldLeft !== undefined) oldLeft -= 1;
 		} else {
 			rows.push({ kind: "context", oldNo, newNo, text });
 			oldNo += 1;
 			newNo += 1;
+			if (oldLeft !== undefined) oldLeft -= 1;
+			if (newLeft !== undefined) newLeft -= 1;
 		}
 	}
 	annotateIntraLine(rows);
