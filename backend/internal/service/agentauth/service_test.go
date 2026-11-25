@@ -26,9 +26,8 @@ func TestStartPrimeAgentLoginUsesTheSessionProfile(t *testing.T) {
 	if _, err := svc.Start(context.Background(), "prime-agent"); err != nil {
 		t.Fatalf("Start(prime-agent): %v", err)
 	}
-	want := map[string]string{"PRIME_AGENT_CODING_AGENT_DIR": filepath.Join(dataDir, "agent-runtime", "prime-agent")}
-	if !reflect.DeepEqual(opener.input.Env, want) {
-		t.Fatalf("login env = %#v, want %#v", opener.input.Env, want)
+	if got, want := opener.input.Env["PRIME_AGENT_CODING_AGENT_DIR"], filepath.Join(dataDir, "agent-runtime", "prime-agent"); got != want {
+		t.Fatalf("login profile = %q, want %q", got, want)
 	}
 	session := map[string]string{}
 	primeagent.New().AugmentRuntimeEnv(session, dataDir)

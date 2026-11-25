@@ -202,6 +202,30 @@ func TestAuthStatusForRuntimeRequiresDataDir(t *testing.T) {
 	}
 }
 
+func TestRuntimeCredentialEnvSelectsTheSessionProfile(t *testing.T) {
+	dataDir := t.TempDir()
+	profile, err := primeDataDir(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]string{"OPENAI_API_KEY": ""}
+	got := New().RuntimeCredentialEnv(dataDir, base)
+	session := map[string]string{}
+	New().AugmentRuntimeEnv(session, dataDir)
+	if got[primeAgentCodingAgentDirEnv] != profile || session[primeAgentCodingAgentDirEnv] != profile {
+		t.Fatalf("discovery profile = %q, session profile = %q, want %q", got[primeAgentCodingAgentDirEnv], session[primeAgentCodingAgentDirEnv], profile)
+	}
+	if value, ok := got["OPENAI_API_KEY"]; !ok || value != "" {
+		t.Fatalf("held-back key = %q, %v; want it kept blank", value, ok)
+	}
+	if len(base) != 1 {
+		t.Fatalf("base was changed: %v", base)
+	}
+	if got := New().RuntimeCredentialEnv(" ", nil); got != nil {
+		t.Fatalf("env without a data directory = %v, want none", got)
+	}
+}
+
 func clearPrimeCredentialEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range primeAPIKeyEnvVars {

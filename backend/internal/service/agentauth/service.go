@@ -383,13 +383,12 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 		}
 		env["XDG_DATA_HOME"] = dataHome
 	}
-	if len(env) > 0 {
-		input.Env = env
-	}
 	if plan.AgentID == "prime-agent" && s.dataDir != "" {
 		// Sign in to the profile sessions run with, not ~/.prime/agent.
-		input.Env = make(map[string]string, 1)
-		primeagent.New().AugmentRuntimeEnv(input.Env, s.dataDir)
+		primeagent.New().AugmentRuntimeEnv(env, s.dataDir)
+	}
+	if len(env) > 0 {
+		input.Env = env
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)
