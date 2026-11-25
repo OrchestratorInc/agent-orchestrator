@@ -400,6 +400,13 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	s.mu.Lock()
 	known := s.lastOrg[account.ID]
 	s.mu.Unlock()
+	// A saved account stays in the organization it was found in: a check that
+	// names none reads as that organization, both for the limits it records and
+	// for the login it confirms, so the two never disagree (#8891).
+	if err == nil && !account.Device() && identity.OrgID == "" && known.id != "" {
+		identity.OrgID, identity.OrgName = known.id, known.name
+		r.identity.OrgID, r.identity.OrgName = known.id, known.name
+	}
 	// A per-token sign-in is never a subscription, so it is checked for the
 	// login and organization it was added with here, before it skips limits.
 	perToken := account.PerToken() && identity.LoggedIn
@@ -442,9 +449,6 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			email, orgID, plan := identity.Email, identity.OrgID, identity.Plan
 			if email == "" {
 				email = account.Email
-			}
-			if orgID == "" && !account.Device() {
-				orgID = known.id
 			}
 			if plan == "" {
 				plan = account.Plan
