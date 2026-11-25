@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "../lib/utils";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
@@ -53,6 +53,16 @@ export function CenterPanelShell({
 	// Tabs are pills on every macOS panel, whatever its band, so no frame can
 	// draw them in the other platforms' flat strip.
 	const pillTabs = align;
+	// The panel stays mounted across pages. When the page's bar comes or goes,
+	// the frame's top edge snaps for one frame instead of sliding: only a sidebar
+	// toggle slides it. Derived in render so the class lands in the same commit.
+	const [settledTopbar, setSettledTopbar] = useState(topbar);
+	const edgeSnap = settledTopbar !== topbar;
+	useEffect(() => {
+		if (!edgeSnap) return;
+		const frame = requestAnimationFrame(() => setSettledTopbar(topbar));
+		return () => cancelAnimationFrame(frame);
+	}, [edgeSnap, topbar]);
 
 	return (
 		<div
@@ -62,6 +72,7 @@ export function CenterPanelShell({
 				// The top bar floats on the window chrome; the panel starts below it.
 				floatingFrame && "center-panel-shell--floating-topbar",
 				bare && "center-panel-shell--bare",
+				edgeSnap && "center-panel-shell--edge-snap",
 				pillTabs && "center-panel-shell--tab-pills",
 				titlebarClearance && "center-panel-shell--titlebar-clearance",
 				titlebarClearance && isFullScreen && "center-panel-shell--titlebar-clearance-fullscreen",

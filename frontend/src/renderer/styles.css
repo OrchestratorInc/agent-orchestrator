@@ -7457,6 +7457,16 @@ html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-s
 	transition: --floating-panel-edge var(--ease-shell-panel), border-color var(--ease-shell-panel);
 }
 
+/* The panel stays mounted across pages, so moving between a page with a top
+ * bar and one without (new chat) would slide the edge too. Only a sidebar
+ * toggle slides it; a page change lands at once (CenterPanelShell's
+ * edge-snap, held for one frame). */
+html[data-new-desktop-ui] .center-panel-shell--edge-snap > .center-panel-surface,
+html[data-new-desktop-ui] .center-panel-shell--edge-snap > .center-panel-surface::before,
+html[data-new-desktop-ui] .center-panel-shell--edge-snap > .center-panel-surface::after {
+	transition: none;
+}
+
 /* The open sidebar overlaps the panel's left inset by a negative margin. On
  * its own 280ms curve that margin outran the sidebar's spring, so the panel
  * slid flush to the window edge before the sidebar pushed it back; on the
@@ -7518,12 +7528,26 @@ html[data-new-desktop-ui] .sidebar-rail-clip :is([data-sidebar-topnav], [data-si
 		padding-left var(--ease-shell-panel);
 }
 
-/* A 32px square: 9px either side of the 14px icon. The row moves 1px right as
- * its padding drops 1px, on the same curve, so the icon never moves. */
+/* The first nav row (Search) starts on the centre panel's top line: the
+ * sidebar starts just under the 50px band, whose last pixel is the panel's
+ * top edge, so the header drops its padding and rises that 1px. */
+html[data-new-desktop-ui][data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] [data-slot="sidebar-header"] {
+	margin-top: -1px;
+	padding-top: 0;
+}
+
+/* The sidebar's button icons are 16px. */
+html[data-new-desktop-ui] [data-slot="sidebar"] :is(:is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"], [data-sidebar-rail-footer], [data-sidebar-footer-expanded]) svg.icon {
+	width: var(--size-icon-base);
+	height: var(--size-icon-base);
+}
+
+/* A 32px square: 8px either side of the 16px icon. The row moves 2px right as
+ * its padding drops 2px, on the same curve, so the icon never moves. */
 html[data-new-desktop-ui] [data-collapsible="rail"] :is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"] {
 	max-width: var(--sidebar-rail-button);
-	margin-left: 1px;
-	padding-left: 9px;
+	margin-left: 2px;
+	padding-left: 8px;
 }
 
 html[data-new-desktop-ui] .sidebar-rail-clip :is(:is([data-sidebar-topnav], [data-sidebar-settings-nav]) .sidebar-expanded-chrome, [data-sidebar-settings-nav] [role="status"], [data-sidebar-sections], [data-sidebar-footer-expanded]) {
@@ -7542,7 +7566,8 @@ html[data-new-desktop-ui] [data-collapsible="rail"] [data-slot="sidebar-footer"]
 
 html[data-new-desktop-ui] [data-collapsible="rail"] [data-sidebar-rail-footer] {
 	/* The footer starts 3px in; this lands the column on the rail rows' x (12px). */
-	left: 9px;
+	/* In the nav squares' column, so every rail icon sits at the same x. */
+	left: 10px;
 	right: auto;
 	/* Matches the 12px from the window's left edge to the buttons. */
 	bottom: 12px;
@@ -7587,14 +7612,23 @@ html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-ov
 	box-shadow: none;
 }
 
+/* The selected tab is where you already are, so hovering it changes nothing. */
+html[data-new-desktop-ui] .session-inspector__tab-button[aria-selected="true"]:hover,
+html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]:hover::before {
+	background-color: var(--secondary);
+}
+
+html[data-new-desktop-ui][data-theme="light"] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]:hover::before {
+	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
+}
+
 /* Edges (macOS): everything sits 2px further from the window edges. The
  * shared panel inset goes from 6px to 8px, and the shell derives the rest
  * from it: the centre panel's left, right and bottom gaps, the right rail
  * inside the panel, and the panel corners, which drop to 10px to stay
  * concentric with the 18px window corner. The top bar keeps its 50px band
- * (the traffic-light row): its controls get 2px more room above and below
- * (11px instead of 9px), so they shrink from 31px to 27px and their centre
- * line stays put. The sidebar's content moves 2px right and its footer 2px
+ * (the traffic-light row): its controls are 32px, the sidebar rows' height,
+ * with 8.5px above and below, and their centre line stays put. The sidebar's content moves 2px right and its footer 2px
  * up, and main moves the native window buttons 2px right to match
  * (MAC_INTERFACE_V2_EDGE_EXTRA in shared/window-chrome.ts). */
 html[data-new-desktop-ui][data-ao-platform="darwin"] {
@@ -7606,7 +7640,7 @@ html[data-new-desktop-ui][data-ao-platform="darwin"] {
 
 html[data-new-desktop-ui][data-ao-platform="darwin"] .center-panel-shell.center-panel-shell--floating-topbar {
 	--floating-topbar-height: calc(var(--size-topbar-primary) + 14px);
-	--floating-topbar-gap: calc(var(--space-2) + 3px);
+	--floating-topbar-gap: calc(var(--space-2) + 0.5px);
 }
 
 html[data-new-desktop-ui][data-ao-platform="darwin"] [data-slot="sidebar-container"] {
@@ -7869,11 +7903,11 @@ html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-ov
 	border-radius: var(--radius-control);
 }
 
-/* Sidebar row actions (project and session rows, section "+") get no hover,
- * press or open-menu fill: only the icon brightens. The pill still shows for
- * keyboard focus, its only focus indicator. */
-html[data-new-desktop-ui] .sidebar-icon-action:not(:focus-visible)::before {
-	opacity: 0 !important;
+/* Sidebar row actions (project and session rows, section "+") keep their
+ * hover fill. They sit 4px inside their row, so their corners are the row's
+ * radius less that inset and the two curves stay concentric. */
+html[data-new-desktop-ui] [data-slot="sidebar"] .sidebar-icon-action {
+	border-radius: calc(var(--radius-control) - var(--space-1));
 }
 
 /* Translucent window: the shell tint is 5 points more opaque than above
