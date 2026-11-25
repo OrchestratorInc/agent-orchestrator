@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Ref } from "react";
+import { useEffect, useRef, type ReactNode, type Ref } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -20,12 +20,18 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * a document, which a video stored without its type turns into a refused
  * download.
  */
-export function SharedArtifactFrame({ frameRef, linkId, onShown, title }: {
+export function SharedArtifactFrame({ frameRef, linkId, onShown, renderMedia, title }: {
 	/** The page's frame, for the comments bridge; a video has none. */
 	frameRef?: Ref<HTMLIFrameElement>;
 	/** Called once there is something to see: the page loaded, or a message in its place. */
 	onShown?: () => void;
 	linkId: string;
+	/**
+	 * Comments on an image or video: draws the file itself from its content
+	 * URL (with its own overlay) instead of the frame or plain video. Call
+	 * `shown` once there is something to see.
+	 */
+	renderMedia?: (contentUrl: string, shown: () => void) => ReactNode;
 	title: string;
 }) {
 	const { t } = useTranslation();
@@ -50,6 +56,7 @@ export function SharedArtifactFrame({ frameRef, linkId, onShown, title }: {
 	if (view.error instanceof CloudCpError && view.error.status === 404) return <PanelMessage>{t("artifacts.sharedUnavailable")}</PanelMessage>;
 	if (view.isError) return <PanelMessage action={<RetryButton onClick={() => { void view.refetch(); }} />}>{t("artifacts.accessError")}</PanelMessage>;
 	if (!view.data) return <PanelMessage>{t("files.loading")}</PanelMessage>;
+	if (renderMedia) return renderMedia(view.data.contentUrl, () => onShownRef.current?.());
 	if (isSharedVideo(view.data.contentType, view.data.name)) {
 		return (
 			<div className="flex h-full w-full items-center justify-center bg-background">

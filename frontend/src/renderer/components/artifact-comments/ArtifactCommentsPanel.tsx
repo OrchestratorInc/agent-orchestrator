@@ -16,6 +16,7 @@ import {
 	type ArtifactCommentThread,
 } from "../../../shared/artifact-comments";
 import { useArtifactCommentAuthorLabel } from "./author-label";
+import { artifactCommentAnchorText } from "./anchor-label";
 import { SendThreadToAgentDialog, type ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { isPendingId, type ArtifactCommentsState } from "./useArtifactComments";
 
@@ -484,6 +485,8 @@ export function ArtifactCommentsPanel({
 	const threads = openGroup?.threads ?? [];
 	const resolvedThreads = resolvedGroup?.threads ?? [];
 	const anchor = element.anchor;
+	// Lines, an image's point or region, a video's moment: where, in words.
+	const where = artifactCommentAnchorText(t, anchor ?? openGroup?.anchor ?? resolvedGroup?.anchor);
 	// One thread open: the newest, until another is clicked; back to the newest
 	// for another element or once a new thread is posted here.
 	const [openThreadId, setOpenThreadId] = useState<string | null>(null);
@@ -553,6 +556,7 @@ export function ArtifactCommentsPanel({
 			</div>
 			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto" ref={scrollRef}>
 				<div className="flex flex-col gap-2.5 p-2.5" ref={contentRef}>
+					{where ? <p className="text-caption font-medium text-muted-foreground tabular-nums" data-testid="artifact-comments-where">{where}</p> : null}
 					{!snapshot && comments.error ? (
 						<div className="flex flex-col items-center gap-2 p-4 text-center text-xs text-muted-foreground" role="alert">
 							{t("artifactComments.loadError")}

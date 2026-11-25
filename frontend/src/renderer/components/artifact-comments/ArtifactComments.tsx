@@ -6,8 +6,10 @@ import { SharedArtifactFrame } from "../SharedArtifactFrame";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PanelMessage } from "../WorkspaceDiffView";
+import { ArtifactCommentsMedia } from "./ArtifactCommentsMedia";
 import { ArtifactCommentsPanel, ArtifactCommentsReadOnlyList } from "./ArtifactCommentsPanel";
 import {
+	artifactCommentAnchorKey,
 	artifactCommentMarkers,
 	groupArtifactCommentThreads,
 	placeCommentsPopover,
@@ -21,11 +23,27 @@ import { useCommentBridge } from "./useCommentBridge";
 
 const POPOVER_CLASS = "absolute top-2 right-2 z-overlay max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) transition-[top] duration-150 ease-out motion-reduce:transition-none animate-popover-in";
 
-/** Files whose published page takes comments: Markdown and HTML. */
-export function artifactCommentsKind(path: string): ArtifactCommentsPickKind | null {
+/**
+ * How a published file takes comments: on elements of a Markdown or HTML
+ * page and on lines of a text or table page (the bridge in the frame picks),
+ * or on a point, rectangle or moment of an image or video (the app picks).
+ */
+export type ArtifactCommentsKind = ArtifactCommentsPickKind | "image" | "video";
+
+// The share host's rendering (control plane shareRenderOf): images and
+// videos are served as uploaded; audio, PDF and Mermaid take no comments;
+// any other file is a text or table page.
+const IMAGE_FILE = /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp|svg)$/i;
+const VIDEO_FILE = /\.(m4v|mov|mp4|ogv|webm|avi|mkv)$/i;
+const NO_COMMENTS_FILE = /\.(aac|flac|m4a|mp3|oga|ogg|opus|wav|pdf|mmd|mermaid)$/i;
+
+export function artifactCommentsKind(path: string): ArtifactCommentsKind | null {
 	if (/\.(md|markdown)$/i.test(path)) return "markdown";
 	if (/\.html?$/i.test(path)) return "html";
-	return null;
+	if (IMAGE_FILE.test(path)) return "image";
+	if (VIDEO_FILE.test(path)) return "video";
+	if (NO_COMMENTS_FILE.test(path)) return null;
+	return "text";
 }
 
 /**
@@ -77,7 +95,7 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
  * a notice says so when the local file has changed since publishing.
  */
 export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, sendTarget, slug, title }: {
-	kind: ArtifactCommentsPickKind;
+	kind: ArtifactCommentsKind;
 	/** Leaves comment mode. */
 	onClose: () => void;
 	/** Called once there is something to see: the published page loaded, or a message in its place. */
@@ -111,7 +129,10 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 		},
 	});
 	const { setAnchors, setMode, select, unsupported } = bridge;
-	useEffect(() => setMode({ type: "mode", on: true, kind }), [kind, setMode]);
+	const media = kind === "image" || kind === "video" ? kind : null;
+	useEffect(() => {
+		if (!media) setMode({ type: "mode", on: true, kind: kind as ArtifactCommentsPickKind });
+	}, [kind, media, setMode]);
 
 	const threads = comments.snapshot?.threads;
 	const groups = useMemo(() => groupArtifactCommentThreads(threads ?? []), [threads]);
@@ -169,8 +190,27 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 				</p>
 			) : null}
 			<div className="relative min-h-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
-				<SharedArtifactFrame frameRef={setFrame} linkId={slug} onShown={shown} title={title} />
-				{unsupported ? (
+				<SharedArtifactFrame
+					frameRef={setFrame}
+					linkId={slug}
+					onShown={shown}
+					renderMedia={media ? (contentUrl, mediaShown) => (
+						<ArtifactCommentsMedia
+							kind={media}
+							onPick={(anchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor })}
+							onSelect={(key) => setElement({ path: key, anchor: null })}
+							onSelection={(rect) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null)}
+							onShown={mediaShown}
+							picked={element?.anchor ?? null}
+							selected={selectedPath}
+							src={contentUrl}
+							threads={threads ?? []}
+							title={title}
+						/>
+					) : undefined}
+					title={title}
+				/>
+				{unsupported && !media ? (
 					<ArtifactCommentsReadOnlyList
 						className={POPOVER_CLASS}
 						comments={comments}
