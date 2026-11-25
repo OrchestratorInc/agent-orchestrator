@@ -1666,48 +1666,46 @@ describe("sent message recall", () => {
 		});
 		await typeInComposer(field, "compare");
 		fireEvent.paste(field, { clipboardData: clipboardData([png("removed.png")]) });
-		await screen.findByLabelText("Remove removed.png");
-		expect(readChatSessionDraft(sessionId).composer.attachments.map((attachment) => attachment.path)).toEqual([path]);
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		expect(readChatSessionDraft(sessionId).composer.text).toContain(path);
 
 		await placeLexicalCaret(field, 0);
 		press(field, "ArrowUp");
 		expect(composerWireText(field)).toBe("earlier ask");
 		await userEvent.click(screen.getByLabelText("Remove removed.png"));
 		await waitFor(() => expect(screen.queryByLabelText("Remove removed.png")).toBeNull());
-		// Still browsing, and leaving now brings back the draft without the image.
+		// Still browsing, and leaving now would bring back a draft without the image.
 		expect(composerWireText(field)).toBe("earlier ask");
-		expect(readChatSessionDraft(sessionId).composer.text).toBe("compare");
-		expect(readChatSessionDraft(sessionId).composer.attachments).toEqual([]);
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("compare ");
 
 		expect(press(field, "ArrowDown")).toBe(true);
-		expect(composerWireText(field)).toBe("compare");
+		expect(composerWireText(field)).toBe("compare ");
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		expect(onSend.mock.calls[0]?.[0]).toBe("compare");
 		expect(onSend.mock.calls[0]?.[1]).toBeUndefined();
 	});
 
-	it("waits for a pasted image to finish staging before recalling", async () => {
+	it("waits for a pasted image to finish staging before recalling, so its chip survives", async () => {
 		const path = ".ao/attachments/attachment-history-staging.png";
 		const staging = deferred<string[]>();
 		const { field } = renderComposer({ sentMessages: ["earlier ask"], onStageAttachments: vi.fn(() => staging.promise) });
 		await typeInComposer(field, "compare");
 		fireEvent.paste(field, { clipboardData: clipboardData([png("staging.png")]) });
-		await screen.findByLabelText("Attaching staging.png");
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
 
 		await placeLexicalCaret(field, 0);
 		expect(press(field, "ArrowUp")).toBe(false);
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
 
 		await act(async () => staging.resolve([path]));
-		await screen.findByLabelText("Remove staging.png");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
 		await placeLexicalCaret(field, 0);
 		expect(press(field, "ArrowUp")).toBe(true);
 		expect(composerWireText(field)).toBe("earlier ask");
 		expect(press(field, "ArrowDown")).toBe(true);
-		expect(composerWireText(field)).toBe("compare");
-		// The image stays attached; the text never carries it.
-		expect(screen.getByLabelText("Remove staging.png")).toBeInTheDocument();
-		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
+		expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull();
+		expect(composerWireText(field)).toBe(`compare ${path} `);
 	});
 
 	it("recalls with Up while a Tab suggestion is offered, which temporarily hides it", async () => {
@@ -1736,11 +1734,10 @@ describe("sent message recall", () => {
 		press(field, "ArrowUp");
 		await placeLexicalCaretAtEnd(field);
 		fireEvent.paste(field, { clipboardData: clipboardData([png("pasted.png")]) });
-		await screen.findByLabelText("Remove pasted.png");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
 
-		expect(composerWireText(field)).toBe("earlier ask");
-		expect(readChatSessionDraft(sessionId).composer.text).toBe("earlier ask");
-		expect(readChatSessionDraft(sessionId).composer.attachments.map((attachment) => attachment.path)).toEqual([path]);
+		expect(composerWireText(field)).toBe(`earlier ask ${path} `);
+		expect(readChatSessionDraft(sessionId).composer.text).toBe(`earlier ask ${path} `);
 		// The walk ended with the edit, so Down at the end no longer replaces the text.
 		expect(press(field, "ArrowDown")).toBe(false);
 	});
@@ -2686,37 +2683,44 @@ describe("attachments", () => {
 		expect(field.textContent).toBe("");
 	});
 
-	it("keeps an image pasted beside text in the attachment strip, out of the text", async () => {
+	it("places a pasted image inline at the caret and drops it with its attachment", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
 		const { onSend, field } = renderComposer({ onStageAttachments: stage });
 		await typeInComposer(field, "compare");
 		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
 
-		await screen.findByLabelText("Remove a.png");
-		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
-		expect(field.textContent).toBe("compare");
+		const chip = await waitFor(() => {
+			const node = field.querySelector('[data-composer-token="image"]');
+			expect(node).not.toBeNull();
+			return node as HTMLElement;
+		});
+		expect(chip).toHaveTextContent("Image 1");
+		expect(chip).toHaveAttribute("title", "a.png");
+		expect(field.textContent).toBe("compare Image 1 ");
 
 		await userEvent.click(screen.getByLabelText("Remove a.png"));
-		await waitFor(() => expect(screen.queryByLabelText("Remove a.png")).toBeNull());
-		expect(field.textContent).toBe("compare");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
+		expect(field.textContent?.trimEnd()).toBe("compare");
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
-	// Staging can be slow: Enter during staging still sends the image the user attached.
-	it("sends a slow image with the message when Enter beats staging", async () => {
+	// Staging can be slow: the chip holds the paste position while the user types on,
+	// and Enter during staging still sends the chip the user saw.
+	it("keeps a slow image where it was pasted and sends it when Enter beats staging", async () => {
 		let finishStaging!: (paths: string[]) => void;
 		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
 		const { onSend, field } = renderComposer({ onStageAttachments: stage });
 		await typeInComposer(field, "make");
 		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
-		await typeInComposer(field, " shorter");
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
+		await typeInComposer(field, "shorter");
 		await waitFor(() => expect(stage).toHaveBeenCalledTimes(1));
 
 		await userEvent.keyboard("{Enter}");
 		finishStaging([".ao/attachments/attachment-a.png"]);
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith(
-			"make shorter\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png",
+			"make .ao/attachments/attachment-a.png shorter\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png",
 		));
 	});
 
@@ -2725,6 +2729,24 @@ describe("attachments", () => {
 		await typeInComposer(field, "No, look at .ao/attachments/attachment-old.png again");
 		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("No, look at .ao/attachments/attachment-old.png again"));
+	});
+
+	it("does not send a chip that undo restored after its image was removed", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage });
+		await typeInComposer(field, "look");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png")]) });
+		await screen.findByLabelText("Remove a.png");
+		await userEvent.click(screen.getByLabelText("Remove a.png"));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
+
+		await userEvent.click(field);
+		await userEvent.keyboard("{Control>}z{/Control}");
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0]?.[0]).toBe("look");
 	});
 
 	it("ignores a paste that carries no file", async () => {
@@ -3052,7 +3074,7 @@ describe("attachments", () => {
 
 	// Pasting an image writes its chip into the text, so a later successful write
 	// makes the whole text durable again, chip included.
-	it("keeps a failed text save through an image paste, and the next edit saves it", async () => {
+	it("makes text durable again, with the chip, when an image is pasted after a failed text save", async () => {
 		const sessionId = "composer-image-after-text-failure";
 		const durableStorage = window.localStorage;
 		let failTextWrite = true;
@@ -3082,11 +3104,10 @@ describe("attachments", () => {
 
 			fireEvent.paste(field, { clipboardData: clipboardData([png("after.png")]) });
 			await screen.findByLabelText("Remove after.png");
-			// Saving the attachment does not vouch for text that failed to save.
-			expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed");
-			await typeInComposer(field, " again");
 			await waitFor(() => expect(getChatDraftBoundary(sessionId)).not.toBe("persistence-failed"));
-			expect(readChatSessionDraft(sessionId).composer.text).toBe("unsafe text again");
+			expect(readChatSessionDraft(sessionId).composer.text).toBe(
+				"unsafe text .ao/attachments/attachment-after-failure.png ",
+			);
 		} finally {
 			view.unmount();
 			localStorage.mockRestore();

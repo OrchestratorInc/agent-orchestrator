@@ -127,7 +127,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
 import { ComposerAttachmentTile, ComposerPendingTile } from "./ComposerAttachmentTile";
 import { AttachmentStrip } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
@@ -2463,15 +2463,19 @@ export const ChatComposer = memo(function ChatComposer({
 		persistComposerText(draft);
 	}
 
-	// Pasted, dropped and picked files show once, in the attachment strip; the
-	// text never gets an inline chip for them, and the message lists them at its end.
+	// Images get an inline chip only beside prose that can refer to them.
+	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
-		// Attaching to a recalled message edits it, as typing would: it becomes the draft.
-		if (historyBrowse.current) {
-			historyBrowse.current = null;
-			persistComposerText(textRef.current);
-		}
-		void fileAttachments.addFiles(files);
+		// Reserve the spot now: staging can take a while, and the user keeps typing.
+		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
+			files.some((file) => file.type.startsWith("image/"))
+			? editor.current?.reserveImages()
+			: undefined;
+		void fileAttachments.addFiles(files).then((added) => {
+			if (!reservation) return;
+			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		});
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {

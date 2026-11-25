@@ -62,7 +62,7 @@ test("a sent image attachment opens at full size when clicked @T0", async ({ pag
 	await expect(dialog).toBeHidden();
 });
 
-test("an image path in sent prose opens inline, while a pasted image stays out of the composer text @T0", async ({ page }) => {
+test("a pasted image sits inline in the prose, in the composer and in history @T0", async ({ page }) => {
 	const id = "inline-image";
 	const staged = ".ao/attachments/attachment-inline.png";
 	await installFakeAgent(page, { workers: [{ id, title: "Inline image", mode: "chat" }] });
@@ -128,7 +128,7 @@ test("an image path in sent prose opens inline, while a pasted image stays out o
 	await expect(page.getByRole("dialog")).toBeVisible();
 	await page.keyboard.press("Escape");
 
-	// Composer: the pasted image goes to the attachment strip; the text stays the user's.
+	// Composer: paste at the caret, keep typing, send.
 	const field = page.getByRole("combobox", { name: "Message the agent" });
 	await field.click();
 	await page.keyboard.type("Make this one");
@@ -138,13 +138,12 @@ test("an image path in sent prose opens inline, while a pasted image stays out o
 		transfer.items.add(new File([bytes], "image.png", { type: "image/png" }));
 		document.activeElement?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
 	}, png);
-	await expect(page.getByRole("button", { name: "Remove image.png", exact: true })).toBeVisible();
-	await expect(field.locator('[data-composer-token="image"]')).toHaveCount(0);
-	await page.keyboard.type(" shorter");
-	await expect(field).toHaveText("Make this one shorter");
+	await expect(field.locator('[data-composer-token="image"]')).toHaveText("Image 1");
+	await page.keyboard.type("shorter");
+	await expect(field).toHaveText("Make this one Image 1 shorter");
 	await page.screenshot({ path: test.info().outputPath("composer.png") });
 	await page.keyboard.press("Enter");
 	await expect.poll(() => sent).toEqual([
-		`Make this one shorter\n\nAttached files (read these files in the workspace):\n- ${staged}`,
+		`Make this one ${staged} shorter\n\nAttached files (read these files in the workspace):\n- ${staged}`,
 	]);
 });

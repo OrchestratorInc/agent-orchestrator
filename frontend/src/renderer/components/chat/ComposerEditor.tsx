@@ -101,6 +101,14 @@ export type ComposerEditorHandle = {
 	endDictation(keep: boolean): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
+	/**
+	 * Hold the caret's place for images still being staged. Returns a reservation
+	 * for fillImages, so the chips land where the user pasted, not wherever the
+	 * caret has moved by the time staging finishes.
+	 */
+	reserveImages(): string | undefined;
+	/** Replace a reservation with one chip per staged image path (none removes it). */
+	fillImages(reservation: string, paths: string[]): void;
 	/** Drop every inline chip for an image that left the attachment list. */
 	removeImage(path: string): void;
 	/**
@@ -442,6 +450,55 @@ function $caretBoundary(editor: LexicalEditor): { atStart: boolean; atEnd: boole
 	};
 }
 
+/** True when the character before the caret would run into an inserted chip's text. */
+function $joinsPreviousWord(selection: RangeSelection): boolean {
+	const { anchor } = selection;
+	const node = anchor.getNode();
+	const before = $isTextNode(node)
+		? node.getTextContent().slice(0, anchor.offset) || (node.getPreviousSibling()?.getTextContent() ?? "")
+		: $isElementNode(node) && anchor.offset > 0
+			? (node.getChildAtIndex(anchor.offset - 1)?.getTextContent() ?? "")
+			: "";
+	return /\S$/.test(before);
+}
+
+function $reserveImages(): string | undefined {
+	const reservation = $createComposerTokenNode("image", "");
+	const nodes: LexicalNode[] = [reservation, $createTextNode(" ")];
+	let selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		// A drop or the file picker can leave no selection; the end is the natural place.
+		$getRoot().selectEnd();
+		selection = $getSelection();
+	}
+	if (!$isRangeSelection(selection)) return undefined;
+	if ($joinsPreviousWord(selection)) nodes.unshift($createTextNode(" "));
+	selection.insertNodes(nodes);
+	return reservation.getKey();
+}
+
+function $fillImages(reservation: string, paths: string[]): void {
+	const node = $getNodeByKey(reservation);
+	// Deleted while staging: the user removed it on purpose, so add nothing back.
+	if (!(node instanceof ComposerTokenNode)) return;
+	if (paths.length === 0) {
+		$removeChip(node);
+		return;
+	}
+	let last: LexicalNode = node;
+	paths.forEach((path, index) => {
+		const chip = $createComposerTokenNode("image", path);
+		if (index === 0) {
+			node.replace(chip);
+		} else {
+			const space = $createTextNode(" ");
+			last.insertAfter(space);
+			space.insertAfter(chip);
+		}
+		last = chip;
+	});
+}
+
 /** Remove a chip and one following space so the words around it don't double-space. */
 function $removeChip(chip: LexicalNode): void {
 	const next = chip.getNextSibling();
@@ -711,6 +768,16 @@ const EditorBridge = forwardRef<
 				editor.update(() => {
 					$insertComposerReference(path, display, wire);
 				}, { discrete: true });
+			},
+			reserveImages: () => {
+				let reservation: string | undefined;
+				editor.update(() => {
+					reservation = $reserveImages();
+				}, { discrete: true });
+				return reservation;
+			},
+			fillImages: (reservation, paths) => {
+				editor.update(() => $fillImages(reservation, paths), { discrete: true });
 			},
 			removeImage: (path) => {
 				editor.update(() => $removeImageTokens((candidate) => candidate === path), { discrete: true });
