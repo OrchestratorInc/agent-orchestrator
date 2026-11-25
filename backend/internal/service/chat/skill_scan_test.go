@@ -148,3 +148,39 @@ func TestScanSkillsLabelsASkillFromItsOwnFolder(t *testing.T) {
 		t.Errorf("ship lost its own metadata: %+v", got[1])
 	}
 }
+
+func TestScanSkillsNamesNestedCommandsAndSkillFolders(t *testing.T) {
+	workspace, home := t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	// Verified against Claude Code 2.1: a skill is named by its folder, and a
+	// nested command by its path.
+	writeFile(t, filepath.Join(workspace, ".claude", "skills", "folder-a", "SKILL.md"), "---\nname: other-b\n---\n")
+	writeFile(t, filepath.Join(workspace, ".claude", "commands", "ns", "deep-cmd.md"), "Nested.")
+
+	names := skillNames(ScanSkills("claude-code", workspace, home))
+	if len(names) != 2 || names[0] != "folder-a" || names[1] != "ns:deep-cmd" {
+		t.Fatalf("names = %v", names)
+	}
+}
+
+func TestScanSkillsDeduplicatesPluginsByTheirResolvedName(t *testing.T) {
+	workspace, home := t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	config := filepath.Join(home, ".claude")
+	a := filepath.Join(config, "plugins", "cache", "m", "a")
+	b := filepath.Join(config, "plugins", "cache", "m", "b")
+	// a@m's manifest says "b"; b@m's says "c". Both must contribute.
+	writeFile(t, filepath.Join(a, ".claude-plugin", "plugin.json"), `{"name":"b"}`)
+	writeFile(t, filepath.Join(a, "skills", "one", "SKILL.md"), "---\ndescription: One\n---\n")
+	writeFile(t, filepath.Join(b, ".claude-plugin", "plugin.json"), `{"name":"c"}`)
+	writeFile(t, filepath.Join(b, "skills", "two", "SKILL.md"), "---\ndescription: Two\n---\n")
+	writeFile(t, filepath.Join(config, "plugins", "installed_plugins.json"), `{"plugins":{
+		"a@m":[{"scope":"user","installPath":"`+a+`"}],
+		"b@m":[{"scope":"user","installPath":"`+b+`"}]}}`)
+	writeFile(t, filepath.Join(config, "settings.json"), `{"enabledPlugins":{"a@m":true,"b@m":true}}`)
+
+	names := skillNames(ScanSkills("claude-code", workspace, home))
+	if len(names) != 2 || names[0] != "b:one" || names[1] != "c:two" {
+		t.Fatalf("names = %v", names)
+	}
+}

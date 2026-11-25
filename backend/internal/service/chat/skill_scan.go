@@ -175,7 +175,7 @@ func enabledClaudePlugins(config, workspace string) []claudePlugin {
 			continue
 		}
 		name, _, _ := strings.Cut(key, "@")
-		if name == "" || seen[name] {
+		if name == "" {
 			continue
 		}
 		for _, install := range installed.Plugins[key] {
@@ -196,11 +196,12 @@ func enabledClaudePlugins(config, workspace string) []claudePlugin {
 			if readJSONFile(filepath.Join(install.InstallPath, ".claude-plugin", "plugin.json"), &manifest) && strings.TrimSpace(manifest.Name) != "" {
 				name = strings.TrimSpace(manifest.Name)
 			}
-			if seen[name] {
-				break
+			// Deduplicated by the resolved name: two install keys can name the
+			// same plugin, and one key's manifest can name another's.
+			if !seen[name] {
+				seen[name] = true
+				plugins = append(plugins, claudePlugin{name: name, path: install.InstallPath})
 			}
-			seen[name] = true
-			plugins = append(plugins, claudePlugin{name: name, path: install.InstallPath})
 			break
 		}
 	}
@@ -213,30 +214,45 @@ func scanSkillRoots(roots []skillRoot) []ports.ChatSkill {
 	var skills []ports.ChatSkill
 	seen := map[string]bool{}
 	for _, root := range roots {
+		if root.commands {
+			for _, command := range commandFiles(root.dir) {
+				meta, ok := readSkillFrontmatter(command.file, false)
+				if !ok || (meta.UserInvocable != nil && !*meta.UserInvocable) {
+					continue
+				}
+				name := command.name
+				if root.prefix != "" {
+					name = root.prefix + ":" + name
+				}
+				if seen[name] {
+					continue
+				}
+				seen[name] = true
+				skills = append(skills, ports.ChatSkill{
+					Name:        name,
+					DisplayName: name,
+					Description: strings.TrimSpace(meta.Description),
+					InputHint:   strings.TrimSpace(meta.ArgumentHint),
+					Source:      root.source,
+				})
+			}
+			continue
+		}
 		entries, err := os.ReadDir(root.dir)
 		if err != nil {
 			continue
 		}
 		for _, entry := range entries {
-			var file, folder, dir string
-			if root.commands {
-				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-					continue
-				}
-				file = filepath.Join(root.dir, entry.Name())
-				folder = strings.TrimSuffix(entry.Name(), ".md")
-			} else {
-				if strings.HasPrefix(entry.Name(), ".") {
-					continue
-				}
-				dir = filepath.Join(root.dir, entry.Name())
-				if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-					continue
-				}
-				file = filepath.Join(dir, "SKILL.md")
-				folder = entry.Name()
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
 			}
-			meta, ok := readSkillFrontmatter(file, !root.commands)
+			// Claude names a skill by its folder, not its frontmatter `name`.
+			folder := entry.Name()
+			dir := filepath.Join(root.dir, folder)
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				continue
+			}
+			meta, ok := readSkillFrontmatter(filepath.Join(dir, "SKILL.md"), true)
 			if !ok || (meta.UserInvocable != nil && !*meta.UserInvocable) {
 				continue
 			}
@@ -257,20 +273,51 @@ func scanSkillRoots(roots []skillRoot) []ports.ChatSkill {
 			}
 			// The label comes from the folder that supplied the skill, never from a
 			// same-named skill in another root; with none, the scanned values stay.
-			if dir != "" {
-				if display, found := readSkillMetadataFile(filepath.Join(dir, "agents", "openai.yaml")); found {
-					if label := strings.TrimSpace(display.Interface.DisplayName); label != "" {
-						skill.DisplayName = label
-					}
-					if summary := strings.TrimSpace(display.Interface.ShortDescription); summary != "" {
-						skill.Description = summary
-					}
+			if display, found := readSkillMetadataFile(filepath.Join(dir, "agents", "openai.yaml")); found {
+				if label := strings.TrimSpace(display.Interface.DisplayName); label != "" {
+					skill.DisplayName = label
+				}
+				if summary := strings.TrimSpace(display.Interface.ShortDescription); summary != "" {
+					skill.Description = summary
 				}
 			}
 			skills = append(skills, skill)
 		}
 	}
 	return skills
+}
+
+type commandFile struct {
+	name string
+	file string
+}
+
+// commandFiles lists a commands folder's `.md` files, subfolders included. Claude
+// names a nested command by its path: `frontend/component.md` is `frontend:component`.
+func commandFiles(dir string) []commandFile {
+	var files []commandFile
+	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if path != dir && strings.HasPrefix(entry.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".md") {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return nil
+		}
+		name := strings.ReplaceAll(filepath.ToSlash(strings.TrimSuffix(rel, ".md")), "/", ":")
+		files = append(files, commandFile{name: name, file: path})
+		return nil
+	})
+	return files
 }
 
 // readSkillFrontmatter reads a skill's frontmatter. A skill must have a file;
