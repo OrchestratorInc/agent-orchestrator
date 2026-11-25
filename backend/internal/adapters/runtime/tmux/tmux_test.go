@@ -364,6 +364,36 @@ func TestDottedReviewerHandleResolvesToCreateName(t *testing.T) {
 	}
 }
 
+func TestLongReviewerHandleResolvesToCreateName(t *testing.T) {
+	raw := "review-" + strings.Repeat("a", 60)
+	want := SessionName(raw)
+	r, fr := newTestRuntime(0)
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy raw long reviewer handle: %v", err)
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one", countCalls(fr, "kill-session"))
+	}
+	for _, call := range fr.calls {
+		if len(call.args) > 0 && call.args[0] == "kill-session" && !reflect.DeepEqual(call.args, killSessionArgs(want)) {
+			t.Fatalf("kill-session args = %v, want %v", call.args, killSessionArgs(want))
+		}
+	}
+	for _, call := range fr.calls {
+		for _, arg := range call.args {
+			if arg == raw {
+				t.Fatalf("tmux received raw long reviewer handle: %v", call.args)
+			}
+		}
+	}
+	for _, id := range []string{raw, want} {
+		got, err := handleID(ports.RuntimeHandle{ID: id})
+		if err != nil || got != want {
+			t.Fatalf("handleID(%q) = %q, %v; want %q", id, got, err, want)
+		}
+	}
+}
+
 // -- env key validation --
 
 func TestCreateRejectsInvalidEnvKeys(t *testing.T) {

@@ -20,10 +20,10 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -1517,15 +1517,13 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 	if id == "" {
 		return "", errors.New("tmux runtime: session id is required")
 	}
-	// Reviewer panes derive their stable handle from the worker session ID.
-	// A dotted project ID reaches lookup before Create has returned its tmux name.
-	if strings.Contains(id, ".") && runtimeid.ValidDottedSessionID(id) {
-		id = SessionName(id)
-	}
-	if !sessionIDPattern.MatchString(id) {
+	if !sessionid.Valid(id) {
 		return "", fmt.Errorf("tmux runtime: invalid handle id %q", id)
 	}
-	return id, nil
+	// Reviewers destroy a stale pane using the raw worker-derived ID before
+	// Create returns a handle. Apply Create's naming to dotted or long IDs;
+	// handles already returned by Create are fixed points of SessionName.
+	return SessionName(id), nil
 }
 
 // -- output detection helpers --

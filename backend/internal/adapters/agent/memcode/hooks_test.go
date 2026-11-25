@@ -178,6 +178,63 @@ func TestCleanupWorkspaceRemovesOnlyValidatedSessionArtifacts(t *testing.T) {
 	}
 }
 
+func TestDottedSessionPrivateHooksAndCleanup(t *testing.T) {
+	workspace, data := t.TempDir(), t.TempDir()
+	const id = "memron.ai-2"
+	cfg := ports.WorkspaceHookConfig{DataDir: data, WorkspacePath: workspace, SessionID: id, SystemPrompt: "private context"}
+	p := New()
+	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatalf("GetAgentHooks dotted session: %v", err)
+	}
+	t.Setenv("AO_MEMCODE_DATA_DIR", data)
+	t.Setenv("AO_MEMCODE_SESSION", id)
+	t.Setenv("AO_MEMCODE_GENERATION", "launch-1")
+	t.Setenv("MEMCODE_SESSION_ID", "sess_b1b1b1b1")
+	var out bytes.Buffer
+	if err := EmitInstructionChunk(&out, "context-chunk-0"); err != nil || out.String() != cfg.SystemPrompt {
+		t.Fatalf("dotted context chunk = %q, %v", out.String(), err)
+	}
+	if _, err := EmitStartWitness(io.Discard); err != nil {
+		t.Fatalf("EmitStartWitness dotted session: %v", err)
+	}
+	w, err := readWitness(data, id, "launch-1")
+	if err != nil || w.Sequence != 1 {
+		t.Fatalf("dotted witness = %+v, %v", w, err)
+	}
+	sibling := filepath.Join(data, "agent-launches", "memcode", "memron-ai-2", "keep")
+	if err := os.MkdirAll(sibling, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CleanupWorkspace(context.Background(), cfg); err != nil {
+		t.Fatalf("CleanupWorkspace dotted session: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "agent-launches", "memcode", id)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dotted session artifacts remain: %v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("hyphenated sibling was removed: %v", err)
+	}
+	for _, invalid := range []string{".", "..", ".leading", "trailing.", "has..gap", "../escape"} {
+		cfg.SessionID = invalid
+		if err := p.GetAgentHooks(context.Background(), cfg); err == nil {
+			t.Errorf("GetAgentHooks accepted %q", invalid)
+		}
+		if _, err := witnessPath(data, invalid, "launch-1"); err == nil {
+			t.Errorf("witnessPath accepted %q", invalid)
+		}
+		if err := p.CleanupWorkspace(context.Background(), cfg); err == nil {
+			t.Errorf("CleanupWorkspace accepted %q", invalid)
+		}
+		t.Setenv("AO_MEMCODE_SESSION", invalid)
+		if err := EmitInstructionChunk(io.Discard, "context-chunk-0"); err == nil {
+			t.Errorf("EmitInstructionChunk accepted %q", invalid)
+		}
+	}
+	if _, err := witnessPath(data, id, "launch.1"); err == nil {
+		t.Fatal("dotted generation was accepted")
+	}
+}
+
 func TestLongPrivateContextIsNotTruncated(t *testing.T) {
 	data := []byte(strings.Repeat("Standing instruction αβ.\n\n", 1200))
 	chunks, err := instructionChunks(data)

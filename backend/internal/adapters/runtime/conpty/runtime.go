@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionid"
 )
 
 const (
@@ -131,7 +131,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	id := string(cfg.SessionID)
 	// Keep runtime handles identical to session IDs: the registry and restore
 	// path use the handle as an exact key.
-	if !runtimeid.ValidDottedSessionID(id) {
+	if !sessionid.Valid(id) {
 		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: invalid session id %q: must contain only letters, digits, underscores, hyphens, and internal dots", id))
 	}
 	if cfg.WorkspacePath == "" {
