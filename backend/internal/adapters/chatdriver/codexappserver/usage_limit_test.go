@@ -176,6 +176,7 @@ func TestCodexUsageLimitDoesNotReportBrokenThread(t *testing.T) {
 	const quotaCompleted = `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"` + codexQuotaCopy + `","codexErrorInfo":"usageLimitExceeded"}}}}`
 	const completed = `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed"}}}`
 	const systemError = `{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"systemError"}}}`
+	const idleStatus = `{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"idle"}}}`
 	const childSystemError = `{"method":"thread/status/changed","params":{"threadId":"child-thread","status":{"type":"systemError"}}}`
 	const idle = domain.ThreadStatusIdle
 	const broken = domain.ThreadStatusSystemError
@@ -190,6 +191,9 @@ func TestCodexUsageLimitDoesNotReportBrokenThread(t *testing.T) {
 		{"status after completion", []string{start, quota, completed, systemError}, []domain.ThreadStatus{idle}},
 		{"other errors stay system errors", []string{start, network, systemError, completed}, []domain.ThreadStatus{broken}},
 		{"later error replaces the refusal", []string{start, quota, network, systemError}, []domain.ThreadStatus{broken}},
+		{"later error restores a hidden status", []string{start, quota, systemError, network}, []domain.ThreadStatus{idle, broken}},
+		{"later error restores a corrected status", []string{start, systemError, quota, network}, []domain.ThreadStatus{broken, idle, broken}},
+		{"native idle after the refusal stays idle", []string{start, quota, systemError, idleStatus, network}, []domain.ThreadStatus{idle, idle}},
 		{"next turn forgets the refusal", []string{start, quota, completed, start, systemError}, []domain.ThreadStatus{broken}},
 		{"child thread is not the root's refusal", []string{start, quota, childSystemError}, []domain.ThreadStatus{broken}},
 	} {
