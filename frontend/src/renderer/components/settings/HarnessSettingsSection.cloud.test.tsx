@@ -16,6 +16,12 @@ vi.mock("../../hooks/useCloudHarnessVersions", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudHarnessVersions")>();
 	return { ...actual, useCloudHarnessVersions: () => cloud.value! };
 });
+// jsdom has no layout width; a test turns on the side-by-side layout here.
+const layout = vi.hoisted(() => ({ wide: false }));
+vi.mock("./harness/harness-ui", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./harness/harness-ui")>();
+	return { ...actual, useWideLayout: () => layout.wide };
+});
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true, localEnabled: true, client: "", loading: false }) }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" }, isLoading: false, error: null, ready: true }) }));
 // The signed-in person's saved credentials (GET /me/providers), as the hook would return them.
@@ -233,8 +239,32 @@ describe("Cloud harness tab", () => {
 		providerConnections.value = [];
 		deleteGitHubPAT.mockClear();
 		listUserAgentModels.mockClear();
+		layout.wide = false;
 	});
 	afterEach(() => cleanup());
+
+	it("keeps the open page on a harness the search still lists, side by side", async () => {
+		layout.wide = true;
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const content = (search: string) => <QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search={search} /></TooltipProvider></QueryClientProvider>;
+		const openPage = () => document.querySelector<HTMLElement>("div[data-agent]")?.dataset.agent;
+		const view = render(content(""));
+
+		// The first harness opens beside the list; another stays open while the search lists it.
+		await waitFor(() => expect(openPage()).toBe("claude-code"));
+		fireEvent.click(document.querySelector<HTMLElement>('button[data-agent="codex"]')!);
+		await waitFor(() => expect(openPage()).toBe("codex"));
+		view.rerender(content("cod"));
+		expect(openPage()).toBe("codex");
+
+		// A search that leaves it out opens the first match instead, or no page at all.
+		view.rerender(content("cursor"));
+		await waitFor(() => expect(openPage()).toBe("cursor"));
+		view.rerender(content("no-such-harness"));
+		await waitFor(() => expect(openPage()).toBeUndefined());
+		expect(screen.getByText("No harnesses match your search.")).toBeInTheDocument();
+	});
 
 	it("still lets a person remove a GitHub token they saved before, and offers nothing to save one", async () => {
 		// A token saved before the GitHub App, still marked valid: the control plane keeps it

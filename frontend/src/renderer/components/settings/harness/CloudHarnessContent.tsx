@@ -58,8 +58,10 @@ function CloudHarnessPages({ connections, focusAgentId, onDetailChange, orgId, s
 	const focusHandledRef = useRef(false);
 	const focusPrimaryActionRef = useRef(false);
 	const targetAgentId = CLOUD_AGENT_PROVIDERS.find((agentId) => agentId === focusAgentId);
+	// A harness with its login open stays listed, as on the local side, so a
+	// search never closes a login (and abandons a browser sign-in) mid-way.
 	const rows = CLOUD_AGENT_PROVIDERS.filter((agentId) =>
-		agentId === targetAgentId || agentLabel(agentId).toLowerCase().includes(search.trim().toLowerCase()),
+		agentId === targetAgentId || agentId === loginAgent || agentLabel(agentId).toLowerCase().includes(search.trim().toLowerCase()),
 	);
 
 	const openDetail = (agentId: CloudHarness, tab: CloudDetailTab = "account") => {
@@ -75,9 +77,12 @@ function CloudHarnessPages({ connections, focusAgentId, onDetailChange, orgId, s
 	// Wide layouts keep the list beside the open harness; narrow ones swap between them.
 	const layoutRef = useRef<HTMLDivElement>(null);
 	const split = useWideLayout(layoutRef);
+	// The open page always belongs to a listed harness: when a search leaves it
+	// out, the first match opens instead, or none when nothing matches.
 	useEffect(() => {
-		if (!split || selectedAgentId !== null || rows.length === 0) return;
-		openDetail(rows[0]);
+		if (!split || (selectedAgentId !== null && rows.includes(selectedAgentId))) return;
+		if (rows.length > 0) openDetail(rows[0]);
+		else if (selectedAgentId !== null) closeDetail();
 	});
 	useEffect(() => {
 		onDetailChange?.(selectedAgentId !== null && !split);
