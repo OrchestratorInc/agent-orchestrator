@@ -23,18 +23,18 @@ function hasParentTraversal(path: string): boolean {
 export async function loadMarkdownPreviewText(
 	source: MarkdownFilePreviewSource,
 	rawPath: string,
-	cloud?: { client: CloudCpClient; ready: boolean },
+	cloud?: { client?: CloudCpClient; ready?: boolean; signal?: AbortSignal },
 ): Promise<string> {
 	const path = stripMarkdownPreviewAnchor(rawPath);
 	if (!isMarkdownFilePath(path)) throw new AoError("MARKDOWN_PREVIEW_LOAD_FAILED", "Unable to load this file.");
 	if (source.kind === "cloud") {
-		if (!cloud?.ready) throw new AoError("MARKDOWN_PREVIEW_LOAD_FAILED", "Unable to load this file.");
+		if (!cloud?.ready || !cloud?.client) throw new AoError("MARKDOWN_PREVIEW_LOAD_FAILED", "Unable to load this file.");
 		// A sibling repository is addressed as ../<repository>/<path>; the client
 		// must be scoped to it before the remaining path is read.
 		const { repository, path: relativePath } = splitWorkspaceRepositoryPath(path);
 		if (hasParentTraversal(relativePath)) throw new AoError("MARKDOWN_PREVIEW_LOAD_FAILED", "Unable to load this file.");
 		const file = await withWorkspaceRepository(cloud.client, repository)
-			.getWorkspaceReviewFile(source.orgId, source.sessionId, { path: relativePath, scope: "combined" });
+			.getWorkspaceReviewFile(source.orgId, source.sessionId, { path: relativePath, scope: "combined" }, { signal: cloud.signal });
 		if (file.binary || file.deleted) throw new AoError("MARKDOWN_PREVIEW_LOAD_FAILED", "Unable to load this file.");
 		return file.content ?? "";
 	}
@@ -49,6 +49,7 @@ export async function loadMarkdownPreviewText(
 	if (hasParentTraversal(workspacePath)) throw new AoError("MARKDOWN_PREVIEW_LOAD_FAILED", "Unable to load this file.");
 	const { data, error } = await clientForSessionHost(source.hostId).GET("/api/v1/sessions/{sessionId}/workspace/file", {
 		params: { path: { sessionId: source.sessionId }, query: { path: workspacePath } },
+		signal: cloud?.signal,
 	});
 	if (error || !data || data.binary || data.deleted) throw new AoError("MARKDOWN_PREVIEW_LOAD_FAILED", "Unable to load this file.");
 	return data.content ?? "";

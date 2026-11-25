@@ -5403,5 +5403,7 @@
 	"backgroundTasks.stale": "已过期",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "后台任务",
-	"backgroundTasks.state.failed": "失败"
+	"backgroundTasks.state.failed": "失败",
+	"markdownPreview.loading": "正在加载文件预览",
+	"markdownPreview.frontmatterReadFailed": "无法读取此文件的 frontmatter。"
 }

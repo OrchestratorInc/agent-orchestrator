@@ -840,6 +840,27 @@ describe("ChatMarkdown", () => {
 		]);
 	});
 
+	it("skips markdown hover preview for a link pointing to the session's own artifact", () => {
+		const onFileOpen = vi.fn();
+		renderWithQueries(
+			<ChatLinkProvider
+				sessionId="s1"
+				markdownFileSource={{ kind: "workspace", sessionId: "s1" }}
+				onFileOpen={onFileOpen}
+				workspacePaths={["notes/doc.md"]}
+			>
+				<ChatMarkdown text="[own plan](/workspace/.ao/worker/artifacts/s1/plan.md) and [workspace doc](notes/doc.md)" />
+			</ChatLinkProvider>,
+		);
+		const ownLink = screen.getByRole("link", { name: "own plan" });
+		const docLink = screen.getByRole("link", { name: "workspace doc" });
+
+		// An ordinary workspace markdown link configures hover preview (wrapped in HoverCard with hover-card-trigger slot)
+		expect(docLink).toHaveAttribute("data-slot", "hover-card-trigger");
+		// The session's own artifact link skips markdown hover preview (no hover-card-trigger slot)
+		expect(ownLink).not.toHaveAttribute("data-slot", "hover-card-trigger");
+	});
+
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());

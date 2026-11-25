@@ -84,7 +84,12 @@ describe("MarkdownFrontmatterPreview", () => {
 		cloudGet.mockResolvedValue({ content: doc, binary: false, deleted: false });
 		renderCard("docs/check.md", { kind: "cloud", orgId: "org-1", sessionId: "sess-1" });
 		expect(await screen.findByText("Steps to verify a build before deployment.")).toBeInTheDocument();
-		expect(cloudGet).toHaveBeenCalledWith("org-1", "sess-1", { path: "docs/check.md", scope: "combined" });
+		expect(cloudGet).toHaveBeenCalledWith(
+			"org-1",
+			"sess-1",
+			{ path: "docs/check.md", scope: "combined" },
+			expect.objectContaining({ signal: expect.any(AbortSignal) }),
+		);
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
@@ -123,7 +128,12 @@ describe("MarkdownFrontmatterPreview", () => {
 		cloudGet.mockResolvedValue({ content: doc, binary: false, deleted: false });
 		renderCard("../second-repo/docs/check.md", { kind: "cloud", orgId: "org-1", sessionId: "sess-1" });
 		expect(await screen.findByText("Deployment checklist")).toBeInTheDocument();
-		expect(cloudGet).toHaveBeenCalledWith("org-1", "sess-1", { path: "docs/check.md", scope: "combined" }, { repository: "second-repo" });
+		expect(cloudGet).toHaveBeenCalledWith(
+			"org-1",
+			"sess-1",
+			{ path: "docs/check.md", scope: "combined" },
+			expect.objectContaining({ repository: "second-repo" }),
+		);
 	});
 
 	it("does not fetch when cloud is not ready", () => {
@@ -182,13 +192,34 @@ describe("MarkdownFrontmatterPreview", () => {
 		expect(description.textContent).not.toContain(tail);
 	});
 
+	it("passes an abort signal to cancel the read when the card closes", () => {
+		let capturedSignal: AbortSignal | undefined;
+		getMock.mockImplementation((_url: string, init: { signal?: AbortSignal }) => {
+			capturedSignal = init?.signal;
+			return new Promise(() => {});
+		});
+		const { unmount } = render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<HoverCard open><MarkdownFrontmatterPreview path="docs/cancel.md" source={{ kind: "workspace", sessionId: "sess-1" }} /></HoverCard>
+			</QueryClientProvider>,
+		);
+		expect(capturedSignal).toBeDefined();
+		expect(capturedSignal?.aborted).toBe(false);
+		unmount();
+		expect(capturedSignal?.aborted).toBe(true);
+	});
+
 	it("ignores a stale response from a previous path", async () => {
 		let releaseFirst: () => void = () => undefined;
 		let firstPromise: Promise<unknown> | undefined;
+		let firstSettled = false;
 		getMock.mockImplementation((_url: string, init: { params: { query: { path: string } } }) => {
 			if (init.params.query.path === "docs/first.md") {
 				firstPromise = new Promise((resolve) => {
-					releaseFirst = () => resolve(fileResponse("---\nname: First file\ndescription: Old\n---\n"));
+					releaseFirst = () => {
+						resolve(fileResponse("---\nname: First file\ndescription: Old\n---\n"));
+						firstSettled = true;
+					};
 				});
 				return firstPromise;
 			}
@@ -211,13 +242,13 @@ describe("MarkdownFrontmatterPreview", () => {
 		await act(async () => {
 			releaseFirst();
 			await firstPromise;
+			await new Promise((r) => setTimeout(r, 50));
 		});
-		await waitFor(() => {
-			expect(screen.queryByText("First file")).not.toBeInTheDocument();
-			expect(screen.queryByText("Old")).not.toBeInTheDocument();
-		});
+		expect(firstSettled).toBe(true);
 		expect(screen.getByText("Second file")).toBeInTheDocument();
 		expect(screen.getByText("Current")).toBeInTheDocument();
+		expect(screen.queryByText("First file")).not.toBeInTheDocument();
+		expect(screen.queryByText("Old")).not.toBeInTheDocument();
 	});
 });
 
@@ -298,6 +329,7 @@ describe("markdown link hover", () => {
 		renderLinks("[Outside](../secret.md)", { kind: "workspace", sessionId: "sess-1" });
 		fireEvent.pointerOver(screen.getByRole("link", { name: "Outside" }), { pointerType: "mouse" });
 		expect(await screen.findByText("Unable to load this file.")).toBeInTheDocument();
+		await new Promise((resolve) => setTimeout(resolve, 350));
 		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.anything());
 	});
 
@@ -309,7 +341,8 @@ describe("markdown link hover", () => {
 			</ChatLinkProvider>,
 		);
 		fireEvent.pointerOver(screen.getByRole("link", { name: "Report" }), { pointerType: "mouse" });
-		await waitFor(() => expect(getMock).not.toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		expect(getMock).not.toHaveBeenCalled();
 		expect(screen.queryByText("Unable to load this file.")).not.toBeInTheDocument();
 	});
 
@@ -326,7 +359,8 @@ describe("markdown link hover", () => {
 	it("does not render preview for a file whose resolved extension is not markdown", async () => {
 		renderLinks("[Catalog](docs/guide.md%3Fdraft)", { kind: "workspace", sessionId: "sess-1" });
 		fireEvent.pointerOver(screen.getByRole("link", { name: "Catalog" }), { pointerType: "mouse" });
-		await waitFor(() => expect(getMock).not.toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		expect(getMock).not.toHaveBeenCalled();
 		expect(screen.queryByText("Unable to load this file.")).not.toBeInTheDocument();
 	});
 });

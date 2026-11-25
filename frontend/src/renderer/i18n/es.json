@@ -5591,5 +5591,7 @@
 	"backgroundTasks.state.failed": "Fallida",
 	"backgroundTasks.shells_many": "{{count}} shells siguen en ejecución",
 	"backgroundTasks.agents_many": "{{count}} agentes en segundo plano en ejecución",
-	"backgroundTasks.tasks_many": "{{count}} tareas en segundo plano en ejecución"
+	"backgroundTasks.tasks_many": "{{count}} tareas en segundo plano en ejecución",
+	"markdownPreview.loading": "Cargando vista previa del archivo",
+	"markdownPreview.frontmatterReadFailed": "No se pudo leer el frontmatter de este archivo."
 }

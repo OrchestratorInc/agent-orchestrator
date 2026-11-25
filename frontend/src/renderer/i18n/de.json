@@ -5421,5 +5421,7 @@
 	"backgroundTasks.stale": "veraltet",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Hintergrundaufgabe",
-	"backgroundTasks.state.failed": "Fehlgeschlagen"
+	"backgroundTasks.state.failed": "Fehlgeschlagen",
+	"markdownPreview.loading": "Dateivorschau wird geladen",
+	"markdownPreview.frontmatterReadFailed": "Das Frontmatter dieser Datei konnte nicht gelesen werden."
 }
