@@ -220,12 +220,13 @@ function shortHomePaths(text: string): string {
 
 /**
  * The Device tab's own page: a header in the New project panel's type, over
- * whatever this step offers, at the top of the tab like the device list.
+ * whatever this step offers, at the top of the tab like the device list. A
+ * `fill` page lets its content take the rest of the tab's height.
  */
-function DevicePage({ back, children, title, description }: { back?: { label: string; onClick: () => void }; children: ReactNode; title: ReactNode; description?: ReactNode }) {
+function DevicePage({ back, children, description, fill = false, title }: { back?: { label: string; onClick: () => void }; children: ReactNode; description?: ReactNode; fill?: boolean; title: ReactNode }) {
 	return (
 		<div className="board-scrollbar flex h-full flex-col overflow-y-auto">
-			<div className="flex w-full max-w-md flex-col px-4 pt-4 pb-6">
+			<div className={cn("flex w-full flex-col px-4 pt-4", fill ? "flex-1 pb-4" : "max-w-md pb-6")}>
 				{back ? (
 					<Button className="-ml-2 mb-3 self-start text-muted-foreground" onClick={back.onClick} size="sm" type="button" variant="quiet">
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
@@ -234,7 +235,7 @@ function DevicePage({ back, children, title, description }: { back?: { label: st
 				) : null}
 				<h3 className="settings-dialog-title">{title}</h3>
 				{description ? <p className="mt-1 text-[13px] leading-5 text-pretty text-muted-foreground">{description}</p> : null}
-				<div className="mt-5">{children}</div>
+				<div className={cn("mt-5", fill && "flex flex-1 flex-col")}>{children}</div>
 			</div>
 		</div>
 	);
@@ -274,12 +275,15 @@ const platformMeta = {
 	android: { icon: AndroidIcon, name: "device.platformAndroid", hint: "device.platformAndroidHint" },
 } as const;
 
-/** iOS and Android as two choices, each saying whether it is ready to run. */
+/**
+ * iOS and Android as two choices stacked down the tab, sharing its height,
+ * each marked only when it needs setup or cannot run here.
+ */
 function PlatformChooser({ onChoose, platforms }: { onChoose: (platform: DevicePlatformStatus) => void; platforms: DevicePlatformStatus[] }) {
 	const { t } = useTranslation();
 	return (
-		<DevicePage description={t("device.chooseBody")} title={t("device.chooseTitle")}>
-			<div className="grid grid-cols-2 gap-3">
+		<DevicePage description={t("device.chooseBody")} fill title={t("device.chooseTitle")}>
+			<div className="flex flex-1 flex-col gap-3">
 				{platforms.map((platform) => {
 					const state = platformReady(platform);
 					const { icon: StateIcon, tone, label } = platformLook[state];
@@ -287,16 +291,14 @@ function PlatformChooser({ onChoose, platforms }: { onChoose: (platform: DeviceP
 					return (
 						<Pressable
 							aria-label={`${t(name)}, ${t(label)}`}
-							className="group flex min-w-0 flex-col items-start gap-5 rounded-lg bg-interactive-hover p-4 transition-colors duration-fast hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring/60"
+							className="group relative flex min-h-36 min-w-0 flex-1 flex-col items-center justify-center gap-4 rounded-lg bg-interactive-hover p-4 text-center transition-colors duration-fast hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring/60"
 							key={platform.platform}
 							onClick={() => onChoose(platform)}
 						>
-							<span className="flex w-full items-start justify-between gap-2">
-								<Logo aria-hidden="true" className="size-6 text-muted-foreground group-hover:text-foreground" />
-								{StateIcon ? <StateIcon aria-hidden="true" className={cn("size-icon-base", tone)} /> : null}
-							</span>
+							{StateIcon ? <StateIcon aria-hidden="true" className={cn("absolute top-3 right-3 size-icon-base", tone)} /> : null}
+							<Logo aria-hidden="true" className="size-10 text-muted-foreground transition-colors duration-fast group-hover:text-foreground" />
 							<span className="min-w-0">
-								<span className="block text-[14px] font-medium text-foreground">{t(name)}</span>
+								<span className="block text-[15px] font-medium text-foreground">{t(name)}</span>
 								<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{state === "ready" ? t(hint) : t(label)}</span>
 							</span>
 						</Pressable>
