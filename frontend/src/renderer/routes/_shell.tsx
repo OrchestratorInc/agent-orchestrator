@@ -75,6 +75,7 @@ import { applyWindowTranslucency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
+import { composerDropTargetFor, type ComposerDropTarget } from "../lib/composer-drop-targets";
 import { cn } from "../lib/utils";
 import {
 	isLinuxPlatform,
@@ -525,7 +526,8 @@ function ShellLayout() {
 		return () => document.removeEventListener("click", handleModifierLinkClick);
 	}, []);
 	// Drop a folder anywhere in the app window to add it as a project, mirroring
-	// VS Code's "drop a folder to open it". A depth counter (not a relatedTarget
+	// VS Code's "drop a folder to open it". Drop files anywhere to attach them
+	// to the nearest chat composer. A depth counter (not a relatedTarget
 	// check) tracks dragenter/dragleave so the overlay doesn't flicker as the
 	// pointer crosses child-element boundaries. XtermTerminal's own drop handler
 	// only swallows (preventDefault/stopPropagation) a drop that is NOT a
@@ -539,6 +541,16 @@ function ShellLayout() {
 			const item = event.dataTransfer?.items?.[0];
 			return item?.webkitGetAsEntry?.()?.isDirectory ?? false;
 		};
+		// Files (not folders) dropped anywhere go to the nearest chat composer,
+		// unless something under the pointer (a terminal, a PR comment box, the
+		// composer itself) already claimed the drag with preventDefault.
+		let highlighted: ComposerDropTarget | undefined;
+		const highlight = (target: ComposerDropTarget | undefined) => {
+			if (highlighted === target) return;
+			highlighted?.setDragging(false);
+			highlighted = target;
+			target?.setDragging(true);
+		};
 		const handleDragEnter = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			event.preventDefault();
@@ -547,21 +559,38 @@ function ShellLayout() {
 		};
 		const handleDragOver = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			if (event.defaultPrevented) {
+				// Claimed below; a composer under the pointer highlights itself.
+				if (highlighted && !highlighted.element()?.contains(event.target as Node)) highlight(undefined);
+				else highlighted = undefined;
+			} else if (!firstEntryIsDirectory(event)) {
+				const target = composerDropTargetFor(event.target);
+				highlight(target?.accepts() ? target : undefined);
+			}
 			event.preventDefault();
 			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		};
 		const handleDragLeave = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-			if (dragDepthRef.current === 0) setIsDragActive(false);
+			if (dragDepthRef.current === 0) {
+				setIsDragActive(false);
+				highlight(undefined);
+			}
 		};
 		const handleDrop = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			const claimed = event.defaultPrevented;
 			event.preventDefault();
 			dragDepthRef.current = 0;
 			setIsDragActive(false);
+			highlight(undefined);
+			if (claimed) return;
 			const item = event.dataTransfer?.items?.[0];
-			if (!item?.webkitGetAsEntry?.()?.isDirectory) return;
+			if (!item?.webkitGetAsEntry?.()?.isDirectory) {
+				composerDropTargetFor(event.target)?.attach(Array.from(event.dataTransfer?.files ?? []));
+				return;
+			}
 			const file = item.getAsFile();
 			if (!file) return;
 			// Must be synchronous, on the File taken directly from dataTransfer, in
