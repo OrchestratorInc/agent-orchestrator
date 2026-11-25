@@ -220,6 +220,38 @@ func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName strin
 	return rows > 0, nil
 }
 
+// FillProjectRoleAgents gives agent to the project's worker and orchestrator
+// roles that name none, in one transaction so a concurrent settings save is
+// never overwritten. Roles that already name an agent are kept. It returns the
+// stored row and whether anything changed.
+func (s *Store) FillProjectRoleAgents(ctx context.Context, id string, agent domain.AgentHarness) (domain.ProjectRecord, bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var row domain.ProjectRecord
+	var changed bool
+	err := s.inTx(ctx, "fill project role agents", func(q *gen.Queries) error {
+		stored, err := q.GetProject(ctx, domain.ProjectID(id))
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		row = projectRowFromGen(stored)
+		if !row.ArchivedAt.IsZero() || !row.Config.FillRoleAgents(agent) {
+			return nil
+		}
+		config, err := marshalProjectConfig(row.Config)
+		if err != nil {
+			return err
+		}
+		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{ID: domain.ProjectID(id), DisplayName: row.DisplayName, Config: config})
+		changed = rows > 0
+		return err
+	})
+	return row, changed, err
+}
+
 // CountProjectsIncludingArchived returns all registry rows, including projects
 // the user archived. It is intentionally separate from ListProjects so first-run
 // seeding does not recreate Scratch after any project has existed.

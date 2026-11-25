@@ -2,7 +2,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
-import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
+import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, startRefused, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
@@ -17,7 +17,7 @@ import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent, spawnHostSelectionReady } from "../lib/hostRoute";
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
@@ -31,8 +31,10 @@ import { connectedAgents } from "../lib/cloud/agents";
 import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
 import { cloudPlanBlock, cloudSessionBilled, planBlocksCloudSetup } from "../lib/cloud/plan";
 import { useCloudPlan } from "../lib/cloud/planStore";
-import { agentModelCatalog } from "../lib/cloud/modelCatalog";
-import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
+import { agentModelCatalog, isReleaseCatalog } from "../lib/cloud/modelCatalog";
+import { useReleaseCatalogRereads } from "../lib/cloud/useReleaseCatalogRereads";
+import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, cloudSpawnProjectOptions, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
+import { standaloneAgentsOffered } from "../lib/cloud/standaloneAgents";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -94,6 +96,8 @@ export default function SpawnScreen() {
 	// before that, an empty list would ask to create a project that exists.
 	const projectsKnown = cloudSelected ? Boolean(cloud) && cloudState.projectsLoaded : selectedHost?.projectsKnown ?? false;
 	const connection = cloudSelected ? (cloud ? "open" : "closed") : selectedHost?.connection ?? "closed";
+	// Cloud starts a standalone agent (no project) where its control plane offers them.
+	const cloudStandaloneOffered = cloudSelected && standaloneAgentsOffered(cloudState.org?.offering ?? cloudState.me?.offering);
 	const cloudAgentsKey = connectedAgents(cloudState.connections).join(",");
 	// Known before anything is typed: a Free organization runs no cloud agents,
 	// and a spent session-hour window starts none until it resets. The control
@@ -359,16 +363,19 @@ export default function SpawnScreen() {
 	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
 		if (!lastProject.loaded) return;
-		const nextProjectId = resolveSpawnProject(
-			projectId,
+		const resolved = resolveSpawnProject(
+			// Standalone holds only where it is offered: a machine always, Cloud when its control plane says so.
+			projectId === STANDALONE_PROJECT && cloudSelected && !cloudStandaloneOffered ? null : projectId,
 			routeHostId === selectedHostId ? routeProjectId : undefined,
 			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
 			lastProject.projectId,
 		);
+		// A Cloud with no projects yet still starts a standalone agent.
+		const nextProjectId = resolved ?? (cloudStandaloneOffered && projectsKnown && projects.length === 0 ? STANDALONE_PROJECT : null);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+	}, [activeProjectId, cloudSelected, cloudStandaloneOffered, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
 
 	// Orchestrator Cloud's catalog: every cloud agent, the connected ones usable.
 	useEffect(() => {
@@ -421,18 +428,40 @@ export default function SpawnScreen() {
 	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
+	// The mode the project pins for the agent (a mode-list agent such as Amp), which the daemon applies.
+	const projectWorkerMode = projectDetail?.config?.worker?.agentConfig?.mode ?? projectDetail?.config?.agentConfig?.mode ?? "";
+	const resolvedMode = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel: projectWorkerMode });
 	const displayedModel = modelTouched ? model : resolvedModel;
 	// The project-aware catalog once it lists something. An empty one (still
 	// discovering, or a project that names none) must not hide the machine's
 	// list, which is what left the menu offering only the default.
 	const currentModels = modelCatalog?.models.length ? modelCatalog.models : agentModelLists[harness] ?? [];
-	// "Default model" when the project pins nothing, because that is the truth:
-	// the provider picks, and naming a model here promised one the session never
-	// ran. Not "Automatic", which reads as an approval mode.
+	// "Default model" when nothing is picked and the project pins nothing: the
+	// default row then names the catalog's default, which the task sends
+	// (modelOverride). Not "Automatic", which reads as an approval mode.
 	const displayedModelLabel = displayedModel ? menuModelName(currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel) : "Default model";
 	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
 	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";
+	// The model the default row names ("Opus 5.5 · Default"), which the task
+	// sends when nothing is picked (modelOverride): from this agent's own loaded
+	// catalog, never one still shown from the agent picked before; none for a
+	// mode list or over the project's pinned model or mode. On Cloud, while the
+	// agent's catalog is missing (reloading after a project change, or its load
+	// failed), the menu names the default from the agent's menu list, which is
+	// the same Cloud catalog (always models, never modes), so that is sent.
+	const defaultRowCatalog = modelCatalog?.agentId === harness
+		? modelCatalog
+		: cloudSelected && agentModelLists[harness]?.length ? { selectionMode: "catalog" as const, models: agentModelLists[harness] } : undefined;
+	// The project's pin is known once its details have loaded for this project;
+	// until then, or when that load failed, no default is sent and the server
+	// applies whatever the project pins. A paired machine's catalog is the
+	// machine's, so its default never reflects the pin.
+	const projectPinKnown = !projectId || projectId === STANDALONE_PROJECT || (projectDetailLoadedFor === projectId && projectDetail?.id === projectId);
+	// On a paired machine Start waits for them: sent before, an unpinned
+	// project's task would carry no model and run the agent's own default.
+	const projectDetailsPending = !cloudSelected && Boolean(projectId) && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId;
+	const defaultRowModel = defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode, pinKnown: projectPinKnown });
 	// The model the task will run, picked or the catalog's default, for its
 	// effort levels.
 	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
@@ -460,7 +489,7 @@ export default function SpawnScreen() {
 	const setupBlocked = planBlocksCloudSetup(planBlock);
 	const cloudNotices = [
 		...(planBlock ? [planBlock.message] : []),
-		...(!setupBlocked && cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
+		...(!setupBlocked && cloudSelected && !cloudStandaloneOffered && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
 	];
 	const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({
 		// One line for a machine that is gone or refused this phone, in place of
@@ -528,19 +557,49 @@ export default function SpawnScreen() {
 	const agentIds = agents.filter((agent) => agent.selectable).map((agent) => agent.id).join("|");
 	// Orchestrator Cloud's model lists, one per connected agent, from its catalog.
 	const cloudOrgId = cloudState.org?.id;
+	// While a list shown is still Cloud's release list, it is read again until
+	// the account's own arrives, as the desktop does (useReleaseCatalogRereads).
+	const [cloudMenuListsRelease, setCloudMenuListsRelease] = useState(false);
+	const [cloudPickedListRelease, setCloudPickedListRelease] = useState(false);
+	const cloudRereads = useReleaseCatalogRereads(cloudSelected && (cloudMenuListsRelease || cloudPickedListRelease));
+	const cloudListsFor = useRef<string | undefined>(undefined);
+	// Whether each agent's menu list is still the release list.
+	const cloudListsRelease = useRef<Record<string, boolean>>({});
+	// The organization the menu lists were loaded for.
+	const cloudListsOrg = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!cloudSelected) return;
-		if (!cloudOrgId || !agentIds) { setAgentModelLists({}); return; }
+		if (!cloudSelected) { cloudListsFor.current = undefined; return; }
+		if (!cloudOrgId || !agentIds) { cloudListsFor.current = undefined; cloudListsOrg.current = undefined; cloudListsRelease.current = {}; setAgentModelLists({}); setCloudMenuListsRelease(false); return; }
+		// Another organization's lists go at once, not when the new ones land:
+		// the default row falls back to them (defaultRowCatalog), and must never
+		// send a model from an organization this task is not in.
+		if (cloudListsOrg.current !== cloudOrgId) {
+			cloudListsOrg.current = cloudOrgId;
+			cloudListsRelease.current = {};
+			setAgentModelLists({});
+		}
+		const key = `${cloudOrgId}/${agentIds}`;
+		const reread = cloudListsFor.current === key;
 		let cancelled = false;
 		void Promise.all(agentIds.split("|").map(async (id) => {
 			try {
-				return [id, cloudModelCatalog(id, await agentModelCatalog(cloudState.client, cloudOrgId, id)).models] as const;
+				const catalog = await agentModelCatalog(cloudState.client, cloudOrgId, id, { rereadRelease: reread });
+				return [id, cloudModelCatalog(id, catalog).models, isReleaseCatalog(catalog)] as const;
 			} catch {
-				return [id, []] as const;
+				return [id, undefined, undefined] as const;
 			}
-		})).then((entries) => { if (!cancelled) setAgentModelLists(Object.fromEntries(entries)); });
+		})).then((entries) => {
+			if (cancelled) return;
+			cloudListsFor.current = key;
+			// A failed re-read keeps the list already shown, and whether it is
+			// still the release list, so its re-reads go on.
+			const released = Object.fromEntries(entries.map(([id, , release]) => [id, release ?? (reread ? cloudListsRelease.current[id] : undefined) ?? false]));
+			cloudListsRelease.current = released;
+			setAgentModelLists((current) => Object.fromEntries(entries.map(([id, models]) => [id, models ?? (reread ? current[id] : undefined) ?? []])));
+			setCloudMenuListsRelease(Object.values(released).some(Boolean));
+		});
 		return () => { cancelled = true; };
-	}, [agentIds, cloudOrgId, cloudSelected, cloudState.client]);
+	}, [agentIds, cloudOrgId, cloudRereads, cloudSelected, cloudState.client]);
 
 	useEffect(() => {
 		if (cloudSelected) return;
@@ -572,17 +631,32 @@ export default function SpawnScreen() {
 	}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);
 
 	// A new cloud task's models come from Orchestrator Cloud's catalog for the agent.
+	const cloudCatalogFor = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!cloudSelected) return;
-		if (!cloudOrgId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!cloudSelected) { cloudCatalogFor.current = undefined; return; }
+		if (!cloudOrgId || !harness) { cloudCatalogFor.current = undefined; setModelCatalog(undefined); setModelLoading(false); setCloudPickedListRelease(false); return; }
+		// A re-read of the list shown neither clears it nor shows it loading.
+		// Another project is a new load: changing it clears the catalog
+		// (changeProject), and Start waits until it is back, so the default
+		// row's model is there to send.
+		const key = `${cloudOrgId}/${harness}/${projectId ?? ""}`;
+		const reread = cloudCatalogFor.current === key;
 		let cancelled = false;
-		setModelLoading(true);
-		agentModelCatalog(cloudState.client, cloudOrgId, harness)
-			.then((catalog) => { if (!cancelled) { setModelCatalog(cloudModelCatalog(harness, catalog)); setModelError(undefined); } })
-			.catch(() => { if (!cancelled) setModelCatalog(undefined); })
+		if (!reread) setModelLoading(true);
+		agentModelCatalog(cloudState.client, cloudOrgId, harness, { rereadRelease: reread })
+			.then((catalog) => {
+				if (cancelled) return;
+				cloudCatalogFor.current = key;
+				setModelCatalog(cloudModelCatalog(harness, catalog));
+				setCloudPickedListRelease(isReleaseCatalog(catalog));
+				setModelError(undefined);
+			})
+			.catch(() => { if (!cancelled && !reread) setModelCatalog(undefined); })
+			// Any answer ends a load: a re-read shows none, but the load it
+			// replaced (another agent's, cut short) may have.
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [cloudOrgId, cloudSelected, cloudState.client, harness]);
+	}, [cloudOrgId, cloudRereads, cloudSelected, cloudState.client, harness, projectId]);
 
 	useEffect(() => {
 		if (cloudSelected) return;
@@ -835,7 +909,7 @@ export default function SpawnScreen() {
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
-				model: modelOverride(displayedModel, modelTouched),
+				model: modelOverride(displayedModel, modelTouched, defaultRowModel),
 				// Only a level picked here; otherwise the model's default applies.
 				effort: chosenEffort,
 				accountId: accountPick || undefined,
@@ -846,12 +920,16 @@ export default function SpawnScreen() {
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
 			const { attachments: _, ...requestFields } = request;
-			const payload = JSON.stringify(requestFields);
+			// A request is what the person chose. The default row's model is the
+			// catalog's, which a re-read can change between a Start whose answer
+			// was lost and its retry: the retry keeps the id, and the model it
+			// went with, so the server matches it instead of starting a second worker.
+			const payload = JSON.stringify({ ...requestFields, model: modelOverride(displayedModel, modelTouched) });
 			// Compared by content, not by object: attachments read back from a
 			// restored draft are the same files the last Start sent.
 			const sent: SpawnDraftRequest = requestMatches(requestRef.current, payload, attachmentsRef.current)
 				? requestRef.current
-				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`, ...(request.model ? { model: request.model } : {}) };
 			requestRef.current = sent;
 			// The request id is on the phone before the request leaves: closed
 			// after the daemon took the task but before the draft is cleared, the
@@ -869,7 +947,7 @@ export default function SpawnScreen() {
 				setBusy(false);
 				return;
 			}
-			const session = await spawn({ ...request, clientRequestId: sent.id });
+			const session = await spawn({ ...request, model: sent.model, clientRequestId: sent.id });
 			// Started: the draft goes, so the next New task opens empty. Only this
 			// Start's: another open page's draft saved meanwhile stays.
 			startedDraft.current = { prompt, attachments: attachmentsRef.current };
@@ -899,6 +977,9 @@ export default function SpawnScreen() {
 		} catch (e) {
 			holding.current = false;
 			haptics.error();
+			// Refused by the server, no task started: the next Start goes under a
+			// new id, with the model shown then rather than this one's default.
+			if (startRefused(e)) requestRef.current = undefined;
 			setError(spawnErrorCopy(e));
 			setOfferTUI(mode === "chat" && isChatPreflightError(e));
 			setBusy(false);
@@ -946,8 +1027,12 @@ export default function SpawnScreen() {
 					hostId={selectedHostId}
 					onSelectHost={edited(chooseHost)}
 					projects={cloudSelected
-						// Cloud sessions always run in a project; a new one is created from here.
-						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
+						// A cloud project is created from here; a standalone agent, where
+						// offered, needs none.
+						? cloudSpawnProjectOptions(
+							[...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const }))],
+							cloudStandaloneOffered,
+						)
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={edited(changeProject)}
@@ -988,7 +1073,7 @@ export default function SpawnScreen() {
 					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
+					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
 		</KeyboardAvoidingView>

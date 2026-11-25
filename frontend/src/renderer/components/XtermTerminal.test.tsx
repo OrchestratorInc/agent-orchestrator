@@ -6,6 +6,7 @@ import type { TerminalMux } from "../lib/terminal-mux";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import { useTerminalSession, type AttachableTerminal } from "../hooks/useTerminalSession";
 import { useUiStore } from "../stores/ui-store";
+import { contrastRatio, mixColor } from "../lib/theme-color";
 import { safeTerminalFind } from "./TerminalSearch";
 import { XtermTerminal } from "./XtermTerminal";
 
@@ -919,6 +920,37 @@ describe("XtermTerminal", () => {
 		}
 	});
 
+	it("keeps current Cline device-auth output readable after a dark-to-light theme switch", () => {
+		// Sanitized from a Cline 3.0.75 PTY on Windows. Cline ignores NO_COLOR
+		// and dims both lines; the actual device code is deliberately omitted.
+		const authOutput = "\x1b[2m[auth] Enter this code in your browser: <CODE>\r\n\x1b[22m" +
+			"\x1b[2m[auth] https://authkit.cline.bot/device?user_code=<CODE>\r\n\x1b[22m";
+		const sgr = [...authOutput.matchAll(/\x1b\[([\d;]+)m/g)].map((match) => Number(match[1]));
+		expect(sgr).toEqual([2, 22, 2, 22]);
+		// xterm renders SGR 2 at 50% opacity. Without the scoped handler, the
+		// light terminal's #3d3d3d foreground falls below WCAG AA contrast.
+		expect(contrastRatio(mixColor("#3d3d3d", "#fafafa", 0.5), "#fafafa")).toBeLessThan(4.5);
+
+		const view = render(<XtermTerminal theme="dark" suppressLoginDim />);
+		const terminal = state.lastTerminal!;
+		const handler = terminal.csiHandlers.find(({ id }) => id.final === "m" && !id.prefix);
+		// Cline prints the code once. It must be parsed without dim even when
+		// the login starts dark, so the retained buffer stays readable in light.
+		expect(handler?.callback([sgr[0]])).toBe(true);
+		expect(handler?.callback([22])).toBe(false);
+		expect(handler?.callback([2, 31])).toBe(false);
+		view.rerender(<XtermTerminal theme="light" suppressLoginDim />);
+		expect(state.lastTerminal).toBe(terminal);
+		expect(handler?.callback([2])).toBe(true);
+		view.unmount();
+
+		const ordinaryView = render(<XtermTerminal theme="light" />);
+		const ordinaryHandler = state.lastTerminal!.csiHandlers.find(({ id }) => id.final === "m" && !id.prefix);
+		expect(ordinaryHandler?.callback([2])).toBe(false);
+		ordinaryView.rerender(<XtermTerminal theme="dark" />);
+		expect(ordinaryHandler?.callback([2])).toBe(false);
+	});
+
 	it("does not reserve width for the hidden terminal scrollbar outside macOS", () => {
 		const { container } = render(<XtermTerminal theme="dark" />);
 
@@ -1047,6 +1079,40 @@ describe("XtermTerminal", () => {
 		expect(onChangeFontSize).toHaveBeenNthCalledWith(2, -1);
 		expect(increase.preventDefault).toHaveBeenCalledOnce();
 		expect(decrease.preventDefault).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["Command", { metaKey: true }],
+		["Ctrl", { ctrlKey: true }],
+	])("resizes the terminal with %s+wheel over xterm and preserves plain scrolling", (_label, modifier) => {
+		const onChangeFontSize = vi.fn();
+		const { container } = render(<XtermTerminal onChangeFontSize={onChangeFontSize} theme="dark" />);
+		const textarea = container.querySelector("textarea")!;
+
+		expect(fireEvent.wheel(textarea, { deltaY: -80, cancelable: true })).toBe(true);
+		expect(onChangeFontSize).not.toHaveBeenCalled();
+
+		expect(fireEvent.wheel(textarea, { ...modifier, deltaY: -40, cancelable: true })).toBe(false);
+		expect(onChangeFontSize).not.toHaveBeenCalled();
+		expect(fireEvent.wheel(textarea, { ...modifier, deltaY: -40, cancelable: true })).toBe(false);
+		expect(onChangeFontSize).toHaveBeenLastCalledWith(1);
+
+		expect(fireEvent.wheel(textarea, { ...modifier, deltaY: 80, cancelable: true })).toBe(false);
+		expect(onChangeFontSize.mock.calls).toEqual([[1], [-1]]);
+	});
+
+	it.each([
+		["line", WheelEvent.DOM_DELTA_LINE, 3],
+		["page", WheelEvent.DOM_DELTA_PAGE, 1],
+	] as const)("zooms one step for each %s-mode wheel event", (_unit, deltaMode, deltaY) => {
+		const onChangeFontSize = vi.fn();
+		const { container } = render(<XtermTerminal onChangeFontSize={onChangeFontSize} theme="dark" />);
+		const textarea = container.querySelector("textarea")!;
+
+		fireEvent.wheel(textarea, { ctrlKey: true, deltaMode, deltaY: -deltaY });
+		fireEvent.wheel(textarea, { ctrlKey: true, deltaMode, deltaY });
+		fireEvent.wheel(textarea, { ctrlKey: true, deltaMode, deltaY: 0, deltaX: deltaY });
+		expect(onChangeFontSize.mock.calls).toEqual([[1], [-1]]);
 	});
 
 	it("reports terminal focus and applies main-process font-size shortcuts only there", () => {

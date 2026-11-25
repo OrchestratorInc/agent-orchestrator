@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
 import { pageHidden } from "../../lib/page-hidden";
 import type { ConversationItem } from "../../types/conversation";
 
@@ -33,6 +33,13 @@ export interface ChatEntranceGate {
 	watchingSince: number;
 	/** When rows the reader did not watch last landed (performance.now()); the view snaps for a moment after. */
 	catchUpAt: number;
+	/**
+	 * When the reader came back to this chat (shown again after it was kept hidden,
+	 * or the window seen again), in epoch ms. Rows written before it landed while
+	 * they were away, with no clock-skew allowance: the read that catches up on
+	 * them lands after the chat is already back on screen.
+	 */
+	returnedAt: number;
 }
 
 /**
@@ -43,7 +50,7 @@ export interface ChatEntranceGate {
 export const ARRIVAL_CLOCK_SKEW_MS = 5_000;
 
 export function createChatEntranceGate(): ChatEntranceGate {
-	return { floor: undefined, settled: false, played: new Set(), seen: undefined, watchingSince: Date.now(), catchUpAt: -Infinity };
+	return { floor: undefined, settled: false, played: new Set(), seen: undefined, watchingSince: Date.now(), catchUpAt: -Infinity, returnedAt: -Infinity };
 }
 
 function writtenBefore(item: ConversationItem, limit: number): boolean {
@@ -53,12 +60,13 @@ function writtenBefore(item: ConversationItem, limit: number): boolean {
 
 /**
  * Accounts for the snapshot about to render, before its rows mount. Rows newer
- * than any seen so far are arrivals; when the window is hidden, or any of them
- * was written before the reader started watching, the batch is a catch-up: the
+ * than any seen so far are arrivals; when the window is hidden, the chat is
+ * `away` (kept hidden, or rendering the frame that shows it again), or any of
+ * them was written before the reader started watching, the batch is a catch-up: the
  * floor rises past it so none of it plays an entrance, and `catchUpAt` marks it
  * so the view lands on it without a glide. Returns whether it was a catch-up.
  */
-export function admitArrivals(gate: ChatEntranceGate, snapshot: { items: readonly ConversationItem[]; latestSequence: number }): boolean {
+export function admitArrivals(gate: ChatEntranceGate, snapshot: { items: readonly ConversationItem[]; latestSequence: number }, away = false): boolean {
 	if (snapshot.items.length === 0) return false;
 	// Runs on every render of the transcript (each streamed chunk): nothing new is the
 	// common case, and it is decided without walking the rows.
@@ -73,8 +81,8 @@ export function admitArrivals(gate: ChatEntranceGate, snapshot: { items: readonl
 	const seen = gate.seen ?? gate.floor;
 	if (newest <= seen) return false;
 	gate.seen = newest;
-	const watchedFrom = gate.watchingSince - ARRIVAL_CLOCK_SKEW_MS;
-	const catchUp = pageHidden() || snapshot.items.some((item) => item.sequence > seen && writtenBefore(item, watchedFrom));
+	const watchedFrom = Math.max(gate.watchingSince - ARRIVAL_CLOCK_SKEW_MS, gate.returnedAt);
+	const catchUp = away || pageHidden() || snapshot.items.some((item) => item.sequence > seen && writtenBefore(item, watchedFrom));
 	if (!catchUp) return false;
 	gate.floor = Math.max(gate.floor, newest);
 	gate.catchUpAt = performance.now();
@@ -102,4 +110,25 @@ export function useChatEntrance(key: string, sequence?: number): boolean {
 		gate?.played.add(key);
 	}, [gate, key]);
 	return entering;
+}
+
+/**
+ * An entrance the chat asks for after the row mounted: a prompt the reader just
+ * sent, which ChatWorkspace flags in a layout effect once the row is in. It
+ * plays once per key. The flag stays set until the next send, so a row
+ * remounted by windowing or a fold, or the durable row that takes over from a
+ * local echo, would otherwise play it again. Without a gate it plays whenever
+ * asked, as before.
+ */
+export function useRequestedEntrance(key: string, requested: boolean): boolean {
+	const gate = useContext(ChatEntrance);
+	const playedKey = `requested:${key}`;
+	// Set in render, so the row that starts the entrance keeps it through the
+	// re-renders that follow; the gate records it once committed.
+	const playing = useRef(false);
+	if (requested && !playing.current && !gate?.played.has(playedKey)) playing.current = true;
+	useLayoutEffect(() => {
+		if (playing.current) gate?.played.add(playedKey);
+	});
+	return requested && playing.current;
 }

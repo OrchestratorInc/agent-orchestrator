@@ -246,7 +246,7 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "cloudflared windows uses winget", target: TargetCloudflared, goos: "windows", found: []string{"winget"},
-			wantCommand: []string{"winget", "install", "-e", "--id", "Cloudflare.cloudflared"},
+			wantCommand: []string{"winget", "install", "-e", "--id", "Cloudflare.cloudflared", "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
 		},
 		{
 			name: "cloudflared windows without winget is unsupported", target: TargetCloudflared, goos: "windows",
@@ -261,7 +261,7 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "gh windows uses winget", target: TargetGH, goos: "windows", found: []string{"winget"},
-			wantCommand: []string{"winget", "install", "-e", "--id", "GitHub.cli"},
+			wantCommand: []string{"winget", "install", "-e", "--id", "GitHub.cli", "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
 		},
 		{
 			name: "gh windows without winget is unsupported", target: TargetGH, goos: "windows",
@@ -293,7 +293,7 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "opencode windows uses winget", target: TargetOpencode, goos: "windows", found: []string{"winget"},
-			wantCommand: []string{"winget", "install", "-e", "--id", "SST.opencode", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
+			wantCommand: []string{"winget", "install", "-e", "--id", "SST.opencode", "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
 		},
 		{
 			name: "opencode darwin remote script is manual", target: TargetOpencode, goos: "darwin", found: []string{"curl", "bash"},
@@ -795,6 +795,65 @@ func TestCursorRejectedLoginUpdateExplainsRecovery(t *testing.T) {
 					}
 				}
 			} else if job.Error != "exit status 1" {
+				t.Fatalf("unrelated error was rewritten: %q", job.Error)
+			}
+		})
+	}
+}
+
+// exitCodeError is an *exec.ExitError stand-in: the install runner returns
+// the command's exit code through ExitCode().
+type exitCodeError struct {
+	code    int
+	message string
+}
+
+func (e exitCodeError) Error() string { return e.message }
+func (e exitCodeError) ExitCode() int { return e.code }
+
+func TestWingetPackageNotFoundExplainsRecovery(t *testing.T) {
+	// winget exits APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND (0x8A150014)
+	// for an ID the catalog no longer has, e.g. SST.opencode since November 2026,
+	// and also when its local source data is stale, so the message suggests
+	// refreshing the sources before installing another way.
+	// Go reports the code unsigned; PowerShell's $LASTEXITCODE shows it signed.
+	const notFound = "No package found matching input criteria.\n"
+	for _, tc := range []struct {
+		name     string
+		method   string
+		err      error
+		wantHint bool
+	}{
+		{name: "missing package", method: "winget", err: exitCodeError{code: 0x8A150014, message: "exit status 0x8a150014"}, wantHint: true},
+		{name: "missing package, signed code", method: "winget", err: exitCodeError{code: -1978335212, message: "exit status 0x8a150014"}, wantHint: true},
+		{name: "other winget failure", method: "winget", err: exitCodeError{code: 1, message: "exit status 1"}},
+		{name: "same code from another method", method: "npm", err: exitCodeError{code: 0x8A150014, message: "exit status 0x8a150014"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService("windows", "winget")
+			t.Cleanup(s.stop)
+			s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+				_, _ = io.WriteString(stdout, notFound)
+				return tc.err
+			})
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				t.Fatal("a failed install must not be verified")
+				return VerifyResult{}, nil
+			})
+			plan := Plan{Target: TargetOpencode, Method: tc.method, Package: "SST.opencode", Command: []string{"winget", "install", "-e", "--id", "SST.opencode"}}
+			job := &Job{Target: TargetOpencode, Status: StatusInstalling}
+			s.jobs[TargetOpencode] = job
+			s.runAgentOperation(t.Context(), plan, AgentOperationInstall, job, nil)
+			if job.Status != StatusFailed || job.Output != notFound {
+				t.Fatalf("job = %+v, want failure with original diagnostics", job)
+			}
+			if tc.wantHint {
+				for _, want := range []string{"SST.opencode", "winget source update", "retry", "no longer in the winget catalog", "install it another way", "Verify again", "exit status 0x8a150014"} {
+					if !strings.Contains(job.Error, want) {
+						t.Fatalf("error = %q, want %q", job.Error, want)
+					}
+				}
+			} else if job.Error != tc.err.Error() {
 				t.Fatalf("unrelated error was rewritten: %q", job.Error)
 			}
 		})

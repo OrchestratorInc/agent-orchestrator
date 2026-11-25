@@ -2,7 +2,7 @@ import { renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConversationItem } from "../../types/conversation";
-import { admitArrivals, ARRIVAL_CLOCK_SKEW_MS, ChatEntrance, createChatEntranceGate, useChatEntrance, type ChatEntranceGate } from "./chat-entrance";
+import { admitArrivals, ARRIVAL_CLOCK_SKEW_MS, ChatEntrance, createChatEntranceGate, useChatEntrance, useRequestedEntrance, type ChatEntranceGate } from "./chat-entrance";
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
 
@@ -71,6 +71,28 @@ describe("admitArrivals", () => {
 		expect(gate.floor).toBe(2);
 	});
 
+	it("treats rows a kept chat holds when it is shown again as a catch-up", () => {
+		// KeepRecentAlive: written while another session was on screen, after the chat first opened.
+		const gate = gateAt(NOW);
+		admitArrivals(gate, snapshot(row(1, NOW)));
+		expect(admitArrivals(gate, snapshot(row(1, NOW), row(2, NOW + 60_000)), true)).toBe(true);
+		expect(gate.floor).toBe(2);
+		// Shown again, the reader watches: a row written then still enters.
+		expect(admitArrivals(gate, snapshot(row(1, NOW), row(2, NOW + 60_000), row(3, NOW + 61_000)))).toBe(false);
+		expect(gate.floor).toBe(2);
+	});
+
+	it("treats rows written just before the reader came back as a catch-up, with no skew allowance", () => {
+		// A to B to A in two seconds: the open read of what A wrote meanwhile lands after A is back.
+		const gate = gateAt(NOW - 60_000);
+		admitArrivals(gate, snapshot(row(1, NOW - 60_000)));
+		gate.watchingSince = gate.returnedAt = NOW;
+		expect(admitArrivals(gate, snapshot(row(1, NOW - 60_000), row(2, NOW - 2_000)))).toBe(true);
+		expect(gate.floor).toBe(2);
+		expect(admitArrivals(gate, snapshot(row(1, NOW - 60_000), row(2, NOW - 2_000), row(3, NOW + 500)))).toBe(false);
+		expect(gate.floor).toBe(2);
+	});
+
 	it("ignores an older page loading above the transcript", () => {
 		const gate = gateAt(NOW);
 		admitArrivals(gate, snapshot(row(10, NOW - 60_000)));
@@ -94,5 +116,37 @@ describe("useChatEntrance", () => {
 		setVisibility("hidden");
 		expect(renderHook(() => useChatEntrance("row:a", 2), { wrapper: withGate(gate) }).result.current).toBe(false);
 		expect(renderHook(() => useChatEntrance("live"), { wrapper: withGate(gate) }).result.current).toBe(false);
+	});
+});
+
+describe("useRequestedEntrance", () => {
+	const withGate = (gate: ChatEntranceGate) => ({ children }: { children: ReactNode }) => (
+		<ChatEntrance.Provider value={gate}>{children}</ChatEntrance.Provider>
+	);
+
+	it("plays when asked after the row mounted, and keeps playing through re-renders", () => {
+		const gate = createChatEntranceGate();
+		const hook = renderHook(({ requested }) => useRequestedEntrance("prompt", requested), {
+			initialProps: { requested: false },
+			wrapper: withGate(gate),
+		});
+		expect(hook.result.current).toBe(false);
+		hook.rerender({ requested: true });
+		expect(hook.result.current).toBe(true);
+		hook.rerender({ requested: true });
+		expect(hook.result.current).toBe(true);
+	});
+
+	it("does not play again for a row remounted with the flag still set", () => {
+		// The timeline windows rows out and back in; the sent prompt keeps its flag until the next send.
+		const gate = createChatEntranceGate();
+		renderHook(() => useRequestedEntrance("prompt", true), { wrapper: withGate(gate) }).unmount();
+		expect(renderHook(() => useRequestedEntrance("prompt", true), { wrapper: withGate(gate) }).result.current).toBe(false);
+		expect(renderHook(() => useRequestedEntrance("other", true), { wrapper: withGate(gate) }).result.current).toBe(true);
+	});
+
+	it("plays whenever asked outside a chat timeline", () => {
+		renderHook(() => useRequestedEntrance("prompt", true)).unmount();
+		expect(renderHook(() => useRequestedEntrance("prompt", true)).result.current).toBe(true);
 	});
 });

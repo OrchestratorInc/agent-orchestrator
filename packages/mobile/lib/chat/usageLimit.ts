@@ -3,7 +3,8 @@ import type { ConversationSnapshot, ConversationTurn, ConversationUsageLimit } f
 /**
  * The turn whose usage-limit notice offers Resume and auto-resume, as the
  * desktop picks it: the latest settled turn, refused for a usage limit, that
- * answered a person's prompt, reached the provider and has no retry yet.
+ * answered a prompt from a person or an event, reached the provider and has no
+ * retry yet.
  */
 export function usageLimitedTurn(snapshot: Pick<ConversationSnapshot, "turns">): ConversationTurn | undefined {
 	let latest: ConversationTurn | undefined;
@@ -14,7 +15,8 @@ export function usageLimitedTurn(snapshot: Pick<ConversationSnapshot, "turns">):
 		break;
 	}
 	if (!latest || latest.state !== "failed" || !latest.usageLimit) return undefined;
-	if (!latest.providerTurnId || latest.hasRetryAttempt || !latest.hasHumanPrompt) return undefined;
+	if (!latest.providerTurnId || latest.hasRetryAttempt) return undefined;
+	if (!latest.hasHumanPrompt && !latest.hasEventPrompt) return undefined;
 	const id = latest.id;
 	return snapshot.turns.some((turn) => turn.retryOfTurnId === id) ? undefined : latest;
 }
