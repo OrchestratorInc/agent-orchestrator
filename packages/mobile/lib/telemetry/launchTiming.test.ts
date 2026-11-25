@@ -25,6 +25,12 @@ describe("launchProperties", () => {
 		});
 	});
 
+	// What an Expo Release build reports: React Native copies the runtime's start.
+	it("does not call a copied runtime start the app's", () => {
+		const props = launchProperties({ kind: "cold", outcome: "usable", marks: { startTime: 1_200, initializeRuntimeStart: 1_200, executeJavaScriptBundleEntryPointStart: 1_260 }, visibleAt: 1_444 });
+		expect(props).toMatchObject({ clock_origin: "runtime", to_js_start_ms: 60, to_visible_ms: 244 });
+	});
+
 	it("falls back to the runtime's start when the app's is not recorded", () => {
 		const props = launchProperties({ kind: "cold", outcome: "usable", marks: { initializeRuntimeStart: 1_200 }, visibleAt: 2_200, usableAt: 3_200 });
 		expect(props).toMatchObject({ clock_origin: "runtime", to_visible_ms: 1_000, to_usable_ms: 2_000 });

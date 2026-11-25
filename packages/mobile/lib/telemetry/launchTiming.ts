@@ -4,9 +4,11 @@
 //
 // React Native's `performance.rnStartupTiming` gives the app's start, the JS
 // runtime's start and the bundle's start in the same clock as
-// `performance.now()`. The app start is not recorded by every host app, so the
-// runtime's start is the fallback origin, and `clock_origin` says which one a
-// launch used.
+// `performance.now()`. The app start is recorded only when the host app logs
+// it, which Expo's does not (checked on a Release build, RN 0.86); React Native
+// then reports the runtime's start as `startTime` too. So `startTime` counts as
+// the process start only when it is earlier than the runtime's start, and
+// `clock_origin` says which origin a launch used.
 
 import type { Surface } from "./surfaces";
 
@@ -49,8 +51,9 @@ export function launchProperties(input: {
 	if (input.landingSurface) props.landing_surface = input.landingSurface;
 	// Backgrounded before it was usable: the times measure the user, not the app.
 	if (input.outcome === "backgrounded") return props;
-	const processStart = finite(input.marks?.startTime);
 	const runtimeStart = finite(input.marks?.initializeRuntimeStart);
+	const reportedStart = finite(input.marks?.startTime);
+	const processStart = reportedStart !== undefined && (runtimeStart === undefined || reportedStart < runtimeStart) ? reportedStart : undefined;
 	const origin = processStart ?? runtimeStart;
 	if (origin === undefined) return props;
 	props.clock_origin = processStart !== undefined ? "process" : "runtime";

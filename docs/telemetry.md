@@ -1116,6 +1116,7 @@ Properties on `mobile.launches.timed`:
 - Times are in milliseconds from the app's start, read from React Native's
   startup marks; `clock_origin` is `process`, or `runtime` when the app's own
   start was not recorded and the JavaScript runtime's start is used instead.
+  The app does not record its own start today, so launches report `runtime`.
   `to_js_start_ms` is the app's JavaScript starting, `to_visible_ms` its first
   frame, and `to_usable_ms` the first frame after a paired machine's data
   arrives. A time outside 0 to 10 minutes is left out.
