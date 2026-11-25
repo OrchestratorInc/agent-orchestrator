@@ -185,7 +185,7 @@ describe("AgentModelPicker", () => {
 		if (model === "Sonnet") expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
 		else expect(current.onPickModel).not.toHaveBeenCalled();
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
-		expect(screen.getByRole("slider", { name: "Effort" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
 	});
 
 	it.each([["menuitemcheckbox", "Fast mode"], ["switch", "Thinking"]] as const)("keeps the parent menu open after toggling a %s named %s", async (role, label) => {
