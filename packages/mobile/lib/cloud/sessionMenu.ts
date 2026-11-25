@@ -37,7 +37,7 @@ export type CloudSessionMenuState = {
 
 /**
  * A cloud session's "⋯" sheet, in the local chat's sections and words: the
- * sandbox shell and the agent's terminal first, then pinning and PR Review
+ * sandbox shell, its agent browser and the agent's terminal first, then pinning and PR Review
  * (the pull request's page, as a local worker's), then the session itself:
  * its switch between Chat and Terminal UI, Archive last in red (Restore once
  * it is archived). There is nothing to
@@ -54,7 +54,7 @@ export function cloudSessionMenuGroups(state: CloudSessionMenuState): Conversati
 	};
 	const item = (action: ConversationMenuItem["action"]) => conversationMenuItem(action, base);
 	const open: ConversationMenuItem[] = [
-		...(state.terminated ? [] : [item("shell")]),
+		...(state.terminated ? [] : [item("shell"), item("browser")]),
 		...(state.canShowAgentTerminal ? [item("agent_terminal")] : []),
 		...(state.projectName ? [{ ...item("project"), subtitle: state.projectName }] : []),
 		...(state.artifactCount ? [item("artifacts")] : []),

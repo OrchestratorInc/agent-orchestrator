@@ -6,7 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-na
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { LocalBrowserTransport } from "../browserLive";
-import { commandSupported, type BrowserCommand, type BrowserTransport, type BrowserViewState } from "../browserTransport";
+import { commandSupported, type BrowserCommand, type BrowserFrame, type BrowserTransport, type BrowserViewState } from "../browserTransport";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { machineState, rejectedMachineLine } from "../hostRoute";
 import { useApp } from "../store";
@@ -52,9 +52,11 @@ export type BrowserLivePaneProps = {
 	 * and waits for the paired connection to do so.
 	 */
 	transport?: () => BrowserTransport;
+	/** What the pane calls the browser it shows, in its own copy. */
+	browserName?: "desktop browser" | "agent browser";
 };
 
-export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null, transport }: BrowserLivePaneProps) {
+export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null, transport, browserName = "desktop browser" }: BrowserLivePaneProps) {
 	const app = useApp();
 	const { config } = app;
 	// A supplied stream doesn't go through the paired machine, so that
@@ -89,6 +91,8 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	// another control, so it takes no gestures until this stream draws its own.
 	const [frameIsLive, setFrameIsLive] = useState(false);
 	const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
+	// The page part of a padded fullscreen frame; the frame's size is that part's.
+	const [frameCrop, setFrameCrop] = useState<BrowserFrame["crop"]>();
 	const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
 	const frameRect = useMemo(() => containBrowserFrame(viewportSize, frameSize), [frameSize, viewportSize]);
 	const frameRectRef = useRef<BrowserFrameRect>(frameRect);
@@ -153,6 +157,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				if (disposed) return;
 				try {
 					setFrameSize({ width: frame.width, height: frame.height });
+					setFrameCrop(frame.crop);
 					setFrameURI(browserJPEGDataURI(frame.jpeg));
 					setFrameIsLive(true);
 				} catch {
@@ -340,7 +345,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					// hear which page it shows.
 					accessible={interactive}
 					accessibilityRole="image"
-					accessibilityLabel={pageTitle ? `Desktop browser, ${pageTitle}` : "Desktop browser"}
+					accessibilityLabel={pageTitle ? `${capitalized(browserName)}, ${pageTitle}` : capitalized(browserName)}
 					// Unhandled, VoiceOver's double-tap lands as a touch on the
 					// frame's middle and clicks whatever the page has there. Its
 					// pass-through gesture still reaches the page by touch.
@@ -349,22 +354,37 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					onLayout={onViewportLayout}
 				>
 					<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
-						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
+						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode={frameCrop ? "stretch" : "contain"} style={frameCrop ? croppedImageStyle(frameRect, frameCrop) : styles.frameImage} /></View> : null}
 					</Animated.View>
 					<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
 				</View>
 			</GestureDetector>
 			{status === "open" && blank ? <View style={styles.overlay}>
-				<EmptyState icon="desktop" title="Nothing is open in the desktop browser yet" action={<Button title="Open URL…" icon="globe" onPress={controls.onOpenURL} />} />
+				<EmptyState icon="desktop" title={`Nothing is open in the ${browserName} yet`} action={<Button title="Open URL…" icon="globe" onPress={controls.onOpenURL} />} />
 			</View> : null}
-			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
+			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title={`Waiting for the ${browserName}…`} /></View> : null}
 			{status !== "open" && !holdingFrame ? <BrowserState status={status} error={error} retry={retry} /> : null}
 			<LoadingBar loading={(status === "open" && loading) || holdingFrame} accessibilityLabel={holdingFrame ? "Reconnecting to the browser" : "Loading page"} />
 		</View>
 		{bottomBar}
-		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} />
+		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} browserName={browserName} />
 		<ToastHost toast={toast} bottomOffset={toolbarShown ? toolbarClearance + space.md : undefined} />
 	</View>;
+}
+
+/** The whole image, scaled so its cropped top-left part fills the frame; the frame clips the rest. */
+function croppedImageStyle(rect: BrowserFrameRect, crop: NonNullable<BrowserFrame["crop"]>) {
+	return {
+		position: "absolute" as const,
+		left: 0,
+		top: 0,
+		width: rect.width * crop.imageWidth / crop.width,
+		height: rect.height * crop.imageHeight / crop.height,
+	};
+}
+
+function capitalized(text: string): string {
+	return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function BrowserState({ status, error, retry }: { status: BrowserStatus; error?: string; retry(): void }) {
@@ -390,7 +410,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// The letterbox around the fitted frame is the page itself, so it follows the
 	// theme instead of drawing black bars in light mode.
 	viewport: { flex: 1, overflow: "hidden", backgroundColor: t.bgBase },
-	frame: { position: "absolute" },
+	frame: { position: "absolute", overflow: "hidden" },
 	frameImage: { width: "100%", height: "100%" },
 	overlay: { ...StyleSheet.absoluteFill },
 	opaque: { backgroundColor: t.bgBase },

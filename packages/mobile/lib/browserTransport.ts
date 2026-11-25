@@ -13,7 +13,13 @@ export type FocusedEditable = {
 	value?: string;
 } | null;
 export type BrowserViewState = BrowserLiveState & { control: BrowserControl; focusedEditable: FocusedEditable };
-export type BrowserFrame = BrowserLiveFrame;
+export type BrowserFrame = BrowserLiveFrame & {
+	/**
+	 * Only the image's top-left `width`×`height` pixels show the page (a
+	 * fullscreen frame, padded to the window); the rest is drawn clipped away.
+	 */
+	crop?: { width: number; height: number; imageWidth: number; imageHeight: number };
+};
 export type BrowserCommand =
 	| BrowserLiveCommand
 	| { type: "viewport"; payload: { width: number; height: number; dpr: number; mobile: boolean } | null }

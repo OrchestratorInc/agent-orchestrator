@@ -16,7 +16,7 @@ export function OpenURLPrompt({ visible, ...props }: OpenURLPromptProps) {
 	return visible ? <OpenURLDialog {...props} /> : null;
 }
 
-function OpenURLDialog({ onSubmit, onDismiss }: Omit<OpenURLPromptProps, "visible">) {
+function OpenURLDialog({ onSubmit, onDismiss, browserName }: Omit<OpenURLPromptProps, "visible">) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const text = useNativeState("");
@@ -66,7 +66,7 @@ function OpenURLDialog({ onSubmit, onDismiss }: Omit<OpenURLPromptProps, "visibl
 					>
 						<TextField.Label><NativeText style={{ fontFamily: font.regular }}>Address</NativeText></TextField.Label>
 						<TextField.Placeholder><NativeText style={{ fontFamily: font.regular }}>{openURLPromptCopy.placeholder}</NativeText></TextField.Placeholder>
-						<TextField.SupportingText><NativeText style={{ fontFamily: font.regular }}>{openURLPromptCopy.message}</NativeText></TextField.SupportingText>
+						<TextField.SupportingText><NativeText style={{ fontFamily: font.regular }}>{openURLPromptCopy.message(browserName)}</NativeText></TextField.SupportingText>
 					</TextField>
 				</AlertDialog.Text>
 				<AlertDialog.ConfirmButton>
