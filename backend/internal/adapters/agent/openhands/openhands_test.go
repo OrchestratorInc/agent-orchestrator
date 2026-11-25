@@ -19,8 +19,7 @@ func testPlugin() *Plugin {
 }
 
 func TestLaunchAndRestore(t *testing.T) {
-	// An exported LLM_API_KEY would add --override-with-envs.
-	t.Setenv("LLM_API_KEY", "")
+	clearOpenHandsLLMEnv(t)
 	p := testPlugin()
 	ctx := context.Background()
 	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{Prompt: "-fix this", NativeSessionID: "ignored", Permissions: ports.PermissionModeBypassPermissions})
@@ -86,8 +85,7 @@ func TestProviderKeyEnablesOpenHandsEnvironmentOverride(t *testing.T) {
 }
 
 func TestPermissions(t *testing.T) {
-	// An exported LLM_API_KEY would add --override-with-envs.
-	t.Setenv("LLM_API_KEY", "")
+	clearOpenHandsLLMEnv(t)
 	for _, tc := range []struct {
 		mode ports.PermissionMode
 		want string
@@ -391,7 +389,7 @@ func TestSettingsPathHonorsPersistenceDir(t *testing.T) {
 // The flag follows the key the session will see, not the daemon's: a project
 // key enables it, and a project that blanks the key keeps the saved settings.
 func TestOpenHandsEnvironmentOverrideFollowsTheSessionEnvironment(t *testing.T) {
-	t.Setenv("LLM_API_KEY", "")
+	clearOpenHandsLLMEnv(t)
 	cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{Env: map[string]string{"LLM_API_KEY": "project-key"}})
 	if want := []string{"openhands", "--override-with-envs"}; err != nil || !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("launch with a project key = %q, %v; want %q", cmd, err, want)

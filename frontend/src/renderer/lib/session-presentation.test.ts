@@ -69,6 +69,18 @@ describe("session presentation", () => {
 				...mergeable,
 				status: "needs_input",
 				activity: { state: "waiting_input", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("input");
+		});
+
+		it("asks rather than alarms for a permission prompt, and keeps the red alert for failures", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				status: "idle",
+				activity: { state: "blocked", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("input");
+			expect(getSessionRowIndicator(sessionWith({
+				status: "ci_failed",
+				displayStatus: "CI failing",
+				activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" },
 			}))).toBe("attention");
 		});
 

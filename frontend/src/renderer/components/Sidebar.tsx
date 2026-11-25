@@ -35,6 +35,7 @@ import {
 	Pin,
 	PinOff,
 	Plus,
+	QuestionMark,
 	Search,
 	Settings,
 	Smartphone,
@@ -601,23 +602,32 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// Rows showing the red alert sit above the rest, but only in the default
-// order: once the user has dragged rows into their own order, it wins. Stable,
-// so the order still holds within each group.
+// A marker that asks the user to act now: the agent's question, or the red alert.
+function isUrgentMarker(marker: ReturnType<typeof getSessionRowIndicator>): boolean {
+	return marker === "input" || marker === "attention";
+}
+
+// Rows with a question or the red alert sit above the rest, but only in the
+// default order: once the user has dragged rows into their own order, it wins.
+// Stable, so the order still holds within each group.
 function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
 	if (hasManualOrder) return sessions;
-	const flagged = sessions.filter((session) => getSessionRowIndicator(session) === "attention");
+	const flagged = sessions.filter((session) => isUrgentMarker(getSessionRowIndicator(session)));
 	if (flagged.length === 0 || flagged.length === sessions.length) return sessions;
 	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
 }
 
 // The icons a row or a collapsed project can show, plus the working
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
-// Each state has its own glyph, so colour is never the only difference: a red
-// alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge. A row's blue spinner (working) and its dot are
-// drawn by SessionActivityGlyph.
+// Each state has its own glyph, so colour is never the only difference: an
+// amber question mark is the agent asking you something, a red alert is
+// something to fix (CI, conflicts, changes requested), an amber alert (the
+// same amber, a different shape) is a person's review next, a green pull
+// request is ready to merge. A question is not an error, so it never takes the
+// red. A row's blue spinner (working) and its dot are drawn by
+// SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
+	input: { Icon: QuestionMark, tone: "text-status-in-review" },
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
 	review: { Icon: CircleAlert, tone: "text-status-in-review" },
@@ -1579,7 +1589,7 @@ const ProjectItem = memo(function ProjectItem({
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
 	// What a collapsed project signals, strongest first: a session waiting on the
-	// user (the alert replaces the icon), then one whose agent is working, then a
+	// user (the question mark replaces the icon), then one whose agent is working, then a
 	// finished turn the user has not opened (both a corner dot on the icon, like
 	// the orchestrator button's).
 	const readAt = useSessionReadStore((state) => state.readAt);
@@ -1595,7 +1605,7 @@ const ProjectItem = memo(function ProjectItem({
 		if (Number.isFinite(updated)) markRead(sessionReadKey(viewedSession), updated);
 	}, [markRead, viewedSession]);
 	const projectActivity = useMemo(() => {
-		if (projectNeedsInput) return "attention" as const;
+		if (projectNeedsInput) return "input" as const;
 		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
 		if (indicators.includes("working")) return "working" as const;
 		const read = { readAt, baseline: readBaseline };
@@ -1997,8 +2007,8 @@ const ProjectItem = memo(function ProjectItem({
 											className="relative inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
-											{!expanded && projectActivity === "attention" ? (
-												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
+											{!expanded && projectActivity === "input" ? (
+												<SessionMarkerIcon data-project-marker="input" marker="input" />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
 											{!expanded && (projectActivity === "working" || projectActivity === "unread") ? (
 												<ReplyBadge data-project-marker={projectActivity} reply={projectActivity} surface="sidebar" />
@@ -2017,8 +2027,8 @@ const ProjectItem = memo(function ProjectItem({
 											<ChevronRight />
 										</span>
 									</span>
-									{/* Collapsed icon rail: the project icon, with a red badge when a session
-									    waits on the user. The session list is hidden here, so the badge
+									{/* Collapsed icon rail: the project icon, with an amber badge when a
+									    session waits on the user. The session list is hidden here, so the badge
 									    shows whether or not the project is expanded. */}
 									<span
 										aria-hidden="true"
@@ -2027,8 +2037,8 @@ const ProjectItem = memo(function ProjectItem({
 										<ProjectIcon avatarUrl={avatarUrl} className="size-5" expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />
 										{projectNeedsInput ? (
 											<span
-												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-destructive ring-2 ring-sidebar"
-												data-project-marker="attention"
+												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-status-in-review ring-2 ring-sidebar"
+												data-project-marker="input"
 											/>
 										) : null}
 									</span>
@@ -2889,7 +2899,7 @@ const SessionRow = memo(function SessionRow({
 										"min-w-0 flex-1 truncate",
 										// Only a session that needs you reads at full brightness; the
 										// rest sit back, so the list has a clear lead.
-										active || marker === "attention"
+										active || isUrgentMarker(marker)
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
 										shimmer && "relative",
