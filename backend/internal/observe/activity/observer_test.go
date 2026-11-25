@@ -670,6 +670,47 @@ func TestPollReconcilesStaleKimiFromRenderedScreen(t *testing.T) {
 	}
 }
 
+type fakeRechecks map[domain.SessionID]bool
+
+func (f fakeRechecks) TerminalActivityRecheckDue(id domain.SessionID, _ time.Time) bool { return f[id] }
+
+// A Kimi StopFailure taken for a child's may have been the parent's own. The
+// screen settles it before the session goes stale, but only when asked.
+func TestPollRechecksFreshKimiActivityOnlyWhenAsked(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	for name, tc := range map[string]struct {
+		due         bool
+		wantSignals int
+	}{
+		"asked":     {due: true, wantSignals: 1},
+		"not asked": {due: false, wantSignals: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			session := activeSession(now, domain.HarnessKimi)
+			session.Activity.LastActivityAt = now.Add(-10 * time.Second)
+			sink := &fakeSink{}
+			rt := &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{}, rendered: " ● Done.\n" + kimiComposer}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, rt,
+				fakeAgents{domain.HarnessKimi: kimi.New()}, Config{
+					Clock: func() time.Time { return now }, Logger: testLogger(),
+					Rechecks: fakeRechecks{session.ID: tc.due},
+				})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.signals) != tc.wantSignals {
+				t.Fatalf("signals = %+v, want %d", sink.signals, tc.wantSignals)
+			}
+			if tc.wantSignals == 1 && (sink.signals[0].State != domain.ActivityIdle || sink.signals[0].Event != "terminal-idle") {
+				t.Fatalf("signal = %+v, want terminal-idle", sink.signals[0])
+			}
+			if !tc.due && rt.styledCalls != 0 {
+				t.Fatalf("read the screen %d times without a recheck", rt.styledCalls)
+			}
+		})
+	}
+}
+
 func TestPollKeepsGenuineLongKimiTurnActive(t *testing.T) {
 	now := time.Unix(500, 0).UTC()
 	for name, activity := range map[string]string{

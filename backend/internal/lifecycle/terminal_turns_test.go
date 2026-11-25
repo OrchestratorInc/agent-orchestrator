@@ -191,6 +191,125 @@ func TestKimiStaleLaunchSubagentStartDoesNotSwallowStopFailure(t *testing.T) {
 	}
 }
 
+// A child counted while an earlier launch was current must not swallow the
+// replacement launch's own StopFailure, even when the new launch's opening
+// hooks never reached AO.
+func TestKimiEarlierLaunchChildCountDoesNotSwallowStopFailure(t *testing.T) {
+	store := &turnRecordingStore{fakeStore: newFakeStore()}
+	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch-1"}}
+	manager := New(store, nil)
+	apply := func(launch string, signal ports.ActivitySignal) {
+		t.Helper()
+		signal.Valid, signal.LaunchID, signal.ExpectedHarness = signal.State != "", launch, domain.HarnessKimi
+		signal.AgentSessionID = "kimi-1"
+		if err := manager.ApplyActivitySignal(context.Background(), "s-1", signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply("launch-1", ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"})
+	apply("launch-1", ports.ActivitySignal{Event: "subagent-start"})
+
+	// The runtime is replaced while the child is open.
+	rec := store.sessions["s-1"]
+	rec.Metadata.RuntimeLaunchID, rec.Metadata.AgentSessionIDLaunchID = "launch-2", "launch-2"
+	store.sessions["s-1"] = rec
+
+	apply("launch-2", ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity after the new launch's stop-failure = %q, want idle", got)
+	}
+}
+
+// A child that is cancelled or times out reports neither SubagentStop nor
+// StopFailure, so its count stays open and the parent's own StopFailure is
+// taken for the child's. The observer is then asked to read the screen early;
+// once it proves the parent back at its prompt, the failed turn closes
+// unanswered and the retry is a turn of its own.
+func TestKimiUnreportedChildEndRechecksTheScreen(t *testing.T) {
+	start := time.Unix(1_000, 0).UTC()
+	now := start
+	store := &turnRecordingStore{fakeStore: newFakeStore()}
+	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch"}}
+	manager := New(store, nil)
+	manager.clock = func() time.Time { return now }
+	hook := func(signal ports.ActivitySignal) {
+		t.Helper()
+		signal.Valid, signal.LaunchID, signal.ExpectedHarness = signal.State != "", "launch", domain.HarnessKimi
+		signal.AgentSessionID, signal.Timestamp = "kimi-1", now
+		if err := manager.ApplyActivitySignal(context.Background(), "s-1", signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook(ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"})
+	// The child times out without a hook; the parent's next request fails.
+	hook(ports.ActivitySignal{Event: "subagent-start"})
+	hook(ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityActive {
+		t.Fatalf("activity after the attributed stop-failure = %q, want active", got)
+	}
+	if manager.TerminalActivityRecheckDue("s-1", start.Add(time.Second)) {
+		t.Fatal("recheck due before Kimi could redraw")
+	}
+	if !manager.TerminalActivityRecheckDue("s-1", start.Add(kimiChildFailureRecheckSettle)) {
+		t.Fatal("recheck not due after the settle delay")
+	}
+
+	// The observer reads Kimi's composer with no spinner.
+	now = start.Add(30 * time.Second)
+	if err := manager.ApplyActivitySignal(context.Background(), "s-1", ports.ActivitySignal{
+		Event: "terminal-idle", State: domain.ActivityIdle, Valid: true, LaunchID: "launch", Timestamp: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity after terminal-idle = %q, want idle", got)
+	}
+	if manager.TerminalActivityRecheckDue("s-1", now) {
+		t.Fatal("recheck still due after the screen settled the failure")
+	}
+
+	now = start.Add(time.Minute)
+	hook(ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"})
+	hook(ports.ActivitySignal{Event: "stop", State: domain.ActivityIdle, FinalAssistantMessage: "importer mapped"})
+	want := []string{
+		"request:kimi:kimi-1:map the importer", "response:",
+		"request:kimi:kimi-1:map the importer", "response:importer mapped",
+	}
+	if !reflect.DeepEqual(store.calls, want) {
+		t.Fatalf("recorded %q, want %q", store.calls, want)
+	}
+}
+
+// The early read is bounded: after the window the observer's ordinary
+// stale-activity read takes over.
+func TestKimiChildFailureRecheckExpires(t *testing.T) {
+	start := time.Unix(1_000, 0).UTC()
+	store := &turnRecordingStore{fakeStore: newFakeStore()}
+	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch"}}
+	manager := New(store, nil)
+	manager.clock = func() time.Time { return start }
+	for _, signal := range []ports.ActivitySignal{
+		{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"},
+		{Event: "subagent-start"},
+		{Event: "stop-failure", State: domain.ActivityIdle},
+	} {
+		signal.Valid, signal.LaunchID, signal.ExpectedHarness = signal.State != "", "launch", domain.HarnessKimi
+		signal.AgentSessionID = "kimi-1"
+		if err := manager.ApplyActivitySignal(context.Background(), "s-1", signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if manager.TerminalActivityRecheckDue("s-1", start.Add(kimiChildFailureRecheckWindow+time.Second)) {
+		t.Fatal("recheck due after its window")
+	}
+	if manager.TerminalActivityRecheckDue("s-1", start.Add(kimiChildFailureRecheckSettle)) {
+		t.Fatal("an expired recheck came back")
+	}
+}
+
 // After a provider switch the previous agent's hook config can still be in the
 // workspace. A signal that names an agent the session no longer runs is dropped
 // before it can record a turn or change activity.

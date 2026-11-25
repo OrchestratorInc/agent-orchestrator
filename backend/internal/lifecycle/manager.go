@@ -285,8 +285,8 @@ type Manager struct {
 	// durable session exited, so the user can safely retry the resume.
 	pendingLaunches map[domain.SessionID]pendingLaunch
 	// kimiChildren counts each Kimi session's open child agents (see
-	// kimiChildSignal). Guarded by mu.
-	kimiChildren map[domain.SessionID]int
+	// kimiChildSignalLocked). Guarded by mu.
+	kimiChildren map[domain.SessionID]kimiChildState
 	// steerActive reports whether a harness can safely receive a write during an
 	// active turn (input steers the run) rather than only while idle. Supplied by
 	// the agent adapter via WithActiveSteering; the default answers false, so an
@@ -316,7 +316,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		flights:                     map[domain.SessionID]*toolFlight{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
-		kimiChildren:                map[domain.SessionID]int{},
+		kimiChildren:                map[domain.SessionID]kimiChildState{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
 		startupSignalGatesInput:     func(domain.AgentHarness) bool { return false },
 		urgentNudgeWaitingInputSafe: func(domain.AgentHarness) bool { return false },
@@ -734,7 +734,8 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
-	if m.kimiChildSignalLocked(id, s) {
+	kimiChild := m.kimiChildSignalLocked(id, rec.Harness, s, now)
+	if kimiChild.consumed {
 		m.mu.Unlock()
 		return nil
 	}
@@ -744,6 +745,9 @@ retryProjection:
 	if !terminalTurnRecorded && mode == domain.SessionModeTUI {
 		terminalTurnRecorded = true
 		m.recordTerminalTurn(ctx, rec, s, now)
+		if kimiChild.endsFailedTurn {
+			m.closeFailedTerminalTurn(ctx, rec, s, now)
+		}
 	}
 	resetConversationCheckpoint :=
 		nativeIdentityChanged ||

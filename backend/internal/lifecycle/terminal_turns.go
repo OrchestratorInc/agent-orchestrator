@@ -60,6 +60,20 @@ func (m *Manager) recordTerminalTurn(ctx context.Context, rec domain.SessionReco
 	}
 }
 
+// closeFailedTerminalTurn closes the open terminal turn unanswered once the
+// screen proves a StopFailure, taken for a child's when it arrived, ended the
+// parent's turn instead. Without it the user's retry would join the failed
+// request.
+func (m *Manager) closeFailedTerminalTurn(ctx context.Context, rec domain.SessionRecord, s ports.ActivitySignal, now time.Time) {
+	recorder, ok := m.store.(terminalTurnRecorder)
+	if !ok {
+		return
+	}
+	if err := recorder.RecordTerminalTurnResponse(ctx, rec.ID, "", timeOr(s.Timestamp, now)); err != nil {
+		slog.Default().Warn("lifecycle: record terminal turn", "session", rec.ID, "event", s.Event, "error", err)
+	}
+}
+
 // staleTerminalStop reports a Stop that belongs to an earlier turn than the
 // one the open terminal row holds: it is older than the latest prompt, or it
 // names a different turn than the one that prompt opened. Recording it would

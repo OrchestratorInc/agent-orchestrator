@@ -31,6 +31,16 @@ type Config struct {
 	// read, and its native identity resolved, without the session's
 	// environment.
 	StartAfter <-chan struct{}
+	// Rechecks, when set, names sessions whose screen should be read before
+	// their activity goes stale (see RecheckSource).
+	Rechecks RecheckSource
+}
+
+// RecheckSource asks for an early screen read of an active session: a hook
+// arrived whose meaning only the screen can settle, such as a Kimi
+// StopFailure taken for a child's that may have been the parent's own.
+type RecheckSource interface {
+	TerminalActivityRecheckDue(id domain.SessionID, now time.Time) bool
 }
 
 type sessionSource interface {
@@ -58,6 +68,7 @@ type Observer struct {
 	clock       func() time.Time
 	logger      *slog.Logger
 	startAfter  <-chan struct{}
+	rechecks    RecheckSource
 	sessionEnv  atomic.Pointer[SessionEnvFunc]
 }
 
@@ -87,6 +98,7 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 		clock:       cfg.Clock,
 		logger:      cfg.Logger,
 		startAfter:  cfg.StartAfter,
+		rechecks:    cfg.Rechecks,
 	}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
@@ -176,7 +188,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 				return
 			}
 		} else if session.Activity.State != domain.ActivityActive || session.Activity.LastActivityAt.IsZero() ||
-			now.Sub(session.Activity.LastActivityAt) < o.staleAfter {
+			(now.Sub(session.Activity.LastActivityAt) < o.staleAfter && !o.recheckDue(session.ID, now)) {
 			return
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
@@ -250,4 +262,8 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
 	}
+}
+
+func (o *Observer) recheckDue(id domain.SessionID, now time.Time) bool {
+	return o.rechecks != nil && o.rechecks.TerminalActivityRecheckDue(id, now)
 }
