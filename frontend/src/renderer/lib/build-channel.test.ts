@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCommandPaletteEnabled, isNightlyBuild, isTeamsEnabled, parseNightlyVersion } from "./build-channel";
+import { isCommandPaletteEnabled, isDevelopmentBuild, isNightlyBuild, isTeamsEnabled, parseNightlyVersion } from "./build-channel";
 
 describe("isNightlyBuild", () => {
 	it("detects -nightly. stamps and rejects everything else", () => {
@@ -8,6 +8,14 @@ describe("isNightlyBuild", () => {
 		expect(isNightlyBuild(undefined)).toBe(false);
 		expect(isNightlyBuild("0.0.0-preview")).toBe(false);
 		expect(isNightlyBuild("0.0.0-test")).toBe(false);
+	});
+});
+
+describe("isDevelopmentBuild", () => {
+	it("is true only for the Vite dev server, not tests or packaged builds", () => {
+		expect(isDevelopmentBuild("development")).toBe(true);
+		expect(isDevelopmentBuild("test")).toBe(false);
+		expect(isDevelopmentBuild("production")).toBe(false);
 	});
 });
 

@@ -8,7 +8,7 @@ import { cloudChatKey, prependOlderCloudEvents, readCloudChatEvents, readOlderCl
 import { appendCloudEvents, cloudConversationSnapshot, cloudSessionModel, mergeCloudEvents, runningCloudTurnId } from "./conversation";
 import { followCloudSessionEvents } from "./eventStream";
 import { CloudError, cloudErrorMessage, isPlanRefusal, planResetCopy } from "./errors";
-import { agentModelCatalog, cachedAgentCatalog, cachedSessionCatalog, catalogAccount, modelsRetryDelay, namedCloudModels, rememberSessionCatalog, sessionCatalogKey } from "./modelCatalog";
+import { agentModelCatalog, cachedAgentCatalog, cachedSessionCatalog, catalogAccount, namedCloudModels, readSessionCatalog, rememberSessionCatalog, sessionCatalogKey } from "./modelCatalog";
 import { cloudLifecycleStage } from "./lifecycle";
 import type { CloudApprovalMode, CloudChatModel, CloudChatModels, CloudClientEvent, CloudSession } from "./types";
 
@@ -348,29 +348,22 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 
 	useEffect(() => {
 		if (!active || !orgId || !catalogKey || !connected || terminated) return;
-		let cancelled = false;
+		// Ends the reads, and any wait between them, when the chat goes away.
+		const controller = new AbortController();
 		setModelsLoading(true);
-		void (async () => {
-			for (let failures = 0; !cancelled;) {
-				try {
-					const account = catalogAccount();
-					const catalog = await client.listChatModels(orgId, sessionId);
-					if (cancelled) return;
-					rememberSessionCatalog(catalogKey, catalog, account);
-					setShown({ catalog, source: "session" });
-					return;
-				} catch (cause) {
-					failures += 1;
-					// A worker still connecting is asked again within a second or two,
-					// not after a fixed five.
-					const delay = modelsRetryDelay(failures, cause);
-					if (delay === undefined || cancelled) return;
-					await new Promise((resolve) => setTimeout(resolve, delay));
-				}
-			}
-		})().finally(() => { if (!cancelled) setModelsLoading(false); });
+		// A worker still connecting is asked again within a second or two, not
+		// after a fixed five; one still starting after its Retry-After
+		// (modelsRetryDelay).
+		void readSessionCatalog(async () => {
+			const account = catalogAccount();
+			return { account, catalog: await client.listChatModels(orgId, sessionId) };
+		}, controller.signal).then((answer) => {
+			if (!answer || controller.signal.aborted) return;
+			rememberSessionCatalog(catalogKey, answer.catalog, answer.account);
+			setShown({ catalog: answer.catalog, source: "session" });
+		}).finally(() => { if (!controller.signal.aborted) setModelsLoading(false); });
 		return () => {
-			cancelled = true;
+			controller.abort();
 			setModelsLoading(false);
 		};
 	}, [active, catalogKey, client, connected, orgId, sessionId, terminated]);
