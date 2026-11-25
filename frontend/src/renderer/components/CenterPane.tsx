@@ -9,7 +9,6 @@ import {
 	useState,
 	type PointerEvent,
 	type ReactNode,
-	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -99,8 +98,6 @@ type AuxiliaryTab =
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: CenterPaneWorkspaceTab };
 
-const WHEEL_ZOOM_THRESHOLD = 80;
-const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
@@ -249,8 +246,6 @@ export function CenterPane({
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
-	const wheelZoomRemainderRef = useRef(0);
-	const lastWheelZoomAtRef = useRef(0);
 	const [fontSize, setFontSize] = useState(initialTerminalFontSize);
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const [terminalBounds, setTerminalBounds] = useState({ leftInset: 0, rightInset: 0, width: 0 });
@@ -523,28 +518,6 @@ export function CenterPane({
 		}
 	}, []);
 
-	const handleWheelZoom = useCallback(
-		(event: ReactWheelEvent<HTMLDivElement>) => {
-			if (!event.ctrlKey && !event.metaKey) return;
-			event.preventDefault();
-			event.stopPropagation();
-
-			if (event.timeStamp - lastWheelZoomAtRef.current > WHEEL_ZOOM_RESET_MS) {
-				wheelZoomRemainderRef.current = 0;
-			}
-			lastWheelZoomAtRef.current = event.timeStamp;
-			wheelZoomRemainderRef.current += event.deltaY;
-
-			const steps = Math.floor(Math.abs(wheelZoomRemainderRef.current) / WHEEL_ZOOM_THRESHOLD);
-			if (steps === 0) return;
-
-			const direction = wheelZoomRemainderRef.current > 0 ? -1 : 1;
-			updateFontSize(direction * steps);
-			wheelZoomRemainderRef.current -= Math.sign(wheelZoomRemainderRef.current) * steps * WHEEL_ZOOM_THRESHOLD;
-		},
-		[updateFontSize],
-	);
-
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
 	const terminalTopbar = (
 		<SessionTabsTopbar
@@ -658,7 +631,6 @@ export function CenterPane({
 		<div
 			ref={paneRef}
 			className="terminal-pane-frame flex h-full min-h-0 min-w-flex-min flex-col"
-			onWheelCapture={handleWheelZoom}
 		>
 			{isFullscreen ? terminalTopbar : <SessionTopbarPortal>{terminalTopbar}</SessionTopbarPortal>}
 			<div

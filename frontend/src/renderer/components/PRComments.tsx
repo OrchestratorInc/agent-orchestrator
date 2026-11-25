@@ -293,7 +293,9 @@ function rememberAttachmentConsent(location: string) {
 }
 
 /** A comment whose files the person chose not to store; it stays a draft. */
-class AttachmentConsentDeclined extends Error {}
+class AttachmentConsentDeclined extends Error {
+	readonly code: string = "ATTACHMENT_CONSENT_DECLINED_ERROR";
+}
 
 /**
  * Asks once per repository before a comment's files are stored there: they go

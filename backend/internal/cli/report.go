@@ -43,7 +43,7 @@ func newReportCommand(ctx *commandContext) *cobra.Command {
 		return ctx.report(cmd.Context(), args, o)
 	}}
 	f := cmd.Flags()
-	f.StringVar(&o.note, "note", "", "Structured state note")
+	f.StringVar(&o.note, "note", "", "Structured state note (maximum 1000 characters)")
 	f.StringArrayVar(&o.artifacts, "artifact", nil, "Attach an opaque artifact reference (repeatable)")
 	f.StringArrayVar(&o.prsCreated, "pr-created", nil, "Attach a created GitHub PR or GitLab MR (repeatable)")
 	f.StringArrayVar(&o.prsReviewed, "pr-reviewed", nil, "Attach a reviewed GitHub PR or GitLab MR (repeatable)")

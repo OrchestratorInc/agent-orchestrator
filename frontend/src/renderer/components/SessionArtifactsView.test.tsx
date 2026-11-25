@@ -78,8 +78,8 @@ vi.mock("./ArtifactSnapshotThumbnail", async () => {
 	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
 });
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
-		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
+	ArtifactFileView: ({ active = true, cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { active?: boolean; cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
+		<div data-active={active ? "true" : "false"} data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
 			{`viewer:${path}`}
 			<button type="button" onClick={() => onEditingChange?.(true)}>start editing</button>
 			<button type="button" onClick={() => onEditingChange?.(false)}>stop editing</button>
@@ -788,9 +788,27 @@ describe("SessionArtifactsView", () => {
 		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
 		expect(screen.getByText("notes/fresh.md isn't in this session's artifacts yet. It opens here once the session lists it.")).toBeInTheDocument();
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		// The pending view must listen for the daemon's ready/change events so the
+		// workspace query can discover a file written before this tab opened.
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 
 		view.rerender(<SessionArtifactsView request={request} session={session([...artifacts, { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" }])} />);
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+	});
+
+	it("stops following an absent file on Back and follows it again on a new request", async () => {
+		const view = renderView(<SessionArtifactsView request={{ key: 1, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		view.rerender(<SessionArtifactsView request={{ key: 2, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 	});
 
 	it("opens a requested file listed under a new name, not the not-listed-yet note", () => {
@@ -822,6 +840,7 @@ describe("SessionArtifactsView", () => {
 		view.rerender(<SessionArtifactsView request={request} session={session(remaining)} />);
 		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
 	});
 
 	it("returns to the gallery from a requested file that is not listed", async () => {
@@ -1041,11 +1060,21 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 	});
 
-	it("disables Publish for a video and says why", async () => {
-		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
-		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+	it("disables Publish for a video browsers cannot play and says why", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mkv", path: "clip.mkv", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mkv" }} session={session([video])} />);
 
-		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mkv" })).toBeDisabled();
+	});
+
+	it("tells the open file whether the view is showing, so a video pauses when the inspector closes", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		const view = renderView(<SessionArtifactsView active request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+		expect(await screen.findByTestId("artifact-view")).toHaveAttribute("data-active", "true");
+
+		view.rerender(<SessionArtifactsView active={false} request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+
+		expect(screen.getByTestId("artifact-view")).toHaveAttribute("data-active", "false");
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {

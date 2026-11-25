@@ -1,12 +1,13 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { describe, expect, it, vi } from "vitest";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
+import { LocalIdentityUnavailableError, computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
 import { setPasswordCipher } from "./remotes-store";
-import { createLocalHostIdentity, type RemoteHealth } from "./remote-request";
+import { createLocalHostIdentity, IncompatibleRemoteVersionError, type RemoteHealth } from "./remote-request";
 import { ExpectedIpcError, installIpcErrorCapture, resetMainErrorCaptureForTests, setMainErrorSink } from "./main-error-capture";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
@@ -106,6 +107,24 @@ describe("registerRemotesIpc", () => {
 		} finally { resetMainErrorCaptureForTests(); }
 	});
 
+	it("preserves the code on a remotes:list failure requested by the renderer", async () => {
+		resetMainErrorCaptureForTests();
+		try {
+			const ipc = fakeIpc();
+			const capture = vi.fn();
+			setMainErrorSink(capture);
+			const error = new AoError("REMOTES_READ_FAILED", "Could not read remote hosts");
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				requireAccount: async () => { throw error; },
+			});
+			await expect(ipc.invoke("remotes:list", true)).resolves.toEqual({ code: error.code, message: error.toString() });
+			expect(capture).toHaveBeenCalledExactlyOnceWith({ category: "ipc", reason: "handler", error, detail: "channel:remotes:list" });
+			await expect(ipc.invoke("remotes:list")).rejects.toBe(error);
+		} finally { resetMainErrorCaptureForTests(); }
+	});
+
 	it("hides this installation without deleting its account record or original password", async () => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");
@@ -123,7 +142,7 @@ describe("registerRemotesIpc", () => {
 		]);
 	});
 
-	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:linkAccountHost", "remotes:previewUrl", "remotes:resolvePreviewUrl", "remotes:externalUrl"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
+	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:linkAccountHost", "remotes:previewUrl", "remotes:resolvePreviewUrl", "remotes:externalUrl", "remotes:hostUpdate", "remotes:startHostUpdate"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");
 		const probe = vi.fn(async () => "online" as const);
@@ -139,6 +158,36 @@ describe("registerRemotesIpc", () => {
 		expect(probe).not.toHaveBeenCalled();
 		expect(start).not.toHaveBeenCalled();
 		expect(await readFile(file, "utf8")).toBe(original);
+	});
+
+	it("reads and starts a host update with the saved credential, even across API versions", async () => {
+		const file = await tempFile();
+		const read = vi.fn(async () => ({ version: "0.14.10", supported: true, state: "idle" as const }));
+		const start = vi.fn(async (_entry: unknown, _version?: string) => ({ version: "0.14.10", supported: true, state: "updating" as const }));
+		const check = vi.fn(async () => "0.15.0");
+		let identity: (entry: unknown) => Promise<string> = async () => "h_workbox";
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: (entry) => identity(entry), hostUpdate: { read, start, check } });
+		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.1:1")).resolves.toMatchObject({ version: "0.14.10" });
+		expect(read).toHaveBeenCalledWith(expect.objectContaining({ hostId: "h_workbox", password: "old" }));
+
+		identity = async () => { throw new IncompatibleRemoteVersionError("h_workbox"); };
+		await expect(ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1")).resolves.toMatchObject({ state: "updating" });
+		expect(start).toHaveBeenCalledOnce();
+		expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "h_workbox" }), undefined);
+		await expect(ipc.invoke("remotes:checkHostUpdate", "http://192.0.2.1:1")).resolves.toBe("0.15.0");
+		expect(check).toHaveBeenCalledWith(expect.objectContaining({ hostId: "h_workbox", password: "old" }));
+		await ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1", "0.15.0");
+		expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "h_workbox" }), "0.15.0");
+
+		identity = async () => { throw new IncompatibleRemoteVersionError("h_imposter"); };
+		await expect(ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1")).rejects.toThrow(/identity changed/);
+		identity = async () => { throw new Error("offline"); };
+		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.1:1")).resolves.toBeNull();
+		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.9:1")).rejects.toThrow(/does not belong/);
+		await expect(ipc.invoke("remotes:checkHostUpdate", "http://192.0.2.1:1")).rejects.toThrow(/offline/);
+		expect(start).toHaveBeenCalledTimes(2);
+		expect(check).toHaveBeenCalledOnce();
 	});
 
 	it("refuses an address that resolves to self under another saved host ID before authentication", async () => {
@@ -863,4 +912,18 @@ describe("registerRemotesIpc", () => {
 			await expect(ipc.invoke("remotes:setComputerUseTarget", "h_workbox")).rejects.toThrow(/http or https address/);
 		});
 	});
+});
+
+it.each([
+	new ExpectedIpcError("Sign in to Orchestrator Cloud"),
+	new LocalIdentityUnavailableError(),
+])("marks expected remotes:list failures even when the subclass has its own code", async (error) => {
+	const ipc = fakeIpc();
+	registerRemotes(ipc.ipcMain, {
+		file: await tempFile(),
+		registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+		requireAccount: async () => { throw error; },
+	});
+	await expect(ipc.invoke("remotes:list", true)).resolves.toEqual({ code: error.code, message: error.toString(), expected: true });
+	await expect(ipc.invoke("remotes:list")).rejects.toBe(error);
 });

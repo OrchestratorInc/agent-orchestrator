@@ -52,6 +52,11 @@ it("shows only the reading status until the first scan returns", async () => {
 	expect(screen.queryByRole("button", { name: "Scan again" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("checkbox", { name: "Select all shown conversations" })).not.toBeInTheDocument();
 });
+it("offers continuable Droid histories for import", async () => {
+	api.GET.mockResolvedValue({ data: { candidates: [{ ...chat, id: "droid-1", title: "Droid history", projectId: "project", harness: "droid" }] } });
+	renderPanel("droid");
+	expect(await screen.findByRole("checkbox", { name: "Import Droid history" })).toBeChecked();
+});
 it("lists OMP chats for import", async () => {
 	api.GET.mockResolvedValue({
 		data: { candidates: [{ ...chat, id: "omp-1", title: "OMP chat", projectId: "project", harness: "omp" }] },

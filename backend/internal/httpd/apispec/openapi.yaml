@@ -4244,6 +4244,90 @@ paths:
       summary: Run the developer project-registry import through the daemon store
       tags:
       - dev
+  /api/v1/devices:
+    get:
+      operationId: getDeviceStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceStatusResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Report device support: opt-in, platform availability, simulators and
+        emulators, and leases'
+      tags:
+      - devices
+  /api/v1/devices/availability:
+    put:
+      operationId: setDeviceAvailability
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceAvailabilityRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceAvailabilityResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn devices on or off for every client; the desktop app sends its
+        Developer mode, and devices start off on every daemon boot
+      tags:
+      - devices
+  /api/v1/devices/setup:
+    post:
+      operationId: setupDevices
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceStatusResponse'
+          description: Accepted
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Turn device support on: install the pinned device tools and start
+        the device hub'
+      tags:
+      - devices
   /api/v1/endpoints:
     get:
       operationId: getEndpoints
@@ -5507,6 +5591,50 @@ paths:
       summary: Start a worker task and refine its title in the background
       tags:
       - sessions
+  /api/v1/pr-preview:
+    get:
+      operationId: getPRPreview
+      parameters:
+      - description: A github.com pull request URL.
+        in: query
+        name: url
+        schema:
+          description: A github.com pull request URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PRPreviewResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+      summary: Read the state and summary of a GitHub pull request a chat links to
+      tags:
+      - link-preview
   /api/v1/projects:
     get:
       operationId: listProjects
@@ -6257,6 +6385,63 @@ paths:
       summary: Post a pull request conversation comment or review-thread reply
       tags:
       - prs
+  /api/v1/prs/{id}/dequeue:
+    post:
+      operationId: dequeuePR
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DequeuePRRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DequeuePRResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove a pull request from its base branch's merge queue
+      tags:
+      - prs
   /api/v1/prs/{id}/details:
     post:
       operationId: loadPRDetails
@@ -6892,6 +7077,92 @@ paths:
         device's own token
       tags:
       - mobile
+  /api/v1/remote-host/update:
+    get:
+      operationId: getRemoteHostUpdate
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHostUpdateResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report this host's version and the state of its last self-hosted update
+      tags:
+      - identity
+    post:
+      operationId: startRemoteHostUpdate
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersRemoteHostUpdateRequest'
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHostUpdateResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Install the newest release of this self-hosted host's channel and restart
+        it
+      tags:
+      - identity
+  /api/v1/remote-host/update/check:
+    post:
+      operationId: checkRemoteHostUpdate
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersRemoteHostUpdateCheckResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Ask a host that runs the desktop app which version it installs next
+      tags:
+      - identity
   /api/v1/reports:
     get:
       operationId: listReports
@@ -8821,6 +9092,109 @@ paths:
       summary: Enable or disable automatic review for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/background-tasks:
+    get:
+      operationId: getBackgroundTasks
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackgroundTasksResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Inspect native background work without waking the session
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/background-tasks/{taskId}/output:
+    get:
+      operationId: getBackgroundTaskOutput
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Provider-scoped background task identifier.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Provider-scoped background task identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackgroundTaskOutputResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Read one background task's recent output without waking the session
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop:
+    post:
+      operationId: stopBackgroundTask
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Provider-scoped background task identifier.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Provider-scoped background task identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Stop one native background task without waking the session
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/chat-view:
     post:
       operationId: setSessionChatView
@@ -9355,6 +9729,11 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersInterruptConversationRequest'
       responses:
         "204":
           description: No Content
@@ -11081,6 +11460,574 @@ paths:
       summary: Promote a queued message into the in-flight turn
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/device:
+    get:
+      operationId: getSessionDevice
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Get the device a session holds
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/button:
+    post:
+      operationId: pressSessionDeviceButton
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PressSessionDeviceButtonRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Press a hardware button on the session's device through the provider,
+        where the stream socket cannot
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/close:
+    post:
+      operationId: closeSessionDevice
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseSessionDeviceRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Release the session's device, optionally shutting it down
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/hub/*:
+    get:
+      operationId: getSessionDeviceHub
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Proxy the leased device's stream, input socket and screenshots from
+        the device hub
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/install:
+    post:
+      operationId: installSessionDeviceApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallSessionDeviceRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Install a built app on the session's device
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/launch:
+    post:
+      operationId: launchSessionDeviceApp
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LaunchSessionDeviceRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Launch an installed app on the session's device
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/open:
+    post:
+      operationId: openSessionDevice
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenSessionDeviceRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Pick, boot and lease a simulator or emulator to a session
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/quality:
+    post:
+      operationId: setSessionDeviceQuality
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetSessionDeviceQualityRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: 'Set how much the session''s device stream costs the link: high, balanced
+        or low (resets when the lease ends)'
+      tags:
+      - devices
+  /api/v1/sessions/{sessionId}/device/screenshot:
+    get:
+      operationId: getSessionDeviceScreenshot
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            image/png:
+              schema:
+                type: string
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Capture the session's device screen as a PNG
+      tags:
+      - devices
   /api/v1/sessions/{sessionId}/exit-agent:
     post:
       operationId: exitAgent
@@ -14658,6 +15605,46 @@ paths:
         paint
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/paths:
+    get:
+      operationId: listSessionWorkspaceFilePaths
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkspaceFilePathsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the visible file paths in a session workspace, without per-file
+        status
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/resolve:
     get:
       operationId: resolveSessionWorkspacePath
@@ -14945,6 +15932,26 @@ paths:
         decorated
       tags:
       - sessions
+  /api/v1/sessions/background-tasks:
+    get:
+      operationId: listBackgroundTasks
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBackgroundTasksResponse'
+          description: OK
+      summary: List native background work for attached session controllers
+      tags:
+      - conversations
   /api/v1/sessions/cleanup:
     post:
       operationId: cleanupSessions
@@ -15077,6 +16084,44 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Turn idle Chat hibernation on or off for this machine
+      tags:
+      - settings
+  /api/v1/settings/commit-attribution:
+    patch:
+      operationId: updateCommitAttribution
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCommitAttributionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose whether new sessions credit Orchestrator on their commits and
+        PRs (beta)
       tags:
       - settings
   /api/v1/settings/computer-use:
@@ -16603,6 +17648,10 @@ components:
           type: string
         permissions:
           type: string
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
       type: object
     AgentInfo:
       properties:
@@ -17225,6 +18274,13 @@ components:
       - uploadId
       - bytes
       type: object
+    AttributionConfig:
+      properties:
+        disableCommitTrailer:
+          type: boolean
+        disablePRFooter:
+          type: boolean
+      type: object
     AutoSpawnPause:
       properties:
         effort:
@@ -17773,6 +18829,126 @@ components:
       - paused
       - networkOutcome
       type: object
+    BackgroundTaskOutputResponse:
+      properties:
+        availability:
+          description: unavailable when this provider or session cannot report the
+            task's output; output is then empty.
+          enum:
+          - ready
+          - unavailable
+          type: string
+        logOmitted:
+          description: 'True when the task''s command writes a log that output leaves
+            out because it can''t be shown as this run''s: a later run writes the
+            same file, the file was written after the run ended, or the run''s final
+            log isn''t kept yet and no earlier read of it was saved. Output then holds
+            only what the task printed itself.'
+          type: boolean
+        logOutsideWorkspace:
+          description: True when the task's command writes its output to a log file
+            outside the session's workspace, which is not read.
+          type: boolean
+        output:
+          description: 'The most recent output: at most the last 200 lines and 64
+            KB, with terminal escapes and control characters removed.'
+          type: string
+        runId:
+          description: The run this output belongs to, when the provider gives runs
+            their own ID. Output for another run of a reused task ID is not the requested
+            run's.
+          type: string
+        sessionId:
+          type: string
+        stale:
+          description: True when the provider stopped sending this task's output,
+            so anything it printed since is missing.
+          type: boolean
+        taskId:
+          type: string
+        truncated:
+          description: True when older output was left out or is missing.
+          type: boolean
+      required:
+      - sessionId
+      - taskId
+      - availability
+      - output
+      type: object
+    BackgroundTaskResponse:
+      properties:
+        command:
+          description: The shell command line, when the provider reports one. Credentials
+            in it are redacted.
+          type: string
+        description:
+          type: string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        kind:
+          enum:
+          - shell
+          - agent
+          - other
+          type: string
+        runId:
+          type: string
+        startedAt:
+          description: When the provider started the task, or else when the daemon
+            first observed it.
+          format: date-time
+          type:
+          - "null"
+          - string
+        state:
+          enum:
+          - running
+          - paused
+          - completed
+          - failed
+          - stopped
+          type: string
+        stoppable:
+          description: True when this provider can stop this running task.
+          type: boolean
+      required:
+      - id
+      - kind
+      - description
+      - state
+      type: object
+    BackgroundTasksResponse:
+      properties:
+        availability:
+          enum:
+          - ready
+          - partial
+          - unavailable
+          type: string
+        controllerGeneration:
+          type: string
+        observedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        sessionId:
+          type: string
+        tasks:
+          items:
+            $ref: '#/components/schemas/BackgroundTaskResponse'
+          type: array
+      required:
+      - sessionId
+      - controllerGeneration
+      - availability
+      - tasks
+      type: object
     BrowserCommandRequest:
       properties:
         action:
@@ -18253,6 +19429,12 @@ components:
       required:
       - remoteUrl
       - destinationParent
+      type: object
+    CloseSessionDeviceRequest:
+      properties:
+        shutdown:
+          description: Also power the simulator or emulator off.
+          type: boolean
       type: object
     CodewhaleLifecycleEvent:
       properties:
@@ -19206,6 +20388,11 @@ components:
       - sessionId
       - displayName
       type: object
+    ControllersInterruptConversationRequest:
+      properties:
+        turnId:
+          type: string
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -19519,6 +20706,18 @@ components:
       - hostId
       - token
       - hostKey
+      type: object
+    ControllersRemoteHostUpdateCheckResponse:
+      properties:
+        version:
+          type: string
+      required:
+      - version
+      type: object
+    ControllersRemoteHostUpdateRequest:
+      properties:
+        version:
+          type: string
       type: object
     ControllersReplaceAgentAccountAPIKeyRequest:
       properties:
@@ -20162,6 +21361,7 @@ components:
       - id
       - name
       - type
+      - choices
       type: object
     ConversationConfigOptionsResponse:
       properties:
@@ -21233,6 +22433,28 @@ components:
       - ok
       - sessionId
       type: object
+    DequeuePRRequest:
+      properties:
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      type: object
+    DequeuePRResponse:
+      properties:
+        changedAt:
+          format: date-time
+          type: string
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+      required:
+      - ok
+      - prNumber
+      - changedAt
+      type: object
     DesktopArtifactLocationResponse:
       properties:
         artifactDir:
@@ -21313,6 +22535,135 @@ components:
           $ref: '#/components/schemas/DevImportProjectsReport'
       required:
       - report
+      type: object
+    DeviceAgentControl:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        command:
+          type: string
+      required:
+      - command
+      - args
+      type: object
+    DeviceAvailabilityRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    DeviceAvailabilityResponse:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
+      type: object
+    DeviceLease:
+      properties:
+        agentDevice:
+          $ref: '#/components/schemas/DeviceAgentControl'
+        device:
+          $ref: '#/components/schemas/DeviceSummary'
+        openedAt:
+          format: date-time
+          type: string
+        provider:
+          description: Provider serving the device, e.g. local.
+          type: string
+        reason:
+          description: Why the resolver picked this provider.
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - provider
+      - device
+      - reason
+      - agentDevice
+      - openedAt
+      type: object
+    DevicePlatformStatus:
+      properties:
+        available:
+          type: boolean
+        platform:
+          enum:
+          - ios
+          - android
+          type: string
+        reason:
+          type: string
+      required:
+      - platform
+      - available
+      type: object
+    DeviceStatusResponse:
+      properties:
+        available:
+          description: 'Whether devices are available: the desktop app''s Developer
+            mode is on. While false, only status, a session''s lease and releasing
+            a device are served.'
+          type: boolean
+        devices:
+          items:
+            $ref: '#/components/schemas/DeviceSummary'
+          type: array
+        enabled:
+          description: Whether the user turned device support on.
+          type: boolean
+        error:
+          type: string
+        leases:
+          items:
+            $ref: '#/components/schemas/DeviceLease'
+          type: array
+        platforms:
+          items:
+            $ref: '#/components/schemas/DevicePlatformStatus'
+          type: array
+        state:
+          enum:
+          - "off"
+          - installing
+          - ready
+          - error
+          type: string
+      required:
+      - available
+      - enabled
+      - state
+      - platforms
+      - devices
+      - leases
+      type: object
+    DeviceSummary:
+      properties:
+        booted:
+          type: boolean
+        id:
+          description: Simulator UDID or emulator serial (AVD name while stopped).
+          type: string
+        name:
+          type: string
+        platform:
+          enum:
+          - ios
+          - android
+          type: string
+        version:
+          type: string
+      required:
+      - id
+      - name
+      - platform
+      - booted
       type: object
     DomainActivity:
       properties:
@@ -22004,6 +23355,15 @@ components:
           minimum: 1
           type: integer
       type: object
+    InstallSessionDeviceRequest:
+      properties:
+        path:
+          description: Absolute path to a .app bundle (iOS) or .apk (Android).
+          minLength: 1
+          type: string
+      required:
+      - path
+      type: object
     InvokeCueRequest:
       properties:
         sessionId:
@@ -22069,6 +23429,15 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    LaunchSessionDeviceRequest:
+      properties:
+        appId:
+          description: Bundle identifier (iOS) or package name (Android).
+          minLength: 1
+          type: string
+      required:
+      - appId
       type: object
     LinkPreviewResponse:
       properties:
@@ -22160,6 +23529,15 @@ components:
           type: string
       required:
       - automations
+      type: object
+    ListBackgroundTasksResponse:
+      properties:
+        sessions:
+          items:
+            $ref: '#/components/schemas/BackgroundTasksResponse'
+          type: array
+      required:
+      - sessions
       type: object
     ListCatalogModelsResponse:
       properties:
@@ -22391,6 +23769,21 @@ components:
       required:
       - shellTerminals
       type: object
+    ListWorkspaceFilePathsResponse:
+      properties:
+        paths:
+          items:
+            type: string
+          type: array
+        sessionId:
+          type: string
+        truncated:
+          type: boolean
+      required:
+      - sessionId
+      - paths
+      - truncated
+      type: object
     ListWorkspaceFilesResponse:
       properties:
         ahead:
@@ -22556,9 +23949,12 @@ components:
           type: boolean
         prNumber:
           type: integer
+        queue:
+          $ref: '#/components/schemas/SessionPRMergeQueueEntry'
         state:
           enum:
           - merged
+          - open
           type: string
         stateChangedAt:
           format: date-time
@@ -22867,6 +24263,17 @@ components:
       - operation
       - shellTerminal
       type: object
+    OpenSessionDeviceRequest:
+      properties:
+        deviceId:
+          description: Simulator UDID, emulator serial, or device name.
+          type: string
+        platform:
+          enum:
+          - ios
+          - android
+          type: string
+      type: object
     OpenShellTerminalRequest:
       properties:
         cols:
@@ -22942,6 +24349,57 @@ components:
       - contentType
       - data
       type: object
+    PRPreviewResponse:
+      properties:
+        additions:
+          type: integer
+        author:
+          type: string
+        changedFiles:
+          type: integer
+        checks:
+          enum:
+          - passing
+          - failing
+          - pending
+          type: string
+        deletions:
+          type: integer
+        number:
+          type: integer
+        repo:
+          description: owner/name
+          type: string
+        sourceBranch:
+          type: string
+        state:
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
+        stateChangedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        targetBranch:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - repo
+      - number
+      - title
+      - state
+      - additions
+      - deletions
+      - changedFiles
+      type: object
     PRReviewState:
       properties:
         latestRun:
@@ -22984,6 +24442,8 @@ components:
       type: object
     PRStackLayerResponse:
       properties:
+        behindParent:
+          type: integer
         ci:
           type: string
         headBranch:
@@ -23094,6 +24554,14 @@ components:
           type: string
       required:
       - ok
+      type: object
+    PressSessionDeviceButtonRequest:
+      properties:
+        button:
+          description: home, back or recents.
+          type: string
+      required:
+      - button
       type: object
     PreviewServerStatusResponse:
       properties:
@@ -23216,6 +24684,8 @@ components:
           type: string
         agentRulesFile:
           type: string
+        attribution:
+          $ref: '#/components/schemas/AttributionConfig'
         autoReview:
           type: boolean
         canonicalRepoURL:
@@ -23252,6 +24722,10 @@ components:
           items:
             type: string
           type: array
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
         trackerIntake:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
@@ -23651,6 +25125,30 @@ components:
       required:
       - offered
       - platform
+      type: object
+    RemoteHostUpdateResponse:
+      properties:
+        error:
+          type: string
+        method:
+          enum:
+          - service
+          - app
+          type: string
+        state:
+          enum:
+          - idle
+          - updating
+          - failed
+          type: string
+        supported:
+          type: boolean
+        version:
+          type: string
+      required:
+      - version
+      - supported
+      - state
       type: object
     RemoveProjectResult:
       properties:
@@ -24465,6 +25963,16 @@ components:
       - behind
       - conflicts
       type: object
+    SessionDeviceResponse:
+      properties:
+        lease:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/DeviceLease'
+            type: object
+      required:
+      - lease
+      type: object
     SessionHistoryResponse:
       properties:
         offset:
@@ -24896,6 +26404,29 @@ components:
       required:
       - name
       type: object
+    SessionPRMergeQueueEntry:
+      properties:
+        enqueuedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        estimatedSecondsToMerge:
+          type: integer
+        position:
+          type: integer
+        state:
+          enum:
+          - queued
+          - awaiting_checks
+          - mergeable
+          - unmergeable
+          - locked
+          type: string
+      required:
+      - state
+      - position
+      type: object
     SessionPRMergeabilitySummary:
       properties:
         conflictFiles:
@@ -25080,6 +26611,10 @@ components:
           items:
             $ref: '#/components/schemas/SessionPRLabel'
           type: array
+        mergeQueue:
+          $ref: '#/components/schemas/SessionPRMergeQueueEntry'
+        mergeQueueRequired:
+          type: boolean
         mergeability:
           $ref: '#/components/schemas/SessionPRMergeabilitySummary'
         number:
@@ -25734,6 +27269,14 @@ components:
       - autoInjectReview
       - session
       type: object
+    SetSessionDeviceQualityRequest:
+      properties:
+        quality:
+          description: high, balanced or low.
+          type: string
+      required:
+      - quality
+      type: object
     SetSessionMergePolicyRequest:
       properties:
         terminateOnPrMerge:
@@ -25826,6 +27369,11 @@ components:
           type: string
         cloudEnabled:
           type: boolean
+        commitAttribution:
+          description: 'Beta: new sessions add a Co-authored-by: orchestrator-inc[bot]
+            trailer to commits and an Generated by Orchestrator line to PR bodies,
+            unless the project turns them off.'
+          type: boolean
         computerUse:
           description: New chat sessions get tools to drive desktop apps through Cua
             Driver (Settings, Computer use agents).
@@ -25860,6 +27408,7 @@ components:
       - versionRefresh
       - computerUse
       - accountHandoff
+      - commitAttribution
       - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
@@ -26478,6 +28027,10 @@ components:
           enum:
           - artifact
           type: string
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
         trackerProvider:
           enum:
           - github
@@ -27227,6 +28780,15 @@ components:
           - string
       type: object
     UpdateChatHibernationRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    UpdateCommitAttributionRequest:
       properties:
         enabled:
           type:

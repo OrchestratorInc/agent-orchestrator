@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CornerDownRight, Plus } from "lucide-react";
+import { CornerDownRight, GitMerge, Plus } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey } from "../hooks/usePRStack";
@@ -8,7 +8,7 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
-import { canStackOn, type PRStackInfo, type PRStackLayer } from "../lib/pr-stack";
+import { canStackOn, stackLayerToRebase, stackRebaseMessage, type PRStack, type PRStackInfo, type PRStackLayer } from "../lib/pr-stack";
 import { openPRTab } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
@@ -80,7 +80,66 @@ function LayerRow({ current, hostId, layer, session }: { current: boolean; hostI
 			) : (
 				<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground"><LayerName layer={layer} /></span>
 			)}
+			{/* How far behind, in the words and mark of the branch's own "commits behind main". */}
+			{(layer.behindParent ?? 0) > 0 ? (
+				<span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" title={t("pr.stack.behindTitle", { count: layer.behindParent })}>
+					<GitMerge aria-hidden="true" className="size-3 shrink-0" />
+					{t("pr.stack.behindCount", { count: layer.behindParent })}
+					<span className="sr-only">{t("pr.stack.needsRebase")}</span>
+				</span>
+			) : null}
 		</li>
+	);
+}
+
+function rebaseRequestKey(layer: PRStackLayer, below: PRStackLayer): string {
+	return `${layer.number}:${layer.headSha ?? ""}:${below.headSha ?? ""}`;
+}
+
+/**
+ * The next layer to rebase onto the one below it. Its agent does the rebase, as
+ * the session's own "Update from base" does; a layer AO doesn't track, or a
+ * whole stack at once, rebases from GitHub's merge box instead.
+ */
+function StackRebaseRow({ hostId, stack }: { hostId?: string; stack: PRStack }) {
+	const { t } = useTranslation();
+	const next = stackLayerToRebase(stack);
+	// Asked once per layer, head, and parent head: the rebase push moves the
+	// head, and a parent that moves again needs a fresh request.
+	const [asked, setAsked] = useState<string>();
+	const ask = useMutation({
+		mutationFn: async ({ layer, below }: { layer: PRStackLayer; below: PRStackLayer }) => {
+			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
+				params: { path: { sessionId: layer.sessionId ?? "" } },
+				body: { message: stackRebaseMessage(layer, below) },
+			});
+			if (error) throw apiErrorException(error, t("pr.stack.askRebaseFailed", { number: layer.number }));
+			return rebaseRequestKey(layer, below);
+		},
+		onSuccess: (head) => setAsked(head),
+	});
+	if (!next) return null;
+	const { layer, below } = next;
+	const sent = asked === rebaseRequestKey(layer, below);
+	return (
+		<div className="flex min-w-0 flex-col gap-1 px-1.5" data-testid="pr-stack-rebase">
+			<p className="m-0 text-xs leading-normal text-muted-foreground" role="status">
+				{sent ? t("pr.stack.askedRebase", { number: layer.number }) : t("pr.stack.behind", { number: layer.number, below: below.number })}
+			</p>
+			<div className="flex flex-wrap items-center gap-2">
+				{layer.sessionId && !sent ? (
+					<Button className="-ml-2 h-6 px-2 text-xs" disabled={ask.isPending} onClick={() => ask.mutate(next)} size="sm" type="button" variant="ghost">
+						{t("pr.stack.askRebase", { number: layer.number })}
+					</Button>
+				) : null}
+				{layer.url ? (
+					<ProductExternalLink className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" href={layer.url}>
+						{t("pr.stack.rebaseOnGitHub")}
+					</ProductExternalLink>
+				) : null}
+			</div>
+			{ask.error instanceof Error ? <p className="m-0 text-xs leading-normal text-error" role="alert">{ask.error.message}</p> : null}
+		</div>
 	);
 }
 
@@ -189,6 +248,7 @@ export function PRStackSection({ hostId, pr, section, session }: {
 					</li>
 				</ol>
 			) : null}
+			{stack ? <StackRebaseRow hostId={hostId} key={stack.number} stack={stack} /> : null}
 			{info.parent ? (
 				<div className={cn(rowClass, "justify-between")}>
 					<ProductExternalLink className="min-w-0 truncate text-muted-foreground underline-offset-2 hover:underline" href={info.parent.url}>
