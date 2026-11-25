@@ -53,7 +53,7 @@ func Unbundle(ctx context.Context, worktree, bundle, ref string) error {
 	if _, err := run(ctx, worktree, nil, "bundle", "verify", "--quiet", bundle); err != nil {
 		return fmt.Errorf("forkseed: verify bundle: %w", err)
 	}
-	if _, err := run(ctx, worktree, nil, "fetch", "--quiet", "--no-write-fetch-head", bundle, ref+":"+ref); err != nil {
+	if _, err := run(ctx, worktree, nil, "fetch", "--quiet", "--no-write-fetch-head", "--no-prune", bundle, ref+":"+ref); err != nil {
 		return fmt.Errorf("forkseed: fetch bundle: %w", err)
 	}
 	return nil
