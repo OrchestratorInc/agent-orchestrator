@@ -238,7 +238,8 @@ describe("Cloud harness tab", () => {
 		cloud.value = cloudHarnessVersions({ editable: true, agents: [] });
 		providerConnections.value = [];
 		deleteGitHubPAT.mockClear();
-		listUserAgentModels.mockClear();
+		listUserAgentModels.mockReset();
+		listUserAgentModels.mockResolvedValue({ models: [] });
 		layout.wide = false;
 	});
 	afterEach(() => cleanup());
@@ -334,6 +335,8 @@ describe("Cloud harness tab", () => {
 	});
 
 	it("asks to log in before listing a harness's Cloud models", async () => {
+		// Cloud answers any account with its release list; it must not stand in for a login.
+		listUserAgentModels.mockResolvedValue({ source: "release", models: [{ id: "opus", displayName: "Opus", default: true }] });
 		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
@@ -341,6 +344,8 @@ describe("Cloud harness tab", () => {
 		const page = await openHarness("claude-code");
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
 		expect(await within(page).findByText("Log in to Claude Code to load its models.")).toBeInTheDocument();
+		expect(within(page).queryByRole("list", { name: "Available models" })).toBeNull();
+		expect(listUserAgentModels).not.toHaveBeenCalled();
 		await userEvent.click(within(page).getByRole("button", { name: "Account" }));
 		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("data-state", "active");
 		expect(within(page).getByRole("button", { name: "Login" })).toBeInTheDocument();

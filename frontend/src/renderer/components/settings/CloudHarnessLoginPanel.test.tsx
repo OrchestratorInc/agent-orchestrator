@@ -56,12 +56,12 @@ function pendingLogin() {
 
 function renderPanel(agent: CloudHarness = "claude-code", account?: CloudHarnessLoginAccount) {
 	const onClose = vi.fn();
-	render(
+	const view = render(
 		<QueryClientProvider client={new QueryClient()}>
 			<CloudHarnessLoginPanel agent={agent} account={account} onClose={onClose} />
 		</QueryClientProvider>,
 	);
-	return { onClose };
+	return { onClose, unmount: view.unmount };
 }
 
 describe("CloudHarnessLoginPanel", () => {
@@ -111,6 +111,27 @@ describe("CloudHarnessLoginPanel", () => {
 		expect(await screen.findByRole("button", { name: "Log in with Anthropic" })).toBeEnabled();
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("abandons a waiting browser login when the panel leaves the page, and closes nothing later", async () => {
+		let resolve: () => void = () => {};
+		bridgeMocks.connectProviderAuth.mockImplementation(() => new Promise<void>((res) => { resolve = res; }));
+		const user = userEvent.setup();
+		const { onClose, unmount } = renderPanel();
+		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
+
+		unmount();
+		expect(bridgeMocks.cancelProviderAuth).toHaveBeenCalledTimes(1);
+		// Should the login still finish, the panel that left closes nothing.
+		resolve();
+		await new Promise((done) => setTimeout(done, 0));
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("leaves nothing to cancel when the panel leaves before any browser login", () => {
+		const { unmount } = renderPanel();
+		unmount();
+		expect(bridgeMocks.cancelProviderAuth).not.toHaveBeenCalled();
 	});
 
 	it("still shows a real login failure", async () => {

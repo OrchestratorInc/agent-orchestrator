@@ -19,13 +19,14 @@ export function CloudHarnessModelsPanel({ agentId, orgId, connected, onOpenAccou
 	onOpenAccount: () => void;
 }) {
 	const { t } = useTranslation();
-	const { catalog, gap, loading } = useCloudModelCatalog({ orgId, agent: agentId, enabled: true });
+	const { catalog, gap, loading } = useCloudModelCatalog({ orgId, agent: agentId, enabled: connected });
 	const [page, setPage] = useState(0);
 	const [modelSearch, setModelSearch] = useState("");
 	useEffect(() => { setPage(0); setModelSearch(""); }, [agentId]);
 	const agent = agentLabel(agentId);
 	const allModels = catalog ? cloudCatalogAsAgentCatalog(agentId, catalog).models : [];
-	if (!connected && !allModels.length) {
+	// Cloud lists its release models for any account, so the list waits for a login.
+	if (!connected) {
 		return <div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
 			<p className="text-sm text-settings-muted">{t("settings.harness.models.needsLogin", { agent })}</p>
 			<Button type="button" size="sm" variant="secondary" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>

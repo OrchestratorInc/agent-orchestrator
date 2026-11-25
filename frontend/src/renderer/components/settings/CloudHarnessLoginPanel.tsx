@@ -117,10 +117,22 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 		panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 	}, []);
 
+	// Whether a browser login is waiting, and whether the panel has left the page,
+	// read by the unmount cleanup and by a login that ends after it.
+	const browserPendingRef = useRef(false);
+	const unmountedRef = useRef(false);
+
 	const cancelBrowserLogin = () => {
 		loginCancelledRef.current = true;
 		void aoBridge.cloud.cancelProviderAuth();
 	};
+
+	// Leaving the page (another tab, harness or search) abandons a waiting
+	// browser login too, as Cancel does.
+	useEffect(() => () => {
+		unmountedRef.current = true;
+		if (browserPendingRef.current) cancelBrowserLogin();
+	}, []);
 
 	// Closing mid-login abandons the login rather than leaving the agent CLI
 	// waiting in the background.
@@ -130,12 +142,13 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	};
 
 	// On success the panel closes; the row's status line shows the connection.
+	// A panel that already left closes nothing, so a newer panel stays open.
 	const finish = async () => {
 		await Promise.all([
 			queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
 			queryClient.invalidateQueries({ queryKey: cloudAgentAccountsQueryKey }),
 		]);
-		onClose();
+		if (!unmountedRef.current) onClose();
 	};
 
 	const submit = async () => {
@@ -166,6 +179,7 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 		if (busy) return;
 		setBusy(true);
 		setBrowserPending(true);
+		browserPendingRef.current = true;
 		setOpenMethod(null);
 		setError(null);
 		loginCancelledRef.current = false;
@@ -187,6 +201,7 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 		} finally {
 			setBusy(false);
 			setBrowserPending(false);
+			browserPendingRef.current = false;
 		}
 	};
 
