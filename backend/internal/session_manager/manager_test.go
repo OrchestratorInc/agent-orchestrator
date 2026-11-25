@@ -47,6 +47,24 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 	}
 }
 
+func TestSeedRecordAutoInjectFollowsProjectDefaults(t *testing.T) {
+	now := time.Date(2026, time.November, 25, 9, 0, 0, 0, time.UTC)
+	cfg := ports.SpawnConfig{ProjectID: "app", Kind: domain.KindWorker}
+	rec := seedRecord(cfg, domain.ProjectConfig{}, now)
+	if !rec.AutoInjectCI || !rec.AutoInjectReview {
+		t.Fatalf("unset project defaults: autoInjectCI=%v autoInjectReview=%v, want both on", rec.AutoInjectCI, rec.AutoInjectReview)
+	}
+	off, on := false, true
+	rec = seedRecord(cfg, domain.ProjectConfig{AutoInjectCI: &off, AutoInjectReview: &on}, now)
+	if rec.AutoInjectCI || !rec.AutoInjectReview {
+		t.Fatalf("project defaults: autoInjectCI=%v autoInjectReview=%v, want off and on", rec.AutoInjectCI, rec.AutoInjectReview)
+	}
+	rec = seedRecord(cfg, domain.ProjectConfig{AutoInjectReview: &off}, now)
+	if !rec.AutoInjectCI || rec.AutoInjectReview {
+		t.Fatalf("project defaults: autoInjectCI=%v autoInjectReview=%v, want on and off", rec.AutoInjectCI, rec.AutoInjectReview)
+	}
+}
+
 type fakeStore struct {
 	cleanupMu                          sync.Mutex
 	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord

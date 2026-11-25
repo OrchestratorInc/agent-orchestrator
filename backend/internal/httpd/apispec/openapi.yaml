@@ -23241,6 +23241,14 @@ components:
           type: string
         agentRulesFile:
           type: string
+        autoInjectCI:
+          type:
+          - "null"
+          - boolean
+        autoInjectReview:
+          type:
+          - "null"
+          - boolean
         autoReview:
           type: boolean
         canonicalRepoURL:

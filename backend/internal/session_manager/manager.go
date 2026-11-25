@@ -6726,9 +6726,17 @@ func seedRecordWithDefault(cfg ports.SpawnConfig, projectConfig domain.ProjectCo
 		OutputType:         domain.SessionOutputNone,
 		TerminateOnPRMerge: resolveTerminateOnPRMerge(cfg, projectConfig, defaultPolicy),
 		AutoReviewEnabled:  projectConfig.AutoReview,
-		AutoInjectReview:   true,
-		AutoInjectCI:       true,
+		AutoInjectReview:   boolOrDefault(projectConfig.AutoInjectReview, true),
+		AutoInjectCI:       boolOrDefault(projectConfig.AutoInjectCI, true),
 	}
+}
+
+// boolOrDefault reads an optional project setting, falling back when unset.
+func boolOrDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {

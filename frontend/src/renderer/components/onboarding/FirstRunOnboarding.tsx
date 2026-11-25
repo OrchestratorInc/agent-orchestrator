@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Archive, ArrowLeft, ChevronDown, ChevronUp, CircleDot, Cloud, Eye, Info, LoaderCircle, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
+import { Archive, ArrowLeft, ChevronDown, ChevronUp, CircleDot, Cloud, Code2, Eye, ListChecks, LoaderCircle, MessageSquare, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
+import { OrchestratorIcon } from "../icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -36,7 +37,7 @@ import {
 } from "../../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
-import { DEFAULT_AGENT_PRIORITY_RANK, defaultProjectAgents } from "../../lib/agent-select-options";
+import { DEFAULT_AGENT_PRIORITY_RANK, defaultProjectAgents, preferredAgentList } from "../../lib/agent-select-options";
 import { toReviewerHarnessId } from "../../lib/reviewer-harnesses";
 import { INITIAL_PROJECT_DEFAULTS, readProjectDefaults, saveProjectDefaults, type ProjectDefaults } from "../../lib/project-defaults";
 import { useSettings } from "../../hooks/useSettings";
@@ -85,14 +86,16 @@ import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, Ins
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
-// Four pages: what Orchestrator is (with its three-part story playing in the
+// Five pages: what Orchestrator is (with its three-part story playing in the
 // preview), the optional account, the tools a worker needs (GitHub CLI and a
-// coding agent), and how agents finish their work (review, archive on merge,
+// coding agent), the agents new projects run their orchestrator and workers
+// on, and how agents finish their work (review, auto-fix, archive on merge,
 // assigned issues). Log in and Your tools are skipped when there is nothing to
-// do on them. Then the real app takes over with Add Project open: no tour, the
+// do on them; the agents page always shows once an agent is ready, since which
+// one runs what is a choice even on a set-up machine. Then the real app takes over with Add Project open: no tour, the
 // app has to make the first project and task obvious on its own
 // (FirstTaskFunnel only measures whether it does).
-const STEPS = ["welcome", "signin", "tools", "defaults"] as const;
+const STEPS = ["welcome", "signin", "tools", "agents", "defaults"] as const;
 type Step = (typeof STEPS)[number];
 // Where a step stored by the earlier seven-page flow resumes.
 const LEGACY_STEPS: Record<string, Step> = {
@@ -103,7 +106,7 @@ const LEGACY_STEPS: Record<string, Step> = {
 	project: "tools",
 };
 /** Each page's step in the onboarding funnel (onboarding-steps.ts). */
-const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools", defaults: "work_defaults" };
+const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools", agents: "default_agents", defaults: "work_defaults" };
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
 /** Longest the Tools page's view waits for its checks before reporting what it knows. */
@@ -304,6 +307,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	const skips = (candidate: Step) =>
 		candidate === "signin" ? cloud.status === "authenticated"
 		: candidate === "tools" ? ghReady && agentReady
+		// Nothing to pick from until an agent is ready.
+		: candidate === "agents" ? !agentReady
 		: false;
 	// Past the last page with something to do, setup is over: the app takes
 	// over with Add Project open. `skipped`: the person moved on without doing
@@ -361,6 +366,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		const timer = window.setTimeout(() => setToolsWaitOver(true), TOOLS_VIEW_WAIT_MS);
 		return () => window.clearTimeout(timer);
 	}, [step, toolsWaitOver]);
+	useOnboardingStep("default_agents", step === "agents", { autoComplete: false });
 	useOnboardingStep("work_defaults", step === "defaults", { autoComplete: false });
 	useOnboardingStep("tools", step === "tools", {
 		autoComplete: false,
@@ -413,13 +419,27 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	function pageCompletion(): Record<string, unknown> {
 		if (step === "welcome") return { story_points_seen: cycle > 0 ? STORY_POINTS : point + 1, story_completed: cycle > 0 };
 		if (step === "tools") return { agents_ready: readyAgentCount, gh_ready: ghReady };
+		const chosen = readProjectDefaults();
+		if (step === "agents") return chosen ? { orchestrator_agent: chosen.orchestratorAgent, worker_agent: chosen.workerAgent } : {};
 		if (step === "defaults") {
-			const chosen = readProjectDefaults();
-			return chosen ? { archive_on_merge: chosen.archiveOnMerge, auto_review: chosen.review, assigned_issues: chosen.assignedIssues } : {};
+			return chosen ? {
+				archive_on_merge: chosen.archiveOnMerge,
+				auto_review: chosen.review,
+				assigned_issues: chosen.assignedIssues,
+				fix_checks: chosen.fixChecks,
+				fix_review_comments: chosen.fixReviewComments,
+			} : {};
 		}
 		return {};
 	}
 	const toolAgents = useToolAgents();
+	// On the agents page the drawing's composer shows the orchestrator agent
+	// being picked.
+	const [orchestratorPick, setOrchestratorPick] = useState<{ id: string; label: string }>();
+	const showPick = step === "agents" && orchestratorPick;
+	const pickerAgents = showPick && !toolAgents.pickerAgents.some((agent) => agent.id === orchestratorPick.id)
+		? [orchestratorPick, ...toolAgents.pickerAgents]
+		: toolAgents.pickerAgents;
 	const scene = (
 		<OnboardingScene
 			step={step}
@@ -427,8 +447,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 			cycle={cycle}
 			finishCycle={finishCycle}
 			sortBeat={sortBeat}
-			pickerAgents={toolAgents.pickerAgents}
-			selectedAgentId={toolAgents.selectedId}
+			pickerAgents={pickerAgents}
+			selectedAgentId={showPick ? orchestratorPick.id : toolAgents.selectedId}
 			phoneShown={step === "signin"}
 			phoneDelay={0}
 			githubShown={githubShown}
@@ -480,6 +500,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 									login={harnessLogin}
 								/>
 							) : null}
+							{step === "agents" ? <DefaultAgentsStep onNext={() => goNext()} onOrchestratorPick={setOrchestratorPick} /> : null}
 							{step === "defaults" ? <WorkDefaultsStep onNext={() => goNext()} /> : null}
 						</motion.div>
 					</AnimatePresence>
@@ -811,7 +832,8 @@ function OnboardingScene({
 	const project = t("firstRun.projectPlaceholder");
 	const welcome = step === "welcome";
 	const stage: WorkStage = welcome ? (point === 0 ? "none" : point === 1 ? "working" : "sorted") : "sorted";
-	const page: ScenePage = welcome && point === 0 ? "chat" : step === "tools" ? "new" : "board";
+	const picking = step === "tools" || step === "agents";
+	const page: ScenePage = welcome && point === 0 ? "chat" : picking ? "new" : "board";
 	const finishing = step === "defaults";
 	const cards = exampleCards(tasks, stage, welcome || finishing ? sortBeat : undefined);
 	// While the chat leads a new loop, the board (fading out behind it) keeps
@@ -837,7 +859,7 @@ function OnboardingScene({
 			phoneShown={phoneShown}
 			phoneDelay={phoneDelay}
 			githubShown={githubShown}
-			focus={welcome ? STORY_FOCUS[point]! : step === "tools" ? "new" : step === "signin" ? "devices" : finishing ? "ci" : "overview"}
+			focus={welcome ? STORY_FOCUS[point]! : picking ? "new" : step === "signin" ? "devices" : finishing ? "ci" : "overview"}
 		/>
 	);
 }
@@ -932,6 +954,14 @@ function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
 	const account = cloud.status === "authenticated" ? cloud.session : null;
 	const accountName = account ? (account.user.displayName?.trim() || account.user.email) : "";
 	const browserWaiting = waiting && !localAuth.available;
+	// Signed in (the browser came back, or the email dialog closed signed in):
+	// nothing is left to do here, so the page moves on by itself. Only once.
+	const advanced = useRef(false);
+	useEffect(() => {
+		if (!account || advanced.current) return;
+		advanced.current = true;
+		onNext();
+	}, [account, onNext]);
 	const signIn = () => {
 		// cloud_signed_in reads where the sign-in started (source: onboarding).
 		noteSignInSource("onboarding");
@@ -1389,96 +1419,153 @@ function ToolsStep({ onNext, onSkip, login }: {
 	);
 }
 
-// ── 3. How agents finish their work ─────────────────────────────────────────
+// ── 4. The agents new projects start on ─────────────────────────────────────
+
+/** Ready agents, ranked as a new project would pick them (best first). */
+function useReadyAgents() {
+	const readiness = useAgentReadinessQuery();
+	const agents = readiness.data?.agents ?? [];
+	const ready = agents.filter((agent) => agent.effectiveReadiness === "ready");
+	const ranked = preferredAgentList(ready);
+	return { agents, ranked, ranking: defaultProjectAgents(ready), labelFor: (id: string) => agents.find((agent) => agent.id === id)?.label ?? id };
+}
+
+/** An agent picker for a row's trailing slot: the Add Project sheet's agent
+ * rows, opening below the trigger with a capped height. */
+function AgentPicker({ value, options, labelFor, labelledBy, onChange }: {
+	value: string;
+	options: readonly string[];
+	labelFor: (id: string) => string;
+	labelledBy: string;
+	onChange: (id: string) => void;
+}) {
+	return (
+		<Select value={value} onValueChange={onChange}>
+			<SelectTrigger size="sm" aria-labelledby={labelledBy} className="min-w-40">
+				{/* Only the avatar and name: Radix would otherwise copy the whole
+				    menu row, checkmark included, into the trigger. */}
+				<SelectValue>
+					<span className="flex min-w-0 items-center gap-2">
+						<AgentAvatar provider={value} className="size-icon-base" decorative />
+						<span className="min-w-0 truncate">{labelFor(value)}</span>
+					</span>
+				</SelectValue>
+			</SelectTrigger>
+			<SelectContent position="popper" side="bottom" align="end" sideOffset={4} showScrollButtons={false} className="max-h-select-menu-max! min-w-56">
+				{options.map((id) => (
+					<SelectItem key={id} value={id} className="[&>span:last-child]:w-full">
+						<AgentSelectMenuItem agentId={id} label={labelFor(id)} selected={id === value} />
+					</SelectItem>
+				))}
+			</SelectContent>
+		</Select>
+	);
+}
 
 /**
- * Defaults every project added from here starts with (project-defaults.ts):
- * archive a chat once its PR merges, a second agent reviews each PR, and
+ * Which agent runs each project's orchestrator and its workers. Starts on the
+ * agents a new project would pick anyway (project-defaults.ts applies the
+ * choice where projects pick their agents); each project's settings can
+ * change it later.
+ */
+function DefaultAgentsStep({ onNext, onOrchestratorPick }: { onNext: () => void; onOrchestratorPick: (agent: { id: string; label: string }) => void }) {
+	const { t } = useTranslation();
+	const { ranked, ranking, labelFor } = useReadyAgents();
+	const saved = readProjectDefaults();
+	const initial = (chosen: string | undefined, fallback: string) =>
+		chosen && ranked.includes(chosen) ? chosen : ranked.includes(fallback) ? fallback : ranked[0];
+	const [picked, setPicked] = useState<{ orchestrator?: string; worker?: string }>({});
+	const orchestrator = picked.orchestrator ?? initial(saved?.orchestratorAgent, ranking.orchestratorAgent);
+	const worker = picked.worker ?? initial(saved?.workerAgent, ranking.workerAgent);
+	useEffect(() => {
+		if (orchestrator) onOrchestratorPick({ id: orchestrator, label: labelFor(orchestrator) });
+		// labelFor is fresh each render; the pick is what changes.
+	}, [orchestrator]);
+	const finish = () => {
+		saveProjectDefaults({ orchestratorAgent: orchestrator, workerAgent: worker });
+		onNext();
+	};
+	return (
+		<StepSplit title={t("firstRun.agentsTitle")} body={t("firstRun.agentsBody")}>
+			<ul className={ROW_LIST}>
+				<CheckRow
+					icon={<OrchestratorIcon className="size-icon-md text-muted-foreground" />}
+					label={<span id="onboarding-orchestrator-agent">{t("firstRun.agentsOrchestrator")}</span>}
+					detail={t("firstRun.agentsOrchestratorDetail")}
+					wrap
+					trailing={orchestrator ? (
+						<AgentPicker value={orchestrator} options={ranked} labelFor={labelFor} labelledBy="onboarding-orchestrator-agent" onChange={(id) => setPicked((current) => ({ ...current, orchestrator: id }))} />
+					) : null}
+				/>
+				<CheckRow
+					icon={<Code2 className="size-icon-md text-muted-foreground" />}
+					label={<span id="onboarding-worker-agent">{t("firstRun.agentsWorkers")}</span>}
+					detail={t("firstRun.agentsWorkersDetail")}
+					wrap
+					trailing={worker ? (
+						<AgentPicker value={worker} options={ranked} labelFor={labelFor} labelledBy="onboarding-worker-agent" onChange={(id) => setPicked((current) => ({ ...current, worker: id }))} />
+					) : null}
+				/>
+			</ul>
+			<StepAction>
+				<NextButton onClick={finish}>{t("firstRun.continue")}</NextButton>
+			</StepAction>
+		</StepSplit>
+	);
+}
+
+// ── 5. How agents finish their work ─────────────────────────────────────────
+
+/**
+ * Defaults every project added from here starts with (project-defaults.ts): a
+ * second agent reviews each PR, agents fix failing checks and merge conflicts
+ * and review comments on their own, a chat is archived once its PR merges, and
  * agents pick up issues assigned to you. The preview plays the PRs' trips
  * through CI and review meanwhile.
  */
 function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
 	const { t } = useTranslation();
-	const readiness = useAgentReadinessQuery();
 	const { settings } = useSettings();
 	const intakeAvailable = settings?.trackerIntakeEnabled === true;
 	const [choices, setChoices] = useState<ProjectDefaults>(() => readProjectDefaults() ?? INITIAL_PROJECT_DEFAULTS);
 	const change = (patch: Partial<ProjectDefaults>) => setChoices((current) => ({ ...current, ...patch }));
 	// Reviewers: only ready agents that can review (not every worker agent
-	// can), the usual pick first when it is one of them (its fallback can be
-	// an agent that isn't ready).
-	const agents = readiness.data?.agents ?? [];
-	const readyIds = agents
-		.filter((agent) => agent.effectiveReadiness === "ready" && toReviewerHarnessId(agent.id) !== undefined)
-		.map((agent) => agent.id);
-	const suggested = readyIds.length ? defaultProjectAgents(agents).reviewerAgent : undefined;
-	const reviewerIds = suggested && readyIds.includes(suggested) ? [suggested, ...readyIds.filter((id) => id !== suggested)] : readyIds;
-	const reviewer = choices.reviewerAgent && reviewerIds.includes(choices.reviewerAgent) ? choices.reviewerAgent : reviewerIds[0];
-	const labelFor = (id: string) => agents.find((agent) => agent.id === id)?.label ?? id;
+	// can), the usual pick first when it is one of them.
+	const { ranked, ranking, labelFor } = useReadyAgents();
+	const reviewerIds = ranked.filter((id) => toReviewerHarnessId(id) !== undefined);
+	const suggested = reviewerIds.includes(ranking.reviewerAgent) ? ranking.reviewerAgent : reviewerIds[0];
+	const reviewer = choices.reviewerAgent && reviewerIds.includes(choices.reviewerAgent) ? choices.reviewerAgent : suggested;
 	const finish = () => {
 		saveProjectDefaults({ ...choices, reviewerAgent: choices.review ? reviewer : undefined, assignedIssues: intakeAvailable && choices.assignedIssues });
 		onNext();
 	};
-	const toggle = (id: string, checked: boolean, onChange: (checked: boolean) => void) => (
-		<Switch id={id} checked={checked} onCheckedChange={onChange} />
+	const row = (id: string, key: "archiveOnMerge" | "review" | "fixChecks" | "fixReviewComments" | "assignedIssues", icon: ReactNode, label: string, detail: string, below?: ReactNode) => (
+		<CheckRow
+			key={id}
+			icon={icon}
+			label={<label htmlFor={id}>{label}</label>}
+			detail={detail}
+			wrap
+			trailing={<Switch id={id} checked={choices[key]} onCheckedChange={(checked) => change({ [key]: checked })} />}
+			below={below}
+		/>
 	);
+	const iconClass = "size-icon-md text-muted-foreground";
 	return (
 		<StepSplit title={t("firstRun.defaultsTitle")} body={t("firstRun.defaultsBody")}>
 			<ul className={ROW_LIST}>
-				<CheckRow
-					icon={<Archive className="size-icon-md text-muted-foreground" />}
-					label={<label htmlFor="onboarding-archive-on-merge">{t("firstRun.defaultsArchive")}</label>}
-					detail={t("firstRun.defaultsArchiveDetail")}
-					wrap
-					trailing={toggle("onboarding-archive-on-merge", choices.archiveOnMerge, (archiveOnMerge) => change({ archiveOnMerge }))}
-				/>
-				<CheckRow
-					icon={<Eye className="size-icon-md text-muted-foreground" />}
-					label={<label htmlFor="onboarding-review">{t("firstRun.defaultsReview")}</label>}
-					detail={t("firstRun.defaultsReviewDetail")}
-					wrap
-					trailing={toggle("onboarding-review", choices.review, (review) => change({ review }))}
-					below={choices.review && reviewer ? (
+				{row("onboarding-review", "review", <Eye className={iconClass} />, t("firstRun.defaultsReview"), t("firstRun.defaultsReviewDetail"),
+					choices.review && reviewer ? (
 						<div className="flex items-center justify-between gap-3">
 							<span id="onboarding-reviewer" className="text-xs text-muted-foreground">{t("firstRun.defaultsReviewer")}</span>
-							<Select value={reviewer} onValueChange={(reviewerAgent) => change({ reviewerAgent })}>
-								<SelectTrigger size="sm" aria-labelledby="onboarding-reviewer" className="min-w-40">
-									{/* Only the avatar and name: Radix would otherwise copy the
-									    whole menu row, checkmark included, into the trigger. */}
-									<SelectValue>
-										<span className="flex min-w-0 items-center gap-2">
-											<AgentAvatar provider={reviewer} className="size-icon-base" decorative />
-											<span className="min-w-0 truncate">{labelFor(reviewer)}</span>
-										</span>
-									</SelectValue>
-								</SelectTrigger>
-								{/* The Add Project sheet's agent menu: below the trigger, one row
-								    per agent, scrolling within its own height. */}
-								<SelectContent position="popper" side="bottom" align="end" sideOffset={4} showScrollButtons={false} className="max-h-select-menu-max! min-w-56">
-									{reviewerIds.map((id) => (
-										<SelectItem key={id} value={id} className="[&>span:last-child]:w-full">
-											<AgentSelectMenuItem agentId={id} label={labelFor(id)} selected={id === reviewer} />
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
+							<AgentPicker value={reviewer} options={reviewerIds} labelFor={labelFor} labelledBy="onboarding-reviewer" onChange={(reviewerAgent) => change({ reviewerAgent })} />
 						</div>
-					) : undefined}
-				/>
-				{intakeAvailable ? (
-					<CheckRow
-						icon={<CircleDot className="size-icon-md text-muted-foreground" />}
-						label={<label htmlFor="onboarding-assigned-issues">{t("firstRun.defaultsIssues")}</label>}
-						detail={t("firstRun.defaultsIssuesDetail")}
-						wrap
-						trailing={toggle("onboarding-assigned-issues", choices.assignedIssues, (assignedIssues) => change({ assignedIssues }))}
-					/>
-				) : null}
+					) : undefined)}
+				{row("onboarding-fix-checks", "fixChecks", <ListChecks className={iconClass} />, t("firstRun.defaultsFixChecks"), t("firstRun.defaultsFixChecksDetail"))}
+				{row("onboarding-fix-comments", "fixReviewComments", <MessageSquare className={iconClass} />, t("firstRun.defaultsFixComments"), t("firstRun.defaultsFixCommentsDetail"))}
+				{row("onboarding-archive-on-merge", "archiveOnMerge", <Archive className={iconClass} />, t("firstRun.defaultsArchive"), t("firstRun.defaultsArchiveDetail"))}
+				{intakeAvailable ? row("onboarding-assigned-issues", "assignedIssues", <CircleDot className={iconClass} />, t("firstRun.defaultsIssues"), t("firstRun.defaultsIssuesDetail")) : null}
 			</ul>
-			<p className="flex gap-2 px-1 text-xs leading-relaxed text-muted-foreground">
-				<Info className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
-				{t("firstRun.defaultsNote")}
-			</p>
 			<StepAction>
 				<NextButton onClick={finish}>{t("firstRun.continue")}</NextButton>
 			</StepAction>

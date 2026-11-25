@@ -161,8 +161,12 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 			set(safe, "project_source", oneOf(p?.project_source, ONBOARDING_PROJECT_SOURCES));
 			set(safe, "agents_ready", boundedInt(p?.agents_ready, 0, 100));
 			if (typeof p?.gh_ready === "boolean") safe.gh_ready = p.gh_ready;
-			for (const key of ["archive_on_merge", "auto_review", "assigned_issues"] as const) {
+			for (const key of ["archive_on_merge", "auto_review", "assigned_issues", "fix_checks", "fix_review_comments"] as const) {
 				if (typeof p?.[key] === "boolean") safe[key] = p[key];
+			}
+			// The agents picked on default_agents: registry ids, nothing else.
+			for (const key of ["orchestrator_agent", "worker_agent"] as const) {
+				if (typeof p?.[key] === "string" && TARGET_PATTERN.test(p[key])) safe[key] = p[key];
 			}
 			break;
 		case "ao.onboarding.step_abandoned":

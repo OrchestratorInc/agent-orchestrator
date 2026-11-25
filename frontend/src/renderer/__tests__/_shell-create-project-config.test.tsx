@@ -32,25 +32,29 @@ describe("createProjectConfig", () => {
 		expect(
 			createProjectConfig(
 				{ workerAgent: "codex", orchestratorAgent: "claude-code" },
-				{ archiveOnMerge: true, review: true, reviewerAgent: "claude-code", assignedIssues: false },
+				{ archiveOnMerge: true, review: true, reviewerAgent: "claude-code", assignedIssues: false, fixChecks: true, fixReviewComments: true },
 			),
 		).toEqual({
 			worker: { agent: "codex" },
 			orchestrator: { agent: "claude-code" },
 			terminateOnPrMerge: true,
+			autoInjectCI: true,
+			autoInjectReview: true,
 			autoReview: true,
 			reviewers: [{ harness: "claude-code" }],
 		});
 		expect(
 			createProjectConfig(
 				{ workerAgent: "codex", orchestratorAgent: "claude-code", reviewerAgent: "opencode" },
-				{ archiveOnMerge: false, review: false, assignedIssues: false },
+				{ archiveOnMerge: false, review: false, assignedIssues: false, fixChecks: false, fixReviewComments: false },
 			),
 		).toEqual({
 			worker: { agent: "codex" },
 			orchestrator: { agent: "claude-code" },
 			reviewers: [{ harness: "opencode" }],
 			terminateOnPrMerge: false,
+			autoInjectCI: false,
+			autoInjectReview: false,
 		});
 	});
 });

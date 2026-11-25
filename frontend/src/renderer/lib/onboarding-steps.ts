@@ -14,8 +14,10 @@
  *   project, its orchestrator chat and the first message (FirstTaskFunnel;
  *   named for the guided tour that used to walk through them)
  * - finish: the guided tour's closing note (not sent since the tour was removed)
- * - work_defaults: how agents finish their work, the page after Your tools
+ * - work_defaults: how agents finish their work, the last page
  *   (appended, so its index comes after the steps that follow it in the flow)
+ * - default_agents: the orchestrator and worker agents new projects start on,
+ *   the page between Your tools and work_defaults (appended likewise)
  */
 export const ONBOARDING_STEPS = [
 	"dependencies",
@@ -29,6 +31,7 @@ export const ONBOARDING_STEPS = [
 	"first_task",
 	"finish",
 	"work_defaults",
+	"default_agents",
 ] as const;
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
