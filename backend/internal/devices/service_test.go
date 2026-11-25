@@ -1838,3 +1838,65 @@ func TestAListingFromBeforeABootDropsNothing(t *testing.T) {
 		t.Fatal("a current listing showing A off kept it parked")
 	}
 }
+
+// listDuring returns a listing taken before running during, so whatever
+// during changes reads as stale.
+type listDuring struct {
+	*fakeProvider
+	during func()
+}
+
+func (f listDuring) ListPlatform(ctx context.Context, platform ports.DevicePlatform) ([]ports.DeviceInfo, error) {
+	all, _ := f.List(ctx)
+	var out []ports.DeviceInfo
+	for _, d := range all {
+		if d.Platform == platform {
+			out = append(out, d)
+		}
+	}
+	if f.during != nil {
+		f.during()
+	}
+	return out, nil
+}
+
+// A boot of the parked device while retirement lists devices cannot be
+// undone by that stale "off": the new holder's records survive the pass.
+func TestABootDuringRetirementKeepsTheNewRecords(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	var svc *Service
+	provider := listDuring{fakeProvider: p, during: func() {
+		openBooted(t, svc, p, "s-2", "A")
+		if err := svc.Close(ctx, "s-2", false); err != nil {
+			t.Error(err)
+		}
+	}}
+	svc = newAvailable(Config{DataDir: t.TempDir(), Provider: provider, Sessions: sessions.lookup})
+	if _, err := svc.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		return svc.state == SetupReady
+	})
+	openBooted(t, svc, p, "s-1", "A")
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	sessions.end("s-1")
+	p.setBooted("A", false) // shut down outside AO: the listing reads it off
+	svc.retireParked(ctx)
+	svc.mu.Lock()
+	cur, parked := svc.parked["ios:A"]
+	owned := svc.owned["ios:A"]
+	svc.mu.Unlock()
+	if !parked || cur.session != "s-2" || !owned {
+		t.Fatalf("parked=%v (by %s) owned=%v, want A owned and parked by s-2", parked, cur.session, owned)
+	}
+	if got := p.shutdownList(); len(got) != 0 {
+		t.Fatalf("shutdowns = %v, want none: s-2 is still running", got)
+	}
+}
