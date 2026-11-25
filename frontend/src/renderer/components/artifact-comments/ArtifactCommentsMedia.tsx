@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import {
 	artifactCommentAnchorKey,
@@ -58,14 +57,13 @@ export function artifactCommentTimelinePoints(groups: readonly ArtifactCommentGr
  * A published image or video in the app's comment workspace. The app draws
  * the file itself, so an overlay on the drawn picture picks: a click is a
  * point, a drag a rectangle, as fractions of the picture. Open groups show as
- * numbered pins or outlined rectangles; a click opens the group. An image is
- * always picking. A video is one player: its control bar has play and pause,
- * the time, a seek bar with a point per comment moment, and Annotate. With
- * Annotate off a click on the frame plays or pauses; with it on, the frame
- * picks (and "Comment at 01:23" comments on the moment alone). Picking pauses
- * the video, and selecting a group seeks to its time and pauses.
+ * numbered pins or outlined rectangles; a click opens the group. On an image
+ * a click is a point and a drag a box. A video is one player: its control bar
+ * has play and pause, the time and a seek bar with a point per comment
+ * moment; on the frame a drag draws a box (pausing there) and a click plays
+ * or pauses. Selecting a group seeks to its time and pauses.
  */
-export function ArtifactCommentsMedia({ annotate = true, kind, onAnnotateChange, onPick, onSelect, onSelection, onShown, picked, selected, src, threads, title }: {
+export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onShown, picked, selected, src, threads, title }: {
 	kind: "image" | "video";
 	src: string;
 	title: string;
@@ -79,9 +77,6 @@ export function ArtifactCommentsMedia({ annotate = true, kind, onAnnotateChange,
 	/** The selected pin, rectangle or dot's top and bottom inside this view, for the popover; null when none. */
 	onSelection: (rect: CommentsSelectionRect | null) => void;
 	onShown?: () => void;
-	/** A video: whether a click or drag on the frame picks (Annotate). An image always picks. */
-	annotate?: boolean;
-	onAnnotateChange?: (on: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -170,7 +165,6 @@ export function ArtifactCommentsMedia({ annotate = true, kind, onAnnotateChange,
 	});
 	const pickedHere = picked && artifactCommentAnchorKind(picked) === kind ? picked : null;
 	const draftRegion = drag ? artifactCommentRegionFromDrag(drag.from, drag.to) : pickedHere?.region;
-	const picking = kind === "image" || annotate;
 	const togglePlay = () => {
 		const video = videoRef.current;
 		if (!video) return;
@@ -181,26 +175,30 @@ export function ArtifactCommentsMedia({ annotate = true, kind, onAnnotateChange,
 
 	const overlay = box ? (
 		<div
-			className={cn("absolute", picking ? "cursor-crosshair touch-none" : "pointer-events-none")}
-			data-annotating={picking ? "" : undefined}
+			className="absolute cursor-crosshair touch-none"
 			data-testid="artifact-comments-media-overlay"
 			onPointerCancel={() => setDrag(null)}
 			onPointerDown={(event) => {
-				if (event.button !== 0 || !picking) return;
+				if (event.button !== 0) return;
 				event.preventDefault();
 				event.currentTarget.setPointerCapture?.(event.pointerId);
-				videoRef.current?.pause();
 				const point = pointAt(event);
 				setDrag({ from: point, to: point });
 			}}
 			onPointerMove={(event) => {
-				if (drag) setDrag({ from: drag.from, to: pointAt(event) });
+				if (!drag) return;
+				const to = pointAt(event);
+				// A video pauses once the press becomes a box.
+				if (kind === "video" && !isPointRegion(artifactCommentRegionFromDrag(drag.from, to))) videoRef.current?.pause();
+				setDrag({ from: drag.from, to });
 			}}
 			onPointerUp={(event) => {
 				if (!drag) return;
 				const region = artifactCommentRegionFromDrag(drag.from, pointAt(event));
 				setDrag(null);
-				pickAt(region);
+				// On a video a click plays or pauses; only a box comments.
+				if (kind === "video" && isPointRegion(region)) togglePlay();
+				else pickAt(region);
 			}}
 			ref={overlayRef}
 			style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
@@ -276,11 +274,8 @@ export function ArtifactCommentsMedia({ annotate = true, kind, onAnnotateChange,
 	return (
 		<div className="flex h-full w-full flex-col bg-background" ref={rootRef}>
 			<div
-				className={cn("relative min-h-0 flex-1", !picking && "cursor-pointer")}
+				className="relative min-h-0 flex-1"
 				data-testid="artifact-comments-video-stage"
-				onClick={(event) => {
-					if (!picking && !(event.target as HTMLElement).closest("button")) togglePlay();
-				}}
 			>
 				<video
 					aria-label={title}
@@ -357,35 +352,6 @@ export function ArtifactCommentsMedia({ annotate = true, kind, onAnnotateChange,
 						})
 						: null}
 				</div>
-				{annotate ? (
-					<button
-						className="shrink-0 rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted"
-						onClick={() => {
-							const video = videoRef.current;
-							video?.pause();
-							onPick(videoCommentAnchor(video?.currentTime ?? 0));
-						}}
-						type="button"
-					>
-						{t("artifactComments.commentAt", { time: formatArtifactCommentTime(time) })}
-					</button>
-				) : null}
-				<button
-					aria-pressed={annotate}
-					className={cn(
-						"flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 hover:bg-muted",
-						annotate ? "border-logo-accent bg-logo-accent/15 text-logo-accent-text" : "border-border text-foreground",
-					)}
-					onClick={() => {
-						if (!annotate) videoRef.current?.pause();
-						onAnnotateChange?.(!annotate);
-					}}
-					title={t("artifactComments.annotateHint")}
-					type="button"
-				>
-					<Pencil aria-hidden="true" className="size-3.5" />
-					{t("artifactComments.annotate")}
-				</button>
 			</div>
 		</div>
 	);

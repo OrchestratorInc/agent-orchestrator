@@ -131,8 +131,6 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 	});
 	const { setAnchors, setMode, select, unsupported } = bridge;
 	const media = kind === "image" || kind === "video" ? kind : null;
-	// A video's Annotate: off, the frame plays and pauses; on, it picks.
-	const [annotate, setAnnotate] = useState(false);
 	// A new comment on a place that already has comments (an image's pin, a video's moment).
 	const writeOn = useCallback((anchor: ArtifactCommentAnchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor }), []);
 	useEffect(() => {
@@ -202,9 +200,7 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 					onShown={shown}
 					renderMedia={media ? (contentUrl, mediaShown) => (
 						<ArtifactCommentsMedia
-							annotate={annotate}
 							kind={media}
-							onAnnotateChange={setAnnotate}
 							onPick={(anchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor })}
 							onSelect={(key) => setElement({ path: key, anchor: null })}
 							onSelection={(rect) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null)}

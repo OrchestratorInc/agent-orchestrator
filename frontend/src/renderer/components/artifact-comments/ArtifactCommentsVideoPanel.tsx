@@ -4,7 +4,6 @@ import { X } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import {
 	formatArtifactCommentTime,
-	isPointRegion,
 	type ArtifactCommentAnchor,
 	type ArtifactCommentGroup,
 	type ArtifactCommentGroups,
@@ -64,18 +63,12 @@ export function ArtifactCommentsVideoPanel({ comments, element, groups, onClose,
 
 	const row = (item: Row) => {
 		const selected = element?.path === item.key;
-		const region = item.anchor.region;
 		const newest = item.group?.threads[0];
 		const first = newest?.comments[0];
 		const head = (
 			<>
 				<span className="flex items-center gap-1.5">
 					<span className="rounded bg-logo-accent/15 px-1.5 py-0.5 font-medium text-logo-accent-text tabular-nums">{formatArtifactCommentTime(item.time)}</span>
-					{region ? (
-						<span className="text-caption text-muted-foreground">
-							{isPointRegion(region) ? t("artifactComments.onPoint") : t("artifactComments.onRegion")}
-						</span>
-					) : null}
 					{item.group && item.group.threads.length > 1 ? (
 						<span className="ml-auto text-caption text-muted-foreground">{t("artifactComments.openCount", { n: item.group.threads.length })}</span>
 					) : null}

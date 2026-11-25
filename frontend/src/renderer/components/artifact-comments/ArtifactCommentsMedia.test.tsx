@@ -173,10 +173,10 @@ describe("comments on a video", () => {
 		await renderWorkspace(client, "video");
 		const element = document.querySelector("video")!;
 		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
-		// One player: no native controls, one Play button, Annotate off.
+		// One player: no native controls, one Play button, nothing else to turn on.
 		expect(element.controls).toBe(false);
 		expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
-		expect(screen.getByRole("button", { name: "Annotate" })).toHaveAttribute("aria-pressed", "false");
+		expect(screen.queryByRole("button", { name: "Annotate" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /^Comment at/ })).not.toBeInTheDocument();
 		// Comments at about the same moment share one point on the seek bar.
 		expect(screen.getAllByTestId("artifact-comments-timeline-point").map((point) => point.getAttribute("aria-label")))
@@ -201,34 +201,33 @@ describe("comments on a video", () => {
 		expect(video.time).toBe(83.5);
 		expect(within(panel).getAllByTestId("artifact-comments-video-row")[1]).toHaveAttribute("data-selected", "");
 
-		// With Annotate off, the frame plays and pauses and draws nothing.
-		const stage = screen.getByTestId("artifact-comments-video-stage");
+		// A click on the frame plays and pauses, and picks nothing.
 		const overlay = screen.getByTestId("artifact-comments-media-overlay");
 		fireEvent.pointerDown(overlay, { button: 0, clientX: 100, clientY: 150 });
 		fireEvent.pointerUp(overlay, { button: 0, clientX: 100, clientY: 150 });
-		expect(screen.queryByTestId("artifact-comments-media-draft")).not.toBeInTheDocument();
-		await userEvent.click(stage);
 		expect(video.paused).toBe(false);
+		expect(screen.queryByTestId("artifact-comments-media-draft")).not.toBeInTheDocument();
 		video.time = 125.25;
 		act(() => { element.dispatchEvent(new Event("timeupdate")); });
 
-		// Annotate on: it pauses; "Comment at" comments on the moment alone.
-		await userEvent.click(screen.getByRole("button", { name: "Annotate" }));
+		// A drag draws a box: the video pauses there and the comment is on the box at that time.
+		fireEvent.pointerDown(overlay, { button: 0, clientX: 200, clientY: 200 });
+		fireEvent.pointerMove(overlay, { button: 0, clientX: 360, clientY: 260 });
 		expect(video.paused).toBe(true);
-		expect(screen.getByRole("button", { name: "Annotate" })).toHaveAttribute("aria-pressed", "true");
-		await userEvent.click(screen.getByRole("button", { name: "Comment at 02:05" }));
+		fireEvent.pointerUp(overlay, { button: 0, clientX: 360, clientY: 260 });
 		const box = await within(panel).findByRole("textbox", { name: "Add a comment…" });
-		// The new comment is a row at its time, the last one.
-		expect(within(panel).getAllByTestId("artifact-comments-video-row").at(-1)).toHaveTextContent("02:05");
+		// The new comment is a row at its time, the last one, with no words for where.
+		const last = within(panel).getAllByTestId("artifact-comments-video-row").at(-1)!;
+		expect(last).toHaveTextContent("02:05");
+		expect(last.textContent).not.toMatch(/box|region|point/);
 		await userEvent.type(box, "Cut here");
 		await userEvent.click(within(panel).getByRole("button", { name: "Comment" }));
 		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
 		const input = client.createArtifactShareThread.mock.calls[0]![1];
-		expect(input.anchor).toMatchObject({ kind: "video", time: 125.25 });
-		expect(input.anchor).not.toHaveProperty("region");
+		expect(input.anchor).toMatchObject({ kind: "video", time: 125.25, region: { x: 0.5, y: 0.5, w: 0.4, h: 0.3 } });
 	});
 
-	it("draws a box on the frame with Annotate on, and adds another comment on the same moment", async () => {
+	it("adds another comment on the same moment, then draws a box on the frame", async () => {
 		stubSizes();
 		stubVideo(250);
 		const anchor = videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0, h: 0 });
@@ -245,8 +244,7 @@ describe("comments on a video", () => {
 		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(1));
 		expect(client.createArtifactShareThread.mock.calls[0]![1].anchor).toEqual(anchor);
 
-		// A box: Annotate on, then drag on the frame.
-		await userEvent.click(screen.getByRole("button", { name: "Annotate" }));
+		// A box: drag on the frame.
 		const overlay = screen.getByTestId("artifact-comments-media-overlay");
 		fireEvent.pointerDown(overlay, { button: 0, clientX: 200, clientY: 200 });
 		fireEvent.pointerMove(overlay, { button: 0, clientX: 360, clientY: 260 });
