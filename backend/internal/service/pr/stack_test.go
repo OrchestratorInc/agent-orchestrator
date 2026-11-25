@@ -33,6 +33,15 @@ type fakeStacker struct {
 	mergeErr    error
 	// onMerge runs once the provider has taken the merge.
 	onMerge func()
+	// behind answers CommitsBehind by "base...head"; compared counts the calls.
+	behind    map[string]int
+	behindErr error
+	compared  int
+}
+
+func (f *fakeStacker) CommitsBehind(_ context.Context, _ ports.SCMRepo, base, head string) (int, error) {
+	f.compared++
+	return f.behind[base+"..."+head], f.behindErr
 }
 
 func (f *fakeStacker) PullRequestStack(_ context.Context, ref ports.SCMPRRef) (ports.SCMStack, bool, error) {
@@ -549,5 +558,45 @@ func TestGuardStackedMerge_NotKnowingDoesNotBlock(t *testing.T) {
 	f.stacker.stackErr = errors.New("rate limited")
 	if err := f.svc.guardStackedMerge(context.Background(), ports.SCMPRRef{Number: 2}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A layer missing commits from the open layer below needs rebasing onto it.
+// The answer for a pair of commits never changes, so it is read once; a layer
+// over a merged one is GitHub's to rebase, and a failed read shows nothing.
+func TestStack_SaysWhichLayersNeedRebasing(t *testing.T) {
+	f := newStackFixture(2)
+	f.stacker.behind = map[string]int{headA + "..." + headB: 2}
+	for range 2 {
+		got, err := f.svc.Stack(context.Background(), "2", "https://github.com/acme/widgets/pull/2")
+		if err != nil || got.Stack == nil {
+			t.Fatalf("got=%#v err=%v", got, err)
+		}
+		behind := []int{got.Stack.Layers[0].BehindParent, got.Stack.Layers[1].BehindParent, got.Stack.Layers[2].BehindParent}
+		if behind[0] != 0 || behind[1] != 2 || behind[2] != 0 {
+			t.Fatalf("behind = %v", behind)
+		}
+	}
+	if f.stacker.compared != 2 {
+		t.Fatalf("compared %d times, want each pair once", f.stacker.compared)
+	}
+
+	merged := newStackFixture(2)
+	merged.stacker.behind = map[string]int{headA + "..." + headB: 2}
+	merged.stacker.stacks[2] = func() ports.SCMStack {
+		stack := threeLayers()
+		stack.Layers[0].Open, stack.Layers[0].Merged = false, true
+		return stack
+	}()
+	got, err := merged.svc.Stack(context.Background(), "2", "https://github.com/acme/widgets/pull/2")
+	if err != nil || got.Stack.Layers[1].BehindParent != 0 {
+		t.Fatalf("over a merged layer: layer=%#v err=%v", got.Stack.Layers[1], err)
+	}
+
+	failing := newStackFixture(2)
+	failing.stacker.behindErr = errors.New("rate limited")
+	got, err = failing.svc.Stack(context.Background(), "2", "https://github.com/acme/widgets/pull/2")
+	if err != nil || got.Stack.Layers[1].BehindParent != 0 {
+		t.Fatalf("failed read: layer=%#v err=%v", got.Stack.Layers[1], err)
 	}
 }

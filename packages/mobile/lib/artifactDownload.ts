@@ -5,6 +5,7 @@ const pending = new Map<string, Promise<string>>();
 
 /** A download that turned out larger than the caller would keep. */
 export class ArtifactTooLargeError extends Error {
+	readonly code: string = "ARTIFACT_TOO_LARGE_ERROR";
 	constructor() {
 		super("This file is too large to download to the phone.");
 		this.name = "ArtifactTooLargeError";

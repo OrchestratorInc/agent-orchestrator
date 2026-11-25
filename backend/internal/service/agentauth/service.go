@@ -274,6 +274,11 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 		case <-op.done:
 		default:
 			s.mu.Unlock()
+			// An account's sign-in is not this harness's own: say so, and never
+			// name its operation for the harness's panel to adopt as its own.
+			if op.account {
+				return nil, apierr.Conflict("AGENT_AUTH_ACCOUNT_LOGIN_IN_PROGRESS", "An account is signing in to this harness. Finish or close that sign-in first.", nil)
+			}
 			return nil, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "A login is already in progress for this harness.", map[string]any{"operationId": op.snapshot.ID})
 		}
 	}

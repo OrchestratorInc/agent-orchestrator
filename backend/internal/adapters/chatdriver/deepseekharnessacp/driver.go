@@ -109,10 +109,7 @@ func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	if standing == "" {
 		return nil
 	}
-	return []acpsdk.ContentBlock{acpsdk.TextBlock(
-		"Standing instructions from Agent Orchestrator. Follow them for this whole session:\n" +
-			"<ao_standing_instructions>\n" + standing + "\n</ao_standing_instructions>",
-	)}
+	return []acpsdk.ContentBlock{acpdriver.PlainStandingInstructionsBlock(standing)}
 }
 
 // deepseekEffort resolves one AO effort value to a Harness level, passing an

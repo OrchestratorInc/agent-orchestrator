@@ -60,13 +60,24 @@ export function useChatRemoteSession(): { hostId?: string; sessionId: string; ba
 }
 
 /**
- * What the session lists for one of its artifact files, by path: the Browser
- * panel URL, and the URL that frames the page inline from its own origin.
+ * The listed artifact a chat card names. A card keeps the path the page had
+ * when the agent reported it; a page renamed since is found by that earlier
+ * path, so an old card still shows it.
  */
-export function useChatArtifactLinks(path: string | undefined): { sessionId: string; previewUrl?: string; inlineUrl?: string } | undefined {
+function findChatArtifact(artifacts: readonly SessionArtifact[] | undefined, path: string): SessionArtifact | undefined {
+	return artifacts?.find((candidate) => candidate.path === path)
+		?? artifacts?.find((candidate) => candidate.previousPaths?.includes(path));
+}
+
+/**
+ * What the session lists for one of its artifact files, by path: where it is
+ * now, the Browser panel URL, and the URL that frames the page inline from its
+ * own origin.
+ */
+export function useChatArtifactLinks(path: string | undefined): { sessionId: string; path: string; previewUrl?: string; inlineUrl?: string } | undefined {
 	const source = useContext(ChatImageSourceContext);
-	const artifact = path === undefined ? undefined : source?.artifacts?.find((candidate) => candidate.path === path);
+	const artifact = path === undefined ? undefined : findChatArtifact(source?.artifacts, path);
 	if (!source || !artifact) return undefined;
 	const inlineUrl = artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
-	return { sessionId: source.sessionId, previewUrl: artifact.previewUrl, inlineUrl };
+	return { sessionId: source.sessionId, path: artifact.path, previewUrl: artifact.previewUrl, inlineUrl };
 }

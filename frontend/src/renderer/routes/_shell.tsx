@@ -1,9 +1,10 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "@/components/app-icons";
@@ -39,6 +40,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useHostUpdatePolling } from "../hooks/useHostUpdates";
 import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
@@ -81,12 +83,13 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
+import { useSwitchHistoryRead } from "../hooks/useSwitchHistoryRead";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -106,8 +109,15 @@ import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 import { markLaunchUsable } from "../lib/launch-telemetry";
 import { useSessionOpenTiming } from "../lib/performance-telemetry";
+import { uiUsage } from "../lib/ui-usage-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
+// The agent update notice checks every installed harness, and on a daemon that
+// has just started each check can hold a connection to it for seconds. The
+// renderer has few (Chromium opens six per host and the event streams keep
+// several), so checks started with the app made the session and Files views
+// opened first wait behind them. They start once launch has settled.
+const HARNESS_UPDATE_CHECKS_DELAY_MS = 15_000;
 
 // Only shown while an orchestrator is starting, but it pulls in the whole chat
 // stack (ChatWorkspace, lexical, markdown). Lazy keeps that off every route.
@@ -223,7 +233,8 @@ function LocalSessionHost() {
 	const cloudOrgId = org?.id;
 	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
 	const liveProjectId = projectSession?.projectId;
-	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const historyPending = useSwitchHistoryRead(liveSessionId);
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId, historyPending);
 	useSessionOpenTiming(liveSessionId, sessionId);
 	const view = useMemo(
 		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
@@ -336,6 +347,14 @@ const ShellCenter = memo(function ShellCenter({
 // the <Outlet> content (board / session / settings / …) swaps. Lifted out of
 // the old single <App>, with selection now owned by the router (route params)
 // instead of Zustand. The daemon-status effect runs here exactly once.
+// What useMatchRoute checked: "/" and "/new" exactly, the settings pages fuzzily, ignoring case.
+function shellRouteKind(pathname: string): "home" | "new" | "settings" | "" {
+	const path = pathname.toLowerCase();
+	if (path === "/") return "home";
+	if (path === "/new") return "new";
+	return /^\/(projects\/[^/]+\/)?settings(\/|$)/.test(path) ? "settings" : "";
+}
+
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
@@ -347,7 +366,9 @@ function ShellLayout() {
 	const router = useRouter();
 	const canGoForward = useCanGoForward();
 	const settingsPage = useSettingsPage();
-	const matchRoute = useMatchRoute();
+	// One string, so a session switch (same kind of route) does not re-render the shell
+	// while the router loads; useMatchRoute would on every location and status change.
+	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
@@ -356,6 +377,7 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
+	useHostUpdatePolling(remoteHosts);
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -392,6 +414,17 @@ function ShellLayout() {
 			preloadSessionView();
 		});
 	}, [daemonIsReady]);
+	const [harnessUpdateChecksDue, setHarnessUpdateChecksDue] = useState(false);
+	useEffect(() => {
+		if (!daemonIsReady) return;
+		const timer = setTimeout(() => setHarnessUpdateChecksDue(true), HARNESS_UPDATE_CHECKS_DELAY_MS);
+		// A daemon that comes back, or a new one that replaces it, has cold checks
+		// again: wait out its launch too.
+		return () => {
+			clearTimeout(timer);
+			setHarnessUpdateChecksDue(false);
+		};
+	}, [daemonIsReady, daemonStatus.pid, daemonStatus.port]);
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
@@ -406,7 +439,13 @@ function ShellLayout() {
 	// While the full-window onboarding shows, the shell behind it takes no
 	// focus or clicks; Settings opened from it lifts that, as it steps aside.
 	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
-	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
+	// One chain per daemon setting Developer Mode drives: each request waits for
+	// its own previous one, so an older enable cannot finish after a disable.
+	const developerModeSyncRef = useRef<Record<"chatHibernation" | "limitHistory" | "devices", Promise<void>>>({
+		chatHibernation: Promise.resolve(),
+		limitHistory: Promise.resolve(),
+		devices: Promise.resolve(),
+	});
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
@@ -574,6 +613,10 @@ function ShellLayout() {
 				: null,
 		);
 	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
+	// Counts a switch to another session and where it started (sidebar, tab, Cmd+K…).
+	useEffect(() => {
+		if (scopedSession?.id) uiUsage.sessionViewed(sessionUiKey(scopedSession.id, routeParams.hostId));
+	}, [routeParams.hostId, scopedSession?.id]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
@@ -602,10 +645,10 @@ function ShellLayout() {
 	}, [queryClient, scopedProjectId]);
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
-	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
+	const isHomeRoute = routeKind === "home";
 	// The new chat page is a session that does not exist yet, so it takes the
 	// session frame and the session view replaces it without the chrome moving.
-	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	const isNewChatRoute = routeKind === "new";
 	// The new chat page keeps its host in the search, not the path.
 	const newChatHost = useRouterState({
 		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
@@ -617,9 +660,7 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isSettingsRoute =
-		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
-		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
+	const isSettingsRoute = routeKind === "settings";
 	// Welcome/settings always self-frame. Platforms that hide the shell-owned
 	// topbar (macOS) use the same full-height inset; session actions mount
 	// inside SessionView.
@@ -871,7 +912,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "Daemon is not ready.");
+				throw new AoError("DAEMON_NOT_READY", status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
@@ -1111,18 +1152,19 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		const projectKey = sessionUiKey(projectId, hostId);
 		const uiState = useUiStore.getState();
 		if (uiState.provisioningProjectIds.has(projectKey) || uiState.restartingProjectIds.has(projectKey)) return;
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-			openProjectSettings(projectId, hostId);
-			return;
-		}
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
-			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));
+			const activeOrchestrator = newestActiveOrchestrator(workspace.sessions);
+			const sessionId = await openRemoteOrchestrator(hostId, projectId, activeOrchestrator);
 			const refresh = queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			// Only a new orchestrator must be in the list before its route can find it.
 			if (!workspace.sessions.some((session) => session.id === sessionId)) await refresh;
 			void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 		} catch (cause) {
+			if (apiErrorCode(cause) === "AGENT_REQUIRED") {
+				openProjectSettings(projectId, { hostId, section: "agents" });
+				return;
+			}
 			const message = cause instanceof Error ? cause.message : t("shell.couldNotSpawn");
 			setOrchestratorStartupError(projectId, message, hostId);
 			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
@@ -1177,31 +1219,35 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [themeStyle]);
 
 	// The renderer owns Developer Mode; the daemon must know its value before
-	// either the view-close path or the idle sweep can hibernate a provider.
+	// either the view-close path or the idle sweep can hibernate a provider,
+	// and devices (a Developer mode preview) stay off in the daemon until it does.
+	// Each setting syncs and retries on its own: one failing request must not
+	// leave another, such as devices, stuck at its old value.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
-		let retry: ReturnType<typeof setTimeout> | undefined;
-		const sync = () => {
-			// Serialize toggles so an older enable request cannot finish after disable.
-			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
+		const retries = new Set<ReturnType<typeof setTimeout>>();
+		const chains = developerModeSyncRef.current;
+		const sync = (key: keyof typeof chains, send: () => Promise<{ error?: unknown }>) => {
+			chains[key] = chains[key].then(async () => {
 				if (cancelled) return;
-				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
-					body: { enabled: developerMode },
-				});
+				const { error } = await send();
 				if (error) throw error;
-				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
-					body: { enabled: developerMode },
-				});
-				if (limitHistoryError) throw limitHistoryError;
 			}).catch(() => {
-				if (!cancelled) retry = setTimeout(sync, 5_000);
+				if (cancelled) return;
+				const retry = setTimeout(() => {
+					retries.delete(retry);
+					sync(key, send);
+				}, 5_000);
+				retries.add(retry);
 			});
 		};
-		sync();
+		sync("chatHibernation", () => apiClient.PATCH("/api/v1/settings/chat-hibernation", { body: { enabled: developerMode } }));
+		sync("limitHistory", () => apiClient.PUT("/api/v1/usage/limit-history", { body: { enabled: developerMode } }));
+		sync("devices", () => apiClient.PUT("/api/v1/devices/availability", { body: { enabled: developerMode } }));
 		return () => {
 			cancelled = true;
-			clearTimeout(retry);
+			for (const retry of retries) clearTimeout(retry);
 		};
 	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
 
@@ -1597,7 +1643,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonIsReady && harnessUpdateChecksDue} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (

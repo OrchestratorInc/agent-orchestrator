@@ -7,6 +7,7 @@ import type { MessageKey } from "../i18n";
 import { apiClient } from "../lib/api-client";
 import { apiErrorException } from "../lib/api-error-exception";
 import { aoBridge } from "../lib/bridge";
+import { installerProgress } from "../lib/installer-progress";
 import type { OnboardingStep } from "../lib/onboarding-steps";
 import type { OnboardingAction } from "../lib/onboarding-telemetry-schema";
 import { apiErrorCode, finishOnboardingAction, installJobOutcome, startOnboardingAction } from "../lib/onboarding-telemetry";
@@ -408,6 +409,10 @@ function InstallRow({
 	const running = starting || isActiveInstallJob(job);
 	const failed = job?.status === "failed";
 	const unsupported = job?.status === "unsupported";
+	// Download attempts and retry backoff first; otherwise what is running on this machine (brew, sudo, npm…), in full.
+	const runningDetail =
+		installerProgress(job?.progress, t) ??
+		(job?.command ? t("startup.installingCommand", { command: job.command }) : undefined);
 
 	let action: React.ReactNode;
 	if (succeeded) action = <span className="text-caption text-settings-muted">{t("settings.harness.installed")}</span>;
@@ -429,9 +434,8 @@ function InstallRow({
 	const detail = succeeded ? null : (
 		<>
 			{notice && !running ? <p className="text-caption text-warning" role="status">{notice}</p> : null}
-			{/* What is running on this machine (brew, sudo, npm…), in full. */}
-			{running && job?.command ? (
-				<p className="break-all text-caption text-settings-muted">{t("startup.installingCommand", { command: job.command })}</p>
+			{running && runningDetail ? (
+				<p className="break-all text-caption text-settings-muted" role="status">{runningDetail}</p>
 			) : null}
 			{running ? (
 				<div className="ao-install-progress" aria-hidden="true">
@@ -491,8 +495,8 @@ export function InstallAction({
 	if (running) {
 		return (
 			<div className="flex flex-col gap-1.5">
-				<p className="text-caption text-settings-muted">
-					{job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis")}
+				<p className="text-caption text-settings-muted" role="status">
+					{installerProgress(job?.progress, t) ?? (job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis"))}
 				</p>
 				<div className="ao-install-progress" aria-hidden="true">
 					<div className="ao-install-progress__bar" />

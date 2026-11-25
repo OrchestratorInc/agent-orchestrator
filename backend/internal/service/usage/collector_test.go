@@ -2155,7 +2155,7 @@ func TestDiscoverClaudePathRejectsGlobMetadata(t *testing.T) {
 	writeUsageFixture(t, filepath.Join(root, "project", "native-session.jsonl"), "{}\n")
 	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
 
-	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "", "")
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "", "", false)
 	mustNoError(t, err)
 	if path != "" {
 		t.Fatalf("invalid Claude native ID discovered %q", path)
@@ -2174,10 +2174,28 @@ func TestDiscoverClaudePathReadsTheWorkspaceProjectDirectory(t *testing.T) {
 	mustNoError(t, os.Chtimes(other, later, later))
 	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
 
-	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "native-session", "", workspace)
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "native-session", "", workspace, false)
 	mustNoError(t, err)
 	if path != want {
 		t.Fatalf("discoverPath = %q, want %q", path, want)
+	}
+}
+
+func TestDiscoverClaudePathDirectSkipsOtherProjectDirectories(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	other := filepath.Join(root, "other-project", "native-session.jsonl")
+	writeUsageFixture(t, other, "{}\n")
+	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
+
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "native-session", "", workspace, true)
+	mustNoError(t, err)
+	if path != "" {
+		t.Fatalf("direct discovery searched other project directories: %q", path)
+	}
+	path, err = collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "native-session", "", workspace, false)
+	mustNoError(t, err)
+	if path != other {
+		t.Fatalf("discoverPath = %q, want %q", path, other)
 	}
 }
 

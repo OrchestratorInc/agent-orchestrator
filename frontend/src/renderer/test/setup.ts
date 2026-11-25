@@ -142,6 +142,10 @@ if (typeof window !== "undefined") {
 
 	window.ao = {
 		triage: { launch: async () => ({ ok: true }) },
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -518,6 +522,9 @@ if (typeof window !== "undefined") {
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			hostUpdate: async () => null,
+			checkHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
+			startHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
 			computerName: async () => "Test computer",
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
