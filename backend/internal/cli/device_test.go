@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -97,7 +99,14 @@ func TestDeviceInstall_SendsAbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capture.path != "/api/v1/sessions/aa-47/device/install" || !strings.Contains(capture.body, `/build/App.app"`) || !strings.HasPrefix(capture.body, `{"path":"/`) {
+	var sent struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(capture.body), &sent); err != nil {
+		t.Fatalf("request body %q: %v", capture.body, err)
+	}
+	// Compare as paths, not text: Windows sends backslashes and a drive letter.
+	if capture.path != "/api/v1/sessions/aa-47/device/install" || !filepath.IsAbs(sent.Path) || filepath.Base(sent.Path) != "App.app" || filepath.Base(filepath.Dir(sent.Path)) != "build" {
 		t.Fatalf("request = %s %s", capture.path, capture.body)
 	}
 	if !strings.Contains(out, "on iPhone 17 Pro") {

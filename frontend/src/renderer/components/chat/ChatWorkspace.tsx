@@ -170,6 +170,7 @@ import {
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
+import { chatFailureReason } from "../../lib/chat-failure-reason";
 import {
 	type BackgroundTally,
 	BackgroundTurnRow,
@@ -198,7 +199,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, ReplacedNotice, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -1061,7 +1062,7 @@ function ChatWorkspaceContent({
 	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
 		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
-		latestSettledTurn.hasHumanPrompt
+		(latestSettledTurn.hasHumanPrompt || latestSettledTurn.hasEventPrompt)
 		? latestSettledTurn : undefined;
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
@@ -1676,6 +1677,22 @@ function ChatWorkspaceContent({
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const ownComposerRef = useRef<ChatComposerHandle>(null);
 	const composerFocusRef = composerRef ?? ownComposerRef;
+	// Coming back to the Chat tab (Ctrl+Tab or a tab click) puts the caret back in the
+	// composer, as the conversation panel stays mounted and nothing else refocuses it.
+	// Only take focus that nothing else holds: the body, or the tab strip that switched.
+	const chatTabInFront = !workspaceActiveTabKey && !reviewerActive && !shellActive;
+	const chatTabWasInFront = useRef(chatTabInFront);
+	useEffect(() => {
+		const returned = chatTabInFront && !chatTabWasInFront.current;
+		chatTabWasInFront.current = chatTabInFront;
+		if (!returned) return;
+		const active = document.activeElement;
+		const unclaimed = !active || active === document.body ||
+			(active.closest("[role='tab'], [role='tablist']") !== null && !active.closest("[role='dialog']"));
+		if (!unclaimed) return;
+		const composer = surfaceRef.current?.querySelector<HTMLElement>('[aria-label="Message the agent"]');
+		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
+	}, [chatTabInFront, composerFocusRef]);
 	const artifactSession = session?.requestedOutput === "artifact";
 	// The sample prompts show only while the composer is empty: picking one hides
 	// them, and clearing the draft brings them back. A saved draft hides them from
@@ -6330,6 +6347,8 @@ const TurnGroup = memo(function TurnGroup({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
 		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
+	// A review round arrives as one message per comment; it draws as one event.
+	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6351,8 +6370,9 @@ const TurnGroup = memo(function TurnGroup({
 		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
 		: undefined;
 	// Counted here, not in the outcome, so a failure shown as a login note counts too.
-	// A usage limit carries no failure code of its own, so it is named here.
-	const reportedFailureCode = group.outcome?.failureCode ?? (group.outcome?.usageLimit ? "usage_limit" : undefined);
+	// A usage limit carries no failure code of its own, so it is named here; any
+	// other failure is named from its error text, which itself is never sent.
+	const reportedFailureCode = group.outcome?.failureCode ?? (group.outcome?.usageLimit ? "usage_limit" : chatFailureReason(group.outcome?.error));
 	useFreshFailureReport(endsWithOutcome ? group.outcome?.state : undefined, group.outcome?.completedAt, group.turnId, reportedFailureCode);
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
@@ -6451,6 +6471,7 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
+			reviewBurst={bursts.get(run.items[0]!.id)}
 			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
@@ -6737,6 +6758,7 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
+	reviewBurst,
 }: {
 	item: ConversationItem;
 	harness?: string;
@@ -6779,6 +6801,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
+	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
+	reviewBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6794,7 +6818,7 @@ function TimelineItem({
 		}
 		// A continue after a stop reaches the agent as a message, but the user did
 		// not write it: mark where the turn picked back up instead of a bubble.
-		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
+		if (item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
 		// worker relay, and is attributed differently. So is one an outside tool
 		// sent through the API, which AO can store as the human's.
@@ -6834,9 +6858,11 @@ function TimelineItem({
 				/>
 			);
 		}
+		// An earlier message of its review burst draws this one.
+		if (reviewBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
