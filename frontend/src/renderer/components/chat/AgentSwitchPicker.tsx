@@ -873,7 +873,14 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 // 	const chosen = account.options.find((option) => option.id === account.value);
 // 	return (
 // 		<OptionMenuSub closeOnSelect>
-// 			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
+// 			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined}>
+// 				<span>{t("settings.agentAccounts.sessionAccount")}</span>
+// 				<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+// 					{chosen ? <AccountBadge provider={provider} name={chosen.name} email={chosen.email} color={chosen.color} /> : null}
+// 					<span className="min-w-0 truncate">{chosen?.label ?? ""}</span>
+// 					<ChevronRight aria-hidden="true" className="size-3 shrink-0" />
+// 				</span>
+// 			</OptionMenuSubTrigger>
 // 			<OptionMenuSubContent scrollable className={SUB_CLASS}>
 // 				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
 // 					{account.options.map((option) => (

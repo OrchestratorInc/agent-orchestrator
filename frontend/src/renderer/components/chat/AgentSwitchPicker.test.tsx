@@ -834,8 +834,10 @@ describe("AgentModelPicker", () => {
 		const chip = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
 		expect(within(chip).getByRole("img", { name: "Work" })).toHaveTextContent("WO");
 		await user.click(chip);
-		await user.click(screen.getByRole("menuitem", { name: /^Account/ }));
+		const accountRow = screen.getByRole("menuitem", { name: /^Account/ });
+		expect(within(accountRow).getByRole("img", { name: "Work" })).toHaveTextContent("WO");
+		await user.click(accountRow);
 		expect(await screen.findByRole("img", { name: "me@home" })).toHaveTextContent("ME");
-		expect(screen.getAllByRole("img", { name: "Work" })).toHaveLength(2);
+		expect(screen.getAllByRole("img", { name: "Work" })).toHaveLength(3);
 	});
 });
