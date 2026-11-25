@@ -60,7 +60,7 @@ export function getAttentionZoneViewForZone(
 export type SessionStatusDotView = {
 	className: string;
 	breathe: boolean;
-	/** The agent is waiting on the user; the sidebar swaps the dot for an alert icon. */
+	/** The agent is waiting on the user; the sidebar swaps the dot for a question mark. */
 	needsInput?: true;
 };
 
@@ -109,13 +109,15 @@ export function getSessionStatusDotView(
  * The things a sidebar row may flag, in order of how much they ask of the
  * user. Everything else (working aside, which has its own spinner) is quiet, so
  * the few icons that appear stand out:
- *  - "attention", red: the session needs you now (input or blocked, CI failing,
- *    or changes requested)
+ *  - "input", amber question mark: the agent stopped to ask you something
+ *    (a question, a decision or a permission prompt)
+ *  - "attention", red: something went wrong that you have to fix (CI failing,
+ *    merge conflicts or changes requested)
  *  - "ready", green: a PR you can merge
  *  - "review", orange alert: a person's review is next
  *  - "merged", purple and dimmed: a PR that has landed, nothing left to do
  */
-export type SessionRowMarker = "attention" | "ready" | "review" | "merged";
+export type SessionRowMarker = "input" | "attention" | "ready" | "review" | "merged";
 
 /**
  * What a sidebar row says about its session, if anything, from the daemon's
@@ -134,7 +136,7 @@ export function getSessionRowMarker(session: {
 	const display = session.displayStatus;
 	if (display === "Terminated" || sectionStatus === "terminated" || display === "Closed without merge") return null;
 
-	if (sessionNeedsInput(session)) return "attention";
+	if (sessionNeedsInput(session)) return "input";
 	if (display === "CI failing" || display === "Merge conflicts" || display === "Changes requested") return "attention";
 	if (!display && (session.status === "ci_failed" || session.status === "changes_requested")) {
 		return "attention";
