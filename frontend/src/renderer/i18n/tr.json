@@ -2171,8 +2171,6 @@
 	"settings.harness.updateJobFailed": "Güncelleme başarısız oldu.",
 	"settings.harness.updateMethodChanged": "Bu sayfa yüklendikten sonra {{agent}} yükleme yöntemi değişti. Yöntemi inceleyip yeniden deneyin.",
 	"settings.harness.working": "Çalışıyor…",
-	"settings.harness.expandOptions": "{{agent}} seçeneklerini genişlet",
-	"settings.harness.collapseOptions": "{{agent}} seçeneklerini daralt",
 	"settings.harness.updating": "Güncelleniyor…",
 	"settings.harness.updateUnsupported": "Desteklenen bir güncelleme yöntemi yok.",
 	"settings.harness.retryUpdate": "Güncellemeyi yeniden dene",

@@ -43,7 +43,7 @@ export function HarnessSettingsSection({
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
 	// An open harness page replaces the list, so its search and filters step aside.
 	const [detailOpen, setDetailOpen] = useState(false);
-	const showToolbar = cloudView || !detailOpen;
+	const showToolbar = !detailOpen;
 	return <SettingsSection
 		title={t("settings.harness")}
 		titleHidden={titleHidden}
@@ -68,6 +68,6 @@ export function HarnessSettingsSection({
 				triggerClassName="w-fit max-w-full"
 			/> : null}
 		{showToolbar && !cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} onDetailChange={setDetailOpen} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} showDiagnostics={selectedHostId === (hostId ?? LOCAL_HOST) ? showDiagnostics : undefined} />}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} onDetailChange={setDetailOpen} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} onDetailChange={setDetailOpen} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} showDiagnostics={selectedHostId === (hostId ?? LOCAL_HOST) ? showDiagnostics : undefined} />}
 	</SettingsSection>;
 }

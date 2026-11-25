@@ -3246,8 +3246,6 @@
 	"settings.harness.updateJobFailed": "업데이트에 실패했습니다.",
 	"settings.harness.updateMethodChanged": "이 페이지를 불러온 뒤 {{agent}} 설치 방식이 변경되었습니다. 확인한 후 다시 시도하세요.",
 	"settings.harness.working": "작업 중…",
-	"settings.harness.expandOptions": "{{agent}} 옵션 펼치기",
-	"settings.harness.collapseOptions": "{{agent}} 옵션 접기",
 	"settings.harness.updating": "업데이트 중…",
 	"settings.harness.updateUnsupported": "지원되는 업데이트 방법이 없습니다.",
 	"settings.harness.retryUpdate": "업데이트 다시 시도",

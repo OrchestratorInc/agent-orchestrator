@@ -25,13 +25,14 @@ vi.mock("../../hooks/useProviderConnections", async (importOriginal) => {
 	return { ...actual, useProviderConnections: () => ({ data: providerConnections.value, isSuccess: true }) };
 });
 const deleteGitHubPAT = vi.hoisted(() => vi.fn(async (): Promise<void> => undefined));
+const listUserAgentModels = vi.hoisted(() => vi.fn(async (): Promise<unknown> => ({ models: [] })));
 vi.mock("../../hooks/useCloudCp", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudCp")>();
 	return {
 		...actual,
 		useCloudCp: (...args: Parameters<typeof actual.useCloudCp>) => {
 			const cp = actual.useCloudCp(...args);
-			return { ...cp, client: { ...cp.client, deleteGitHubPAT } };
+			return { ...cp, client: { ...cp.client, deleteGitHubPAT, listUserAgentModels } };
 		},
 	};
 });
@@ -231,6 +232,7 @@ describe("Cloud harness tab", () => {
 		cloud.value = cloudHarnessVersions({ editable: true, agents: [] });
 		providerConnections.value = [];
 		deleteGitHubPAT.mockClear();
+		listUserAgentModels.mockClear();
 	});
 	afterEach(() => cleanup());
 
@@ -276,6 +278,42 @@ describe("Cloud harness tab", () => {
 		await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
 		expect(await within(row).findByRole("alert")).toHaveTextContent("Could not remove the GitHub token.");
 		expect(invalidate).toHaveBeenCalledTimes(2);
+	});
+
+	it("opens a harness on a page with only Account and Models, its models read from Cloud", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockResolvedValueOnce({ source: "worker", models: [
+			{ id: "gpt-5.5", displayName: "GPT-5.5", default: true, efforts: ["low", "high"] },
+			{ id: "gpt-5.5-mini", displayName: "GPT-5.5 mini", default: false },
+		] });
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("codex");
+		expect(within(page).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Account", "Models"]);
+		expect(within(page).getByText("Connected")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		const list = await within(page).findByRole("list", { name: "Available models" });
+		expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+		expect(within(list).getByText("Default")).toBeInTheDocument();
+		expect(within(list).getByText("Effort: low · high")).toBeInTheDocument();
+		// Cloud pickers list every model, so there is nothing to switch off.
+		expect(within(page).queryByRole("switch")).toBeNull();
+		expect(listUserAgentModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
+	});
+
+	it("asks to log in before listing a harness's Cloud models", async () => {
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("claude-code");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByText("Log in to Claude Code to load its models.")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Account" }));
+		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("data-state", "active");
+		expect(within(page).getByRole("button", { name: "Login" })).toBeInTheDocument();
 	});
 
 	it("offers no GitHub personal access token: Cloud reaches private repositories through the GitHub App", async () => {

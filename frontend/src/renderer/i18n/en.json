@@ -2171,8 +2171,6 @@
 	"settings.harness.updateJobFailed": "Update failed.",
 	"settings.harness.updateMethodChanged": "How {{agent}} is installed changed since this page loaded. Review it, then try again.",
 	"settings.harness.working": "Working…",
-	"settings.harness.expandOptions": "Expand {{agent}} options",
-	"settings.harness.collapseOptions": "Collapse {{agent}} options",
 	"settings.harness.updating": "Updating…",
 	"settings.harness.updateUnsupported": "No supported update method is available.",
 	"settings.harness.retryUpdate": "Retry update",

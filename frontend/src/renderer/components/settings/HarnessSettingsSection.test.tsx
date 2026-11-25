@@ -1729,26 +1729,29 @@ describe("HarnessSettingsSection", () => {
 		await screen.findByText("Goose");
 
 		await user.click(screen.getByRole("radio", { name: "Cloud" }));
-		// Only cloud-supported harnesses, with no local install or login controls.
+		// Only cloud-supported harnesses, listed like the local view.
 		expect(screen.queryByText("Goose")).toBeNull();
-		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
-		// A disclosure and one cloud login action; no local install controls.
-		expect(within(claudeRow).getAllByRole("button")).toHaveLength(2);
-		expect(within(claudeRow).getByText("API version not reported")).toBeInTheDocument();
-		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
-		expect(within(claudeRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
-		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
-		await user.click(within(claudeRow).getByRole("button", { name: "Cancel" }));
-		expect(within(claudeRow).queryByTestId("cloud-harness-login")).toBeNull();
+		const claudeListRow = await findListRow("claude-code");
+		expect(within(claudeListRow).getByText("Not connected")).toBeInTheDocument();
+		expect(within(claudeListRow).queryByRole("button", { name: "Login" })).toBeNull();
 
-		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
-		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
-		expect(within(codexRow).queryByRole("button", { name: "Install" })).toBeNull();
-		expect(within(codexRow).queryByRole("button", { name: "Refresh login" })).toBeNull();
-		await user.click(within(codexRow).getByRole("button", { name: "Expand Codex options" }));
-		await user.click(within(codexRow).getByRole("button", { name: "Refresh login" }));
-		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
+		// Its page has only Account and Models tabs, and no local install controls.
+		const claudePage = await findAgentRow("claude-code");
+		expect(within(claudePage).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Account", "Models"]);
+		expect(within(claudePage).queryByRole("button", { name: "Install" })).toBeNull();
+		expect(within(claudePage).getByText("Not connected")).toBeInTheDocument();
+		expect(within(claudePage).getByText("API version not reported")).toBeInTheDocument();
+		await user.click(within(claudePage).getByRole("button", { name: "Login" }));
+		expect(within(claudePage).getByTestId("cloud-harness-login")).toBeInTheDocument();
+		expect(within(claudePage).queryByRole("button", { name: "Login" })).toBeNull();
+		await user.click(within(claudePage).getByRole("button", { name: "Cancel" }));
+		expect(within(claudePage).queryByTestId("cloud-harness-login")).toBeNull();
+
+		const codexPage = await findAgentRow("codex");
+		expect(within(codexPage).getByText("Connected")).toBeInTheDocument();
+		expect(within(codexPage).queryByRole("button", { name: "Login" })).toBeNull();
+		await user.click(within(codexPage).getByRole("button", { name: "Refresh login" }));
+		expect(within(codexPage).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
 	});
 
 	it("reads a harness as connected only from its valid default connection", async () => {
@@ -1763,10 +1766,8 @@ describe("HarnessSettingsSection", () => {
 		];
 		renderSection(undefined, undefined, "cloud");
 
-		const codexRow = await findAgentRow("codex");
-		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
-		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
+		expect(within(await findListRow("codex")).getByText("Connected")).toBeInTheDocument();
+		expect(within(await findListRow("claude-code")).getByText("Not connected")).toBeInTheDocument();
 	});
 
 	it("opens straight into the cloud view when asked", async () => {
@@ -1775,7 +1776,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection(undefined, undefined, "cloud");
 
 		expect(await screen.findByRole("radio", { name: "Cloud" })).toHaveAttribute("aria-checked", "true");
-		expect((await screen.findAllByRole("button", { name: "Login" })).length).toBeGreaterThan(0);
+		expect(await findListRow("claude-code")).toBeInTheDocument();
 		expect(screen.queryByText("Goose")).toBeNull();
 	});
 

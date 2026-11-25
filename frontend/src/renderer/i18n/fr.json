@@ -3315,8 +3315,6 @@
 	"settings.harness.updateJobFailed": "La mise à jour a échoué.",
 	"settings.harness.updateMethodChanged": "L’installation de {{agent}} a changé depuis le chargement de cette page. Vérifiez-la, puis réessayez.",
 	"settings.harness.working": "En cours…",
-	"settings.harness.expandOptions": "Développer les options de {{agent}}",
-	"settings.harness.collapseOptions": "Réduire les options de {{agent}}",
 	"settings.harness.updating": "Mise à jour…",
 	"settings.harness.updateUnsupported": "Aucune méthode de mise à jour prise en charge n’est disponible.",
 	"settings.harness.retryUpdate": "Réessayer la mise à jour",

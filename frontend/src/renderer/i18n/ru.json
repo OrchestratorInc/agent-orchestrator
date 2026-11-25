@@ -2203,8 +2203,6 @@
 	"settings.harness.updateJobFailed": "Ошибка обновления.",
 	"settings.harness.updateMethodChanged": "Способ установки {{agent}} изменился после загрузки этой страницы. Проверьте его и повторите попытку.",
 	"settings.harness.working": "Работа…",
-	"settings.harness.expandOptions": "Развернуть параметры {{agent}}",
-	"settings.harness.collapseOptions": "Свернуть параметры {{agent}}",
 	"settings.harness.updating": "Обновление…",
 	"settings.harness.updateUnsupported": "Нет доступного поддерживаемого способа обновления.",
 	"settings.harness.retryUpdate": "Повторить обновление",
