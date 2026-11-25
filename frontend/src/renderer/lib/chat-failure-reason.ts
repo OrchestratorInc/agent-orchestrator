@@ -23,7 +23,7 @@ export type ChatFailureReason = (typeof CHAT_FAILURE_REASONS)[number];
 // generic ones they would also match: an exceeded quota is reported as a 429,
 // and an overloaded provider as a 5xx.
 const PATTERNS: readonly [RegExp, ChatFailureReason][] = [
-	[/insufficient[_ ]quota|exceeded your current quota|credit balance|billing|payment required|\b402\b/i, "quota_exceeded"],
+	[/insufficient[_ ]quota|exceeded your current quota|credit balance|billing[_ ]hard[_ ]limit|payment required|\b402\b/i, "quota_exceeded"],
 	[/\b429\b|rate[ _-]?limit|too many requests/i, "rate_limited"],
 	[/\b529\b|overloaded|over capacity|server is busy|high demand/i, "provider_overloaded"],
 	[/context (?:length|window)|maximum context|prompt is too long|input is too long|too many tokens|token limit/i, "context_too_long"],

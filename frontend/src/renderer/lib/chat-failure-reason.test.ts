@@ -6,6 +6,9 @@ describe("chatFailureReason", () => {
 	it.each([
 		["You exceeded your current quota, please check your plan and billing details. (429 insufficient_quota)", "quota_exceeded"],
 		["Your credit balance is too low to access the Anthropic API.", "quota_exceeded"],
+		["Billing hard limit has been reached (billing_hard_limit_reached)", "quota_exceeded"],
+		["401 Unauthorized: billing account authentication token has expired.", "auth_required"],
+		["429 Too Many Requests: see your billing settings for higher limits", "rate_limited"],
 		["429 Too Many Requests: rate limit reached for requests", "rate_limited"],
 		['API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', "provider_overloaded"],
 		["prompt is too long: 215000 tokens > 200000 maximum", "context_too_long"],
