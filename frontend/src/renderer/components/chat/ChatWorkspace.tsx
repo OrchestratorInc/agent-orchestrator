@@ -8280,6 +8280,10 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 			<motion.h1
 				ref={headingRef}
 				layout={reducedMotion ? false : "position"}
+				// Glide only when the prompts come or go. The first measurement fills the
+				// spacer on mount, and a resize can change it; neither is a move to animate,
+				// or every new chat would open with the heading rising into place.
+				layoutDependency={promptsOpen}
 				transition={{ layout: WELCOME_SETTLE }}
 				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
 				// Anchored on the composer box alone: a group-has variant would restyle the app
