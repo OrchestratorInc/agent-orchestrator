@@ -97,6 +97,15 @@ func newTaskCommand(ctx *commandContext) *cobra.Command {
 			"Exit codes: 0 started (running or done), 1 failed or timed out, 2 usage error, 3 waiting on the user.\n" +
 			"With --json, stdout is {status, taskId, sessionIds, reason, fix}; status is one of\n" +
 			"starting, running, done, failed, needs_input.",
+		// Runnable so a mistyped subcommand (`ao task statuz`) is a usage
+		// error, exit 2, instead of help with exit 0. Bare `ao task` shows help.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return usageError{fmt.Errorf("unknown command %q for %q; run `ao task --help`", args[0], cmd.CommandPath())}
+			}
+			return cmd.Help()
+		},
 	}
 	cmd.AddCommand(newTaskStartCommand(ctx))
 	cmd.AddCommand(newTaskStatusCommand(ctx))

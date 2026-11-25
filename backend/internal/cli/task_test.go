@@ -889,3 +889,17 @@ func TestTaskNeedsInputIsNotAUsageErrorEvent(t *testing.T) {
 		t.Fatal("a usage error should still be reported as one")
 	}
 }
+
+func TestTaskUnknownSubcommandIsAUsageError(t *testing.T) {
+	_, _, err := executeCLI(t, fakeClockDeps(), "task", "statuz", "repo-1")
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("exit = %d (%v), want 2", got, err)
+	}
+	if !strings.Contains(err.Error(), `unknown command "statuz"`) {
+		t.Fatalf("err = %v", err)
+	}
+	out, _, err := executeCLI(t, fakeClockDeps(), "task")
+	if err != nil || !strings.Contains(out, "Exit codes: 0 started") {
+		t.Fatalf("bare `ao task`: err = %v, out = %q", err, out)
+	}
+}
