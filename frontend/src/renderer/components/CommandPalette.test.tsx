@@ -6,11 +6,14 @@ import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspa
 import { useUiStore } from "../stores/ui-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { peekSessionSearchReveal, resetSessionSearchReveals } from "../lib/session-search-reveal";
+import { sessionUiKey } from "../lib/hosts";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
 const choosePathMock = vi.hoisted(() => vi.fn());
 const getMock = vi.hoisted(() => vi.fn());
+// The other AO machines connected; none unless a test connects some.
+const connectedHostsMock = vi.hoisted(() => ({ value: [] as string[] }));
 const postMock = vi.hoisted(() => vi.fn());
 const openExternalMock = vi.hoisted(() => vi.fn());
 const writeTextMock = vi.hoisted(() => vi.fn());
@@ -121,6 +124,7 @@ function notifyCtxChange() {
 	for (const listener of ctx.listeners) listener();
 }
 
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 	useParams: () => {
@@ -163,6 +167,10 @@ vi.mock("../lib/api-client", () => ({
 		GET: getMock,
 		POST: postMock,
 	},
+	apiErrorCode: (error: unknown) =>
+		typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string"
+			? (error as { code: string }).code
+			: undefined,
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error) {
@@ -172,9 +180,24 @@ vi.mock("../lib/api-client", () => ({
 	},
 }));
 
+// Search across machines is its own hook with its own tests; here it says what
+// the other machines answered. By default there are none.
+const remoteSearchMock = vi.hoisted(() => {
+	const none = { answers: [] as unknown[], settled: true };
+	return { none, value: none };
+});
+vi.mock("../hooks/useRemoteMachineSearch", () => ({
+	// The answers are for the words the palette asked about.
+	useRemoteMachineSearch: (request: { query: string }) => ({ query: request.query.trim(), ...remoteSearchMock.value }),
+}));
+
 vi.mock("../lib/host-clients", () => ({
 	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
 	clientForHost: () => ({ GET: getMock, POST: postMock }),
+	// The session menu's hooks read the connected hosts.
+	subscribeConnectedHosts: () => () => {},
+	connectedHost: () => undefined,
+	connectedHosts: () => connectedHostsMock.value,
 }));
 
 
@@ -206,6 +229,7 @@ vi.mock("./CreateProjectFlow", () => ({
 }));
 
 import { CommandPalette } from "./CommandPalette";
+import { onDedicatedShortcut } from "../hooks/useAppShortcut";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 
 function renderPalette() {
@@ -512,7 +536,10 @@ describe("CommandPalette workspace file search", () => {
 		useUiStore.setState({ archiveModal: null });
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		await screen.findByPlaceholderText(/search sessions/i);
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		// On a session page the project's actions wait for a search.
+		fireEvent.change(input, { target: { value: "archived" } });
+		await waitFor(() => expect(document.querySelector('[cmdk-item][data-value="current-open-archive"]')).not.toBeNull());
 
 		fireEvent.click(document.querySelector('[cmdk-item][data-value="current-open-archive"]')!);
 
@@ -609,16 +636,28 @@ describe("CommandPalette workspace file search", () => {
 	});
 });
 
+describe("CommandPalette session menu", () => {
+	it("keeps the palette open on Rename, with the name in the field", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.click(await screen.findByText(rowTitle("Rename"), {}, { timeout: 2_000 }));
+
+		await waitFor(() => expect(document.querySelector<HTMLInputElement>("[cmdk-input]")?.value).toBe("fix flake"));
+		expect(useUiStore.getState().isCommandPaletteOpen).toBe(true);
+	});
+});
+
 describe("CommandPalette content search", () => {
 	const contentHit = { path: "src/lib/palette.ts", line: 12, text: "export function \x02closePalette\x03() {}" };
 	const chatHit = { messageId: "msg-1", sessionId: "w-fix", projectId: "proj-1", title: "Palette cleanup", text: "we should \x02close\x03 the \x02palette\x03 on Escape" };
 
-	it("opens a file at its matched line", async () => {
+	it("opens a file at its matched line, from Go to file", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		mockSearch([], [contentHit]);
 		renderPalette();
-		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "close palette" } });
+		act(() => appShortcutBus.emit({ id: "quick-open-file" }));
+		fireEvent.change(await screen.findByPlaceholderText("Search files"), { target: { value: "close palette" } });
 
 		fireEvent.click(await screen.findByText(rowTitle("palette.ts:12"), {}, { timeout: 2_000 }));
 		expect(getMock).toHaveBeenCalledWith(
@@ -682,25 +721,25 @@ describe("CommandPalette content search", () => {
 			? { error: {} }
 			: { data: { results: [], truncated: false } });
 		renderPalette();
-		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		const input = await screen.findByPlaceholderText(/search sessions/i);
+		// Text inside files is searched from Go to file; chats from the main list.
+		const inFiles = failedPath.endsWith("/content");
+		act(() => (inFiles ? appShortcutBus.emit({ id: "quick-open-file" }) : useUiStore.getState().setCommandPaletteOpen(true)));
+		const input = await screen.findByPlaceholderText(inFiles ? "Search files" : /search sessions/i);
 		fireEvent.change(input, { target: { value: "close palette" } });
 		expect(await screen.findByRole("alert", {}, { timeout: 2_000 })).toHaveTextContent(message);
 		fireEvent.change(input, { target: { value: "new query" } });
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("keeps a control that names every word above content that mentions them", async () => {
+	it("leaves text inside files to Go to file", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		mockSearch([], [{ path: "src/Sidebar.tsx", line: 3, text: "// \x02hide\x03 \x02sidebar\x03" }]);
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		const input = await screen.findByPlaceholderText(/search sessions/i);
-		for (const query of ["hide sidebar", "toggle sidbar"]) {
-			fireEvent.change(input, { target: { value: query } });
-			await screen.findByText(rowTitle("Sidebar.tsx:3"), {}, { timeout: 2_000 });
-			expect(screen.getAllByRole("option")[0]).toHaveTextContent("Toggle sidebar");
-		}
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "hide sidebar" } });
+		expect(await screen.findByText(rowTitle("Toggle sidebar"), {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(screen.queryByText(rowTitle("Sidebar.tsx:3"))).not.toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/search/content", expect.anything());
 	});
 });
 
@@ -832,7 +871,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -871,7 +910,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -896,7 +935,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -915,7 +954,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -954,22 +993,28 @@ describe("CommandPalette actions", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
-	it("shows disabled New task reason, skips it for selection, and ignores clicks", async () => {
-		ctx.params = {};
-		renderPalette();
-		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		const input = await screen.findByPlaceholderText(/search sessions/i);
-		expect(screen.queryByText("No current project")).toBeNull();
-		fireEvent.change(input, { target: { value: "new" } });
-		expect(await screen.findByText("No current project")).toBeInTheDocument();
-		await waitFor(() => {
-			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
-			expect(selected?.textContent).not.toContain("No current project");
-			expect(selected?.getAttribute("aria-disabled")).not.toBe("true");
-		});
-		fireEvent.click(document.querySelector('[cmdk-item][data-value="current-new-task"]')!);
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+	it("runs New task off a project the way ⌘N does", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const newSession = vi.fn();
+		// The shell's ⌘N handler, as the palette reaches it.
+		const dispose = onDedicatedShortcut("new-session", () => () => {}, newSession);
+		try {
+			ctx.params = {};
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+			await screen.findByPlaceholderText(/search sessions/i);
+			const row = document.querySelector('[cmdk-item][data-value="current-new-task"]');
+			expect(row?.getAttribute("aria-disabled")).not.toBe("true");
+			fireEvent.click(row!);
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1);
+			});
+			expect(newSession).toHaveBeenCalledTimes(1);
+			expect(spawnMock).not.toHaveBeenCalled();
+		} finally {
+			dispose();
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not spawn Open orchestrator while the project is restarting", async () => {
@@ -983,26 +1028,43 @@ describe("CommandPalette actions", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
 		ctx.params = { projectId: "proj-2" };
 		ctx.workspaces[1].orchestratorAgent = undefined;
+		spawnMock.mockResolvedValue("proj-2-orch-new");
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-2" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+		// The daemon fills the empty role as it starts the orchestrator.
+		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-2", "command_palette"));
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("opens local project agent settings when the daemon requires an orchestrator agent", async () => {
+		ctx.params = { projectId: "proj-2" };
+		ctx.workspaces[1].orchestratorAgent = undefined;
+		spawnMock.mockRejectedValueOnce(Object.assign(new Error("Configure an orchestrator agent"), { code: "AGENT_REQUIRED" }));
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-2", section: "agents",
+		}));
 		await waitFor(() => expect(paletteInput()).toBeNull());
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("navigates and closes when selecting a project", async () => {
 		ctx.params = {};
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.click(screen.getByText(rowTitle("lib")));
+		// Projects wait for a search.
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "lib" } });
+		fireEvent.click(await screen.findByText(rowTitle("lib")));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-2" } });
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
@@ -1089,8 +1151,9 @@ describe("CommandPalette actions", () => {
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.change(input, { target: { value: "toggle theme" } });
 		fireEvent.keyDown(input, { key: "Enter" });
-		expect(useUiStore.getState().resolvedTheme).toBe("light");
 		expect(input).toHaveValue("toggle theme");
+		// The toggle reads the OS appearance first, so the switch lands a tick later.
+		await waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("light"));
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 
@@ -1354,7 +1417,7 @@ describe("CommandPalette back navigation", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -1417,7 +1480,7 @@ describe("CommandPalette back navigation", () => {
 			const { rerenderPalette } = renderPalette();
 			act(() => useUiStore.getState().setCommandPaletteOpen(true));
 			const input = await screen.findByPlaceholderText(/search sessions/i);
-			fireEvent.change(input, { target: { value: "archived" } });
+			fireEvent.change(input, { target: { value: "archived cleanup" } });
 			await waitFor(() => {
 				const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 				expect(selected?.textContent).toContain("archived cleanup");
@@ -1488,6 +1551,8 @@ describe("CommandPalette New task", () => {
 describe("CommandPalette session-text search", () => {
 	beforeEach(() => {
 		resetSessionSearchReveals();
+		remoteSearchMock.value = remoteSearchMock.none;
+		connectedHostsMock.value = [];
 	});
 
 	function searchResponse(results: unknown[], coverage: Record<string, unknown> = { state: "ready" }) {
@@ -1634,6 +1699,128 @@ describe("CommandPalette session-text search", () => {
 		expect(peekSessionSearchReveal("standalone-3")).toMatchObject({ messageId: "msg-1" });
 	});
 
+	it("searches every connected machine and opens a remote session on its machine", async () => {
+		mockSearch([hit]);
+		remoteSearchMock.value = { settled: true, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, messageId: "remote-msg", sessionName: "fix flake on azure" }] },
+			{ hostId: "h_old", label: "Old desk", outcome: "needs_update", total: 0, results: [] },
+		] };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		// The same session id on two machines is two sessions: both rows stay,
+		// and the remote one says where it is.
+		const remoteRow = await screen.findByText("fix flake on azure", {}, { timeout: 2_000 });
+		expect(screen.getByText("fix flake")).toBeInTheDocument();
+		// The machine is a badge beside the title, so a long title cannot hide it.
+		const remoteItem = remoteRow.closest("[cmdk-item]");
+		expect(remoteItem?.querySelector('[data-slot="command-item-machine"]')?.textContent).toBe("AzureLinux");
+		expect(remoteItem?.textContent).toContain("you · app · codex");
+		expect(screen.getByTestId("palette-machines-not-searched").textContent).toBe("Not searched on Old desk (update AO there to search it).");
+
+		fireEvent.click(remoteRow);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "h_azure", projectId: "proj-1", sessionId: "w-fix" },
+		});
+		// The match is handed to that machine's session, keyed by host and id.
+		expect(peekSessionSearchReveal(sessionUiKey("w-fix", "h_azure"))).toMatchObject({ messageId: "remote-msg" });
+		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
+	});
+
+	// QA: one slow machine held every other machine's rows back for six seconds.
+	it("shows the machines that have answered without waiting for a slow one", async () => {
+		mockSearch([hit]);
+		remoteSearchMock.value = { settled: false, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, sessionName: "fix flake on azure" }] },
+			{ hostId: "h_home", label: "Laptop", outcome: "offline", total: 0, results: [] },
+		] };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		expect(await screen.findByText("fix flake on azure", {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(screen.getByText("fix flake")).toBeInTheDocument();
+		// The slow machine is still being asked, and the one whose reason is known
+		// is named at once.
+		expect(screen.getByText("Searching past sessions…")).toBeInTheDocument();
+		expect(screen.getByTestId("palette-machines-not-searched").textContent).toBe("Not searched on Laptop (offline).");
+	});
+
+	// This machine's index can be off (AO_SESSION_SEARCH=off) or unopenable while
+	// its daemon runs on. That is one machine not answering: the machines that
+	// did answer still show, and the local failure is still said.
+	it("shows other machines' matches when this machine's search is unavailable", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path.includes("/search/index-status")) return { data: { coverage: { state: "unavailable" } } };
+			if (path.includes("/search/sessions")) {
+				return { error: { code: "SESSION_SEARCH_UNAVAILABLE", message: "Session search is not available on this daemon" } };
+			}
+			if (path === "/api/v1/conversations/search") return { data: { results: [] } };
+			return { data: {} };
+		});
+		remoteSearchMock.value = { settled: true, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, sessionName: "fix flake on azure" }] },
+		] };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		expect(await screen.findByText("fix flake on azure", {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(screen.getByText(/Session search is not available on this daemon/)).toBeInTheDocument();
+	});
+
+	// QA: at 150 ms a steady typist sent one search per keystroke to every machine.
+	it("waits for a longer pause before searching while other machines are connected", async () => {
+		mockSearch([hit]);
+		connectedHostsMock.value = ["h_azure"];
+		useUiStore.setState({ remoteHosts: true });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		const searchedFor = (q: string) => getMock.mock.calls.some(([path, init]) =>
+			path === "/api/v1/search/sessions" && (init as { params?: { query?: { q?: string } } })?.params?.query?.q === q);
+		vi.useFakeTimers();
+		try {
+			fireEvent.change(input, { target: { value: "flaky" } });
+			await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+			expect(searchedFor("flaky")).toBe(false);
+			await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+			expect(searchedFor("flaky")).toBe(true);
+		} finally {
+			vi.useRealTimers();
+			useUiStore.setState({ remoteHosts: false });
+		}
+	});
+
+	it("opens a remote standalone session's match on that machine's standalone route", async () => {
+		mockSearch([]);
+		remoteSearchMock.value = { settled: true, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, sessionId: "standalone-9", projectId: "", sessionName: "kettle on azure" }] },
+		] };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		fireEvent.click(await screen.findByText("kettle on azure", {}, { timeout: 2_000 }));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/session/$sessionId",
+			params: { hostId: "h_azure", sessionId: "standalone-9" },
+		});
+	});
+
+	// QA: a span past the end of the snippet cut the whole line down to "…".
+	it("still shows the snippet when a matched span does not fit it", async () => {
+		mockSearch([{ ...hit, snippet: "a longer line that mentions the flaky login test in passing", highlights: [{ start: 9_999, end: 10_010 }] }]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		const row = (await screen.findByText("fix flake", {}, { timeout: 2_000 })).closest("[cmdk-item]");
+		expect(row?.textContent).toContain("a longer line that mentions the flaky login test in passing");
+	});
+
 	it("opens a tool-output match without inventing a message anchor", async () => {
 		mockSearch([{ ...hit, kind: "command", messageId: undefined, snippet: "TS2304: cannot find name" }]);
 		renderPalette();
@@ -1648,6 +1835,51 @@ describe("CommandPalette session-text search", () => {
 		// A command-output hit has no message bubble; the session opens plainly
 		// rather than scrolling to a guessed anchor.
 		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
+	});
+
+	// Review: rows kept from the previous query while a slower answer loads were
+	// still picked automatically, so Enter could open a session the new query
+	// does not match.
+	it("does not open a row kept from the previous query until the new answer lands", async () => {
+		let answerFlaky2: (value: unknown) => void = () => {};
+		getMock.mockImplementation((path: string, init?: { params?: { query?: { q?: string } } }) => {
+			if (path.includes("/search/index-status")) return Promise.resolve({ data: { coverage: { state: "ready" } } });
+			if (path.includes("/search/sessions")) {
+				if (init?.params?.query?.q === "flaky2") return new Promise((resolve) => { answerFlaky2 = resolve; });
+				return Promise.resolve(searchResponse([hit]));
+			}
+			if (path === "/api/v1/conversations/search") return Promise.resolve({ data: { results: [] } });
+			return Promise.resolve({ data: {} });
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "flaky" } });
+		await screen.findByText("fix flake", {}, { timeout: 2_000 });
+
+		fireEvent.change(input, { target: { value: "flaky2" } });
+		await waitFor(() => expect(getMock.mock.calls.some(([path, init]) =>
+			path === "/api/v1/search/sessions" && (init as { params?: { query?: { q?: string } } })?.params?.query?.q === "flaky2")).toBe(true), { timeout: 2_000 });
+		// The kept row is still shown while "flaky2" loads, but disabled: Enter,
+		// the arrow keys and a click all leave it.
+		const kept = screen.getByText("fix flake").closest("[cmdk-item]");
+		expect(kept?.getAttribute("data-disabled")).toBe("true");
+		fireEvent.keyDown(input, { key: "Enter" });
+		fireEvent.keyDown(input, { key: "ArrowDown" });
+		fireEvent.keyDown(input, { key: "Enter" });
+		fireEvent.click(kept!);
+		expect(navigateMock).not.toHaveBeenCalled();
+
+		await act(async () => {
+			answerFlaky2(searchResponse([{ ...hit, sessionId: "w-two", messageId: "msg-2", sessionName: "flaky two" }]));
+		});
+		await waitFor(() => {
+			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
+			expect(selected?.textContent).toContain("flaky two");
+		}, { timeout: 2_000 });
+		fireEvent.keyDown(input, { key: "Enter" });
+		await waitFor(() => expect(navigateMock).toHaveBeenCalled());
+		expect(JSON.stringify(navigateMock.mock.calls.at(-1))).toContain("w-two");
 	});
 
 	it("copies the resume command on ⌘↵ instead of opening", async () => {
@@ -1711,6 +1943,56 @@ describe("CommandPalette session-text search", () => {
 		// The request is a recency browse, not a text search.
 		const searchCall = getMock.mock.calls.find(([path]) => String(path).includes("/search/sessions"));
 		expect(searchCall?.[1]).toMatchObject({ params: { query: { sort: "recent", limit: 8 } } });
+	});
+
+	function groupText(heading: string): string | undefined {
+		const node = [...document.querySelectorAll("[cmdk-group-heading]")].find((candidate) => candidate.textContent === heading);
+		return node?.closest("[cmdk-group]")?.textContent ?? undefined;
+	}
+
+	it("leaves the open session and Needs attention rows out of Recent sessions", async () => {
+		const flagged = ctx.workspaces[0].sessions[0];
+		const status = flagged.status;
+		flagged.status = "ci_failed";
+		try {
+			ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+			const recent = (sessionId: string, sessionName: string) => ({ ...hit, sessionId, sessionName, messageId: "", kind: "title", snippet: "" });
+			mockSearch([recent("w-merge", "ship banner"), recent("w-fix", "fix flake"), recent("w-archived", "archived cleanup")]);
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+
+			await waitFor(() => expect(groupText("Recent sessions")).toContain("archived cleanup"), { timeout: 2_000 });
+			expect(groupText("Needs attention")).toContain("ship banner");
+			expect(groupText("Recent sessions")).not.toContain("ship banner");
+			expect(groupText("Recent sessions")).not.toContain("fix flake");
+		} finally {
+			flagged.status = status;
+		}
+	});
+
+	it("lists past-session matches after commands and sessions, ahead of chats", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path.includes("/search/index-status")) return { data: { coverage: { state: "ready" } } };
+			if (path.includes("/search/sessions")) {
+				return searchResponse([{ ...hit, sessionId: "w-merge", sessionName: "ship banner", snippet: "fix the banner", highlights: [{ start: 0, end: 3 }] }]);
+			}
+			if (path === "/api/v1/conversations/search") {
+				return { data: { results: [{ messageId: "chat-1", sessionId: "w-archived", projectId: "proj-1", title: "Archived chat", text: "\x02fix\x03 it later" }] } };
+			}
+			return { data: {} };
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "fix" } });
+
+		await waitFor(() => {
+			const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent);
+			expect(headings).toContain("Past sessions");
+			expect(headings).toContain("In chats");
+			expect(headings.indexOf("Sessions")).toBeGreaterThanOrEqual(0);
+			expect(headings.indexOf("Sessions")).toBeLessThan(headings.indexOf("Past sessions"));
+			expect(headings.indexOf("Past sessions")).toBeLessThan(headings.indexOf("In chats"));
+		}, { timeout: 2_000 });
 	});
 
 	// The recent sessions once sat under Past sessions while a typed search

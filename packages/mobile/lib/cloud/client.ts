@@ -36,6 +36,7 @@ import type {
 	CloudWorkspaceSearch,
 	CloudWorkspaceTree,
 	CreateCloudSessionInput,
+	CreateCloudStandaloneAgentInput,
 } from "./types";
 
 type Query = Record<string, string | number | boolean | undefined>;
@@ -89,6 +90,15 @@ function buildUrl(baseUrl: string, path: string, query?: Query): string {
 	return url;
 }
 
+/** A Retry-After header (seconds, or an HTTP date) as milliseconds from `now`. */
+export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+	const header = value?.trim();
+	if (!header) return undefined;
+	if (/^\d+$/.test(header)) return Number(header) * 1_000;
+	const at = Date.parse(header);
+	return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+}
+
 async function errorFromResponse(response: Response): Promise<CloudError> {
 	let message = `Orchestrator Cloud request failed (${response.status}).`;
 	let code: string | undefined;
@@ -108,7 +118,7 @@ async function errorFromResponse(response: Response): Promise<CloudError> {
 		// Not JSON: keep the status message.
 	}
 	if (response.status === 401) return new CloudAuthError(message, { status: 401, code, requestId });
-	return new CloudError(message, { status: response.status, code, requestId, details, resetsAt });
+	return new CloudError(message, { status: response.status, code, requestId, details, resetsAt, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) });
 }
 
 /**
@@ -201,8 +211,13 @@ export function createCloudClient(options: CloudClientOptions) {
 			json<{ organization: CloudOrganization }>("POST", "/orgs", { body: { displayName } }),
 
 		// ---- Projects
-		listProjects: (orgId: string, list: ListOptions = {}) =>
-			json<CloudPage<CloudProject>>("GET", `${org(orgId)}/projects`, { query: { cursor: list.cursor, limit: list.limit ?? 100 }, signal: list.signal }),
+		/**
+		 * `standaloneAgents` reads the projects without the caller's standalone
+		 * agents ("exclude") or those agents alone ("only"); omitted lists both. A
+		 * control plane without agents ignores it and lists every project.
+		 */
+		listProjects: (orgId: string, list: ListOptions & { standaloneAgents?: "exclude" | "only" } = {}) =>
+			json<CloudPage<CloudProject>>("GET", `${org(orgId)}/projects`, { query: { cursor: list.cursor, limit: list.limit ?? 100, standaloneAgents: list.standaloneAgents }, signal: list.signal }),
 		getProject: (orgId: string, projectId: string) =>
 			json<{ project: CloudProject }>("GET", `${org(orgId)}/projects/${seg(projectId)}`),
 		createStandaloneProject: (orgId: string, input: { displayName: string; config?: CloudProjectConfig }, idempotencyKey = options.newKey()) =>
@@ -234,6 +249,9 @@ export function createCloudClient(options: CloudClientOptions) {
 			json<{ session: CloudSession }>("GET", session(orgId, sessionId), { signal }),
 		createSession: (orgId: string, input: CreateCloudSessionInput, idempotencyKey = options.newKey()) =>
 			json<{ session: CloudSession }>("POST", `${org(orgId)}/sessions`, { body: input, idempotencyKey }),
+		/** One worker with no repository and no orchestrator; its own project comes back with it. */
+		createStandaloneAgent: (orgId: string, input: CreateCloudStandaloneAgentInput, idempotencyKey = options.newKey()) =>
+			json<{ project: CloudProject; session: CloudSession }>("POST", `${org(orgId)}/standalone-agents`, { body: input, idempotencyKey }),
 		/** Archive: stops the sandbox, keeps the history. */
 		/**
 		 * Opens the session's event stream (server-sent events): what it already

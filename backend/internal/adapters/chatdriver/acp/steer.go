@@ -1102,6 +1102,23 @@ var errSteerTurnStopping = fmt.Errorf("%w: the turn is being stopped", ports.Err
 func (c *conversation) WithdrawPendingSteers() func() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.withdrawPendingSteersLocked()
+}
+
+// WithdrawPendingSteersFor withdraws like WithdrawPendingSteers, but only while
+// providerTurnID is still the running turn. See ports.ChatTurnSteerWithdrawer.
+func (c *conversation) WithdrawPendingSteersFor(providerTurnID string) func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if providerTurnID == "" || c.activeTurn != providerTurnID {
+		return nil
+	}
+	return c.withdrawPendingSteersLocked()
+}
+
+// withdrawPendingSteersLocked does the work of WithdrawPendingSteers. Callers
+// must hold c.mu.
+func (c *conversation) withdrawPendingSteersLocked() func() {
 	turn := c.activeTurn
 	if turn != "" {
 		if c.stoppingTurn != turn {

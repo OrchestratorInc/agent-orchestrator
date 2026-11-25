@@ -53,7 +53,7 @@ export function HarnessDetailGroup({ title, action, children }: { title: string;
 
 /** A row of a harness page card. `secondary` is a second, full-width line of
  * the same row (AO Cloud's side of the harness), not a row of its own. */
-export function HarnessDetailRow({ label, description, children, secondary }: { label: string; description?: string; children?: ReactNode; secondary?: ReactNode }) {
+export function HarnessDetailRow({ label, description, children, secondary }: { label: ReactNode; description?: string; children?: ReactNode; secondary?: ReactNode }) {
 	return <div className={cn(HARNESS_CARD_ROW_CLASS, "min-w-0 flex-wrap gap-x-4 gap-y-1 [overflow-wrap:anywhere]")}>
 		<span className="min-w-0 flex-1">
 			<span className="block text-sm leading-5 text-settings-label">{label}</span>

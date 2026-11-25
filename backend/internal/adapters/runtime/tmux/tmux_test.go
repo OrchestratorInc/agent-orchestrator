@@ -333,6 +333,111 @@ func TestSessionNameMatchesCreateNaming(t *testing.T) {
 	}
 }
 
+func TestDottedReviewerHandleResolvesToCreateName(t *testing.T) {
+	raw := "review-memron.ai-2"
+	// The reviewer launcher destroys a stale pane with the raw derived handle
+	// before Create returns a tmux handle. Exercise that actual lookup path.
+	r, fr := newTestRuntime(0)
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy raw reviewer handle: %v", err)
+	}
+	for _, call := range fr.calls {
+		for _, arg := range call.args {
+			if arg == raw {
+				t.Fatalf("tmux received raw dotted reviewer handle: %v", call.args)
+			}
+		}
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one for sanitized reviewer handle", countCalls(fr, "kill-session"))
+	}
+	got, err := handleID(ports.RuntimeHandle{ID: raw})
+	if err != nil || got != SessionName(raw) {
+		t.Fatalf("handleID(%q) = %q, %v; want Create name %q", raw, got, err, SessionName(raw))
+	}
+	other, err := handleID(ports.RuntimeHandle{ID: "review-memron-ai-2"})
+	if err != nil || other == got {
+		t.Fatalf("distinct reviewer handle = %q, %v; dotted handle = %q", other, err, got)
+	}
+	if _, err := handleID(ports.RuntimeHandle{ID: "review-memron..ai-2"}); err == nil {
+		t.Fatal("dot path segment was accepted")
+	}
+}
+
+func TestLongReviewerHandleResolvesToCreateName(t *testing.T) {
+	raw := "review-" + strings.Repeat("a", 60)
+	want := SessionName(raw)
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("can't find session: " + raw)}
+	fr.hook = func(_ context.Context, call int) error {
+		if call == 1 {
+			return &exec.ExitError{}
+		}
+		return nil
+	}
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy raw long reviewer handle: %v", err)
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one", countCalls(fr, "kill-session"))
+	}
+	for _, call := range fr.calls {
+		if len(call.args) > 0 && call.args[0] == "kill-session" && !reflect.DeepEqual(call.args, killSessionArgs(want)) {
+			t.Fatalf("kill-session args = %v, want %v", call.args, killSessionArgs(want))
+		}
+	}
+	if got, err := handleID(ports.RuntimeHandle{ID: want}); err != nil || got != want {
+		t.Fatalf("stored handle = %q, %v; want %q", got, err, want)
+	}
+	if len(fr.calls) == 0 || !reflect.DeepEqual(fr.calls[0].args, hasSessionArgs(raw)) {
+		t.Fatalf("first call = %v, want exact raw probe", fr.calls)
+	}
+}
+
+func TestLongLegacyReviewerHandleDestroysOriginalSession(t *testing.T) {
+	raw := "review-" + strings.Repeat("a", 60)
+	r := New(Options{Binary: "bundled-tmux-test", LegacyBinary: "system-tmux-test", SocketName: "ao", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("can't find session: " + raw), err: &exec.ExitError{}}, // private socket
+		{},                  // legacy default socket has the raw session
+		{},                  // enforce detach-on-destroy
+		{out: []byte("on")}, // verify detach-on-destroy
+	}}
+	r.runner = fr
+	r.reapSessions = (&recordingReaper{}).reap
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy long legacy reviewer handle: %v", err)
+	}
+	kills := 0
+	for _, call := range fr.calls {
+		if len(call.args) >= 3 && call.args[2] == "kill-session" {
+			kills++
+			if call.name != "system-tmux-test" || !reflect.DeepEqual(call.args, append([]string{"-L", "default"}, killSessionArgs(raw)...)) {
+				t.Fatalf("kill-session call = %+v, want raw name on legacy socket", call)
+			}
+		}
+	}
+	if kills != 1 {
+		t.Fatalf("kill-session calls = %d, want one", kills)
+	}
+}
+
+func TestLongLegacyHandlePreservesRawName(t *testing.T) {
+	raw := "TestRuntimeIntegrationLegacyDefaultSocket" + strings.Repeat("a", 30)
+	r, fr := newTestRuntime(0)
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy long legacy handle: %v", err)
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one", countCalls(fr, "kill-session"))
+	}
+	for _, call := range fr.calls {
+		if len(call.args) > 0 && call.args[0] == "kill-session" && !reflect.DeepEqual(call.args, killSessionArgs(raw)) {
+			t.Fatalf("kill-session args = %v, want %v", call.args, killSessionArgs(raw))
+		}
+	}
+}
+
 // -- env key validation --
 
 func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
@@ -441,7 +546,7 @@ func TestCreateLaunchCommandContainsKeepAliveShell(t *testing.T) {
 	// The launch command is the last argument to new-session (after shellPath -c).
 	args := fr.calls[0].args
 	launchCmd := args[len(args)-1]
-	if !strings.Contains(launchCmd, `exec "${SHELL:-/bin/sh}" -i`) {
+	if !strings.Contains(launchCmd, `exec "$SHELL" -i; else exec '/bin/sh' -i`) {
 		t.Fatalf("launch command missing keep-alive shell: %q", launchCmd)
 	}
 	if !strings.HasPrefix(launchCmd, "cd '/tmp/ws' || exit; ") {
@@ -449,6 +554,39 @@ func TestCreateLaunchCommandContainsKeepAliveShell(t *testing.T) {
 	}
 	if !strings.Contains(launchCmd, "'myagent'") {
 		t.Fatalf("launch command missing quoted argv: %q", launchCmd)
+	}
+}
+
+func TestLaunchPreludeUsesPOSIXShellWithNonPOSIXUserShell(t *testing.T) {
+	for _, userShell := range []string{"/usr/bin/fish", "/bin/zsh", "/bin/bash"} {
+		t.Run(filepath.Base(userShell), func(t *testing.T) {
+			r, fr := newTestRuntime(0)
+			r.shell = userShell
+			fr.outputs = [][]byte{nil, []byte("/tmp/ws\n"), nil, nil, nil, nil, nil}
+			cfg := ports.RuntimeConfig{SessionID: "sess-1", WorkspacePath: "/tmp/ws", Argv: []string{"myagent"}}
+			if _, err := r.Create(context.Background(), cfg); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			args := fr.calls[0].args
+			if got := args[len(args)-3]; got != "/bin/sh" {
+				t.Fatalf("Create prelude shell = %q, want /bin/sh", got)
+			}
+			if !strings.Contains(args[len(args)-1], `exec "$SHELL" -i; else exec '`+userShell+`' -i`) {
+				t.Fatalf("Create lost interactive shell preference: %q", args[len(args)-1])
+			}
+			if _, err := r.Restart(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, cfg); err != nil {
+				t.Fatalf("Restart: %v", err)
+			}
+			for _, call := range fr.calls {
+				if len(call.args) > 0 && call.args[0] == "respawn-pane" {
+					if got := call.args[len(call.args)-3]; got != "/bin/sh" {
+						t.Fatalf("Restart prelude shell = %q, want /bin/sh", got)
+					}
+					return
+				}
+			}
+			t.Fatal("Restart did not respawn pane")
+		})
 	}
 }
 
@@ -470,7 +608,7 @@ func TestCreateCommandTerminalExitsWhenCommandCompletes(t *testing.T) {
 	if !strings.HasSuffix(launchCmd, "; exit $?") {
 		t.Fatalf("command terminal launch = %q, want command exit propagation", launchCmd)
 	}
-	if strings.Contains(launchCmd, `exec "${SHELL:-/bin/sh}" -i`) || strings.Contains(launchCmd, `exec cat >/dev/null`) {
+	if strings.Contains(launchCmd, `exec "$SHELL" -i`) || strings.Contains(launchCmd, `exec cat >/dev/null`) {
 		t.Fatalf("command terminal launch unexpectedly keeps the pane alive: %q", launchCmd)
 	}
 }
@@ -623,7 +761,7 @@ func TestBuildLaunchCommandPreservesExplicitNoColor(t *testing.T) {
 		Argv:          []string{"myagent"},
 		Env:           map[string]string{"NO_COLOR": "1"},
 	}
-	launchCmd := buildLaunchCommand(cfg, "/tmp/env")
+	launchCmd := buildLaunchCommand(cfg, "/tmp/env", "/bin/sh")
 	script := launchEnvScript(cfg)
 
 	if !strings.Contains(script, "export NO_COLOR='1'\n") {

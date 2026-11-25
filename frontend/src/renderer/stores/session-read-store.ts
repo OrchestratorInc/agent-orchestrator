@@ -46,8 +46,16 @@ export const useSessionReadStore = create<SessionReadState>((set, get) => {
 	};
 });
 
+type ReadSession = { id: string; hostId?: string; updatedAt: string };
+
 /** True when the session changed after the user last had it open. */
-export function useSessionUnread(session: { id: string; hostId?: string; updatedAt: string }): boolean {
+export function isSessionUnread(session: ReadSession, state: Stored): boolean {
+	const updated = Date.parse(session.updatedAt);
+	return Number.isFinite(updated) && updated > (state.readAt[sessionReadKey(session)] ?? state.baseline);
+}
+
+/** isSessionUnread for one session, re-rendering when its read time changes. */
+export function useSessionUnread(session: ReadSession): boolean {
 	const key = sessionReadKey(session);
 	const readUntil = useSessionReadStore((state) => state.readAt[key] ?? state.baseline);
 	const updated = Date.parse(session.updatedAt);

@@ -9,6 +9,8 @@ import type {
 	PRCardStatus,
 	PRCheckState,
 	PRChecksTally,
+	PRStripCell,
+	PRStripTone,
 	PRDisplayTone,
 	PRNoun,
 	PRSummaryLink,
@@ -35,6 +37,7 @@ export function PRSummaryMeta({
 	className,
 	countNounLabel = defaultCountNounLabel,
 	externalLink: ExternalLink,
+	hideDiffCounts = false,
 	inline = false,
 	leading,
 	openedViaLabel = "via Orchestrator",
@@ -43,6 +46,8 @@ export function PRSummaryMeta({
 	className?: string;
 	countNounLabel?: CountNounLabel;
 	externalLink: ExternalLinkComponent;
+	/** The compact line leaves +/− out: something beside it states the same numbers. */
+	hideDiffCounts?: boolean;
 	/** The author and the diff stats share one line, as the PR view's card shows them. */
 	inline?: boolean;
 	leading?: string;
@@ -51,7 +56,7 @@ export function PRSummaryMeta({
 	pr: PRSummaryMetadata;
 }) {
 	if (inline) {
-		return <PRCompactMeta className={className} countNounLabel={countNounLabel} externalLink={ExternalLink} leading={leading} openedViaLabel={openedViaLabel} pr={pr} />;
+		return <PRCompactMeta className={className} countNounLabel={countNounLabel} externalLink={ExternalLink} hideDiffCounts={hideDiffCounts} leading={leading} openedViaLabel={openedViaLabel} pr={pr} />;
 	}
 	const branchRange = prBranchRange(pr);
 	const hasDiff = hasDiffMetadata(pr);
@@ -150,6 +155,7 @@ function PRCompactMeta({
 	className,
 	countNounLabel,
 	externalLink: ExternalLink,
+	hideDiffCounts = false,
 	leading,
 	openedViaLabel,
 	pr,
@@ -157,6 +163,7 @@ function PRCompactMeta({
 	className?: string;
 	countNounLabel: CountNounLabel;
 	externalLink: ExternalLinkComponent;
+	hideDiffCounts?: boolean;
 	leading?: string;
 	openedViaLabel: string;
 	pr: PRSummaryMetadata;
@@ -208,7 +215,7 @@ function PRCompactMeta({
 			{hasDiff || avatar ? (
 				<span className="flex shrink-0 items-center gap-2 tabular-nums">
 					{pr.changedFiles > 0 ? <span>{countNounLabel(pr.changedFiles, "file")}</span> : null}
-					{changed ? (
+					{changed && !hideDiffCounts ? (
 						<span className="inline-flex items-center gap-1">
 							{pr.additions > 0 ? <span aria-hidden="true" className="text-success">+{formatCount(pr.additions)}</span> : null}
 							{pr.deletions > 0 ? <span aria-hidden="true" className="text-error">−{formatCount(pr.deletions)}</span> : null}
@@ -304,6 +311,21 @@ export function PRCardStatusSummary({
 		(status) => status.key === "lifecycle" || !omitted?.has(status.key),
 	);
 	const rows = presentation.statusRows?.filter((status) => status.key === "lifecycle" || !omitted?.has(status.key));
+	if (presentation.strip && presentation.readinessRows && presentation.readiness && compactReadiness) {
+		return (
+			<ReadinessStrip
+				action={action}
+				cells={presentation.strip}
+				className={className}
+				details={readinessDetails}
+				explained={presentation.readinessExplained === true}
+				externalLink={externalLink}
+				readiness={presentation.readiness}
+				reviewDetailsAction={reviewDetailsAction}
+				rows={presentation.readinessRows}
+			/>
+		);
+	}
 	if (presentation.readinessRows && presentation.readiness && compactReadiness) {
 		return (
 			<ReadinessFacts
@@ -441,8 +463,8 @@ function StatusRow({
 		: fact
 			? (
 				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-status-fact">
-					<span>{fact.title}</span>
-					<span className="inline-flex min-w-0 items-center gap-1" data-state={fact.state}>
+					<span className={rowLabelClass}>{fact.title}</span>
+					<span className={`${rowStateClass} ${cn("inline-flex min-w-0 items-center gap-1", attentionClass[status.tone])}`} data-state={fact.state}>
 						<CheckStateGlyph className={toneClass[status.tone]} state={fact.state} />
 						<span className="min-w-0 truncate">{fact.value}</span>
 					</span>
@@ -484,8 +506,9 @@ function StatusRow({
 					<PRCardStatusLink externalLink={ExternalLink} status={status} />
 				)}
 			</div>
+			{tally ? <ChecksBar tally={tally} /> : null}
 			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot && "pl-4")}>
+				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot ? "pl-4" : plain && rowChildClass)}>
 					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
 					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 				</div>
@@ -516,35 +539,96 @@ const checkStateClass: Record<PRCheckState, string> = {
 	skipped: "text-passive",
 };
 
-/** A check state's glyph in its colour; a running check's spins unless motion is reduced. */
-export function CheckStateGlyph({ className, state }: { className?: string; state: PRCheckState }) {
+// A row's label leads at the row's own size, with its state two sizes below it.
+const rowLabelClass = "text-foreground";
+// Joined outside cn(): tailwind-merge reads this size as a colour and drops it for one.
+const rowStateClass = "text-micro";
+// What belongs to a row sits in from it.
+const rowChildClass = "pl-4";
+
+/** A state that is in the way takes its colour on the words too; one that is fine stays plain. */
+const attentionClass: Partial<Record<PRDisplayTone, string>> = {
+	review: "text-status-in-review",
+	warning: "text-warning",
+	error: "text-error",
+};
+
+const glyphSizeClass = { xs: "size-icon-xs", sm: "size-icon-sm" };
+
+/**
+ * A check state's glyph in its colour; a running check's spins unless motion is
+ * reduced. `size` is a prop because the two icon sizes don't override each other
+ * as classes.
+ */
+export function CheckStateGlyph({ className, size = "xs", state }: { className?: string; size?: keyof typeof glyphSizeClass; state: PRCheckState }) {
 	return (
 		<CheckStateIcon
-			className={cn("size-icon-xs shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
+			className={cn(glyphSizeClass[size], "shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
 			state={state}
 		/>
 	);
 }
 
+/** States that still need a look; the row names the worst of them. */
+const attentionStates: PRCheckState[] = ["failed", "running", "pending"];
+
 /**
- * "Checks", then how many checks stand at each state, worst first. The first
- * count leads in full weight; the rest are quieter.
+ * "Checks", then a count only for what still needs a look: the worst state some
+ * check is in ("2 failing"). When every check passed or was skipped, "Checks"
+ * stands alone, as on GitHub's merge box. The bar under the row shows every
+ * state; screen readers hear every count.
  */
 function ChecksTally({ tally }: { tally: PRChecksTally }) {
+	const lead = tally.counts[0] && attentionStates.includes(tally.counts[0].state) ? tally.counts[0] : undefined;
+	const rest = lead ? tally.counts.slice(1) : tally.counts;
 	return (
 		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-checks-tally">
-			<span>{tally.title}</span>
-			{tally.counts.map((count, index) => (
+			<span className={rowLabelClass}>{tally.title}</span>
+			{lead ? (
 				<span
-					className={cn("inline-flex items-center gap-1 tabular-nums", index === 0 ? "text-foreground" : "font-normal text-muted-foreground")}
-					data-state={count.state}
-					key={count.state}
+					className={`${rowStateClass} ${cn("tabular-nums", lead.state === "failed" ? "text-error" : "font-normal text-muted-foreground")}`}
+					data-state={lead.state}
 				>
-					<CheckStateGlyph state={count.state} />
-					{count.label}
+					{/* Words only, as on GitHub's merge box: the bar under the row carries the colours. */}
+					{lead.label}
 				</span>
+			) : null}
+			{rest.map((count) => (
+				<span className="sr-only" data-state={count.state} key={count.state}>, {count.label}</span>
 			))}
 		</span>
+	);
+}
+
+/** The bar's order: done on the left, what still needs a look on the right. */
+const barOrder: PRCheckState[] = ["passed", "skipped", "pending", "running", "failed"];
+const barClass: Record<PRCheckState, string> = {
+	passed: "bg-success",
+	skipped: "bg-passive/50",
+	pending: "bg-muted-foreground/45",
+	running: "bg-status-working",
+	failed: "bg-error",
+};
+
+/**
+ * Every check as one thin bar, a segment per state sized by its count, like
+ * GitHub's merge box. Its tooltip spells out the counts; the row's text
+ * already reads them to screen readers.
+ */
+function ChecksBar({ tally }: { tally: PRChecksTally }) {
+	const segments = barOrder.map((state) => tally.counts.find((count) => count.state === state)).filter((count): count is PRChecksTally["counts"][number] => Boolean(count));
+	if (segments.length === 0) return null;
+	return (
+		<div
+			aria-hidden="true"
+			className="mt-1.5 flex h-1.5 min-w-0 gap-0.5 overflow-hidden rounded-full"
+			data-testid="pr-checks-bar"
+			title={tally.counts.map((count) => count.label).join(" · ")}
+		>
+			{segments.map((count) => (
+				<span className={cn("h-full min-w-1 first:rounded-l-full last:rounded-r-full", barClass[count.state])} data-state={count.state} key={count.state} style={{ flexGrow: count.count, flexBasis: 0 }} />
+			))}
+		</div>
 	);
 }
 
@@ -589,11 +673,11 @@ function ReadinessFacts({
 	const leadMore = lead ? details?.[lead.key] : readiness.detail;
 	const more = leadMore || others.length > 0 ? (
 		<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
-			{leadMore ? <div className="min-w-0 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
+			{leadMore ? <div className={cn("min-w-0 text-xs leading-4 text-muted-foreground", rowChildClass)}>{leadMore}</div> : null}
 			{others.map((status) => (
 				<div className="min-w-0" key={status.key}>
 					<StatusRow externalLink={externalLink} reviewDetailsAction={reviewDetailsAction} status={status} />
-					{details?.[status.key] ? <div className="mt-1 min-w-0">{details[status.key]}</div> : null}
+					{details?.[status.key] ? <div className={cn("mt-1 min-w-0", rowChildClass)}>{details[status.key]}</div> : null}
 				</div>
 			))}
 		</div>
@@ -609,6 +693,148 @@ function ReadinessFacts({
 				/>
 			</div>
 			{action ? <div className="shrink-0">{action}</div> : null}
+		</div>
+	);
+}
+
+const stripToneClass: Record<PRStripTone, string> = {
+	success: "bg-success",
+	passive: "bg-passive/50",
+	neutral: "bg-muted-foreground/45",
+	working: "bg-status-working",
+	warning: "bg-warning",
+	error: "bg-error",
+};
+const stripNoteClass = { error: "text-error", warning: "text-warning", neutral: "text-muted-foreground" } as const;
+
+/** A strip cell's bar: a static segment per share, or an empty hatched track when there is nothing to count. */
+function StripBar({ cell }: { cell: PRStripCell }) {
+	const segments = cell.segments.filter((segment) => segment.count > 0);
+	return (
+		<span aria-hidden="true" className="mt-1.5 flex h-1.5 min-w-0 gap-0.5 overflow-hidden rounded-full" data-testid={`pr-strip-bar-${cell.key}`} title={cell.summary}>
+			{segments.length > 0 ? segments.map((segment, index) => (
+				<span
+					className={cn("h-full min-w-1 first:rounded-l-full last:rounded-r-full", stripToneClass[segment.tone])}
+					data-tone={segment.tone}
+					key={`${segment.tone}-${index}`}
+					style={{ flexGrow: segment.count, flexBasis: 0 }}
+				/>
+			)) : (
+				<span className="h-full flex-1 rounded-full border border-border bg-[repeating-linear-gradient(135deg,var(--color-border)_0_2px,transparent_2px_5px)]" data-tone="empty" />
+			)}
+		</span>
+	);
+}
+
+/**
+ * The merge readiness as GitHub's merge box draws it: a cell each for Checks,
+ * Comments (when the PR has any) and Approvals (when the repo requires them),
+ * each a title, a note for what still needs a look, and a bar. A cell opens its
+ * details under the whole strip, flush with it. A conflict, which no cell
+ * covers, gets its own line above.
+ */
+function ReadinessStrip({
+	action,
+	cells,
+	className,
+	details,
+	explained,
+	externalLink,
+	readiness,
+	reviewDetailsAction,
+	rows,
+}: {
+	action?: ReactNode;
+	cells: PRStripCell[];
+	className?: string;
+	details?: Partial<Record<string, ReactNode>>;
+	explained: boolean;
+	externalLink: ExternalLinkComponent;
+	readiness: NonNullable<PRCardPresentation["readiness"]>;
+	reviewDetailsAction?: ReactNode;
+	rows: PRCardStatus[];
+}) {
+	const [open, setOpen] = useState<PRStripCell["key"] | null>(null);
+	const regionId = useId();
+	const reduceMotion = useReducedMotion();
+	const conflict = rows.find((status) => status.key === "merge" && status.tone === "error");
+	// Without a fact that explains it, the verdict itself says why the PR can't merge.
+	const verdict = !explained && !conflict && (readiness.tone === "error" || readiness.tone === "warning") ? readiness : undefined;
+	const panel = (cell: PRStripCell): ReactNode => {
+		const node = cell.key === "ci" ? details?.ci : undefined;
+		const review = cell.key !== "ci" ? reviewDetailsAction : undefined;
+		if (!node && !cell.detail && !review) return null;
+		return (
+			<div className="flex min-w-0 flex-col gap-1.5">
+				{cell.detail ? <p className="m-0 text-xs leading-4 text-muted-foreground">{cell.detail}</p> : null}
+				{node}
+				{review ? <div className="min-w-0">{review}</div> : null}
+			</div>
+		);
+	};
+	const narrow = cells.length >= 3;
+	const openCell = cells.find((cell) => cell.key === open);
+	const openPanel = openCell ? panel(openCell) : null;
+	return (
+		<div className={cn("min-w-0 border-t border-border pt-2", className)} data-testid="pr-readiness-strip">
+			{conflict ? (
+				<div className="mb-2 min-w-0">
+					<StatusRow details={details?.merge} externalLink={externalLink} status={conflict} />
+				</div>
+			) : verdict ? (
+				<p className={cn("m-0 mb-2 text-xs font-medium leading-4", toneClass[verdict.tone])}>{verdict.label}</p>
+			) : null}
+			<div className="grid min-w-0 gap-3" style={{ gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))` }}>
+				{cells.map((cell) => {
+					const opens = panel(cell) !== null;
+					// Three cells leave little room, so the note shortens but stays beside the title, as on GitHub.
+					const noteText = narrow ? cell.shortNote ?? cell.note : cell.note;
+					const note = noteText ? <span className={cn("min-w-0 truncate text-micro tabular-nums", stripNoteClass[cell.noteTone ?? "neutral"])} data-note="">{noteText}</span> : null;
+					const head = (
+						<>
+							<span className="flex min-w-0 items-baseline gap-1.5 text-xs leading-4">
+								<span className="shrink-0 font-medium text-foreground">{cell.title}</span>
+								{note}
+								{/* Three cells need the room for the note; the whole cell still opens on a click. */}
+								{opens && !narrow ? <ChevronIcon aria-hidden="true" className="ml-auto size-icon-2xs shrink-0 self-center text-muted-foreground" direction={open === cell.key ? "up" : "down"} /> : null}
+							</span>
+							<span className="sr-only">, {cell.summary}</span>
+							<StripBar cell={cell} />
+						</>
+					);
+					return opens ? (
+						<button
+							aria-controls={open === cell.key ? regionId : undefined}
+							aria-expanded={open === cell.key}
+							className="flex min-w-0 flex-col rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							data-cell={cell.key}
+							key={cell.key}
+							onClick={() => setOpen((value) => (value === cell.key ? null : cell.key))}
+							type="button"
+						>
+							{head}
+						</button>
+					) : (
+						<div className="flex min-w-0 flex-col" data-cell={cell.key} key={cell.key}>{head}</div>
+					);
+				})}
+			</div>
+			<AnimatePresence initial={false}>
+				{openPanel ? (
+					<motion.div
+						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+						className="min-w-0"
+						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+						id={regionId}
+						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+						key={open}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+					>
+						<div className="min-w-0 pt-2.5" data-testid="pr-strip-panel">{openPanel}</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			{action ? <div className="mt-2 flex justify-end">{action}</div> : null}
 		</div>
 	);
 }

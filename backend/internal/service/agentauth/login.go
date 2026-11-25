@@ -134,6 +134,10 @@ type loginOperation struct {
 	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
 	// printed for it.
 	nativeDigits []string
+	// account marks an account folder's sign-in. The harness's own sign-in
+	// is never handed it to recover, so its panel cannot show, finish or
+	// cancel another account's sign-in.
+	account bool
 }
 
 // StartLogin runs a fixed native login or saves a reviewed provider key.
@@ -159,13 +163,48 @@ type LoginOptions struct {
 	Device *bool
 	// Provider is the catalog provider a provider_key login configures.
 	Provider string
+	// AccountEnv runs the login in an account folder AO keeps (its
+	// CLAUDE_CONFIG_DIR or CODEX_HOME) instead of the computer's own login.
+	// Only the CLI's own sign-in methods take it, and a success leaves the
+	// computer's own login and AO's saved keys as they were.
+	AccountEnv map[string]string
 }
 
 func (o LoginOptions) sharesDevice() bool { return o.Device != nil && *o.Device }
 
+// AccountLoginMethod reports a method that signs a CLI in by running the CLI
+// itself, which an account folder can do: not a key AO saves, a setup token,
+// or the guided native terminal.
+func AccountLoginMethod(agentID, method string) bool {
+	if method == "native" || method == catalogKeyMethod || method == claudeSetupTokenMethod {
+		return false
+	}
+	if _, ok := environmentMethod(agentID, method); ok {
+		return false
+	}
+	if _, ok := directKeyWriter(agentID); ok {
+		return false
+	}
+	args, _, err := loginArgs(agentID, method)
+	return err == nil && len(args) > 0
+}
+
+// StartAccountLogin runs the CLI's own sign-in for method in an account folder
+// whose environment is env. The renderer follows it like any UI login.
+func (s *Service) StartAccountLogin(ctx context.Context, agentID, method, secret string, env map[string]string) (LoginSnapshot, error) {
+	if len(env) == 0 {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_ACCOUNT_INVALID", "An account login needs its account folder.", nil)
+	}
+	return s.StartLoginWithOptions(ctx, agentID, method, secret, LoginOptions{AccountEnv: env})
+}
+
 // StartLoginWithOptions is StartLogin with a model and device setting for
 // provider-key methods. An empty secret reuses the key AO already saved.
 func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, secret string, opts LoginOptions) (LoginSnapshot, error) {
+	account := opts.AccountEnv != nil
+	if account && (!AccountLoginMethod(agentID, method) || opts.Model != "" || opts.Device != nil || opts.Provider != "") {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This sign-in method cannot add an account.", nil)
+	}
 	model := opts.Model
 	if (method == catalogKeyMethod) != (opts.Provider != "") {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_PROVIDER_INVALID", "Choose a provider for a provider key, and only for a provider key.", nil)
@@ -226,7 +265,14 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 	// s.mu is taken just to record the result, so a slow store (`omp auth
 	// import`, a systemd user bus) never stalls other harnesses' logins.
 	withdrawFailed := false
-	if isKey, err := s.saveLoginKey(ctx, plan, method, secret, model, opts, &withdrawFailed); isKey {
+	// An account login is always the CLI's own; it never saves a key here.
+	saveKey := s.saveLoginKey
+	if account {
+		saveKey = func(context.Context, Plan, string, string, string, LoginOptions, *bool) (bool, error) {
+			return false, nil
+		}
+	}
+	if isKey, err := saveKey(ctx, plan, method, secret, model, opts, &withdrawFailed); isKey {
 		if err != nil {
 			return LoginSnapshot{}, err
 		}
@@ -251,7 +297,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return s.saveClaudeSetupToken(secret, expires)
 	}
 	loginCtx, cancel := context.WithDeadline(context.Background(), expires)
-	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{})}
+	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{}), account: account}
 	cmd := s.commandContext(loginCtx, plan.command[0], args...)
 	process.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 3 * time.Second
@@ -262,8 +308,13 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")
 		}
 	}
-	// AO's copy of a key that would override this sign-in stays out of it.
-	cmd.Env = providerkeys.EnvList(append(os.Environ(), "NO_COLOR=1", "TERM=dumb"), providerkeys.WithheldForSignIn(agentID))
+	// AO's copy of a key that would override this sign-in stays out of it. An
+	// account login also points the CLI at the account's own folder.
+	overrides := providerkeys.WithheldForSignIn(agentID)
+	for key, value := range opts.AccountEnv {
+		overrides[key] = value
+	}
+	cmd.Env = providerkeys.EnvList(append(os.Environ(), "NO_COLOR=1", "TERM=dumb"), overrides)
 	if agentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
@@ -325,7 +376,8 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		// started after it still gets the key. A failed release fails the
 		// sign-in. Runs outside s.mu.
 		var releaseErr error
-		if err == nil && loginCtx.Err() == nil {
+		// An account folder's sign-in leaves the computer's own login alone.
+		if err == nil && loginCtx.Err() == nil && !account {
 			releaseCtx, releaseCancel := context.WithTimeout(afterLogin, 5*time.Second)
 			_, releaseErr = s.releaseSubscriptionKey(releaseCtx, agentID)
 			releaseCancel()
@@ -347,7 +399,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 				// The newest sign-in wins, as in the terminal login menu: an
 				// earlier setup token would otherwise keep signing sessions in.
 				// The native login already succeeded, so cleanup is best effort.
-				if agentID == "claude-code" && s.dataDir != "" {
+				if agentID == "claude-code" && s.dataDir != "" && !account {
 					_ = claudecode.RemoveLocalOAuthToken(s.dataDir)
 				}
 			}

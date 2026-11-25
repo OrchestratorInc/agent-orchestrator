@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionid"
 )
 
 const (
@@ -49,14 +49,15 @@ func conptyPartialCreateFailure(err error, handle ports.RuntimeHandle, cleanup p
 	return runtimeEffectFailure{err: err, handle: handle, effect: ports.RuntimeEffectPossible, cleanup: cleanup}
 }
 
-// validSessionID matches agent-orchestrator's assertValidSessionId.
-var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
 // hostSession is the in-memory state for a live pty-host connection.
 type hostSession struct {
-	addr             string
-	pid              int
-	launchID         string
+	addr     string
+	pid      int
+	launchID string
+	// startedBy is the latest moment the pty-host at pid can have started:
+	// when spawn returned it, or (recovered after a restart) when it was
+	// registered. A process at pid that started later reused the pid.
+	startedBy        time.Time
 	currentOwner     bool
 	protocolVersion  int
 	protocolResolved bool
@@ -128,8 +129,10 @@ func New(opts Options) *Runtime {
 // Returns an error if sessionID is invalid, already exists, or spawn fails.
 func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	id := string(cfg.SessionID)
-	if !validSessionID.MatchString(id) {
-		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: invalid session id %q: must match ^[a-zA-Z0-9_-]+$", id))
+	// Keep runtime handles identical to session IDs: the registry and restore
+	// path use the handle as an exact key.
+	if !sessionid.Valid(id) {
+		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: invalid session id %q: must contain only letters, digits, underscores, hyphens, and internal dots", id))
 	}
 	if cfg.WorkspacePath == "" {
 		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: workspace path required"))
@@ -177,7 +180,8 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	}
 
 	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env,
-		HostOptions{StartOnAttach: cfg.StartOnAttach, LazySurface: cfg.LazyStyledOutput, Cols: cfg.InitialCols, Rows: cfg.InitialRows})
+		HostOptions{StartOnAttach: cfg.StartOnAttach, LazySurface: cfg.LazyStyledOutput, Cols: cfg.InitialCols, Rows: cfg.InitialRows, ReplayFile: cfg.ReplayFile, OutputLines: cfg.OutputLines})
+	spawnedBy := time.Now()
 	if err != nil {
 		cause := fmt.Errorf("conpty: spawn pty-host for %q: %w", id, err)
 		handle := ports.RuntimeHandle{ID: id}
@@ -199,7 +203,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 			// spawner could not prove cleanup. Retain its PID and launch fence in
 			// both memory and the restart registry. The sentinel address prevents
 			// ordinary client traffic while keeping the possible handle probeable.
-			sess := &hostSession{addr: unresolvedHostAddress, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true}
+			sess := &hostSession{addr: unresolvedHostAddress, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true, startedBy: spawnedBy}
 			r.mu.Lock()
 			r.sessions[id] = sess
 			r.mu.Unlock()
@@ -219,7 +223,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 			return ports.RuntimeHandle{}, conptyPartialCreateFailure(cause, handle, ports.RuntimeCleanupFailed)
 		}
 		r.mu.Lock()
-		r.sessions[id] = &hostSession{addr: addr, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true}
+		r.sessions[id] = &hostSession{addr: addr, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true, startedBy: spawnedBy}
 		r.mu.Unlock()
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		cleanupErr := r.Destroy(cleanupCtx, handle)
@@ -232,7 +236,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 
 	sess := &hostSession{
 		addr: addr, pid: pid, launchID: cfg.Env[runtimeLaunchIDEnv], currentOwner: true,
-		protocolVersion: conPTYHostProtocolVersion, protocolResolved: true,
+		protocolVersion: conPTYHostProtocolVersion, protocolResolved: true, startedBy: spawnedBy,
 	}
 
 	r.mu.Lock()
@@ -500,6 +504,23 @@ func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandl
 	return []int{sess.pid}, nil
 }
 
+// BoundedProcessRoots is ProcessRootPIDs with the latest moment the pty-host
+// can have started, so a caller can tell the host from a process that reused
+// its pid after the host exited without being unregistered.
+func (r *Runtime) BoundedProcessRoots(ctx context.Context, handle ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return nil, fmt.Errorf("conpty: resolve runtime %q: %w", handle.ID, err)
+	}
+	if sess == nil || sess.pid <= 0 {
+		return nil, nil
+	}
+	if sess.startedBy.IsZero() {
+		return nil, fmt.Errorf("conpty: no start bound for pty-host %d of %q", sess.pid, handle.ID)
+	}
+	return []ports.ProcessRoot{{PID: sess.pid, StartedBy: sess.startedBy}}, nil
+}
+
 // ServerPID has no equivalent here: ConPTY hosts one pty per session rather
 // than sharing a detached server the way tmux does.
 func (r *Runtime) ServerPID(ctx context.Context) (int, bool) {
@@ -660,6 +681,11 @@ func (r *Runtime) resolveWithEvidence(ctx context.Context, id string) (*hostSess
 		}
 		// Re-populate the map so subsequent calls skip the file scan.
 		recovered := &hostSession{addr: e.PipePath, pid: e.PtyHostPID, launchID: e.LaunchID}
+		if registered, err := time.Parse(time.RFC3339, e.RegisteredAt); err == nil {
+			// RegisteredAt is truncated to the second; the host started at most
+			// within that second.
+			recovered.startedBy = registered.Add(time.Second)
+		}
 		r.mu.Lock()
 		// Only store if another goroutine hasn't beaten us.
 		if r.sessions[id] == nil {

@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronLeft, Folder, Link2, LoaderCircle } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -9,7 +10,7 @@ import type { MessageKey } from "../i18n/messages";
 import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, WithGitHubState } from "./FirstRunSteps";
+import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunImport, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, WithGitHubState, WithImportOffer } from "./FirstRunSteps";
 import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
@@ -38,6 +39,7 @@ export default function CloneRepositoryDialog({
 	firstRun = false,
 	onOpenLocalFolder,
 	onStartStandaloneAgent,
+	onChatsImported,
 	cloning = false,
 	disabled,
 	error,
@@ -61,6 +63,8 @@ export default function CloneRepositoryDialog({
 	firstRun?: boolean;
 	onOpenLocalFolder?: () => void;
 	onStartStandaloneAgent?: () => void;
+	/** Set when first run may offer the import step; runs once the import finished. */
+	onChatsImported?: () => void;
 	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
@@ -96,7 +100,9 @@ export default function CloneRepositoryDialog({
 	const [choosingDestination, setChoosingDestination] = useState(false);
 	const [repositoryFieldTouched, setRepositoryFieldTouched] = useState(false);
 	const [shake, setShake] = useState(false);
-	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
+	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "import" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
+	// Back from the project step returns to the import step only if it was shown.
+	const [importOffered, setImportOffered] = useState(false);
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
 	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
 	const repositoryAvatar = repositoryAvatarFromGitUrl(value.remoteUrl);
@@ -266,10 +272,11 @@ export default function CloneRepositoryDialog({
 		});
 	};
 
+	useTelemetrySurface("onboarding", open && firstRun);
 	return (
 		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && !firstRun && onClose()}>
 			<Dialog.Portal>
-				<Dialog.Content onEscapeKeyDown={firstRun ? (event) => event.preventDefault() : undefined} onInteractOutside={firstRun ? (event) => event.preventDefault() : undefined} className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+				<Dialog.Content data-telemetry-surface={firstRun ? "onboarding" : undefined} onEscapeKeyDown={firstRun ? (event) => event.preventDefault() : undefined} onInteractOutside={firstRun ? (event) => event.preventDefault() : undefined} className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
 					{(() => {
 						const render = (gh: GitHubState) => {
 						const showRepoPicker = firstRun && gh.hasGitHub;
@@ -280,7 +287,33 @@ export default function CloneRepositoryDialog({
 						};
 						const stepContent = (<>
 					{firstRun && firstRunStep === "welcome" ? (
-						<FirstRunWelcome disabled={disabled} onNext={() => setFirstRunStep("sources")} />
+						onChatsImported ? (
+							<WithImportOffer>
+								{(offer) => (
+									<FirstRunWelcome
+										disabled={disabled}
+										onNext={() => {
+											setImportOffered(offer);
+											setFirstRunStep(offer ? "import" : "sources");
+										}}
+									/>
+								)}
+							</WithImportOffer>
+						) : (
+							<FirstRunWelcome disabled={disabled} onNext={() => setFirstRunStep("sources")} />
+						)
+					) : null}
+					{firstRun && firstRunStep === "import" && onChatsImported ? (
+						<FirstRunImport
+							onBack={() => setFirstRunStep("welcome")}
+							onClose={onClose}
+							onSkip={() => setFirstRunStep("sources")}
+							onNothingToImport={() => {
+								setImportOffered(false);
+								setFirstRunStep("sources");
+							}}
+							onImported={onChatsImported}
+						/>
 					) : null}
 					{firstRun && firstRunStep === "github" ? <FirstRunGitHubStep
 						onBack={() => setFirstRunStep("sources")}
@@ -291,7 +324,7 @@ export default function CloneRepositoryDialog({
 						<FirstRunSources
 							disabled={disabled}
 							gh={gh}
-							onBack={() => setFirstRunStep("welcome")}
+							onBack={() => setFirstRunStep(importOffered ? "import" : "welcome")}
 							onClose={onClose}
 							onPickRepo={(remoteUrl) => {
 								onChange({ ...value, remoteUrl });

@@ -65,6 +65,9 @@ type SpawnConfig struct {
 	// AgentAccountID is the provider account the agent runs under. Empty uses
 	// the provider's default account.
 	AgentAccountID string
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool
 
 	// RequestedMode is the caller's explicit session mode, or empty to let the
 	// daemon resolve its default. It is validated and persisted before any
@@ -168,11 +171,14 @@ type ForkTerminalLaunch struct {
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the
-// already-decoded bytes; the manager derives the on-disk filename from the
-// MIME type.
+// already-decoded bytes of a small file sent inline; Upload instead names a
+// file streamed to disk first (attachmentstore.Store.Upload), which is how a
+// large file arrives. Exactly one is set. The manager derives the on-disk
+// filename from the MIME type.
 type SpawnAttachment struct {
 	// Ext is the file extension (including the leading dot, e.g. ".png")
 	// inferred from the attachment's declared MIME type, or ".bin" for unknown types.
-	Ext  string
-	Data []byte
+	Ext    string
+	Data   []byte
+	Upload string
 }

@@ -31,8 +31,9 @@ describe("reviewer control integration", () => {
 		expect(actions).toContain("request === modelRequest.current");
 	});
 
-	it("confirms model and mode changes while a review is running", () => {
-		expect(actions).toContain("confirmReviewerChange(reviewerOverride, { ...reviewerConfig, [key]: value })");
+	it("confirms model, mode and effort changes while a review is running", () => {
+		expect(actions).toContain("confirmReviewerChange(reviewerOverride, reviewerModelPick(modelState, value))");
+		expect(actions).toContain("confirmReviewerChange(reviewerOverride, reviewerEffortPick(modelState, level))");
 	});
 
 	it("does not warn or save when the selected reviewer settings are unchanged", () => {
@@ -40,9 +41,9 @@ describe("reviewer control integration", () => {
 	});
 
 	it("renders every reviewer through the shared harness logo registry", () => {
-		expect(pickerIOS).toContain('import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios"');
-		expect(pickerIOS).toContain("<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />");
-		expect(picker).toContain("const source = logoFor(harness);");
+		expect(pickerIOS).toContain('import { HarnessImage } from "./spawn-composer-controls.ios"');
+		expect(pickerIOS).toContain("<HarnessImage harness={agent.id} />");
+		expect(picker).toContain("const source = logoFor(harness, scheme);");
 	});
 
 	it("keeps Android review actions scrolling inside the sheet", () => {
@@ -50,9 +51,11 @@ describe("reviewer control integration", () => {
 		expect(sheetAndroid).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
 	});
 
-	it("picks the reviewer and model from native iOS menu pickers", () => {
+	it("picks the reviewer, model and effort from native iOS menu pickers", () => {
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-reviewer")');
-		expect(pickerIOS).toContain('accessibilityIdentifier("review-model")');
+		expect(pickerIOS).toContain('tag="review-model"');
+		expect(pickerIOS).toContain('tag="review-effort"');
+		expect(pickerIOS).toContain("accessibilityIdentifier(identifier)");
 	});
 
 	it("only offers reviewers that can run, like the spawn sheet", () => {

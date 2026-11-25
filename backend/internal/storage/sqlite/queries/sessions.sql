@@ -366,6 +366,13 @@ SELECT id, project_id, num, issue_id, kind, harness,
     runtime_released_launch_id, import_source
 FROM sessions ORDER BY project_id, num;
 
+-- name: ListPreviewSessions :many
+-- Live workers with only the columns the preview poller reads.
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions
+WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY id;
+
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
@@ -391,12 +398,16 @@ WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
     AND s.id NOT IN (
         SELECT t.handled_by_session_id FROM conversation_turns t
         JOIN conversations c ON c.id = t.conversation_id
-        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+        LEFT JOIN review r ON r.id = c.review_id
+        WHERE (c.session_id IS NULL OR c.session_id <> t.handled_by_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> t.handled_by_session_id)
     )
     AND s.id NOT IN (
         SELECT c.current_session_id FROM conversations c
+        LEFT JOIN review r ON r.id = c.review_id
         WHERE c.current_session_id IS NOT NULL
             AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> c.current_session_id)
     )
 ORDER BY s.id;
 
@@ -433,6 +444,7 @@ UPDATE sessions SET
     updated_at = sqlc.arg(updated_at),
     auto_inject_review = sqlc.arg(auto_inject_review),
     auto_inject_ci = sqlc.arg(auto_inject_ci),
+    terminate_on_pr_merge = sqlc.arg(terminate_on_pr_merge),
     provision_state = sqlc.arg(provision_state),
     provision_error = '',
     client_request_id = sqlc.arg(client_request_id),

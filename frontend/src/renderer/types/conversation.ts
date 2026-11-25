@@ -155,6 +155,12 @@ export interface ConversationTurn {
 	 * reason, rather than as a run that failed.
 	 */
 	notRun?: boolean;
+	/**
+	 * A running Cloud turn no agent has taken yet: the session is still starting,
+	 * or its worker took the turn while it checks out the project, runs Setup and
+	 * starts the agent. It reads as the session getting ready, not as thinking.
+	 */
+	agentPending?: boolean;
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;
@@ -578,6 +584,8 @@ export interface SystemEventDetail {
 	senderProjectId?: string;
 	senderDisplayName?: string;
 	clientMessageId?: string;
+	/** steer: the person deleted the queued message while the agent was taking it; it was delivered. */
+	deliveredBeforeDelete?: boolean;
 	/** steer: the queued turns whose messages this steer carried into the running turn. */
 	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
@@ -588,6 +596,11 @@ export interface SystemEventDetail {
 		uri?: string;
 		name?: string;
 		text?: string;
+		excerpt?: {
+			reference?: { id?: string; order?: number; conversationId?: string; messageId?: string; revision?: number; text?: string; comment?: string; snapshot?: ChatExcerptSnapshot };
+			selectedText?: string;
+		};
+		fileReference?: ChatFileReference;
 	}>;
 }
 
