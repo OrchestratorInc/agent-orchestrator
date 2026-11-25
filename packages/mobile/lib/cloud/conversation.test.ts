@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { requestDockModel } from "../chat/requestDockModel";
 import { groupConversationByTurn } from "../chat/timelineModel";
-import { appendCloudEvents, cloudConversationSnapshot, cloudTurnDiff, runningCloudTurnId } from "./conversation";
+import { appendCloudEvents, cloudConversationSnapshot, cloudSessionModel, cloudTurnDiff, runningCloudTurnId } from "./conversation";
 import type { CloudClientEvent, CloudSession } from "./types";
 
 const session = (overrides: Partial<CloudSession> = {}): CloudSession => ({
@@ -193,5 +193,25 @@ describe("cloud conversation projection", () => {
 		const whole = cloudConversationSnapshot(session(), events);
 		expect(whole.hasMoreBefore).toBe(false);
 		expect(groupConversationByTurn(whole).map((group) => group.turnId)).toEqual(["t2", "t1"]);
+	});
+});
+
+describe("the model a cloud session runs", () => {
+	const base = { id: "s", orgId: "o", projectId: "p", kind: "worker", harness: "claude-code", displayName: "", branch: "", mode: "trusted", interfaceMode: "chat", activityState: "idle", status: "idle", runtimeConnected: true, isTerminated: false, createdAt: "", updatedAt: "" } as CloudSession;
+
+	it("is its current model: a Chat pick made anywhere, not only the one it launched with", () => {
+		expect(cloudSessionModel({ ...base, model: "opus", currentModel: "sonnet" })).toBe("sonnet");
+		expect(cloudSessionModel({ ...base, model: "", currentModel: "opus" })).toBe("opus");
+	});
+
+	it("is the agent's default when the current model is empty, whatever it launched with", () => {
+		expect(cloudSessionModel({ ...base, model: "opus", currentModel: "" })).toBeUndefined();
+		expect(cloudSessionModel({ ...base, currentModel: "default" })).toBeUndefined();
+	});
+
+	it("is the launch model from a control plane that predates currentModel", () => {
+		expect(cloudSessionModel({ ...base, model: "opus" })).toBe("opus");
+		expect(cloudSessionModel({ ...base, model: " " })).toBeUndefined();
+		expect(cloudSessionModel(base)).toBeUndefined();
 	});
 });

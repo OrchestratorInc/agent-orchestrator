@@ -62,6 +62,7 @@ type lifecycleStack struct {
 	reaperDone       <-chan struct{}
 	activityDone     <-chan struct{}
 	turnFailureDone  <-chan struct{}
+	nativeDone       <-chan struct{}
 	artifactsDone    <-chan struct{}
 	autoReviewDone   <-chan struct{}
 	reviewDoneDone   <-chan struct{}
@@ -81,7 +82,11 @@ type lifecycleStack struct {
 // reaper. The goroutine stops when ctx is cancelled; Stop waits for it to drain.
 // The messenger is the per-daemon agent messenger the LCM uses to nudge agents
 // in response to SCM observations (CI failure, review feedback, merge conflict).
-func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
+// turnFailureIdleTick is how often the turn-failure observer looks while no
+// turn is running; a session change brings it back to its 2 s tick at once.
+const turnFailureIdleTick = 30 * time.Second
+
+func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger, sessionChanges <-chan struct{}) *lifecycleStack {
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
@@ -98,7 +103,12 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
 	activityStart := make(chan struct{})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart})
-	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
+	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{
+		Logger:   logger,
+		Wake:     sessionChanges,
+		IdleTick: turnFailureIdleTick,
+	})
+	nativeSessionPoller := activityobserver.NewNativeSessionObserver(store, lcm, agents, activityobserver.NativeSessionConfig{DataDir: dataDir, Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
 		// fx treats reporting as best effort; an occupied or unavailable socket
@@ -115,6 +125,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		reaperDone:       rp.Start(ctx),
 		activityDone:     activityPoller.Start(ctx),
 		turnFailureDone:  turnFailurePoller.Start(ctx),
+		nativeDone:       nativeSessionPoller.Start(ctx),
 		herdr:            herdrServer,
 		artifactsDone:    artifactsPoller.Start(ctx),
 		activity:         activityPoller,
@@ -224,6 +235,9 @@ func (l *lifecycleStack) Stop() {
 	if l.turnFailureDone != nil {
 		<-l.turnFailureDone
 	}
+	if l.nativeDone != nil {
+		<-l.nativeDone
+	}
 	if l.artifactsDone != nil {
 		<-l.artifactsDone
 	}
@@ -272,6 +286,8 @@ type sessionLifecycle interface {
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
+	SetDevicesOffered(offered func() bool)
+	SetCommitAttributionEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
@@ -394,6 +410,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Logger:              log,
 		ReconcileWorkers:    startupReconcileWorkers,
 		CodexOperationGate:  codexOperationGate,
+		TerminateOnPRMerge:  cfg.TerminateOnPRMerge,
 	})
 	mgr.SetAgentReadiness(agentReadiness)
 	scmProvider := newMultiSCMProvider(cfg.GitLab, log)

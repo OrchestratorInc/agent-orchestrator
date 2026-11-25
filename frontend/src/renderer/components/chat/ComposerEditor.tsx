@@ -313,7 +313,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 				className={cn(
 					"mx-0.5 inline-flex items-center gap-1 rounded-md border border-border-strong bg-interactive-hover px-1.5 py-0.5 align-middle text-[0.9em] leading-none select-none",
 					this.__kind === "skill"
-						? "text-logo-accent"
+						? "text-logo-accent-text"
 						: "text-foreground",
 				)}
 			>

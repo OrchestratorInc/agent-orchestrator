@@ -21,6 +21,7 @@ import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadlin
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
+import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests, WORKER_STARTING_CODE } from "../../lib/cloud-worker-starting";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -32,6 +33,8 @@ const cloudMocks = vi.hoisted(() => ({
 	steerQueuedMessage: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
+	getWorkspaceReviewTree: vi.fn(),
+	searchWorkspaceReview: vi.fn(),
 	listUserAgentModels: vi.fn(),
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
@@ -56,6 +59,8 @@ vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
 }));
 vi.mock("../../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => cloudSetup.meUserId }));
+const restoreSession = vi.hoisted(() => vi.fn());
+vi.mock("../../hooks/useRestoreSession", () => ({ useRestoreSession: () => restoreSession }));
 vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({
 		features: [...(cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"]), ...cloudSetup.features],
@@ -116,6 +121,8 @@ function capturedCloudExcerpt(): ChatDraftExcerptReference {
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
+		// A session's starting backoff is module state: one test's must not hold the next one's reads.
+		resetCloudWorkerStartingForTests();
 		vi.mocked(reportPlanRefusal).mockClear();
 		vi.mocked(reportUpgradeViewed).mockClear();
 		billing.offering = { selfServeBilling: true, canManageBilling: true };
@@ -259,6 +266,53 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ cloudOrgId: "org-1", harnessView: "cloud" });
 	});
 
+	describe("a worker still preparing its workspace", () => {
+		const starting = () => new CloudCpError("The session's workspace is still starting.", { status: 503, code: WORKER_STARTING_CODE, retryAfterMs: 1_000 });
+		beforeEach(() => {
+			resetCloudWorkerStartingForTests();
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0, hasOlder: false, nextBefore: CLOUD_CHAT_NEWEST });
+			cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		});
+
+		it("is not asked for its models until it is ready, then is", async () => {
+			noteCloudWorkerStarting("org-1", session.id, starting());
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+			expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+			// Its Retry-After passed: the catalog is asked for.
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+		});
+
+		it("is not asked for its files for @ until it is ready, and a still-starting answer is asked again rather than shown", async () => {
+			const tree = { path: "", truncated: false, entries: [{ name: "README.md", path: "README.md", type: "file", status: "unmodified", size: 5 }] };
+			cloudMocks.getWorkspaceReviewTree.mockReset().mockRejectedValueOnce(starting()).mockResolvedValue(tree);
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			// A models read was answered, so the workspace is ready; then it says it is starting again.
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+			act(() => { cloudMocks.chatProps.mock.lastCall?.[0].onFileQuery(""); });
+			await waitFor(() => expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(1));
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(1);
+			expect(queryClient.getQueryState(["cloud-composer-files", "org-1", session.id, ""])?.status).not.toBe("error");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].filePaths).toEqual(["README.md"]), { timeout: 3_000 });
+			expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(2);
+		});
+
+		it("asks again after its Retry-After when it answers that it is still starting, instead of showing an error", async () => {
+			cloudMocks.listChatModels.mockRejectedValueOnce(starting());
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1));
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1);
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+			await waitFor(() => expect(queryClient.getQueryState(["cloud-chat-models", "org-1", session.id, "codex", ""])?.status).toBe("success"));
+		});
+	});
+
 	it("holds a chat it hasn't read yet as one with history, and reopens a closed chat from its cache", async () => {
 		const events = [
 			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Why?", turnId: "turn-1" }, createdAt: session.updatedAt },
@@ -289,6 +343,55 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.chatProps.mock.calls[0]?.[0].snapshot.items).toHaveLength(2);
 		expect(cloudMocks.chatProps.mock.calls[0]?.[0].historyPending).toBe(false);
 		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenLastCalledWith("org-1", session.id, { after: 2, before: CLOUD_CHAT_NEWEST, limit: 500 }));
+	});
+
+	it("opens a new orchestrator still starting as a new chat, not one being restored", async () => {
+		const starting = {
+			...session, kind: "orchestrator", runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" },
+		} satisfies WorkspaceSession;
+		cloudMocks.listChatEvents.mockReset().mockImplementation(() => new Promise(() => {}));
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		const firstFrames = async (subject: WorkspaceSession) => {
+			cloudMocks.chatProps.mockClear();
+			const view = render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><CloudSessionChatSurface session={subject} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			const pending = cloudMocks.chatProps.mock.calls.map((call) => call[0].historyPending);
+			view.unmount();
+			return pending;
+		};
+		// Its read has not answered, yet a first start has no history to wait for.
+		expect(await firstFrames(starting)).not.toContain(true);
+		// Woken from a pause (a worker has connected before), it has history: it waits.
+		expect(await firstFrames({ ...starting, cloud: { ...starting.cloud, workerEpoch: 7 } })).toContain(true);
+		// A worker may start with its task: it waits for its history too.
+		expect(await firstFrames({ ...starting, kind: "worker" })).toContain(true);
+	});
+
+	it("keeps a new orchestrator centered when its worker connects before the first read answers", async () => {
+		const starting = {
+			...session, kind: "orchestrator", runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" },
+		} satisfies WorkspaceSession;
+		cloudMocks.listChatEvents.mockReset().mockImplementation(() => new Promise(() => {}));
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={starting} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// The worker connects while the read is still out: no longer starting, with an epoch.
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{
+			...starting, runtimeConnected: true, cloud: { ...starting.cloud, observedState: "running", workerEpoch: 1 },
+		}} /></QueryClientProvider>);
+		expect(cloudMocks.chatProps.mock.calls.map((call) => call[0].historyPending)).not.toContain(true);
+		// Another session opened in the same surface decides afresh.
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{
+			...starting, id: "cloud-other", runtimeConnected: true, cloud: { ...starting.cloud, observedState: "running", workerEpoch: 3 },
+		}} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(true));
+		view.unmount();
 	});
 
 	it("reads the next account's own chat, never the previous account's cached one", async () => {
@@ -2226,6 +2329,81 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
 	});
 
+	it("restores an archived session before its message, and sends nothing when the restore is refused", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		restoreSession.mockReset()
+			.mockResolvedValueOnce({ status: "error", message: "Restore refused" })
+			.mockResolvedValueOnce({ status: "success" });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const archived = { ...session, cloud: { orgId: "org-1" }, isTerminated: true, runtimeConnected: false };
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={archived} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// Opening it restored nothing.
+		expect(restoreSession).not.toHaveBeenCalled();
+
+		await expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "message-1"))
+			.rejects.toMatchObject({ code: "SESSION_RESTORE_FAILED", message: "Restore refused" });
+		expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
+
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "message-1");
+		expect(restoreSession).toHaveBeenCalledTimes(2);
+		expect(restoreSession).toHaveBeenLastCalledWith(session.id);
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledOnce();
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ text: "hello" }), { idempotencyKey: "message-1" });
+		expect(restoreSession.mock.invocationCallOrder[1]).toBeLessThan(cloudMocks.sendSessionMessage.mock.invocationCallOrder[0]!);
+	});
+
+	it("sends a message held by a restore to its own session after another one opened", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		let finishRestore: (result: { status: "success" }) => void = () => {};
+		restoreSession.mockReset().mockReturnValueOnce(new Promise((resolve) => { finishRestore = resolve; }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const archived = { ...session, cloud: { orgId: "org-1" }, isTerminated: true, runtimeConnected: false };
+		const other = { ...session, id: "cloud-other", cloud: { orgId: "org-2" } };
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={archived} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		const sent = cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "message-1");
+		// The composer shows the restore while it runs.
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].resumingAgent).toBe(true));
+
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={other} /></QueryClientProvider>);
+		await act(async () => {
+			finishRestore({ status: "success" });
+			await sent;
+		});
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledOnce();
+		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ text: "hello" }), { idempotencyKey: "message-1" });
+		// Not the other session's restore.
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].resumingAgent).toBe(false);
+	});
+
+	it("leaves restoring a session shared from another organization to its owner", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		restoreSession.mockReset();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1", shared: true }, isTerminated: true, runtimeConnected: false }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// A message to it would wait unanswered, so the composer says who can restore it.
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].composerLockedPlaceholder).toBe("Only the owner can restore this archived session");
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("hello", [], "message-1").catch(() => undefined);
+		expect(restoreSession).not.toHaveBeenCalled();
+	});
+
 	it("says a session deleted under the composer must be restored", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockReset();
@@ -3533,5 +3711,130 @@ describe("toSnapshot agent switches", () => {
 		expect(first).toBeLessThan(marker);
 		expect(marker).toBeLessThan(held);
 		expect(items[marker].sequence).toBeLessThan(items[held].sequence);
+	});
+});
+
+// A worker takes a turn as soon as it connects, then checks out the project,
+// runs Setup and starts the agent before the agent opens the turn. Until then
+// the turn is waiting for its agent, so the chat says the session is getting
+// ready rather than that the agent is thinking.
+describe("toSnapshot turns waiting for their agent", () => {
+	const event = (sequence: number, type: string, payload: Record<string, unknown>): CloudCpClientEvent => ({
+		sessionId: session.id, sequence, type, payload, createdAt: session.updatedAt,
+	});
+	const pending = (snapshot: ReturnType<typeof toSnapshot>) => snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id);
+	const sent = [event(1, "chat.user_message", { text: "Go", turnId: "turn-1" })];
+	const taken = [...sent, event(2, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 })];
+
+	it("waits from the send, through the worker taking the turn, until the agent opens it", () => {
+		// Sent while the session starts: no worker has taken it yet.
+		expect(pending(toSnapshot(session, sent))).toEqual(["turn-1"]);
+		// Taken by a worker still checking out the project.
+		expect(pending(toSnapshot(session, taken))).toEqual(["turn-1"]);
+		// The agent opened the turn.
+		expect(pending(toSnapshot(session, [...taken, event(3, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: false })]))).toEqual([]);
+		// Output alone shows an agent at work too.
+		expect(pending(toSnapshot(session, [...taken, event(3, "chat.assistant_delta", { turnId: "turn-1", delta: "On it" })]))).toEqual([]);
+	});
+
+	it("waits again for the agent of a new attempt", () => {
+		const retried = [
+			...taken,
+			event(3, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: true }),
+			event(4, "chat.turn_started", { turnId: "turn-1", attempt: 2, workerEpoch: 4 }),
+		];
+		expect(pending(toSnapshot(session, retried))).toEqual(["turn-1"]);
+	});
+
+	it("treats a turn started above the loaded events as the agent's", () => {
+		const page = [event(5, "chat.assistant_delta", { turnId: "turn-1", delta: "still going" })];
+		expect(pending(toSnapshot(session, page, undefined, { partial: true }))).toEqual([]);
+	});
+
+	// The worker's agent is already running: a later turn on it finds the
+	// project set up, so it reads as the agent's from its start, without a
+	// "Setting up project" flash before each message's capabilities arrive.
+	it("does not wait again on a worker whose agent already opened a turn", () => {
+		const warm = [
+			event(1, "worker.connected", { workerId: "w", epoch: 3 }),
+			...taken.slice(0, 1).map((e) => ({ ...e, sequence: 2 })),
+			event(3, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 }),
+			event(4, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: true }),
+			event(5, "chat.turn_completed", { turnId: "turn-1", attempt: 1 }),
+			event(6, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		const connected = { ...session, runtimeConnected: true };
+		// Sent to the warm session, before the worker took it.
+		expect(pending(toSnapshot(connected, warm))).toEqual([]);
+		// Taken by the same worker, its capabilities not in yet.
+		const takenWarm = [...warm, event(7, "chat.turn_started", { turnId: "turn-2", attempt: 1, workerEpoch: 3 })];
+		expect(pending(toSnapshot(connected, takenWarm))).toEqual([]);
+	});
+
+	it("waits on a new worker (a restore or a wake) and while no worker is connected", () => {
+		const before = [
+			event(1, "worker.connected", { workerId: "w", epoch: 3 }),
+			event(2, "chat.user_message", { text: "Go", turnId: "turn-1" }),
+			event(3, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 }),
+			event(4, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: true }),
+			event(5, "chat.turn_completed", { turnId: "turn-1", attempt: 1 }),
+			event(6, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		// The worker paused or ended: the next message waits for a new one.
+		expect(pending(toSnapshot({ ...session, runtimeConnected: false }, before))).toEqual(["turn-2"]);
+		// A new worker took it: its agent starts first.
+		const rewoken = [...before,
+			event(7, "worker.connected", { workerId: "w2", epoch: 4 }),
+			event(8, "chat.turn_started", { turnId: "turn-2", attempt: 1, workerEpoch: 4 })];
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true }, rewoken))).toEqual(["turn-2"]);
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true },
+			[...rewoken, event(9, "chat.turn_capabilities", { turnId: "turn-2", attempt: 1, steering: true })]))).toEqual([]);
+	});
+
+	it("leaves a worker that never reports capabilities as running from its start", () => {
+		const older = [
+			event(1, "chat.user_message", { text: "First", turnId: "turn-0" }),
+			event(2, "chat.turn_started", { turnId: "turn-0", attempt: 1 }),
+			event(3, "chat.turn_completed", { turnId: "turn-0", attempt: 1 }),
+			event(4, "chat.user_message", { text: "Second", turnId: "turn-1" }),
+			event(5, "chat.turn_started", { turnId: "turn-1", attempt: 1 }),
+		];
+		expect(pending(toSnapshot(session, older))).toEqual([]);
+	});
+
+	// An older worker that never reported capabilities says nothing about the
+	// newer worker that replaced it: that one's first turn still waits for its
+	// agent, while a turn the older worker took still reads as running.
+	it("goes by worker when an older one never reported capabilities", () => {
+		const olderWorker = [
+			event(1, "chat.user_message", { text: "First", turnId: "turn-0" }),
+			event(2, "chat.turn_started", { turnId: "turn-0", attempt: 1, workerEpoch: 3 }),
+			event(3, "chat.turn_completed", { turnId: "turn-0", attempt: 1 }),
+		];
+		const sameWorker = [...olderWorker,
+			event(4, "chat.user_message", { text: "Second", turnId: "turn-1" }),
+			event(5, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 })];
+		expect(pending(toSnapshot(session, sameWorker))).toEqual([]);
+		const newerWorker = [...olderWorker,
+			event(4, "worker.connected", { workerId: "w2", epoch: 4 }),
+			event(5, "chat.user_message", { text: "Second", turnId: "turn-1" }),
+			event(6, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 4 })];
+		expect(pending(toSnapshot(session, newerWorker))).toEqual(["turn-1"]);
+	});
+
+	// A page that begins after the worker connected still knows the current
+	// worker from the turns it took: its next turn goes straight to the agent.
+	it("knows the current worker from its turns when its connection is above the page", () => {
+		const page = [
+			event(10, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 }),
+			event(11, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: false }),
+			event(12, "chat.turn_completed", { turnId: "turn-1", attempt: 1 }),
+			event(13, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true }, page, undefined, { partial: true }))).toEqual([]);
+		// A newer worker that connected since keeps its own epoch.
+		const rewoken = [...page.slice(0, 3), event(13, "worker.connected", { workerId: "w2", epoch: 4 }),
+			event(14, "chat.user_message", { text: "Next", turnId: "turn-2" })];
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true }, rewoken, undefined, { partial: true }))).toEqual(["turn-2"]);
 	});
 });

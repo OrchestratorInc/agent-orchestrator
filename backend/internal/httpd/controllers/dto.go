@@ -556,6 +556,13 @@ type ListWorkspaceTreeResponse struct {
 	Truncated bool                 `json:"truncated"`
 }
 
+// ListWorkspaceFilePathsResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/paths.
+type ListWorkspaceFilePathsResponse struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	Paths     []string         `json:"paths"`
+	Truncated bool             `json:"truncated"`
+}
+
 // WorkspaceTreeEntry is one immediate child of a listed directory.
 type WorkspaceTreeEntry struct {
 	Name string                            `json:"name"`
@@ -643,7 +650,8 @@ type SessionArtifactView struct {
 // RegisterArtifactsRequest is the body of POST
 // /api/v1/sessions/{sessionId}/artifact-registrations.
 type RegisterArtifactsRequest struct {
-	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	Paths      []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	WorkingDir string   `json:"workingDir,omitempty" description:"The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there."`
 }
 
 // RegisterArtifactsResponse reports what a registration did, so the agent can
@@ -731,6 +739,9 @@ type SpawnSessionRequest struct {
 	// DisplayNameExplicit says displayName was deliberately chosen, so it wins
 	// over a terminal program's title. Omit it for a name derived from the prompt.
 	DisplayNameExplicit bool `json:"displayNameExplicit,omitempty"`
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 	// Attachments are files pasted or dropped into the task brief. Each carries
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
@@ -1610,6 +1621,12 @@ type SessionPRSummary struct {
 	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
 	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
 
+	// MergeQueueRequired says the PR's base branch merges through a merge
+	// queue, so Merge adds the PR to the queue. MergeQueue is its place there,
+	// absent while it isn't queued.
+	MergeQueueRequired bool                      `json:"mergeQueueRequired,omitempty"`
+	MergeQueue         *SessionPRMergeQueueEntry `json:"mergeQueue,omitempty"`
+
 	// Description is the PR body as markdown. It is untrusted provider content
 	// and must be sanitized when rendered.
 	Description          string `json:"description,omitempty"`
@@ -1765,6 +1782,40 @@ type ListSessionPRsResponse struct {
 	LinkedPRs []SessionPRReference `json:"linkedPrs"`
 }
 
+// SessionPRMergeQueueEntry is a pull request's place in its base branch's merge
+// queue. Position counts from 1 at the front; EstimatedSecondsToMerge is the
+// provider's estimate, absent when it gives none.
+type SessionPRMergeQueueEntry struct {
+	State                   string     `json:"state" enum:"queued,awaiting_checks,mergeable,unmergeable,locked"`
+	Position                int        `json:"position"`
+	EstimatedSecondsToMerge int        `json:"estimatedSecondsToMerge,omitempty"`
+	EnqueuedAt              *time.Time `json:"enqueuedAt,omitempty"`
+}
+
+func newSessionPRMergeQueueEntry(in *contract.PullRequestMergeQueueEntry) *SessionPRMergeQueueEntry {
+	if in == nil {
+		return nil
+	}
+	return &SessionPRMergeQueueEntry{
+		State:                   in.State,
+		Position:                in.Position,
+		EstimatedSecondsToMerge: in.EstimatedSecondsToMerge,
+		EnqueuedAt:              optionalTime(in.EnqueuedAt),
+	}
+}
+
+func newSessionPRMergeQueueEntryFromDomain(in *domain.MergeQueueEntry) *SessionPRMergeQueueEntry {
+	if in == nil {
+		return nil
+	}
+	return &SessionPRMergeQueueEntry{
+		State:                   string(in.State),
+		Position:                in.Position,
+		EstimatedSecondsToMerge: in.EstimatedSecondsToMerge,
+		EnqueuedAt:              optionalTime(in.EnqueuedAt),
+	}
+}
+
 // NewSessionPRSummary maps the service PR summary model to its HTTP DTO.
 func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 	return SessionPRSummary{
@@ -1792,6 +1843,9 @@ func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 		ObservedAt:       in.ObservedAt,
 		CIObservedAt:     in.CIObservedAt,
 		ReviewObservedAt: in.ReviewObservedAt,
+
+		MergeQueueRequired: in.MergeQueueRequired,
+		MergeQueue:         newSessionPRMergeQueueEntry(in.MergeQueue),
 
 		Description:          in.Description,
 		DescriptionTruncated: in.DescriptionTruncated,
@@ -2296,6 +2350,12 @@ type AgentModelsQuery struct {
 	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
 }
 
+// AgentSkillsQuery names the project whose own skill folders are scanned
+// alongside the user's.
+type AgentSkillsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Project whose skill folders are read before the user's. Omitted scans only the user's own skills."`
+}
+
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a device-wide model catalog.
 type AgentModelsRefreshQuery struct {
@@ -2442,6 +2502,53 @@ type CompactSessionUsageResponse struct {
 // ListCompactSessionUsageResponse is the batch dashboard usage response.
 type ListCompactSessionUsageResponse struct {
 	Sessions []CompactSessionUsageResponse `json:"sessions"`
+}
+
+// BackgroundTaskResponse is provider-owned background work, not an OS process.
+type BackgroundTaskResponse struct {
+	ID          string     `json:"id"`
+	RunID       string     `json:"runId,omitempty"`
+	Kind        string     `json:"kind" enum:"shell,agent,other"`
+	Description string     `json:"description"`
+	Command     string     `json:"command,omitempty" description:"The shell command line, when the provider reports one. Credentials in it are redacted."`
+	State       string     `json:"state" enum:"running,paused,completed,failed,stopped"`
+	StartedAt   *time.Time `json:"startedAt,omitempty" description:"When the provider started the task, or else when the daemon first observed it."`
+	EndedAt     *time.Time `json:"endedAt,omitempty"`
+	Stoppable   bool       `json:"stoppable,omitempty" description:"True when this provider can stop this running task."`
+}
+
+// BackgroundTaskOutputResponse is one background task's recent output.
+type BackgroundTaskOutputResponse struct {
+	SessionID    domain.SessionID `json:"sessionId"`
+	TaskID       string           `json:"taskId"`
+	Availability string           `json:"availability" enum:"ready,unavailable" description:"unavailable when this provider or session cannot report the task's output; output is then empty."`
+	Output       string           `json:"output" description:"The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed."`
+	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out or is missing."`
+	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
+	// LogOutsideWorkspace explains an output without the task's log.
+	LogOutsideWorkspace bool `json:"logOutsideWorkspace,omitempty" description:"True when the task's command writes its output to a log file outside the session's workspace, which is not read."`
+	// LogOmitted marks output without the task's log, which can't be shown as this run's.
+	LogOmitted bool   `json:"logOmitted,omitempty" description:"True when the task's command writes a log that output leaves out because it can't be shown as this run's: a later run writes the same file, the file was written after the run ended, or the run's final log isn't kept yet and no earlier read of it was saved. Output then holds only what the task printed itself."`
+	RunID      string `json:"runId,omitempty" description:"The run this output belongs to, when the provider gives runs their own ID. Output for another run of a reused task ID is not the requested run's."`
+}
+
+// BackgroundTaskIDParam names one provider-owned background task.
+type BackgroundTaskIDParam struct {
+	TaskID string `path:"taskId" description:"Provider-scoped background task identifier."`
+}
+
+// BackgroundTasksResponse distinguishes unavailable reporting from no live tasks.
+type BackgroundTasksResponse struct {
+	SessionID            domain.SessionID         `json:"sessionId"`
+	ControllerGeneration string                   `json:"controllerGeneration"`
+	Availability         string                   `json:"availability" enum:"ready,partial,unavailable"`
+	ObservedAt           *time.Time               `json:"observedAt,omitempty"`
+	Tasks                []BackgroundTaskResponse `json:"tasks"`
+}
+
+// ListBackgroundTasksResponse batches readings for already attached providers.
+type ListBackgroundTasksResponse struct {
+	Sessions []BackgroundTasksResponse `json:"sessions"`
 }
 
 // SessionMemoryProcessResponse is one process in a session's runtime tree.
@@ -3014,13 +3121,28 @@ type MergePRRequest struct {
 	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
 }
 
-// MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
+// MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200). Where the
+// base branch requires a merge queue the PR joins it instead of merging: State
+// stays open and Queue is its place in the queue.
 type MergePRResponse struct {
-	OK             bool           `json:"ok"`
-	PRNumber       int            `json:"prNumber"`
-	Method         string         `json:"method"`
-	State          domain.PRState `json:"state" enum:"merged"`
-	StateChangedAt time.Time      `json:"stateChangedAt"`
+	OK             bool                      `json:"ok"`
+	PRNumber       int                       `json:"prNumber"`
+	Method         string                    `json:"method"`
+	State          domain.PRState            `json:"state" enum:"merged,open"`
+	StateChangedAt time.Time                 `json:"stateChangedAt"`
+	Queue          *SessionPRMergeQueueEntry `json:"queue,omitempty"`
+}
+
+// DequeuePRRequest is the body of POST /api/v1/prs/{id}/dequeue.
+type DequeuePRRequest struct {
+	PRURL string `json:"prUrl" minLength:"1"`
+}
+
+// DequeuePRResponse is the body of POST /api/v1/prs/{id}/dequeue (200).
+type DequeuePRResponse struct {
+	OK        bool      `json:"ok"`
+	PRNumber  int       `json:"prNumber"`
+	ChangedAt time.Time `json:"changedAt"`
 }
 
 // ChangePRStateRequest is the body of POST /api/v1/prs/{id}/state.
@@ -3053,6 +3175,9 @@ type PRStackLayerResponse struct {
 	NoChecks bool `json:"noChecks,omitempty"`
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
+	// BehindParent counts the commits of the open layer below that this layer
+	// lacks: above zero, it needs rebasing onto that layer.
+	BehindParent int `json:"behindParent,omitempty"`
 }
 
 // LoadPRDetailsRequest names the tracked PR whose details to read.
@@ -3201,6 +3326,32 @@ type IdentityResponse struct {
 	APIVersion int    `json:"apiVersion"`
 }
 
+// RemoteHostUpdateResponse is the body of GET and POST /api/v1/remote-host/update.
+// Supported is false for a host that cannot be updated from another computer.
+// Method says how a supported host updates: its self-hosted service, or the
+// desktop app on it, which closes and relaunches. Version is empty for an
+// unversioned build.
+type RemoteHostUpdateResponse struct {
+	Version   string `json:"version"`
+	Supported bool   `json:"supported"`
+	Method    string `json:"method,omitempty" enum:"service,app"`
+	State     string `json:"state" enum:"idle,updating,failed"`
+	Error     string `json:"error,omitempty"`
+}
+
+// RemoteHostUpdateRequest is the optional body of POST /api/v1/remote-host/update.
+// Version is the release the caller confirmed. A host that runs the desktop
+// app installs only that version; a self-hosted host ignores it.
+type RemoteHostUpdateRequest struct {
+	Version string `json:"version,omitempty"`
+}
+
+// RemoteHostUpdateCheckResponse is the body of POST /api/v1/remote-host/update/check:
+// the version a host that runs the desktop app installs next.
+type RemoteHostUpdateCheckResponse struct {
+	Version string `json:"version"`
+}
+
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
 // phone paired to this desktop identifies only a signed-in AO Cloud user ID.
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
@@ -3232,6 +3383,32 @@ type LinkPreviewResponse struct {
 	FaviconURL  string `json:"faviconUrl,omitempty"`
 	// FaviconDarkURL is the page's icon for a dark color scheme, when it names one.
 	FaviconDarkURL string `json:"faviconDarkUrl,omitempty"`
+}
+
+// PRPreviewQuery selects the GitHub pull request to preview.
+type PRPreviewQuery struct {
+	URL string `query:"url" description:"A github.com pull request URL."`
+}
+
+// PRPreviewResponse is the body of GET /api/v1/pr-preview (200): the state and
+// summary of any GitHub pull request a chat links to, read through the
+// daemon's GitHub account.
+type PRPreviewResponse struct {
+	URL    string `json:"url"`
+	Repo   string `json:"repo" description:"owner/name"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	State  string `json:"state" enum:"open,draft,merged,closed"`
+	// Checks is omitted when the pull request has no checks.
+	Checks       string `json:"checks,omitempty" enum:"passing,failing,pending"`
+	Author       string `json:"author,omitempty"`
+	SourceBranch string `json:"sourceBranch,omitempty"`
+	TargetBranch string `json:"targetBranch,omitempty"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	// StateChangedAt is when it merged or closed, else when it was opened.
+	StateChangedAt *time.Time `json:"stateChangedAt,omitempty"`
 }
 
 // MobileStatusResponse is the body of the Connect Mobile status/enable/disable/
@@ -3679,7 +3856,7 @@ type ConversationConfigOptionResponse struct {
 	Type           string                             `json:"type" enum:"select,boolean"`
 	CurrentValue   string                             `json:"currentValue,omitempty"`
 	CurrentBoolean *bool                              `json:"currentBoolean,omitempty"`
-	Choices        []ConversationConfigChoiceResponse `json:"choices,omitempty"`
+	Choices        []ConversationConfigChoiceResponse `json:"choices"`
 }
 
 // ConversationConfigChoiceResponse is one value in a provider select.
@@ -3753,6 +3930,15 @@ type ConversationTurnSettingsPayload struct {
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
 }
 
+// InterruptConversationRequest is the optional body of a chat Stop. TurnID is
+// the conversation turn the user pressed Stop on. With it, a Stop that lands
+// after that turn ended cannot cancel a later turn, and a repeated Stop for a
+// turn that already stopped succeeds without reaching the agent. Without it the
+// in-flight turn is stopped, as older clients expect.
+type InterruptConversationRequest struct {
+	TurnID string `json:"turnId,omitempty"`
+}
+
 // ResolveConversationApprovalRequest answers a pending approval. DecisionID must
 // be one the provider offered for that request; AO does not invent options.
 type ResolveConversationApprovalRequest struct {
@@ -3794,6 +3980,7 @@ type ConversationTurnResponse struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool                            `json:"hasEventPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
 	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
@@ -4353,6 +4540,8 @@ type SettingsResponse struct {
 	// ComputerUse gives new chat sessions the computer-use tools.
 	ComputerUse    bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
 	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
+	// CommitAttribution is the Orchestrator attribution beta.
+	CommitAttribution bool `json:"commitAttribution" description:"Beta: new sessions add a Co-authored-by: orchestrator-inc[bot] trailer to commits and an Generated by Orchestrator line to PR bodies, unless the project turns them off."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
 	// CloudEnabled reports whether the cloud offering is available: on for
@@ -4401,6 +4590,11 @@ type UpdateComputerUseRequest struct {
 
 // UpdateAccountHandoffRequest turns the usage-limit account handoff on or off.
 type UpdateAccountHandoffRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateCommitAttributionRequest switches the Orchestrator attribution beta.
+type UpdateCommitAttributionRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -4610,7 +4804,16 @@ type AgentAccountResponse struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	// Device marks the computer's own login, which AO launches with the CLI's
 	// config folder untouched.
-	Device  bool   `json:"device"`
+	Device bool `json:"device"`
+	// Kind is how the account signs its CLI in: a subscription, a subscription
+	// setup token, an API key, or a metered (per-token) sign-in such as
+	// Anthropic Console. API key and metered accounts bill per token, have no
+	// limits, and are never moved to or from at a usage limit.
+	Kind domain.AgentAccountKind `json:"kind" enum:"subscription,setup_token,api_key,metered"`
+	// Name is the label of an API key account; KeyHint is its key's last four
+	// characters. The key itself is never sent.
+	Name    string `json:"name,omitempty"`
+	KeyHint string `json:"keyHint,omitempty"`
 	Email   string `json:"email,omitempty"`
 	Plan    string `json:"plan,omitempty"`
 	Default bool   `json:"default"`
@@ -4634,16 +4837,53 @@ type AgentAccountsResponse struct {
 	Accounts []AgentAccountResponse `json:"accounts"`
 }
 
-// StartAgentAccountLoginRequest asks to add an account of a provider.
+// StartAgentAccountLoginRequest asks to add an account of a provider. Without
+// a method, the CLI's own sign-in runs in a terminal; with one, it runs in the
+// background and the app follows it as a UI login (its authOperationId). A
+// setup token is saved at once.
 type StartAgentAccountLoginRequest struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// Method is the sign-in method; Secret its credential when it takes one
+	// (a setup token, an OpenAI API key or access token).
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+	// Name labels a new account that has no email of its own.
+	Name string `json:"name,omitempty"`
+}
+
+// SignInAgentAccountAgainRequest picks how a saved account signs in again,
+// with a method that makes its own kind of account. An empty body opens the
+// CLI's own sign-in in a terminal.
+type SignInAgentAccountAgainRequest struct {
+	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
+	Secret string `json:"secret,omitempty"`
+}
+
+// AddAgentAccountAPIKeyRequest adds an account that launches the provider's
+// CLI with an API key. The key is checked with the provider before it is saved.
+type AddAgentAccountAPIKeyRequest struct {
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude"`
+	// Name labels the account; empty shows a default label.
+	Name   string `json:"name,omitempty"`
+	APIKey string `json:"apiKey"`
+}
+
+// ReplaceAgentAccountAPIKeyRequest saves a new key for an API key account.
+type ReplaceAgentAccountAPIKeyRequest struct {
+	APIKey string `json:"apiKey"`
 }
 
 // StartAgentAccountLoginResponse is a sign-in running in a terminal.
 type StartAgentAccountLoginResponse struct {
-	OperationID   string                            `json:"operationId"`
-	Provider      domain.AgentAccountProvider       `json:"provider" enum:"claude,codex"`
-	ShellTerminal CodexAccountLoginTerminalResponse `json:"shellTerminal"`
+	// OperationID verifies or cancels the sign-in; empty when Account is set.
+	OperationID string                      `json:"operationId,omitempty"`
+	Provider    domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// ShellTerminal is a sign-in running in a terminal. AuthOperationID is one
+	// running in the background, read and answered through the harness's
+	// /auth/operations routes. Account is the account a setup token saved.
+	ShellTerminal   *CodexAccountLoginTerminalResponse `json:"shellTerminal,omitempty"`
+	AuthOperationID string                             `json:"authOperationId,omitempty"`
+	Account         *AgentAccountResponse              `json:"account,omitempty"`
 }
 
 // VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
@@ -4777,4 +5017,97 @@ type ForkSessionRequest struct {
 type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
+}
+
+// DevicePlatformStatus says whether this machine can run a platform's
+// simulators or emulators, and why not.
+type DevicePlatformStatus struct {
+	Platform  string `json:"platform" enum:"ios,android"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// DeviceSummary is one iOS Simulator or Android Emulator.
+type DeviceSummary struct {
+	ID       string `json:"id" description:"Simulator UDID or emulator serial (AVD name while stopped)."`
+	Name     string `json:"name"`
+	Platform string `json:"platform" enum:"ios,android"`
+	Version  string `json:"version,omitempty"`
+	Booted   bool   `json:"booted"`
+}
+
+// DeviceAgentControl is the agent-device invocation pinned to a session's
+// device: run Command with a subcommand, then Args.
+type DeviceAgentControl struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// DeviceLease is the device a session holds.
+type DeviceLease struct {
+	SessionID   domain.SessionID   `json:"sessionId"`
+	Provider    string             `json:"provider" description:"Provider serving the device, e.g. local."`
+	Device      DeviceSummary      `json:"device"`
+	Reason      string             `json:"reason" description:"Why the resolver picked this provider."`
+	AgentDevice DeviceAgentControl `json:"agentDevice"`
+	OpenedAt    time.Time          `json:"openedAt"`
+}
+
+// DeviceStatusResponse is the body of GET /api/v1/devices.
+type DeviceStatusResponse struct {
+	Available bool                   `json:"available" description:"Whether devices are available: the desktop app's Developer mode is on. While false, only status, a session's lease and releasing a device are served."`
+	Enabled   bool                   `json:"enabled" description:"Whether the user turned device support on."`
+	State     string                 `json:"state" enum:"off,installing,ready,error"`
+	Error     string                 `json:"error,omitempty"`
+	Platforms []DevicePlatformStatus `json:"platforms"`
+	Devices   []DeviceSummary        `json:"devices"`
+	Leases    []DeviceLease          `json:"leases"`
+}
+
+// DeviceAvailabilityRequest turns devices on or off; the desktop app sends its
+// Developer mode.
+type DeviceAvailabilityRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// DeviceAvailabilityResponse is whether devices are now available.
+type DeviceAvailabilityResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SessionDeviceResponse carries a session's lease, null when it has none.
+type SessionDeviceResponse struct {
+	Lease *DeviceLease `json:"lease"`
+}
+
+// OpenSessionDeviceRequest narrows the device a session wants. Both fields
+// are optional: the resolver picks from the project and this machine.
+type OpenSessionDeviceRequest struct {
+	Platform string `json:"platform,omitempty" enum:"ios,android"`
+	DeviceID string `json:"deviceId,omitempty" description:"Simulator UDID, emulator serial, or device name."`
+}
+
+// InstallSessionDeviceRequest installs a built app on the session's device.
+type InstallSessionDeviceRequest struct {
+	Path string `json:"path" minLength:"1" description:"Absolute path to a .app bundle (iOS) or .apk (Android)."`
+}
+
+// LaunchSessionDeviceRequest starts an installed app.
+type LaunchSessionDeviceRequest struct {
+	AppID string `json:"appId" minLength:"1" description:"Bundle identifier (iOS) or package name (Android)."`
+}
+
+// SetSessionDeviceQualityRequest sets how much the session's device stream costs the link.
+type SetSessionDeviceQualityRequest struct {
+	Quality string `json:"quality" description:"high, balanced or low."`
+}
+
+// PressSessionDeviceButtonRequest presses a hardware button on the session's device.
+type PressSessionDeviceButtonRequest struct {
+	Button string `json:"button" description:"home, back or recents."`
+}
+
+// CloseSessionDeviceRequest releases the session's device.
+type CloseSessionDeviceRequest struct {
+	Shutdown bool `json:"shutdown,omitempty" description:"Also power the simulator or emulator off."`
 }

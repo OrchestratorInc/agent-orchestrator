@@ -86,7 +86,40 @@ describe("ChatWorkspace retry", () => {
 		expect(loadOlder).not.toHaveBeenCalled();
 	});
 
-	it("does not offer usage-limit recovery without a durable human prompt", () => {
+	function limitedEventSnapshot(): ConversationSnapshot {
+		const snapshot = limitedSnapshot();
+		snapshot.turns[0] = { ...snapshot.turns[0]!, hasHumanPrompt: false, hasEventPrompt: true };
+		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user"
+			? { ...item, origin: "automation" } : item);
+		return snapshot;
+	}
+
+	it("offers auto-resume for the latest limited turn an event started", async () => {
+		const setAutoResume = vi.fn();
+		render(<ChatWorkspace snapshot={limitedEventSnapshot()} retryControl={{ retry: vi.fn(), setAutoResume }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Auto-resume at reset" }));
+		expect(setAutoResume).toHaveBeenCalledWith("turn-1", true);
+	});
+
+	it("resumes a limited turn an event started once the reset has passed", async () => {
+		const snapshot = limitedEventSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("offers nothing on an event's limited turn once a newer turn ran", () => {
+		const snapshot = limitedEventSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.turns.push({ id: "later", state: "completed", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
+	});
+
+	it("does not offer usage-limit recovery without a durable human or event prompt", () => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.hasHumanPrompt = false;
 		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();

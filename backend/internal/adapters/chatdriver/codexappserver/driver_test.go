@@ -1231,7 +1231,7 @@ func TestReadOnlyTurnCannotOverrideSandbox(t *testing.T) {
 func TestBackgroundReadOnlySandboxPersistsAcrossTurnOverrides(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{
-		WorkspacePath: "/tmp/ws", Permissions: ports.PermissionModeAuto,
+		WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto,
 		ReadOnly: true, DisableNetwork: true, Ephemeral: true,
 	})
 	if err != nil {

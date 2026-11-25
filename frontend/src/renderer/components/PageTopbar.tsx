@@ -1,6 +1,7 @@
 import { createContext, useContext, useLayoutEffect, useRef, useState, type ComponentProps, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { cn } from "../lib/utils";
 import { NotificationCenter } from "./NotificationCenter";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
@@ -80,7 +81,8 @@ function usePageTopbarPaddingLeft() {
 }
 
 function PageTopbarFrame({ className, ...props }: ComponentProps<"header">) {
-	return <header className={cn("flex h-toolbar w-full shrink-0 items-center", className)} style={dragStyle} {...props} />;
+	useTelemetrySurface("topbar");
+	return <header className={cn("flex h-toolbar w-full shrink-0 items-center", className)} data-telemetry-surface="topbar" style={dragStyle} {...props} />;
 }
 
 export const topbarTitleClass = "text-brand font-semibold tracking-tight leading-none text-foreground whitespace-nowrap";

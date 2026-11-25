@@ -65,6 +65,9 @@ type SpawnConfig struct {
 	// AgentAccountID is the provider account the agent runs under. Empty uses
 	// the provider's default account.
 	AgentAccountID string
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool
 
 	// RequestedMode is the caller's explicit session mode, or empty to let the
 	// daemon resolve its default. It is validated and persisted before any
@@ -122,6 +125,10 @@ type SpawnFork struct {
 	// KeepSeedRef marks a SeedRef the fork borrowed, such as a turn's saved
 	// rollback snapshot. It is applied but never deleted.
 	KeepSeedRef bool
+	// SeedDir, for a source in a plain folder with no git repository, is a
+	// copy of its files to move into the new workspace. StartPoint and
+	// SeedRef are then empty.
+	SeedDir string
 	// SourceTitle names the original in the fork's standing instructions.
 	SourceTitle string
 	// ArtifactsAsOf, when set, copies the original's artifacts as they were

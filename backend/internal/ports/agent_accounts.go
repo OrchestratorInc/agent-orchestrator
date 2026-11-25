@@ -23,6 +23,25 @@ var (
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
 )
 
+// ErrAgentAccountRenewalPending skips a check of a stored login whose access
+// token expired and is renewed by the agent's next run. The login is still
+// signed in; asking the CLI would try the renewal itself.
+var ErrAgentAccountRenewalPending = errors.New("the saved login token expired")
+
+// Account kind and sign-in method errors the API maps to client responses.
+var (
+	ErrAgentAccountKeyRejected       = errors.New("the provider rejected the key or token")
+	ErrAgentAccountKeyUnchecked      = errors.New("the provider could not be reached to check the API key")
+	ErrAgentAccountKindMismatch      = errors.New("the account's kind does not support this")
+	ErrAgentAccountNoLimits          = errors.New("a per-token account has no usage limits")
+	ErrAgentAccountMethodInvalid     = errors.New("the sign-in method cannot add an account of this provider")
+	ErrAgentAccountSignInUnavailable = errors.New("the in-app sign-in is unavailable")
+)
+
+// ErrAgentAccountNeedsDeveloperMode joins ErrAgentAccountUnshared when Windows
+// refused the link because its Developer Mode is off.
+var ErrAgentAccountNeedsDeveloperMode = errors.New("the account's links need Windows Developer Mode")
+
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
 // folders. home is empty for the computer's own folder. Implementations ask the
 // CLI itself; none of them reads a token.
@@ -49,6 +68,9 @@ type AgentAccountProviderCLI interface {
 type AgentAccountStore interface {
 	ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, error)
 	CreateAgentAccount(ctx context.Context, account domain.AgentAccount) error
+	// UpdateAgentAccountKeyHint records the last characters of an API key or
+	// setup token account's new credential; ErrAgentAccountUnknown otherwise.
+	UpdateAgentAccountKeyHint(ctx context.Context, id, hint string) error
 	DeleteAgentAccount(ctx context.Context, id string) error
 	GetAgentAccountDefault(ctx context.Context, provider domain.AgentAccountProvider) (string, bool, error)
 	SetAgentAccountDefault(ctx context.Context, provider domain.AgentAccountProvider, accountID string) error

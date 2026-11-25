@@ -4,8 +4,9 @@ The `ao` CLI is a thin Go/Cobra client for the local Agent Orchestrator daemon.
 It opens the desktop app and discovers, inspects, or stops its daemon through the
 loopback HTTP surface and the `running.json` handshake. It must not open SQLite
 directly or call runtime, workspace, tracker, or agent adapters in-process.
-The offline `ao triage` exception resolves agent executables and launches a local
-agent without the daemon, as described below.
+Two offline exceptions work without the daemon: `ao triage` resolves agent
+executables and launches a local agent, and `ao import` reads a legacy install
+into the database while the daemon is stopped. Both are described below.
 
 When using the CLI directly from a shell, make sure the daemon is running first
 by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
@@ -21,7 +22,7 @@ go build -o ./bin/ao ./cmd/ao
 
 ## Current commands
 
-Product commands use daemon HTTP routes. The offline `ao triage` diagnostic launcher is an exception. Run `ao <command>
+Product commands use daemon HTTP routes. The offline `ao triage` and `ao import` commands are the exceptions. Run `ao <command>
 --help` for the authoritative flag shape.
 
 ### Daemon control
@@ -71,11 +72,19 @@ without a terminal runs it in the background and reads its output; see
 
 ### Report a problem
 
-Unreleased: `ao triage` collects bounded, redacted diagnostics and opens Claude Code
+`ao triage` collects bounded, redacted diagnostics and opens Claude Code
 or Codex to draft a report. It works with the daemon down and never starts it.
 Files go under `$AO_DATA_DIR/triage` when set, otherwise `~/.ao/triage`.
 After the agent exits, review the text and answer `[y/N]` before posting.
 See the [command reference](../../backend/internal/skillassets/using-ao/commands/triage.md).
+
+### Import from a legacy install
+
+`ao import` reads the old flat-file store (`~/.agent-orchestrator`, or `--from`)
+read-only and copies its projects and per-project settings into the current
+database. Stop the daemon first; it refuses to run while one is live. `--dry-run`
+reports the plan without writing, `--yes` skips the prompt, and `--json` prints
+the report. Re-running skips rows that already exist.
 
 ### Product commands
 
@@ -105,6 +114,8 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
 | `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}?keepArtifacts=true`; artifact files stay, view only, on the Artifacts page. `--delete-artifacts` drops `keepArtifacts` so they are deleted too. |
+| `ao session history [<id>]`        | `GET /api/v1/sessions/{id}/history`; turns newest first, defaulting to the current session. |
+| `ao session top`                    | `GET /api/v1/sessions` and `GET /api/v1/usage/sessions/memory`; memory per live session. |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
 | `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
 | `ao session switch <id> [agent]` / `--from <agent> [agent]` `[--model <m>] [--effort <e>] [--permission <p>] [--force] [-m <text>]` | `--from` lists via `GET /api/v1/sessions?active=true`; each switch is `POST /api/v1/sessions/{id}/provider-switch`, then `POST /api/v1/sessions/{id}/send` for `-m` |
@@ -112,7 +123,15 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
+| `ao preview clear`                  | `DELETE /api/v1/sessions/{id}/preview`         |
 | `ao preview start/status/stop`      | `POST/GET/DELETE /api/v1/sessions/{id}/preview/server` |
+| `ao artifact add <path>...`         | `POST /api/v1/sessions/{id}/artifact-registrations` |
+| `ao render <file.html>`             | `POST /api/v1/sessions/{id}/renders` (`/renders/check` validates first) |
+| `ao pane ls/split/run/read/send/close/interrupt/remove/ungroup/focus` | `/api/v1/sessions/{id}/panes`, `/panes/input`, `/panes/output` |
+| `ao device setup/status`            | `POST /api/v1/devices/setup`, `GET /api/v1/devices` |
+| `ao device open/install/launch/close` | `/api/v1/sessions/{id}/device` and `/device/{action}`; Developer mode only |
+| `ao search [query]`                 | `GET /api/v1/search/sessions`; `--index-status` and `--reindex` use `/search/index-status` and `/search/reindex` |
+| `ao dev import-projects`            | `POST /api/v1/dev/import-projects`             |
 | `ao browser ...`                    | `GET /api/v1/browser/status`, `POST /api/v1/browser/commands` |
 | `ao browser chrome status\|setup\|remove` | `GET`, `POST`, `DELETE /api/v1/browser/chrome` |
 | `ao hooks <agent> <event>`          | `POST /api/v1/sessions/{id}/activity` (hidden) |
@@ -158,7 +177,8 @@ takeover, concurrent provider changes, and worktree preservation can be handled
 together.
 
 `ao report` persists a worker-originated coordination claim before reporting
-success. Checkpoints, free-form messages, and output-only reports batch until
+success. `--note` and free-form text are each limited to 1000 characters.
+Checkpoints, free-form messages, and output-only reports batch until
 another flush or the first report's one-hour fallback. The first `--done`
 report opens a five-minute settlement window. AO tries to deliver the batch about 15
 seconds after no other worker of the project is still working, and at the
@@ -317,9 +337,8 @@ rm -rf "$tmp"
 
 Add a product command only when a daemon HTTP route owns the corresponding
 mutation/read; the CLI must call that route rather than reimplementing daemon
-behavior. Commands not yet exposed but with backend routes in place include
-`ao events ...` (over the CDC/SSE endpoint) and CLI parity for PR/review
-actions.
+behavior. `ao events ...` (over the CDC/SSE endpoint) is not exposed yet even
+though its backend route exists.
 
 Do not port old in-process TypeScript CLI behavior that mixed command handling
 with storage and runtime implementation details.
@@ -335,8 +354,10 @@ remote for them. `canonicalRepoURL` requires a valid root origin; it is not a
 workspace child allowlist. Scratch projects cannot claim PRs.
 
 For automatic attribution, workspace sessions recorded on a bare branch such as
-`ao/ws-1` or `ao/ws-1-2` can use hyphen siblings (`ao/ws-1-fix` or
-`ao/ws-1-2-fix`) in registered repositories. Keep the entire recorded branch,
+`orchestrator/ws-1` or `orchestrator/ws-1-2` can use hyphen siblings
+(`orchestrator/ws-1-fix` or `orchestrator/ws-1-2-fix`) in registered
+repositories. Sessions created before the `orchestrator/` prefix keep their
+`ao/` branches, and the same rule applies to them. Keep the entire recorded branch,
 including collision suffixes. Exact and stacked branches and `/root` slash
 siblings remain supported. Matching prefers the most specific owner and leaves
 ambiguous ownership for explicit claiming. Custom branches and single-repository
