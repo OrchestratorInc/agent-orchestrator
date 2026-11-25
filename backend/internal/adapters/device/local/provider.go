@@ -964,8 +964,8 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 	}
 	startedHere := !device.Booted
 	// The expected-boot mark only covers this call: a boot that does not finish
-	// must not let a later boot outside AO pass as this one, and one that does
-	// has recorded its boot by then.
+	// must not let a later boot outside AO pass as this one (cleared below),
+	// and one that does clears it with its recorded boot.
 	expected := false
 	defer func() {
 		if expected {
@@ -1039,11 +1039,18 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		p.awaitLiveStream(ctx, device)
 	}
 	p.restoreQuality(ctx, device)
+	// Storing the helper's boot and clearing the expected-boot mark happen
+	// together: a newer boot seen between the two would be recorded while
+	// still excused by the mark, and never acted on.
+	p.mu.Lock()
 	if helperBoot != "" {
-		p.mu.Lock()
 		p.storeBootsLocked(map[string]string{device.ID: helperBoot})
-		p.mu.Unlock()
 	}
+	if expected {
+		delete(p.ownBoots, device.ID)
+		expected = false
+	}
+	p.mu.Unlock()
 	return device, nil
 }
 
