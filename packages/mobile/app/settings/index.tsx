@@ -63,6 +63,7 @@ import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../../l
 import { applyUpdate } from "../../lib/updateScreenState";
 import { reloadIntoUpdate } from "../../lib/updateResumeStore";
 import { useToast } from "../../lib/useToast";
+import { loadUserMobileOptOut, setUserMobileOptOut } from "../../lib/telemetry/runtime";
 import { VERSION_FLOOR } from "../../lib/versionFloor";
 import { getThemeDefinition } from "../../../shared/theme/palettes";
 
@@ -269,6 +270,13 @@ export default function SettingsScreen() {
 					{notificationsRow}
 				</SettingsSection>
 
+				<SettingsSection
+					title="Privacy"
+					footer="Anonymous usage events and error reports, never your code, prompts or messages. Turning this off stops them on this phone, paired or not, and no desktop can turn it back on."
+				>
+					<AnalyticsRow />
+				</SettingsSection>
+
 				<SettingsSection title="Updates">
 					<SoftwareUpdateRow />
 				</SettingsSection>
@@ -423,6 +431,34 @@ function useNotificationsRow(): ReactElement | null {
 			disabled={toggle.disabled || pending !== null}
 			onValueChange={(next) => { void onToggle(next); }}
 			testID="settings-notifications"
+		/>
+	);
+}
+
+/** The phone's own analytics opt-out, available before any pairing. */
+function AnalyticsRow() {
+	const [optedOut, setOptedOut] = useState<boolean | null>(null);
+	useEffect(() => {
+		let mounted = true;
+		void loadUserMobileOptOut().then((saved) => {
+			if (mounted) setOptedOut(saved);
+		});
+		return () => {
+			mounted = false;
+		};
+	}, []);
+	return (
+		<SettingsToggleRow
+			icon="analytics"
+			label="Share usage analytics"
+			value={optedOut === null ? false : !optedOut}
+			disabled={optedOut === null}
+			onValueChange={(share) => {
+				haptics.select();
+				setOptedOut(!share);
+				void setUserMobileOptOut(!share).catch(() => setOptedOut(share));
+			}}
+			testID="settings-share-analytics"
 		/>
 	);
 }

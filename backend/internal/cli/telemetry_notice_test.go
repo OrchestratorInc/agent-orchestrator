@@ -17,7 +17,7 @@ func TestTelemetryNoticeShowsOncePerInstall(t *testing.T) {
 	var out bytes.Buffer
 	maybeShowTelemetryNotice(&out, envFrom(nil), dir, true)
 	text := out.String()
-	for _, want := range []string{"Settings > General > Privacy", "DO_NOT_TRACK=1", "docs/telemetry.md", "GitHub username only if you turn"} {
+	for _, want := range []string{"Settings > General > Privacy", "DO_NOT_TRACK=1", "docs/telemetry.md", "only if you turn that on", "ao telemetry log", "ao telemetry off"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("notice missing %q:\n%s", want, text)
 		}

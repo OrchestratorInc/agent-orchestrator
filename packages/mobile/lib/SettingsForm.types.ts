@@ -31,6 +31,7 @@ export const settingsIcons = {
 	emulateMachines: symbols.devices,
 	device: symbols.phone,
 	feature: { ios: "lightbulb", android: "lightbulb" },
+	analytics: { ios: "chart.bar", android: "data_usage" },
 	// Orchestrator Cloud's page and its coding agents' pages.
 	organization: { ios: "building.2", android: "group" },
 	// The organization's plan and its usage, on Orchestrator Cloud's page.

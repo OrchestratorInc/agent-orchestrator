@@ -95,8 +95,11 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		host: MOBILE_POSTHOG_HOST,
 		enableSessionReplay: false,
 		captureAppLifecycleEvents: false,
-		// Keep the phone's own anonymous SDK identity across desktop pairings.
-		personProfiles: "identified_only",
+		// Keep the phone's own anonymous SDK identity across desktop pairings, and
+		// never create a PostHog person profile for it.
+		personProfiles: "never",
+		// No GeoIP: PostHog must not derive a location from the phone's IP.
+		disableGeoip: true,
 	});
 
 	const version =
@@ -127,6 +130,8 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 			uiUsageTracker?.setEnabled(!optedOut);
 			consentGeneration += 1;
 			if (!optedOut && connectedConfigs.length) void syncDesktopTelemetryIdentity(connectedConfigs).catch(() => {});
+		},
+		onDesktopOptOutChange: (optedOut) => {
 			void (optedOut
 				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
 				: AsyncStorage.removeItem(OPT_OUT_STORAGE_KEY)
@@ -155,6 +160,8 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 // The desktop's opt-out is sticky on the phone: it survives unpairing and only a
 // paired desktop that is opted in lifts it.
 const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
+// The phone's own Settings switch: works without pairing, and no desktop lifts it.
+const USER_OPT_OUT_STORAGE_KEY = "ao.telemetry.userOptedOut";
 const PHONE_IDENTITY_MIGRATION_KEY = "ao.telemetry.phoneIdentity.v2";
 
 /** Restores the persisted opt-out and releases capture. Awaited before the first heartbeat. */
@@ -175,15 +182,38 @@ export async function loadMobileOptOut(): Promise<void> {
 		}
 	}
 	let stored = false;
+	let user = false;
 	try {
-		stored = (await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1";
+		[stored, user] = (await Promise.all([AsyncStorage.getItem(OPT_OUT_STORAGE_KEY), AsyncStorage.getItem(USER_OPT_OUT_STORAGE_KEY)])).map((value) => value === "1");
 	} catch {
 		/* unreadable storage: stay opted in rather than guess */
 	}
+	// Both applied in one synchronous step, so capture is released only once
+	// the phone's own switch is known too.
+	telemetry?.setUserOptedOut(user);
 	telemetry?.restoreOptOut(stored);
 	// After the preference, so an opted-out phone never sends a saved window.
 	await restoreUiUsage();
 	preferenceLoaded();
+}
+
+/** The phone's own "Share usage analytics" switch, as saved. */
+export async function loadUserMobileOptOut(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(USER_OPT_OUT_STORAGE_KEY)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Turns the phone's own analytics opt-out on or off. It applies without any
+ * paired desktop, stops PostHog and Sentry on the phone at once, and is saved
+ * so it holds across launches.
+ */
+export async function setUserMobileOptOut(optedOut: boolean): Promise<void> {
+	telemetry?.setUserOptedOut(optedOut);
+	await (optedOut ? AsyncStorage.setItem(USER_OPT_OUT_STORAGE_KEY, "1") : AsyncStorage.removeItem(USER_OPT_OUT_STORAGE_KEY));
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */

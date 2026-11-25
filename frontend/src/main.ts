@@ -387,7 +387,7 @@ let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
 // daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
 const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
-const SHARE_GITHUB_LOGIN_CHANGED_CHANNEL = "telemetry:shareGithubLoginChanged";
+const SHARE_IDENTITY_CHANGED_CHANNEL = "telemetry:shareIdentityChanged";
 const telemetryIdentity = new TelemetryIdentityController(
 	desktopDataDir,
 	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
@@ -397,7 +397,7 @@ const telemetryIdentity = new TelemetryIdentityController(
 		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
 	},
 	(share) => {
-		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(SHARE_GITHUB_LOGIN_CHANGED_CHANNEL, share);
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(SHARE_IDENTITY_CHANGED_CHANNEL, share);
 	},
 );
 const trustedShellWebContents = new Map<number, WebContents>();
@@ -3752,11 +3752,11 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	return telemetryIdentity.setCloudUser(userId);
 });
 ipcMain.handle("telemetry:getGithubIdentity", () => telemetryIdentity.githubIdentity());
-ipcMain.handle("telemetry:getShareGithubLogin", () => telemetryIdentity.isSharingGithubLogin());
-ipcMain.handle("telemetry:setShareGithubLogin", (event, share: unknown) => {
+ipcMain.handle("telemetry:getShareIdentity", () => telemetryIdentity.isSharingIdentity());
+ipcMain.handle("telemetry:setShareIdentity", (event, share: unknown) => {
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || typeof share !== "boolean") throw new Error("invalid GitHub username sharing request");
-	return telemetryIdentity.setShareGithubLogin(share);
+	return telemetryIdentity.setShareIdentity(share);
 });
 ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
 // Performance telemetry: the launch start (once per shell page) and the

@@ -36,121 +36,6 @@ func newTestSink(t *testing.T, dir string, requests chan map[string]any, hits *a
 	return sink
 }
 
-func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
-	dir := t.TempDir()
-	// Sharing the GitHub username is opt-in; this test covers the shared path.
-	shareGitHub(t, dir, true)
-	sink := newTestSink(t, dir, nil, nil)
-	defer func() { _ = sink.Close(context.Background()) }()
-	stableInstallID := sink.Identity().InstallID()
-
-	anon := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
-	for _, k := range []string{"github_actor", "ao_cloud_user_id", "$set"} {
-		if _, ok := anon[k]; ok {
-			t.Fatalf("anonymous event carries %q", k)
-		}
-	}
-	if anon["$process_person_profile"] != false {
-		t.Fatalf("anonymous event is identified: %v", anon["$process_person_profile"])
-	}
-	if anon["install_id"] != stableInstallID {
-		t.Fatal("anonymous event missing installation ID")
-	}
-	if anon["is_signed_in"] != false {
-		t.Fatalf("anonymous event has is_signed_in = %#v, want false", anon["is_signed_in"])
-	}
-
-	sink.Identity().SetGitHubLogin("octocat")
-	if err := sink.Identity().SetCloudUserID(context.Background(), "user_01HABC"); err != nil {
-		t.Fatalf("valid WorkOS id rejected: %v", err)
-	}
-	first := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
-	if first["github_actor"] != "octocat" || first["ao_cloud_user_id"] != "user_01HABC" {
-		t.Fatalf("identity not on event: %#v", first)
-	}
-	if first["install_id"] != stableInstallID {
-		t.Fatal("signed-in event changed installation ID")
-	}
-	if first["is_signed_in"] != true {
-		t.Fatalf("signed-in event has is_signed_in = %#v", first["is_signed_in"])
-	}
-	if first["$process_person_profile"] != true {
-		t.Fatal("signed-in event must be linked to the person")
-	}
-	set, _ := first["$set"].(map[string]any)
-	if set["github_login"] != "octocat" || set["ao_cloud_user_id"] != "user_01HABC" {
-		t.Fatalf("$set = %#v", set)
-	}
-	if _, ok := set["email"]; ok {
-		t.Fatal("daemon must never $set email")
-	}
-	// The key advances only after the sender receives a successful response.
-	sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
-
-	second := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
-	if second["github_actor"] != "octocat" || second["ao_cloud_user_id"] != "user_01HABC" || second["$process_person_profile"] != true {
-		t.Fatalf("identity missing on later event: %#v", second)
-	}
-	if _, ok := second["$set"]; ok {
-		t.Fatal("$set resent for unchanged identity")
-	}
-	for _, key := range []string{"app_version", "ao_version"} {
-		if second[key] != "1.2.3" {
-			t.Fatalf("%s = %v, want 1.2.3", key, second[key])
-		}
-	}
-
-	// Sign-out drops the user but the person set is re-evaluated, not stale.
-	_ = sink.Identity().SetCloudUserID(context.Background(), "")
-	out := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
-	if _, ok := out["ao_cloud_user_id"]; ok {
-		t.Fatal("ao_cloud_user_id survived sign-out")
-	}
-	if out["is_signed_in"] != false {
-		t.Fatalf("known sign-out has is_signed_in = %#v", out["is_signed_in"])
-	}
-	if out["install_id"] != stableInstallID || sink.Identity().InstallID() != stableInstallID {
-		t.Fatal("sign-out changed installation ID")
-	}
-}
-
-func TestPersonPropertiesAreRetriedAfterARejectedSend(t *testing.T) {
-	var sent []map[string]any
-	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
-		defer req.Body.Close()
-		var body map[string]any
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			return nil, err
-		}
-		sent = append(sent, body)
-		status := http.StatusOK
-		if len(sent) == 1 {
-			status = http.StatusBadRequest
-		}
-		return &http.Response{StatusCode: status, Body: http.NoBody}, nil
-	}), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = sink.Close(context.Background()) }()
-	if err := sink.Identity().SetCloudUserID(context.Background(), "user_A"); err != nil {
-		t.Fatal(err)
-	}
-	for range 3 {
-		sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
-	}
-	if len(sent) != 3 {
-		t.Fatalf("sends = %d, want 3", len(sent))
-	}
-	for index, wantSet := range []bool{true, true, false} {
-		props := sent[index]["properties"].(map[string]any)
-		_, hasSet := props["$set"]
-		if hasSet != wantSet {
-			t.Fatalf("send %d has $set = %t, want %t", index, hasSet, wantSet)
-		}
-	}
-}
-
 func TestIdentityRejectsMalformedValues(t *testing.T) {
 	ident, err := NewIdentity(t.TempDir())
 	if err != nil {
@@ -363,7 +248,7 @@ func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
 
 	emit() // anonymous: the install ID
 	_ = ident.SetCloudUserID(context.Background(), "user_A")
-	emit() // signed in: the account, not the install ID that identify() merges into A
+	emit() // signed in: still the anonymous install ID
 	_ = ident.SetCloudUserID(context.Background(), "")
 	install1 := ident.AnonymousID()
 	emit() // signed out: must not resolve to A
@@ -371,7 +256,9 @@ func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
 	emit()
 
 	got := drainDistinct(t, requests, 4)
-	if got[0] != install0 || got[1] != "user_A" || got[3] != "user_B" {
+	// Never the Cloud user ID: distinct_id stays the anonymous install-scoped ID
+	// while signed in, so no event ties back to an account.
+	if got[0] != install0 || got[1] != install0 || got[3] != install1 {
 		t.Fatalf("distinct ids = %v", got)
 	}
 	if install1 == install0 || got[2] != install1 {

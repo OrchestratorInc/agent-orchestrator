@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 
-type ShareGithubLoginState = {
+type ShareIdentityState = {
 	share: boolean;
 	loaded: boolean;
 	saving: boolean;
@@ -16,7 +16,7 @@ type ShareGithubLoginState = {
  * the marker the daemon reads; the renderer applies a change when main
  * broadcasts it (see main.tsx), so this store only reads and requests.
  */
-export const useShareGithubLoginStore = create<ShareGithubLoginState>((set, get) => ({
+export const useShareIdentityStore = create<ShareIdentityState>((set, get) => ({
 	share: false,
 	loaded: false,
 	saving: false,
@@ -25,7 +25,7 @@ export const useShareGithubLoginStore = create<ShareGithubLoginState>((set, get)
 	load: async () => {
 		if (get().loaded) return;
 		try {
-			set({ share: await aoBridge.telemetry.getShareGithubLogin(), loaded: true, loadError: false });
+			set({ share: await aoBridge.telemetry.getShareIdentity(), loaded: true, loadError: false });
 		} catch {
 			set({ loaded: true, loadError: true });
 		}
@@ -34,7 +34,7 @@ export const useShareGithubLoginStore = create<ShareGithubLoginState>((set, get)
 		if (get().saving) return;
 		set({ saving: true, saveError: false });
 		try {
-			set({ share: await aoBridge.telemetry.setShareGithubLogin(share), saving: false, loadError: false });
+			set({ share: await aoBridge.telemetry.setShareIdentity(share), saving: false, loadError: false });
 		} catch {
 			set({ saving: false, saveError: true });
 		}

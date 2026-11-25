@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -98,9 +97,9 @@ func TestNoHashWithoutSalt(t *testing.T) {
 	}
 }
 
-func shareGitHub(t *testing.T, dir string, on bool) {
+func shareIdentityMarker(t *testing.T, dir string, on bool) {
 	t.Helper()
-	path := filepath.Join(dir, ShareGitHubLoginFile)
+	path := filepath.Join(dir, ShareIdentityFile)
 	if on {
 		if err := os.WriteFile(path, []byte("1\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -134,12 +133,18 @@ func TestGitHubIdentityIsOffByDefaultAndGatedByTheToggle(t *testing.T) {
 	if props := sink.properties(spawned); props["kind"] != "worker" {
 		t.Fatalf("other allowlisted fields dropped: %#v", props)
 	}
+	if err := ident.SetCloudUserID(context.Background(), "user_01HABC"); err != nil {
+		t.Fatal(err)
+	}
+	if props := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started"}); props["ao_cloud_user_id"] != nil {
+		t.Fatalf("Cloud user ID exported with sharing off: %#v", props)
+	}
 	snap := ident.Snapshot()
 	if snap.GitHubLogin != "" || !snap.GitHubSignedIn {
 		t.Fatalf("snapshot with sharing off = %#v, want no login but signed in", snap)
 	}
 
-	shareGitHub(t, dir, true)
+	shareIdentityMarker(t, dir, true)
 	if props := sink.properties(spawned); props["github_actor"] != "octocat" {
 		t.Fatalf("github_actor missing with sharing on: %#v", props)
 	}
@@ -155,43 +160,38 @@ func TestGitHubIdentityIsOffByDefaultAndGatedByTheToggle(t *testing.T) {
 	}
 }
 
-func TestTurningGitHubSharingOffClearsThePersonLogin(t *testing.T) {
+// Matches T3 Code and Orca: no PostHog person profile and no GeoIP on any
+// event, whether signed out, signed in, or sharing account identity.
+func TestNoPersonProfileOrGeoIPOnAnyEvent(t *testing.T) {
 	dir := t.TempDir()
 	sink := newTestSink(t, dir, nil, nil)
 	defer func() { _ = sink.Close(context.Background()) }()
-	shareGitHub(t, dir, true)
-	sink.Identity().SetGitHubLogin("octocat")
-	sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
-
-	shareGitHub(t, dir, false)
-	props := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
-	unset, _ := props["$unset"].([]string)
-	if !slices.Contains(unset, "github_actor") || !slices.Contains(unset, "github_login") {
-		t.Fatalf("person login not cleared after sharing off: %#v", props)
+	ident := sink.Identity()
+	check := func(stage string) {
+		t.Helper()
+		props := sink.properties(ports.TelemetryEvent{Name: "ao.sessions.spawned", Payload: map[string]any{"kind": "worker", "github_actor": "octocat"}})
+		if props["$process_person_profile"] != false || props["$geoip_disable"] != true {
+			t.Fatalf("%s: person=%v geoip_disable=%v", stage, props["$process_person_profile"], props["$geoip_disable"])
+		}
+		for _, key := range []string{"$set", "$set_once", "$unset", "email"} {
+			if _, ok := props[key]; ok {
+				t.Fatalf("%s: event carries %s", stage, key)
+			}
+		}
 	}
-	if _, ok := props["github_actor"]; ok {
-		t.Fatal("github_actor still on the event after sharing off")
-	}
-	sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
-	if _, ok := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started"})["$unset"]; ok {
-		t.Fatal("person cleanup resent on every event")
-	}
-}
-
-func TestSignedInPersonDropsGitHubLoginWhenNotShared(t *testing.T) {
-	sink := newTestSink(t, t.TempDir(), nil, nil)
-	defer func() { _ = sink.Close(context.Background()) }()
-	sink.Identity().SetGitHubLogin("octocat")
-	if err := sink.Identity().SetCloudUserID(context.Background(), "user_01HABC"); err != nil {
+	check("anonymous")
+	ident.SetGitHubLogin("octocat")
+	if err := ident.SetCloudUserID(context.Background(), "user_01HABC"); err != nil {
 		t.Fatal(err)
 	}
-	props := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started"})
-	set, _ := props["$set"].(map[string]any)
-	if _, ok := set["github_login"]; ok {
-		t.Fatalf("github_login set on person with sharing off: %#v", set)
+	check("signed in")
+	if props := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started"}); props["ao_cloud_user_id"] != nil || props["is_signed_in"] != true {
+		t.Fatalf("signed in without sharing: %#v", props)
 	}
-	unset, _ := props["$unset"].([]string)
-	if !slices.Contains(unset, "github_login") {
-		t.Fatalf("stale github_login not cleared: %#v", unset)
+	shareIdentityMarker(t, dir, true)
+	check("sharing identity")
+	props := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started"})
+	if props["ao_cloud_user_id"] != "user_01HABC" || props["github_actor"] != "octocat" {
+		t.Fatalf("shared identity missing: %#v", props)
 	}
 }

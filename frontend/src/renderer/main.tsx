@@ -14,7 +14,7 @@ import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
 import { TelemetryIdentityRuntime } from "./components/TelemetryIdentityRuntime";
-import { applyAnalyticsOptOut, applyRendererTelemetryPolicy, applyShareGithubLogin, bindRendererErrorHandlers, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
+import { applyAnalyticsOptOut, applyRendererTelemetryPolicy, applyShareIdentity, bindRendererErrorHandlers, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
@@ -26,7 +26,7 @@ import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
-import { useShareGithubLoginStore } from "./stores/share-github-login-store";
+import { useShareIdentityStore } from "./stores/share-identity-store";
 
 // Bind before the first render: errors during route setup and the first
 // render used to fire before TelemetryBoundary's effect bound these. Captures
@@ -53,9 +53,9 @@ void aoBridge.telemetry.getAnalyticsOptOut().then((optedOut) => {
 	applyPerformanceOptOut(true);
 	discardUiUsage();
 }).catch(() => undefined);
-aoBridge.telemetry.onShareGithubLogin((share) => {
-	useShareGithubLoginStore.setState({ share, loaded: true });
-	applyShareGithubLogin(share);
+aoBridge.telemetry.onShareIdentity((share) => {
+	useShareIdentityStore.setState({ share, loaded: true });
+	applyShareIdentity(share);
 });
 aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
 	useAnalyticsOptOutStore.setState({ optedOut, loaded: true });

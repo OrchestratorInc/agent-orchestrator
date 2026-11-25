@@ -427,11 +427,6 @@ type PostHogSink struct {
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
 	// (zero-value sinks in tests) behaves as anonymous and opted in.
 	ident *Identity
-	// setKey is the last identity whose person `$set` send succeeded, so
-	// it goes out once per identity change rather than on every event. See
-	// properties().
-	setMu  sync.Mutex
-	setKey string
 	// appVersion stamps app_version/ao_version on every exported event. Empty
 	// leaves the properties off entirely rather than reporting a misleading
 	// "unknown" that would show up as a real version in release breakdowns.
@@ -626,11 +621,10 @@ func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) 
 	// events that carry the same uuid.
 	eventUUID := uuid.NewString()
 	props := s.propertiesWithCount(ev, entry.lifetimeSessions)
-	// A signed-in install reports as the AO Cloud user, so its events never
-	// depend on which account the anonymous install ID was once merged into.
-	// Signed out, the current anonymous install ID is used.
-	cloudUserID, _ := props["ao_cloud_user_id"].(string)
-	identity := ports.TelemetryIdentity{CloudUserID: cloudUserID}
+	// Always the anonymous install-scoped ID, never the AO Cloud user ID: with
+	// person profiles off, distinct_id is the only thing that could tie events
+	// to an account, and it must not. A sign-out still rotates it.
+	identity := ports.TelemetryIdentity{}
 	if s.ident != nil {
 		identity.InstallID = s.ident.InstallID()
 		identity.AnonymousID = s.ident.AnonymousID()
@@ -658,13 +652,6 @@ func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) 
 		}
 		retryable, err := s.sendOnce(ctx, payload)
 		if err == nil {
-			if _, hasSet := props["$set"]; hasSet {
-				actor, _ := props["github_actor"].(string)
-				uid, _ := props["ao_cloud_user_id"].(string)
-				s.setMu.Lock()
-				s.setKey = personSetKey(actor, uid)
-				s.setMu.Unlock()
-			}
 			return
 		}
 		if !retryable || attempt == postHogSendMaxAttempts {
@@ -721,12 +708,13 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 		// desktop renderer (client="desktop") and mobile (client="mobile"), so a
 		// shared event like ao.app.active splits by one property across surfaces.
 		"client": "cli",
-		// The distinct ID is a random install ID with no person data behind it,
-		// so skip PostHog person-profile processing: identified events bill at
-		// several times the anonymous rate and the profiles would hold nothing.
+		// No PostHog person profiles, ever: the distinct ID is a random install ID
+		// and nothing is $set on a person. Account identifiers, when the user
+		// opts in, ride as event properties only.
 		"$process_person_profile": false,
-		// PostHog's default; pinned so coarse geo breakdowns can't silently flip off.
-		"$geoip_disable": false,
+		// No GeoIP enrichment: PostHog must not derive a location from the
+		// sender's IP address.
+		"$geoip_disable": true,
 	}
 	// Without this, every daemon event lands with no version at all, so a
 	// failure rate cannot be attributed to a release. Renderer events already
@@ -779,11 +767,11 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 			props["session_id_hash"] = h
 		}
 	}
-	shareGitHub := s.ident != nil && s.ident.SharesGitHubLogin()
+	shareIdentity := s.ident != nil && s.ident.SharesIdentity()
 	for k, v := range sanitizeRemotePayload(ev.Name, ev.Payload) {
-		// The GitHub username and org are opt-in (Settings > General > Privacy,
-		// "Include my GitHub username"); off by default.
-		if !shareGitHub && gitHubIdentityProperties[k] {
+		// Account identifiers are opt-in (Settings > General > Privacy, "Include
+		// my account identity"); off by default.
+		if !shareIdentity && accountIdentityProperties[k] {
 			continue
 		}
 		props[k] = v
@@ -801,72 +789,26 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 	return props
 }
 
-// stampIdentity attaches who this install is to an event. The GitHub login and
-// AO Cloud user ID ride every event as event properties; the person profile is
-// only processed (billed as identified) once there is a login to mirror or a
-// signed-in user to link, and the person `$set` is resent only when either
-// changes, so a busy daemon does not multiply identified-event cost. Email is
-// deliberately absent: it is set once by the signed-in desktop at identify time.
+// stampIdentity adds the account identifiers the user opted in to sharing:
+// the authenticated GitHub login (github_actor) and the AO Cloud user ID
+// (ao_cloud_user_id). They are event properties only; no person profile is
+// created or updated. eventAttributes returns nothing while sharing is off.
 func (s *PostHogSink) stampIdentity(props map[string]any) {
-	var uid string
-	if s.ident != nil {
-		var login string
-		uid, login = s.ident.eventAttributes()
-		if _, ok := props["github_actor"]; !ok && login != "" {
-			props["github_actor"] = login
-		}
+	if s.ident == nil {
+		return
 	}
-	actor, _ := props["github_actor"].(string)
+	uid, login := s.ident.eventAttributes()
+	if _, ok := props["github_actor"]; !ok && login != "" {
+		props["github_actor"] = login
+	}
 	if uid != "" {
 		props["ao_cloud_user_id"] = uid
-		// Linked to the person the desktop identify() selected; the stable
-		// installation ID remains an event property.
-		props["$process_person_profile"] = true
 	}
-	key := personSetKey(actor, uid)
-	s.setMu.Lock()
-	prev := s.setKey
-	s.setMu.Unlock()
-	if key == prev {
-		return
-	}
-	// Nothing to set, unless this process last set a GitHub login and sharing
-	// has since been turned off: then the person update below clears it.
-	if actor == "" && uid == "" && !strings.HasPrefix(prev, "|") && prev != "" {
-		props["$set"] = map[string]any{}
-		props["$unset"] = append(append([]string{}, stalePersonProperties...), "github_actor", "github_login")
-		props["$process_person_profile"] = true
-		return
-	}
-	if actor == "" && uid == "" {
-		return
-	}
-	set := map[string]any{}
-	if actor != "" {
-		// github_actor is the long-standing person property; github_login is the
-		// name the desktop identify() uses. Same value, kept in step.
-		set["github_actor"], set["github_login"] = actor, actor
-	}
-	if uid != "" {
-		set["ao_cloud_user_id"] = uid
-	}
-	props["$set"] = set
-	props["$unset"] = stalePersonProperties
-	if actor == "" {
-		// Sharing is off: a login an earlier build or setting put on the person
-		// is removed rather than left behind.
-		props["$unset"] = append(append([]string{}, stalePersonProperties...), "github_actor", "github_login")
-	}
-	props["$process_person_profile"] = true
 }
 
-var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}
-
-// gitHubIdentityProperties name who the user is on GitHub. They are exported
-// only when the user opted in to sharing their GitHub username.
-var gitHubIdentityProperties = map[string]bool{"github_actor": true, "github_org": true}
-
-func personSetKey(actor, uid string) string { return actor + "|" + uid }
+// accountIdentityProperties name who the user is on GitHub or AO Cloud. They
+// are exported only while the user opted in to sharing their account identity.
+var accountIdentityProperties = map[string]bool{"github_actor": true, "github_org": true, "ao_cloud_user_id": true}
 
 // validArtifactValue reports whether value is allowed for the artifact
 // telemetry property key: a closed vocabulary, or a count.

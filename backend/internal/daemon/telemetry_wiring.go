@@ -130,7 +130,7 @@ var gitHubLoginRetryDelays = []time.Duration{0, 30 * time.Second, 2 * time.Minut
 
 // startGitHubLoginResolver resolves the authenticated human GitHub login in the
 // background and stores it on the telemetry identity. The login is exported as
-// github_actor only when the user turned on "Include my GitHub username"
+// github_actor only when the user turned on "Include my account identity"
 // (off by default); otherwise it only tells onboarding that GitHub sign-in is
 // done. No lookup runs while telemetry is opted out. The provider is rebuilt
 // per attempt because it reads the token at construction. Only the

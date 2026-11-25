@@ -51,7 +51,14 @@ export type MobileTelemetry = {
 	/** Remove an SDK identity inherited from older desktop adoption code. */
 	resetPhoneIdentity(): void;
 	releasePhoneIdentity(): void;
+	/** The paired desktop's (or the saved desktop) opt-out. */
 	setOptedOut(optedOut: boolean): void;
+	/**
+	 * The phone's own "Share usage analytics" switch. Works without any pairing
+	 * and no desktop can lift it: telemetry is off while either this or the
+	 * desktop's opt-out is on.
+	 */
+	setUserOptedOut(optedOut: boolean): void;
 	/**
 	 * Applies the saved opt-out read from storage and releases capture. Ignored
 	 * for the opt-out value if a connected desktop has already reported its live
@@ -71,8 +78,10 @@ export type MobileTelemetryOptions = {
 	 * persisted limiter. Omitted in tests that are not exercising the cap.
 	 */
 	allow?: (event: string) => boolean;
-	/** Called when the opt-out flips, so the runtime can persist it. */
+	/** Called when the effective opt-out (phone or desktop) flips. */
 	onOptOutChange?: (optedOut: boolean) => void;
+	/** Called with the desktop's opt-out, so the runtime can persist that alone. */
+	onDesktopOptOutChange?: (optedOut: boolean) => void;
 	/**
 	 * Drop every capture until setOptedOut() is called with the saved preference.
 	 * The runtime sets this because the preference loads asynchronously and a
@@ -92,6 +101,8 @@ export function createMobileTelemetry(
 	const denied = new Set(options.disabledEvents ?? []);
 	const allow = options.allow ?? (() => true);
 	let optedOut = false;
+	let desktopOptedOut = false;
+	let userOptedOut = false;
 	let blocked = options.awaitPreference ?? false;
 	let identityPending = options.awaitIdentityMigration ?? false;
 	let liveStateApplied = false;
@@ -123,7 +134,7 @@ export function createMobileTelemetry(
 	// always pushed to both even when it equals the guess.
 	let settled = !(options.awaitPreference ?? false);
 
-	const setOptedOut = (next: boolean): void => {
+	const applyOptOut = (next: boolean): void => {
 		blocked = false;
 		if (next === optedOut && settled) return;
 		settled = true;
@@ -148,6 +159,17 @@ export function createMobileTelemetry(
 		void client.register(context);
 	};
 
+	const setOptedOut = (next: boolean): void => {
+		desktopOptedOut = next;
+		options.onDesktopOptOutChange?.(next);
+		applyOptOut(userOptedOut || desktopOptedOut);
+	};
+
+	const setUserOptedOut = (next: boolean): void => {
+		userOptedOut = next;
+		applyOptOut(userOptedOut || desktopOptedOut);
+	};
+
 	const capture = (event: MobileEventName, properties?: Record<string, unknown>): boolean => {
 		// Fail closed on the event name: an event not in the allowlist is never
 		// sent, so a typo cannot ship a bare untracked event.
@@ -168,7 +190,9 @@ export function createMobileTelemetry(
 			...(signInKnown ? { is_signed_in: cloudUserId !== null } : {}),
 			ao_cloud_user_id: cloudUserId,
 			github_actor: githubActor,
+			// No person profile and no IP-derived location, on every event.
 			$process_person_profile: false,
+			$geoip_disable: true,
 		});
 		return true;
 	};
@@ -214,6 +238,7 @@ export function createMobileTelemetry(
 		},
 		releasePhoneIdentity: () => { identityPending = false; },
 		setOptedOut,
+		setUserOptedOut,
 		restoreOptOut,
 		active: async (storage, now) => {
 			if (blocked || identityPending || optedOut) return;

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TELEMETRY_OPT_OUT_FILE, TELEMETRY_SHARE_GITHUB_LOGIN_FILE, TelemetryIdentityController } from "./telemetry-identity";
+import { TELEMETRY_OPT_OUT_FILE, TELEMETRY_SHARE_IDENTITY_FILE, TelemetryIdentityController } from "./telemetry-identity";
 
 const ORIGIN = "http://127.0.0.1:4010";
 
@@ -238,13 +238,13 @@ describe("TelemetryIdentityController GitHub username sharing", () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 		const broadcastShare = vi.fn();
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, vi.fn() as never, vi.fn(), broadcastShare);
-		expect(ctl.isSharingGithubLogin()).toBe(false);
-		expect(await ctl.setShareGithubLogin(true)).toBe(true);
-		expect(ctl.isSharingGithubLogin()).toBe(true);
-		await expect(stat(path.join(dir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE))).resolves.toBeTruthy();
-		await ctl.setShareGithubLogin(false);
-		expect(ctl.isSharingGithubLogin()).toBe(false);
-		await expect(readFile(path.join(dir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE))).rejects.toThrow();
+		expect(ctl.isSharingIdentity()).toBe(false);
+		expect(await ctl.setShareIdentity(true)).toBe(true);
+		expect(ctl.isSharingIdentity()).toBe(true);
+		await expect(stat(path.join(dir, TELEMETRY_SHARE_IDENTITY_FILE))).resolves.toBeTruthy();
+		await ctl.setShareIdentity(false);
+		expect(ctl.isSharingIdentity()).toBe(false);
+		await expect(readFile(path.join(dir, TELEMETRY_SHARE_IDENTITY_FILE))).rejects.toThrow();
 		expect(broadcastShare.mock.calls).toEqual([[true], [false]]);
 	});
 });

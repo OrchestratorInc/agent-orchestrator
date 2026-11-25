@@ -163,7 +163,7 @@ describe("telemetry sanitizers", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
 		expect(config.persistence).toBe("memory");
-		expect(config.person_profiles).toBe("identified_only");
+		expect(config.person_profiles).toBe("never");
 		expect(config.autocapture).toBe(false);
 		expect(config.capture_performance).toBe(false);
 		expect(config.disable_session_recording).toBe(true);
@@ -387,37 +387,25 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
-	it("identify aliases the install id into the WorkOS user and sets email once as a person property", () => {
+	it("the real SDK sends no $identify and keeps the anonymous install id even if identify() were called", () => {
 		const events: { event: string; properties: Record<string, unknown>; $set?: Record<string, unknown> }[] = [];
 		const client = new PostHog();
 		client.init("phc_test", {
 			...buildPostHogConfig("ins_stable-install-id"),
 			advanced_disable_flags: true,
-			disable_session_recording: true,
-			disable_surveys: true,
 			// Observe what would be sent; nothing leaves the test.
 			before_send: (event) => {
 				if (event) events.push(event as never);
 				return null;
 			},
 		});
-		client.identify("user_01H", { email: "dev@example.com", ao_cloud_user_id: "user_01H", github_login: "octocat" });
-		expect(client.get_distinct_id()).toBe("user_01H");
-		const identify = events.find((e) => e.event === "$identify");
-		expect(identify).toBeTruthy();
-		expect(identify!.properties.$anon_distinct_id).toBe("ins_stable-install-id");
-		expect(identify!.properties.distinct_id ?? client.get_distinct_id()).toBe("user_01H");
-		expect(identify!.$set ?? identify!.properties.$set).toEqual({
-			email: "dev@example.com",
-			ao_cloud_user_id: "user_01H",
-			github_login: "octocat",
-		});
-
-		// After identify, ordinary events carry the user and never the email.
+		client.identify("user_01H", { email: "dev@example.com" });
 		client.capture("ao.support.opened", withTelemetryContext({}));
+		expect(events.some((e) => e.event === "$identify" || e.event === "$create_alias")).toBe(false);
+		expect(client.get_distinct_id()).toBe("ins_stable-install-id");
 		const after = events.find((e) => e.event === "ao.support.opened");
-		expect(after?.properties).toMatchObject({ distinct_id: "user_01H", $is_identified: true });
-		expect(JSON.stringify(after)).not.toContain("dev@example.com");
+		expect(after?.properties).toMatchObject({ $process_person_profile: false, $geoip_disable: true });
+		expect(JSON.stringify(events)).not.toContain("dev@example.com");
 	});
 
 	it("builds stable AO version context for PostHog events", () => {
@@ -1122,7 +1110,7 @@ describe("feature flags across an in-session analytics opt-out", () => {
 // /flags requests bypass before_send, so nothing the SDK stores from the page
 // may ride along: the raw route names projects and sessions.
 describe("feature flag requests carry no page route", () => {
-	it("sends no initial URL or referrer in /flags after a capture and identify", async () => {
+	it("sends no initial URL or referrer in /flags after a capture and a flag reload", async () => {
 		vi.useFakeTimers();
 		const original = window.location.href;
 		window.history.replaceState(null, "", "/#/projects/private-project/sessions/secret-session?ref=private");
@@ -1134,7 +1122,7 @@ describe("feature flag requests carry no page route", () => {
 				if (options.url.includes("/flags")) bodies.push(JSON.stringify(options.data ?? {}));
 			};
 			client.capture("ao.app.loaded", withTelemetryContext({}));
-			client.identify("user_A", { ao_cloud_user_id: "user_A" });
+			client.reloadFeatureFlags();
 			await vi.advanceTimersByTimeAsync(2_000);
 			expect(bodies.length).toBeGreaterThan(0);
 			for (const body of bodies) {

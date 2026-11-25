@@ -8,9 +8,9 @@ export const TELEMETRY_OPT_OUT_FILE = "telemetry_opt_out";
 /**
  * Present only while "Include my GitHub username" is on (off by default). The
  * daemon reads it before attaching github_actor or github_org to any export
- * (adapters/telemetry.ShareGitHubLoginFile).
+ * (adapters/telemetry.ShareIdentityFile).
  */
-export const TELEMETRY_SHARE_GITHUB_LOGIN_FILE = "telemetry_share_github_login";
+export const TELEMETRY_SHARE_IDENTITY_FILE = "telemetry_share_identity";
 
 /** What the daemon resolved about GitHub: the login only when sharing is on. */
 export type TelemetryGithubIdentity = { login: string | null; signedIn: boolean };
@@ -62,22 +62,22 @@ export class TelemetryIdentityController {
 		private readonly origin: () => string | null,
 		private readonly fetcher: Fetcher = fetch,
 		private readonly broadcast: (optedOut: boolean) => void = () => undefined,
-		private readonly broadcastShareGithubLogin: (share: boolean) => void = () => undefined,
+		private readonly broadcastShareIdentity: (share: boolean) => void = () => undefined,
 	) {}
 
-	isSharingGithubLogin(): boolean {
-		return existsSync(path.join(this.dataDir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE));
+	isSharingIdentity(): boolean {
+		return existsSync(path.join(this.dataDir, TELEMETRY_SHARE_IDENTITY_FILE));
 	}
 
-	async setShareGithubLogin(share: boolean): Promise<boolean> {
-		const file = path.join(this.dataDir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE);
+	async setShareIdentity(share: boolean): Promise<boolean> {
+		const file = path.join(this.dataDir, TELEMETRY_SHARE_IDENTITY_FILE);
 		if (share) {
 			await mkdir(this.dataDir, { recursive: true });
 			await writeFile(file, "1\n", { mode: 0o600 });
 		} else {
 			await rm(file, { force: true });
 		}
-		this.broadcastShareGithubLogin(share);
+		this.broadcastShareIdentity(share);
 		return share;
 	}
 

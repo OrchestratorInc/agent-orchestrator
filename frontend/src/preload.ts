@@ -669,13 +669,13 @@ const api = {
 		},
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
 		getGithubIdentity: () => ipcRenderer.invoke("telemetry:getGithubIdentity") as Promise<{ login: string | null; signedIn: boolean }>,
-		getShareGithubLogin: () => ipcRenderer.invoke("telemetry:getShareGithubLogin") as Promise<boolean>,
-		setShareGithubLogin: (share: boolean) => ipcRenderer.invoke("telemetry:setShareGithubLogin", share) as Promise<boolean>,
-		onShareGithubLogin: (listener: (share: boolean) => void) => {
+		getShareIdentity: () => ipcRenderer.invoke("telemetry:getShareIdentity") as Promise<boolean>,
+		setShareIdentity: (share: boolean) => ipcRenderer.invoke("telemetry:setShareIdentity", share) as Promise<boolean>,
+		onShareIdentity: (listener: (share: boolean) => void) => {
 			const wrapped = (_event: unknown, share: boolean) => listener(share);
-			ipcRenderer.on("telemetry:shareGithubLoginChanged", wrapped);
+			ipcRenderer.on("telemetry:shareIdentityChanged", wrapped);
 			return () => {
-				ipcRenderer.off("telemetry:shareGithubLoginChanged", wrapped);
+				ipcRenderer.off("telemetry:shareIdentityChanged", wrapped);
 			};
 		},
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,

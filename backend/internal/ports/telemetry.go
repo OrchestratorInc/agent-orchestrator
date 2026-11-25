@@ -55,8 +55,8 @@ type TelemetryIdentity struct {
 	// CloudUserKnown is true after the desktop has resolved its Cloud session.
 	// An empty CloudUserID is only a known sign-out when this is true.
 	CloudUserKnown bool
-	// GitHubLogin is filled only when the user turned on "Include my GitHub
-	// username"; GitHubSignedIn says whether a login was resolved at all, so
+	// GitHubLogin is filled only when the user turned on "Include my account
+	// identity"; GitHubSignedIn says whether a login was resolved at all, so
 	// onboarding can tell GitHub sign-in is done without learning who it is.
 	GitHubLogin    string
 	GitHubSignedIn bool
@@ -92,9 +92,10 @@ type TelemetryIdentityStore interface {
 	// MarkInstalledEvent reserves the one install event before queueing it.
 	MarkInstalledEvent(ctx context.Context) (bool, error)
 	SetGitHubLogin(login string)
-	// SharesGitHubLogin reports whether the user opted in to attaching their
-	// GitHub username (github_actor, github_org) to exported events.
-	SharesGitHubLogin() bool
+	// SharesIdentity reports whether the user opted in to attaching their
+	// account identifiers (github_actor, github_org, ao_cloud_user_id) to
+	// exported events and the paired phone's identity.
+	SharesIdentity() bool
 }
 
 // InstallMilestones claims install-lifetime "firsts" durably (marker files in

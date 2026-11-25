@@ -20,10 +20,11 @@ import (
 // app and (via the identity route) the phone all read one switch.
 const OptOutFile = "telemetry_opt_out"
 
-// ShareGitHubLoginFile is the marker the desktop app writes when the user turns
-// on "Include my GitHub username" in Settings. Absent (the default) means the
-// GitHub login and org never leave the machine on exported events.
-const ShareGitHubLoginFile = "telemetry_share_github_login"
+// ShareIdentityFile is the marker the desktop app writes when the user turns
+// on "Include my account identity" in Settings. Absent (the default) means the
+// GitHub login, the repositories' GitHub org and the AO Cloud user ID never
+// leave the machine on exported events or to a paired phone.
+const ShareIdentityFile = "telemetry_share_identity"
 
 const (
 	installIDFile      = "telemetry_install_id"
@@ -88,7 +89,7 @@ func NewIdentity(dataDir string) (*Identity, error) {
 			return nil, fmt.Errorf("record telemetry anonymous id: %w", err)
 		}
 	}
-	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), sharePath: filepath.Join(dataDir, ShareGitHubLoginFile), fresh: freshInstall(dataDir)}
+	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), sharePath: filepath.Join(dataDir, ShareIdentityFile), fresh: freshInstall(dataDir)}
 	if salt, ok := loadOrCreateHashSalt(dataDir); ok {
 		ident.hashSalt = salt
 	}
@@ -166,10 +167,10 @@ func (i *Identity) OptedOut() bool {
 	return err == nil
 }
 
-// SharesGitHubLogin reports whether the user opted in to sending their GitHub
-// username. Read from the marker on every call, like OptedOut, so a change in
+// SharesIdentity reports whether the user opted in to sending their account
+// identifiers (GitHub username and org, AO Cloud user ID). Read from the marker on every call, like OptedOut, so a change in
 // Settings applies to the next export without a restart.
-func (i *Identity) SharesGitHubLogin() bool {
+func (i *Identity) SharesIdentity() bool {
 	if i.sharePath == "" {
 		return false
 	}
@@ -311,7 +312,7 @@ func (i *Identity) SetGitHubLogin(login string) {
 // linked to the previous account.
 func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	optedOut := i.OptedOut()
-	share := i.SharesGitHubLogin()
+	share := i.SharesIdentity()
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	snap := ports.TelemetryIdentity{InstallID: i.installID, AnonymousID: i.anonymousID, OptedOut: optedOut || i.persistFailed}
@@ -329,14 +330,14 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 // eventAttributes avoids another marker read while constructing an export.
 // The sender checks ExportSuppressed immediately before each HTTP attempt.
 func (i *Identity) eventAttributes() (cloudUserID, githubLogin string) {
-	share := i.SharesGitHubLogin()
+	share := i.SharesIdentity()
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	if i.persistFailed {
 		return "", ""
 	}
 	if !share {
-		return i.cloudUserID, ""
+		return "", ""
 	}
 	return i.cloudUserID, i.githubLogin
 }

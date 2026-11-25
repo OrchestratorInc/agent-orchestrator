@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
 import { noteCloudSignInCompleted } from "../lib/cloud-telemetry";
-import { clearCloudUser, identifyCloudUser, noteCloudSignInWebVisitor } from "../lib/telemetry";
+import { clearCloudUser, identifyCloudUser } from "../lib/telemetry";
 
 // Waits between attempts to get the daemon to acknowledge the current user (or
 // the sign-out). The daemon is usually still starting when the session resolves;
@@ -10,22 +10,19 @@ import { clearCloudUser, identifyCloudUser, noteCloudSignInWebVisitor } from "..
 // without a record. A sign-out repeats at the last interval until acknowledged.
 export const BINDING_RETRY_MS = [1_000, 3_000, 10_000, 30_000, 60_000, 180_000];
 
-// Ties the AO Cloud sign-in to the PostHog identity: hands the opaque user ID to
-// the daemon through main so its events join the same person, and identifies the
-// user in the renderer (email as a person property, once) only after the daemon
-// acknowledged it. identify() links the install ID to the account permanently;
-// without the daemon's record of that link a later sign-out could not retire the
-// ID. Only the production WorkOS account is identified; the dev-only local
-// provider never is.
+// Hands the AO Cloud sign-in state to the daemon through main and notes it in the
+// renderer once the daemon acknowledged it. Nothing identifies the user to
+// PostHog: there is no identify(), alias() or person profile, and the email
+// never leaves the app. The user ID becomes an event property only while
+// "Include my account identity" is on. The daemon still records the binding so
+// a sign-out or account switch rotates the anonymous install-scoped ID. Only the
+// production WorkOS account counts; the dev-only local provider never does.
 export function TelemetryIdentityRuntime() {
 	const { session, status } = useCloudSession();
 	const userId = session?.authProvider === "workos" ? session.user.id : null;
-	const email = session?.authProvider === "workos" ? session.user.email : "";
-	// A sign-in completed through the website's return page adds that visit's
-	// id, which main holds until it is taken, once: here on the session's
-	// notification, or on mounting when the sign-in link started the app.
-	// Telemetry links it to the account when it identifies the user, and only if
-	// analytics are on.
+	// A completed sign-in is held by main until it is taken, once: here on the
+	// session's notification, or on mounting when the sign-in link started the
+	// app. The website visit id it may carry is never linked to anything.
 	useEffect(() => {
 		const cloud = aoBridge.cloud;
 		if (!cloud) return;
@@ -33,9 +30,7 @@ export function TelemetryIdentityRuntime() {
 		const takeSignIn = () => {
 			void cloud.takePendingSignIn().then((pending) => {
 				if (!mounted || !pending) return;
-				const { account, signIn } = pending;
-				noteCloudSignInCompleted(account);
-				noteCloudSignInWebVisitor(account.authProvider === "workos" ? account.user.id : null, signIn.webDistinctId);
+				noteCloudSignInCompleted(pending.account);
 			}, () => undefined);
 		};
 		const unsubscribe = cloud.onSessionChanged(takeSignIn);
@@ -68,7 +63,7 @@ export function TelemetryIdentityRuntime() {
 				if (cancelled) return;
 				if (result === "unsupported" && !userId) return;
 				if (result === true) {
-					if (userId) await identifyCloudUser({ id: userId, email });
+					if (userId) await identifyCloudUser({ id: userId });
 					return;
 				}
 			}
@@ -76,6 +71,6 @@ export function TelemetryIdentityRuntime() {
 		return () => {
 			cancelled = true;
 		};
-	}, [userId, email, status]);
+	}, [userId, status]);
 	return null;
 }
