@@ -5444,6 +5444,8 @@
 	"move.workerTooOld": "Der Orchestrator-Cloud-Worker dieser Sitzung ist zu alt, um sie zu verschieben. Starte die Sitzung neu, um ihn zu aktualisieren, und verschiebe sie dann.",
 	"move.agentStillRunning": "Die Orchestrator Cloud konnte nicht bestätigen, dass der Agent gestoppt wurde: Einige seiner Prozesse liefen noch, daher wurde nichts committet oder gepusht. Versuche es erneut.",
 	"move.turnsQueued": "Für diese Sitzung warten in der Orchestrator Cloud noch Nachrichten. Lass sie ausführen oder entferne sie und verschiebe die Sitzung dann.",
+	"move.inProgress": "Diese Sitzung wird gerade auf einen anderen Computer verschoben. Starte ihren Agenten neu, sobald das Verschieben abgeschlossen oder fehlgeschlagen ist.",
+	"move.switchInProgress": "Für diese Sitzung läuft gerade ein Wechsel. Versuche es erneut, sobald er abgeschlossen ist.",
 	"moveHere.menuItem": "Auf diesen Computer verschieben…",
 	"moveHere.title": "{{title}} auf diesen Computer verschieben",
 	"moveHere.project": "Projekt",

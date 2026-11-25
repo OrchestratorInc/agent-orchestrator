@@ -1081,7 +1081,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Stops the session's agent, then commits the session's uncommitted work, ignored files aside, as one commit on its branch and pushes the branch, so an AO daemon's move/import can continue the session from it. Delete the session once the import succeeds; if the move fails, agent/restart starts its terminal agent again. Viewers get 403. A branch the remote has commits for that the session lacks fails the push. */
+        /** @description Stops the session's agent, then commits the session's uncommitted work, ignored files aside, as one commit on its branch and pushes the branch, so an AO daemon's move/import can continue the session from it. Delete the session once the import succeeds; if the move fails, agent/restart starts its terminal agent again. Viewers get 403. A branch the remote has commits for that the session lacks fails the push. Asked again while a move holds the session (its export running, or answered and the move neither ended nor abandoned), it answers with that move, under the same moveId (200 once answered, 202 while it runs), instead of starting another. */
         post: operations["exportSessionMove"];
         delete?: never;
         options?: never;
@@ -1305,7 +1305,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. On a session whose work is moving to another machine (SESSION_MOVING), it abandons the move: the session stays here and its agent starts again. */
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. On a session whose work is moving to another machine (SESSION_MOVING), once its export answered, it abandons the move: the session stays here and its agent starts again. While the export still runs it answers 409 MOVE_IN_PROGRESS. */
         post: operations["restartSessionAgent"];
         delete?: never;
         options?: never;
@@ -8733,7 +8733,7 @@ export interface operations {
                     "application/json": components["schemas"]["SessionMoveExportRunning"];
                 };
             };
-            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). MOVE_TURNS_QUEUED: messages are still queued for the session in AO Cloud; let them run or remove them, then move. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). MOVE_TURNS_QUEUED: messages are still queued for the session in AO Cloud; let them run or remove them, then move. INTERFACE_TRANSITION_IN_PROGRESS: an interface or agent switch is in progress for the session; try again once it finishes. These two are refused before the worker is asked, so nothing stopped, committed or pushed. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8798,7 +8798,7 @@ export interface operations {
                     "application/json": components["schemas"]["SessionMoveExportRunning"];
                 };
             };
-            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). MOVE_TURNS_QUEUED: messages are still queued for the session in AO Cloud; let them run or remove them, then move. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9118,6 +9118,15 @@ export interface operations {
                     "application/json": {
                         requested: boolean;
                     };
+                };
+            };
+            /** @description MOVE_IN_PROGRESS: the session's move export is still running, so the move is not abandoned and its agent is not started. Restart it once the move has finished or failed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

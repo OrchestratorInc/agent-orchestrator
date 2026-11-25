@@ -5426,6 +5426,8 @@
 	"move.workerTooOld": "此会话的 Orchestrator Cloud worker 版本过旧，无法移动。请重新启动会话以更新它，然后再移动。",
 	"move.agentStillRunning": "Orchestrator Cloud 无法确认智能体已停止：它的部分进程仍在运行，因此没有提交或推送任何内容。请重试。",
 	"move.turnsQueued": "此会话在 Orchestrator Cloud 中仍有排队的消息。请等待它们运行完毕或将其删除，然后再移动。",
+	"move.inProgress": "此会话正在移动到另一台电脑。请在移动完成或失败后再重新启动其智能体。",
+	"move.switchInProgress": "此会话正在进行切换。请在切换完成后重试。",
 	"moveHere.menuItem": "移动到此电脑…",
 	"moveHere.title": "将 {{title}} 移动到此电脑",
 	"moveHere.project": "项目",

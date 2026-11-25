@@ -5464,6 +5464,8 @@
 	"move.workerTooOld": "Bu oturumun Orchestrator Cloud worker'ı onu taşımak için çok eski. Güncellemek için oturumu yeniden başlatın, sonra taşıyın.",
 	"move.agentStillRunning": "Orchestrator Cloud ajanın durduğunu doğrulayamadı: bazı işlemleri hâlâ çalışıyordu, bu yüzden hiçbir şey commit edilmedi veya gönderilmedi. Yeniden deneyin.",
 	"move.turnsQueued": "Bu oturum için Orchestrator Cloud'da hâlâ sırada bekleyen mesajlar var. Çalışmalarını bekleyin veya onları kaldırın, sonra oturumu taşıyın.",
+	"move.inProgress": "Bu oturum şu anda başka bir bilgisayara taşınıyor. Taşıma bittiğinde veya başarısız olduğunda ajanını yeniden başlatın.",
+	"move.switchInProgress": "Bu oturumda bir geçiş sürüyor. Bittiğinde yeniden deneyin.",
 	"moveHere.menuItem": "Bu bilgisayara taşı…",
 	"moveHere.title": "{{title}} oturumunu bu bilgisayara taşı",
 	"moveHere.project": "Proje",

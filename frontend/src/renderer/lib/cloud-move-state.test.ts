@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CloudCpError } from "./cloud-cp";
-import { moveStateText, withMoveStateText } from "./cloud-move-state";
+import { moveErrorText, moveStateText, withMoveStateText } from "./cloud-move-state";
 
 describe("withMoveStateText", () => {
 	it("says why a moving session refuses, in the app's words, keeping the error's code", () => {
@@ -23,6 +23,11 @@ describe("withMoveStateText", () => {
 			code: "MOVE_TURNS_QUEUED",
 			message: "Messages are still queued for this session in Orchestrator Cloud. Let them run or remove them, then move it.",
 		});
+		expect(withMoveStateText(new CloudCpError("move in progress (CP text)", { status: 409, code: "MOVE_IN_PROGRESS" }))).toMatchObject({
+			status: 409,
+			code: "MOVE_IN_PROGRESS",
+			message: "This session is moving to another computer right now. Restart its agent once the move has finished or failed.",
+		});
 	});
 
 	it("leaves every other error as it is", () => {
@@ -31,5 +36,13 @@ describe("withMoveStateText", () => {
 		const plain = new Error("offline");
 		expect(withMoveStateText(plain)).toBe(plain);
 		expect(moveStateText(undefined)).toBeUndefined();
+	});
+
+	it("keeps a switch in progress in its own words outside the move dialog", () => {
+		const switching = new CloudCpError("A switch is already in progress for this session.", { status: 409, code: "INTERFACE_TRANSITION_IN_PROGRESS" });
+		expect(withMoveStateText(switching)).toBe(switching);
+		expect(moveErrorText("INTERFACE_TRANSITION_IN_PROGRESS")).toBe("A switch is in progress for this session. Try again when it finishes.");
+		expect(moveErrorText("MOVE_TURNS_QUEUED")).toBe(moveStateText("MOVE_TURNS_QUEUED"));
+		expect(moveErrorText("STEER_IN_PROGRESS")).toBeUndefined();
 	});
 });

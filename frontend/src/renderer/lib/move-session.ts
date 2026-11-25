@@ -138,6 +138,21 @@ export const TRANSCRIPT_NOT_CAPTURED = "MOVE_TRANSCRIPT_NOT_CAPTURED";
 /** Cloud kept a moved session's copy: it was restarted or used after the move's export. */
 export const MOVE_COPY_IN_USE = "MOVE_COPY_IN_USE";
 
+/** Cloud did not start the agent again: the move's export still runs and holds the session. */
+export const MOVE_IN_PROGRESS = "MOVE_IN_PROGRESS";
+
+/**
+ * Refusals of a move's export that Cloud makes before it asks the worker
+ * anything (messages still queued, an interface or agent switch in progress):
+ * nothing stopped, committed or pushed.
+ */
+const EXPORT_REFUSED_UNTOUCHED = new Set(["MOVE_TURNS_QUEUED", "INTERFACE_TRANSITION_IN_PROGRESS"]);
+
+/** Whether a failed move left the Cloud session as it was: its export was refused before anything stopped. */
+export function moveLeftSessionAsItWas(error: MoveError): boolean {
+	return error.step === "export" && error.code !== undefined && EXPORT_REFUSED_UNTOUCHED.has(error.code);
+}
+
 export interface MoveDeps {
 	source: DaemonClient;
 	cloud: Pick<CloudCpClient, "createSession" | "createProject">;
@@ -488,7 +503,17 @@ export async function moveSessionHere(
 		}
 		deps.onCloned?.(projectId);
 	}
-	const restart = () => deps.cloud.restartSessionAgent(orgId, cloudSessionId).then(() => true, () => false);
+	// Set when Cloud refuses the restart because the move's export still runs
+	// (MOVE_IN_PROGRESS): it holds the session until that export ends.
+	let exportHoldsSession = false;
+	const restart = () =>
+		deps.cloud.restartSessionAgent(orgId, cloudSessionId).then(
+			() => true,
+			(error: unknown) => {
+				exportHoldsSession = error instanceof CloudCpError && error.code === MOVE_IN_PROGRESS;
+				return false;
+			},
+		);
 
 	// One Cloud call stops the agent and pushes; a failure is shown on the push.
 	// Cloud answers within about 50 s, with the move or with the export still
@@ -545,9 +570,26 @@ export async function moveSessionHere(
 		}
 		deps.onExportMove?.(undefined);
 		const reason = error instanceof CloudCpError && error.status !== 0 ? error : "Could not reach Orchestrator Cloud.";
-		throw new MoveError(apiErrorMessage(reason, "Could not push the session"), "export", errorCode(error), await restart());
+		const message = apiErrorMessage(reason, "Could not push the session");
+		// Refused before the worker was asked: nothing stopped, so nothing is
+		// started again, and a restart could cut into a switch in progress.
+		if (error instanceof CloudCpError && EXPORT_REFUSED_UNTOUCHED.has(error.code ?? "")) {
+			throw new MoveError(message, "export", error.code, true);
+		}
+		const restarted = await restart();
+		// The export runs after all (its answer was lost before its moveId
+		// came back): Try again asks Cloud again, which answers with that move.
+		if (exportHoldsSession) {
+			throw new MoveError(
+				"Orchestrator Cloud is still moving the session. Its agent stays stopped; Try again waits on that move.",
+				"export", MOVE_IN_PROGRESS, false, undefined, "settle", input.branch,
+			);
+		}
+		throw new MoveError(message, "export", errorCode(error), restarted);
 	}
-	// A later Try again exports afresh: the agent may have run again by then.
+	// A later Try again asks Cloud again: while this move holds the session
+	// Cloud answers with it (the same moveId), and once the move ended or was
+	// abandoned it runs a new export, as the agent may have run again by then.
 	deps.onExportMove?.(undefined);
 
 	deps.onStep?.("import");

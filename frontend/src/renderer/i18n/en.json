@@ -5424,6 +5424,8 @@
 	"move.workerTooOld": "This session's Orchestrator Cloud worker is too old to move it. Restart the session to update it, then move it.",
 	"move.agentStillRunning": "Orchestrator Cloud could not confirm the agent had stopped: some of its processes were still running, so nothing was committed or pushed. Try again.",
 	"move.turnsQueued": "Messages are still queued for this session in Orchestrator Cloud. Let them run or remove them, then move it.",
+	"move.inProgress": "This session is moving to another computer right now. Restart its agent once the move has finished or failed.",
+	"move.switchInProgress": "A switch is in progress for this session. Try again when it finishes.",
 	"moveHere.menuItem": "Move to this computer…",
 	"moveHere.title": "Move {{title}} to this computer",
 	"moveHere.project": "Project",

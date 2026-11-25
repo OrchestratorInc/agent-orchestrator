@@ -17,10 +17,10 @@ import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../lib/cloud-age
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { CloudCpError } from "../lib/cloud-cp";
-import { CLOUD_BRANCH_FEATURE, cloudHarness, localHarness, MoveError, moveSession, moveSessionHere, TRANSCRIPT_NOT_CAPTURED, type MoveDeps, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget, type MoveWarning } from "../lib/move-session";
+import { CLOUD_BRANCH_FEATURE, cloudHarness, localHarness, MoveError, moveLeftSessionAsItWas, moveSession, moveSessionHere, TRANSCRIPT_NOT_CAPTURED, type MoveDeps, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget, type MoveWarning } from "../lib/move-session";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { repoKey } from "../lib/repo-key";
-import { moveStateText, withMoveStateText } from "../lib/cloud-move-state";
+import { moveErrorText, withMoveStateText } from "../lib/cloud-move-state";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
@@ -338,7 +338,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 					)}
 					{error ? (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
-							<p>{(error instanceof MoveError && moveStateText(error.code)) || error.message}</p>
+							<p>{(error instanceof MoveError && moveErrorText(error.code)) || error.message}</p>
 							{error instanceof MoveError && error.pushed ? (
 								<p className="text-settings-muted">
 									{error.pushed.wip
@@ -776,7 +776,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					) : null}
 					{error ? (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
-							<p>{(error instanceof MoveError && moveStateText(error.code)) || error.message}</p>
+							<p>{(error instanceof MoveError && moveErrorText(error.code)) || error.message}</p>
 							{error instanceof MoveError && error.code === TRANSCRIPT_NOT_CAPTURED ? (
 								<p className="text-settings-label">{t("moveHere.transcriptNotCaptured")}</p>
 							) : null}
@@ -790,7 +790,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 										: t("move.failedPushed", { branch: error.pushed.branch })}
 								</p>
 							) : null}
-							{error instanceof MoveError && error.step === "clone" ? (
+							{error instanceof MoveError && (error.step === "clone" || moveLeftSessionAsItWas(error)) ? (
 								<p className="text-settings-muted">{t("moveHere.failedClone")}</p>
 							) : (
 								moveFailureNote(error, {

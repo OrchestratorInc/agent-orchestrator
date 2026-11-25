@@ -677,11 +677,50 @@ describe("moving a Cloud session to this computer", () => {
 			"Messages are still queued for this session in Orchestrator Cloud. Let them run or remove them, then move it.",
 		)).toBeTruthy();
 		expect(screen.queryByText("turns queued (CP text)")).toBeNull();
+		// Refused before anything stopped: the session is as it was, and no restart is asked.
+		expect(screen.getByText("Nothing moved. The session stays in Orchestrator Cloud as it was.")).toBeTruthy();
+		expect(cloud.restartSessionAgent).not.toHaveBeenCalled();
 		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/sessions/move/import")).toHaveLength(0);
 		expect(cloud.deleteSession).not.toHaveBeenCalled();
 		// Once the queued messages ran or were removed, trying again moves it.
 		await user.click(screen.getByRole("button", { name: "Try again" }));
 		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+	});
+
+	it("says a switch is in progress, in the app's words, without restarting the Cloud agent mid-switch", async () => {
+		cloud.exportSessionMove.mockRejectedValueOnce(new CloudCpError("switch in progress (CP text)", { status: 409, code: "INTERFACE_TRANSITION_IN_PROGRESS" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("A switch is in progress for this session. Try again when it finishes.")).toBeTruthy();
+		expect(screen.queryByText("switch in progress (CP text)")).toBeNull();
+		expect(screen.getByText("Nothing moved. The session stays in Orchestrator Cloud as it was.")).toBeTruthy();
+		expect(cloud.restartSessionAgent).not.toHaveBeenCalled();
+		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/sessions/move/import")).toHaveLength(0);
+		await user.click(screen.getByRole("button", { name: "Try again" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+	});
+
+	it("says the move is still running when Cloud will not restart its agent, and Try again finishes that move", async () => {
+		// The export's answer is lost, and the restart is refused: the export runs after all.
+		cloud.exportSessionMove.mockRejectedValueOnce(new CloudCpError("fetch failed", { status: 0 }));
+		cloud.restartSessionAgent.mockRejectedValueOnce(new CloudCpError("move in progress (CP text)", { status: 409, code: "MOVE_IN_PROGRESS" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText(
+			"This session is moving to another computer right now. Restart its agent once the move has finished or failed.",
+		)).toBeTruthy();
+		expect(screen.queryByText("move in progress (CP text)")).toBeNull();
+		// Not the line that says to restart it from the session now.
+		expect(screen.queryByText("The session stays in Orchestrator Cloud, but its agent is stopped. Restart it from the session.")).toBeNull();
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
+		// Asked again, Cloud answers with the move that holds the session.
+		cloud.exportSessionMove.mockResolvedValueOnce({ ...(await cloud.exportSessionMove.getMockImplementation()?.()), moveId: "exp-1" });
+		await user.click(screen.getByRole("button", { name: "Try again" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(cloud.restartSessionAgent).toHaveBeenCalledTimes(1);
+		expect(cloud.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1", { moveId: "exp-1" });
 	});
 
 	it("keeps the Cloud session when it was used again after the move, and says so", async () => {
