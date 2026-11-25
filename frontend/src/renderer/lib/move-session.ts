@@ -13,13 +13,16 @@ export interface MoveTarget {
 	orgId: string;
 	projectId: string;
 	harness: string;
+	/** Orchestrator Cloud runs harness in Chat (the account's chatHarnesses); a session in Chat stays in Chat only then. */
+	chat?: boolean;
 }
 
 export type MoveStep = "project" | "clone" | "stop" | "export" | "import" | "complete";
 
 /** Something the move left behind that the dialog had said would move, and why. */
 export interface MoveWarning {
-	kind: "transcript" | "sidecar";
+	kind: "transcript" | "sidecar" | "interface";
+	/** Why, for transcript and sidecar; for interface, the agent that runs in the terminal instead of Chat. */
 	reason: string;
 }
 
@@ -346,6 +349,10 @@ export async function moveSession(
 	const carried = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, state.key ?? moveId, target.harness);
 	const transcriptImportId = carried?.importId;
 	warnings = carried?.warnings ?? [];
+	// The session keeps its interface: a session in Chat stays in Chat when
+	// Cloud runs its agent there, and otherwise continues in the terminal.
+	const inChat = m.mode === "chat";
+	if (inChat && !target.chat) warnings.push({ kind: "interface", reason: target.harness });
 	const request: CloudSessionRequest = state.current ?? {
 		projectId,
 		kind: "worker",
@@ -353,6 +360,7 @@ export async function moveSession(
 		displayName: (m.displayName || target.harness).slice(0, 100),
 		prompt: exported.data.handoffNote,
 		branch: m.branch,
+		interfaceMode: inChat && target.chat ? "chat" : "tui",
 		...(sameAgent && m.model ? { model: m.model } : {}),
 		...(effort ? { reasoningEffort: effort } : {}),
 		...(approvalMode ? { approvalMode } : {}),
@@ -593,14 +601,17 @@ export async function moveSessionHere(
 	deps.onExportMove?.(undefined);
 
 	deps.onStep?.("import");
-	const m = exported.manifest;
+	const { interface: cloudInterface, ...m } = exported.manifest;
 	const pushed = { branch: m.branch, tip: m.tip, wip: m.wip };
+	// The session starts here in the interface it had in Cloud; this computer
+	// runs it in the terminal when its agent has no Chat here, and says so.
+	const mode = cloudInterface === "chat" ? "chat" : cloudInterface === "terminal" ? "tui" : undefined;
 	deps.onImport?.(projectId);
 	const importing = deps.daemon.POST("/api/v1/sessions/move/import", {
 		body: {
 			projectId,
 			moveId: input.moveId,
-			manifest: { ...m, ...input.settings },
+			manifest: { ...m, ...input.settings, ...(mode ? { mode } : {}) },
 			handoffNote: exported.handoffNote,
 			...(exported.transcript ? { transcript: exported.transcript } : {}),
 		},

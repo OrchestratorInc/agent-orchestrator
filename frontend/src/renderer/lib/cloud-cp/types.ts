@@ -723,6 +723,12 @@ export interface CloudCpSession {
 	 */
 	coderWorkspaceUrl?: string;
 	isTerminated: boolean;
+	/**
+	 * The session moved to another computer: the delete that finished its move
+	 * ended it, and it continues there, so it cannot be restored here. Absent
+	 * from an older control plane.
+	 */
+	movedAway?: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
 	terminateOnPrMerge?: boolean;
@@ -1526,8 +1532,10 @@ export interface CloudCpMoveExportResponse {
 		harness: string;
 		model?: string;
 		displayName?: string;
-		/** The session's approval mode; absent from a control plane that does not carry it. */
+		/** The session's approval mode (in Chat, its last turn's); absent from a control plane that does not carry it. */
 		permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+		/** The interface the session was in; absent from an older control plane. */
+		interface?: "chat" | "terminal";
 		/** The GitHub issue intake started the session for, as owner/repo#N. */
 		issueId?: string;
 		/** URLs of the session's open pull requests. */

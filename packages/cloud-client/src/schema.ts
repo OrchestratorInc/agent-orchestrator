@@ -1305,7 +1305,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. On a session whose work is moving to another machine (SESSION_MOVING), once its export answered, it abandons the move: the session stays here and its agent starts again. While the export still runs it answers 409 MOVE_IN_PROGRESS. */
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting, and for a session in Chat, which starts its agent with its next message instead (a move that holds it is still abandoned, so Chat takes messages again); a session viewer cannot restart it. On a session whose work is moving to another machine (SESSION_MOVING), once its export answered, it abandons the move: the session stays here and its agent starts again. While the export still runs it answers 409 MOVE_IN_PROGRESS. */
         post: operations["restartSessionAgent"];
         delete?: never;
         options?: never;
@@ -3139,10 +3139,15 @@ export interface components {
                 model?: string;
                 displayName?: string;
                 /**
-                 * @description The session's approval mode, which the moved session keeps. Absent when the session has none of its own.
+                 * @description The session's approval mode, which the moved session keeps; for a session in Chat, the mode its last turn ran with. Absent when the session has none of its own.
                  * @enum {string}
                  */
                 permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+                /**
+                 * @description The interface the session was in. The daemon starts the moved session in it when its agent supports Chat there, else in the terminal (and says so). Absent from an older control plane: the daemon's default.
+                 * @enum {string}
+                 */
+                interface?: "chat" | "terminal";
                 /** @description The GitHub issue issue intake started the session for, as owner/repo#N; absent for a session intake did not start. */
                 issueId?: string;
                 /** @description URLs of the session's open pull requests (its own or claimed by it; not merged or closed); absent when it has none. */
@@ -5004,6 +5009,8 @@ export interface components {
             coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
+            /** @description The session moved to another computer: it was deleted by the conditional delete (?moveId=) that finished its move, and continues there. It cannot be restored (restoreSession answers 409 SESSION_MOVED_AWAY). Absent or false for any other session. */
+            movedAway?: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /**
              * Format: uuid
@@ -8386,6 +8393,15 @@ export interface operations {
             };
             /** @description not_found. No such session, a session of a deleted project, or one whose content was deleted for its creator's data retention. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description SESSION_MOVED_AWAY. The session moved to another computer (its movedAway is true) and continues there; to use AO Cloud again, move it from that computer. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

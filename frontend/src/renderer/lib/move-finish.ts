@@ -281,3 +281,34 @@ export const useUnsettledMoveHereStore = create<UnsettledMoveHereStore>((set, ge
 		set({ moves });
 	},
 }));
+
+/**
+ * Where a Cloud session that moved to this computer continues here: the
+ * session its move started. The Cloud copy then reads as moved away, and its
+ * card links here. Kept on this computer only, newest last, at most
+ * MAX_MOVED_HERE entries.
+ */
+export interface MovedHere {
+	projectId: string;
+	sessionId: string;
+	at: number;
+}
+
+const MOVED_HERE_KEY = "ao.move.here.done";
+const MAX_MOVED_HERE = 200;
+
+type MovedHereStore = {
+	moves: Record<string, MovedHere>;
+	record: (orgId: string, cloudSessionId: string, here: Omit<MovedHere, "at">) => void;
+};
+
+export const useMovedHereStore = create<MovedHereStore>((set, get) => ({
+	moves: load<Record<string, MovedHere>>(MOVED_HERE_KEY, {}),
+	record: (orgId, cloudSessionId, here) => {
+		const moves = { ...get().moves, [unsettledMoveHereKey(orgId, cloudSessionId)]: { ...here, at: Date.now() } };
+		const keys = Object.keys(moves).sort((a, b) => moves[a].at - moves[b].at);
+		for (const old of keys.slice(0, Math.max(0, keys.length - MAX_MOVED_HERE))) delete moves[old];
+		save(MOVED_HERE_KEY, moves);
+		set({ moves });
+	},
+}));

@@ -307,6 +307,8 @@ export type WorkspaceSession = {
 		startupError?: { code: string; message: string; at: string; detail?: string };
 		/** Bring-your-own Coder workspace page; absent for managed compute. */
 		coderWorkspaceUrl?: string;
+		/** The session moved to another computer and continues there; it cannot be restored. */
+		movedAway?: true;
 	};
 };
 

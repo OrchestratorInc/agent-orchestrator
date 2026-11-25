@@ -11,7 +11,7 @@ import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
 import { uploadCloudTranscript, uploadCloudTranscriptSidecar } from "../lib/cloud-attachments";
-import { unsettledMoveHereKey, unsettledMoveKey, useUnfinishedMoveStore, useUnsettledMoveHereStore, useUnsettledMoveStore } from "../lib/move-finish";
+import { unsettledMoveHereKey, unsettledMoveKey, useMovedHereStore, useUnfinishedMoveStore, useUnsettledMoveHereStore, useUnsettledMoveStore } from "../lib/move-finish";
 import { agentLabel } from "../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
@@ -170,7 +170,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	// An empty projectId has the move create newProject.
 	const target: MoveTarget | undefined =
 		org && (project || newProject || finishing) && !loading && !unavailable
-			? { orgId: org.id, projectId: createdProject.current ?? project?.id ?? "", harness }
+			? { orgId: org.id, projectId: createdProject.current ?? project?.id ?? "", harness, chat: offering.chatHarnesses.includes(harness) }
 			: undefined;
 	const changes = preview.data?.changes ?? [];
 	// Secret environment files the move leaves on this computer.
@@ -429,7 +429,11 @@ function MoveWarnings({ warnings }: { warnings?: MoveWarning[] }) {
 	return (
 		<ul role="alert" className="space-y-1 text-sm text-warning">
 			{warnings.map((warning) => (
-				<li key={warning.kind}>{t(warning.kind === "transcript" ? "move.warnTranscript" : "move.warnSidecar", { reason: warning.reason })}</li>
+				<li key={warning.kind}>
+					{warning.kind === "interface"
+						? t("move.warnInterface", { agent: agentLabel(warning.reason) })
+						: t(warning.kind === "transcript" ? "move.warnTranscript" : "move.warnSidecar", { reason: warning.reason })}
+				</li>
 			))}
 		</ul>
 	);
@@ -635,6 +639,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 				},
 			);
 			useUnsettledMoveHereStore.getState().set(hereKey, undefined);
+			// The Cloud copy's card links here once it reads as moved away.
+			useMovedHereStore.getState().record(orgId, session.id, { projectId: moved.projectId, sessionId: moved.sessionId });
 			if (moved.deleteError) {
 				// The session runs here; deleting the Cloud copy is retried until it lands.
 				useUnfinishedMoveStore.getState().add({
@@ -796,8 +802,10 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 								moveFailureNote(error, {
 									unknown: t("moveHere.failedUnknown"),
 									notRolledBack: t("moveHere.failedNotRestarted"),
-									resumed: t("moveHere.failedRestarted"),
-									rolledBack: t("moveHere.failedRestarted"),
+									// A session in Chat starts its agent with its next message: the move
+									// let go of, it takes messages again.
+									resumed: session.mode === "chat" ? t("moveHere.failedChatContinues") : t("moveHere.failedRestarted"),
+									rolledBack: session.mode === "chat" ? t("moveHere.failedChatContinues") : t("moveHere.failedRestarted"),
 								})
 							)}
 						</div>

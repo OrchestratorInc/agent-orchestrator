@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -970,5 +971,123 @@ func TestMoveTranscriptKeepsWithinCloudsUploadLimit(t *testing.T) {
 	broken := transcriptCommander{id: "aid-1", size: 100, data: "{}\n", sidecar: "x", sidecarErr: errors.New("permission denied")}
 	if out, err := transcriptService(broken, domain.ActivityExited).MoveTranscript(context.Background(), "mer-2"); err != nil || out.SidecarOmitted != "unreadable" {
 		t.Fatalf("MoveTranscript = omitted %q, %v; want unreadable", out.SidecarOmitted, err)
+	}
+}
+
+// chatMoveCommander is a session manager that can refuse a spawn's Chat and
+// records the interface switches it is asked for.
+type chatMoveCommander struct {
+	*fakeCommander
+	spawnErrs     []error
+	modes         []domain.SessionMode
+	switches      []domain.SessionMode
+	switchedID    domain.SessionID
+	switchPolicy  domain.SessionInterfaceTransitionPolicy
+	switchHistory domain.SessionInterfaceTransitionHistoryPolicy
+	switchErr     error
+}
+
+func (c *chatMoveCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	c.modes = append(c.modes, cfg.RequestedMode)
+	if len(c.spawnErrs) > 0 {
+		err := c.spawnErrs[0]
+		c.spawnErrs = c.spawnErrs[1:]
+		if err != nil {
+			return domain.SessionRecord{}, 0, 0, err
+		}
+	}
+	return c.fakeCommander.Spawn(ctx, cfg)
+}
+
+func (c *chatMoveCommander) InterfaceTransitionStatus(context.Context, domain.SessionID) (sessionmanager.InterfaceTransitionStatus, error) {
+	return sessionmanager.InterfaceTransitionStatus{}, nil
+}
+
+func (c *chatMoveCommander) StartInterfaceTransition(_ context.Context, id domain.SessionID, target domain.SessionMode,
+	policy domain.SessionInterfaceTransitionPolicy, history domain.SessionInterfaceTransitionHistoryPolicy,
+) (domain.SessionInterfaceTransition, error) {
+	c.switches = append(c.switches, target)
+	c.switchedID, c.switchPolicy, c.switchHistory = id, policy, history
+	return domain.SessionInterfaceTransition{}, c.switchErr
+}
+
+func (c *chatMoveCommander) CancelInterfaceTransition(context.Context, domain.SessionID) error {
+	return nil
+}
+
+func (c *chatMoveCommander) AcknowledgeInterfaceTransitionNotice(context.Context, domain.SessionID, string) (domain.SessionInterfaceTransition, error) {
+	return domain.SessionInterfaceTransition{}, nil
+}
+
+// A session that was in Chat where it came from starts here in Chat. A
+// carried conversation resumes in the terminal and then switches to Chat, as
+// Switch to Chat does; without one the session starts in Chat. When this
+// computer cannot run it in Chat, it starts in the terminal and says so.
+func TestImportMoveKeepsChat(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f61"
+	refused := apierr.Conflict("SESSION_MODE_UNSUPPORTED", "claude-code does not support Chat UI", nil)
+	for _, tc := range []struct {
+		name         string
+		mode         domain.SessionMode
+		conversation bool
+		spawnErrs    []error
+		switchErr    error
+		wantModes    []domain.SessionMode
+		wantSwitches []domain.SessionMode
+		wantWarning  bool
+	}{
+		{name: "chat without a conversation", mode: domain.SessionModeChat, wantModes: []domain.SessionMode{domain.SessionModeChat}},
+		{name: "chat this computer cannot run", mode: domain.SessionModeChat, spawnErrs: []error{refused},
+			wantModes: []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI}, wantWarning: true},
+		{name: "chat with a conversation", mode: domain.SessionModeChat, conversation: true,
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat}},
+		{name: "chat with a conversation that cannot switch", mode: domain.SessionModeChat, conversation: true, switchErr: errors.New("chat unsupported"),
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat}, wantWarning: true},
+		{name: "terminal", mode: domain.SessionModeTUI, conversation: true, wantModes: []domain.SessionMode{domain.SessionModeTUI}},
+		{name: "an unknown interface", mode: "terminal", wantModes: []domain.SessionMode{""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			fc := &chatMoveCommander{spawnErrs: tc.spawnErrs, switchErr: tc.switchErr, fakeCommander: &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				rec := domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, Mode: cfg.RequestedMode}
+				if cfg.Transfer != nil {
+					rec.Metadata.AgentSessionID = id
+				}
+				return rec
+			}}}
+			manifest := importManifest(tip)
+			manifest.Mode, manifest.Permissions = tc.mode, domain.PermissionModeAcceptEdits
+			in := MoveImportInput{ProjectID: "mer", MoveID: "m-chat-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: manifest, HandoffNote: "NOTE"}
+			if tc.conversation {
+				in.Transcript = &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
+			}
+			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(fc.modes, tc.wantModes) {
+				t.Fatalf("spawned in %q, want %q", fc.modes, tc.wantModes)
+			}
+			if !slices.Equal(fc.switches, tc.wantSwitches) {
+				t.Fatalf("switches %q, want %q", fc.switches, tc.wantSwitches)
+			}
+			if len(tc.wantSwitches) > 0 && (fc.switchedID != "mer-9" || fc.switchPolicy != domain.SessionInterfaceTransitionDrain ||
+				fc.switchHistory != domain.SessionInterfaceTransitionHistoryStrict) {
+				t.Fatalf("switched %q with %q/%q, want mer-9 drain/strict", fc.switchedID, fc.switchPolicy, fc.switchHistory)
+			}
+			// The approval mode Chat ran with goes with it.
+			if fc.spawnedCfg.AgentConfig.Permissions != domain.PermissionModeAcceptEdits {
+				t.Fatalf("permissions %q, want accept-edits", fc.spawnedCfg.AgentConfig.Permissions)
+			}
+			if got := slices.Contains(out.Warnings, movedChatInTerminal); got != tc.wantWarning {
+				t.Fatalf("warnings %q, want the terminal note: %v", out.Warnings, tc.wantWarning)
+			}
+		})
 	}
 }

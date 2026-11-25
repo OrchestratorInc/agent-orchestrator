@@ -46,10 +46,30 @@ describe("moveSession", () => {
 		expect(steps).toEqual(["stop", "export", "import", "complete"]);
 		expect(cp.createSession).toHaveBeenCalledWith("org-1", {
 			projectId: "proj-1", kind: "worker", harness: "claude-code", displayName: "Fix login",
-			prompt: exported.handoffNote, branch: "feat/move", model: "opus", reasoningEffort: "high",
+			prompt: exported.handoffNote, branch: "feat/move", interfaceMode: "tui", model: "opus", reasoningEffort: "high",
 		}, { idempotencyKey: "m-2" });
 		const completeBody = (source.POST as ReturnType<typeof vi.fn>).mock.calls[2][1].body;
 		expect(completeBody).toEqual({ moveId: "m-2", orgId: "org-1", sessionId: "cloud-9" });
+	});
+
+	it("keeps a session in Chat in Chat, with its approval mode, when Cloud runs its agent in Chat; otherwise in the terminal, and says so", async () => {
+		const chatExport = { ...exported, manifest: { ...exported.manifest, mode: "chat", permissions: "accept-edits" } };
+		const run = async (chat: boolean) => {
+			const source = fakeDaemon({
+				"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+				"/api/v1/sessions/{sessionId}/move/export": ok(chatExport),
+				"/api/v1/sessions/{sessionId}/move/complete": ok(),
+			}, []);
+			const cp = cloud();
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-chat", target: { ...target, chat } }, { source, cloud: cp });
+			return { request: cp.createSession.mock.calls[0][1], result };
+		};
+		const inChat = await run(true);
+		expect(inChat.request).toMatchObject({ interfaceMode: "chat", approvalMode: "accept-edits" });
+		expect(inChat.result.warnings ?? []).toEqual([]);
+		const inTerminal = await run(false);
+		expect(inTerminal.request).toMatchObject({ interfaceMode: "tui", approvalMode: "accept-edits" });
+		expect(inTerminal.result.warnings).toEqual([{ kind: "interface", reason: "claude-code" }]);
 	});
 
 	describe("when Orchestrator Cloud has no project for the repository", () => {
@@ -468,6 +488,21 @@ describe("moveSessionHere", () => {
 		});
 		expect(cp.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1");
 		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+	});
+
+	it("starts the session here in the interface it had in Cloud", async () => {
+		const bodyFor = async (cloudInterface?: "chat" | "terminal") => {
+			const cp = cloudFake({ exportSessionMove: async () => ({ ...cloudExport, manifest: { ...cloudExport.manifest, ...(cloudInterface ? { interface: cloudInterface } : {}) } }) });
+			const local = daemon(ok({ session: { id: "local-9" } }));
+			await moveSessionHere(input, { daemon: local, cloud: cp });
+			return (local.POST as ReturnType<typeof vi.fn>).mock.calls[0][1].body.manifest;
+		};
+		const chat = await bodyFor("chat");
+		expect(chat).toMatchObject({ mode: "chat" });
+		expect(chat).not.toHaveProperty("interface");
+		expect(await bodyFor("terminal")).toMatchObject({ mode: "tui" });
+		// An older control plane says nothing: this computer's default.
+		expect(await bodyFor()).not.toHaveProperty("mode");
 	});
 
 	it("starts the Cloud agent again when Cloud cannot push", async () => {

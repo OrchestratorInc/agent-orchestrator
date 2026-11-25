@@ -61,6 +61,7 @@ export function preloadXtermTerminal(): void {
 	void loadXtermTerminal().catch(() => undefined);
 }
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
+import { MovedHereNote } from "./MovedHereNote";
 import { MovedToCloudNote } from "./MovedToCloudNote";
 import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
 import { Button } from "./ui/button";
@@ -1317,8 +1318,10 @@ function AttachedTerminal({
 		!isSessionActive &&
 		!sharedCloudSession &&
 		!contentExpired &&
-		// A session that moved to Orchestrator Cloud continues there; it is not restored here.
-		!session.movedTo;
+		// A session that moved to Orchestrator Cloud, or a Cloud one that moved to
+		// another computer, continues there; it is not restored here.
+		!session.movedTo &&
+		!session.cloud?.movedAway;
 
 	const handleReady = useCallback((handle: AttachableTerminal) => {
 		setTerminal(handle);
@@ -1667,6 +1670,8 @@ function TerminalEndedStrip({ canRestore, contentExpired, error, isRestoring, on
 					</div>
 					{movedToCloud && session ? (
 						<MovedToCloudNote session={session} className="mt-0.5" />
+					) : variant === "session" && session?.cloud?.movedAway ? (
+						<MovedHereNote session={session} className="mt-0.5" />
 					) : (
 						<div className="mt-0.5 text-xs text-muted-foreground">
 							{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}

@@ -49,7 +49,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 vi.mock("../lib/cloud-attachments", () => ({ uploadCloudTranscript }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: cloud.signedIn ? { id: "org-1" } : undefined }) }));
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: cloud.features }) }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: cloud.features, chatHarnesses: ["claude-code"] }) }));
 vi.mock("../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ data: cloud.connections, isPending: false }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudProjectsQuery: () => ({ data: cloud.projects, isPending: false }),
@@ -432,8 +432,8 @@ describe("moving a Cloud session to this computer", () => {
 	const tip = "3f2a91c".padEnd(40, "0");
 	const local = { projectId: "app", name: "app", path: "/Users/me/code/app" };
 
-	function renderHere() {
-		useUiStore.setState({ moveSessionTarget: cloudSession, globalToast: null });
+	function renderHere(target: WorkspaceSession = cloudSession) {
+		useUiStore.setState({ moveSessionTarget: target, globalToast: null });
 		return render(
 			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
 				<TooltipProvider>
@@ -555,6 +555,20 @@ describe("moving a Cloud session to this computer", () => {
 		expect(screen.getByText("The session continues in Orchestrator Cloud and its agent is running again.")).toBeTruthy();
 		expect(cloud.restartSessionAgent).toHaveBeenCalledWith("org-1", "cloud-1");
 		expect(cloud.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("says a session in Chat carries on in Cloud and takes messages again when the move fails", async () => {
+		// Cloud answers agent/restart for a session in Chat with requested: false.
+		cloud.restartSessionAgent.mockResolvedValue({ requested: false });
+		daemon.posts = { "/api/v1/sessions/move/import": { error: { code: "MOVE_LOCAL_AHEAD", message: "feat/login here has commits that Orchestrator Cloud's does not. Push them first." } } };
+		renderHere({ ...cloudSession, mode: "chat" } as WorkspaceSession);
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("feat/login here has commits that Orchestrator Cloud's does not. Push them first.")).toBeTruthy();
+		expect(screen.getByText("The session continues in Orchestrator Cloud, and its Chat takes messages again.")).toBeTruthy();
+		expect(screen.queryByText("The session continues in Orchestrator Cloud and its agent is running again.")).toBeNull();
+		expect(screen.queryByText("The session stays in Orchestrator Cloud, but its agent is stopped. Restart it from the session.")).toBeNull();
+		expect(cloud.restartSessionAgent).toHaveBeenCalledWith("org-1", "cloud-1");
 	});
 
 	it("keeps the Cloud session and says so when part of the conversation did not move", async () => {

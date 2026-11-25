@@ -304,6 +304,10 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 	if !validPermissionMode(m.Permissions) {
 		m.Permissions = ""
 	}
+	// An interface this machine does not know leaves the choice to its default.
+	if m.Mode != "" && !m.Mode.Valid() {
+		m.Mode = ""
+	}
 	// AO Cloud names a GitHub issue owner/repo#N; this machine's tracker ids
 	// carry their provider (github:owner/repo#N), which intake matches on.
 	if id := strings.TrimSpace(string(m.IssueID)); id != "" && !strings.Contains(id, ":") {
@@ -403,9 +407,33 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 			cfg.Prompt = ""
 		}
 	}
+	// A session in Chat where it came from starts here in Chat when its agent
+	// runs in Chat on this computer, and otherwise in the terminal, saying so.
+	// A carried conversation resumes in its CLI's terminal first (Spawn starts
+	// it there) and switches to Chat once it has.
+	chat := m.Mode == domain.SessionModeChat
+	if chat && cfg.Transfer != nil {
+		cfg.RequestedMode = domain.SessionModeTUI
+	}
 	sess, _, _, err := s.Spawn(ctx, cfg)
+	if err != nil && cfg.RequestedMode == domain.SessionModeChat && chatUnavailable(err) {
+		// An explicit Chat this computer cannot run costs nothing, so the
+		// terminal start runs under the same move.
+		s.moveLog().WarnContext(ctx, "move: Chat unavailable here; starting in the terminal", "move", in.MoveID, "err", err)
+		cfg.RequestedMode = domain.SessionModeTUI
+		sess, _, _, err = s.Spawn(ctx, cfg)
+		if err == nil {
+			warnings = append(warnings, movedChatInTerminal)
+		}
+	}
 	if err != nil {
 		return MoveImportOutcome{}, err
+	}
+	if chat && cfg.Transfer != nil {
+		if err := s.switchMovedSessionToChat(ctx, sess.ID); err != nil {
+			s.moveLog().WarnContext(ctx, "move: the moved session stays in the terminal", "move", in.MoveID, "err", err)
+			warnings = append(warnings, movedChatInTerminal)
+		}
 	}
 	if cfg.Transfer != nil && conversationNotPlaced(in, sess) {
 		warnings = append(warnings, "The conversation could not be placed here, so the session starts from the handoff note.")
@@ -910,6 +938,43 @@ func (s *Service) sessionMovedTo(ctx context.Context, cloudSessionID domain.Sess
 		}
 	}
 	return domain.SessionRecord{}, false
+}
+
+// movedChatInTerminal is the import's warning for a session that was in Chat
+// where it came from and continues in the terminal here.
+const movedChatInTerminal = "This computer can't run the session in Chat, so it continues in the terminal."
+
+// switchMovedSessionToChat asks a moved session that resumed its conversation
+// in the terminal to switch to Chat, as the user's Switch to Chat does: once
+// its agent is idle, Chat takes over the same conversation.
+func (s *Service) switchMovedSessionToChat(ctx context.Context, id domain.SessionID) error {
+	manager, ok := s.manager.(interfaceTransitionCommander)
+	if !ok {
+		return errors.New("this build cannot switch session interfaces")
+	}
+	_, err := manager.StartInterfaceTransition(ctx, id, domain.SessionModeChat,
+		domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+	return err
+}
+
+// chatUnavailable reports a spawn refused because Chat cannot run here: the
+// agent has no Chat on this computer, its driver is missing or incompatible,
+// it is not signed in for Chat, or Chat refuses the approval mode.
+func chatUnavailable(err error) bool {
+	for _, target := range []error{ports.ErrChatUnsupported, ports.ErrChatDriverUnavailable, ports.ErrChatDriverIncompatible,
+		ports.ErrChatAuthRequired, ports.ErrChatPermissionModeUnsupported} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) {
+		switch apiErr.Code {
+		case "SESSION_MODE_UNSUPPORTED", "CHAT_PERMISSION_MODE_UNSUPPORTED", "CHAT_DRIVER_UNAVAILABLE", "CHAT_DRIVER_INCOMPATIBLE", "CHAT_AUTH_REQUIRED":
+			return true
+		}
+	}
+	return false
 }
 
 // moveLog is the service's logger, or one that drops records when it has none.
