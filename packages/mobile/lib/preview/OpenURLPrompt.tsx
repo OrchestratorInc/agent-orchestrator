@@ -8,7 +8,7 @@ export type { OpenURLPromptProps } from "./OpenURLPrompt.types";
  * "Open URL…" as the system's own text prompt: a UIAlertController with one
  * field and the URL keyboard. It draws nothing in the screen itself.
  */
-export function OpenURLPrompt({ visible, onSubmit, onDismiss }: OpenURLPromptProps) {
+export function OpenURLPrompt({ visible, onSubmit, onDismiss, browserName }: OpenURLPromptProps) {
 	// The alert outlives the render that opened it, so its buttons call the
 	// latest handlers rather than the ones it was shown with.
 	const latest = useRef({ onSubmit, onDismiss });
@@ -18,7 +18,7 @@ export function OpenURLPrompt({ visible, onSubmit, onDismiss }: OpenURLPromptPro
 		if (!visible) return;
 		Alert.prompt(
 			openURLPromptCopy.title,
-			openURLPromptCopy.message,
+			openURLPromptCopy.message(browserName),
 			[
 				{ text: openURLPromptCopy.cancel, style: "cancel", onPress: () => latest.current.onDismiss() },
 				{
@@ -35,7 +35,7 @@ export function OpenURLPrompt({ visible, onSubmit, onDismiss }: OpenURLPromptPro
 			"",
 			"url",
 		);
-	}, [visible]);
+	}, [browserName, visible]);
 
 	return null;
 }

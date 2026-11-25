@@ -9,6 +9,7 @@ import { isConfigured } from "../config";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
+import { useSessionDevice } from "../useSessionDevice";
 import type { MuxStatus } from "../mux";
 import { filesRoute } from "../files/navigation";
 import { glassHeaderControl } from "../native-header-items";
@@ -272,6 +273,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const dead = notFound || (!shellOnly && known ? isRuntimeGone(known) : false);
 	// Polled so the globe can advertise the optional App preview tab.
 	const hasPreview = useSessionPreview(activeConfig, id, !shellOnly);
+	// Only an agent session can hold a simulator or emulator for the menu to open.
+	const deviceName = useSessionDevice(shellOnly ? null : activeConfig, id)?.device.name;
 	// The terminal's artifacts, in its "⋯" once the agent has written something.
 	const artifactCount = !shellOnly && known && "artifacts" in known ? deliverableArtifacts(known.artifacts ?? []).length : 0;
 	const openArtifacts = useCallback(() => {
@@ -669,6 +672,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		interfaceFailureRecovery.confirm((policy) => void startInterfaceSwitch(policy));
 	}, [interfaceFailureRecovery, startInterfaceSwitch]);
 
+	const openDevice = useCallback(() => {
+		router.push({ pathname: "/device/[id]", params: { id: sessionId, hostId: params.hostId } });
+	}, [params.hostId, router, sessionId]);
 	const openFiles = useCallback(() => {
 		router.push(filesRoute(sessionId, params.hostId, params.title));
 	}, [params.hostId, params.title, router, sessionId]);
@@ -767,6 +773,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const menuActions: Record<TerminalMenuAction, () => void> = {
 		switch_chat: () => void requestInterfaceSwitch(),
 		preview: toggleBrowser,
+		device: openDevice,
 		files: openFiles,
 		artifacts: openArtifacts,
 		zoom_out: () => zoom(-1),
@@ -787,6 +794,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		checkingChat: rechecking,
 		switchingToChat: interfaceSwitch.starting || switchCardShown,
 		previewReady: hasPreview,
+		deviceName,
 		artifactCount,
 		// Zoom only the mobile viewport; the shared PTY grid stays unchanged.
 		// Pinch and double-tap zoom too.
@@ -794,7 +802,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		// A dead session's way back is Restore, in the overlay; a dead shell can
 		// still be closed.
 		close: reviewerPane ? "reviewer" : shellOnly ? "shell" : dead ? undefined : "archive",
-	}), [artifactCount, dead, hasPreview, interfaceSwitch.starting, interfaceSwitch.status?.supported, rechecking, reviewerPane, shellOnly, switchCardShown, unpaired]);
+	}), [artifactCount, dead, deviceName, hasPreview, interfaceSwitch.starting, interfaceSwitch.status?.supported, rechecking, reviewerPane, shellOnly, switchCardShown, unpaired]);
 	// The bar holds only "⋯", as Chat's does: switch, preview and files buttons
 	// beside it cut the iOS title to about nine characters. Chat opens its
 	// actions as a sheet; the terminal keeps the platform's menu.

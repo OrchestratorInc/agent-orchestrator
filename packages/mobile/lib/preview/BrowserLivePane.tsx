@@ -123,6 +123,14 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	frameWidth.current = frameSize.width;
 	const blank = page !== null && !page.url;
 
+	// The last frame is kept only for the session that drew it.
+	const frameSession = useRef(sessionID);
+	useEffect(() => {
+		if (frameSession.current === sessionID) return;
+		frameSession.current = sessionID;
+		setFrameURI(undefined);
+	}, [sessionID]);
+
 	useEffect(() => {
 		setPage(null);
 		setFrameIsLive(false);
@@ -281,6 +289,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const interactive = status === "open" && !stale && Boolean(frameURI) && frameIsLive && !blank;
 	// The last frame stays up while the stream comes back, so the page doesn't blank.
 	const reconnecting = Boolean(frameURI) && !blank && (status === "reconnecting" || (status === "open" && stale));
+	// Reconnecting with the last stream's frame on screen: it stays visible under
+	// a loading bar instead of being covered until the new stream draws (it takes
+	// no gestures meanwhile, see frameIsLive). The socket opens before that first
+	// frame, so the bar stays through "open" too.
+	const holdingFrame = (status === "connecting" || status === "open" || status === "reconnecting") && Boolean(frameURI) && !frameIsLive && !blank;
 	// Another session's page starts at its fitted size.
 	useEffect(() => {
 		zoomScale.value = 1;
@@ -391,11 +404,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				<View accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.reconnecting}>
 					<Text style={styles.reconnectingText}>Reconnecting…</Text>
 				</View>
-			</View> : status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
-			<LoadingBar loading={status === "open" && loading} accessibilityLabel="Loading page" />
+			</View> : status !== "open" && !holdingFrame ? <BrowserState status={status} error={error} retry={retry} /> : null}
+			<LoadingBar loading={(status === "open" && loading) || holdingFrame} accessibilityLabel={holdingFrame ? "Reconnecting to the browser" : "Loading page"} />
 		</View>
 		{bottomBar}
-		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} />
+		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} browserName={browserName} />
 		<ToastHost toast={toast} bottomOffset={toolbarShown ? toolbarClearance + space.md : undefined} />
 	</View>;
 }

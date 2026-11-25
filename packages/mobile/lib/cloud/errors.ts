@@ -11,8 +11,10 @@ export class CloudError extends Error {
 	readonly details?: Record<string, unknown>;
 	/** When a plan limit lifts, for a plan refusal that says (WINDOW_/WEEKLY_LIMIT_REACHED). */
 	readonly resetsAt?: string;
+	/** How long the control plane asked the caller to wait (its Retry-After), in milliseconds. */
+	readonly retryAfterMs?: number;
 
-	constructor(message: string, options: { status: number; code?: string; requestId?: string; details?: Record<string, unknown>; resetsAt?: string; cause?: unknown }) {
+	constructor(message: string, options: { status: number; code?: string; requestId?: string; details?: Record<string, unknown>; resetsAt?: string; retryAfterMs?: number; cause?: unknown }) {
 		super(message);
 		this.name = "CloudError";
 		this.status = options.status;
@@ -20,6 +22,7 @@ export class CloudError extends Error {
 		this.requestId = options.requestId;
 		this.details = options.details;
 		this.resetsAt = options.resetsAt;
+		this.retryAfterMs = options.retryAfterMs;
 		if (options.cause !== undefined) (this as { cause?: unknown }).cause = options.cause;
 	}
 }
