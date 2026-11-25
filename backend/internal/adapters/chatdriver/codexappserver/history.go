@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/codexrollout"
 )
 
 // Conversation history operations: rollback, fork, and the thread title.
@@ -91,12 +92,6 @@ func asRefusal(err error) error {
 		return &providerRefusal{err: err}
 	}
 	return err
-}
-
-// providerTurn is the subset of a thread's turn list AO reads.
-type providerTurn struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
 }
 
 // ReadHistory returns a settled, provider-neutral replay of the native Codex
@@ -314,72 +309,20 @@ func (c *conversation) Rollback(ctx context.Context, providerTurnID string) erro
 		return errors.New("rollback needs a provider turn id")
 	}
 
-	// Serialized with turn dispatch: the count computed below is only valid for the
-	// turn list it was read from, and a turn starting in between would shift every
-	// position in it.
+	// Serialized with turn dispatch: the count Rollback computes is only valid
+	// for the turn list it read, and a turn starting in between would shift
+	// every position in it.
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
-	turns, err := c.readTurns(ctx)
-	if err != nil {
-		return err
-	}
-
-	discard := 0
-	for i, turn := range turns {
-		if turn.ID == providerTurnID {
-			discard = len(turns) - i
-			break
-		}
-	}
-	if discard == 0 {
-		// Either the turn was already discarded or it belongs to history this thread
-		// no longer holds. Refusing beats guessing: any count AO invented here would
-		// discard turns the user never named.
+	err := codexrollout.Rollback(ctx, requester{c.conn}, c.threadID, providerTurnID)
+	if errors.Is(err, codexrollout.ErrTurnNotInHistory) {
+		// Either the turn was already discarded or it belongs to history this
+		// thread no longer holds. Refusing beats guessing: any count AO
+		// invented here would discard turns the user never named.
 		return refuse("turn %q is not in the provider's history", providerTurnID)
 	}
-
-	if err := c.conn.request(ctx, "thread/rollback", map[string]any{
-		"threadId": c.threadID,
-		"numTurns": discard,
-	}, nil); err != nil {
-		var rpcErr *rpcError
-		if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 ||
-			(rpcErr.Code == -32600 && strings.Contains(rpcErr.Message, "unknown variant `thread/rollback`"))) {
-			// Codex 0.162 replaced the count-based operation with an exclusive
-			// turn anchor. Only an unknown-method refusal permits this fallback;
-			// busy/validation/transport failures must never try another mutation.
-			if err := c.conn.request(ctx, "thread/revert", map[string]any{
-				"threadId": c.threadID, "beforeTurnId": providerTurnID,
-			}, nil); err != nil {
-				return asRefusal(fmt.Errorf("thread/revert: %w", err))
-			}
-			return nil
-		}
-		return asRefusal(fmt.Errorf("thread/rollback: %w", err))
-	}
-	return nil
-}
-
-// readTurns is the provider's own turn list for this thread, oldest first.
-//
-// Read from the provider rather than counted from AO's rows because the two sets
-// legitimately differ: AO records a turn whose dispatch the provider rejected, and
-// a turn from before a resume may be absent here. thread/rollback counts in the
-// provider's terms, so counting in AO's would discard the wrong number of turns.
-func (c *conversation) readTurns(ctx context.Context) ([]providerTurn, error) {
-	var resp struct {
-		Thread struct {
-			Turns []providerTurn `json:"turns"`
-		} `json:"thread"`
-	}
-	if err := c.conn.request(ctx, "thread/read", map[string]any{
-		"threadId":     c.threadID,
-		"includeTurns": true,
-	}, &resp); err != nil {
-		return nil, asRefusal(fmt.Errorf("thread/read: %w", err))
-	}
-	return resp.Thread.Turns, nil
+	return asRefusal(err)
 }
 
 // Fork branches this conversation into a second provider conversation, so an
@@ -391,25 +334,16 @@ func (c *conversation) Fork(ctx context.Context, lastProviderTurnID *string) (st
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
-	params := codexproto.ThreadForkParams{ThreadID: c.threadID}
+	var anchor *string
 	if lastProviderTurnID != nil {
-		anchor := c.nativeID(strings.TrimSpace(*lastProviderTurnID))
-		if anchor == "" {
-			return "", errors.New("fork anchor must not be blank")
-		}
-		params.LastTurnID = &anchor
+		native := c.nativeID(strings.TrimSpace(*lastProviderTurnID))
+		anchor = &native
 	}
-	// cwd is deliberately absent so the fork inherits the source thread's working
-	// directory. A fork pointed at a different tree would remember editing files
-	// that are not there.
-	var resp codexproto.ThreadForkResponse
-	if err := c.conn.request(ctx, codexproto.MethodThreadFork, params, &resp); err != nil {
-		return "", asRefusal(fmt.Errorf("thread/fork: %w", err))
-	}
-	if resp.Thread.ID == "" {
-		return "", errors.New("thread/fork returned no thread id")
-	}
-	return resp.Thread.ID, nil
+	// cwd is deliberately absent so the fork inherits the source thread's
+	// working directory. A fork pointed at a different tree would remember
+	// editing files that are not there.
+	id, err := codexrollout.Fork(ctx, requester{c.conn}, c.threadID, anchor)
+	return id, asRefusal(err)
 }
 
 // SetTitle names the thread provider-side.
