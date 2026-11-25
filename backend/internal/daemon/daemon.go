@@ -174,6 +174,9 @@ func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals co
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) (retErr error) {
+	// ao.daemon.ready's steps start here, so config loading and data
+	// directory preparation count toward the prepare step.
+	steps := newStartupSteps(time.Now(), time.Now)
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -203,7 +206,6 @@ func Run(buildVersion string) (retErr error) {
 	}
 	lifecycle := lifecyclelog.Open(logRoot, cfg.Telemetry.AppVersion)
 	startedAt := time.Now()
-	steps := newStartupSteps(startedAt, time.Now)
 	startFields := lifecyclelog.ProcessContext()
 	startFields["owner"] = os.Getenv("AO_OWNER")
 	startFields["port"] = cfg.Port

@@ -20,7 +20,7 @@ const daemonStartupReconciledEvent = "ao.daemon.startup_reconciled"
 // Steps of ao.daemon.ready, in order. Each is sent as <step>_ms; the payload
 // allowlist in adapters/telemetry lists the same keys.
 const (
-	stepPrepare          = "prepare"           // browser runtime tokens and the stale run-file probe
+	stepPrepare          = "prepare"           // config, data directory, lifecycle log, browser runtime tokens and the stale run-file probe
 	stepLockWait         = "lock_wait"         // the data directory lock, held by a predecessor still shutting down
 	stepStoreOpen        = "store_open"        // SQLite open, migrations and report claim recovery
 	stepLifecycleSetup   = "lifecycle_setup"   // skills, telemetry, notifications, CDC and the lifecycle manager
