@@ -1521,9 +1521,12 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 		return "", fmt.Errorf("tmux runtime: invalid handle id %q", id)
 	}
 	// Reviewers destroy a stale pane using the raw worker-derived ID before
-	// Create returns a handle. Apply Create's naming to dotted or long IDs;
-	// handles already returned by Create are fixed points of SessionName.
-	return SessionName(id), nil
+	// Create returns a handle. Keep long legacy handles unchanged: sessions
+	// adopted from the default socket may have names Create would now shorten.
+	if strings.Contains(id, ".") || (strings.HasPrefix(id, "review-") && len(id) > 48) {
+		return SessionName(id), nil
+	}
+	return id, nil
 }
 
 // -- output detection helpers --

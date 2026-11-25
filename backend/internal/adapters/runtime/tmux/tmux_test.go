@@ -394,6 +394,22 @@ func TestLongReviewerHandleResolvesToCreateName(t *testing.T) {
 	}
 }
 
+func TestLongLegacyHandlePreservesRawName(t *testing.T) {
+	raw := "TestRuntimeIntegrationLegacyDefaultSocket" + strings.Repeat("a", 30)
+	r, fr := newTestRuntime(0)
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy long legacy handle: %v", err)
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one", countCalls(fr, "kill-session"))
+	}
+	for _, call := range fr.calls {
+		if len(call.args) > 0 && call.args[0] == "kill-session" && !reflect.DeepEqual(call.args, killSessionArgs(raw)) {
+			t.Fatalf("kill-session args = %v, want %v", call.args, killSessionArgs(raw))
+		}
+	}
+}
+
 // -- env key validation --
 
 func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
