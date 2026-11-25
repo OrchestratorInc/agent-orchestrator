@@ -2763,6 +2763,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// streams are scanned) and the running.json handshake — first one wins.
 	const spawnedAtMs = Date.now();
 	let portConfirmed = false;
+	// Set as soon as the child exits: its pipes can still deliver a listen line
+	// while the exit waits for them to drain, and a dead child is never ready.
+	let childExited = false;
 	let runFileTimer: ReturnType<typeof setInterval> | undefined;
 	let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -2774,7 +2777,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	};
 
 	const reportBoundPort = (port: number) => {
-		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
+		if (portConfirmed || childExited || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
 		lifecycleLog("daemon_ready", { daemonPid: child.pid ?? null, port, startupMs: Date.now() - spawnedAtMs });
@@ -2883,6 +2886,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 
 	child.once("exit", (code, signal) => {
 		stopDiscovery();
+		childExited = true;
 		lifecycleLog("daemon_exit", {
 			daemonPid: child.pid ?? null,
 			code,
