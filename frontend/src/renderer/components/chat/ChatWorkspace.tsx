@@ -2466,7 +2466,7 @@ function ChatWorkspaceContent({
 								{/* The guided tour's last stop (GuidedTour). */}
 								<div
 									ref={composerBoxRef}
-									className="group/composer relative z-10"
+									className="relative z-10"
 									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
 									data-tour="composer"
 								>
@@ -8273,7 +8273,9 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 				layout={reducedMotion ? false : "position"}
 				transition={{ layout: WELCOME_SETTLE }}
 				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
-				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out group-has-[[data-composer-suggest-menu]]/composer:opacity-0 sm:text-3xl"
+				// Anchored on the composer box alone: a group-has variant would restyle the app
+				// on every DOM change (style-invalidation.test.ts).
+				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
 			>
 				{heading}
 			</motion.h1>
