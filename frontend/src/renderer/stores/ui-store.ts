@@ -82,7 +82,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
 
 /**
  * A background task listed in the side panel's Background tasks tab. `task` is
@@ -289,6 +289,7 @@ export type UiState = {
 	developerMode: boolean;
 	/** Experimental: connect to AO daemons on other machines. Default off. */
 	remoteHosts: boolean;
+	autoUpdateRemoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
@@ -385,6 +386,7 @@ export type UiState = {
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
+	setAutoUpdateRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
@@ -489,6 +491,7 @@ export type OrchestratorReplacementFailure = {
 
 const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
+const autoUpdateRemoteHostsStorageKey = "ao.autoUpdateRemoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
@@ -634,6 +637,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	themeStyle: initialThemeStyle,
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
+	autoUpdateRemoteHosts: getLocalStorage()?.getItem(autoUpdateRemoteHostsStorageKey) === "true",
 	diagnostics: initialDiagnostics(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
@@ -763,6 +767,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setRemoteHosts: (remoteHosts) => {
 		getLocalStorage()?.setItem(remoteHostsStorageKey, String(remoteHosts));
 		set({ remoteHosts });
+	},
+	setAutoUpdateRemoteHosts: (autoUpdateRemoteHosts) => {
+		getLocalStorage()?.setItem(autoUpdateRemoteHostsStorageKey, String(autoUpdateRemoteHosts));
+		set({ autoUpdateRemoteHosts });
 	},
 	setDiagnostics: (diagnostics) => {
 		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));

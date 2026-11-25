@@ -173,6 +173,7 @@ import {
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
+import { chatFailureReason } from "../../lib/chat-failure-reason";
 import {
 	type BackgroundTally,
 	BackgroundTurnRow,
@@ -1972,9 +1973,9 @@ function ChatWorkspaceContent({
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
-				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} onResolve={onResolveInput} />
+				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} harness={snapshot.harness} onResolve={onResolveInput} />
 			) : undefined,
-		[onResolveInput, stablePendingUserInput],
+		[onResolveInput, snapshot.harness, stablePendingUserInput],
 	);
 	const canSteerQueuedMessage =
 		Boolean(onSteer) && Boolean(onPromoteQueuedTurn) && can(snapshot, "steer") && turn?.state === "running";
@@ -6419,8 +6420,9 @@ const TurnGroup = memo(function TurnGroup({
 		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
 		: undefined;
 	// Counted here, not in the outcome, so a failure shown as a login note counts too.
-	// A usage limit carries no failure code of its own, so it is named here.
-	const reportedFailureCode = group.outcome?.failureCode ?? (group.outcome?.usageLimit ? "usage_limit" : undefined);
+	// A usage limit carries no failure code of its own, so it is named here; any
+	// other failure is named from its error text, which itself is never sent.
+	const reportedFailureCode = group.outcome?.failureCode ?? (group.outcome?.usageLimit ? "usage_limit" : chatFailureReason(group.outcome?.error));
 	useFreshFailureReport(endsWithOutcome ? group.outcome?.state : undefined, group.outcome?.completedAt, group.turnId, reportedFailureCode);
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
@@ -6519,6 +6521,7 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
+			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
 			onDecide={onDecide}
@@ -6772,6 +6775,7 @@ function TurnLiveStatus({ blocked }: { blocked?: boolean }) {
 
 function TimelineItem({
 	item,
+	harness,
 	sessionId,
 	apiBaseUrl,
 	onDecide,
@@ -6805,6 +6809,7 @@ function TimelineItem({
 	status,
 }: {
 	item: ConversationItem;
+	harness?: string;
 	sessionId: string;
 	apiBaseUrl: string | null;
 	onDecide?: (requestId: string, decisionId: string) => void;
@@ -6912,7 +6917,7 @@ function TimelineItem({
 		return <ApprovalCard activity={item} onDecide={onDecide} busy={busy} />;
 	}
 	if (item.activityKind === "user_input") {
-		return item.status === "pending" ? null : <ElicitationHistory activity={item} />;
+		return item.status === "pending" ? null : <ElicitationHistory activity={item} harness={harness} />;
 	}
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;

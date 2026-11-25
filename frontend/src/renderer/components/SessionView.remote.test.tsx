@@ -1319,7 +1319,7 @@ it("adds the remote reviewer Chat tab without switching to it when a review is t
 	renderRemoteSession(queryClient, "box-b");
 	await userEvent.click(await screen.findByRole("button", { name: "Open inspector panel" }));
 	await userEvent.click(await screen.findByRole("tab", { name: "Reviews" }));
-	await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Review now" }));
 	const reviewerTab = await screen.findByRole("tab", { name: "Reviewer" });
 	expect(mutations).toEqual(["http://127.0.0.1:4001/api/v1/sessions/session-1/reviews/trigger"]);
 	expect(reviewerTab).toHaveAttribute("aria-selected", "false");

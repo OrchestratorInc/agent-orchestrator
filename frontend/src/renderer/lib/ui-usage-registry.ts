@@ -1,4 +1,6 @@
+import { APP_SHORTCUTS, type AppShortcutId } from "../../shared/shortcuts";
 import { isUiSurface, UI_SURFACES, type UiSurface } from "./ui-surfaces";
+import { COMPOSER_ERROR_CODES } from "./composer-send-failure";
 
 // Closed vocabularies for UI usage telemetry, imported by the call sites and by
 // the sanitizer so the two cannot drift. Only these ids, counts and durations
@@ -49,6 +51,7 @@ export const UI_CONTROLS = [
 	"inspector.tab_summary",
 	"inspector.tab_reviews",
 	"inspector.tab_browser",
+	"inspector.tab_device",
 	"inspector.tab_files",
 	"inspector.tab_artifacts",
 	"inspector.tab_side_chat",
@@ -101,6 +104,7 @@ export const UI_FEATURES = [
 	"inspector_summary",
 	"inspector_reviews",
 	"inspector_browser",
+	"inspector_device",
 	"inspector_files",
 	"inspector_artifacts",
 	"inspector_subagents",
@@ -132,6 +136,7 @@ export const SURFACE_FEATURES: Partial<Record<UiSurface, UiFeature>> = {
 	inspector_summary: "inspector_summary",
 	inspector_reviews: "inspector_reviews",
 	inspector_browser: "inspector_browser",
+	inspector_device: "inspector_device",
 	inspector_files: "inspector_files",
 	inspector_artifacts: "inspector_artifacts",
 	inspector_subagents: "inspector_subagents",
@@ -162,8 +167,8 @@ export type ErrorKind = (typeof ERROR_KINDS)[number];
 
 /**
  * The only error codes `ao.ui.error_shown` may carry: the daemon's failure
- * codes and a chat turn's known provider failures, upper-cased. Anything else
- * is dropped, however it is spelled.
+ * codes, a chat turn's known provider failures, and why a composer send
+ * failed, upper-cased. Anything else is dropped, however it is spelled.
  */
 export const ERROR_CODES = [
 	"NOT_CONFIGURED",
@@ -178,6 +183,20 @@ export const ERROR_CODES = [
 	"AUTH_REQUIRED",
 	"PROVIDER_KEY_MISSING",
 	"USAGE_LIMIT",
+	// A chat turn failure read from its error text (lib/chat-failure-reason.ts).
+	"QUOTA_EXCEEDED",
+	"RATE_LIMITED",
+	"PROVIDER_OVERLOADED",
+	"CONTEXT_TOO_LONG",
+	"MODEL_UNAVAILABLE",
+	"NETWORK_ERROR",
+	"TIMED_OUT",
+	"PROVIDER_SERVER_ERROR",
+	"AGENT_NOT_INSTALLED",
+	"AGENT_EXITED",
+	"CONTENT_REFUSED",
+	// Why a composer send failed: its own reasons, then the API's send refusals.
+	...COMPOSER_ERROR_CODES,
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -193,6 +212,47 @@ export type AttachmentSource = (typeof ATTACHMENT_SOURCES)[number];
 /** How a message left the composer. */
 export const SEND_INPUTS = ["keyboard", "button"] as const;
 export type SendInput = (typeof SEND_INPUTS)[number];
+
+/** Every app shortcut, by its id in the keyboard shortcuts list. */
+export const SHORTCUT_IDS: readonly AppShortcutId[] = APP_SHORTCUTS.map((shortcut) => shortcut.id);
+
+const SHORTCUT_ID_SET = new Set<string>(SHORTCUT_IDS);
+
+export function isShortcutId(value: unknown): value is AppShortcutId {
+	return typeof value === "string" && SHORTCUT_ID_SET.has(value);
+}
+
+/** How a shortcut's action ran: its key chord, or picked from the command palette. */
+export const SHORTCUT_VIAS = ["key", "cmdk"] as const;
+export type ShortcutVia = (typeof SHORTCUT_VIAS)[number];
+
+/** Numeric keys of one entry in the summary's `shortcuts` array. */
+export const SHORTCUT_STAT_KEYS = ["key_count", "cmdk_count"] as const;
+export type ShortcutStatKey = (typeof SHORTCUT_STAT_KEYS)[number];
+
+/**
+ * The control a shortcut does the same thing as. Its key chord is counted on
+ * that control too, as `shortcut_count` beside `click_count`.
+ */
+export const SHORTCUT_CONTROLS: Partial<Record<AppShortcutId, UiControl>> = {
+	"new-session": "topbar.new_task",
+	"open-settings": "sidebar.settings",
+	"toggle-sidebar": "sidebar.collapse",
+	"toggle-inspector": "topbar.inspector",
+	"open-orchestrator": "topbar.open_orchestrator",
+	"open-in-editor": "topbar.open_editor",
+	"archive-session": "sidebar.session_archive",
+	"model-picker": "composer.model_picker",
+	"dictate": "composer.dictation",
+	"close-shell-terminal": "tab.close",
+	"previous-session": "sidebar.session_row",
+	"next-session": "sidebar.session_row",
+	"jump-to-session": "sidebar.session_row",
+	"previous-attention-session": "sidebar.session_row",
+	"next-attention-session": "sidebar.session_row",
+	"previous-tab": "tab.select",
+	"next-tab": "tab.select",
+};
 
 /** Top-level numeric keys of `ao.ui.usage_summary`. A key left out means 0. */
 export const USAGE_SUMMARY_COUNTERS = [
@@ -260,6 +320,7 @@ export type SurfaceStatKey = (typeof SURFACE_STAT_KEYS)[number];
 export const CONTROL_STAT_KEYS = [
 	"click_count",
 	"keyboard_count",
+	"shortcut_count",
 	"hover_click_count",
 	"hover_only_count",
 	"rage_click_count",
@@ -306,6 +367,25 @@ function sanitizeControlStats(value: unknown): Properties[] | undefined {
 		seen.add(raw.control_id);
 		const row: Properties = { control_id: raw.control_id };
 		for (const key of CONTROL_STAT_KEYS) {
+			const n = count(raw[key]);
+			if (n) row[key] = n;
+		}
+		if (Object.keys(row).length > 1) rows.push(row);
+	}
+	return rows.length ? rows : undefined;
+}
+
+function sanitizeShortcutStats(value: unknown): Properties[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const seen = new Set<string>();
+	const rows: Properties[] = [];
+	for (const entry of value.slice(0, SHORTCUT_IDS.length)) {
+		if (!entry || typeof entry !== "object") continue;
+		const raw = entry as Properties;
+		if (!isShortcutId(raw.shortcut_id) || seen.has(raw.shortcut_id)) continue;
+		seen.add(raw.shortcut_id);
+		const row: Properties = { shortcut_id: raw.shortcut_id };
+		for (const key of SHORTCUT_STAT_KEYS) {
 			const n = count(raw[key]);
 			if (n) row[key] = n;
 		}
@@ -365,6 +445,7 @@ export function sanitizeUiUsageProperties(event: string, properties?: Properties
 			if (properties?.flush_reason === "interval" || properties?.flush_reason === "startup") safe.flush_reason = properties.flush_reason;
 			set("surfaces", sanitizeSurfaceStats(properties?.surfaces));
 			set("controls", sanitizeControlStats(properties?.controls));
+			set("shortcuts", sanitizeShortcutStats(properties?.shortcuts));
 			break;
 		}
 	}
