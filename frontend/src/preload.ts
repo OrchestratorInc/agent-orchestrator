@@ -49,7 +49,7 @@ import type {
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
 import type { TelemetryBootstrap } from "./shared/telemetry";
-import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
+import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
 	TELEMETRY_POLICY_CHANGED_CHANNEL,
@@ -105,6 +105,8 @@ import type {
 	BrowserProfileDeleteResult,
 	BrowserProfileMenuInput,
 	BrowserProfileSelectInput,
+	BrowserProfileSwitchConfirmRequest,
+	BrowserProfileSwitchFailure,
 	BrowserProfileViewState,
 } from "./shared/browser-profiles";
 import type {
@@ -665,6 +667,7 @@ const api = {
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
 		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
 		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,
+		launchSteps: () => ipcRenderer.invoke("telemetry:launchSteps") as Promise<LaunchSteps | null>,
 		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
@@ -848,6 +851,32 @@ const api = {
 			ipcRenderer.on("browser:profileManage", wrapped);
 			return () => {
 				ipcRenderer.off("browser:profileManage", wrapped);
+			};
+		},
+		/** The main process needs the user to accept a profile switch that reloads loaded pages. */
+		onProfileSwitchConfirm: (listener: (request: BrowserProfileSwitchConfirmRequest) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; profileId?: unknown }) => {
+				if (typeof payload?.viewId !== "string") return;
+				if (payload.profileId !== null && typeof payload.profileId !== "string") return;
+				listener({ viewId: payload.viewId, profileId: payload.profileId });
+			};
+			ipcRenderer.on("browser:profileSwitchConfirm", wrapped);
+			return () => {
+				ipcRenderer.off("browser:profileSwitchConfirm", wrapped);
+			};
+		},
+		onProfileSwitchFailed: (listener: (failure: BrowserProfileSwitchFailure) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; message?: unknown; reason?: unknown }) => {
+				if (typeof payload?.viewId !== "string" || typeof payload.message !== "string") return;
+				listener({
+					viewId: payload.viewId,
+					message: payload.message,
+					...(payload.reason === "agent-active" ? { reason: "agent-active" as const } : {}),
+				});
+			};
+			ipcRenderer.on("browser:profileSwitchFailed", wrapped);
+			return () => {
+				ipcRenderer.off("browser:profileSwitchFailed", wrapped);
 			};
 		},
 		onAnnotationSubmit: (listener: (payload: BrowserAnnotationSubmitPayload) => void) => {

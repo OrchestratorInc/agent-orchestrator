@@ -3289,6 +3289,30 @@ html.sidebar-reordering * {
 	}
 }
 
+/* A composer attachment's corner remove button: a solid disc with a ring in the
+   composer's own fill, so it cuts cleanly out of the tile under it. Solid copies
+   because a translucent window clears the composer and button fills, which let
+   the picture show through. */
+.cursor-chat-composer {
+	--composer-bg-solid: var(--solid-bg-secondary, var(--color-bg-secondary));
+}
+
+:root[data-theme="light"] .cursor-chat-composer {
+	--composer-bg-solid: var(--color-bg-elevated);
+}
+
+.composer-tile-remove {
+	background: color-mix(in oklch, var(--foreground) 18%, var(--composer-bg-solid, var(--color-bg-elevated)));
+	color: color-mix(in oklch, var(--foreground) 88%, transparent);
+	box-shadow: 0 0 0 2px var(--composer-bg-solid, var(--color-bg-elevated));
+	transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.composer-tile-remove:hover {
+	background: color-mix(in oklch, var(--foreground) 26%, var(--composer-bg-solid, var(--color-bg-elevated)));
+	color: var(--foreground);
+}
+
 /* The composer has no border; it is told apart from the canvas by its fill alone.
    Focus remains visible on the keyboard-focusable controls inside it. */
 .cursor-chat-composer {

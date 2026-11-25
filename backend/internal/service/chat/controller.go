@@ -16,6 +16,7 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -388,7 +389,7 @@ var ErrForcedHandoffStoppedSource = errors.New("the forced handoff stopped the s
 // ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
 // this conversation, not failed, was rolled back, or carries no durable prompt
 // the user authored. A retry is only ever offered for an eligible failed human
-// turn.
+// turn, or for an automation turn a usage limit refused.
 var ErrTurnNotRetryable = errors.New("turn is not retryable")
 
 // ErrRetryStaleBranch reports a durable failed turn that is no longer visible
@@ -1606,6 +1607,14 @@ func (c *Controller) readRateLimits() {
 // ProviderConversationID is the handle to persist for resume.
 func (c *Controller) ProviderConversationID() string { return c.conv.ProviderConversationID() }
 
+// providerConversationID is the live provider thread, or empty before one exists.
+func (c *Controller) providerConversationID() string {
+	if c.conv == nil {
+		return ""
+	}
+	return c.conv.ProviderConversationID()
+}
+
 // ConversationID is the durable conversation this controller writes to.
 func (c *Controller) ConversationID() string { return c.conversation.ID }
 
@@ -1814,7 +1823,8 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
 	}
-	if prompt.Origin != domain.MessageOriginHuman {
+	limitedEvent := prompt.Origin == domain.MessageOriginAutomation && source.UsageLimit != nil
+	if prompt.Origin != domain.MessageOriginHuman && !limitedEvent {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
 	}
 
@@ -1842,6 +1852,12 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, ErrTurnRunning
 	}
 
+	relayed := prompt.AuthoredByUser && cmp.Or(prompt.ProviderInputText, prompt.Text) == prompt.Text
+	if limitedEvent && !relayed {
+		if prompt, err = c.usageLimitEventContinuation(ctx, source); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	content, err := retryPromptContent(prompt.DeliveryContentJSON, c.Capabilities())
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1860,6 +1876,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		ClientMessageID:     key,
 		DeliveryContentJSON: prompt.DeliveryContentJSON,
 		Continuation:        prompt.Continuation,
+		AuthoredByUser:      prompt.AuthoredByUser,
 	}
 	var created bool
 	if autoResume {
@@ -1892,6 +1909,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
+		AuthoredByUser:  prompt.AuthoredByUser,
 		ClientMessageID: key,
 	}, now, false, nil)
 }
@@ -4317,7 +4335,15 @@ func (c *Controller) applyThreadState(
 	update ports.ChatThreadState,
 	now time.Time,
 ) error {
+	// A conversation outlives its provider thread. What another agent or an
+	// earlier thread reported is not merged into this thread's state. Read before
+	// taking c.mu: a driver may guard its handle with its own lock.
+	thread := c.providerConversationID()
 	c.mu.Lock()
+	if !c.threadState.AppliesTo(c.harness, thread) {
+		c.threadState = domain.ConversationThreadState{}
+	}
+	c.threadState.Harness, c.threadState.ProviderConversationID = c.harness, thread
 	if update.Status != "" {
 		c.threadState.Status = update.Status
 		// The flags belong to the status report that carried them: an active thread

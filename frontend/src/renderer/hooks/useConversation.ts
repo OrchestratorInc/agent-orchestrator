@@ -2553,6 +2553,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			retryOfTurnId: turn.retryOfTurnId,
 			hasRetryAttempt: turn.hasRetryAttempt,
 			hasHumanPrompt: turn.hasHumanPrompt,
+			hasEventPrompt: turn.hasEventPrompt,
 			errorMessage: turn.errorMessage,
 			failureCode: turn.failureCode,
 			usageLimit: turn.usageLimit ? {
