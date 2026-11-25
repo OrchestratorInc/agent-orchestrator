@@ -8244,14 +8244,6 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 	const headingRef = useRef<HTMLHeadingElement>(null);
 	const ghostRef = useRef<HTMLUListElement>(null);
 	const [promptsHeight, setPromptsHeight] = useState(0);
-	// The first measurement fills the spacer before the first paint; the heading must
-	// not glide for it, or every new chat opens with the heading rising into place.
-	// The glide turns on a frame later, once the stack stands where it belongs.
-	const [glides, setGlides] = useState(false);
-	useEffect(() => {
-		const frame = requestAnimationFrame(() => setGlides(true));
-		return () => cancelAnimationFrame(frame);
-	}, []);
 	useLayoutEffect(() => {
 		const heading = headingRef.current;
 		const ghost = ghostRef.current;
@@ -8287,7 +8279,11 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
 			<motion.h1
 				ref={headingRef}
-				layout={reducedMotion || !glides ? false : "position"}
+				layout={reducedMotion ? false : "position"}
+				// Glide only when the prompts come or go. The first measurement fills the
+				// spacer on mount, and a resize can change it; neither is a move to animate,
+				// or every new chat would open with the heading rising into place.
+				layoutDependency={promptsOpen}
 				transition={{ layout: WELCOME_SETTLE }}
 				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
 				// Anchored on the composer box alone: a group-has variant would restyle the app
