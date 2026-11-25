@@ -58,10 +58,12 @@ function CloudHarnessPages({ connections, focusAgentId, onDetailChange, orgId, s
 	const focusHandledRef = useRef(false);
 	const focusPrimaryActionRef = useRef(false);
 	const targetAgentId = CLOUD_AGENT_PROVIDERS.find((agentId) => agentId === focusAgentId);
+	// A browser login waiting in a harness's accounts list, which keeps its own login state.
+	const [pendingLoginAgent, setPendingLoginAgent] = useState<CloudHarness | null>(null);
 	// A harness with its login open stays listed, as on the local side, so a
 	// search never closes a login (and abandons a browser sign-in) mid-way.
 	const rows = CLOUD_AGENT_PROVIDERS.filter((agentId) =>
-		agentId === targetAgentId || agentId === loginAgent || agentLabel(agentId).toLowerCase().includes(search.trim().toLowerCase()),
+		agentId === targetAgentId || agentId === loginAgent || agentId === pendingLoginAgent || agentLabel(agentId).toLowerCase().includes(search.trim().toLowerCase()),
 	);
 
 	const openDetail = (agentId: CloudHarness, tab: CloudDetailTab = "account") => {
@@ -113,7 +115,8 @@ function CloudHarnessPages({ connections, focusAgentId, onDetailChange, orgId, s
 	const selectedVersion = selected ? describeCloudHarness(versions.data, selected)?.currentVersion : undefined;
 	const accountTab = (agentId: CloudHarness) => {
 		// With accounts the list logs in: it opens on adding one while there is none.
-		if (agentAccounts) return <CloudAgentAccountsPanel key={agentId} agent={agentId} addFirst={!selectedConnected} />;
+		if (agentAccounts) return <CloudAgentAccountsPanel key={agentId} agent={agentId} addFirst={!selectedConnected}
+			onLoginPendingChange={(pending) => setPendingLoginAgent((current) => pending ? agentId : current === agentId ? null : current)} />;
 		// As on the local Account card, the login takes the status row's place while it is open.
 		return <HarnessDetailGroup title={t("settings.harness.account")}>
 			{loginAgent === agentId ? <CloudHarnessLoginPanel key={agentId} agent={agentId} onClose={() => setLoginAgent(null)} /> : <HarnessDetailRow

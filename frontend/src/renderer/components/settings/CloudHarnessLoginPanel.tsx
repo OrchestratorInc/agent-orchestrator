@@ -85,7 +85,13 @@ function loginMethodsFor(agent: CloudHarness, credentialType: string | undefined
 // credential is personal: it runs the caller's cloud sessions in every org they
 // belong to. Without `account` the login replaces the harness's one login
 // (PUT /me/providers/{agent}); with it, it adds or signs in one of its accounts.
-export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: CloudHarness; account?: CloudHarnessLoginAccount; onClose: () => void }) {
+export function CloudHarnessLoginPanel({ agent, account, onClose, onPendingChange }: {
+	agent: CloudHarness;
+	account?: CloudHarnessLoginAccount;
+	onClose: () => void;
+	/** Whether a browser login is waiting, so the page keeps this harness open until it ends. */
+	onPendingChange?: (pending: boolean) => void;
+}) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
@@ -121,6 +127,15 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	// read by the unmount cleanup and by a login that ends after it.
 	const browserPendingRef = useRef(false);
 	const unmountedRef = useRef(false);
+	const onPendingChangeRef = useRef(onPendingChange);
+	onPendingChangeRef.current = onPendingChange;
+	// Reports a waiting browser login, and its end however it ends (done,
+	// failed, cancelled, or the panel leaving).
+	useEffect(() => {
+		if (!browserPending) return;
+		onPendingChangeRef.current?.(true);
+		return () => onPendingChangeRef.current?.(false);
+	}, [browserPending]);
 
 	const cancelBrowserLogin = () => {
 		loginCancelledRef.current = true;
