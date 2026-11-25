@@ -56,6 +56,8 @@ import { conversationQueryOptions } from "../hooks/useConversation";
 
 class EventSourceStub {
 	static instances: EventSourceStub[] = [];
+	/** How many upcoming constructions throw, as a browser may for a refused URL. */
+	static failNext = 0;
 	url: string;
 	closed = false;
 	readyState = 0; // CONNECTING
@@ -65,6 +67,10 @@ class EventSourceStub {
 	listeners: string[] = [];
 	handlers = new Map<string, (event: Event) => void>();
 	constructor(url: string) {
+		if (EventSourceStub.failNext > 0) {
+			EventSourceStub.failNext -= 1;
+			throw new Error("EventSource construction failed");
+		}
 		this.url = url;
 		EventSourceStub.instances.push(this);
 	}
@@ -109,6 +115,7 @@ function cdcSources() {
 
 beforeEach(() => {
 	EventSourceStub.instances = [];
+	EventSourceStub.failNext = 0;
 	onStatusMock.mockReset().mockReturnValue(removeStatusMock);
 	removeStatusMock.mockReset();
 	getApiBaseUrlMock.mockReset().mockReturnValue("http://127.0.0.1:3001");
@@ -541,6 +548,22 @@ describe("createEventTransport", () => {
 		} finally {
 			vi.useRealTimers();
 			vi.unstubAllGlobals();
+		}
+	});
+
+	it("retries a stream whose construction threw", async () => {
+		vi.useFakeTimers();
+		try {
+			EventSourceStub.failNext = 1;
+			createEventTransport(fakeQueryClient()).connect();
+			expect(cdcSources()).toHaveLength(0);
+			expect(getEventsConnectionState()).toBe("disconnected");
+
+			// The first retry lands within the 5s initial backoff, whatever the jitter.
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(cdcSources()).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
 		}
 	});
 
