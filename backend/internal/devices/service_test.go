@@ -501,8 +501,8 @@ func TestReusesOwnedDeviceBeforeBootingAnother(t *testing.T) {
 	if err := svc.Close(ctx, "s-1", false); err != nil {
 		t.Fatal(err)
 	}
-	// The device stays booted after its session ends; the next session reuses
-	// it rather than booting a third while B belongs to someone else.
+	// The device stays booted after its session releases it; the next session
+	// reuses it rather than booting a third while B belongs to someone else.
 	for i := range p.devices {
 		if p.devices[i].ID == first.Device.ID {
 			p.devices[i].Booted = true
@@ -1394,4 +1394,284 @@ func TestAFailedOpenRollsBackTheDeviceItStarted(t *testing.T) {
 	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "A"}); err != nil {
 		t.Fatalf("the next open of A: %v", err)
 	}
+}
+
+// endableSessions is a session lookup whose sessions end when told to.
+type endableSessions struct {
+	mu    sync.Mutex
+	ended map[domain.SessionID]bool
+}
+
+func (e *endableSessions) end(id domain.SessionID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ended == nil {
+		e.ended = map[domain.SessionID]bool{}
+	}
+	e.ended[id] = true
+}
+
+func (e *endableSessions) lookup(_ context.Context, id domain.SessionID) (SessionInfo, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return SessionInfo{Terminated: e.ended[id]}, nil
+}
+
+func newEndableService(t *testing.T, dir string, p *fakeProvider, sessions *endableSessions) *Service {
+	t.Helper()
+	svc := newAvailable(Config{DataDir: dir, Provider: p, Sessions: sessions.lookup, Now: func() time.Time { return time.Unix(1, 0) }})
+	if _, err := svc.Setup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		return svc.state == SetupReady
+	})
+	return svc
+}
+
+func (f *fakeProvider) shutdownList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.shutdowns...)
+}
+
+// openBooted opens the named device for a session and lists it as running,
+// as the real provider does once the boot returns.
+func openBooted(t *testing.T, svc *Service, p *fakeProvider, id domain.SessionID, device string) {
+	t.Helper()
+	if _, err := svc.Open(context.Background(), id, OpenRequest{DeviceID: device}); err != nil {
+		t.Fatal(err)
+	}
+	p.setBooted(device, true)
+}
+
+// A simulator AO started for a session is powered off once that session ends,
+// instead of running on for nobody (#9084).
+func TestAnEndedSessionPowersOffTheDeviceAOStarted(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	openBooted(t, svc, p, "s-1", "A")
+
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 0 {
+		t.Fatalf("shutdowns = %v while the session still holds its device", got)
+	}
+	sessions.end("s-1")
+	svc.pruneEnded(ctx)
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("shutdowns = %v, want [A]", got)
+	}
+	svc.mu.Lock()
+	owned, parked := len(svc.owned), len(svc.parked)
+	svc.mu.Unlock()
+	if owned != 0 || parked != 0 {
+		t.Fatalf("owned=%d parked=%d after powering A off, want nothing kept", owned, parked)
+	}
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 1 {
+		t.Fatalf("shutdowns = %v, want A powered off once", got)
+	}
+}
+
+// A device that was running before the session took it belongs to someone
+// else (the user, another tool): the session ending leaves it on.
+func TestAnEndedSessionLeavesADeviceItFoundRunning(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	openBooted(t, svc, p, "s-1", "B")
+	sessions.end("s-1")
+	svc.pruneEnded(ctx)
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 0 {
+		t.Fatalf("shutdowns = %v, want B left running", got)
+	}
+}
+
+// `ao device close` keeps the device on for another session to take. If none
+// does, it is powered off when the session that released it ends.
+func TestAClosedDevicePowersOffWhenItsSessionEnds(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	openBooted(t, svc, p, "s-1", "A")
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 0 {
+		t.Fatalf("shutdowns = %v while the releasing session is still running", got)
+	}
+	sessions.end("s-1")
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("shutdowns = %v, want [A]", got)
+	}
+}
+
+// A released device another session took is that session's now: the first
+// session ending leaves it on, and the second one ending powers it off.
+func TestAParkedDeviceFollowsTheSessionThatTookIt(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	openBooted(t, svc, p, "s-1", "A")
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	sessions.end("s-1")
+	svc.pruneEnded(ctx)
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 0 {
+		t.Fatalf("shutdowns = %v, want A left on for s-2", got)
+	}
+	sessions.end("s-2")
+	svc.pruneEnded(ctx)
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("shutdowns = %v, want [A] once s-2 ended", got)
+	}
+}
+
+// A parked device someone already shut down is only forgotten, and a failed
+// power-off is tried again on the next pass.
+func TestRetiringSkipsStoppedDevicesAndRetriesFailures(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	openBooted(t, svc, p, "s-1", "A")
+	openBooted(t, svc, p, "s-2", "C")
+	p.setBooted("C", false)
+	p.mu.Lock()
+	p.shutdownErr = errors.New("hub busy")
+	p.mu.Unlock()
+	sessions.end("s-1")
+	sessions.end("s-2")
+	svc.pruneEnded(ctx)
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("shutdowns = %v, want only A tried (C is already off)", got)
+	}
+	p.mu.Lock()
+	p.shutdownErr = nil
+	p.mu.Unlock()
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 2 || got[1] != "A" {
+		t.Fatalf("shutdowns = %v, want A tried again", got)
+	}
+	svc.mu.Lock()
+	parked := len(svc.parked)
+	svc.mu.Unlock()
+	if parked != 0 {
+		t.Fatalf("parked = %d, want nothing left", parked)
+	}
+}
+
+// A device AO booted once and that has since stopped is no longer AO's: when
+// the user boots it again and a session borrows it, the session ending leaves
+// it on.
+func TestAStoppedDeviceIsNoLongerAOs(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	openBooted(t, svc, p, "s-1", "A")
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	// Shut down outside AO; a later open's listing sees it off.
+	p.setBooted("A", false)
+	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "C"}); err != nil {
+		t.Fatal(err)
+	}
+	// The user boots A themselves; s-3 borrows it, then ends with s-1.
+	p.setBooted("A", true)
+	if _, err := svc.Open(ctx, "s-3", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	sessions.end("s-1")
+	sessions.end("s-3")
+	svc.pruneEnded(ctx)
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 0 {
+		t.Fatalf("shutdowns = %v, want the user's A left on", got)
+	}
+}
+
+// A shutdown through `ao device close --shutdown` ends AO's claim on the
+// device too.
+func TestCloseWithShutdownForgetsTheDevice(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newEndableService(t, t.TempDir(), p, &endableSessions{})
+	openBooted(t, svc, p, "s-1", "A")
+	if err := svc.Close(ctx, "s-1", true); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	owned, parked := svc.owned[deviceKey(ports.DeviceInfo{ID: "A", Platform: ports.DevicePlatformIOS})], len(svc.parked)
+	svc.mu.Unlock()
+	if owned || parked != 0 {
+		t.Fatalf("owned(A)=%v parked=%d after shutting A down", owned, parked)
+	}
+}
+
+// An emulator is powered off under the serial it runs under now, never the
+// serial it ran under when parked, which another emulator may have taken.
+func TestRetiringAnEmulatorUsesItsCurrentSerial(t *testing.T) {
+	ctx := context.Background()
+	p := &fakeProvider{
+		platforms: []ports.DevicePlatformAvailability{{Platform: ports.DevicePlatformAndroid, Available: true}},
+		devices: []ports.DeviceInfo{
+			{ID: "Pixel_9", Name: "Pixel_9", Platform: ports.DevicePlatformAndroid},
+			{ID: "Other", Name: "Other", Platform: ports.DevicePlatformAndroid},
+		},
+		bootID: func(ports.DeviceInfo) string { return "emulator-5554" },
+	}
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "Pixel_9"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	// Pixel_9 restarted as emulator-5556; Other now runs as emulator-5554.
+	p.mu.Lock()
+	p.devices = []ports.DeviceInfo{
+		{ID: "emulator-5556", Name: "Pixel_9", Platform: ports.DevicePlatformAndroid, Booted: true},
+		{ID: "emulator-5554", Name: "Other", Platform: ports.DevicePlatformAndroid, Booted: true},
+	}
+	p.mu.Unlock()
+	sessions.end("s-1")
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 1 || got[0] != "emulator-5556" {
+		t.Fatalf("shutdowns = %v, want [emulator-5556]", got)
+	}
+}
+
+// The reaper powers the device off on its own, with nobody polling.
+func TestTheReaperPowersOffAnEndedSessionsDevice(t *testing.T) {
+	previous := reapEvery
+	reapEvery = 20 * time.Millisecond
+	t.Cleanup(func() { reapEvery = previous })
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, t.TempDir(), p, sessions)
+	t.Cleanup(func() { _ = svc.Shutdown() })
+	openBooted(t, svc, p, "s-1", "A")
+	sessions.end("s-1")
+	waitFor(t, func() bool { return len(p.shutdownList()) == 1 })
 }
