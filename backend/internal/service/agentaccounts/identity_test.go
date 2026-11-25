@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -71,5 +72,67 @@ func TestAddAPIKeyAccountSavesAValidColor(t *testing.T) {
 	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey, "pink")
 	if err != nil || view.Account.Color != "pink" {
 		t.Fatalf("view = %+v, err = %v", view.Account, err)
+	}
+}
+
+// holdingStore holds the first identity write until release is closed, so a
+// second update can run while the first is between its read and its write.
+type holdingStore struct {
+	*memStore
+	held    chan struct{}
+	release chan struct{}
+	first   bool
+}
+
+func (h *holdingStore) UpdateAgentAccountIdentity(ctx context.Context, id, name, color string) error {
+	if !h.first {
+		h.first = true
+		close(h.held)
+		<-h.release
+	}
+	return h.memStore.UpdateAgentAccountIdentity(ctx, id, name, color)
+}
+
+// Two partial updates that overlap keep both changes: one that sends only the
+// name does not write back the color it read before the other set it.
+func TestUpdateIdentityOverlappingPartialUpdatesKeepBothFields(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{}}
+	svc, store, root := newAPIKeyService(t, claude)
+	store.accounts = []domain.AgentAccount{{
+		ID: "acct-a", Provider: domain.AgentAccountProviderClaude, Home: root + "/claude/acct-a", Email: "a@example.com",
+		Name: "Old", Color: "red",
+	}}
+	holding := &holdingStore{memStore: store, held: make(chan struct{}), release: make(chan struct{})}
+	svc.store = holding
+
+	nameDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateIdentity(ctx, "acct-a", strPtr("Work"), nil)
+		nameDone <- err
+	}()
+	<-holding.held
+
+	colorDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("blue"))
+		colorDone <- err
+	}()
+	// Without serialization the color update finishes while the name update is
+	// held; with it, the color update waits. Either way, release the name update.
+	select {
+	case err := <-colorDone:
+		colorDone <- err
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(holding.release)
+	if err := <-nameDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-colorDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := store.accounts[0]; got.Name != "Work" || got.Color != "blue" {
+		t.Fatalf("overlapping updates lost a field: name %q color %q", got.Name, got.Color)
 	}
 }
