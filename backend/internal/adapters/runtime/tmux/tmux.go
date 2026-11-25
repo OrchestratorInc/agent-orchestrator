@@ -23,6 +23,7 @@ import (
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/sessionid"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -542,6 +543,18 @@ func (r *Runtime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error
 	id, err := handleID(handle)
 	if err != nil {
 		return err
+	}
+	if strings.HasPrefix(id, "review-") && len(id) > 48 {
+		// A raw reviewer ID may name a session created before tmux shortened
+		// long IDs. Prefer that exact session; only use Create's hashed name
+		// after confirming the raw name is absent on the known sockets.
+		alive, probeErr := r.IsAlive(ctx, handle)
+		if probeErr != nil && !errors.Is(probeErr, ports.ErrRuntimeUnavailable) {
+			return probeErr
+		}
+		if !alive {
+			id = SessionName(id)
+		}
 	}
 	// Capture pane session ids while the session still exists; a missing
 	// session lists no panes and reaps nothing. Best-effort: failures here must
@@ -1518,8 +1531,13 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 	if id == "" {
 		return "", errors.New("tmux runtime: session id is required")
 	}
-	if !sessionIDPattern.MatchString(id) {
+	if !sessionid.Valid(id) {
 		return "", fmt.Errorf("tmux runtime: invalid handle id %q", id)
+	}
+	// Dotted IDs cannot be stored tmux handles, so map them to Create's name.
+	// Preserve long raw handles here: legacy sessions may use their full name.
+	if strings.Contains(id, ".") {
+		return SessionName(id), nil
 	}
 	return id, nil
 }

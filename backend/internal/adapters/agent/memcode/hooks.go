@@ -17,9 +17,10 @@ import (
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/sessionid"
 )
 
-var component = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var generationComponent = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const maxInstructionChunks = 64
 
@@ -50,7 +51,7 @@ type witness struct {
 }
 
 func witnessPath(data, session, generation string) (string, error) {
-	if !component.MatchString(session) || !component.MatchString(generation) || !filepath.IsAbs(data) {
+	if !sessionid.Valid(session) || !generationComponent.MatchString(generation) || !filepath.IsAbs(data) {
 		return "", errors.New("invalid memcode launch witness location")
 	}
 	return filepath.Join(data, "agent-launches", "memcode", session, generation, "witness.json"), nil
@@ -122,7 +123,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !component.MatchString(cfg.SessionID) {
+	if !sessionid.Valid(cfg.SessionID) {
 		return errors.New("invalid Orchestrator-managed session identity")
 	}
 	if cfg.Config.Model != "" && cfg.Env["MEMCODE_ENDPOINT_URL"] != "" {
@@ -187,7 +188,7 @@ func (*Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConf
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !component.MatchString(cfg.SessionID) || !filepath.IsAbs(cfg.DataDir) {
+	if !sessionid.Valid(cfg.SessionID) || !filepath.IsAbs(cfg.DataDir) {
 		return errors.New("invalid private memcode cleanup location")
 	}
 	path := filepath.Join(cfg.DataDir, "agent-launches", "memcode", cfg.SessionID)
@@ -247,7 +248,7 @@ func EmitInstructionChunk(out io.Writer, event string) error {
 		return errors.New("invalid memcode context chunk")
 	}
 	data, session := os.Getenv("AO_MEMCODE_DATA_DIR"), os.Getenv("AO_MEMCODE_SESSION")
-	if !component.MatchString(session) || !filepath.IsAbs(data) {
+	if !sessionid.Valid(session) || !filepath.IsAbs(data) {
 		return errors.New("invalid private memcode context location")
 	}
 	count := 0

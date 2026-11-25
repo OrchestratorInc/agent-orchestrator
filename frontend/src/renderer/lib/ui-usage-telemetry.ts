@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useRef } from "react";
+import type { AppShortcutId } from "../../shared/shortcuts";
+import { aoBridge } from "./bridge";
 import { captureRendererEvent, isAnalyticsOptedOut, isDeniedEvent, telemetryStorage } from "./telemetry";
 import {
 	CONTROL_FEATURES,
 	CONTROL_STAT_KEYS,
 	HOVER_CONTROLS,
 	isErrorCode,
+	isShortcutId,
 	isUiControl,
 	RETRY_CONTROLS,
+	SHORTCUT_CONTROLS,
+	SHORTCUT_STAT_KEYS,
 	SURFACE_FEATURES,
 	SURFACE_STAT_KEYS,
 	UI_FEATURES,
@@ -18,6 +23,8 @@ import {
 	type ErrorKind,
 	type ErrorPresentation,
 	type SendInput,
+	type ShortcutStatKey,
+	type ShortcutVia,
 	type SurfaceOpenedBy,
 	type SurfaceStatKey,
 	type SwitchSource,
@@ -34,7 +41,9 @@ import { isUiSurface, surfaceElementOf, TELEMETRY_SURFACE_ATTRIBUTE, type UiSurf
 // 45-60 minute window, like the session management summary. The hot paths are
 // cheap on purpose: one passive delegated listener per event type on the
 // document and Element.closest() walks only. The one layout read is for a
-// click on nothing interactive, checked after the next paint.
+// click on nothing interactive, checked after the next paint. App shortcuts
+// never reach the page as key presses (the main process claims their chords),
+// so main reports each one by id.
 
 const STATE_KEY = "ao.telemetry.uiUsage.v1";
 const SURFACE_VIEW_KEY = "ao.telemetry.surfaceViewsByDate";
@@ -106,6 +115,7 @@ const TEXT_FIELD_SELECTOR = "textarea, input:not([type=checkbox],[type=radio],[t
 
 type SurfaceStats = Partial<Record<SurfaceStatKey | "visible_ms" | "focused_ms", number>>;
 type ControlStats = Partial<Record<ControlStatKey, number>>;
+type ShortcutStats = Partial<Record<ShortcutStatKey, number>>;
 
 type PersistedState = {
 	version: 1;
@@ -116,6 +126,7 @@ type PersistedState = {
 	counters: Partial<Record<DirectCounter, number>>;
 	surfaces: Partial<Record<UiSurface, SurfaceStats>>;
 	controls: Partial<Record<UiControl, ControlStats>>;
+	shortcuts: Partial<Record<AppShortcutId, ShortcutStats>>;
 };
 
 /** The click as dispatched; a listener after this one may still prevent its default. */
@@ -140,7 +151,7 @@ function newWindowId(): string {
 }
 
 function freshState(now: number, flushAt = now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS): PersistedState {
-	return { version: 1, windowId: newWindowId(), windowStartedAt: now, windowFlushAt: flushAt, activeMs: 0, counters: {}, surfaces: {}, controls: {} };
+	return { version: 1, windowId: newWindowId(), windowStartedAt: now, windowFlushAt: flushAt, activeMs: 0, counters: {}, surfaces: {}, controls: {}, shortcuts: {} };
 }
 
 function isFiniteNonNegative(value: unknown): value is number {
@@ -162,8 +173,11 @@ function numbersOf<K extends string>(value: unknown, keys: readonly K[]): Partia
 const SURFACE_STATE_KEYS = [...SURFACE_STAT_KEYS, "visible_ms", "focused_ms"] as const;
 
 /** Saved rows with only known names and numeric stats, so a damaged entry cannot stop a flush. */
-function cleanRows(parsed: Partial<PersistedState>): Pick<PersistedState, "counters" | "surfaces" | "controls"> {
+function cleanRows(parsed: Partial<PersistedState>): Pick<PersistedState, "counters" | "surfaces" | "controls" | "shortcuts"> {
 	const counters = (numbersOf(parsed.counters, USAGE_SUMMARY_COUNTERS) ?? {}) as PersistedState["counters"];
+	// A window saved before shortcuts were counted by id (it has no `shortcuts`)
+	// counted every key chord as one. Dropped, so it is never sent as schema 2.
+	if (!parsed.shortcuts) delete counters.shortcut_count;
 	const surfaces: PersistedState["surfaces"] = {};
 	for (const [surface, stats] of Object.entries(parsed.surfaces ?? {})) {
 		if (!isUiSurface(surface)) continue;
@@ -176,7 +190,14 @@ function cleanRows(parsed: Partial<PersistedState>): Pick<PersistedState, "count
 		const clean = numbersOf(stats, CONTROL_STAT_KEYS);
 		if (clean) controls[control] = clean;
 	}
-	return { counters, surfaces, controls };
+	// A window saved before shortcuts were counted has none.
+	const shortcuts: PersistedState["shortcuts"] = {};
+	for (const [shortcut, stats] of Object.entries(parsed.shortcuts ?? {})) {
+		if (!isShortcutId(shortcut)) continue;
+		const clean = numbersOf(stats, SHORTCUT_STAT_KEYS);
+		if (clean) shortcuts[shortcut] = clean;
+	}
+	return { counters, surfaces, controls, shortcuts };
 }
 
 function loadState(storage: Pick<Storage, "getItem"> | undefined, now: number): PersistedState {
@@ -522,8 +543,8 @@ export class UiUsageRuntime {
 			if (event.key === "Meta" || event.key === "Control" || event.key === "Alt" || event.key === "Shift") return;
 			// Clipboard, undo and select-all inside a text field are editing, not shortcuts.
 			if (isEditable(event.target) && /^[acvxyz]$/i.test(event.key)) return;
+			// Only an intent: app shortcuts are counted by id when main reports them.
 			this.intent = { kind: "shortcut", surface: surfaceOfElement(event.target), at: now };
-			this.bumpCounter("shortcut_count");
 			return;
 		}
 		// Typing is not an intent; only keys that act on a focused control are.
@@ -706,6 +727,26 @@ export class UiUsageRuntime {
 		this.featureUsed("model_change");
 	}
 
+	/**
+	 * An app shortcut ran, by its key chord or from the command palette. A chord
+	 * also counts on the control that does the same thing, and explains the
+	 * session switch or surface open it causes.
+	 */
+	shortcutUsed(id: string, via: ShortcutVia): void {
+		const now = this.now();
+		if (via === "key") this.activity(now);
+		if (this.optedOut() || !isShortcutId(id)) return;
+		const stats = (this.state.shortcuts[id] ??= {});
+		const key = via === "key" ? "key_count" : "cmdk_count";
+		stats[key] = (stats[key] ?? 0) + 1;
+		this.dirty = true;
+		if (via !== "key") return;
+		this.intent = { kind: "shortcut", at: now };
+		this.bumpCounter("shortcut_count");
+		const control = SHORTCUT_CONTROLS[id];
+		if (control) this.bumpControl(control, "shortcut_count");
+	}
+
 	errorShown(kind: ErrorKind, presentation: ErrorPresentation, surface?: UiSurface, errorCode?: string): void {
 		if (this.optedOut()) return;
 		const now = this.now();
@@ -790,6 +831,11 @@ export class UiUsageRuntime {
 			for (const key of CONTROL_STAT_KEYS) if (stats[key]) row[key] = stats[key];
 			return row;
 		});
+		const shortcuts = Object.entries(state.shortcuts).map(([shortcut_id, stats]) => {
+			const row: Record<string, unknown> = { shortcut_id };
+			for (const key of SHORTCUT_STAT_KEYS) if (stats[key]) row[key] = stats[key];
+			return row;
+		});
 		const derived: Record<string, number> = {};
 		for (const surface of ["cmdk", "model_picker", "slash_menu", "mention_menu", "notifications_panel"] as const) {
 			const stats = state.surfaces[surface];
@@ -800,7 +846,8 @@ export class UiUsageRuntime {
 			}
 		}
 		return {
-			measurement_schema_version: 1,
+			// 2: shortcut_count counts app shortcuts by id, not every key chord.
+			measurement_schema_version: 2,
 			window_id: state.windowId,
 			window_duration_seconds: Math.round((now - state.windowStartedAt) / 1000),
 			active_seconds: Math.round(state.activeMs / 1000),
@@ -809,6 +856,7 @@ export class UiUsageRuntime {
 			...derived,
 			surfaces,
 			controls,
+			shortcuts,
 		};
 	}
 
@@ -822,7 +870,7 @@ export class UiUsageRuntime {
 		const properties = this.summaryProperties(reason);
 		const windowId = this.state.windowId;
 		const rows = (value: unknown) => Array.isArray(value) && value.some((row) => Object.keys(row as object).length > 1);
-		const hasActivity = this.state.activeMs >= 1_000 || Object.keys(this.state.counters).length > 0 || rows(properties.surfaces) || rows(properties.controls);
+		const hasActivity = this.state.activeMs >= 1_000 || Object.keys(this.state.counters).length > 0 || rows(properties.surfaces) || rows(properties.controls) || rows(properties.shortcuts);
 		this.state = freshState(now);
 		this.dirty = true;
 		this.persist();
@@ -942,6 +990,8 @@ export const uiUsage = {
 	attachmentAdded: (source: AttachmentSource) => runtime?.attachmentAdded(source),
 	draftDiscarded: () => runtime?.draftDiscarded(),
 	modelChanged: () => runtime?.modelChanged(),
+	/** An app shortcut ran: by its chord (reported by main, or the page's own fallback) or from Cmd+K. */
+	shortcutUsed: (id: string, via: ShortcutVia) => runtime?.shortcutUsed(id, via),
 	featureUsed: (feature: UiFeature) => runtime?.featureUsed(feature),
 	errorShown: (kind: ErrorKind, presentation: ErrorPresentation, surface?: UiSurface, errorCode?: string) => runtime?.errorShown(kind, presentation, surface, errorCode),
 	dismissed: (surface: UiSurface) => runtime?.dismissed(surface),
@@ -1044,6 +1094,9 @@ export function startUiUsageTelemetry(): () => void {
 		hoverFrame = 0;
 		current.endHover();
 	};
+	// Each chord main claims, once per press however many components handle it.
+	// Menu bar items run the same actions but are not reported here.
+	const stopShortcuts = aoBridge.app.onShortcutPressed?.((id) => current.shortcutUsed(id, "key"));
 	const onWindowState = () => current.windowStateChanged();
 	const onPageHide = () => current.checkpoint();
 	document.addEventListener("click", onClick, passiveCapture);
@@ -1084,6 +1137,7 @@ export function startUiUsageTelemetry(): () => void {
 	return () => {
 		window.clearInterval(checkpoint);
 		window.clearTimeout(flushTimer);
+		stopShortcuts?.();
 		cancelAnimationFrame(hoverFrame);
 		document.removeEventListener("click", onClick, passiveCapture);
 		document.removeEventListener("keydown", onKeyDown, passiveCapture);
