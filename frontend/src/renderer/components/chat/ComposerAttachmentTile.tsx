@@ -95,7 +95,9 @@ export function ComposerAttachmentTile({
 	const src = previewsLocally ? localUrl : mediaUrl;
 	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ") || undefined;
 	if (imageSrc) return <ImageTile src={imageSrc} name={name} details={details}>{remove}</ImageTile>;
-	if (previewKind === "video" && src) return <VideoTile src={src} name={name} details={details}>{remove}</VideoTile>;
+	// A picked video is a video tile from its first frame, before its object URL exists,
+	// so the tile (and its remove control) is not swapped out for a file card and back.
+	if (previewKind === "video" && (src || previewsLocally)) return <VideoTile src={src} name={name} details={details}>{remove}</VideoTile>;
 	return (
 		<FileCard name={name} bytes={bytes}>
 			{previewKind === "pdf" && src ? <PdfThumbnail key={src} src={src} name={name} /> : null}
@@ -123,22 +125,24 @@ function ImageTile({ src, name, details, children }: { src: string; name: string
 	);
 }
 
-function VideoTile({ src, name, details, children }: { src: string; name: string; details?: string; children: ReactNode }) {
+function VideoTile({ src, name, details, children }: { src?: string; name: string; details?: string; children: ReactNode }) {
 	const [open, setOpen] = useState(false);
 	// Failure and length belong to one source: when the picked file gives way to the staged
 	// copy they start over, while an open preview stays open.
 	const [failedSrc, setFailedSrc] = useState<string>();
 	const [measured, setMeasured] = useState<{ src: string; seconds: number }>();
 	const failed = failedSrc === src;
-	const duration = measured?.src === src ? measured.seconds : undefined;
+	const duration = measured && measured.src === src ? measured.seconds : undefined;
 	return (
 		<li title={name} className={cn(TILE_CLASS, "size-14")}>
 			<Pressable
-				onClick={() => setOpen(true)}
+				onClick={() => {
+					if (src) setOpen(true);
+				}}
 				aria-label={name}
 				className={cn(SQUARE_CLASS, "relative block cursor-zoom-in focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring")}
 			>
-				{failed ? null : (
+				{failed || !src ? null : (
 					<video
 						crossOrigin={mediaCrossOrigin(src)}
 						muted
@@ -165,7 +169,7 @@ function VideoTile({ src, name, details, children }: { src: string; name: string
 					</span>
 				)}
 			</Pressable>
-			<AttachmentLightbox open={open} onOpenChange={setOpen} kind="video" src={src} name={name} details={details} />
+			{src ? <AttachmentLightbox open={open} onOpenChange={setOpen} kind="video" src={src} name={name} details={details} /> : null}
 			{children}
 		</li>
 	);
