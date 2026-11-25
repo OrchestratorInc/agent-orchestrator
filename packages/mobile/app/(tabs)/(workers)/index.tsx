@@ -223,7 +223,13 @@ export default function FleetScreen() {
 					: workerProjectId !== ALL_WORKER_PROJECTS ? "project"
 						: workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? "environment"
 							: "idle";
-	const [boardEmpty, setBoardEmpty] = useState(false);
+	// Kept with the board it came from: a new filter re-keys the list, and until
+	// that list reports, the last board's answer must not stand for this one.
+	const [emptyBoard, setEmptyBoard] = useState<{ key: string; empty: boolean } | null>(null);
+	const boardEmpty = emptyBoard?.key === boardIdentityKey && emptyBoard.empty;
+	const onEmptyChange = useCallback((empty: boolean) => {
+		setEmptyBoard((prev) => (prev?.key === boardIdentityKey && prev.empty === empty ? prev : { key: boardIdentityKey, empty }));
+	}, [boardIdentityKey]);
 	const failureKind = useBoardFailureKind();
 	// The selected machine's own state, classified as WorkerMachineState does;
 	// reconnecting is not shown as a failure.
@@ -298,7 +304,7 @@ export default function FleetScreen() {
 				refreshing={refreshing}
 				onRefresh={onRefresh}
 				ListHeaderComponent={listHeader}
-				onEmptyChange={setBoardEmpty}
+				onEmptyChange={onEmptyChange}
 				ListEmptyComponent={
 					emptyView === "unpaired" ? (
 						<UnpairedState />
