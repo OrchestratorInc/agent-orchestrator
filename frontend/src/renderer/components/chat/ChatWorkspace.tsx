@@ -8293,7 +8293,7 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
 				// Anchored on the composer box alone: a group-has variant would restyle the app
 				// on every DOM change (style-invalidation.test.ts).
-				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
+				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
 			>
 				{heading}
 			</motion.h1>
