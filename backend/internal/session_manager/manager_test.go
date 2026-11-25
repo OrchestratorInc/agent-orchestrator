@@ -6519,6 +6519,7 @@ func TestSpawn_DefaultBranchFetchFailureDoesNotBlockWorkerSpawn(t *testing.T) {
 func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	m, st, _, _ := newManager()
 	m.dataDir = filepath.Join(home, ".ao", "dev", "data")
 
@@ -6542,6 +6543,7 @@ func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 func TestSpawn_ExplicitBranchBypassesDevNamespace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	m, st, _, _ := newManager()
 	m.dataDir = filepath.Join(home, ".ao", "dev", "data")
 
@@ -8960,11 +8962,17 @@ func TestSpawnAndRestore_PrependsResolvedBinaryAndNodeDirsToRuntimePATH(t *testi
 	// The daemon-dir pin stays at the HEAD: the agent binary is launched by
 	// absolute path and does not need its directory first, but a bare `ao` in
 	// the session must resolve to this daemon (see restorePinnedDir).
-	want := strings.Join([]string{filepath.Dir(daemonExe), binDir, nodeDir, "/usr/bin"}, string(os.PathListSeparator))
+	wantDirs := []string{filepath.Dir(daemonExe), binDir, nodeDir, "/usr/bin"}
+	if runtime.GOOS == "windows" {
+		// nodeRuntimeDir never adds a Node runtime directory on Windows.
+		wantDirs = []string{filepath.Dir(daemonExe), binDir, "/usr/bin"}
+	}
+	want := strings.Join(wantDirs, string(os.PathListSeparator))
 
 	for _, operation := range []string{"spawn", "restore"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			t.Setenv("PATH", "/usr/bin")
 			t.Setenv("VOLTA_HOME", filepath.Join(home, ".volta"))
 			t.Setenv("FNM_DIR", filepath.Join(home, ".fnm"))
@@ -9035,6 +9043,7 @@ func TestSpawn_DoesNotAddNodeRuntimeForNativeBinary(t *testing.T) {
 	home := t.TempDir()
 	binDir := filepath.Join(home, "native", "bin")
 	agentBin := filepath.Join(binDir, "agent")
+	daemonExe := filepath.Join(t.TempDir(), "ao")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -9054,7 +9063,7 @@ func TestSpawn_DoesNotAddNodeRuntimeForNativeBinary(t *testing.T) {
 			}
 			return agentBin, nil
 		},
-		Executable: func() (string, error) { return "/ao/bin/ao", nil },
+		Executable: func() (string, error) { return daemonExe, nil },
 	})
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -9062,7 +9071,7 @@ func TestSpawn_DoesNotAddNodeRuntimeForNativeBinary(t *testing.T) {
 	if nodeLookups != 0 {
 		t.Fatalf("node LookPath calls = %d, want 0 for native binary", nodeLookups)
 	}
-	want := strings.Join([]string{"/ao/bin", binDir, "/usr/bin"}, string(os.PathListSeparator))
+	want := strings.Join([]string{filepath.Dir(daemonExe), binDir, "/usr/bin"}, string(os.PathListSeparator))
 	if got := rt.lastCfg.Env["PATH"]; got != want {
 		t.Fatalf("runtime env PATH = %q, want %q", got, want)
 	}
