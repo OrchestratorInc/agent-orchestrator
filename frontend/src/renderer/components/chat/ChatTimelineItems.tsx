@@ -2019,7 +2019,7 @@ function ActivityStepBody({ children, list = false, text = false, className }: {
 	if (insideRail) return <div className={cn(text && "pl-[22px]", className)}>{children}</div>;
 	return (
 		<InsideActivityRail.Provider value={true}>
-			<div data-activity-rail="" className="ml-1.5 border-l border-border-strong pl-[15px]">
+			<div data-activity-rail="" className="activity-step-line">
 				{children}
 			</div>
 		</InsideActivityRail.Provider>

@@ -2998,10 +2998,21 @@ html.sidebar-reordering * {
    into each child's icon (a file row's first letter), ending at the last child. Every
    child's first line is a 28px row, so its icon sits 14px down. */
 .activity-thread,
+.activity-step-line,
+.subagent-thread,
 [data-thread-parent] {
-	/* Stronger than border-strong, which is too faint to follow down a long thread. */
-	--thread-line: color-mix(in oklch, var(--color-text-primary) 22%, transparent);
+	/* Stronger than border-strong, which is too faint to follow down a long thread. Opaque,
+	   mixed over the canvas's solid colour, so where a curve leaves the line the overlap
+	   does not show brighter (a translucent window keeps the solid copy on :root). */
+	--thread-line: color-mix(in oklch, var(--color-text-primary) 22%, var(--solid-bg-primary, var(--color-bg-primary)));
 	--thread-stroke: 1.5px;
+}
+/* A step opened on its own: a straight line under its icon, in the thread's stroke and
+   colour, with its details where the step's text starts (22px). */
+.activity-step-line {
+	margin-left: calc(7px - var(--thread-stroke) / 2);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	padding-left: calc(15px - var(--thread-stroke) / 2);
 }
 .activity-thread {
 	--thread-indent: 19px;
@@ -3059,10 +3070,57 @@ html.sidebar-reordering * {
 [data-thread-parent]::after {
 	content: "";
 	position: absolute;
-	left: calc(7px - var(--thread-stroke) / 2);
-	top: calc(50% + 10px);
+	/* From 3px under the row's icon: its centre (--thread-x) and half its height plus 3. */
+	left: calc(var(--thread-x, 7px) - var(--thread-stroke) / 2);
+	top: calc(50% + var(--thread-drop, 10px));
 	bottom: 0;
 	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+/* A team's subagents, threaded the same way from the first (18px) mark in the team's row. Each
+   agent's row is two lines tall, so its curve lands on the row's middle, at its mark. */
+.subagent-thread {
+	--thread-indent: 19px;
+	position: relative;
+	margin-left: calc(9px - var(--thread-stroke) / 2);
+	padding-left: var(--thread-indent);
+}
+.subagent-thread::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: calc(-1 * var(--thread-lead, 0px));
+	height: var(--thread-lead, 0px);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+.subagent-thread > li {
+	position: relative;
+}
+.subagent-thread > li:not(:last-child)::after {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: 0;
+	bottom: 0;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+.subagent-thread > li > [data-thread-anchor],
+.subagent-thread > li > div > [data-thread-anchor] {
+	position: relative;
+}
+.subagent-thread > li > [data-thread-anchor]::before,
+.subagent-thread > li > div > [data-thread-anchor]::before {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: 0;
+	width: calc(var(--thread-indent) - 3px);
+	height: 50%;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	border-bottom: var(--thread-stroke) solid var(--thread-line);
+	border-bottom-left-radius: 10px;
 	pointer-events: none;
 }
 
