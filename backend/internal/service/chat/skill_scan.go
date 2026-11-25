@@ -296,9 +296,12 @@ type commandFile struct {
 // names a nested command by its path: `frontend/component.md` is `frontend:component`.
 func commandFiles(dir string) []commandFile {
 	var files []commandFile
+	prefix := dir + string(filepath.Separator)
 	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		// WalkDir reports errors only for folders (the root included): skip one it
+		// cannot read and keep the rest.
 		if err != nil {
-			return nil
+			return filepath.SkipDir
 		}
 		if entry.IsDir() {
 			if path != dir && strings.HasPrefix(entry.Name(), ".") {
@@ -309,10 +312,7 @@ func commandFiles(dir string) []commandFile {
 		if !strings.HasSuffix(entry.Name(), ".md") {
 			return nil
 		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return nil
-		}
+		rel := strings.TrimPrefix(path, prefix)
 		name := strings.ReplaceAll(filepath.ToSlash(strings.TrimSuffix(rel, ".md")), "/", ":")
 		files = append(files, commandFile{name: name, file: path})
 		return nil
