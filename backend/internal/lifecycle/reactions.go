@@ -835,6 +835,12 @@ func hasUnresolvedComments(comments []ports.PRCommentObservation) bool {
 	return false
 }
 
+// failedPRChecks selects the checks the CI nudge sends to the agent. Only real
+// failures qualify. A current cancelled check still makes CI failing and is
+// listed with its link for people (UI-actionable), but it is deliberately not
+// agent-actionable: a cancellation, whether by hand or by the system, is not a
+// code failure, so the agent has nothing to fix. A cancelled-only failure
+// therefore queues no nudge.
 func failedPRChecks(checks []ports.PRCheckObservation) []ports.PRCheckObservation {
 	failed := make([]ports.PRCheckObservation, 0, len(checks))
 	for _, ch := range checks {

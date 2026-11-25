@@ -476,11 +476,11 @@ func TestObserve_CIStates(t *testing.T) {
 			wantCI: domain.CIPending,
 		},
 		{
-			name: "cancelled with nothing running is unknown",
+			name: "cancelled with nothing running is failing",
 			nodes: []any{
 				map[string]any{"__typename": "CheckRun", "name": "deploy", "status": "COMPLETED", "conclusion": "CANCELLED"},
 			},
-			wantCI: domain.CIUnknown,
+			wantCI: domain.CIFailing,
 		},
 		{
 			name: "legacy statuscontext failure",
@@ -1126,21 +1126,13 @@ func TestGHTokenSourceUsesInjectedHook(t *testing.T) {
 	}
 }
 
-// TestObserve_CIPaginationDegradesPassingToUnknown pins the safety
-// guard for the GraphQL contexts pagination: when GitHub reports
-// hasNextPage=true, a visible "all passing" set could be hiding a
-// failure on the next page. The provider must degrade Passing /
-// Pending / Unknown to CIUnknown so downstream code doesn't treat a
-// possibly-broken PR as ready. A FAILING verdict from the visible
-// page is still safe (and must NOT degrade).
-func TestObserve_CIPaginationDegradesPassingToUnknown(t *testing.T) {
-	f := newFakeGH(t)
+// A partial visible set can hide a failing context on a later page.
+func TestCISummary_CIPaginationDegradesPassingToUnknown(t *testing.T) {
 	fx := basePRFixture()
-	fx.prData(func(pr map[string]any) {
-		commits := pr["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
-		commit := commits["commit"].(map[string]any)
-		roll := commit["statusCheckRollup"].(map[string]any)
-		ctxs := roll["contexts"].(map[string]any)
+	var pr map[string]any
+	fx.prData(func(m map[string]any) {
+		pr = m
+		ctxs := statusRollup(m)["contexts"].(map[string]any)
 		// One visible passing context, but hasNextPage=true so a
 		// failure could be hiding in the unseen tail.
 		ctxs["nodes"] = []any{
@@ -1148,40 +1140,140 @@ func TestObserve_CIPaginationDegradesPassingToUnknown(t *testing.T) {
 		}
 		ctxs["pageInfo"] = map[string]any{"hasNextPage": true}
 	})
-	fx.install(t, f)
-	p := newProviderForTest(t, f)
-
-	obs, err := p.Observe(ctx(), fx.prURL())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.CI != domain.CIUnknown {
-		t.Fatalf("CI = %q, want CIUnknown (hasNextPage must degrade passing)", obs.CI)
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIUnknown {
+		t.Fatalf("CI = %q, want CIUnknown (hasNextPage must degrade passing)", got)
 	}
 }
 
-func TestObserve_CIPaginationDoesNotMaskKnownFailure(t *testing.T) {
-	f := newFakeGH(t)
+func TestCISummary_CIPaginationDoesNotMaskUnmatchableFailure(t *testing.T) {
 	fx := basePRFixture()
-	fx.prData(func(pr map[string]any) {
-		commits := pr["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
-		commit := commits["commit"].(map[string]any)
-		roll := commit["statusCheckRollup"].(map[string]any)
-		ctxs := roll["contexts"].(map[string]any)
+	var pr map[string]any
+	fx.prData(func(m map[string]any) {
+		pr = m
+		ctxs := statusRollup(m)["contexts"].(map[string]any)
 		ctxs["nodes"] = []any{
 			map[string]any{"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE", "databaseId": float64(0)},
 		}
 		ctxs["pageInfo"] = map[string]any{"hasNextPage": true}
 	})
-	fx.install(t, f)
-	p := newProviderForTest(t, f)
-
-	obs, err := p.Observe(ctx(), fx.prURL())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIFailing {
+		t.Fatalf("CI = %q, want CIFailing for a check without workflow metadata", got)
 	}
-	if obs.CI != domain.CIFailing {
-		t.Fatalf("CI = %q, want CIFailing (a known failure on page 1 must NOT degrade)", obs.CI)
+}
+
+func TestCISummary_CIPaginationDefersSupersedableFailures(t *testing.T) {
+	for _, conclusion := range []string{"FAILURE", "CANCELLED"} {
+		t.Run(conclusion, func(t *testing.T) {
+			fx := basePRFixture()
+			var pr map[string]any
+			fx.prData(func(m map[string]any) {
+				pr = m
+				contexts := statusRollup(m)["contexts"].(map[string]any)
+				check := actionsCheckRun("Go", "lint", conclusion, 1)
+				check["databaseId"] = float64(0) // Skip optional job-log enrichment.
+				contexts["nodes"] = []any{check}
+				contexts["pageInfo"] = map[string]any{"hasNextPage": true}
+			})
+			if got := ciSummaryFromGraphQL(pr); got != domain.CIUnknown {
+				t.Fatalf("CI = %q, want unknown until later pages can rule out a newer run", got)
+			}
+		})
+	}
+}
+
+func TestObserve_FetchesRemainingCheckContexts(t *testing.T) {
+	cases := []struct {
+		name, first, second string
+		wantCI              domain.CIState
+		wantCheckStatus     domain.PRCheckStatus
+	}{
+		{name: "superseded cancellation", first: "CANCELLED", second: "SUCCESS", wantCI: domain.CIPassing, wantCheckStatus: domain.PRCheckPassed},
+		{name: "current cancellation", first: "SUCCESS", second: "CANCELLED", wantCI: domain.CIFailing, wantCheckStatus: domain.PRCheckCancelled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeGH(t)
+			fx := basePRFixture()
+			var firstPR map[string]any
+			fx.prData(func(pr map[string]any) {
+				firstPR = pr
+				roll := statusRollup(pr)
+				roll["state"] = "FAILURE"
+				first := actionsCheckRun("Go", "lint", tc.first, 1)
+				first["databaseId"] = float64(0)
+				contexts := roll["contexts"].(map[string]any)
+				contexts["nodes"] = []any{first}
+				contexts["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "cursor-1"}
+			})
+			fx.install(t, fake)
+			page := basePRFixture()
+			var pagePR map[string]any
+			page.prData(func(pr map[string]any) {
+				pagePR = pr
+				second := actionsCheckRun("Go", "lint", tc.second, 2)
+				second["databaseId"] = float64(0)
+				second["detailsUrl"] = "https://example.com/checks/current-lint"
+				contexts := statusRollup(pr)["contexts"].(map[string]any)
+				contexts["nodes"] = []any{second}
+				contexts["pageInfo"] = map[string]any{"hasNextPage": false}
+			})
+			fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				body, _ := io.ReadAll(r.Body)
+				switch fake.callsTo(http.MethodPost, "/graphql") {
+				case 1:
+					if !strings.Contains(string(body), "pageInfo{ hasNextPage endCursor }") {
+						t.Error("initial GraphQL query does not request endCursor")
+						delete(statusContexts(firstPR)["pageInfo"].(map[string]any), "endCursor")
+					}
+					_ = json.NewEncoder(w).Encode(fx.graphql)
+				case 2:
+					if !strings.Contains(string(body), `after:\"cursor-1\"`) && !strings.Contains(string(body), `after:"cursor-1"`) {
+						t.Fatalf("fallback query missing cursor, body=%s", body)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repo": map[string]any{"pullRequest": pagePR}}})
+				default:
+					t.Fatal("unexpected GraphQL request")
+				}
+			})
+
+			obs, err := newProviderForTest(t, fake).Observe(ctx(), fx.prURL())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !obs.Fetched || obs.CI != tc.wantCI || len(obs.Checks) != 1 || obs.Checks[0].Status != tc.wantCheckStatus || obs.Checks[0].URL != "https://example.com/checks/current-lint" {
+				t.Fatalf("observation = %+v, want current %s check and CI %q", obs, tc.wantCheckStatus, tc.wantCI)
+			}
+			if got := fake.callsTo(http.MethodPost, "/graphql"); got != 2 {
+				t.Fatalf("GraphQL calls = %d, want initial and next page", got)
+			}
+		})
+	}
+}
+
+func TestObserve_CheckContextPageFailureDoesNotMarkFetched(t *testing.T) {
+	fake := newFakeGH(t)
+	fx := basePRFixture()
+	fx.prData(func(pr map[string]any) {
+		contexts := statusRollup(pr)["contexts"].(map[string]any)
+		contexts["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "cursor-1"}
+	})
+	fx.install(t, fake)
+	fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
+		if fake.callsTo(http.MethodPost, "/graphql") == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(fx.graphql)
+			return
+		}
+		http.Error(w, "page unavailable", http.StatusBadGateway)
+	})
+
+	obs, err := newProviderForTest(t, fake).Observe(ctx(), fx.prURL())
+	if err == nil || obs.Fetched {
+		t.Fatalf("observation = %+v, err = %v; want failed observation on required page fetch", obs, err)
+	}
+	if got := fake.callsTo(http.MethodPost, "/graphql"); got != 2 {
+		t.Fatalf("GraphQL calls = %d, want initial and next page", got)
 	}
 }
 
@@ -1359,9 +1451,91 @@ func TestSCMObservationFlagsHeadsThatCannotBeStackParents(t *testing.T) {
 func actionsCheckRun(workflow, name, conclusion string, id float64) map[string]any {
 	n := map[string]any{"__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion, "databaseId": id}
 	if workflow != "" {
-		n["checkSuite"] = map[string]any{"workflowRun": map[string]any{"event": "pull_request", "workflow": map[string]any{"name": workflow}}}
+		workflowIDs := map[string]float64{"Go": 1, "Frontend": 2, "CLI E2E": 3, "CI": 4}
+		n["checkSuite"] = map[string]any{"workflowRun": map[string]any{"event": "pull_request", "runNumber": id, "runAttempt": 1, "workflow": map[string]any{"name": workflow, "databaseId": workflowIDs[workflow]}}}
 	}
 	return n
+}
+
+func actionsCheckRunAt(workflow, name, conclusion string, id, number, attempt float64) map[string]any {
+	n := actionsCheckRun(workflow, name, conclusion, id)
+	run := n["checkSuite"].(map[string]any)["workflowRun"].(map[string]any)
+	run["runNumber"], run["runAttempt"] = number, attempt
+	return n
+}
+
+func TestCurrentCancelledCheckIsFailing(t *testing.T) {
+	var pr map[string]any
+	basePRFixture().prData(func(m map[string]any) {
+		pr = m
+		commit := m["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["commit"].(map[string]any)
+		roll := commit["statusCheckRollup"].(map[string]any)
+		roll["state"] = "FAILURE"
+		old := actionsCheckRun("Go", "lint", "SUCCESS", 1)
+		current := actionsCheckRun("Go", "lint", "CANCELLED", 2)
+		current["detailsUrl"] = "https://example.com/checks/2"
+		roll["contexts"] = map[string]any{"nodes": []any{old, current}, "pageInfo": map[string]any{"hasNextPage": false}}
+	})
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIFailing {
+		t.Fatalf("summary = %q, want failing for the newest cancelled occurrence", got)
+	}
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello"}, Number: 42}, pr)
+	if obs.CI.Summary != string(domain.CIFailing) {
+		t.Fatalf("observer summary = %q, want failing", obs.CI.Summary)
+	}
+	if len(obs.CI.FailedChecks) != 1 || obs.CI.FailedChecks[0].URL != "https://example.com/checks/2" {
+		t.Fatalf("failed checks = %#v, want current cancelled check link", obs.CI.FailedChecks)
+	}
+	statusRollup(pr)["state"] = "PENDING"
+	if got := scmCISummary(pr); got != domain.CIFailing {
+		t.Fatalf("observer summary with stale rollup = %q, want failing from current check", got)
+	}
+}
+
+func TestCISummaryUnknownConclusionBlocksPassing(t *testing.T) {
+	var pr map[string]any
+	basePRFixture().prData(func(m map[string]any) {
+		pr = m
+		commit := m["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["commit"].(map[string]any)
+		roll := commit["statusCheckRollup"].(map[string]any)
+		roll["state"] = "PENDING"
+		roll["contexts"] = map[string]any{
+			"nodes":    []any{actionsCheckRun("Go", "lint", "SUCCESS", 1), actionsCheckRun("Go", "build", "", 2)},
+			"pageInfo": map[string]any{"hasNextPage": false},
+		}
+	})
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIUnknown {
+		t.Fatalf("summary = %q, want unknown while a completed check lacks a conclusion", got)
+	}
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello"}, Number: 42}, pr)
+	if obs.CI.Summary != string(domain.CIUnknown) || len(obs.CI.FailedChecks) != 0 {
+		t.Fatalf("observer CI = %+v, want unknown without failed checks", obs.CI)
+	}
+}
+
+func TestCISummaryPreservesDifferentEventsOnSameHead(t *testing.T) {
+	for _, conclusion := range []string{"FAILURE", "CANCELLED"} {
+		t.Run(conclusion, func(t *testing.T) {
+			var pr map[string]any
+			basePRFixture().prData(func(m map[string]any) {
+				pr = m
+				push := actionsCheckRun("Go", "lint", conclusion, 1)
+				push["checkSuite"].(map[string]any)["workflowRun"].(map[string]any)["event"] = "push"
+				push["detailsUrl"] = "https://example.com/checks/push-lint"
+				pullRequest := actionsCheckRun("Go", "lint", "SUCCESS", 2)
+				roll := statusRollup(m)
+				roll["state"] = "FAILURE"
+				roll["contexts"] = map[string]any{"nodes": []any{push, pullRequest}, "pageInfo": map[string]any{"hasNextPage": false}}
+			})
+			if got := ciSummaryFromGraphQL(pr); got != domain.CIFailing {
+				t.Fatalf("summary = %q, want failing for current %s push check", got, conclusion)
+			}
+			obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello"}, Number: 42}, pr)
+			if obs.CI.Summary != string(domain.CIFailing) || len(obs.CI.Checks) != 2 || len(obs.CI.FailedChecks) != 1 || obs.CI.FailedChecks[0].URL != "https://example.com/checks/push-lint" {
+				t.Fatalf("observer CI = %+v, want both events and actionable push link", obs.CI)
+			}
+		})
+	}
 }
 
 // PR #7774: the same commit ran each workflow three times; the first run was
@@ -1377,11 +1551,12 @@ func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 		actionsCheckRun("CLI E2E", "native (ubuntu-latest)", "SUCCESS", 12),
 	}
 	cases := []struct {
-		name       string
-		nodes      []any
-		wantCI     domain.CIState
-		wantChecks int
-		wantFailed []string
+		name          string
+		nodes         []any
+		wantCI        domain.CIState
+		wantChecks    int
+		wantFailed    []string
+		wantFailedIDs []string
 	}{
 		{name: "only superseded runs failed", nodes: superseded, wantCI: domain.CIPassing, wantChecks: 3},
 		{
@@ -1389,6 +1564,48 @@ func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 			nodes:      append(slices.Clone(superseded), actionsCheckRun("Frontend", "lint", "FAILURE", 4)),
 			wantCI:     domain.CIFailing,
 			wantChecks: 4,
+			wantFailed: []string{"lint"},
+		},
+		{
+			name: "same workflow name with different IDs stays independent",
+			nodes: func() []any {
+				other := actionsCheckRun("Go", "lint", "CANCELLED", 20)
+				other["checkSuite"].(map[string]any)["workflowRun"].(map[string]any)["workflow"].(map[string]any)["databaseId"] = float64(99)
+				return append(slices.Clone(superseded), other)
+			}(),
+			wantCI:     domain.CIFailing,
+			wantChecks: 4,
+			wantFailed: []string{"lint"},
+		},
+		{
+			name: "both workflow IDs keep their current cancelled failure",
+			nodes: func() []any {
+				other := actionsCheckRun("Go", "lint", "CANCELLED", 2)
+				other["checkSuite"].(map[string]any)["workflowRun"].(map[string]any)["workflow"].(map[string]any)["databaseId"] = float64(99)
+				return []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), other}
+			}(),
+			wantCI:        domain.CIFailing,
+			wantChecks:    2,
+			wantFailed:    []string{"lint", "lint"},
+			wantFailedIDs: []string{"1", "2"},
+		},
+		{
+			name: "newer run number wins over check ID",
+			nodes: []any{
+				actionsCheckRunAt("Go", "lint", "CANCELLED", 20, 1, 1),
+				actionsCheckRunAt("Go", "lint", "SUCCESS", 10, 2, 1),
+			},
+			wantCI:     domain.CIPassing,
+			wantChecks: 1,
+		},
+		{
+			name: "newer attempt wins within the same run",
+			nodes: []any{
+				actionsCheckRunAt("Go", "lint", "SUCCESS", 20, 1, 1),
+				actionsCheckRunAt("Go", "lint", "CANCELLED", 10, 1, 2),
+			},
+			wantCI:     domain.CIFailing,
+			wantChecks: 1,
 			wantFailed: []string{"lint"},
 		},
 		{
@@ -1423,11 +1640,16 @@ func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 				t.Fatalf("checks = %#v, want %d", obs.CI.Checks, tc.wantChecks)
 			}
 			var failed []string
+			var failedIDs []string
 			for _, ch := range obs.CI.FailedChecks {
 				failed = append(failed, ch.Name)
+				failedIDs = append(failedIDs, ch.ProviderID)
 			}
 			if !slices.Equal(failed, tc.wantFailed) {
 				t.Fatalf("failed checks = %v, want %v", failed, tc.wantFailed)
+			}
+			if tc.wantFailedIDs != nil && !slices.Equal(failedIDs, tc.wantFailedIDs) {
+				t.Fatalf("failed provider IDs = %v, want %v", failedIDs, tc.wantFailedIDs)
 			}
 			if tc.wantCI == domain.CIPassing && obs.CI.FailedFingerprint != "" {
 				t.Fatalf("failed fingerprint = %q, want empty so no CI-failure nudge fires", obs.CI.FailedFingerprint)
@@ -1439,7 +1661,7 @@ func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 // GitHub's rollup state stays FAILURE for cancelled checks, so every case here
 // starts from that rollup. PR #7964: runs cancelled by a PR body edit showed
 // "CI failing" while their replacements ran.
-func TestCISummaryCancelledChecksAreNotFailures(t *testing.T) {
+func TestCISummaryCancelledCheckTransitions(t *testing.T) {
 	inProgress := func(workflow, name string, id float64) map[string]any {
 		n := actionsCheckRun(workflow, name, "", id)
 		n["status"] = "IN_PROGRESS"
@@ -1457,25 +1679,28 @@ func TestCISummaryCancelledChecksAreNotFailures(t *testing.T) {
 			wantCI: domain.CIPending,
 		},
 		{
-			name:   "another check still running",
-			nodes:  []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), inProgress("Frontend", "build", 2)},
-			wantCI: domain.CIPending,
+			name:       "unrelated check running does not hide current cancellation",
+			nodes:      []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), inProgress("Frontend", "build", 2)},
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"lint"},
 		},
 		{
-			name:   "cancelled by hand with no replacement settles as unknown",
-			nodes:  []any{actionsCheckRun("Go", "lint", "CANCELLED", 1)},
-			wantCI: domain.CIUnknown,
+			name:       "cancelled by hand with no replacement fails",
+			nodes:      []any{actionsCheckRun("Go", "lint", "CANCELLED", 1)},
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"lint"},
 		},
 		{
-			name:   "cancelled beside passing checks is not passing",
-			nodes:  []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), actionsCheckRun("Go", "build", "SUCCESS", 2)},
-			wantCI: domain.CIUnknown,
+			name:       "cancelled beside passing checks fails",
+			nodes:      []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), actionsCheckRun("Go", "build", "SUCCESS", 2)},
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"lint"},
 		},
 		{
-			name:       "a real failure still wins and lists only itself",
+			name:       "a real failure still wins and lists both actionable checks",
 			nodes:      []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), actionsCheckRun("Go", "build", "FAILURE", 2)},
 			wantCI:     domain.CIFailing,
-			wantFailed: []string{"build"},
+			wantFailed: []string{"lint", "build"},
 		},
 	}
 	for _, tc := range cases {
@@ -1549,16 +1774,18 @@ func TestCISummaryGateFailureInCancelledSuiteIsNotAFailure(t *testing.T) {
 		wantFailed []string
 	}{
 		{
-			name:       "replacement run still going",
+			name:       "newest cancelled gate still fails while sibling jobs rerun",
 			nodes:      append(slices.Clone(cancelledRun), running("Go", "lint", 10), running("Go", "backend-core (0)", 11)),
 			wantStatus: domain.PRCheckCancelled,
-			wantCI:     domain.CIPending,
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"build-test"},
 		},
 		{
-			name:       "cancelled run with no replacement settles as unknown",
+			name:       "cancelled run with no replacement fails",
 			nodes:      cancelledRun,
 			wantStatus: domain.PRCheckCancelled,
-			wantCI:     domain.CIUnknown,
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"lint", "backend-core (0)", "build-test"},
 		},
 		{
 			name: "real failures before cancellation stay failed",
@@ -1569,7 +1796,7 @@ func TestCISummaryGateFailureInCancelledSuiteIsNotAFailure(t *testing.T) {
 				suiteCheckRun("CI", "ci-ok", "FAILURE", "CANCELLED", 131435963322),
 			},
 			wantCI:     domain.CIFailing,
-			wantFailed: []string{"go / lint", "go / storage-race", "ci-ok"},
+			wantFailed: []string{"go / lint", "go / storage-race", "go / backend-core (1)", "ci-ok"},
 		},
 		{
 			name: "gate failure in a run that failed is still a failure",
@@ -1606,7 +1833,7 @@ func TestCISummaryGateFailureInCancelledSuiteIsNotAFailure(t *testing.T) {
 			},
 			wantStatus: domain.PRCheckFailed,
 			wantCI:     domain.CIFailing,
-			wantFailed: []string{"build-test"},
+			wantFailed: []string{"lint", "build-test"},
 		},
 	}
 	for _, tc := range cases {
@@ -1715,7 +1942,7 @@ func TestFetchPullRequestsToleratesWorkflowRunAccessErrors(t *testing.T) {
 	basePRFixture().prData(func(m map[string]any) { pr = m })
 	fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), "checkSuite{ conclusion id workflowRun{ event workflow{ name } } }") {
+		if !strings.Contains(string(body), "checkSuite{ conclusion id workflowRun{ event runNumber runAttempt workflow{ databaseId } } }") {
 			t.Fatalf("batch query should request each check run's suite conclusion and workflow, body=%s", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
