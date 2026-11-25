@@ -39,7 +39,6 @@ import {
 import {
 	Archive,
 	ArrowUpRight,
-	PanelLeft,
 	GitPullRequest,
 	GitMerge,
 	Info,
@@ -69,7 +68,7 @@ import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifac
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { SessionForksSection } from "./SessionForksSection";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
+import { openPRTab } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
 import { ClassicSessionBranchSummary } from "./ClassicSessionBranchSummary";
 import { CopyButton } from "./chat/CopyButton";
@@ -80,7 +79,6 @@ import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
-import { PRDescriptionDrawer } from "./PRDescriptionDrawer";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
@@ -1205,7 +1203,8 @@ function PRViewSummaryCard({
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	usePRNoChecksClock([pr]);
 	const noChecks = prHasNoChecks(pr);
-	const detailsFailed = usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
+	// Labels, reviewers and checks on the card come from the PR's details.
+	usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
 	const presentation = prCardPresentation(pr, { noChecks });
 	const canMerge = prCanMerge(pr, { noChecks }) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
@@ -1238,9 +1237,8 @@ function PRViewSummaryCard({
 			</Button>
 		) : undefined,
 	};
-	const activeTabUrl = usePRTabs(sessionUiKey(sessionId, hostId)).active;
-	const [descriptionOpen, setDescriptionOpen] = useState(false);
-	const sectionRef = useRef<HTMLElement>(null);
+	// The title row's action button writes its status lines here, under the card.
+	const [actionMessages, setActionMessages] = useState<HTMLDivElement | null>(null);
 	const cardView = (
 		<InspectorPullRequestCardView
 			compact
@@ -1301,10 +1299,8 @@ function PRViewSummaryCard({
 	);
 	if (layout === "card") return cardView;
 	const state = prStateIcon[pr.state];
-	// A local PR opens in its own tab, where its description, conversation and changes live.
+	// A local PR opens in its own tab, in the centre: description, conversation and changes.
 	const opensTab = !cloudOrgId && !guest && Boolean(pr.url);
-	const tabShowing = activeTabUrl === pr.url;
-	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
 	const titleLabel = (
 		<>
 			{/* The chips above name the repository in full on hover; here its short name leaves room for the title. */}
@@ -1322,70 +1318,35 @@ function PRViewSummaryCard({
 			icon={pr.provider === "github" ? <GitHubIcon className="size-icon-sm shrink-0 text-passive" /> : undefined}
 		/>
 	);
-	// The card leaves the description out: a few lines of a long body told too
-	// little for the room they took. The title opens all of it in a drawer, or,
-	// while the PR's tab is showing, its Summary, where the description already is.
-	// AO reads a description only for a local GitHub PR; AO Cloud and GitLab send
-	// none yet, so there the title keeps its old job rather than open an empty drawer.
-	const describes = Boolean(pr.detailsObservedAt) || (pr.provider === "github" && !cloudOrgId);
-	const titleOpensDrawer = describes && !tabShowing;
+	// One button for everything on this PR, beside its title: the branch's next git step, then the PR's own.
+	const actionButton = !cloudOrgId && !guest && pr.state !== "merged" ? (
+		<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} messages={actionMessages} pr={pr} sessionId={sessionId} />
+	) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
+		<CloudPRGitStepButton git={work.git} messages={actionMessages} />
+	) : null;
+	// A local PR's tab has Open on GitHub, so the row keeps its width for the button;
+	// where the title can't open a tab (AO Cloud, a guest), the logo still links out.
+	const action = <>{actionButton}{opensTab ? null : providerLink}</>;
 	return (
-		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus" ref={sectionRef}>
-			{titleOpensDrawer || opensTab ? (
+		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
+			{/* The title opens the PR's tab, where its description already is. */}
+			{opensTab ? (
 				<InfoRowLabelButton
-					action={(
-						<>
-							{opensTab && titleOpensDrawer ? (
-								<Pressable className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => openTab()}>
-									<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
-									{t("pr.openTab")}
-								</Pressable>
-							) : null}
-							{providerLink}
-						</>
-					)}
-					aria-expanded={titleOpensDrawer ? descriptionOpen : undefined}
-					aria-haspopup={titleOpensDrawer ? "dialog" : undefined}
+					action={action}
 					icon={state.icon}
 					iconClassName={state.className}
-					label={(
-						<>
-							{titleLabel}
-							{titleOpensDrawer ? <span className="sr-only">, {t("pr.description.show")}</span> : null}
-						</>
-					)}
-					onClick={() => titleOpensDrawer ? setDescriptionOpen(true) : openTab()}
+					label={titleLabel}
+					onClick={() => openPRTab(sessionUiKey(sessionId, hostId), pr.url)}
 					title={pr.title}
 				/>
 			) : (
-				<InfoRow action={providerLink} icon={state.icon} iconClassName={state.className} label={titleLabel} title={pr.title} />
+				<InfoRow action={action} icon={state.icon} iconClassName={state.className} label={titleLabel} title={pr.title} />
 			)}
 			{cardView}
-			{describes ? (
-				<PRDescriptionDrawer
-					anchor={sectionRef}
-					cloud={Boolean(cloudOrgId)}
-					detailsFailed={detailsFailed}
-					onOpenChange={setDescriptionOpen}
-					open={descriptionOpen}
-					pr={pr}
-					title={titleLabel}
-				/>
-			) : null}
-
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
 			) : elsewhere}
-			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
-			{!cloudOrgId && !guest && pr.state !== "merged" ? (
-				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
-					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
-				</div>
-			) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
-				<div className={cn("pt-2 pb-2", !work.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
-					<CloudPRGitStepButton git={work.git} />
-				</div>
-			) : null}
+			<div className="empty:hidden pb-2" ref={setActionMessages} />
 		</section>
 	);
 }
