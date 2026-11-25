@@ -5238,6 +5238,23 @@ export interface paths {
         patch: operations["updateSessionRetention"];
         trace?: never;
     };
+    "/api/v1/settings/skill-bridge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Turn the skill bridge preview on or off until the daemon restarts */
+        patch: operations["updateSkillBridge"];
+        trace?: never;
+    };
     "/api/v1/settings/version-refresh": {
         parameters: {
             query?: never;
@@ -10040,6 +10057,10 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateSkillBridgeRequest: {
+            /** @description Whether new and resumed sessions get a private copy of the user's skills their agent does not already load. Kept until the daemon restarts. */
+            enabled: null | boolean;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -29902,6 +29923,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateSessionRetentionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSkillBridge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkillBridgeRequest"];
             };
         };
         responses: {

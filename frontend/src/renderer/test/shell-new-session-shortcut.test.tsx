@@ -608,8 +608,11 @@ describe("shell workspace startup", () => {
 		useUiStore.setState({ developerMode: true });
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		const view = await renderShell();
-		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
 		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: true },
+		});
+		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/skill-bridge", {
 			body: { enabled: true },
 		});
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
@@ -626,7 +629,7 @@ describe("shell workspace startup", () => {
 			</Suspense>,
 		);
 
-		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(4));
 	});
 
 	it("starts agent update checks once launch has settled, not with the app", async () => {
@@ -671,7 +674,7 @@ describe("shell workspace startup", () => {
 		expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", { body: { enabled: true } });
 	});
 
-	it("keeps chat hibernation and devices disabled when Developer Mode is off", async () => {
+	it("keeps chat hibernation, devices and the skill bridge disabled when Developer Mode is off", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		await renderShell();
 
@@ -682,6 +685,9 @@ describe("shell workspace startup", () => {
 			body: { enabled: false },
 		}));
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/devices/availability", {
+			body: { enabled: false },
+		}));
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/skill-bridge", {
 			body: { enabled: false },
 		}));
 	});

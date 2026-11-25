@@ -621,6 +621,9 @@ func (m *Manager) resumeChatController(
 			}
 		}
 	}
+	if agent, ok := m.agents.Agent(rec.Harness); ok && !reconnectOnly {
+		m.syncSkillBridge(ctx, agent, rec.ID, launchPath, env)
+	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
 	if len(awakeTargets) > 0 {

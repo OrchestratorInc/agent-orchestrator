@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -48,6 +49,37 @@ func TestSettingsChatHibernationRequiresBoolean(t *testing.T) {
 		var got SettingsResponse
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.ChatHibernationEnabled != enabled {
 			t.Fatalf("body=%s status=%d response=%+v err=%v", body, w.Code, got, err)
+		}
+	}
+}
+
+type skillBridgeSettingsService struct {
+	hibernationSettingsService
+	bridge bool
+}
+
+func (s *skillBridgeSettingsService) SetSkillBridge(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.bridge = enabled
+	s.calls++
+	return settingssvc.Snapshot{}, nil
+}
+
+func TestSettingsSkillBridgeRequiresBoolean(t *testing.T) {
+	svc := &skillBridgeSettingsService{}
+	c := &SettingsController{Svc: svc}
+	patch := func(body string) int {
+		w := httptest.NewRecorder()
+		c.setSkillBridge(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/skill-bridge", strings.NewReader(body)))
+		return w.Code
+	}
+	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"true"}`} {
+		if code := patch(body); code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, code, svc.calls)
+		}
+	}
+	for _, enabled := range []bool{true, false} {
+		if code := patch(`{"enabled":` + strconv.FormatBool(enabled) + `}`); code != http.StatusOK || svc.bridge != enabled {
+			t.Fatalf("enabled=%v status=%d stored=%v", enabled, code, svc.bridge)
 		}
 	}
 }

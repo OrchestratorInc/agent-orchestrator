@@ -52,9 +52,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent does not advertise resumable session/fork", ports.ErrChatCapabilityUnavailable)
 	}
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
-		d.cfg.ImplicitWorkspaceDirectories)
+	additional, err := d.sessionDirectories(launchCfg, cfg.AdditionalDirectories, init)
 	if err != nil {
 		conv.discard()
 		return nil, err

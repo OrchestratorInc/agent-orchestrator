@@ -108,6 +108,8 @@ type Service struct {
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
+	// skillBridge holds the Developer mode switch: 0 not told yet, 1 on, 2 off.
+	skillBridge atomic.Int32
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
@@ -296,6 +298,30 @@ func (s *Service) SetChatHibernationEnabled(ctx context.Context, enabled bool) (
 	}
 	snapshot.ChatHibernationEnabled = enabled
 	return snapshot, nil
+}
+
+// SkillBridge reports whether new sessions get the user's skills their agent
+// misses. known is false from daemon boot until the desktop says whether
+// Developer Mode is on.
+func (s *Service) SkillBridge() (enabled, known bool) {
+	switch s.skillBridge.Load() {
+	case 1:
+		return true, true
+	case 2:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// SetSkillBridge changes the in-memory skill bridge switch.
+func (s *Service) SetSkillBridge(ctx context.Context, enabled bool) (Snapshot, error) {
+	value := int32(2)
+	if enabled {
+		value = 1
+	}
+	s.skillBridge.Store(value)
+	return s.Get(ctx)
 }
 
 // ChatHarnesses lists the harnesses that can run in chat mode today.

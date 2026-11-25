@@ -270,6 +270,14 @@ type AgentLaunchAuthValidator interface {
 	ValidateLaunchAuth(ctx context.Context, workingDir string, env map[string]string) (AgentAuthStatus, error)
 }
 
+// AgentSkillBridge is the optional capability of an adapter that adds the
+// session's bridged skill folder (package skillbridge) to its launch.
+type AgentSkillBridge interface {
+	// NativeSkillRoots lists the folders of skills the agent already loads for
+	// every session, whatever its workspace. env is the session's environment.
+	NativeSkillRoots(ctx context.Context, workspacePath string, env map[string]string) []string
+}
+
 // AgentBinaryResolver is the optional capability adapters expose when their
 // binary can be checked without constructing a real session launch command.
 type AgentBinaryResolver interface {

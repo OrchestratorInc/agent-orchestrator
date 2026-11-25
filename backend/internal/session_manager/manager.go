@@ -620,6 +620,9 @@ type Manager struct {
 	// commitAttribution reports the Orchestrator attribution beta; nil is off.
 	commitAttributionMu sync.Mutex
 	commitAttribution   func(context.Context) bool
+	// skillBridge reports the skill bridge switch (Developer mode); nil is off.
+	skillBridgeMu sync.Mutex
+	skillBridge   func() (enabled, known bool)
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -7300,6 +7303,7 @@ func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	if err := os.RemoveAll(dir); err != nil {
 		m.logger.Warn("system prompt cleanup failed", "session", id, "path", dir, "err", err)
 	}
+	m.removeSkillBridge(id)
 }
 
 func workspaceOrchestratorPrompt(repos []domain.WorkspaceRepoRecord) string {
@@ -7946,6 +7950,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 			return fmt.Errorf("pre-launch: %w", err)
 		}
 	}
+	m.syncSkillBridge(ctx, agent, id, workspacePath, env)
 	return nil
 }
 

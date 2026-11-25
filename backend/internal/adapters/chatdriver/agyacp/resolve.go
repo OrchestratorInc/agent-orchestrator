@@ -7,11 +7,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
-	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // serverPathEnvVar points AO at an exact agy_acp_server executable, like
@@ -60,7 +58,7 @@ func newResolver(agyCLI func(context.Context) (string, error)) resolver {
 	return resolver{
 		getenv: os.Getenv, isFile: isExecutableFile,
 		agyCLI: agyCLI, resolveSpec: binaryutil.ResolveBinary,
-		cliVersion: cachedCLIVersion,
+		cliVersion: agy.CLIVersion,
 	}
 }
 
@@ -90,42 +88,6 @@ func (r resolver) target(ctx context.Context) (launchTarget, error) {
 		return launchTarget{}, err
 	}
 	return launchTarget{path: server}, nil
-}
-
-// cliVersionTimeout bounds `agy --version`, which answers in well under a
-// second.
-const cliVersionTimeout = 10 * time.Second
-
-type cliVersionKey struct {
-	path    string
-	size    int64
-	modTime time.Time
-}
-
-// cliVersions caches `agy --version` per binary, so a launch does not run it
-// again until the CLI is replaced or updated.
-var cliVersions sync.Map // cliVersionKey -> string
-
-func cachedCLIVersion(ctx context.Context, cli string) (string, error) {
-	info, err := os.Stat(cli)
-	if err != nil {
-		return "", err
-	}
-	key := cliVersionKey{path: cli, size: info.Size(), modTime: info.ModTime()}
-	if cached, ok := cliVersions.Load(key); ok {
-		if version, ok := cached.(string); ok {
-			return version, nil
-		}
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, cliVersionTimeout)
-	defer cancel()
-	out, err := aoprocess.CommandContext(probeCtx, cli, "--version").Output()
-	if err != nil {
-		return "", fmt.Errorf("agy --version: %w", err)
-	}
-	version := strings.TrimSpace(string(out))
-	cliVersions.Store(key, version)
-	return version, nil
 }
 
 // serverPath resolves, in order: the explicit override, the server installed

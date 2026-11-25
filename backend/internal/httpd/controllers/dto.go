@@ -4595,6 +4595,11 @@ type UpdateChatHibernationRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+// UpdateSkillBridgeRequest switches the skill bridge preview.
+type UpdateSkillBridgeRequest struct {
+	Enabled *bool `json:"enabled" description:"Whether new and resumed sessions get a private copy of the user's skills their agent does not already load. Kept until the daemon restarts."`
+}
+
 // capabilityNames lists the abilities a provider has, sorted so a client sees a
 // stable list rather than Go's map order. Only true entries are named: a
 // capability the driver reports as false is one it cannot do, which is the same

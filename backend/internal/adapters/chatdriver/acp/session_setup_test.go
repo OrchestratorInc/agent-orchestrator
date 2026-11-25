@@ -3,9 +3,11 @@ package acp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -227,6 +229,70 @@ func TestACPAdditionalDirectoriesLifecycle(t *testing.T) {
 					if len(want) == 0 && strings.Contains(string(raw), `"additionalDirectories"`) {
 						t.Fatalf("redundant additional directories were sent: %s", raw)
 					}
+				}
+			})
+		}
+	}
+}
+
+// An optional directory is added where the agent supports it, and never fails
+// a session where it does not.
+func TestOptionalDirectoriesFollowAgentSupport(t *testing.T) {
+	for _, mode := range []string{"new", "load", "resume", "fork-resume"} {
+		for _, supported := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/supported=%v", mode, supported), func(t *testing.T) {
+				root, skills := t.TempDir(), t.TempDir()
+				caps := acpsdk.AgentCapabilities{LoadSession: mode == "load",
+					SessionCapabilities: acpsdk.SessionCapabilities{
+						Resume: &acpsdk.SessionResumeCapabilities{}, Fork: &acpsdk.SessionForkCapabilities{},
+					},
+				}
+				if supported {
+					caps.SessionCapabilities.AdditionalDirectories = &acpsdk.SessionAdditionalDirectoriesCapabilities{}
+				}
+				agent := &fakeAgent{forkID: "child", capabilities: &caps}
+				driver := forkTestDriver(agent)
+				driver.cfg.OptionalDirectories = func(launch LaunchConfig) []string {
+					if launch.SessionID != "s-1" || launch.DataDir == "" {
+						t.Errorf("launch = %+v, want the session and data folder", launch)
+					}
+					return []string{skills}
+				}
+				data := t.TempDir()
+				cfg := ports.ChatStartConfig{SessionID: "s-1", DataDir: data, WorkspacePath: root}
+				var conv ports.ChatConversation
+				var err error
+				switch mode {
+				case "new":
+					conv, err = driver.Start(t.Context(), cfg)
+				case "fork-resume":
+					conv, err = driver.ForkIntoHost(t.Context(), "owned:parent", "", cfg)
+				default:
+					conv, err = driver.Resume(t.Context(), ports.ChatResumeConfig{
+						SessionID: "s-1", DataDir: data, WorkspacePath: root, ProviderConversationID: "owned:provider",
+					})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = conv.Close() }()
+				agent.mu.Lock()
+				defer agent.mu.Unlock()
+				var got []string
+				switch mode {
+				case "new":
+					got = agent.newParams.AdditionalDirectories
+				case "load":
+					got = agent.loadParams.AdditionalDirectories
+				default:
+					got = agent.resumeParams.AdditionalDirectories
+				}
+				var want []string
+				if supported {
+					want = []string{skills}
+				}
+				if !slices.Equal(got, want) {
+					t.Fatalf("additional directories = %v, want %v", got, want)
 				}
 			})
 		}

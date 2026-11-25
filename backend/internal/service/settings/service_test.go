@@ -54,6 +54,26 @@ func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	}
 }
 
+func TestSkillBridgeIsUnknownUntilTheDesktopSaysSo(t *testing.T) {
+	ctx := context.Background()
+	store := &hibernationSettingsStore{}
+	svc := New(store, nil, Offering{}, nil)
+	if enabled, known := svc.SkillBridge(); enabled || known {
+		t.Fatalf("a new daemon reported enabled=%v known=%v", enabled, known)
+	}
+	for _, want := range []bool{true, false} {
+		if _, err := svc.SetSkillBridge(ctx, want); err != nil {
+			t.Fatal(err)
+		}
+		if enabled, known := svc.SkillBridge(); enabled != want || !known {
+			t.Fatalf("after setting %v: enabled=%v known=%v", want, enabled, known)
+		}
+	}
+	if _, known := New(store, nil, Offering{}, nil).SkillBridge(); known {
+		t.Fatal("a restarted daemon kept the switch")
+	}
+}
+
 func TestDisablingChatHibernationSurvivesSettingsReadFailure(t *testing.T) {
 	ctx := context.Background()
 	store := &hibernationSettingsStore{}
