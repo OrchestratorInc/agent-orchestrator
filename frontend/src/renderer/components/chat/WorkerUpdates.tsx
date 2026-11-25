@@ -834,7 +834,9 @@ const PR_STATES = {
 /** The PR state a session's sidebar row shows, once a PR decides it. */
 function prState(session: WorkspaceSession): WaitingState | undefined {
 	const marker = getSessionRowMarker(session);
-	return marker && marker !== "attention" ? PR_STATES[marker] : undefined;
+	// Failing CI, conflicts or requested changes: the sidebar's red alert.
+	if (marker === "attention") return { label: session.displayStatus ?? "Needs attention", glyph: "alert" };
+	return marker ? PR_STATES[marker] : undefined;
 }
 
 /** Where a worker that has not answered yet is now, read from its session's durable facts. */

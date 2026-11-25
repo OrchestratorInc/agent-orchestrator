@@ -317,6 +317,7 @@ describe("orchestrator worker updates", () => {
 		["PR in review", { status: "idle", activity: { state: "idle" }, kanbanColumn: "needs_review", displayStatus: "Needs human review" }, "In review", false],
 		["PR ready", { status: "idle", activity: { state: "idle" }, kanbanColumn: "ready", displayStatus: "Mergeable" }, "Ready to merge", false],
 		["PR merged", { status: "idle", activity: { state: "idle" }, kanbanColumn: "ready", displayStatus: "Merged" }, "Merged", false],
+		["PR with failing CI", { status: "idle", activity: { state: "idle" }, displayStatus: "CI failing" }, "CI failing", false],
 		["working with a PR", { status: "working", activity: { state: "active" }, kanbanColumn: "needs_review", displayStatus: "Needs human review" }, "Working", true],
 		["unavailable", { statusReadiness: "unavailable" }, "Status unavailable", false],
 		["missing", null, "Status unavailable", false],
@@ -575,6 +576,35 @@ describe("background turns in the orchestrator chat", () => {
 			reply("t1", 2, "Noted."),
 		]);
 		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
+	// The orchestrator answers a report by spawning another worker. That worker's line
+	// is under the turn until it answers, so the turn stays in view until then.
+	const spawnedFixCi: ConversationActivity = {
+		kind: "activity", id: "ao-action:session.spawned:proj-290", turnId: "t1", sequence: 15, revision: 0, activityKind: "ao_action",
+		status: "completed", summary: "Spawned an agent", createdAt: at(1),
+		detail: { action: "session.spawned", operationId: "proj-290", targetSessionId: "proj-290", displayName: "Fix CI" },
+	};
+	const spawnedInBackground = [
+		report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser."),
+		spawnedFixCi,
+		reply("t1", 2, "Started Fix CI."),
+	];
+
+	it("keeps a background turn in view while a worker it spawned has not answered", () => {
+		renderOrchestrator(spawnedInBackground);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("Fix CI");
+	});
+
+	it("folds that turn once the worker it spawned reports", () => {
+		renderOrchestrator([
+			...spawnedInBackground,
+			report("t2", 3, "[done] [Fix CI](ao://sessions/proj/proj-290)\nCI is green."),
+			reply("t2", 4, "Noted."),
+		]);
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 done · /);
 	});
 
 	it("folds a needs-you report a newer update from the same worker overtook", () => {

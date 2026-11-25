@@ -7118,7 +7118,11 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			: undefined;
 		const { steps, live, stopped } = groupSubagents(group);
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
-		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome, index, carried) : "yours";
+		// A turn stays in view while a worker it spawned has not answered, as one does while
+		// a subagent it launched works: the worker's line is under the reply until then. One
+		// terminated before it answered keeps it too, since that line is where the chat says so.
+		const spawnWaiting = waitingSpawns(group.items.flatMap((item) => spawnedWorker(item) ?? []), spawnedSessionIds(group.items), index).length > 0;
+		const standing = outcome && !teamWorking && !spawnWaiting ? turnStanding(group.items, outcome, index, carried) : "yours";
 		if (standing !== "background" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"
