@@ -557,14 +557,34 @@ func (s *Store) Remove(ctx context.Context, id domain.SessionID, workspacePath, 
 	return nil
 }
 
-// Exists reports whether a canonical attachment is stored for id.
-func (s *Store) Exists(ctx context.Context, id domain.SessionID, name string) bool {
-	file, _, err := s.Open(ctx, id, name)
+// Exists reports whether a canonical attachment is stored for id. Only
+// confirmed absence is false with a nil error: a permission, I/O or
+// cancellation failure while looking is returned as an error, never reported
+// as a missing file.
+func (s *Store) Exists(ctx context.Context, id domain.SessionID, name string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if s.dataDir == "" || validateSessionID(id) != nil || validateName(name) != nil {
+		return false, nil
+	}
+	sessionRoot, err := s.openCanonicalSession(ctx, id, false)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, fmt.Errorf("open canonical attachment directory: %w", err)
+	}
+	defer func() { _ = sessionRoot.Close() }()
+	file, _, err := openRegularFile(ctx, sessionRoot, name, noLimit)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("open canonical attachment: %w", err)
 	}
 	_ = file.Close()
-	return true
+	return true, nil
 }
 
 // RemoveSession removes canonical files only when the owning session row was

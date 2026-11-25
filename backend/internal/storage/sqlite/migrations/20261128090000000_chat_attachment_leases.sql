@@ -2,23 +2,34 @@
 -- +goose StatementBegin
 -- A Chat composer stages a picked file before the message that names it is
 -- sent, so the bytes survive navigation and restart. Each such file is leased
--- to its unsent draft here. The row is removed the moment any accepted user
--- message names the file (the triggers below run inside the insert or edit
--- that accepts it), so a file referenced by history has no lease and is never
--- reclaimed. A lease that is released (its chip removed or its draft
--- discarded) or that expires without renewal is reclaimed: both stored copies
--- are deleted, then the row. Files staged without a lease (spawn briefs,
+-- to its unsent draft here. Files staged without a lease (spawn briefs,
 -- terminal sends, browser annotations, everything staged before this table)
 -- are never reclaimed before their session is deleted.
+--
+-- Lifecycle of a row:
+--   live       released_at_ms IS NULL
+--   released   released_at_ms set: the draft gave the file up, or it expired
+--   reclaiming reclaiming_at_ms set: reclamation claimed it and is deleting
+--              both stored copies
+--   reclaimed  reclaimed_at_ms set: both copies are gone; the row stays as a
+--              tombstone so a late reference is refused, and is pruned later
+--
+-- Accepting a message that names a file (the triggers below run inside the
+-- write that accepts it) deletes a live or released row, which commits the
+-- file for good: a release that lost the race to acceptance is undone. Once
+-- reclamation has claimed a row, acceptance is refused instead, so an
+-- accepted message can never name a file that is being or has been deleted.
 --
 -- Times are Unix milliseconds. Names are 128-bit random per staged file, so a
 -- name appearing anywhere in a message is a reference to that file.
 CREATE TABLE chat_attachment_leases (
-    session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    name           TEXT NOT NULL,
-    created_at_ms  INTEGER NOT NULL,
-    renewed_at_ms  INTEGER NOT NULL,
-    released_at_ms INTEGER,
+    session_id       TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    created_at_ms    INTEGER NOT NULL,
+    renewed_at_ms    INTEGER NOT NULL,
+    released_at_ms   INTEGER,
+    reclaiming_at_ms INTEGER,
+    reclaimed_at_ms  INTEGER,
     PRIMARY KEY (session_id, name)
 );
 -- +goose StatementEnd
@@ -28,8 +39,14 @@ CREATE TRIGGER chat_attachment_leases_commit_insert
 AFTER INSERT ON conversation_messages
 WHEN NEW.role = 'user'
 BEGIN
+    SELECT RAISE(ABORT, 'chat attachment was discarded')
+    WHERE EXISTS (
+        SELECT 1 FROM chat_attachment_leases
+        WHERE reclaiming_at_ms IS NOT NULL
+          AND (instr(NEW.text, name) > 0 OR instr(NEW.delivery_content_json, name) > 0)
+    );
     DELETE FROM chat_attachment_leases
-    WHERE released_at_ms IS NULL
+    WHERE reclaiming_at_ms IS NULL
       AND (instr(NEW.text, name) > 0 OR instr(NEW.delivery_content_json, name) > 0);
 END;
 -- +goose StatementEnd
@@ -39,8 +56,15 @@ CREATE TRIGGER chat_attachment_leases_commit_update
 AFTER UPDATE OF text, delivery_content_json ON conversation_messages
 WHEN NEW.role = 'user'
 BEGIN
+    SELECT RAISE(ABORT, 'chat attachment was discarded')
+    WHERE EXISTS (
+        SELECT 1 FROM chat_attachment_leases
+        WHERE reclaiming_at_ms IS NOT NULL
+          AND (instr(NEW.text, name) > 0 OR instr(NEW.delivery_content_json, name) > 0)
+          AND instr(OLD.text, name) = 0 AND instr(OLD.delivery_content_json, name) = 0
+    );
     DELETE FROM chat_attachment_leases
-    WHERE released_at_ms IS NULL
+    WHERE reclaiming_at_ms IS NULL
       AND (instr(NEW.text, name) > 0 OR instr(NEW.delivery_content_json, name) > 0);
 END;
 -- +goose StatementEnd
@@ -52,8 +76,13 @@ END;
 CREATE TRIGGER chat_attachment_leases_commit_steer
 AFTER INSERT ON conversation_steer_deliveries
 BEGIN
+    SELECT RAISE(ABORT, 'chat attachment was discarded')
+    WHERE EXISTS (
+        SELECT 1 FROM chat_attachment_leases
+        WHERE reclaiming_at_ms IS NOT NULL AND instr(NEW.request_json, name) > 0
+    );
     DELETE FROM chat_attachment_leases
-    WHERE released_at_ms IS NULL
+    WHERE reclaiming_at_ms IS NULL
       AND instr(NEW.request_json, name) > 0;
 END;
 -- +goose StatementEnd
@@ -62,8 +91,13 @@ END;
 CREATE TRIGGER chat_attachment_leases_commit_edit
 AFTER INSERT ON conversation_edit_deliveries
 BEGIN
+    SELECT RAISE(ABORT, 'chat attachment was discarded')
+    WHERE EXISTS (
+        SELECT 1 FROM chat_attachment_leases
+        WHERE reclaiming_at_ms IS NOT NULL AND instr(NEW.request_json, name) > 0
+    );
     DELETE FROM chat_attachment_leases
-    WHERE released_at_ms IS NULL
+    WHERE reclaiming_at_ms IS NULL
       AND instr(NEW.request_json, name) > 0;
 END;
 -- +goose StatementEnd

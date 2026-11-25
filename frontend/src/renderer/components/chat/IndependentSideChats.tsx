@@ -22,7 +22,7 @@ import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from 
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
 import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
-import { emptySideChatDraft, mergeSideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDeliveryReceipt } from "./sideChatDraft";
+import { emptySideChatDraft, mergeSideChatDraft, parseSideChatDraft, sideDeliveryHoldsPath, type SideChatDraft, type SideDeliveryReceipt } from "./sideChatDraft";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
@@ -498,10 +498,27 @@ export function useIndependentSideChats(
 	// The open side's draft files are renewed whenever they change, so a draft
 	// kept open does not lose them to lease expiry.
 	const activeDraftPaths = (activeId ? drafts[activeId]?.attachments ?? [] : []).map((file) => file.path).join("\n");
+	// A file the daemon has already reclaimed (its draft expired or gave it up
+	// elsewhere) is dropped from the draft, but only while the same side is
+	// still the open one.
 	useEffect(() => {
-		if (!updateAttachmentLeases || !activeDraftPaths) return;
-		void updateAttachmentLeases([], activeDraftPaths.split("\n")).catch(() => undefined);
-	}, [activeDraftPaths, updateAttachmentLeases]);
+		if (!updateAttachmentLeases || !activeDraftPaths || !activeId) return;
+		const sideId = activeId;
+		let cancelled = false;
+		void updateAttachmentLeases([], activeDraftPaths.split("\n")).then((missing) => {
+			if (cancelled || activeIdRef.current !== sideId || !missing.length) return;
+			const gone = new Set(missing);
+			setDrafts((current) => {
+				const draft = current[sideId];
+				if (!draft?.attachments.some((file) => gone.has(file.path))) return current;
+				return { ...current, [sideId]: { ...draft, attachments: draft.attachments.filter((file) => !gone.has(file.path)) } };
+			});
+			setAttachments((current) => current[sideId]?.some((item) => gone.has(item.path))
+				? { ...current, [sideId]: current[sideId].filter((item) => !gone.has(item.path)) }
+				: current);
+		}).catch(() => undefined);
+		return () => { cancelled = true; };
+	}, [activeId, activeDraftPaths, updateAttachmentLeases, setDrafts]);
 	const activationRevision = useRef({ id: activeId, revision: 0 });
 	if (activationRevision.current.id !== activeId) {
 		activationRevision.current = { id: activeId, revision: activationRevision.current.revision + 1 };
@@ -2222,7 +2239,8 @@ export function useIndependentSideChats(
 										...current,
 										[activeId]: (current[activeId] ?? []).filter((item) => item.path !== path),
 									}));
-									if (path) void updateAttachmentLeases?.([path]).catch(() => undefined);
+									if (path && !sideDeliveryHoldsPath(drafts[activeId], path) && !sendingRef.current.has(activeId))
+										void updateAttachmentLeases?.([path]).catch(() => undefined);
 								}
 							}}
 							files={[]}

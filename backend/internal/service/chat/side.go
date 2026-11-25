@@ -1812,17 +1812,13 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 		content = append(content, domain.SideContent{
 			Type: item.Type, MIMEType: item.MIMEType, Data: item.Data, URI: item.URI, Name: item.Name, Text: item.Text})
 	}
-	// Side transcripts are not stored in conversation tables, so the lease
-	// triggers never see them. Commit before the question is reserved: a
-	// failure after this keeps a file that was never sent, never the reverse.
-	if leases, ok := s.store.(chatAttachmentLeaseCommitter); ok {
-		texts := []string{text}
-		for _, item := range content {
-			texts = append(texts, item.URI, item.Name, item.Text)
-		}
-		if err := leases.CommitChatAttachmentLeases(ctx, session, texts); err != nil {
-			return domain.SideTurn{}, fmt.Errorf("commit side question attachments: %w", err)
-		}
+	texts := []string{text}
+	for _, item := range content {
+		texts = append(texts, item.URI, item.Name, item.Text)
+	}
+	restoreLeases, err := s.commitSideAttachments(ctx, session, texts)
+	if err != nil {
+		return domain.SideTurn{}, err
 	}
 	question := domain.SideTurn{
 		ID: s.newID(), SideID: sideID, ClientMessageID: msg.ClientMessageID, Text: text, Content: content,
@@ -1830,6 +1826,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 	if starting {
 		turn, err := s.sides.store.ReserveSideStart(ctx, side, question, s.sides.launchID())
 		if err != nil {
+			restoreLeases()
 			return domain.SideTurn{}, err
 		}
 		side, err = s.sides.store.SideConversation(ctx, sideID)
@@ -1847,6 +1844,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 	}
 	turn, created, err := s.sides.store.ReserveSideTurn(ctx, question, s.sides.launchID())
 	if err != nil {
+		restoreLeases()
 		return domain.SideTurn{}, err
 	}
 	if created {
@@ -1859,7 +1857,36 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 // chatAttachmentLeaseCommitter commits draft-staged files named by a message
 // accepted outside the conversation tables.
 type chatAttachmentLeaseCommitter interface {
-	CommitChatAttachmentLeases(ctx context.Context, id domain.SessionID, texts []string) error
+	CommitChatAttachmentLeases(ctx context.Context, id domain.SessionID, texts []string) ([]string, error)
+	RestoreChatAttachmentLeases(ctx context.Context, id domain.SessionID, names []string, now time.Time) error
+}
+
+// commitSideAttachments commits the draft-staged files a side question names.
+// Side transcripts are not stored in conversation tables, so the lease
+// triggers never see them. The commit runs before the question is recorded,
+// and refuses a file already claimed for deletion, so a recorded question
+// never names a deleted file. If recording then fails, the returned restore
+// re-leases what was committed, so the draft that still holds those files can
+// give them up again.
+func (s *Service) commitSideAttachments(ctx context.Context, session domain.SessionID, texts []string) (func(), error) {
+	leases, ok := s.store.(chatAttachmentLeaseCommitter)
+	if !ok {
+		return func() {}, nil
+	}
+	committed, err := leases.CommitChatAttachmentLeases(ctx, session, texts)
+	if err != nil {
+		return nil, fmt.Errorf("commit side question attachments: %w", err)
+	}
+	return func() {
+		if len(committed) == 0 {
+			return
+		}
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if err := leases.RestoreChatAttachmentLeases(restoreCtx, session, committed, s.now()); err != nil && s.log != nil {
+			s.log.Warn("side question attachments could not be re-leased", "sessionID", session, "error", err)
+		}
+	}, nil
 }
 
 // EditQueuedSideQuestion replaces the text of a queued side question.
@@ -1873,12 +1900,12 @@ func (s *Service) EditQueuedSideQuestion(ctx context.Context, session domain.Ses
 	if strings.TrimSpace(text) == "" {
 		return ErrSideQuestionInvalid
 	}
-	if leases, ok := s.store.(chatAttachmentLeaseCommitter); ok {
-		if err := leases.CommitChatAttachmentLeases(ctx, session, []string{text}); err != nil {
-			return fmt.Errorf("commit side question attachments: %w", err)
-		}
+	restoreLeases, err := s.commitSideAttachments(ctx, session, []string{text})
+	if err != nil {
+		return err
 	}
 	if err := s.sides.store.EditQueuedSideTurn(ctx, sideID, turnID, text); err != nil {
+		restoreLeases()
 		return err
 	}
 	s.sides.announce(sideID)

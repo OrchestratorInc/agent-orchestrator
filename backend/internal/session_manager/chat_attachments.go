@@ -102,7 +102,7 @@ func (m *Manager) stageAttachments(
 			if leases, ok := m.chatAttachmentLeases(); ok {
 				if err := leases.LeaseChatAttachment(ctx, id, name, m.clock()); err != nil {
 					// Unleased, the file would outlive the draft that dropped it.
-					_ = m.attachments.Remove(ctx, id, rec.Metadata.WorkspacePath, name)
+					m.rollbackUnleasedAttachment(ctx, leases, id, rec.Metadata.WorkspacePath, name)
 					return nil, fmt.Errorf("lease attachment %d: %w", i+1, err)
 				}
 			}

@@ -18,22 +18,34 @@ import (
 // the result) is reclaimed after it.
 const ChatAttachmentLeaseTTL = 7 * 24 * time.Hour
 
+// chatAttachmentTombstoneTTL is how long a reclaimed file's row is kept so a
+// message that still names it is refused rather than accepted.
+const chatAttachmentTombstoneTTL = 30 * 24 * time.Hour
+
+// chatAttachmentCleanupTimeout bounds cleanup that must outlive a cancelled
+// request, such as rolling back a staged file whose lease was not recorded.
+const chatAttachmentCleanupTimeout = 30 * time.Second
+
 // chatAttachmentLeaseStore is the ownership record for draft-staged files.
 //
 // The model: staging a draft file leases it; accepting any message that names
 // it commits it (the lease row is deleted in the same write that accepts the
 // message, so there is no window in which an accepted file is still leased);
 // removing its chip or discarding its draft releases the lease; a lease that
-// is not renewed within ChatAttachmentLeaseTTL expires into released. Only a
-// released lease's files are deleted, and only a live lease can be released,
-// so a file named by accepted history is never deleted before its session.
+// is not renewed within ChatAttachmentLeaseTTL expires into released. An
+// acceptance that names a released file still commits it, until reclamation
+// claims the row; from the claim on, acceptance is refused. Files are deleted
+// only after a successful claim, so a file named by accepted history is never
+// deleted before its session.
 type chatAttachmentLeaseStore interface {
 	LeaseChatAttachment(ctx context.Context, id domain.SessionID, name string, now time.Time) error
 	ReleaseChatAttachmentLeases(ctx context.Context, id domain.SessionID, names []string, now time.Time) error
 	RenewChatAttachmentLeases(ctx context.Context, id domain.SessionID, names []string, now time.Time) ([]string, error)
 	ExpireChatAttachmentLeases(ctx context.Context, id domain.SessionID, cutoff, now time.Time) error
 	ReleasedChatAttachmentLeases(ctx context.Context, id domain.SessionID) (map[domain.SessionID][]string, error)
-	ForgetChatAttachmentLease(ctx context.Context, id domain.SessionID, name string) error
+	ClaimChatAttachmentLease(ctx context.Context, id domain.SessionID, name string, now time.Time) (bool, error)
+	MarkChatAttachmentReclaimed(ctx context.Context, id domain.SessionID, name string, now time.Time) error
+	PruneChatAttachmentTombstones(ctx context.Context, cutoff time.Time) error
 }
 
 func (m *Manager) chatAttachmentLeases() (chatAttachmentLeaseStore, bool) {
@@ -93,7 +105,15 @@ func (m *Manager) UpdateAttachmentLeases(ctx context.Context, id domain.SessionI
 	}
 	missing := []string{}
 	for i, name := range renewNames {
-		if gone[name] || !m.attachments.Exists(ctx, id, name) {
+		if gone[name] {
+			missing = append(missing, renewPaths[i])
+			continue
+		}
+		exists, err := m.attachments.Exists(ctx, id, name)
+		if err != nil {
+			return nil, fmt.Errorf("inspect attachment %s: %w", name, err)
+		}
+		if !exists {
 			missing = append(missing, renewPaths[i])
 		}
 	}
@@ -138,16 +158,54 @@ func (m *Manager) reclaimChatAttachments(ctx context.Context, id domain.SessionI
 			workspacePath = rec.Metadata.WorkspacePath
 		}
 		for _, name := range names {
+			// The claim is what makes deletion safe: an acceptance that commits
+			// the file first wins, and one that comes after it is refused.
+			claimed, err := leases.ClaimChatAttachmentLease(ctx, session, name, m.clock())
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if !claimed {
+				continue
+			}
 			if err := m.attachments.Remove(ctx, session, workspacePath, name); err != nil {
 				errs = append(errs, fmt.Errorf("remove %s/%s: %w", session, name, err))
 				continue
 			}
-			if err := leases.ForgetChatAttachmentLease(ctx, session, name); err != nil {
+			if err := leases.MarkChatAttachmentReclaimed(ctx, session, name, m.clock()); err != nil {
 				errs = append(errs, err)
 			}
 		}
 	}
+	if id == "" {
+		if err := leases.PruneChatAttachmentTombstones(ctx, now.Add(-chatAttachmentTombstoneTTL)); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// rollbackUnleasedAttachment deletes a draft file whose lease could not be
+// recorded. It runs on its own bounded context: the failure may be the
+// request's cancellation, which must not also cancel the cleanup. If the
+// file cannot be deleted now, it is recorded as released so the next reclaim
+// pass deletes it; only if that also fails is the file left behind.
+func (m *Manager) rollbackUnleasedAttachment(ctx context.Context, leases chatAttachmentLeaseStore, id domain.SessionID, workspacePath, name string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatAttachmentCleanupTimeout)
+	defer cancel()
+	removeErr := m.attachments.Remove(cleanupCtx, id, workspacePath, name)
+	if removeErr == nil {
+		return
+	}
+	now := m.clock()
+	leaseErr := leases.LeaseChatAttachment(cleanupCtx, id, name, now)
+	if leaseErr == nil {
+		leaseErr = leases.ReleaseChatAttachmentLeases(cleanupCtx, id, []string{name}, now)
+	}
+	if leaseErr != nil {
+		m.logger.Warn("staged chat attachment could not be rolled back", "sessionID", id, "name", name,
+			"removeError", removeErr, "leaseError", leaseErr)
+	}
 }
 
 // attachmentNames keeps the staged-attachment paths among paths, deduplicated,
