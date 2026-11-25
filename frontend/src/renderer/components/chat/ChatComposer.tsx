@@ -131,6 +131,7 @@ import {
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
 import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
+import { noteComposerDropTargetFocus, registerComposerDropTarget, type ComposerDropTarget } from "../../lib/composer-drop-targets";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
@@ -2488,16 +2489,38 @@ export const ChatComposer = memo(function ChatComposer({
 		attachFiles(files);
 	}
 
-	function onDrop(event: DragEvent<HTMLFormElement>) {
-		setDragging(false);
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
-		const files = Array.from(event.dataTransfer?.files ?? []);
-		if (files.length === 0) return;
-		event.preventDefault();
-		event.stopPropagation();
+	function acceptsDroppedFiles(): boolean {
+		return canAttach && !fileAttachments.preparing && !draftMutationPending && !submitInFlight.current;
+	}
+
+	function acceptDroppedFiles(files: File[]): boolean {
+		if (!acceptsDroppedFiles() || files.length === 0) return false;
 		uiUsage.attachmentAdded("drop");
 		attachFiles(files);
+		return true;
 	}
+
+	function onDrop(event: DragEvent<HTMLFormElement>) {
+		setDragging(false);
+		// No stopPropagation: the shell's window listener must still see the drop
+		// to reset its drag tracking. preventDefault tells it the drop is taken.
+		if (acceptDroppedFiles(Array.from(event.dataTransfer?.files ?? []))) event.preventDefault();
+	}
+
+	// Files dropped anywhere in the window, outside any drop zone of their own,
+	// land here when this is the nearest composer (see composer-drop-targets).
+	const dropHandlersRef = useRef({ accepts: acceptsDroppedFiles, attach: acceptDroppedFiles });
+	dropHandlersRef.current = { accepts: acceptsDroppedFiles, attach: acceptDroppedFiles };
+	const dropTarget = useMemo<ComposerDropTarget>(() => ({
+		element: () => formRef.current,
+		accepts: () => dropHandlersRef.current.accepts(),
+		attach: (files) => dropHandlersRef.current.attach(files),
+		setDragging,
+	}), []);
+	useEffect(() => {
+		if (!canAttach) return;
+		return registerComposerDropTarget(dropTarget);
+	}, [canAttach, dropTarget]);
 
 	// Only modifier transitions re-render: React bails out when the value is unchanged.
 	useEffect(() => {
@@ -2604,6 +2627,7 @@ export const ChatComposer = memo(function ChatComposer({
 				}}
 				onDragLeave={() => setDragging(false)}
 				onDropCapture={onDrop}
+				onFocusCapture={() => noteComposerDropTargetFocus(dropTarget)}
 				// The border colors for rest, hover, focus and drag are one set of states
 				// on one surface, so they are declared together in CSS rather than half
 				// here and half there.
