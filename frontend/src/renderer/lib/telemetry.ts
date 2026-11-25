@@ -23,6 +23,7 @@ import { reserveException } from "./reported-errors";
 import { installRendererErrorHandlers } from "../../shared/renderer-error-handlers";
 import { launchProperties, takeLaunchStart } from "./launch-telemetry";
 import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
+import { DAEMON_EXIT_REASONS } from "../../shared/daemon-exit-reason";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -1253,6 +1254,8 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.code === "string") safe.code = properties.code;
 			if (typeof properties?.exit_code === "number") safe.exit_code = properties.exit_code;
 			if (typeof properties?.signal === "string") safe.signal = properties.signal;
+			// Read from the daemon's last output line in main; only the fixed reason is sent.
+			if (typeof properties?.exit_reason === "string" && (DAEMON_EXIT_REASONS as readonly string[]).includes(properties.exit_reason)) safe.exit_reason = properties.exit_reason;
 			break;
 		case "ao.requests.failed":
 			if (typeof properties?.operation === "string") safe.operation = properties.operation;

@@ -1006,7 +1006,7 @@
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",
 	"cues.typeName.command": "Command",
-	"daemon.hint.binaryMissing": "Run npm run build:daemon to rebuild the daemon.",
+	"daemon.hint.binaryMissing": "Reinstall Orchestrator to restore its background service.",
 	"daemon.hint.conflict": "Stop the conflicting daemon, then restart the desktop app.",
 	"daemon.hint.default": "Check the terminal where you ran npm run dev for details.",
 	"daemon.hint.notConfigured": "Set AO_DAEMON_COMMAND or run the desktop app from a source checkout.",

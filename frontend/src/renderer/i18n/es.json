@@ -1018,7 +1018,7 @@
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",
 	"cues.typeName.command": "Command",
-	"daemon.hint.binaryMissing": "Ejecuta npm run build:daemon para recompilar el daemon.",
+	"daemon.hint.binaryMissing": "Reinstala Orchestrator para restaurar su servicio en segundo plano.",
 	"daemon.hint.conflict": "Detén el daemon en conflicto y reinicia la aplicación de escritorio.",
 	"daemon.hint.default": "Revisa la terminal donde ejecutaste npm run dev para más detalles.",
 	"daemon.hint.notConfigured": "Define AO_DAEMON_COMMAND o ejecuta la aplicación de escritorio desde un checkout del código fuente.",

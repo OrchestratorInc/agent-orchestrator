@@ -1006,7 +1006,7 @@
 	"cues.typeLabel": "Tür",
 	"cues.typeName.agent": "Aracı",
 	"cues.typeName.command": "Komut",
-	"daemon.hint.binaryMissing": "Daemon'u yeniden derlemek için npm run build:daemon çalıştırın.",
+	"daemon.hint.binaryMissing": "Arka plan hizmetini geri yüklemek için Orchestrator'ı yeniden yükleyin.",
 	"daemon.hint.conflict": "Çakışan daemon'u durdurun, ardından masaüstü uygulamasını yeniden başlatın.",
 	"daemon.hint.default": "Ayrıntılar için npm run dev komutunu çalıştırdığınız terminale bakın.",
 	"daemon.hint.notConfigured": "AO_DAEMON_COMMAND ayarlayın veya masaüstü uygulamasını bir kaynak kopyadan çalıştırın.",

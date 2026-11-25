@@ -1009,7 +1009,7 @@
 	"cues.typeLabel": "Type",
 	"cues.typeName.agent": "Agent",
 	"cues.typeName.command": "Command",
-	"daemon.hint.binaryMissing": "npm run build:daemon を実行してデーモンを再ビルドしてください。",
+	"daemon.hint.binaryMissing": "Orchestrator を再インストールして、バックグラウンドサービスを復元してください。",
 	"daemon.hint.conflict": "競合しているデーモンを停止してから、デスクトップアプリを再起動してください。",
 	"daemon.hint.default": "npm run dev を実行したターミナルで詳細を確認してください。",
 	"daemon.hint.notConfigured": "AO_DAEMON_COMMAND を設定するか、ソースチェックアウトからデスクトップアプリを実行してください。",
