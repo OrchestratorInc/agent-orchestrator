@@ -55,7 +55,7 @@ enabled = false
 
 func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
 	home, project := sourceHome(t)
-	claude := NativeNames(domain.HarnessClaudeCode, filepath.ToSlash(project), nil)
+	claude := NativeNames(context.Background(), domain.HarnessClaudeCode, filepath.ToSlash(project), nil)
 	for _, name := range []string{"Linear", "linear", "old", "files", "scoped", "repo"} {
 		if !claude[name] {
 			t.Errorf("claude names = %v, missing %q", claude, name)
@@ -66,17 +66,17 @@ func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
 			t.Errorf("claude names hold %q, which Claude Code does not load", name)
 		}
 	}
-	if codex := NativeNames(domain.HarnessCodex, project, nil); !codex["sentry"] || codex["Linear"] || !codex["paused"] {
+	if codex := NativeNames(context.Background(), domain.HarnessCodex, project, nil); !codex["sentry"] || codex["Linear"] || !codex["paused"] {
 		t.Errorf("codex names = %v", codex)
 	}
 	other := filepath.Join(home, "account")
 	writeSource(t, filepath.Join(other, ".claude.json"), `{"mcpServers": {"account-only": {"command": "x"}}}`)
-	if got := NativeNames(domain.HarnessClaudeCode, "", map[string]string{"CLAUDE_CONFIG_DIR": other}); !got["account-only"] || got["Linear"] {
+	if got := NativeNames(context.Background(), domain.HarnessClaudeCode, "", map[string]string{"CLAUDE_CONFIG_DIR": other}); !got["account-only"] || got["Linear"] {
 		t.Errorf("account folder names = %v", got)
 	}
 	writeSource(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers": {"Figma": {"url": "https://mcp.figma.com/mcp"}}}`)
 	writeSource(t, filepath.Join(project, ".cursor", "mcp.json"), `{"mcpServers": {"repo-cursor": {"command": "x"}}}`)
-	if got := NativeNames(domain.HarnessCursor, project, nil); !got["figma"] || !got["repo-cursor"] || got["Linear"] {
+	if got := NativeNames(context.Background(), domain.HarnessCursor, project, nil); !got["figma"] || !got["repo-cursor"] || got["Linear"] {
 		t.Errorf("cursor names = %v", got)
 	}
 }

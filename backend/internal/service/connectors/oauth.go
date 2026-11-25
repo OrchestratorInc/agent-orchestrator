@@ -411,6 +411,7 @@ type savingSource struct {
 	refresh func(refreshToken string) (*oauth2.Token, error)
 	mu      sync.Mutex
 	token   oauth2.Token
+	unsaved bool
 }
 
 func (t *savingSource) Token() (*oauth2.Token, error) {
@@ -418,6 +419,9 @@ func (t *savingSource) Token() (*oauth2.Token, error) {
 	defer t.mu.Unlock()
 	if t.token.Valid() || t.token.RefreshToken == "" {
 		current := t.token
+		if t.unsaved {
+			t.unsaved = t.service.keepToken(t, &current) != nil
+		}
 		return &current, nil
 	}
 	next, err := t.refresh(t.token.RefreshToken)
@@ -431,10 +435,8 @@ func (t *savingSource) Token() (*oauth2.Token, error) {
 	if next.RefreshToken == "" {
 		next.RefreshToken = t.token.RefreshToken
 	}
-	if err := t.service.keepToken(t, next); err != nil {
-		return nil, err
-	}
 	t.token = *next
+	t.unsaved = t.service.keepToken(t, next) != nil
 	return next, nil
 }
 

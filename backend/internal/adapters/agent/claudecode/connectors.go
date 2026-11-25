@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -18,7 +19,10 @@ type connectorServer struct {
 }
 
 // ConnectorArgs writes the tool servers to a private file and returns the flag that loads it.
-func (p *Plugin) ConnectorArgs(servers []ports.ChatMCPServerConfig, _, file string) (args []string, env map[string]string, err error) {
+func (p *Plugin) ConnectorArgs(ctx context.Context, servers []ports.ChatMCPServerConfig, _, file string) (args []string, env map[string]string, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	entries := make(map[string]connectorServer, len(servers))
 	for _, server := range servers {
 		entries[server.Name] = connectorServer{

@@ -89,7 +89,7 @@ func (m *Manager) terminalConnectors(ctx context.Context, agent ports.Agent, har
 			}
 		}
 	}
-	args, extra, err := adapter.ConnectorArgs(servers, token, filepath.Join(dir, "connectors.json"))
+	args, extra, err := adapter.ConnectorArgs(ctx, servers, token, filepath.Join(dir, "connectors.json"))
 	if err != nil {
 		m.logger.Warn("terminal session gets no connectors", "session", id, "error", err)
 		return argv

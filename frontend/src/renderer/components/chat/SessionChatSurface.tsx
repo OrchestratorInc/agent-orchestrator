@@ -328,8 +328,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const readyConnectorLoaded = Boolean(readyConnector && snapshot?.mcpServers?.some((server) => server.name === readyConnector.key && server.status === "ready"));
 	const offerConnectorRestart = useCallback((connector?: ReadyConnector) => useConnectorRestartStore.getState().offer(uiSessionId, connector), [uiSessionId]);
 	const restartForConnector = useLatestCallback(async () => {
+		const connector = readyConnector;
 		await commands.restartAgent();
-		if (readyConnector) await commands.send(`The ${readyConnector.key} connector is ready. Continue.`);
+		offerConnectorRestart();
+		if (!connector) return;
+		await Promise.resolve(commands.send(`The ${connector.key} connector is ready. Continue.`))
+			.catch((error) => useUiStore.getState().showGlobalToast("Message not sent after the restart", apiErrorMessage(error), "error"));
 	});
 	const connectorRestart = useMemo(
 		() => ({ ready: readyConnectorLoaded ? undefined : readyConnector?.name, busy: agentBusy, offer: offerConnectorRestart, restart: restartForConnector }),

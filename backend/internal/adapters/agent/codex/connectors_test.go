@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ func TestConnectorArgsPassTheTokenThroughTheEnvironment(t *testing.T) {
 			"AO_MCP_LAUNCH_URL": "http://127.0.0.1:3011/mcp/s/mer-1/connectors/paper/launch", "AO_MCP_RELAY_AUTHORIZATION": "Bearer secret-token",
 		}},
 	}
-	args, env, err := (&Plugin{}).ConnectorArgs(servers, "secret-token", "")
+	args, env, err := (&Plugin{}).ConnectorArgs(context.Background(), servers, "secret-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}

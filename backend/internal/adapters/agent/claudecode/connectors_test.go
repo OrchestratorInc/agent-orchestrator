@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ func TestConnectorArgsKeepTheTokenInAPrivateFile(t *testing.T) {
 		{Name: "linear", Type: "http", URL: "http://127.0.0.1:3011/mcp/s/mer-1/connectors/linear", Headers: map[string]string{"Authorization": "Bearer secret-token"}},
 		{Name: "paper", Type: "stdio", Command: "/opt/ao-mcp", Env: map[string]string{"AO_MCP_LAUNCH_URL": "http://127.0.0.1:3011/mcp/s/mer-1/connectors/paper/launch"}},
 	}
-	args, env, err := (&Plugin{}).ConnectorArgs(servers, "secret-token", file)
+	args, env, err := (&Plugin{}).ConnectorArgs(context.Background(), servers, "secret-token", file)
 	if err != nil || len(env) != 0 || !slices.Equal(args, []string{"--mcp-config", file}) {
 		t.Fatalf("args = %v, env = %v, err = %v", args, env, err)
 	}

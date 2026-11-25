@@ -635,6 +635,38 @@ func TestCallsAtTheSameTimeRenewAnExpiredTokenOnce(t *testing.T) {
 	}
 }
 
+func TestARenewedTokenSurvivesAFailedSaveOfTheFile(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	created := signInFake(t, svc, fake, Input{Name: "fake"})
+	if !svc.renew(created.ID, "Bearer access-1") {
+		t.Fatal("no renewal was started")
+	}
+	blocked := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	good := svc.path
+	svc.path = filepath.Join(blocked, "connectors.json")
+	svc.mu.Unlock()
+	if token, err := svc.tokenSource(created.ID).Token(); err != nil || token.AccessToken != "access-2" {
+		t.Fatalf("token while the file cannot be written = %+v, %v", token, err)
+	}
+	if got := svc.records[0].OAuth; got.RefreshToken != "refresh-1" {
+		t.Fatalf("the file state changed while it could not be written: %+v", got)
+	}
+	svc.mu.Lock()
+	svc.path = good
+	svc.mu.Unlock()
+	if token, err := svc.tokenSource(created.ID).Token(); err != nil || token.AccessToken != "access-2" {
+		t.Fatalf("token after the file can be written again = %+v, %v", token, err)
+	}
+	if got := svc.records[0].OAuth; fake.tokenCalls.Load() != 2 || got.AccessToken != "access-2" || got.RefreshToken != "refresh-2" {
+		t.Fatalf("token calls %d, saved %+v: the next call must save the renewed token and renew nothing", fake.tokenCalls.Load(), got)
+	}
+}
+
 func TestACallbackPageThatLoadsAgainStillKnowsItsSignIn(t *testing.T) {
 	fake := newFakeServer(t, true)
 	svc := New(t.TempDir(), testBaseURL)

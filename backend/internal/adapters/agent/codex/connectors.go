@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"slices"
@@ -10,7 +11,7 @@ import (
 )
 
 // ConnectorArgs returns the config overrides that give Codex the tool servers; the token goes in the environment.
-func (p *Plugin) ConnectorArgs(servers []ports.ChatMCPServerConfig, token, _ string) (args []string, env map[string]string, err error) {
+func (p *Plugin) ConnectorArgs(_ context.Context, servers []ports.ChatMCPServerConfig, token, _ string) (args []string, env map[string]string, err error) {
 	set := func(key string, value any) {
 		if raw, encodeErr := json.Marshal(value); encodeErr == nil {
 			args = append(args, "-c", key+"="+string(raw))

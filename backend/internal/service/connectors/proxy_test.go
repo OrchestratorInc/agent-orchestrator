@@ -169,6 +169,20 @@ func TestTheProxyRefusesWhatTheSessionMayNotReach(t *testing.T) {
 	if status, body := proxyPost(t, daemon.URL+proxyPrefix+"ao-13/connectors/fake", "Bearer "+otherToken, call); status != http.StatusOK || !strings.Contains(body, "has no connector named fake") {
 		t.Fatalf("a session of another project = %d %s", status, body)
 	}
+	failing := map[string]bool{"ao-12": true, "ao-13": true}
+	svc.SetSessionLookup(func(_ context.Context, id string) (string, bool) { return AnyProject, failing[id] })
+	if status, body := proxyPost(t, daemon.URL+proxyPrefix+"ao-13/connectors/fake", "Bearer "+otherToken, call); status != http.StatusOK || !strings.Contains(body, "has no connector named fake") {
+		t.Fatalf("a session of another project while the session store fails = %d %s", status, body)
+	}
+	if status, body := proxyPost(t, mine.URL, token, call); status != http.StatusOK || strings.Contains(body, "has no connector named") {
+		t.Fatalf("the session that got the connector, while the session store fails = %d %s", status, body)
+	}
+	svc.SetSessionLookup(func(_ context.Context, id string) (string, bool) {
+		if id == "ao-13" {
+			return "other-project", open[id]
+		}
+		return "demo", open[id]
+	})
 	open["ao-12"] = false
 	if status, _ := proxyPost(t, mine.URL, token, call); status != http.StatusOK {
 		t.Fatalf("a session the daemon starts now = %d", status)

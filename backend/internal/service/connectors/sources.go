@@ -84,8 +84,11 @@ func (s *Service) SetImportProjects(projects func(ctx context.Context) []ImportP
 }
 
 // NativeNames returns the names of the tool servers that an agent reads from its own configuration.
-func NativeNames(harness domain.AgentHarness, workspace string, env map[string]string) map[string]bool {
+func NativeNames(ctx context.Context, harness domain.AgentHarness, workspace string, env map[string]string) map[string]bool {
 	names := map[string]bool{}
+	if ctx.Err() != nil {
+		return names
+	}
 	home, _ := os.UserHomeDir()
 	switch harness {
 	case domain.HarnessClaudeCode:

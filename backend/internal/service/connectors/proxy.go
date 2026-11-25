@@ -292,8 +292,9 @@ func (s *Service) admit(r *http.Request, sessionID, key string, transport Transp
 			return nil, "unknown session"
 		}
 	}
+	reachable := rec != nil && (lookup == nil || rec.ProjectID == "" || rec.ProjectID == projectID || (projectID == AnyProject && s.gave(sessionID, key)))
 	switch {
-	case rec == nil || rec.Transport != transport || (lookup != nil && rec.ProjectID != "" && rec.ProjectID != projectID && projectID != AnyProject):
+	case rec == nil || rec.Transport != transport || !reachable:
 		return &record{}, "This session has no connector named " + key + "."
 	case !rec.Enabled:
 		return rec, rec.Name + " is turned off. Ask the user to open Settings, Connectors, and turn it on."
@@ -307,6 +308,13 @@ func (s *Service) offers(projectID string) bool {
 	return s.load() == nil && slices.ContainsFunc(s.records, func(rec record) bool {
 		return rec.Enabled && (rec.ProjectID == "" || rec.ProjectID == projectID)
 	})
+}
+
+func (s *Service) gave(sessionID, key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	use := s.sessions[sessionID]
+	return use != nil && slices.Contains(use.keys, key)
 }
 
 func (s *Service) starting(sessionID string) bool {

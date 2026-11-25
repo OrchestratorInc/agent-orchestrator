@@ -61,7 +61,7 @@ type connectorArgsAgent struct {
 	file    string
 }
 
-func (a *connectorArgsAgent) ConnectorArgs(servers []ports.ChatMCPServerConfig, token, file string) ([]string, map[string]string, error) {
+func (a *connectorArgsAgent) ConnectorArgs(_ context.Context, servers []ports.ChatMCPServerConfig, token, file string) ([]string, map[string]string, error) {
 	a.servers, a.token, a.file = servers, token, file
 	return []string{"--tools", file}, map[string]string{"AO_CONNECTOR_TOKEN": token}, nil
 }

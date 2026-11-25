@@ -400,10 +400,23 @@ describe("SessionChatSurface connector restart", () => {
 		await act(async () => { await sideMocks.connectorRestart?.restart(); });
 		expect(conversationCommandState.send).toHaveBeenCalledWith("The hf connector is ready. Continue.");
 		expect(conversationCommandState.restartAgent.mock.invocationCallOrder[0]).toBeLessThan(conversationCommandState.send.mock.invocationCallOrder[0] as number);
+		expect(sideMocks.connectorRestart?.ready).toBeUndefined();
+		act(() => sideMocks.connectorRestart?.offer({ key: "hf", name: "Hugging Face" }));
+		expect(sideMocks.connectorRestart?.ready).toBe("Hugging Face");
 		conversationState.snapshot = { capabilities: [], mcpServers: [{ name: "hf", status: "ready" }] };
 		again.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		expect(sideMocks.connectorRestart?.ready).toBeUndefined();
 		act(() => sideMocks.connectorRestart?.offer());
+	});
+
+	it("ends the offer after the restart also when the message is refused, so the button cannot restart the agent again", async () => {
+		conversationCommandState.send = vi.fn().mockRejectedValue(new Error("The agent is still starting."));
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		act(() => sideMocks.connectorRestart?.offer({ key: "hf", name: "hf" }));
+		await act(async () => { await sideMocks.connectorRestart?.restart(); });
+		expect(conversationCommandState.restartAgent).toHaveBeenCalledTimes(1);
+		expect(sideMocks.connectorRestart?.ready).toBeUndefined();
+		expect(useUiStore.getState().globalToast).toMatchObject({ title: "Message not sent after the restart", tone: "error" });
 	});
 
 	it("sends nothing when the restart fails", async () => {

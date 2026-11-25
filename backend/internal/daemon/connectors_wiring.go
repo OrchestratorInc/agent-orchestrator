@@ -42,7 +42,7 @@ func wireConnectors(svc *connectors.Service, store connectorStore, sessions conn
 	sessions.SetSessionConnectors(func(ctx context.Context, in sessionmanager.SessionConnectorsInput) []ports.ChatMCPServerConfig {
 		return svc.ForSession(ctx, connectors.SessionInput{
 			SessionID: in.SessionID, ProjectID: string(in.ProjectID),
-			Native: func() map[string]bool { return connectors.NativeNames(in.Harness, in.Workspace, in.Env) },
+			Native: func() map[string]bool { return connectors.NativeNames(ctx, in.Harness, in.Workspace, in.Env) },
 		})
 	})
 }
