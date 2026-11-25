@@ -235,6 +235,10 @@ func (p *Provider) EnsureReady(ctx context.Context) error {
 		return err
 	}
 	p.stopStaleHub(hubTool.entryPath(root))
+	// Read before the hub starts: its helpers are made for these boots or
+	// later ones, so a reboot from here on reads as a change (at worst one
+	// restart too many, never one missed).
+	boots := p.currentBoots(ctx)
 	hub, err := p.startHub(ctx, nodePath, hubTool.entryPath(root))
 	if err != nil {
 		if p.life.Err() != nil {
@@ -250,12 +254,7 @@ func (p *Provider) EnsureReady(ctx context.Context) error {
 		return errProviderClosed
 	}
 	p.hub = hub
-	// Every helper of this hub belongs to the boot each simulator is on now.
-	go func() { //nolint:gosec // G118: outlives the request that started the hub
-		ctx, cancel := context.WithTimeout(p.life, 30*time.Second)
-		defer cancel()
-		p.recordBoots(ctx)
-	}()
+	p.storeBootsLocked(boots)
 	if p.tuned == nil {
 		// A restarted daemon: put back what the last one had set.
 		p.tuned = p.loadTuned()
@@ -1008,6 +1007,12 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		device.ID = res.ID
 	}
 	device.Booted = true
+	// The boot the fresh helper below is made for, read before the helper is:
+	// a reboot after this reads as a change once Boot ends.
+	helperBoot := ""
+	if expected {
+		helperBoot = p.currentBoots(ctx)[device.ID]
+	}
 	if device.Platform == ports.DevicePlatformIOS {
 		// Booting alone does not attach a stream helper; the grid start does
 		// both and is idempotent for a booted simulator.
@@ -1032,11 +1037,10 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		p.awaitLiveStream(ctx, device)
 	}
 	p.restoreQuality(ctx, device)
-	if expected {
-		// Its own deadline: the boot's may be nearly spent by the stream wait.
-		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		p.recordBoots(recordCtx, device.ID)
-		cancel()
+	if helperBoot != "" {
+		p.mu.Lock()
+		p.storeBootsLocked(map[string]string{device.ID: helperBoot})
+		p.mu.Unlock()
 	}
 	return device, nil
 }
@@ -1087,7 +1091,7 @@ func (p *Provider) expectBoot(udid string) {
 // a running simulator found on a boot this provider did not start gets the
 // hub replaced, which gives every simulator a fresh helper; viewers reconnect.
 // Boots are recorded whenever the helpers are known to belong to them, when a
-// hub starts and when Boot finishes (see recordBoots), so a reboot nobody was
+// hub starts and when Boot makes one (see storeBootsLocked), so a reboot nobody was
 // watching is caught on the next look; a simulator first seen later (one
 // created after the hub started) only has its boot recorded then.
 func (p *Provider) NoteBooted(device ports.DeviceInfo) {
@@ -1114,30 +1118,28 @@ func (p *Provider) NoteBooted(device ports.DeviceInfo) {
 	}
 }
 
-// recordBoots stores the boot each simulator is on now as the one the hub's
-// helpers belong to: called when a hub starts (all its helpers are new) and
-// when Boot has booted a simulator (its helper was reset first). Only the
-// named simulators when any are given.
-func (p *Provider) recordBoots(ctx context.Context, only ...string) {
+// currentBoots reads each simulator's boot now (simctl's lastUsedAt) by
+// UDID; nil when simctl cannot say.
+func (p *Provider) currentBoots(ctx context.Context) map[string]string {
 	_, boots, err := p.unlistedSimulators(ctx, nil)
-	if err != nil || len(boots) == 0 {
+	if err != nil {
+		return nil
+	}
+	return boots
+}
+
+// storeBootsLocked records boots read before the hub's helpers for them were
+// made, as the boots those helpers belong to: when a hub starts (every helper
+// is new) and when Boot has made a simulator's helper. Callers hold p.mu.
+func (p *Provider) storeBootsLocked(boots map[string]string) {
+	if len(boots) == 0 {
 		return
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.bootIDs == nil {
 		p.bootIDs = map[string]string{}
 	}
-	if len(only) == 0 {
-		for id, boot := range boots {
-			if boot != "" {
-				p.bootIDs[id] = boot
-			}
-		}
-		return
-	}
-	for _, id := range only {
-		if boot := boots[id]; boot != "" {
+	for id, boot := range boots {
+		if boot != "" {
 			p.bootIDs[id] = boot
 		}
 	}

@@ -981,7 +981,10 @@ func TestHubStartRecordsEverySimulatorsBoot(t *testing.T) {
 	var mu sync.Mutex
 	boot := "boot-1"
 	p.run = simctlBoots(&boot, &mu)
-	p.recordBoots(context.Background())
+	boots := p.currentBoots(context.Background())
+	p.mu.Lock()
+	p.storeBootsLocked(boots)
+	p.mu.Unlock()
 	p.NoteBooted(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: "boot-2"})
 	if n := replacementsSeen(replaced); n != 1 {
 		t.Fatalf("a reboot since the hub started replaced the hub %d times, want 1", n)
@@ -1065,5 +1068,44 @@ func TestListCarriesSimulatorBoots(t *testing.T) {
 	}
 	if boots["LISTED"] != "2026-11-25T01:00:00Z" || boots["EXTRA"] != "2026-11-20T09:00:00Z" {
 		t.Fatalf("boots = %v, want simctl's lastUsedAt for both", boots)
+	}
+}
+
+// The boot recorded for Boot's simulator is the one its fresh helper was made
+// for: a reboot outside AO while Boot is still finishing (after the helper,
+// before Boot returns) is caught afterwards, not taken as the helper's boot.
+func TestBootRecordsTheBootItsHelperWasMadeFor(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("simctl is macOS only")
+	}
+	var mu sync.Mutex
+	boot := "boot-ao"
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/vendor/serve-sim/grid/api/start" {
+			mu.Lock()
+			boot = "boot-outside" // rebooted right after the helper was made
+			mu.Unlock()
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(hub.Close)
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	replaced := fakeReplacements(p)
+	p.run = simctlBoots(&boot, &mu)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := p.Boot(ctx, ports.DeviceInfo{ID: "UDID-1", Name: "Lab", Platform: ports.DevicePlatformIOS}); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	recorded := p.bootIDs["UDID-1"]
+	p.mu.Unlock()
+	if recorded != "boot-ao" {
+		t.Fatalf("recorded %q, want the boot the helper was made for", recorded)
+	}
+	p.NoteBooted(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: "boot-outside"})
+	if n := replacementsSeen(replaced); n != 1 {
+		t.Fatalf("a reboot during Boot's finish replaced the hub %d times, want 1", n)
 	}
 }
