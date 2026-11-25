@@ -191,6 +191,24 @@ func (q *Queries) CountStaleBinarySessions(ctx context.Context) ([]CountStaleBin
 	return items, nil
 }
 
+const endSessionMoveStarted = `-- name: EndSessionMoveStarted :execrows
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = ''
+`
+
+type EndSessionMoveStartedParams struct {
+	UpdatedAt time.Time
+	ID        domain.SessionID
+}
+
+// Clears a move in progress unless the session has been marked moved.
+func (q *Queries) EndSessionMoveStarted(ctx context.Context, arg EndSessionMoveStartedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endSessionMoveStarted, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getClientRequestSession = `-- name: GetClientRequestSession :one
 SELECT id, client_request_hash, client_request_committed FROM sessions WHERE client_request_id = ?
 `
@@ -1509,6 +1527,35 @@ func (q *Queries) MarkHarnessSessionsStale(ctx context.Context, arg MarkHarnessS
 	return result.RowsAffected()
 }
 
+const markSessionMoved = `-- name: MarkSessionMoved :execrows
+UPDATE sessions SET moved_to = ?, move_started = '', updated_at = ?
+WHERE id = ? AND moved_to = '' AND move_started = ?
+    AND (is_terminated = 1 OR activity_state = 'exited')
+`
+
+type MarkSessionMovedParams struct {
+	MovedTo     string
+	UpdatedAt   time.Time
+	ID          domain.SessionID
+	MoveStarted string
+}
+
+// Records the AO Cloud session a session moved to while move_started still
+// names that move and the agent is stopped. A session resumed here since the
+// move pushed it (which clears move_started) is not marked.
+func (q *Queries) MarkSessionMoved(ctx context.Context, arg MarkSessionMovedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markSessionMoved,
+		arg.MovedTo,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.MoveStarted,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const nextSessionNum = `-- name: NextSessionNum :one
 SELECT COALESCE(MAX(num), 0) + 1 AS next FROM sessions WHERE project_id = ?
 `
@@ -1975,24 +2022,6 @@ type SetSessionMoveStartedParams struct {
 
 func (q *Queries) SetSessionMoveStarted(ctx context.Context, arg SetSessionMoveStartedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionMoveStarted, arg.MoveStarted, arg.UpdatedAt, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const setSessionMovedTo = `-- name: SetSessionMovedTo :execrows
-UPDATE sessions SET moved_to = ?, updated_at = ? WHERE id = ?
-`
-
-type SetSessionMovedToParams struct {
-	MovedTo   string
-	UpdatedAt time.Time
-	ID        domain.SessionID
-}
-
-func (q *Queries) SetSessionMovedTo(ctx context.Context, arg SetSessionMovedToParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setSessionMovedTo, arg.MovedTo, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

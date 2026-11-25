@@ -222,3 +222,31 @@ func TestBuildSaysWhereTheFullHistoryIsOnlyWhenTold(t *testing.T) {
 		t.Fatalf("the full history pointer is missing:\n%s", pointed)
 	}
 }
+
+// A moved session's note names no path under the user's home folder and
+// names the WIP commit by the subject the move gave it.
+func TestBuildMovedNoteHidesTheHomeFolder(t *testing.T) {
+	got := Build(Input{
+		SourceHarness: "claude-code", TargetHarness: "claude-code", SessionTitle: "Importer", Branch: "feat/move",
+		MovedFrom: "the user's computer", MovedWIP: true, MovedWIPCommit: "WIP: uncommitted changes from a local session",
+		HomeDir: "/Users/ann/",
+		Turns: []Turn{{
+			UserRequest:   "read /Users/ann/.config/app.toml and /Users/ann",
+			AgentResponse: "done; /Users/anna/notes.md is someone else's, see ~/x and /tmp/Users/ann/y",
+			At:            time.Unix(1, 0),
+		}},
+	})
+	for _, want := range []string{
+		"/ao-moved/home/.config/app.toml", "and /ao-moved/home", "/Users/anna/notes.md", "/tmp/Users/ann/y",
+		`"WIP: uncommitted changes from a local session"`, "not committed on the user's computer",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("note is missing %q:\n%s", want, got)
+		}
+	}
+	// Only the paths that merely share the prefix may still read /Users/ann.
+	rest := strings.NewReplacer("/Users/anna/", "", "/tmp/Users/ann/", "").Replace(got)
+	if strings.Contains(rest, "/Users/ann") {
+		t.Errorf("note still names the home folder:\n%s", got)
+	}
+}

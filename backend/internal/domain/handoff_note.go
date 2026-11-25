@@ -72,6 +72,11 @@ type HandoffNoteInput struct {
 	// MovedWIP says the branch's top commit holds the work that was not
 	// committed on MovedFrom.
 	MovedWIP bool
+	// MovedWIPCommit is that commit's subject.
+	MovedWIPCommit string
+	// HomeDir is the user's home folder; the note writes paths under it with a
+	// placeholder the destination fills in.
+	HomeDir string
 	// MaxBytes lowers the byte cap for a destination with a smaller prompt
 	// limit; Orchestrator Cloud takes 65,536 bytes. Zero keeps the default.
 	MaxBytes int
@@ -147,6 +152,6 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 		ArtifactDir: in.ArtifactDir, Artifacts: artifacts, Turns: turns, Terminal: in.Terminal,
 		HistoryFiles: history, Fork: fork, TerminalOutput: in.TerminalOutput, Inherited: in.Inherited,
 		FullHistory: fullHistory, MaxChars: handoffNoteMaxChars,
-		MovedFrom: in.MovedFrom, MovedWIP: in.MovedWIP, MaxBytes: in.MaxBytes,
+		MovedFrom: in.MovedFrom, MovedWIP: in.MovedWIP, MovedWIPCommit: in.MovedWIPCommit, HomeDir: in.HomeDir, MaxBytes: in.MaxBytes,
 	})
 }

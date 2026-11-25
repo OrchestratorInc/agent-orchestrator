@@ -18,6 +18,7 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionfork"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionmove"
 )
 
 // SessionTurns returns every turn AO holds for a session, oldest first: the
@@ -184,8 +185,9 @@ func (s *Service) ForkHandoffNote(ctx context.Context, source domain.SessionReco
 }
 
 // MoveNote builds the note a session starts from after it moves to another
-// machine. It leaves out what only exists on movedFrom and keeps within
-// maxBytes when the destination sets a smaller prompt limit.
+// machine. It leaves out what only exists on movedFrom, writes paths under the
+// user's home folder with a placeholder, and keeps within maxBytes when the
+// destination sets a smaller prompt limit.
 func (s *Service) MoveNote(ctx context.Context, record domain.SessionRecord, movedFrom string, wip bool, maxBytes int) (string, error) {
 	input, err := s.handoffNoteInput(ctx, record, record.Harness, "")
 	if err != nil {
@@ -193,6 +195,12 @@ func (s *Service) MoveNote(ctx context.Context, record domain.SessionRecord, mov
 	}
 	input.ChangedFiles = handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
 	input.MovedFrom, input.MovedWIP, input.MaxBytes = movedFrom, wip, maxBytes
+	if wip {
+		input.MovedWIPCommit = sessionmove.WIPCommitSubject
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		input.HomeDir = home
+	}
 	return domain.BuildHandoffNote(input), nil
 }
 

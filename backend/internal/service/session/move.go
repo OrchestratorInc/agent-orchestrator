@@ -33,7 +33,7 @@ type MoveNoter interface {
 }
 
 type sessionMoveStore interface {
-	SetSessionMovedTo(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error)
+	MarkSessionMoved(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error)
 }
 
 type sessionMoveStartedStore interface {
@@ -135,13 +135,13 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 
 	label := strings.TrimSpace(in.SourceLabel)
 	if label == "" {
-		label = machineName()
+		label = defaultMoveSource
 	}
 	wt := rec.Metadata.WorkspacePath
 	if _, err := sessionmove.RefuseDefaultBranch(ctx, wt, project.Config.WorktreeBaseBranch()); err != nil {
 		return MoveExport{}, s.moveAPIError(ctx, err)
 	}
-	c, err := sessionmove.CaptureWorktree(ctx, sessionmove.CaptureOptions{Worktree: wt, Label: label, Exclude: project.Config.Symlinks})
+	c, err := sessionmove.CaptureWorktree(ctx, sessionmove.CaptureOptions{Worktree: wt, Exclude: project.Config.Symlinks})
 	if err != nil {
 		return MoveExport{}, s.moveAPIError(ctx, err)
 	}
@@ -319,7 +319,8 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		return MoveImportOutcome{}, s.moveAPIError(ctx, err)
 	}
 
-	prompt := in.HandoffNote
+	// AO Cloud writes paths under the user's home folder with a placeholder.
+	prompt := nativetransfer.FillCloudHomeText(in.HandoffNote)
 	if prompt == "" {
 		prompt = "This Orchestrator-managed session moved here from " + m.SourceLabel + ". Check the branch's files and git log, then wait for the user."
 	}
@@ -396,6 +397,11 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 // CompleteMove marks the session as moved to AO Cloud, then archives it. A
 // live orchestrator of the project is told so it does not respawn the worker;
 // the move does not wait for it to take the message.
+//
+// The mark is one conditional write: it holds only while the move that pushed
+// the session is still its move in progress and the agent is stopped. A
+// session the user resumed here meanwhile (a retried complete arriving late)
+// is refused with MOVE_NOT_IN_PROGRESS and never archived.
 func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in MoveCompleteInput) (domain.Session, error) {
 	d := in.Destination
 	if d.MoveID == "" || d.SessionID == "" || d.OrgID == "" {
@@ -417,10 +423,24 @@ func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in Move
 	}
 	if rec.MovedTo == nil {
 		d.At = s.clock().UTC()
-		if _, err := store.SetSessionMovedTo(ctx, id, d, d.At); err != nil {
+		marked, err := store.MarkSessionMoved(ctx, id, d, d.At)
+		if err != nil {
 			return domain.Session{}, err
 		}
-		go s.tellOrchestrator(context.WithoutCancel(ctx), rec, d)
+		if !marked {
+			// Read again: a concurrent complete of the same move may have marked it.
+			now, found, err := s.store.GetSession(ctx, id)
+			if err != nil {
+				return domain.Session{}, err
+			}
+			if !found || now.MovedTo == nil || now.MovedTo.MoveID != d.MoveID {
+				return domain.Session{}, apierr.Conflict("MOVE_NOT_IN_PROGRESS",
+					"This session was resumed on this computer after the move started, so it stays here. Its Orchestrator Cloud copy is still there; archive the one you don't need.", nil)
+			}
+			rec = now
+		} else {
+			go s.tellOrchestrator(context.WithoutCancel(ctx), rec, d)
+		}
 	}
 	if !rec.IsTerminated {
 		if _, err := s.manager.RequestKill(ctx, id); err != nil {
@@ -452,15 +472,9 @@ func (s *Service) tellOrchestrator(ctx context.Context, rec domain.SessionRecord
 	}
 }
 
-// machineName is this computer's name as the user sees it, for a move whose
-// caller did not name the source.
-func machineName() string {
-	name, err := os.Hostname()
-	if name = strings.TrimSuffix(strings.TrimSpace(name), ".local"); err != nil || name == "" {
-		return "another machine"
-	}
-	return name
-}
+// defaultMoveSource names this computer in a moved session's note when the
+// caller does not. It is not the hostname, which often holds the user's name.
+const defaultMoveSource = "the user's computer"
 
 func moveRequestHash(in MoveImportInput) string {
 	sum := sha256.Sum256([]byte(string(in.ProjectID) + "\x00" + in.Manifest.Branch + "\x00" + in.Manifest.Tip))
@@ -727,12 +741,25 @@ func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHar
 	if n > CloudTranscriptMaxBytes {
 		return "", "", nil, nativetransfer.ErrTooLarge
 	}
+	// AO Cloud writes paths under the user's home folder with a placeholder;
+	// the JSON Lines transcripts get this machine's home folder back. OpenCode's
+	// export document is filled in where it is placed, and a Cursor store is
+	// binary.
+	if harness == domain.HarnessClaudeCode || harness == domain.HarnessCodex {
+		if err := nativetransfer.FillCloudHome(transcript); err != nil {
+			return "", "", nil, err
+		}
+	}
 	if harness != domain.HarnessClaudeCode {
 		return transcript, "", nil, nil
 	}
 	if len(t.SidecarGzip) > 0 {
 		sidecar := filepath.Join(dir, t.AgentSessionID)
-		if sidecarErr = nativetransfer.ExtractClaudeSidecar(bytes.NewReader(t.SidecarGzip), sidecar, CloudTranscriptMaxBytes); sidecarErr != nil {
+		sidecarErr = nativetransfer.ExtractClaudeSidecar(bytes.NewReader(t.SidecarGzip), sidecar, CloudTranscriptMaxBytes)
+		if sidecarErr == nil {
+			sidecarErr = nativetransfer.FillCloudHome(sidecar)
+		}
+		if sidecarErr != nil {
 			_ = os.RemoveAll(sidecar)
 			warning = "Subagent transcripts and saved tool output stayed in Orchestrator Cloud."
 		}

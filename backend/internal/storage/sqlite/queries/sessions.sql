@@ -477,8 +477,17 @@ UPDATE sessions SET auto_inject_review = ?, updated_at = ? WHERE id = ?;
 -- name: SetSessionAutoInjectCI :execrows
 UPDATE sessions SET auto_inject_ci = ?, updated_at = ? WHERE id = ?;
 
--- name: SetSessionMovedTo :execrows
-UPDATE sessions SET moved_to = ?, updated_at = ? WHERE id = ?;
+-- name: MarkSessionMoved :execrows
+-- Records the AO Cloud session a session moved to while move_started still
+-- names that move and the agent is stopped. A session resumed here since the
+-- move pushed it (which clears move_started) is not marked.
+UPDATE sessions SET moved_to = ?, move_started = '', updated_at = ?
+WHERE id = ? AND moved_to = '' AND move_started = ?
+    AND (is_terminated = 1 OR activity_state = 'exited');
+
+-- name: EndSessionMoveStarted :execrows
+-- Clears a move in progress unless the session has been marked moved.
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = '';
 
 -- name: SetSessionMoveConversationPlaced :execrows
 UPDATE sessions SET move_conversation_placed = 1, updated_at = ? WHERE id = ?;

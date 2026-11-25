@@ -57,7 +57,7 @@ func (c *SessionMovesController) preview(w http.ResponseWriter, r *http.Request)
 	}
 	changes := make([]MoveChange, 0, len(out.Changes))
 	for _, ch := range out.Changes {
-		changes = append(changes, MoveChange{Path: ch.Path, Status: moveChangeStatus(ch.Status)})
+		changes = append(changes, MoveChange{Path: ch.Path, Status: moveChangeStatus(ch.Status), Untracked: ch.Untracked})
 	}
 	envelope.WriteJSON(w, http.StatusOK, MovePreviewResponse{
 		Branch: out.Branch, DefaultBranch: out.DefaultBranch, Changes: changes,

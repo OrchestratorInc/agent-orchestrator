@@ -5039,6 +5039,9 @@ type MoveTranscriptResponse struct {
 type MoveChange struct {
 	Path   string `json:"path"`
 	Status string `json:"status" enum:"added,modified,deleted"`
+	// Untracked marks an added file git did not track, which the user may not
+	// expect the move to commit and push.
+	Untracked bool `json:"untracked,omitempty"`
 }
 
 // MoveExportRequest asks this machine to push a stopped session for a move to

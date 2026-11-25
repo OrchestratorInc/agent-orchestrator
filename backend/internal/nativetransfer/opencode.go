@@ -8,7 +8,9 @@ import (
 
 // RewriteOpenCodeExport replaces the working directory an OpenCode 2 `session
 // export` document names (info.location.directory) with to, wherever it
-// stands as a whole path in the document.
+// stands as a whole path in the document. Moving to AO Cloud (to is
+// CloudCwdPlaceholder) also writes the rest of the home folder as
+// CloudHomePlaceholder; moving here fills that placeholder in.
 func RewriteOpenCodeExport(data []byte, to string) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -22,7 +24,17 @@ func RewriteOpenCodeExport(data []byte, to string) ([]byte, error) {
 	if dir == "" {
 		return nil, errors.New("nativetransfer: the OpenCode session names no directory")
 	}
-	paths, err := newPathMap(map[string]string{dir: to})
+	pairs := map[string]string{dir: to}
+	var paths pathMap
+	var err error
+	if to == CloudCwdPlaceholder {
+		paths, err = cloudPaths(pairs)
+	} else {
+		if home := userHome(); home != "" && dir != CloudHomePlaceholder {
+			pairs[CloudHomePlaceholder] = home
+		}
+		paths, err = newPathMap(pairs)
+	}
 	if err != nil {
 		return nil, err
 	}

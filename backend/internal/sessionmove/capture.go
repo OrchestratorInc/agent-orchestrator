@@ -19,11 +19,14 @@ var (
 
 const lfsPointerPrefix = "version https://git-lfs.github.com/spec/v1"
 
+// WIPCommitSubject is the message of the commit a move makes of a worktree's
+// uncommitted work. It names no machine, since the commit is pushed to
+// origin, and it is fixed so that a retry makes the same commit.
+const WIPCommitSubject = "WIP: uncommitted changes from a local session"
+
 // CaptureOptions selects the worktree to capture.
 type CaptureOptions struct {
 	Worktree string
-	// Label names the source machine in the WIP commit message.
-	Label string
 	// Exclude lists repo-relative paths that stay behind as they are in HEAD,
 	// such as AO project symlinks or files the user chose not to move.
 	Exclude []string
@@ -57,6 +60,9 @@ type Change struct {
 	Status byte
 	// Size is the captured blob's size; 0 for deletions and submodules.
 	Size int64
+	// Untracked marks an added file git did not track: one the user may not
+	// know the move commits and pushes.
+	Untracked bool
 }
 
 // CaptureWorktree records the worktree's uncommitted work, tracked and
@@ -80,6 +86,10 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 	}
 	c := Capture{Branch: branch, Base: base}
 	if c.Submodules, err = checkStatus(ctx, wt); err != nil {
+		return Capture{}, err
+	}
+	untracked, err := untrackedPaths(ctx, wt)
+	if err != nil {
 		return Capture{}, err
 	}
 
@@ -115,11 +125,7 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 		return c, nil
 	}
 
-	label := opts.Label
-	if label == "" {
-		label = "the source machine"
-	}
-	// The base's date makes the commit repeatable: a retry after a push that
+	// The fixed message and the base's date make the commit repeatable: a retry after a push that
 	// origin took but this side could not confirm pushes the same commit again.
 	date, err := gitLine(ctx, wt, "show", "-s", "--format=%cd", "--date=raw", base)
 	if err != nil {
@@ -127,7 +133,7 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 	}
 	commitEnv := append(identityEnv(ctx, wt), "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
 	commit, err := runGit(ctx, wt, commitEnv, nil, "commit-tree", "-p", base,
-		"-m", "WIP: uncommitted changes from "+label, tree)
+		"-m", WIPCommitSubject, tree)
 	if err != nil {
 		return Capture{}, err
 	}
@@ -135,7 +141,26 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 	if c.Changes, err = changes(ctx, wt, base, c.Commit); err != nil {
 		return Capture{}, err
 	}
+	for i := range c.Changes {
+		c.Changes[i].Untracked = c.Changes[i].Status == 'A' && untracked[c.Changes[i].Path]
+	}
 	return c, nil
+}
+
+// untrackedPaths lists the worktree's untracked files that are not ignored,
+// read from the real index without writing it.
+func untrackedPaths(ctx context.Context, wt string) (map[string]bool, error) {
+	out, err := runGit(ctx, wt, nil, nil, "ls-files", "-z", "--others", "--exclude-standard", "--full-name")
+	if err != nil {
+		return nil, err
+	}
+	paths := map[string]bool{}
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths[p] = true
+		}
+	}
+	return paths, nil
 }
 
 // refuseOperation stops a capture in the middle of a merge, rebase,

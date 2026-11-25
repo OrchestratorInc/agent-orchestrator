@@ -256,7 +256,7 @@ func TestBuildHandoffNoteForAMovedSession(t *testing.T) {
 		Turns:        handoffTestTurns(3), MovedFrom: "MacBook A", MovedWIP: true,
 	})
 	for _, want := range []string{
-		"moved here from MacBook A", "Moved from: MacBook A", `"WIP: uncommitted changes from MacBook A"`,
+		"moved here from MacBook A", "Moved from: MacBook A", `"WIP: uncommitted changes", holds the work that was not committed on MacBook A`,
 		"stayed in the session's artifact directory on MacBook A", "- report.md", "The full conversation stays on MacBook A.",
 	} {
 		if !strings.Contains(got, want) {

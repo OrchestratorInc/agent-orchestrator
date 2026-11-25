@@ -73,7 +73,7 @@ func WriteCodexRolloutForCloud(ctx context.Context, w io.Writer, opts CodexOptio
 	if meta.ID != id {
 		return "", fmt.Errorf("nativetransfer: rollout %s records conversation %s", path, meta.ID)
 	}
-	paths, err := newPathMap(map[string]string{meta.Cwd: CloudCwdPlaceholder})
+	paths, err := cloudPaths(map[string]string{meta.Cwd: CloudCwdPlaceholder})
 	if err != nil {
 		return "", err
 	}

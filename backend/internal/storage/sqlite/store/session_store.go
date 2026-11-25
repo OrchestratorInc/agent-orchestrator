@@ -732,18 +732,32 @@ func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPin
 	return rows > 0, nil
 }
 
-// SetSessionMovedTo records where a session moved to. It returns ok=false
-// when the session id does not exist.
-func (s *Store) SetSessionMovedTo(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error) {
+// MarkSessionMoved records the AO Cloud session a session moved to and ends
+// its move in progress, in one write that holds only while move_started still
+// names move.MoveID and the agent is stopped. It returns ok=false otherwise,
+// such as for a session the user resumed here after the move pushed it.
+func (s *Store) MarkSessionMoved(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error) {
 	data, err := json.Marshal(move)
 	if err != nil {
 		return false, fmt.Errorf("encode session move %s: %w", id, err)
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionMovedTo(ctx, gen.SetSessionMovedToParams{ID: id, MovedTo: string(data), UpdatedAt: updatedAt})
+	rows, err := s.qw.MarkSessionMoved(ctx, gen.MarkSessionMovedParams{ID: id, MovedTo: string(data), UpdatedAt: updatedAt, MoveStarted: move.MoveID})
 	if err != nil {
-		return false, fmt.Errorf("set session moved to %s: %w", id, err)
+		return false, fmt.Errorf("mark session %s moved: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// EndSessionMoveStarted clears a session's move in progress unless it has
+// been marked moved. It returns ok=false when it was, or the id does not exist.
+func (s *Store) EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.EndSessionMoveStarted(ctx, gen.EndSessionMoveStartedParams{UpdatedAt: updatedAt, ID: id})
+	if err != nil {
+		return false, fmt.Errorf("end session move %s: %w", id, err)
 	}
 	return rows > 0, nil
 }

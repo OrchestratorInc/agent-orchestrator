@@ -7218,6 +7218,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            moveStarted?: string;
             movedTo?: components["schemas"]["SessionMove"];
             needsResume: boolean;
             /** @enum {string} */
@@ -8403,6 +8404,7 @@ export interface components {
             path: string;
             /** @enum {string} */
             status: "added" | "modified" | "deleted";
+            untracked?: boolean;
         };
         MoveCompleteRequest: {
             moveId: string;

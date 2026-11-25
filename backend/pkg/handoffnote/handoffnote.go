@@ -120,6 +120,11 @@ type Input struct {
 	// MovedWIP says the branch's top commit holds the work that was not
 	// committed on MovedFrom.
 	MovedWIP bool
+	// MovedWIPCommit is that commit's subject.
+	MovedWIPCommit string
+	// HomeDir is the user's home folder on MovedFrom. Paths under it are
+	// written as HomePlaceholder, so the note names no local user or folder.
+	HomeDir string
 	// MaxBytes lowers the byte cap for a destination with a smaller prompt
 	// limit; the package MaxBytes when 0 or higher.
 	MaxBytes int
@@ -272,7 +277,11 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 	}
 
 	if in.MovedWIP {
-		fmt.Fprintf(&b, "\n## Code\nThe branch's top commit, \"WIP: uncommitted changes from %s\", holds the work that was not committed there. Keep it, amend it, or squash it.\n", in.MovedFrom)
+		subject := in.MovedWIPCommit
+		if subject == "" {
+			subject = "WIP: uncommitted changes"
+		}
+		fmt.Fprintf(&b, "\n## Code\nThe branch's top commit, %q, holds the work that was not committed on %s. Keep it, amend it, or squash it.\n", subject, in.MovedFrom)
 	}
 
 	if len(in.Artifacts) > 0 && in.MovedFrom != "" {
@@ -356,7 +365,40 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 		b.WriteString("Do not mention this note unless it is relevant. Wait for the user's next message.\n")
 	}
 	b.WriteString("</ao-handoff-request>")
-	return b.String()
+	return replaceHome(b.String(), in.HomeDir)
+}
+
+// HomePlaceholder stands for the user's home folder in a moved session's note
+// and conversation; the destination fills in its own.
+const HomePlaceholder = "/ao-moved/home"
+
+// replaceHome writes home as HomePlaceholder wherever it stands as a whole
+// path: "/Users/ann" matches "/Users/ann/x" but not "/Users/anna".
+func replaceHome(s, home string) string {
+	home = strings.TrimRight(home, "/")
+	if home == "" || !strings.HasPrefix(home, "/") {
+		return s
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(s, home)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		end := i + len(home)
+		b.WriteString(s[:i])
+		if (i == 0 || !isPathByte(s[i-1])) && (end == len(s) || !isPathByte(s[end])) {
+			b.WriteString(HomePlaceholder)
+		} else {
+			b.WriteString(home)
+		}
+		s = s[end:]
+	}
+}
+
+func isPathByte(c byte) bool {
+	return c == '-' || c == '_' || c == '.' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // handoffTaskShownInFull reports whether the original task already appears

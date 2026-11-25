@@ -20903,6 +20903,8 @@ components:
           type: string
         model:
           type: string
+        moveStarted:
+          type: string
         movedTo:
           $ref: '#/components/schemas/SessionMove'
         needsResume:
@@ -24110,6 +24112,8 @@ components:
           - modified
           - deleted
           type: string
+        untracked:
+          type: boolean
       required:
       - path
       - status

@@ -472,8 +472,9 @@ type SessionRecord struct {
 	// MoveStarted is the move id of a move to AO Cloud whose export pushed the
 	// branch and that has neither finished nor been rolled back. Restoring at
 	// startup leaves such a session stopped; an explicit restore or resume ends
-	// the move here and clears it.
-	MoveStarted string `json:"-"`
+	// the move here and clears it. The app finishes that move under this id
+	// instead of starting a second one.
+	MoveStarted string `json:"moveStarted,omitempty"`
 	// StaleBinary is set while the session's current launch still runs a
 	// harness release an update has since replaced. It is derived when the row
 	// is read: any later launch starts on the installed release and reads as

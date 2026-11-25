@@ -13,7 +13,7 @@ func TestMoveToCloudAndBack(t *testing.T) {
 	want := expectedTarget(t, f)
 	before := stateOf(t, f.src)
 
-	c, err := CaptureWorktree(t.Context(), CaptureOptions{Worktree: f.src, Label: "MacBook A", Exclude: exclude})
+	c, err := CaptureWorktree(t.Context(), CaptureOptions{Worktree: f.src, Exclude: exclude})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,12 +23,16 @@ func TestMoveToCloudAndBack(t *testing.T) {
 	if c.Branch != "feat/x" || c.Base != f.c2 || c.Commit == "" {
 		t.Fatalf("capture = %+v", c)
 	}
-	if got := g(t, f.src, "log", "-1", "--format=%s", c.Commit); got != "WIP: uncommitted changes from MacBook A" {
+	if got := g(t, f.src, "log", "-1", "--format=%s", c.Commit); got != WIPCommitSubject {
 		t.Fatalf("message = %q", got)
 	}
 	status := map[string]byte{}
+	untracked := map[string]bool{}
 	for _, ch := range c.Changes {
 		status[ch.Path] = ch.Status
+		if ch.Untracked {
+			untracked[ch.Path] = true
+		}
 		if ch.Path == "assets/logo.bin" && ch.Size != 64<<10 {
 			t.Fatalf("logo.bin size = %d", ch.Size)
 		}
@@ -44,6 +48,11 @@ func TestMoveToCloudAndBack(t *testing.T) {
 		if status[p] != s {
 			t.Fatalf("%s status = %q, want %q (all: %v)", p, status[p], s, status)
 		}
+	}
+	// src/a2.go was added with git mv, so only the files git never tracked are marked.
+	if want := map[string]bool{"notes/new.txt": true, "assets/logo.bin": true, "link.txt": true}; len(untracked) != len(want) ||
+		!untracked["notes/new.txt"] || !untracked["assets/logo.bin"] || !untracked["link.txt"] {
+		t.Fatalf("untracked = %v, want %v", untracked, want)
 	}
 
 	if err := PushBranch(t.Context(), f.src, c, GitHubFileLimit); err != nil {

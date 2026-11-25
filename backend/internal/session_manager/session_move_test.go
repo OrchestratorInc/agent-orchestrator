@@ -23,11 +23,32 @@ func TestMovedSessionCannotRunHereAgain(t *testing.T) {
 	}
 }
 
-func (f *fakeStore) SetSessionMoveStarted(_ context.Context, id domain.SessionID, moveID string, _ time.Time) (bool, error) {
+func (f *fakeStore) EndSessionMoveStarted(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
-	rec.MoveStarted = moveID
+	if !ok || rec.MovedTo != nil {
+		return false, nil
+	}
+	rec.MoveStarted = ""
 	f.sessions[id] = rec
-	return ok, nil
+	return true, nil
+}
+
+// A move/complete that lands between a resume's read and its write wins: the
+// session is marked moved, so the resume refuses instead of running it here.
+func TestResumeRefusesASessionMarkedMovedMeanwhile(t *testing.T) {
+	m, st, _, _ := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+	rec := st.sessions["mer-1"]
+	rec.MoveStarted = "m-1"
+	st.sessions["mer-1"] = rec
+	// The store's copy is marked moved after the caller read the record.
+	stale := rec
+	moved := rec
+	moved.MovedTo = &domain.SessionMove{MoveID: "m-1", OrgID: "org-1", SessionID: "cloud-2"}
+	st.sessions["mer-1"] = moved
+	if err := m.endMoveHere(ctx, stale); !errors.Is(err, ErrSessionMoved) {
+		t.Fatalf("endMoveHere err = %v, want ErrSessionMoved", err)
+	}
 }
 
 // A session whose move to AO Cloud pushed its branch and did not finish may

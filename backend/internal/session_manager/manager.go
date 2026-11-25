@@ -3665,7 +3665,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if rec.MovedTo != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
 	}
-	m.endMoveHere(ctx, rec)
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -4017,7 +4019,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if rec.MovedTo != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
 	}
-	m.endMoveHere(ctx, rec)
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
+	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {
 		case <-m.persistentHostReconcileDone:
@@ -5201,22 +5205,29 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 	return nil
 }
 
-// endMoveHere clears a session's unfinished move to AO Cloud: an explicit
-// restore or resume (including a failed move's rollback) runs it here, so
-// the move is over.
-func (m *Manager) endMoveHere(ctx context.Context, rec domain.SessionRecord) {
+// endMoveHere ends a session's unfinished move to AO Cloud: an explicit
+// restore or resume (including a failed move's rollback) runs it here, so the
+// move is over. The store clears it only while the session is not marked
+// moved, so a move/complete that lands first wins with ErrSessionMoved and
+// the session never runs here and in AO Cloud both.
+func (m *Manager) endMoveHere(ctx context.Context, rec domain.SessionRecord) error {
 	if rec.MoveStarted == "" {
-		return
+		return nil
 	}
 	store, ok := m.store.(interface {
-		SetSessionMoveStarted(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error)
+		EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
 	})
 	if !ok {
-		return
+		return nil
 	}
-	if _, err := store.SetSessionMoveStarted(ctx, rec.ID, "", m.clock().UTC()); err != nil {
-		m.logger.Warn("clear an unfinished session move", "sessionID", rec.ID, "error", err)
+	ended, err := store.EndSessionMoveStarted(ctx, rec.ID, m.clock().UTC())
+	if err != nil {
+		return fmt.Errorf("end the unfinished move: %w", err)
 	}
+	if !ended {
+		return ErrSessionMoved
+	}
+	return nil
 }
 
 // restoreAllSession restores one terminated session marked for restore at

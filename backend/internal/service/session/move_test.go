@@ -25,9 +25,14 @@ import (
 
 type moveStore struct{ *fakeStore }
 
-func (m moveStore) SetSessionMovedTo(_ context.Context, id domain.SessionID, move domain.SessionMove, _ time.Time) (bool, error) {
-	rec := m.sessions[id]
-	rec.MovedTo = &move
+// MarkSessionMoved holds only while the move is the session's move in
+// progress and its agent is stopped, as the SQLite store's conditional write does.
+func (m moveStore) MarkSessionMoved(_ context.Context, id domain.SessionID, move domain.SessionMove, _ time.Time) (bool, error) {
+	rec, ok := m.sessions[id]
+	if !ok || rec.MovedTo != nil || rec.MoveStarted != move.MoveID || (!rec.IsTerminated && rec.Activity.State != domain.ActivityExited) {
+		return false, nil
+	}
+	rec.MovedTo, rec.MoveStarted = &move, ""
 	m.sessions[id] = rec
 	return true, nil
 }
@@ -59,7 +64,8 @@ func (moveStore) ListPRFactsForSessions(context.Context, []domain.SessionID) (ma
 func TestCompleteMoveDoesNotWaitForTheOrchestrator(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
-	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker,
+		MoveStarted: "move-1", Activity: domain.Activity{State: domain.ActivityExited}}
 	release := make(chan struct{})
 	told := make(chan string, 1)
 	fc := &fakeCommander{sendFunc: func(id domain.SessionID, message string) error {
@@ -84,6 +90,48 @@ func TestCompleteMoveDoesNotWaitForTheOrchestrator(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the orchestrator was not told")
+	}
+}
+
+// A move/complete retried after the user resumed the session here never
+// archives it: the session stays, and the refusal says the Cloud copy remains.
+func TestCompleteMoveRefusesASessionResumedHere(t *testing.T) {
+	for name, rec := range map[string]domain.SessionRecord{
+		"resumed (move ended here)": {ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Activity: domain.Activity{State: domain.ActivityExited}},
+		"agent running":             {ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MoveStarted: "move-1", Activity: domain.Activity{State: domain.ActivityActive}},
+		"another move":              {ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MoveStarted: "move-2", Activity: domain.Activity{State: domain.ActivityExited}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["mer-2"] = rec
+			fc := &fakeCommander{}
+			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+			_, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}})
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != "MOVE_NOT_IN_PROGRESS" {
+				t.Fatalf("err = %v, want MOVE_NOT_IN_PROGRESS", err)
+			}
+			if st.sessions["mer-2"].MovedTo != nil || len(fc.killed) != 0 {
+				t.Fatalf("session marked %v, killed %v; want neither", st.sessions["mer-2"].MovedTo, fc.killed)
+			}
+		})
+	}
+}
+
+// A repeated complete of a move already recorded still archives the session
+// and reports it moved.
+func TestCompleteMoveRepeatsSafely(t *testing.T) {
+	st := newFakeStore()
+	dest := domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MovedTo: &dest,
+		Activity: domain.Activity{State: domain.ActivityExited}}
+	fc := &fakeCommander{}
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+	if _, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: dest}); err != nil {
+		t.Fatalf("CompleteMove: %v", err)
+	}
+	if len(fc.killed) != 1 {
+		t.Fatalf("killed = %v, want the session archived", fc.killed)
 	}
 }
 
@@ -286,6 +334,31 @@ func mustOpen(t *testing.T, name string) *os.File {
 
 func importManifest(tip string) MoveManifest {
 	return MoveManifest{RepoKey: "github.com/acme/app", Branch: "feat/move", Tip: tip, Harness: domain.HarnessClaudeCode, SourceLabel: "Orchestrator Cloud"}
+}
+
+// A conversation from AO Cloud names the user's home folder with a
+// placeholder; it is placed with this machine's home folder filled in.
+func TestWriteImportArchiveFillsInTheHomeFolder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	const id = "01a1f2eb-1c10-7462-9afc-a0787b4e965c"
+	rollout := `{"type":"session_meta","payload":{"id":"` + id + `","timestamp":"2026-11-19T08:27:36.895Z","cwd":"/workspace/repository"}}` + "\n" +
+		`{"type":"response_item","payload":{"text":"read ` + nativetransfer.CloudHomePlaceholder + `/.config/app.toml"}}` + "\n"
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(rollout))
+	_ = zw.Close()
+	path, _, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessCodex, MoveImportTranscript{AgentSessionID: id, Gzip: gz.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "read "+home+"/.config/app.toml") || strings.Contains(string(data), nativetransfer.CloudHomePlaceholder) {
+		t.Fatalf("placed rollout = %s, want the placeholder filled in with %s", data, home)
+	}
 }
 
 func TestImportMoveRefusesAnotherRepository(t *testing.T) {
