@@ -84,7 +84,10 @@ import {
 	User,
 	Wrench,
 	X,
+	ToolBoxJson,
+	ToolBoxText,
 } from "@/components/app-icons";
+import { CHAT_BOX_CLASS, ChatBoxHeader } from "./ChatBox";
 
 /** The mark beside a command, tool or file-edit step, by what the step did. */
 const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
@@ -2193,9 +2196,12 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
 				// deliberately keeps only the category.
-				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
-					{detail.command}
-				</pre>
+				<div className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader label="Command" copyText={detail.command} copyLabel="Copy command" />
+					<pre data-no-swipe-nav="" className="scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-foreground">
+						{detail.command}
+					</pre>
+				</div>
 			) : null}
 			{!isFileChange && (detail?.reason || detail?.text) ? (
 				<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
@@ -2240,9 +2246,10 @@ const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: Co
 });
 
 /**
- * Expanded command / explore body: one soft chat-surface card with the shell
- * line nested in its own chip, then muted monospace output underneath — the
- * same anatomy as the Cursor explore block, restated in AO chat tokens.
+ * Expanded command body: the command as one `$` line with its own copy button,
+ * then what it printed in a "Shell" box that copies its output. A long or
+ * multi-line command stays one line and ends in an ellipsis; its title holds the
+ * whole of it.
  */
 function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
@@ -2250,50 +2257,46 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 	const reason = (detail?.reason ?? detail?.text)?.trim();
 	const binary = command ? commandBinaryLabel(command) : undefined;
 	const showPrompt = Boolean(reason && reason !== command);
+	const hasShell = Boolean(detail?.output || detail?.terminalInput);
+	const outputText = () => stripAnsi(commandOutputText(detail?.output as unknown));
 
 	return (
-		<div className="cursor-chat-explore-box mt-1 flex min-w-0 flex-col overflow-hidden rounded-lg border">
+		<div className="mt-1 flex min-w-0 flex-col gap-1.5">
 			{showPrompt ? (
-				<div className="flex min-w-0 items-start gap-2 border-b border-border/60 px-3 py-2">
-					<span
-						aria-hidden="true"
-						className="shrink-0 select-none pt-px font-mono text-caption leading-relaxed text-muted-foreground/70"
-					>
-						&gt;_
-					</span>
-					<div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-						<span className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
-							{reason}
-						</span>
-						{binary ? (
-							<span className="shrink-0 font-mono text-caption text-muted-foreground/55">
-								{binary}
-							</span>
-						) : null}
-					</div>
-				</div>
+				<p className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs leading-relaxed text-foreground/90">
+					<span className="min-w-0 break-words">{reason}</span>
+					{binary ? <span className="shrink-0 font-mono text-caption text-muted-foreground/55">{binary}</span> : null}
+				</p>
 			) : null}
 
 			{command ? (
-				<pre data-no-swipe-nav=""
-					className={cn(
-						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
-						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
-					)}
-				>
-					{command}
-				</pre>
-			) : null}
-
-			{detail?.terminalInput ? (
-				<div className={cn("px-3 py-2", detail?.output && "border-b border-border/60")}>
-					<TerminalInput
-						text={detail.terminalInput}
-						truncated={detail.terminalInputTruncated}
-					/>
+				<div data-command-line="" className="flex min-w-0 items-center gap-1">
+					<pre data-no-swipe-nav="" title={command} className="min-w-0 truncate font-mono text-xs leading-normal text-muted-foreground">
+						<span aria-hidden="true" className="select-none text-passive">$ </span>
+						{command}
+					</pre>
+					<CopyButton compact size="icon-xs" text={command} label="Copy command" className="shrink-0 [&_svg]:size-3" />
 				</div>
 			) : null}
-			{detail?.output ? <CommandOutput activity={activity} embedded /> : null}
+
+			{hasShell ? (
+				<div data-command-shell="" className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader
+						label="Shell"
+						copyText={detail?.output ? outputText : undefined}
+						copyLabel="Copy output"
+					/>
+					{detail?.terminalInput ? (
+						<div className={cn("px-3 py-2", detail?.output && "pb-0")}>
+							<TerminalInput
+								text={detail.terminalInput}
+								truncated={detail.terminalInputTruncated}
+							/>
+						</div>
+					) : null}
+					{detail?.output ? <CommandOutput activity={activity} embedded /> : null}
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -2315,13 +2318,12 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 	const shown = useMemo(() => caretNotation(text), [text]);
 	return (
 		<div className="flex flex-col gap-1">
-			<span className="flex items-center gap-1.5 text-caption text-muted-foreground/70">
-				<Keyboard aria-hidden="true" className="size-3" />
-				Agent typed
-			</span>
-			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
-				{shown}
-			</pre>
+			<div className={cn(CHAT_BOX_CLASS, "my-0")}>
+				<ChatBoxHeader icon={<Keyboard aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />} label="Agent typed" />
+				<pre data-no-swipe-nav="" className="scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-accent">
+					{shown}
+				</pre>
+			</div>
 			{truncated ? (
 				<p className="text-micro text-muted-foreground/70">
 					Orchestrator stopped recording keystrokes at its cap; more were sent.
@@ -2403,10 +2405,10 @@ function CommandOutput({
 				ref={pre}
 				aria-live={streaming ? "polite" : undefined}
 				className={cn(
-					"scrollbar-none max-h-64 overflow-auto font-mono leading-relaxed text-muted-foreground",
+					"scrollbar-none max-h-64 overflow-auto font-mono text-xs leading-normal text-muted-foreground",
 					embedded
-						? "cursor-chat-explore-output px-3 py-2 text-caption"
-						: "border border-border bg-background px-2.5 py-2 text-caption",
+						? "cursor-chat-explore-output px-3 pt-1 pb-3"
+						: "rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5",
 				)}
 			>
 				{preview}
@@ -2890,11 +2892,12 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 			{present(detail?.content) ? <ToolContent value={detail?.content} /> : null}
 			{detail?.progress ? (
-				<div className="flex flex-col gap-1">
-					<span className="text-caption text-muted-foreground/70">
-						Progress
-					</span>
-					<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
+				<div data-tool-box="progress" className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader
+						icon={<ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+						label="Progress"
+					/>
+					<pre className="scrollbar-none max-h-40 overflow-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-muted-foreground">
 						{detail.progress}
 					</pre>
 				</div>
@@ -2971,7 +2974,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 								</p>
 							))}
 							{view.text ? (
-								<pre className="scrollbar-none max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-muted-foreground">
+								<pre className="scrollbar-none m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground">
 									{view.text}
 								</pre>
 							) : null}
@@ -2985,23 +2988,24 @@ function AOToolRow({ view }: { view: AOToolView }) {
 
 function ToolContent({ value }: { value: unknown }) {
 	const text = normalizeToolCode(toolContentText(value));
-	if (text) {
-		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
-		return (
-			<pre data-no-swipe-nav="" className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
-				<code className="block whitespace-pre font-mono text-caption leading-relaxed text-muted-foreground">
-					{ text }
+	if (text && looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
+	const json = text ? undefined : truncationNote(value) ?? formatJson(value);
+	return (
+		<div data-tool-box="output" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={text
+					? <ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+					: <ToolBoxJson aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label="Output"
+				copyText={text || json}
+				copyLabel="Copy output"
+			/>
+			<pre data-no-swipe-nav="" className="scrollbar-none max-h-64 overflow-auto whitespace-pre px-3 pt-1 pb-3">
+				<code className={cn("block whitespace-pre font-mono text-xs leading-normal", text ? "text-muted-foreground" : "text-foreground")}>
+					{text || json}
 				</code>
 			</pre>
-		);
-	}
-	const truncated = truncationNote(value);
-	return (
-		<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-			<code className="font-mono text-caption leading-[1.55] text-foreground">
-				{truncated ?? formatJson(value)}
-			</code>
-		</pre>
+		</div>
 	);
 }
 
@@ -3021,35 +3025,43 @@ function looksLikeUnifiedDiff(text: string): boolean {
 
 function ToolDiffCode({ text }: { text: string }) {
 	return (
-		<div className="chat-code max-h-64 overflow-auto rounded-lg border border-border bg-background px-0 py-1 font-mono text-caption leading-[1.55]">
-			{ text.split("\n").map((line, index) => {
-				const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
-				const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
-				const content = kind === "context" ? line : line.slice(1);
-				return (
-					<div
-						key={`${index}-${line}`}
-						data-tool-diff-row=""
-						className={cn(
-							"flex min-w-max whitespace-pre px-2.5",
-							kind === "add" && "bg-success/10",
-							kind === "del" && "bg-error/10",
-						)}
-					>
-						<span
-							aria-hidden="true"
+		<div data-tool-box="output" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={<ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label="Output"
+				copyText={text}
+				copyLabel="Copy output"
+			/>
+			<div className="max-h-64 overflow-auto px-0 pt-1 pb-3 font-mono text-caption leading-[1.55]">
+				{ text.split("\n").map((line, index) => {
+					const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
+					const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
+					const content = kind === "context" ? line : line.slice(1);
+					return (
+						<div
+							key={`${index}-${line}`}
+							data-tool-diff-row=""
 							className={cn(
-								"w-4 shrink-0 select-none text-center",
-								kind === "add" && "text-success",
-								kind === "del" && "text-error",
+								"flex min-w-max whitespace-pre px-2.5",
+								kind === "add" && "bg-success/10",
+								kind === "del" && "bg-error/10",
 							)}
 						>
-							{marker}
-						</span>
-						<span className="whitespace-pre text-foreground/90">{content}</span>
-					</div>
-				);
-			})}
+							<span
+								aria-hidden="true"
+								className={cn(
+									"w-4 shrink-0 select-none text-center",
+									kind === "add" && "text-success",
+									kind === "del" && "text-error",
+								)}
+							>
+								{marker}
+							</span>
+							<span className="whitespace-pre text-foreground/90">{content}</span>
+						</div>
+					);
+				})}
+			</div>
 		</div>
 	);
 }
@@ -3078,17 +3090,18 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 	const text = useMemo(() => (capped ? "" : formatJson(value)), [capped, value]);
 
 	return (
-		<div className="flex flex-col gap-1">
-			<span className="text-caption text-muted-foreground/70">
-				{label}
-			</span>
+		<div data-tool-box="json" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={<ToolBoxJson aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label={label}
+				copyText={capped ? undefined : text}
+				copyLabel={`Copy ${label.toLowerCase()}`}
+			/>
 			{capped ? (
-				<p className="border border-border bg-background px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">
-					{capped}
-				</p>
+				<p className="px-3 pt-1 pb-3 text-xs leading-relaxed text-muted-foreground">{capped}</p>
 			) : (
-				<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-					<code className="font-mono text-caption leading-[1.55] text-foreground">
+				<pre data-no-swipe-nav="" className="scrollbar-none max-h-56 overflow-auto px-3 pt-1 pb-3">
+					<code className="font-mono text-xs leading-normal text-foreground">
 						<HighlightedCode code={text} language="json" />
 					</code>
 				</pre>
@@ -3157,6 +3170,19 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 		detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
 	);
 
+	// What was decided on, one ruled row each. A model making the call is a materially
+	// different thing to be told than a policy rule matching, so the provider's own
+	// word for who decided is carried rather than flattened to "automatically".
+	const facts: Array<{ term: string; value: string; strong?: boolean }> = [];
+	if (detail?.command) facts.push({ term: "command", value: detail.command, strong: true });
+	if (detail?.cwd) facts.push({ term: "cwd", value: shortenPaths(detail.cwd) });
+	if (detail?.host) facts.push({ term: "host", value: detail.host });
+	if (paths.length) facts.push({ term: "files", value: paths.map((path) => shortenPaths(path)).join(", ") });
+	if (detail?.decisionSource) {
+		const took = detail.durationMs !== undefined && detail.durationMs > 0 ? ` · ${formatDecisionDuration(detail.durationMs)}` : "";
+		facts.push({ term: "decided by", value: `${detail.decisionSource}${took}` });
+	}
+
 	return (
 		<div className="group/activity border-t border-border first:border-t-0">
 			<Pressable
@@ -3209,63 +3235,28 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 			</Pressable>
 
 			{open && hasBody ? (
-				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
-					{/* Said in full rather than implied by the label: "auto-approved" alone
-					    leaves it ambiguous whether the user set something up that did this. */}
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						{denied
-							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
-							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
-					</p>
-					{detail?.rationale ? (
-						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
-							{detail.rationale}
+				// Lined up with the label, past the icon (11px inset, 15px icon, 9px gap).
+				<div className="flex flex-col gap-2 pr-[11px] pb-2.5 pl-[35px]">
+					<div className="flex flex-col gap-1.5 rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 text-xs leading-relaxed">
+						{/* Said in full rather than implied by the label: "auto-approved" alone
+						    leaves it ambiguous whether the user set something up that did this. */}
+						<p className="m-0 text-muted-foreground">
+							{denied
+								? "The agent asked to do this and the provider declined on your behalf. You were not asked."
+								: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
 						</p>
+						{detail?.rationale ? <p className="m-0 text-foreground">{detail.rationale}</p> : null}
+					</div>
+					{facts.length ? (
+						<dl className="m-0 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-background font-mono text-caption leading-relaxed">
+							{facts.map((fact) => (
+								<div key={fact.term} className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-baseline gap-x-3 border-t border-border px-3 py-2 first:border-t-0">
+									<dt className="text-muted-foreground/70">{fact.term}</dt>
+									<dd className={cn("m-0 min-w-0 break-all", fact.strong ? "text-foreground" : "text-muted-foreground")}>{fact.value}</dd>
+								</div>
+							))}
+						</dl>
 					) : null}
-					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
-						{detail?.command ? (
-							<>
-								<dt className="text-muted-foreground/70">command</dt>
-								<dd className="min-w-0 break-all text-foreground">{detail.command}</dd>
-							</>
-						) : null}
-						{detail?.cwd ? (
-							<>
-								<dt className="text-muted-foreground/70">cwd</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{shortenPaths(detail.cwd)}
-								</dd>
-							</>
-						) : null}
-						{detail?.host ? (
-							<>
-								<dt className="text-muted-foreground/70">host</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">{detail.host}</dd>
-							</>
-						) : null}
-						{paths.length ? (
-							<>
-								<dt className="text-muted-foreground/70">files</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{paths.map((path) => shortenPaths(path)).join(", ")}
-								</dd>
-							</>
-						) : null}
-						{detail?.decisionSource ? (
-							<>
-								<dt className="text-muted-foreground/70">decided by</dt>
-								<dd className="text-muted-foreground">
-									{/* A model making the call is a materially different thing to be
-									    told than a policy rule matching, so the provider's own word
-									    for it is carried rather than flattened to "automatically". */}
-									{detail.decisionSource}
-									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDecisionDuration(detail.durationMs)}`
-										: ""}
-								</dd>
-							</>
-						) : null}
-					</dl>
 				</div>
 			) : null}
 		</div>
@@ -3518,7 +3509,7 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			</div>
 			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
 			{output && expanded ? (
-				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground select-text">{output}</pre>
+				<pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground select-text">{output}</pre>
 			) : null}
 		</div>
 	);
@@ -3795,9 +3786,12 @@ export function ApprovalCard({
 					{detail?.reason ?? approvalPrompt(subjectKind)}
 				</p>
 
-				<pre className="mt-2 scrollbar-none max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/45 px-2.5 py-1.5 font-mono text-xs leading-[1.45] text-muted-foreground">
-					{detail?.rawCommand ?? command}
-				</pre>
+				<div className={cn(CHAT_BOX_CLASS, "mt-2 mb-0")}>
+					<ChatBoxHeader label="Command" copyText={detail?.rawCommand ?? command} copyLabel="Copy command" />
+					<pre className="scrollbar-none m-0 max-h-32 overflow-auto whitespace-pre-wrap break-words px-3 pt-1 pb-3 font-mono text-xs leading-normal text-muted-foreground">
+						{detail?.rawCommand ?? command}
+					</pre>
+				</div>
 
 				<div className="mt-2 flex flex-wrap justify-end gap-1.5">
 					{denyDecision ? (
