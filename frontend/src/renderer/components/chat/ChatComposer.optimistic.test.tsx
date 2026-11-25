@@ -149,11 +149,12 @@ describe("optimistic message delivery", () => {
 		expect(pending.onSend.mock.calls[1][0]).toContain(".ao/attachments/two.png");
 	});
 
-	it("sends a file entered on its own during a restore right after the first message", async () => {
-		const sessionId = "optimistic-restore-file-only";
+	it.each([["still uploading", true], ["uploaded", false]])("sends a file entered on its own while %s right after the message being restored", async (state, uploading) => {
+		const sessionId = `optimistic-restore-file-only-${state}`;
 		const pending = pendingSend();
 		let finishStaging!: (paths: string[]) => void;
 		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
+		const finish = () => act(async () => finishStaging([".ao/attachments/next.png"]));
 		render(
 			<TooltipProvider>
 				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
@@ -162,12 +163,18 @@ describe("optimistic message delivery", () => {
 		const field = await startSend(pending.onSend, "first message");
 		pasteImages(field, "next.png");
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		if (!uploading) {
+			await finish();
+			await screen.findByLabelText("Remove next.png");
+		}
 		fireEvent.keyDown(field, { key: "Enter" });
-		await act(async () => pending.resolve());
-		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
 		expect(pending.onSend).toHaveBeenCalledOnce();
-
-		await act(async () => finishStaging([".ao/attachments/next.png"]));
+		await act(async () => pending.resolve());
+		if (uploading) {
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+			expect(pending.onSend).toHaveBeenCalledOnce();
+			await finish();
+		}
 
 		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
 		expect(pending.onSend.mock.calls[1][0]).toContain(".ao/attachments/next.png");

@@ -1764,7 +1764,8 @@ export const ChatComposer = memo(function ChatComposer({
 			if (
 				!savingQueuedEdit &&
 				editorClears.current !== editorClearsAtSubmit.current &&
-				(textRef.current.trim() || fileAttachments.hasPendingReads())
+				(textRef.current.trim() || fileAttachments.hasPendingReads() ||
+					(draftScope && readChatSessionDraft(draftScope).composer.attachments.length > 0))
 			) {
 				// A repeat Enter re-holds the same draft; count it only once.
 				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;

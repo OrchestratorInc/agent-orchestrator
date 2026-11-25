@@ -1729,6 +1729,9 @@ describe("controller recovery", () => {
 			});
 			await waitFor(() => expect(paths()).toEqual([RESTORE]));
 			const staging = result.current.stage([{ mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+			const removed = new AbortController();
+			const cancelled = result.current.stage([{ mimeType: "image/png", data: "iVBORw0KGgo=" }], removed.signal).catch((error: unknown) => error);
+			removed.abort();
 			await act(async () => {});
 			expect(paths()).toEqual([RESTORE]);
 
@@ -1737,7 +1740,8 @@ describe("controller recovery", () => {
 				await sending;
 			});
 			await expect(staging).resolves.toEqual([".ao/attachments/a.png"]);
-			expect(paths().indexOf(RESTORE)).toBeLessThan(paths().indexOf(ATTACHMENTS));
+			expect(await cancelled).toMatchObject({ name: "AbortError" });
+			expect(paths().filter((path) => path === ATTACHMENTS)).toHaveLength(1);
 		});
 
 		it("stages nothing when the restore fails", async () => {

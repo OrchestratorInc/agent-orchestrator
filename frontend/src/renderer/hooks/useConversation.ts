@@ -2426,6 +2426,7 @@ export function useStageAttachments(sessionId: string | undefined, hostId?: stri
 			if (archived) {
 				const restores = queryClient.getMutationCache().findAll({ mutationKey: ["resume-agent", hostId ?? "local", sessionId], status: "pending" });
 				await Promise.all(restores.map((restore) => restore.continue()));
+				signal?.throwIfAborted();
 			}
 			// A file too large to inline is streamed from disk to this session's
 			// daemon first, and the request names the upload.
