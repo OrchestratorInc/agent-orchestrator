@@ -1,6 +1,7 @@
 import { encodeButton as encodeButtonFrame, encodeTouch as encodeTouchFrame, type DeviceButton, type DevicePlatform, type TouchPhase } from "../../shared/devices/device-input";
 import { AoError } from "../../shared/telemetry/ao-error";
 import { authHeaders, httpBase, type ServerConfig } from "./config";
+import { AoError } from "../../shared/telemetry/ao-error";
 
 // Input frames for the device hub's stream sockets: the same encoder as the
 // desktop Device tab (packages/shared), handed to React Native's WebSocket as
@@ -37,7 +38,7 @@ export function deviceScreenshotRequest(cfg: ServerConfig, sessionId: string) {
 export async function fetchDeviceFrame(cfg: ServerConfig, sessionId: string, signal?: AbortSignal): Promise<string> {
 	const request = deviceScreenshotRequest(cfg, sessionId);
 	const res = await fetch(request.url, { headers: request.headers, signal });
-	if (!res.ok) throw new AoError("DEVICE_FRAME_HTTP", `device frame ${res.status}`);
+	if (!res.ok) throw new AoError("DEVICE_FRAME_FETCH_FAILED", `device frame ${res.status}`);
 	const blob = await res.blob();
 	return await new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
