@@ -319,11 +319,12 @@ describe("send keys", () => {
 		const { field } = renderComposer({ draftSessionId: "composer-long-paste", onStageAttachments: stage });
 		const log = "line\n".repeat(1000);
 		fireEvent.paste(field, { clipboardData: textClipboard(log) });
-		fireEvent.paste(field, { clipboardData: textClipboard(log) });
 		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
-		expect(await screen.findByRole("button", { name: "Remove pasted-text-2.txt" })).toBeInTheDocument();
 		expect(stage).toHaveBeenCalledWith([expect.objectContaining({ mimeType: "text/plain", name: "pasted-text.txt" })], expect.anything());
 		expect(composerWireText(field)).toBe("");
+
+		fireEvent.paste(field, { clipboardData: textClipboard(log) });
+		expect(await screen.findByRole("button", { name: "Remove pasted-text-2.txt" })).toBeInTheDocument();
 	});
 	it("attaches a long text that comes with an image as a file beside the image", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.txt"]);
