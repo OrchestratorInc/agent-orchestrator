@@ -921,6 +921,39 @@ describe("cloudShare IPC for a remote host's file", () => {
 		expect((await inspect()).pageFilesChanged).toBe(true);
 	});
 
+	it("publishes nothing when the host refuses the request, not a file, while a page's files download", async () => {
+		for (const status of [401, 408, 429]) {
+			const hostFiles = hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } });
+			// Found, then the host locks this device out or no longer takes its credential.
+			const lockedOut = hostFiles.get("sess-1/docs/b.png")!;
+			lockedOut.served = () => { lockedOut.status = status; };
+			const { publish, hostFile, requests } = setup({ files: true, hostFiles });
+			await expect(publish(hostFile), String(status)).resolves.toMatchObject({ status: "error" });
+			expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/finalize");
+			expect(await snapshots()).toEqual([]);
+		}
+	});
+
+	it("publishes nothing when the host refuses the request while a page's files are looked up", async () => {
+		const { publish, hostFile, requests } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png">`, { "a.png": { body: "png", status: 401 } }),
+		});
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "error" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+	});
+
+	it("does not offer to republish a host page because the host refused the check, not a file", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png" } });
+		const { invoke, publish, hostFile } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1 } });
+		hostFiles.get("sess-1/docs/a.png")!.status = 429;
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.not.toHaveProperty("pageFilesChanged");
+		// One the host refuses on its own (403) is gone from the page, so it does offer it.
+		hostFiles.get("sess-1/docs/a.png")!.status = 403;
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.toMatchObject({ pageFilesChanged: true });
+	});
+
 	it("publishes nothing when the host stops answering while a page's files are found", async () => {
 		const { publish, hostFile, requests } = setup({
 			files: true,

@@ -90,6 +90,17 @@ function hostPageFileVersion(resolvedPath: string, fingerprint: string): string 
 	return `${resolvedPath}\n${fingerprint}`;
 }
 
+/**
+ * Whether a host refused one file of a page (403): that file is left out. Its
+ * other refusals are about the request, not the file (401 for a revoked
+ * device or wrong password, 408, 429 while it locks this address out), so
+ * they fail the publish rather than drop files a link may already serve. A
+ * missing file (404) is file_missing.
+ */
+function hostRefusedFile(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "host_unavailable" && error.status === 403;
+}
+
 /** How many of a published host page's files are looked up at once, to tell whether any changed. */
 const HOST_PAGE_FILE_CHECKS = 8;
 
@@ -414,7 +425,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		} catch (error) {
 			if (!(error instanceof CloudShareError)) throw error;
 			if (error.code === "file_missing" || error.code === "invalid_file") return "";
-			if (error.code === "host_unavailable" && error.status >= 400 && error.status < 500) return "";
+			if (hostRefusedFile(error)) return "";
 			return undefined;
 		}
 	};
@@ -468,7 +479,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			if (!info.resolvedPath) throw new CloudShareError("invalid_file", "The machine this file is on does not say where the file resolves.");
 			return { ...located, relativePath: info.resolvedPath, size: info.size };
 		} catch (error) {
-			if (error instanceof CloudShareError && error.code === "host_unavailable" && error.status >= 400 && error.status < 500) {
+			if (error instanceof CloudShareError && hostRefusedFile(error)) {
 				throw new CloudShareError("invalid_file", error.message, error.status);
 			}
 			throw error;
@@ -542,7 +553,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 						pageFiles.fingerprints[used.referencedPath] = hostPageFileVersion(used.file.relativePath, copy.fingerprint);
 					} catch (error) {
 						if (!(error instanceof CloudShareError)) throw error;
-						if (error.code === "host_unavailable" && error.status >= 400 && error.status < 500) {
+						if (hostRefusedFile(error)) {
 							// One the host refuses to serve now is left out, as it is when it is looked up.
 							pageFiles.skipped.push({ reference: used.path, reason: "outside" });
 						} else if (error.code === "file_missing" || error.code === "source_changed") {
