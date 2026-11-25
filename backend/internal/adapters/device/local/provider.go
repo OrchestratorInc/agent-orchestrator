@@ -250,6 +250,12 @@ func (p *Provider) EnsureReady(ctx context.Context) error {
 		return errProviderClosed
 	}
 	p.hub = hub
+	// Every helper of this hub belongs to the boot each simulator is on now.
+	go func() { //nolint:gosec // G118: outlives the request that started the hub
+		ctx, cancel := context.WithTimeout(p.life, 30*time.Second)
+		defer cancel()
+		p.recordBoots(ctx)
+	}()
 	if p.tuned == nil {
 		// A restarted daemon: put back what the last one had set.
 		p.tuned = p.loadTuned()
@@ -956,11 +962,12 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		return device, nil
 	}
 	startedHere := !device.Booted
-	// A boot that does not finish leaves no expected boot behind, or a later
-	// boot outside AO would pass as this one.
-	expected, finished := false, false
+	// The expected-boot mark only covers this call: a boot that does not finish
+	// must not let a later boot outside AO pass as this one, and one that does
+	// has recorded its boot by then.
+	expected := false
 	defer func() {
-		if expected && !finished {
+		if expected {
 			p.mu.Lock()
 			delete(p.ownBoots, device.ID)
 			p.mu.Unlock()
@@ -1025,7 +1032,12 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		p.awaitLiveStream(ctx, device)
 	}
 	p.restoreQuality(ctx, device)
-	finished = true
+	if expected {
+		// Its own deadline: the boot's may be nearly spent by the stream wait.
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		p.recordBoots(recordCtx, device.ID)
+		cancel()
+	}
 	return device, nil
 }
 
@@ -1074,7 +1086,10 @@ func (p *Provider) expectBoot(udid string) {
 // back: video came, and every touch went nowhere until the hub restarted. So
 // a running simulator found on a boot this provider did not start gets the
 // hub replaced, which gives every simulator a fresh helper; viewers reconnect.
-// The first sighting of a simulator only records its boot.
+// Boots are recorded whenever the helpers are known to belong to them, when a
+// hub starts and when Boot finishes (see recordBoots), so a reboot nobody was
+// watching is caught on the next look; a simulator first seen later (one
+// created after the hub started) only has its boot recorded then.
 func (p *Provider) NoteBooted(device ports.DeviceInfo) {
 	if device.Platform != ports.DevicePlatformIOS || !device.Booted || device.BootID == "" {
 		return
@@ -1086,11 +1101,9 @@ func (p *Provider) NoteBooted(device ports.DeviceInfo) {
 	previous, seen := p.bootIDs[device.ID]
 	p.bootIDs[device.ID] = device.BootID
 	changed := seen && previous != device.BootID
-	own := p.ownBoots[device.ID]
-	if own && (changed || !seen) {
-		delete(p.ownBoots, device.ID)
-	}
-	replace := changed && !own && p.hub != nil && !p.closed && !p.replacingHub
+	// A boot Boot is still running is expected: Boot records it and clears
+	// the mark when it ends.
+	replace := changed && !p.ownBoots[device.ID] && p.hub != nil && !p.closed && !p.replacingHub
 	if replace {
 		p.replacingHub = true
 	}
@@ -1098,6 +1111,35 @@ func (p *Provider) NoteBooted(device ports.DeviceInfo) {
 	if replace {
 		p.log.Info("simulator booted outside AO; restarting the device hub for fresh touch input", "device", device.ID)
 		go p.replaceHub() //nolint:gosec // G118: outlives the request that noticed the boot
+	}
+}
+
+// recordBoots stores the boot each simulator is on now as the one the hub's
+// helpers belong to: called when a hub starts (all its helpers are new) and
+// when Boot has booted a simulator (its helper was reset first). Only the
+// named simulators when any are given.
+func (p *Provider) recordBoots(ctx context.Context, only ...string) {
+	_, boots, err := p.unlistedSimulators(ctx, nil)
+	if err != nil || len(boots) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.bootIDs == nil {
+		p.bootIDs = map[string]string{}
+	}
+	if len(only) == 0 {
+		for id, boot := range boots {
+			if boot != "" {
+				p.bootIDs[id] = boot
+			}
+		}
+		return
+	}
+	for _, id := range only {
+		if boot := boots[id]; boot != "" {
+			p.bootIDs[id] = boot
+		}
 	}
 }
 

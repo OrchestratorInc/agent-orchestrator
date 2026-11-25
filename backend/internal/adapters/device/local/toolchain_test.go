@@ -897,8 +897,8 @@ func TestNoteBootedReplacesTheHubForABootOutsideAO(t *testing.T) {
 	}
 }
 
-// A boot through Boot gets a fresh helper there, so it does not replace the
-// hub; the next unexpected boot still does.
+// A boot Boot is running is expected and does not replace the hub, however
+// often it is seen; once Boot has ended, the next unexpected boot does.
 func TestNoteBootedAcceptsItsOwnBoot(t *testing.T) {
 	p := New(Config{DataDir: t.TempDir()})
 	p.hub = &hubProcess{done: make(chan struct{})}
@@ -909,12 +909,82 @@ func TestNoteBootedAcceptsItsOwnBoot(t *testing.T) {
 	p.NoteBooted(sim("boot-1"))
 	p.expectBoot("UDID-1")
 	p.NoteBooted(sim("boot-2"))
+	p.NoteBooted(sim("boot-2"))
 	if n := replacementsSeen(replaced); n != 0 {
 		t.Fatalf("AO's own boot replaced the hub %d times", n)
 	}
+	p.mu.Lock()
+	delete(p.ownBoots, "UDID-1") // Boot ended
+	p.mu.Unlock()
 	p.NoteBooted(sim("boot-3"))
 	if n := replacementsSeen(replaced); n != 1 {
 		t.Fatalf("the next outside boot replaced the hub %d times, want 1", n)
+	}
+}
+
+// simctlBoots answers `simctl list devices` with UDID-1 on the given boot.
+func simctlBoots(boot *string, mu *sync.Mutex) func(context.Context, string, ...string) ([]byte, error) {
+	return func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name != "xcrun" {
+			return nil, errors.New("not here")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return []byte(`{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{"udid":"UDID-1","name":"Lab","state":"Shutdown","lastUsedAt":"` + *boot + `"}]}}`), nil
+	}
+}
+
+// An agent opens a device with nobody watching, then it is rebooted outside
+// AO: the first look at it afterwards must still catch the reboot, because
+// Boot recorded the boot it made.
+func TestOutsideBootAfterAnUnwatchedAOBootIsCaught(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("simctl is macOS only")
+	}
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(hub.Close)
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	replaced := fakeReplacements(p)
+	var mu sync.Mutex
+	boot := "boot-ao"
+	p.run = simctlBoots(&boot, &mu)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := p.Boot(ctx, ports.DeviceInfo{ID: "UDID-1", Name: "Lab", Platform: ports.DevicePlatformIOS}); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	recorded, expected := p.bootIDs["UDID-1"], p.ownBoots["UDID-1"]
+	p.mu.Unlock()
+	if recorded != "boot-ao" || expected {
+		t.Fatalf("after Boot: recorded %q, still expected %v; want boot-ao and no mark", recorded, expected)
+	}
+	p.NoteBooted(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: "boot-outside"})
+	if n := replacementsSeen(replaced); n != 1 {
+		t.Fatalf("an unwatched outside boot replaced the hub %d times, want 1", n)
+	}
+}
+
+// A hub's helpers belong to the boots its simulators were on when it started:
+// a lease restored after a daemon restart, or taken on a simulator already
+// running, is caught on its first look after an outside reboot.
+func TestHubStartRecordsEverySimulatorsBoot(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("simctl is macOS only")
+	}
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{done: make(chan struct{})}
+	replaced := fakeReplacements(p)
+	var mu sync.Mutex
+	boot := "boot-1"
+	p.run = simctlBoots(&boot, &mu)
+	p.recordBoots(context.Background())
+	p.NoteBooted(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: "boot-2"})
+	if n := replacementsSeen(replaced); n != 1 {
+		t.Fatalf("a reboot since the hub started replaced the hub %d times, want 1", n)
 	}
 }
 
