@@ -6293,6 +6293,20 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("does not reopen Computer use once the session's earlier steps leave the timeline window", () => {
+		computerUseTimelineState.steps = [stepBefore("1")];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			// Later calls push the pre-entry step out of the window.
+			computerUseTimelineState.steps = [stepNow("2")];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
 	it("treats steps made while the session was off screen as history", () => {
 		computerUseTimelineState.steps = undefined;
 		const view = render(<SessionView sessionId="sess-1" />);

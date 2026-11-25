@@ -2833,6 +2833,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (!visit || visit.sessionId !== uiSessionId || latestComputerUseStep === visit.seen) return;
 		visit.seen = latestComputerUseStep;
 		const entries = computerUseTimeline.data ?? [];
+		// Steps from before this visit mean the session already made its first
+		// call: remember that, since the timeline window can later drop them.
+		if (entries.some((entry) => Date.parse(entry.at) < visit.enteredAt)) visit.revealed = true;
 		const latest = entries.at(-1);
 		if (!latest || Date.parse(latest.at) < visit.enteredAt || terminated) return;
 		// The session's first step ever, made while it is on screen, opens the tab.
