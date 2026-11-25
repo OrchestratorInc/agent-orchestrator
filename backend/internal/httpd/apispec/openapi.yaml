@@ -21554,6 +21554,8 @@ components:
           - provider_key_missing
           - auth_required
           type: string
+        hasEventPrompt:
+          type: boolean
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:

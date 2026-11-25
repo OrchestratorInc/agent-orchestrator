@@ -7437,6 +7437,7 @@ export interface components {
             errorMessage?: string;
             /** @enum {string} */
             failureCode?: "provider_key_missing" | "auth_required";
+            hasEventPrompt?: boolean;
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
