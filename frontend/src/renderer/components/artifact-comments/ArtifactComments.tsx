@@ -65,9 +65,14 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
 /**
  * The open file's published page with its comments: the same bytes the link
  * shows, framed from its share host with this account's view token, and the
- * comments panel beside it. Comments belong to the published version, so the
- * local file is not shown while they are open; a notice says so when the
- * local file has changed since publishing.
+ * comments in a popover floating over its top right corner, under the header's
+ * Comments button, so the page keeps its full width. Comments belong to the
+ * published version, so the local file is not shown while they are open; a
+ * notice says so when the local file has changed since publishing.
+ *
+ * With no comments yet nothing pops up: comment mode is on (the button stays
+ * pressed and the page outlines what's under the pointer), and the popover
+ * opens once an element is picked.
  */
 export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget, slug, title }: {
 	kind: ArtifactCommentsPickKind;
@@ -127,30 +132,34 @@ export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget,
 		);
 	}
 	const version = comments.snapshot?.currentVersion;
+	// Shown once there is something to show: threads, a picked element, a load
+	// error, or a page whose parts can't be picked (which says so).
+	const showPopover = (threads?.length ?? 0) > 0 || picked !== null || (Boolean(comments.error) && !comments.snapshot) || bridge.status === "unsupported";
 	return (
-		<div className="flex h-full min-h-0" data-testid="artifact-comments-workspace">
-			<div className="flex min-w-0 flex-1 flex-col">
-				{outdated && version !== undefined ? (
-					<p className="shrink-0 border-b border-border px-3 py-1.5 text-caption text-muted-foreground" role="status">
-						{t("artifactComments.publishedVersion", { version })}
-					</p>
+		<div className="flex h-full min-h-0 flex-col" data-testid="artifact-comments-workspace">
+			{outdated && version !== undefined ? (
+				<p className="shrink-0 border-b border-border px-3 py-1.5 text-caption text-muted-foreground" role="status">
+					{t("artifactComments.publishedVersion", { version })}
+				</p>
+			) : null}
+			<div className="relative min-h-0 flex-1">
+				<SharedArtifactFrame frameRef={setFrame} linkId={slug} title={title} />
+				{showPopover ? (
+					<ArtifactCommentsPanel
+						bridgeStatus={bridge.status}
+						className="absolute top-2 right-2 z-overlay max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) animate-popover-in"
+						comments={comments}
+						expandedPath={expandedPath}
+						groups={groups}
+						onCancelPick={cancelPick}
+						onClose={onClose}
+						onExpand={expand}
+						picked={picked}
+						positions={positions}
+						sendTarget={sendTarget}
+					/>
 				) : null}
-				<div className="relative min-h-0 flex-1">
-					<SharedArtifactFrame frameRef={setFrame} linkId={slug} title={title} />
-				</div>
 			</div>
-			<ArtifactCommentsPanel
-				bridgeStatus={bridge.status}
-				comments={comments}
-				expandedPath={expandedPath}
-				groups={groups}
-				onCancelPick={cancelPick}
-				onClose={onClose}
-				onExpand={expand}
-				picked={picked}
-				positions={positions}
-				sendTarget={sendTarget}
-			/>
 		</div>
 	);
 }

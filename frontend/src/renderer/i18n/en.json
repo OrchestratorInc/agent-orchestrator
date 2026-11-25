@@ -5475,6 +5475,7 @@
 	"artifactComments.resolvedOnElement": "{{n}} resolved on this element",
 	"artifactComments.show": "Show",
 	"artifactComments.hide": "Hide",
+	"artifactComments.collapseThread": "Collapse thread",
 	"artifactComments.resolvedBy": "Resolved by {{name}}",
 	"artifactComments.unanchored": "Couldn't find this part of the page",
 	"artifactComments.edited": "edited",

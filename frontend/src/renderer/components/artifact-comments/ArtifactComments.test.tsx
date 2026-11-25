@@ -273,6 +273,31 @@ describe("ArtifactCommentsPanel cards and threads", () => {
 		port.close();
 	});
 
+	it("pops up nothing on an artifact with no comments until an element is picked", async () => {
+		const client = fakeClient(snapshot({ threads: [] }));
+		renderWorkspace(client);
+		await waitFor(() => expect(client.listArtifactShareComments).toHaveBeenCalled());
+		const port = await connectBridge();
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+		// Comment mode is on (the frame is framed for picking), but no popover and no empty state.
+		expect(screen.getByTestId("published-frame")).toBeInTheDocument();
+		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
+		expect(screen.queryByTestId("artifact-comments-empty")).not.toBeInTheDocument();
+		port.postMessage({ type: "pick", anchor: newAnchor });
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		expect(within(popover).getByRole("textbox", { name: "Add a comment…" })).toBeInTheDocument();
+		await userEvent.click(within(popover).getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument());
+		port.close();
+	});
+
+	it("floats the comments over the artifact instead of beside it", async () => {
+		renderWorkspace(fakeClient());
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		expect(popover).toHaveClass("absolute");
+		expect(popover.parentElement).toContainElement(screen.getByTestId("published-frame"));
+	});
+
 	it("shows an element's threads folded below the box when writing on it", async () => {
 		renderWorkspace(fakeClient());
 		await screen.findByRole("button", { expanded: false, name: /staging only/ });
@@ -285,13 +310,27 @@ describe("ArtifactCommentsPanel cards and threads", () => {
 		port.close();
 	});
 
-	it("collapses an element with several threads to its first comment and +N more, with no thread count", async () => {
+	it("collapses an element with several threads to its newest thread and +N more, with no thread count", async () => {
 		const other = thread({ id: "t2", createdAt: "2026-11-23T09:30:00Z", comments: [{ id: "c3", threadId: "t2", clientId: "k3", author: sam, body: "Title is too long for the sidebar.", createdAt: "2026-11-23T09:30:00Z", editedAt: null, deleted: false }] });
 		renderWorkspace(fakeClient(snapshot({ threads: [thread(), other] })));
-		const card = await screen.findByRole("button", { expanded: false, name: /staging only/ });
+		const card = await screen.findByRole("button", { expanded: false, name: /too long/ });
 		expect(within(card).getByText("+1 more")).toBeInTheDocument();
 		expect(within(card).queryByText(/thread/i)).not.toBeInTheDocument();
-		expect(within(card).queryByText("Title is too long for the sidebar.")).not.toBeInTheDocument();
+		expect(within(card).queryByText(/staging only/)).not.toBeInTheDocument();
+	});
+
+	it("opens the newest thread of an expanded element and folds the others to one line", async () => {
+		const other = thread({ id: "t2", createdAt: "2026-11-23T09:30:00Z", comments: [{ id: "c3", threadId: "t2", clientId: "k3", author: sam, body: "Title is too long for the sidebar.", createdAt: "2026-11-23T09:30:00Z", editedAt: null, deleted: false }] });
+		renderWorkspace(fakeClient(snapshot({ threads: [thread(), other] })));
+		await userEvent.click(await screen.findByRole("button", { expanded: false, name: /too long/ }));
+		const threadIds = () => [...document.querySelectorAll("[data-thread-id]")].map((node) => [node.getAttribute("data-thread-id"), node.hasAttribute("data-thread-folded")]);
+		// Newest first and open; the older thread is one line.
+		expect(threadIds()).toEqual([["t2", false], ["t1", true]]);
+		expect(screen.getAllByRole("textbox", { name: "Reply…" })).toHaveLength(1);
+		await userEvent.click(screen.getByRole("button", { expanded: false, name: /staging only/ }));
+		expect(threadIds()).toEqual([["t2", false], ["t1", false]]);
+		await userEvent.click(screen.getAllByRole("button", { name: "Collapse thread" })[0]);
+		expect(threadIds()).toEqual([["t2", true], ["t1", false]]);
 	});
 
 	it("labels resolved threads with who resolved them and offers Reopen, never Send to agent", async () => {

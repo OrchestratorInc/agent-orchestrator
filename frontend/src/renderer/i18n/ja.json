@@ -5495,6 +5495,7 @@
 	"artifactComments.resolvedOnElement": "この要素で解決済み {{n}} 件",
 	"artifactComments.show": "表示",
 	"artifactComments.hide": "非表示",
+	"artifactComments.collapseThread": "スレッドを折りたたむ",
 	"artifactComments.resolvedBy": "{{name}} が解決",
 	"artifactComments.unanchored": "ページのこの部分が見つかりません",
 	"artifactComments.edited": "編集済み",

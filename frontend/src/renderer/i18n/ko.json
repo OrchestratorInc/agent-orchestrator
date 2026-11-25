@@ -5495,6 +5495,7 @@
 	"artifactComments.resolvedOnElement": "이 요소에서 해결됨 {{n}}개",
 	"artifactComments.show": "보기",
 	"artifactComments.hide": "숨기기",
+	"artifactComments.collapseThread": "스레드 접기",
 	"artifactComments.resolvedBy": "{{name}} 님이 해결함",
 	"artifactComments.unanchored": "페이지의 이 부분을 찾을 수 없습니다",
 	"artifactComments.edited": "수정됨",

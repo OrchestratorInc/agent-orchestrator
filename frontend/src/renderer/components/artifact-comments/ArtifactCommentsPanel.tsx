@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, MoreHorizontal, RotateCcw, Send, X } from "@/components/app-icons";
+import { ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ChevronUp, MoreHorizontal, RotateCcw, Send, X } from "@/components/app-icons";
 import { formatTimeTerse } from "../../lib/format-time";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -200,11 +200,13 @@ function ReplyBox({ onSubmit }: { onSubmit: (body: string, clientId: string) => 
 }
 
 /** One comment: its author row (with the ⋯ menu and anything the thread adds), text, and "edited". */
-function CommentItem({ aside, comment, comments, reply, viewer }: {
+function CommentItem({ aside, comment, comments, reply, trailing, viewer }: {
 	aside?: ReactNode;
 	comment: ArtifactComment;
 	comments: ArtifactCommentsState;
 	reply: boolean;
+	/** After the ⋯ menu, at the row's very end. */
+	trailing?: ReactNode;
 	viewer: Viewer;
 }) {
 	const { t } = useTranslation();
@@ -234,6 +236,7 @@ function CommentItem({ aside, comment, comments, reply, viewer }: {
 		return (
 			<p className={cn("text-xs italic text-muted-foreground", reply && "ml-2.5 border-l-2 border-border pl-2.5")} data-comment-id={comment.id}>
 				{t("artifactComments.deleted")}
+				{trailing ? <span className="float-right not-italic">{trailing}</span> : null}
 			</p>
 		);
 	}
@@ -254,6 +257,7 @@ function CommentItem({ aside, comment, comments, reply, viewer }: {
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
+				{trailing}
 			</AuthorRow>
 			{editing ? (
 				<div className="flex flex-col gap-1.5 rounded-md border border-logo-accent bg-background p-2">
@@ -309,8 +313,36 @@ function ThreadSummary({ thread, viewer }: { thread: ArtifactCommentThread; view
 	);
 }
 
-function ThreadView({ comments, sendTarget, thread, viewer, version }: {
+/** A folded thread in an expanded group: one line of avatar, name, time and its first comment; click to open it. */
+function ThreadLine({ onExpand, thread, viewer }: { onExpand: () => void; thread: ArtifactCommentThread; viewer: Viewer }) {
+	const { t } = useTranslation();
+	const authorName = useAuthorName();
+	const first = thread.comments[0];
+	if (!first) return null;
+	const name = authorName(first, viewer);
+	return (
+		<button
+			aria-expanded={false}
+			className="-mx-1 flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1.5 text-left text-xs outline-none hover:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+			data-thread-id={thread.id}
+			data-thread-folded="true"
+			onClick={onExpand}
+			type="button"
+		>
+			<Avatar author={first.author} name={name} />
+			<span className="max-w-[40%] shrink-0 truncate font-semibold text-foreground">{name}</span>
+			<span className="shrink-0 text-muted-foreground tabular-nums">· {formatTimeTerse(first.createdAt)}</span>
+			<span className={cn("min-w-0 flex-1 truncate text-sm", first.deleted ? "italic text-muted-foreground" : "text-foreground")}>
+				{first.deleted ? t("artifactComments.deleted") : first.body}
+			</span>
+		</button>
+	);
+}
+
+function ThreadView({ comments, onCollapse, sendTarget, thread, viewer, version }: {
 	comments: ArtifactCommentsState;
+	/** Folds the thread back to one line; set when its group has other threads. */
+	onCollapse?: () => void;
 	sendTarget?: ArtifactCommentsSendTarget;
 	thread: ArtifactCommentThread;
 	viewer: Viewer;
@@ -345,7 +377,19 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	return (
 		<div className="flex flex-col gap-2 py-2.5 first:pt-0 last:pb-0" data-thread-id={thread.id}>
 			{visibleComments(thread).map((comment, index) => (
-				<CommentItem aside={index === 0 ? aside : undefined} comment={comment} comments={comments} key={comment.id} reply={index > 0} viewer={viewer} />
+				<CommentItem
+					aside={index === 0 ? aside : undefined}
+					comment={comment}
+					comments={comments}
+					key={comment.id}
+					reply={index > 0}
+					trailing={index === 0 && onCollapse ? (
+						<Button aria-expanded aria-label={t("artifactComments.collapseThread")} className="-my-1" onClick={onCollapse} size="icon-xs" type="button" variant="quiet">
+							<ChevronUp aria-hidden="true" className="size-3.5" />
+						</Button>
+					) : undefined}
+					viewer={viewer}
+				/>
 			))}
 			{!resolved && !pending ? (
 				<ReplyBox onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)} />
@@ -378,7 +422,7 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 }
 
 /**
- * One element's card. Collapsed: the oldest thread's first comment, cut to two
+ * One element's card. Collapsed: the newest thread's first comment, cut to two
  * lines, then "+N more" when the element has several threads, else its reply
  * count; never a thread count. Expanded: an accent border around the content.
  */
@@ -440,6 +484,8 @@ export type ArtifactCommentsPanelProps = {
 	positions: readonly BridgeAnchorPosition[];
 	/** The session that made the file, when the app knows it: offers Send to agent to the owner. */
 	sendTarget?: ArtifactCommentsSendTarget;
+	/** The surface: the workspace floats it over the artifact as a popover. */
+	className?: string;
 };
 
 /**
@@ -449,6 +495,7 @@ export type ArtifactCommentsPanelProps = {
  */
 export function ArtifactCommentsPanel({
 	bridgeStatus,
+	className,
 	comments,
 	expandedPath,
 	groups,
@@ -466,6 +513,15 @@ export function ArtifactCommentsPanel({
 	const [showResolved, setShowResolved] = useState(false);
 	const [shownResolvedPath, setShownResolvedPath] = useState<string | null>(null);
 	const resolvedByPath = useMemo(() => new Map(groups.resolved.map((group) => [group.path, group])), [groups.resolved]);
+	// In the expanded group the newest thread is open and the rest fold to one line;
+	// a thread listed here has been flipped from that default. Reset per group.
+	const [flipped, setFlipped] = useState<ReadonlySet<string>>(() => new Set());
+	useEffect(() => setFlipped(new Set()), [expandedPath]);
+	const flip = (id: string) => setFlipped((current) => {
+		const next = new Set(current);
+		if (!next.delete(id)) next.add(id);
+		return next;
+	});
 	// New comments being written, by element: they outlive the box, which moves
 	// when the posted copy turns a new element's box into its group.
 	const [drafts, setDrafts] = useState<Record<string, NewCommentDraft>>({});
@@ -595,7 +651,27 @@ export function ArtifactCommentsPanel({
 								</div>
 							) : (
 								<>
-									{threadViews(group.threads)}
+									<div className="flex flex-col divide-y divide-border">
+										{group.threads.map((thread, index) => {
+											const several = group.threads.length > 1;
+											const open = !several || (index === 0) !== flipped.has(thread.id);
+											return open ? (
+												<ThreadView
+													comments={comments}
+													key={thread.id}
+													onCollapse={several ? () => flip(thread.id) : undefined}
+													sendTarget={sendTarget}
+													thread={thread}
+													version={version}
+													viewer={viewer}
+												/>
+											) : (
+												<div className="flex flex-col py-1 first:pt-0 last:pb-0" key={thread.id}>
+													<ThreadLine onExpand={() => flip(thread.id)} thread={thread} viewer={viewer} />
+												</div>
+											);
+										})}
+									</div>
 									{resolvedHere ? (
 										<div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5">
 											<button
@@ -646,7 +722,7 @@ export function ArtifactCommentsPanel({
 	return (
 		<aside
 			aria-label={t("artifactComments.title")}
-			className="flex h-full w-[340px] shrink-0 flex-col border-l border-border bg-background"
+			className={cn("flex w-[340px] shrink-0 flex-col", className ?? "h-full border-l border-border bg-background")}
 			onKeyDown={(event) => {
 				if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLTextAreaElement)) onClose();
 			}}
