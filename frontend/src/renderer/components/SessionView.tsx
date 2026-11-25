@@ -71,6 +71,7 @@ import { useShellAgentStore } from "../stores/shell-agent-store";
 import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
+import { OpenArtifactsContext } from "./chat/open-artifacts";
 import { CHAT_EVENTS_SAFETY_POLL_MS, CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { useCloudOpening } from "../lib/cloud-opening";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
@@ -2481,6 +2482,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 	}, [hostId, queryClient, sessionId, t]);
 
+	// The chat's "Open Artifacts": the Artifacts tab as it stands, no artifact asked for.
+	const handleOpenArtifacts = useCallback(() => {
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		transitionInspectorView("artifacts");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 	const handleOpenArtifact = useCallback(
 		(target: { feedback?: boolean; path: string }) => {
 			setBrowserPopOutState({ sessionId, phase: "docked" });
@@ -2995,6 +3003,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<TabSplitMenuContext.Provider value={splitTabMenu}>
 							<SessionTabAgentMenuContext.Provider value={sessionTabAgentMenu}>
+							<OpenArtifactsContext.Provider value={hasInspector ? handleOpenArtifacts : undefined}>
 							<div
 								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || mainReviewerChatId || sessionPaneHidden || activePRUrl) && "invisible pointer-events-none")}
 								data-split-pane={SESSION_TAB_KEY}
@@ -3146,6 +3155,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 							) : null}
 							</div>
+							</OpenArtifactsContext.Provider>
 							</SessionTabAgentMenuContext.Provider>
 							</TabSplitMenuContext.Provider>
 							</SplitHiddenTabKeysContext.Provider>

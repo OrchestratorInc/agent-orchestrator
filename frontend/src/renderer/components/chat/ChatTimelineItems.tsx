@@ -25,6 +25,9 @@ import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
 import { ArtifactThumbnail } from "../ArtifactThumbnail";
+import { ArtifactHoverPreview, artifactTypeLabel } from "../ArtifactHoverPreview";
+import { HoverCard, HoverCardTrigger } from "../ui/hover-card";
+import { useOpenArtifacts } from "./open-artifacts";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
 import { useChatEntrance, useRequestedEntrance } from "./chat-entrance";
@@ -4305,7 +4308,10 @@ export function TurnResults({
 	);
 }
 
-/** Preview cards for the deliverables one turn created or edited. */
+/**
+ * The deliverables one turn created or edited, as a list: each row opens its
+ * artifact, and hovering it previews the artifact above the row.
+ */
 export function TurnArtifacts({
 	artifacts,
 	sessionId,
@@ -4318,45 +4324,60 @@ export function TurnArtifacts({
 	/**
 	 * Opens the artifact by its artifact path. Not the workspace-file opener: a
 	 * cloud chat resolves that against workspace files, which never holds the
-	 * artifact, so a card would open the wrong file or none.
+	 * artifact, so a row would open the wrong file or none.
 	 */
 	onOpenArtifact?: (target: { path: string }) => void;
 }) {
+	const openArtifacts = useOpenArtifacts();
+	const count = artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`;
 	return (
-		<section aria-label={artifacts.length === 1 ? "Artifact" : `${artifacts.length} Artifacts`} className="flex min-w-0 flex-col gap-2">
-			<span className="text-xs text-muted-foreground">
-				{artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`}
-			</span>
-			<ul className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2.5">
+		<section aria-label={count} className="flex min-w-0 flex-col rounded-[var(--radius-panel)] bg-surface pb-1.5">
+			<div className="flex min-h-11 items-center justify-between gap-3 px-4">
+				<span className="text-sm text-muted-foreground">{count}</span>
+				{openArtifacts ? (
+					<button
+						type="button"
+						onClick={openArtifacts}
+						className="shrink-0 rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+					>
+						Open Artifacts
+					</button>
+				) : null}
+			</div>
+			<ul className="m-0 flex list-none flex-col px-1.5">
 				{artifacts.map(({ artifact, status }) => {
 					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
-					const verb = fileChangeVerb(status);
-					const body = (
+					const verb = status === "added" ? "Created" : "Updated";
+					const type = artifactTypeLabel(artifact.path, artifact.kind);
+					const line = (
 						<>
-							<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+							<span className="relative size-6 shrink-0 overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border">
 								<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={TURN_ARTIFACT_PAGE_HEIGHT} row={row} />
 							</span>
-							<span className="flex min-w-0 flex-col">
-								<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
-								<span className="truncate text-caption leading-4 text-passive">{verb}</span>
-							</span>
+							<span className="min-w-0 truncate text-sm text-foreground">{artifact.name}</span>
+							<span className="shrink-0 text-sm text-passive">{type}</span>
+							<span className="ml-auto shrink-0 pl-3 text-sm text-muted-foreground">{verb}</span>
 						</>
 					);
-					const tileClass = "group flex w-full min-w-0 flex-col gap-1.5 rounded-md text-left focus-visible:ring-1 focus-visible:ring-ring";
+					const rowClass = "flex h-10 w-full min-w-0 items-center gap-3 rounded-lg px-2.5 text-left";
 					return (
 						<li key={artifact.path} className="min-w-0">
-							{onOpenArtifact ? (
-								<Pressable
-									aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
-									className={tileClass}
-									onClick={() => onOpenArtifact({ path: artifact.path })}
-									title={artifact.path}
-								>
-									{body}
-								</Pressable>
-							) : (
-								<div className={tileClass} title={artifact.path}>{body}</div>
-							)}
+							<HoverCard openDelay={250} closeDelay={100}>
+								<HoverCardTrigger asChild>
+									{onOpenArtifact ? (
+										<Pressable
+											aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
+											className={cn(rowClass, "transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:outline-none")}
+											onClick={() => onOpenArtifact({ path: artifact.path })}
+										>
+											{line}
+										</Pressable>
+									) : (
+										<div className={rowClass}>{line}</div>
+									)}
+								</HoverCardTrigger>
+								<ArtifactHoverPreview row={row} detail={`${type} · ${verb} in this turn`} side="top" align="end" sideOffset={8} />
+							</HoverCard>
 						</li>
 					);
 				})}

@@ -1,11 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import type { SessionLinkSource } from "../lib/use-session-link-navigation";
 import type { PullRequestFacts, SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, artifactExcerpt, markdownPreviewSource } from "./SessionLinkPreviewCard";
+import { ArtifactLinkPreviewCard, ArtifactPreviewCard, SessionLinkPreviewCard, artifactExcerpt, markdownPreviewSource } from "./SessionLinkPreviewCard";
 
 const mocks = vi.hoisted(() => ({ source: vi.fn(), artifactFile: vi.fn(), dismiss: vi.fn() }));
 
@@ -223,7 +223,73 @@ describe("artifactExcerpt", () => {
 	});
 });
 
+/** The board's artifact card, for the first artifact its session lists. */
+function BoardCard({ session: owner }: { session: WorkspaceSession }) {
+	return <ArtifactPreviewCard artifact={owner.artifactFiles![0]!} session={owner} />;
+}
+
 describe("ArtifactLinkPreviewCard", () => {
+	beforeEach(() => {
+		mocks.source.mockReset();
+		mocks.artifactFile.mockReset();
+		// The picture stays unloaded until seen, so nothing here fetches file bytes.
+		vi.stubGlobal("IntersectionObserver", class {
+			observe() {}
+			disconnect() {}
+		});
+		vi.stubGlobal("ResizeObserver", class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		});
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("previews the linked artifact as the chat's artifact list does: picture, name, and what it is", () => {
+		const worker = session({ artifactFiles: [artifact({ kind: "html", name: "pricing.html", path: "pricing.html" })] });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/pricing.html" sourceHostId="box-a" />);
+
+		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined);
+		const card = screen.getByRole("status", { name: "pricing.html" });
+		expect(card).toHaveTextContent("pricing.html");
+		expect(card).toHaveTextContent(/^pricing\.htmlPage · /);
+		expect(mocks.artifactFile).not.toHaveBeenCalled();
+	});
+
+	it("names a file artifact by its type", () => {
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [artifact({ kind: "file", name: "nextjs.svg", path: "nextjs.svg" })] }))] }));
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/nextjs.svg" />);
+
+		expect(screen.getByRole("status", { name: "nextjs.svg" })).toHaveTextContent(/SVG · /);
+	});
+
+	it.each([
+		["a remote host's page", { sourceHostId: "box-a" }],
+		["a Cloud session's page", { sourceKind: "cloud" as const }],
+	])("never frames %s", (_name, props) => {
+		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl: "http://ao-inline-artifact.abc123.localhost:8080/chart.html" });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
+
+		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" {...props} />);
+
+		expect(screen.getByRole("status", { name: "chart.html" })).toBeInTheDocument();
+		expect(container.querySelector("iframe")).toBeNull();
+	});
+
+	it("reports an artifact the session no longer lists", () => {
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [] }))] }));
+
+		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/gone.md" />);
+
+		expect(screen.getByRole("status")).toHaveTextContent("Artifact unavailable");
+		expect(mocks.artifactFile).not.toHaveBeenCalled();
+	});
+});
+
+describe("ArtifactPreviewCard", () => {
 	beforeEach(() => {
 		mocks.source.mockReset();
 		mocks.artifactFile.mockReset();
@@ -231,12 +297,10 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("previews the linked artifact's leading content", async () => {
 		const worker = session({ artifactFiles: [artifact()] });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "# Plan\nShip artifact links." });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "# Plan\nShip artifact links." });
 
-		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/plans/plan.md" sourceHostId="box-a" />);
+		renderWithQuery(<BoardCard session={{ ...worker, hostId: "box-a" }} />);
 
-		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined);
 		expect(screen.getByText("plan.md")).toBeInTheDocument();
 		expect(screen.getByText("Implement worker link previews")).toHaveTextContent("Implement worker link previews · worker-367");
 		expect(await screen.findByText(/Ship artifact links\./)).toBeInTheDocument();
@@ -245,10 +309,9 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("shows a markdown artifact's frontmatter name and description above its body", async () => {
 		const worker = session({ artifactFiles: [artifact()] });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "---\nname: Q3 plan\ndescription: \"What ships next quarter\"\ntags: [a]\n---\n# Plan\nShip artifact links." });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "---\nname: Q3 plan\ndescription: \"What ships next quarter\"\ntags: [a]\n---\n# Plan\nShip artifact links." });
 
-		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/plans/plan.md" />);
+		renderWithQuery(<BoardCard session={worker} />);
 
 		expect(await screen.findByText("Q3 plan")).toBeInTheDocument();
 		expect(screen.getByText("What ships next quarter")).toBeInTheDocument();
@@ -258,10 +321,9 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("renders a markdown artifact's body as formatted markdown with inert links", async () => {
 		const worker = session({ artifactFiles: [artifact()] });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "# Plan\n\nShip **artifact links** and [docs](https://example.com).\n\n- one\n- two\n" });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "# Plan\n\nShip **artifact links** and [docs](https://example.com).\n\n- one\n- two\n" });
 
-		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/plans/plan.md" />);
+		renderWithQuery(<BoardCard session={worker} />);
 
 		expect(await screen.findByText("Plan")).toBeInTheDocument();
 		expect(screen.queryByText(/^# Plan/)).not.toBeInTheDocument();
@@ -273,10 +335,9 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("previews a CSV artifact as a table of its leading rows", async () => {
 		const worker = session({ artifactFiles: [artifact({ kind: "file", name: "sizes.csv", path: "sizes.csv" })] });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "package,size\n\"backend, go\",42\nfrontend,17\n" });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "package,size\n\"backend, go\",42\nfrontend,17\n" });
 
-		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/sizes.csv" />);
+		renderWithQuery(<BoardCard session={worker} />);
 
 		const table = await screen.findByRole("table");
 		expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["package", "size"]);
@@ -286,9 +347,8 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("previews an HTML artifact as a sandboxed render of its inline page without fetching its source", () => {
 		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl: "http://ao-inline-artifact.abc123.localhost:8080/chart.html" });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
-
-		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" />);
+		
+		const { container } = renderWithQuery(<BoardCard session={session({ artifactFiles: [page] })} />);
 
 		const frame = container.querySelector("iframe");
 		expect(frame).toHaveAttribute("src", "http://ao-inline-artifact.abc123.localhost:8080/chart.html");
@@ -303,10 +363,9 @@ describe("ArtifactLinkPreviewCard", () => {
 		["a remote host's proxy URL", "http://ao-inline-artifact.abc123.localhost:8080/chart.html", "box-a"],
 	])("never frames %s", async (_name, inlineUrl, hostId) => {
 		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Fallback text</p></body></html>" });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Fallback text</p></body></html>" });
 
-		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" sourceHostId={hostId} />);
+		const { container } = renderWithQuery(<BoardCard session={{ ...session({ artifactFiles: [page] }), hostId }} />);
 
 		expect(await screen.findByText("Fallback text")).toBeInTheDocument();
 		expect(container.querySelector("iframe")).toBeNull();
@@ -314,10 +373,9 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("never frames a Cloud session's page", async () => {
 		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html", inlineUrl: "http://ao-inline-artifact.abc123.localhost:8080/chart.html" });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Cloud text</p></body></html>" });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Cloud text</p></body></html>" });
 
-		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" sourceKind="cloud" />);
+		const { container } = renderWithQuery(<BoardCard session={{ ...session({ artifactFiles: [page] }), cloud: { provider: "cloud" } as never }} />);
 
 		expect(await screen.findByText("Cloud text")).toBeInTheDocument();
 		expect(container.querySelector("iframe")).toBeNull();
@@ -325,10 +383,9 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("falls back to an HTML artifact's text when it has no inline page", async () => {
 		const page = artifact({ kind: "html", name: "chart.html", path: "chart.html" });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [page] }))] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Remote chart</p></body></html>" });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "<html><body><p>Remote chart</p></body></html>" });
 
-		const { container } = renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/chart.html" />);
+		const { container } = renderWithQuery(<BoardCard session={session({ artifactFiles: [page] })} />);
 
 		expect(await screen.findByText("Remote chart")).toBeInTheDocument();
 		expect(container.querySelector("iframe")).toBeNull();
@@ -336,10 +393,9 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("names an orchestrator's artifacts as the orchestrator's, with the session id once", () => {
 		const orchestrator = session({ id: "skills-1", title: "skills-1", kind: "orchestrator", artifactFiles: [artifact()] });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(orchestrator)] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "Plan" });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "Plan" });
 
-		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/skills-1/artifacts/plans/plan.md" />);
+		renderWithQuery(<BoardCard session={orchestrator} />);
 
 		expect(screen.getByText(/^Orchestrator/)).toHaveTextContent(/^Orchestrator · skills-1$/);
 		expect(screen.queryByText(/#s-1/)).not.toBeInTheDocument();
@@ -347,20 +403,11 @@ describe("ArtifactLinkPreviewCard", () => {
 
 	it("shows a worker without a title by its session id alone", () => {
 		const worker = session({ id: "skills-2", title: "skills-2", artifactFiles: [artifact()] });
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
-		mocks.artifactFile.mockResolvedValue({ binary: false, content: "Plan" });
+				mocks.artifactFile.mockResolvedValue({ binary: false, content: "Plan" });
 
-		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/skills-2/artifacts/plans/plan.md" />);
+		renderWithQuery(<BoardCard session={worker} />);
 
 		expect(screen.getByText("skills-2")).toHaveTextContent(/^skills-2$/);
 	});
 
-	it("reports an artifact the session no longer lists", () => {
-		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ artifactFiles: [] }))] }));
-
-		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/gone.md" />);
-
-		expect(screen.getByRole("status")).toHaveTextContent("Artifact unavailable");
-		expect(mocks.artifactFile).not.toHaveBeenCalled();
-	});
 });
