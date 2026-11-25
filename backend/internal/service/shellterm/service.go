@@ -1511,9 +1511,8 @@ func (s *Service) resolveProjectRootOrDataDir(ctx context.Context, projectID dom
 //
 // The shellterm- prefix keeps shell handles trivially distinguishable from
 // session handles in logs, the DB, and the mux. The character set is
-// constrained by the runtime adapters, which are stricter than they look:
-// conpty rejects anything outside ^[a-zA-Z0-9_-]+$ and tmux uses the id as a
-// session name — so hex, not base64.
+// constrained to the shared session ID character set. Hex keeps generated
+// handles simple for ConPTY and tmux and avoids base64 path characters.
 func newShellTerminalHandleID() (string, error) {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
