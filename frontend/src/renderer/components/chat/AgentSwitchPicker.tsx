@@ -50,6 +50,8 @@ import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
+import { AccountBadge } from "../AccountBadge";
+import type { AccountColor } from "../../lib/account-identity";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
 export interface PendingAgentSwitch {
@@ -116,7 +118,8 @@ export interface AgentSwitchProps {
 }
 
 export interface AccountChoice {
-	options: Array<{ id: string; label: string; disabled?: boolean }>;
+	/** `name`, `email` and `color` feed the account's badge, shown when there are 2 or more accounts. */
+	options: Array<{ id: string; label: string; disabled?: boolean; name?: string; email?: string; color?: AccountColor }>;
 	value?: string;
 	onPick: (id: string) => void;
 	disabled?: boolean;
@@ -453,6 +456,8 @@ export function AgentModelPicker({
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
 	const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
+	// With two or more accounts the chip's logo becomes the badge of the account in use.
+	const chipAccount = showAccount && !terminal ? agentSwitch.account?.options.find((option) => option.id === agentSwitch.account?.value) : undefined;
 	// A setting changed in the menu is a choice too, so closing after it is not an abandon.
 	// It is not a model change.
 	const withPick = (toggle: ((next: boolean) => void) | undefined) => toggle && ((next: boolean) => {
@@ -501,7 +506,7 @@ export function AgentModelPicker({
 			</OptionMenuSub>
 		) : null,
 		// One account has nothing to switch to, so the row is only for two or more.
-		showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
+		showAccount && agentSwitch.account ? <AccountRows key="account" provider={shownHarness} account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
 	].filter(Boolean);
 	const settingsGroups = [
 		settingsRows.length > 0 ? settingsRows : null,
@@ -543,7 +548,8 @@ export function AgentModelPicker({
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 				data-telemetry-id={terminal ? undefined : "composer.model_picker"}
 			>
-				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
+				{chipAccount ? <AccountBadge provider={shownHarness} name={chipAccount.name} email={chipAccount.email} color={chipAccount.color} />
+					: <ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />}
 				{loadingModels && !savedLabel && !pending && !terminal ? (
 					<span className="flex items-center gap-1.5 text-muted-foreground">
 						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
@@ -821,7 +827,7 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 	);
 }
 
-function AccountRows({ account }: { account: AccountChoice }) {
+function AccountRows({ account, provider }: { account: AccountChoice; provider: string }) {
 	const { t } = useTranslation();
 	const chosen = account.options.find((option) => option.id === account.value);
 	return (
@@ -838,6 +844,7 @@ function AccountRows({ account }: { account: AccountChoice }) {
 							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
 							className="text-xs text-foreground"
 						>
+							<AccountBadge provider={provider} name={option.name} email={option.email} color={option.color} />
 							<span className="min-w-0 truncate">{option.label}</span>
 						</OptionMenuItem>
 					))}
