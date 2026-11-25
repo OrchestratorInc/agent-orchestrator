@@ -21,17 +21,6 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// offloadableNames are folder names whose contents a package manager or build
-// recreates. A folder is offloaded only when its name is here (or a project
-// lists its path) AND git reports it ignored: tracked or untracked-but-not-
-// ignored files are never touched.
-var offloadableNames = nameSet(
-	"node_modules", "dist", "build", "out", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vite",
-	".parcel-cache", ".angular", ".expo", ".cache", "coverage", "target", ".gradle", "__pycache__",
-	".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".venv", ".dart_tool", "Pods", "DerivedData",
-	".terraform", ".webpack", "storybook-static",
-)
-
 func nameSet(names ...string) map[string]bool {
 	set := make(map[string]bool, len(names))
 	for _, name := range names {
@@ -44,14 +33,6 @@ func nameSet(names ...string) map[string]bool {
 // project lists them and git ignores them: secrets, AO's own files and agent
 // or editor state.
 var protectedSegments = []string{".git", ".ao", ".claude", ".codex", ".agents", ".vscode", ".idea", ".ssh", ".aws"}
-
-// packageManaged are folders a package manager fills entirely from its
-// registry; their contents are never the user's own files, so they are not
-// searched for secrets (packages routinely ship test keys).
-var packageManaged = nameSet(
-	"node_modules", ".venv", "Pods", ".gradle", ".dart_tool", "__pycache__", ".tox", ".terraform",
-	".pytest_cache", ".mypy_cache", ".ruff_cache",
-)
 
 // containsProtected reports whether any path under dir is protected.
 func containsProtected(ctx context.Context, dir string) (bool, error) {
@@ -99,6 +80,8 @@ func isProtected(rel string) bool {
 type offloadTarget struct {
 	Rel   string // slash-separated, relative to the worktree
 	Bytes int64
+	// Install marks a folder that needs an install step to come back.
+	Install bool
 }
 
 // gitCommand runs non-interactive, hook-free git in dir.
@@ -117,13 +100,20 @@ func gitCommand(ctx context.Context, dir string, args ...string) ([]byte, error)
 	return out, nil
 }
 
-// findOffloadTargets lists the folders an offload of worktree would remove.
-func findOffloadTargets(ctx context.Context, worktree string, projectPaths []string) ([]offloadTarget, error) {
-	out, err := gitCommand(ctx, worktree, "status", "--porcelain=v1", "-z", "--ignored=traditional", "--untracked-files=normal")
+// findOffloadTargets lists the folders an offload of worktree would remove,
+// and the install-tier folders it leaves because nothing would reinstall them.
+// A folder is a target only when git ignores it, it matches an offload rule
+// whose marker file is present (or the project lists it), and it is not
+// protected; everything else is left alone.
+func findOffloadTargets(ctx context.Context, worktree string, policy offloadPolicy) ([]offloadTarget, []string, error) {
+	// matching: an ignored folder is listed by the path its ignore pattern
+	// names (.nx/cache/, vendor/bundle/), not collapsed into its parent.
+	out, err := gitCommand(ctx, worktree, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=normal")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	selected := map[string]bool{}
+	selected := map[string]offloadRule{}
+	var held []string
 	for _, record := range bytes.Split(out, []byte{0}) {
 		line := string(record)
 		if !strings.HasPrefix(line, "!! ") {
@@ -134,22 +124,35 @@ func findOffloadTargets(ctx context.Context, worktree string, projectPaths []str
 			continue // a single ignored file; only folders are offloaded
 		}
 		rel = strings.TrimSuffix(rel, "/")
-		if offloadableNames[path.Base(rel)] && !isProtected(rel) {
-			selected[rel] = true
+		if isProtected(rel) {
+			continue
 		}
+		rule, ok := matchOffloadRule(worktree, rel)
+		if !ok {
+			continue
+		}
+		if rule.tier == tierInstall && !policy.reinstallable(worktree, rel) {
+			held = append(held, rel)
+			continue
+		}
+		selected[rel] = rule
 	}
-	for _, raw := range projectPaths {
+	for _, raw := range policy.ExtraPaths {
 		rel := strings.Trim(filepath.ToSlash(filepath.Clean(strings.TrimSpace(raw))), "/")
 		if rel == "" || rel == "." || strings.HasPrefix(rel, "../") || rel == ".." || isProtected(rel) {
+			continue
+		}
+		if _, ok := selected[rel]; ok {
 			continue
 		}
 		info, statErr := os.Lstat(filepath.Join(worktree, filepath.FromSlash(rel)))
 		if statErr != nil || !info.IsDir() {
 			continue
 		}
-		// check-ignore exits 0 only when git ignores the path.
+		// check-ignore exits 0 only when git ignores the path. The project
+		// declares the folder rebuildable, so it is searched for secrets.
 		if _, ignoreErr := gitCommand(ctx, worktree, "check-ignore", "-q", "--", rel); ignoreErr == nil {
-			selected[rel] = true
+			selected[rel] = offloadRule{tier: tierRebuilds}
 		}
 	}
 	rels := make([]string, 0, len(selected))
@@ -157,6 +160,7 @@ func findOffloadTargets(ctx context.Context, worktree string, projectPaths []str
 		rels = append(rels, rel)
 	}
 	sort.Strings(rels)
+	sort.Strings(held)
 	targets := make([]offloadTarget, 0, len(rels))
 	for _, rel := range rels {
 		// Skip a folder nested in one already selected: removing the parent
@@ -171,12 +175,13 @@ func findOffloadTargets(ctx context.Context, worktree string, projectPaths []str
 		if nested {
 			continue
 		}
-		if !packageManaged[path.Base(rel)] {
+		rule := selected[rel]
+		if !rule.packageManaged {
 			// A build or cache folder can hold a copied secret (dist/.env); one
 			// that does is left whole rather than removed with it.
 			protected, protErr := containsProtected(ctx, filepath.Join(worktree, filepath.FromSlash(rel)))
 			if protErr != nil {
-				return nil, protErr
+				return nil, nil, protErr
 			}
 			if protected {
 				continue
@@ -184,13 +189,13 @@ func findOffloadTargets(ctx context.Context, worktree string, projectPaths []str
 		}
 		size, sizeErr := treeSize(ctx, filepath.Join(worktree, filepath.FromSlash(rel)))
 		if sizeErr != nil {
-			return nil, sizeErr
+			return nil, nil, sizeErr
 		}
 		if size > 0 {
-			targets = append(targets, offloadTarget{Rel: rel, Bytes: size})
+			targets = append(targets, offloadTarget{Rel: rel, Bytes: size, Install: rule.tier == tierInstall})
 		}
 	}
-	return targets, nil
+	return targets, held, nil
 }
 
 // lockfileNames are the package-manager lockfiles a dependency template is
@@ -299,7 +304,8 @@ func (s *Service) offloadWorktree(ctx context.Context, project domain.ProjectRec
 	if !Within(s.layout.Worktrees(), worktree) {
 		return result, errors.New("worktree is outside AO's managed worktrees")
 	}
-	targets, err := findOffloadTargets(ctx, worktree, project.Config.StorageOffloadPaths)
+	policy := s.offloadPolicyFor(project)
+	targets, _, err := findOffloadTargets(ctx, worktree, policy)
 	if err != nil || len(targets) == 0 {
 		return result, err
 	}
@@ -348,6 +354,11 @@ func (s *Service) offloadWorktree(ctx context.Context, project domain.ProjectRec
 			if !pathExists(filepath.Join(s.templateDir(key), templateTreeName)) {
 				key = ""
 			}
+		}
+		if step.target.Install && key == "" && !policy.HasSetup {
+			// Only a template could have brought it back, and none exists:
+			// leave it rather than lose it.
+			continue
 		}
 		if _, err := moveToTrash(s.layout.Trash(), step.abs); err != nil {
 			errs = append(errs, err)

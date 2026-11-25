@@ -35,6 +35,9 @@ type WorktreeUsage struct {
 	Bytes     int64
 	// DependencyBytes is what an offload would free right now.
 	DependencyBytes int64
+	// HeldBack lists install-tier folders (node_modules, .venv) an offload
+	// leaves because no Setup script or template would bring them back.
+	HeldBack []string
 	// GitWorktree reports a folder that is a registered git worktree.
 	GitWorktree bool
 	// Clean reports an orphan git worktree with no uncommitted changes.
@@ -323,10 +326,11 @@ func (s *Service) measureWorktree(ctx context.Context, dir string, byPath map[st
 		usage.LastUsed = info.ModTime()
 	}
 	if usage.GitWorktree && usage.State != WorktreeLive {
-		if targets, err := findOffloadTargets(ctx, dir, s.projectOffloadPaths(ctx, usage.ProjectID)); err == nil {
+		if targets, held, err := findOffloadTargets(ctx, dir, s.projectOffloadPolicy(ctx, usage.ProjectID)); err == nil {
 			for _, t := range targets {
 				usage.DependencyBytes += t.Bytes
 			}
+			usage.HeldBack = held
 		}
 	}
 	if usage.GitWorktree && (usage.State == WorktreeEnded || usage.State == WorktreeOrphan) {
@@ -341,15 +345,15 @@ func (s *Service) measureWorktree(ctx context.Context, dir string, byPath map[st
 	return usage
 }
 
-func (s *Service) projectOffloadPaths(ctx context.Context, id domain.ProjectID) []string {
-	if id == "" {
-		return nil
+// projectOffloadPolicy is what the project allows an offload to take; an
+// unknown project gets no extra paths and no Setup script.
+func (s *Service) projectOffloadPolicy(ctx context.Context, id domain.ProjectID) offloadPolicy {
+	if id != "" {
+		if project, ok, err := s.projects.GetProject(ctx, string(id)); err == nil && ok {
+			return s.offloadPolicyFor(project)
+		}
 	}
-	project, ok, err := s.projects.GetProject(ctx, string(id))
-	if err != nil || !ok {
-		return nil
-	}
-	return project.Config.StorageOffloadPaths
+	return offloadPolicy{Cloneable: s.cloneSupported()}
 }
 
 func (s *Service) scanDatabase(ctx context.Context) DatabaseUsage {

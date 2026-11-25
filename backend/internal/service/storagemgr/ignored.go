@@ -70,10 +70,13 @@ func ignoredRebuildable(ctx context.Context, worktree, rel string, dir bool) (bo
 			// Projections of attachments AO stores canonically elsewhere.
 			return true, nil
 		}
-		if !offloadableNames[base] || isProtected(rel) {
+		// The same rules and marker files an offload uses. The tier does not
+		// matter here: the repo's own manifests can reinstall what goes.
+		rule, ok := matchOffloadRule(worktree, rel)
+		if !ok || isProtected(rel) {
 			return false, nil
 		}
-		if packageManaged[base] {
+		if rule.packageManaged {
 			return true, nil
 		}
 		protected, err := containsProtected(ctx, abs)

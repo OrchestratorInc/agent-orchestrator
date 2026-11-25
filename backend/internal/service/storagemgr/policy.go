@@ -56,9 +56,13 @@ func plan(in policyInput) []PlannedAction {
 			}
 			threshold, why := offloadThreshold(sess, settings, in.Pressure)
 			idle := in.Now.Sub(sess.LastActivity)
+			reason := fmt.Sprintf("quiet %s; %s", humanDuration(idle), why)
+			if held := describeHeld(wt.HeldBack); held != "" {
+				reason += "; " + held
+			}
 			out = append(out, PlannedAction{
 				Kind: domain.StorageCleanOffload, Target: wt.Path, SessionID: sess.ID, Bytes: wt.DependencyBytes,
-				Reason:    fmt.Sprintf("quiet %s; %s", humanDuration(idle), why),
+				Reason:    reason,
 				Automatic: auto && idle >= threshold,
 			})
 		case WorktreeEnded:

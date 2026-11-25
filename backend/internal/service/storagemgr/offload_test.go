@@ -17,7 +17,7 @@ import (
 func TestFindOffloadTargetsOnlyIgnoredDependencyFolders(t *testing.T) {
 	dir := t.TempDir()
 	newRepoWorktree(t, dir)
-	targets, err := findOffloadTargets(context.Background(), dir, []string{"out-custom", ".ao", "notes", "../escape"})
+	targets, _, err := findOffloadTargets(context.Background(), dir, offloadPolicy{ExtraPaths: []string{"out-custom", ".ao", "notes", "../escape"}, HasSetup: true})
 	if err != nil {
 		t.Fatalf("find targets: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestOffloadWorktreeRemovesOnlyTargetsAndRecordsFacts(t *testing.T) {
 	svc, layout := newTestService(t, store, nil, nil, nil)
 	worktree := filepath.Join(layout.Worktrees(), "p", "p-1")
 	newRepoWorktree(t, worktree)
-	project := domain.ProjectRecord{ID: "p", Config: domain.ProjectConfig{StorageOffloadPaths: []string{"out-custom"}}}
+	project := domain.ProjectRecord{ID: "p", Config: domain.ProjectConfig{StorageOffloadPaths: []string{"out-custom"}, PostCreate: []string{"npm ci"}}}
 
 	var records []domain.SessionStorageFacts
 	result, err := svc.offloadWorktree(context.Background(), project, worktree, func(f domain.SessionStorageFacts) error {
@@ -92,7 +92,7 @@ func TestOffloadSkipsBuildFolderHoldingASecret(t *testing.T) {
 	newRepoWorktree(t, dir)
 	writeFile(t, filepath.Join(dir, "dist", ".env.production"), "SECRET=2")
 	writeFile(t, filepath.Join(dir, "node_modules", "pkg", "test", "server.key"), "fixture key")
-	targets, err := findOffloadTargets(context.Background(), dir, nil)
+	targets, _, err := findOffloadTargets(context.Background(), dir, offloadPolicy{HasSetup: true})
 	if err != nil {
 		t.Fatalf("find targets: %v", err)
 	}

@@ -17,7 +17,7 @@ ao storage settings [flags]
 
 | Kind | What it frees |
 |---|---|
-| `offload` | Git-ignored dependency and build folders of quiet open sessions; restored on resume |
+| `offload` | Git-ignored dependency and build folders of quiet open sessions; restored on resume. Folders with a common name (`bin`, `vendor`, `env`, `deps`) count only beside their language's marker file (`*.csproj`, `composer.json`, a `pyvenv.cfg` inside, `mix.exs`). Installed dependencies (`node_modules`, virtualenvs, `vendor`, `Pods`) are offloaded only when the project's Setup script or a copy-on-write template can bring them back |
 | `ended_worktrees` | Worktrees of terminated sessions (never forced; dirty ones are kept; one holding git-ignored files that cannot be rebuilt, such as a `.env`, is never removed automatically and its plan reason lists them) |
 | `orphan_worktrees` | Clean git worktrees no session owns (manual only) |
 | `db_backups` | Old database backups (the newest is kept) |
