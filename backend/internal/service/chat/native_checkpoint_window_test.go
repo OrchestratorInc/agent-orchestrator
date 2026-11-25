@@ -63,6 +63,18 @@ func TestVerifyNativeCheckpointReportsUnsettledAfterASlowRead(t *testing.T) {
 	}
 }
 
+func TestVerifyNativeCheckpointBoundsAStalledRead(t *testing.T) {
+	previous := nativeHistoryLoadAttemptLimit
+	nativeHistoryLoadAttemptLimit = 20 * time.Millisecond
+	t.Cleanup(func() { nativeHistoryLoadAttemptLimit = previous })
+	verifier := &slowCheckpointVerifier{read: time.Minute, results: []error{nil}}
+
+	_, err := verifyNativeCheckpoint(context.Background(), verifier, ports.NativeCheckpointRequest{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("verifyNativeCheckpoint error = %v; want the read cut at its limit", err)
+	}
+}
+
 func TestVerifyNativeCheckpointRetriesUnsettledWithinTheWindow(t *testing.T) {
 	withSettleWindow(t, time.Second)
 	verifier := &slowCheckpointVerifier{results: []error{unsettledCheckpoint(), nil}}

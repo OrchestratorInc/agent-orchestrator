@@ -391,10 +391,6 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			turn := checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice,
 				carried: notice && followsCompaction(records, record.ParentUUID)}
-			// A note can also open its prompt's cycle ahead of the prompt: a local
-			// command typed before it, or the summary of a compaction the prompt
-			// set off, which keeps the prompt and hangs it after the summary.
-			// Replay skips the note, so the prompt is the cycle's user boundary.
 			if !notice && len(turns) > 0 && turns[len(turns)-1].notice && turns[len(turns)-1].promptID == record.PromptID {
 				turns[len(turns)-1] = turn
 				continue
