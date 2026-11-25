@@ -183,6 +183,18 @@ export interface CloudShareLinks {
 	privateLinks: boolean;
 }
 
+const UNPLAYABLE_VIDEO = /\.(avi|mkv|ogv)$/i;
+
+/**
+ * Whether a file is a video in a format browsers do not play. A share link
+ * has no download, so its viewer could show nothing of one: it is never
+ * published. The control plane refuses it too. .ogv is Theora, which Chrome
+ * and Firefox no longer play.
+ */
+export function isUnplayableShareVideo(name: string): boolean {
+	return UNPLAYABLE_VIDEO.test(name);
+}
+
 /**
  * What the share popover and the Publish button know about a file, read
  * without opening it: from this computer's publish record and the file's
@@ -192,7 +204,7 @@ export interface CloudShareInspection {
 	name: string;
 	/** Known for a local file, and for a cloud file whose list was read. */
 	size?: number;
-	/** Video is not shared yet. */
+	/** A video in a format browsers do not play (see isUnplayableShareVideo). */
 	unsupported: boolean;
 	/** The link this file was last published to from this computer, if any. */
 	shareId?: string;
@@ -228,11 +240,12 @@ export interface CloudSharePageFiles {
 	/** How many the link serves beside the page now. */
 	included: number;
 	/**
-	 * How many the page uses that were left out: video (not shared yet), a
-	 * file outside the page's folder or missing, or past the link's limit.
+	 * How many the page uses that were left out: a video the control plane
+	 * does not publish or browsers cannot play, a file outside the page's
+	 * folder or missing, or past the link's limit.
 	 */
 	skipped: number;
-	/** How many of skipped are video. */
+	/** How many of skipped are video the control plane does not publish yet. */
 	videos: number;
 	/** The control plane predates included files: the page was published alone. */
 	unsupported: boolean;

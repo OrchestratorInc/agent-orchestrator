@@ -103,6 +103,16 @@ describe("SessionInspectorShellView", () => {
     rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
     expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
   });
+  it("renders the Background tasks view edge to edge under its own tab", () => {
+    const withTasks = [...tabs, { id: "task" as const, icon: <svg />, label: "Background tasks" }];
+    render(<SessionInspectorShellView
+      activeView="task" ariaLabel="Session inspector" browserPoppedOut={false}
+      taskView={<div data-testid="task-slot" />}
+      tabs={withTasks} onViewChange={vi.fn()}
+    />);
+    expect(screen.getByTestId("task-slot").parentElement).toHaveClass("p-0", "overflow-hidden");
+    expect(screen.getByRole("tab", { name: "Background tasks" })).toHaveAttribute("aria-selected", "true");
+  });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
     render(<SessionInspectorShellView
@@ -1152,5 +1162,11 @@ describe("commentTextLines", () => {
     expect(commentTextLines("```suggestion\nconst x = 1;\n```")).toEqual(["const x = 1;"]);
     expect(commentTextLines("_⚠️ Potential issue_\n\n**Rename `snake_case_name`.**\n\n___")).toEqual(["⚠️ Potential issue", "Rename snake_case_name."]);
     expect(commentTextLines("Keep my_var and `_private_` as written.")).toEqual(["Keep my_var and _private_ as written."]);
+  });
+
+  it("previews a GitHub alert by its text, not its [!NOTE] marker", () => {
+    expect(commentTextLines("> [!NOTE]\n> Free review of this PR on us.")).toEqual(["Free review of this PR on us."]);
+    expect(commentTextLines("[!warning]\nCheck the migration.")).toEqual(["Check the migration."]);
+    expect(commentTextLines("> [!NOTE]\n> ## Reviews paused\n> - Resume with a comment")).toEqual(["Reviews paused", "Resume with a comment"]);
   });
 });

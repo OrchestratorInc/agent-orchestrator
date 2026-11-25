@@ -1,3 +1,4 @@
+import { uiUsage } from "../../lib/ui-usage-telemetry";
 import { AppLink } from "../AppLink";
 import { TurnForkButton } from "../SessionForkControls";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
@@ -48,7 +49,6 @@ import {
 	Copy,
 	CornerDownLeft,
 	CornerDownRight,
-	File as FileIcon,
 	FileDiff,
 	FilePen,
 	FilePlus,
@@ -183,6 +183,8 @@ import {
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
+import { WorkspacePathSegments } from "../ChangedFilesList";
+import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -817,6 +819,29 @@ export interface TurnOutcomeLogin {
 }
 
 /** Sends a failed turn's prompt again as a new turn. */
+// Failed turns already reported this launch, so a re-render, a scroll back or a
+// return to the chat does not count the same failure twice.
+const reportedFailures = new Set<string>();
+const FRESH_FAILURE_MS = 2 * 60_000;
+
+/**
+ * Counts a failed turn as an error shown, once, when it failed moments ago (not
+ * one read from history). Called by the turn's owner, so a failure counts however
+ * it is shown: as the turn's outcome or as a login note under the message.
+ * `failedAt` is when the turn ended; `failureKey` is the turn's id.
+ */
+export function useFreshFailureReport(state: string | undefined, failedAt: string | undefined, failureKey: string | undefined, failureCode: string | undefined) {
+	useEffect(() => {
+		if (state !== "failed" || !failedAt) return;
+		const at = Date.parse(failedAt);
+		if (!Number.isFinite(at) || Date.now() - at > FRESH_FAILURE_MS) return;
+		const key = `${failureKey ?? failedAt}|${failureCode ?? ""}`;
+		if (reportedFailures.has(key)) return;
+		reportedFailures.add(key);
+		uiUsage.errorShown("chat_turn_failed", "inline", "chat", failureCode ? failureCode.toUpperCase() : undefined);
+	}, [failedAt, failureCode, failureKey, state]);
+}
+
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 	return (
 		<Button
@@ -826,6 +851,7 @@ function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 			onClick={retry.onRetry}
 			disabled={retry.pending || retry.disabled}
 			aria-label="Retry this turn"
+			data-telemetry-id="chat.retry"
 			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
 			data-testid="retry-turn"
 		>
@@ -4220,12 +4246,12 @@ export function TurnChangedFiles({
 					const body = (
 						<>
 							<span className="sr-only">{status.label}</span>
-							<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+							<WorkspaceEntryIcon kind="file" name={fileBasename(openPath)} />
 							<span
-								className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+								className="flex min-w-0 flex-1 text-xs"
 								title=""
 							>
-								{fileBasename(file.path)}
+								<WorkspacePathSegments path={openPath} nameClassName="text-foreground/80" />
 							</span>
 							{file.additions > 0 ? (
 								<span className="shrink-0 font-mono text-caption tabular-nums text-success">
@@ -4265,13 +4291,14 @@ export function TurnChangedFiles({
 							) : (
 								<div className={rowClass}>
 									<span className="sr-only">{status.label}</span>
-									<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+									<WorkspaceEntryIcon kind="file" name={fileBasename(openPath)} />
 									<FileLocationLabel
-										path={file.path}
+										path={openPath}
+										showFullPath
 										oldPath={file.oldPath}
 										locationPath={tooltipPath}
 										locationOldPath={tooltipOldPath}
-										className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+										className="flex min-w-0 flex-1 text-xs"
 									/>
 									{file.additions > 0 ? (
 										<span className="shrink-0 font-mono text-caption tabular-nums text-success">
@@ -4316,14 +4343,15 @@ export function TurnChangedFiles({
 }
 
 /**
- * Basename only — color distinguishes it from "Edited", no hover fill. Hovering
- * shows the home-shortened worktree path in a monospace tooltip.
+ * File path beside an edit or changed-file row. Hovering shows the
+ * home-shortened worktree path in a monospace tooltip.
  */
 function FileLocationLabel({
 	path,
 	oldPath,
 	locationPath,
 	locationOldPath,
+	showFullPath,
 	className,
 }: {
 	path: string;
@@ -4331,6 +4359,7 @@ function FileLocationLabel({
 	/** Absolute/worktree path for the tooltip when `path` is only a basename. */
 	locationPath?: string;
 	locationOldPath?: string;
+	showFullPath?: boolean;
 	className?: string;
 }) {
 	const location = fileLocationLabel(locationPath ?? path, locationOldPath ?? oldPath);
@@ -4339,15 +4368,15 @@ function FileLocationLabel({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				{/* `title=""` blocks Chromium's native ellipsis tooltip so only the
-				    path tooltip below appears — otherwise hover shows the basename. */}
+				    worktree path tooltip below appears. */}
 				<span
 					className={cn(
-						"min-w-0 truncate text-xs text-foreground/65 outline-none",
+						showFullPath ? "flex min-w-0 text-xs outline-none" : "min-w-0 truncate text-xs text-foreground/65 outline-none",
 						className,
 					)}
 					title=""
 				>
-					{fileBasename(path)}
+					{showFullPath ? <WorkspacePathSegments path={path} nameClassName="text-foreground/80" /> : fileBasename(path)}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">

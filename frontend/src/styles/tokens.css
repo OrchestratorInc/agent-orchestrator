@@ -86,6 +86,11 @@
 	--color-text-markdown-code: var(--color-brand-logo-text);
 	--color-text-markdown-link: var(--color-brand-logo-text); /* underline distinguishes links */
 	--color-text-markdown-link-hover: #88b8e5;
+	/* A workspace file named in chat: the accent as a faint wash, with a pale
+	 * shade of it as text. Both mix from the accent, so a named theme recolours them. */
+	--color-chat-file-bg: color-mix(in srgb, var(--color-brand-logo) 16%, transparent);
+	--color-chat-file-bg-hover: color-mix(in srgb, var(--color-brand-logo) 24%, transparent);
+	--color-chat-file-text: color-mix(in srgb, var(--color-brand-logo-text) 45%, var(--foreground));
 	--color-text-terminal: #d6d6d6;
 	--color-text-terminal-dim: #8e8e8e;
 
@@ -738,6 +743,10 @@
 	--color-text-markdown-code: var(--color-brand-logo-text);
 	--color-text-markdown-link: var(--color-brand-logo-text);
 	--color-text-markdown-link-hover: #295984;
+	--color-chat-file-bg: color-mix(in srgb, var(--color-brand-logo) 12%, transparent);
+	--color-chat-file-bg-hover: color-mix(in srgb, var(--color-brand-logo) 18%, transparent);
+	/* More foreground than in dark, so the text stays above 4.5:1 on its tint in every palette. */
+	--color-chat-file-text: color-mix(in srgb, var(--color-brand-logo-text) 40%, var(--foreground));
 	--color-text-terminal: #3d3d3d;
 	--color-text-terminal-dim: #757575;
 
@@ -822,7 +831,9 @@
 	--color-border-import-modal: var(--border);
 	--color-text-import-title: var(--foreground);
 	--color-text-import-muted: var(--muted-foreground);
-	--color-bg-import-card: var(--card);
+	/* An input well on the white dialog, as dark lifts it: a plain --card
+	 * field is the same white as the dialog and loses its edge. */
+	--color-bg-import-card: var(--input);
 	--color-bg-import-card-hover: var(--accent);
 	--color-bg-import-illustration: var(--color-bg-import-chip);
 	--color-bg-import-chip: var(--secondary);

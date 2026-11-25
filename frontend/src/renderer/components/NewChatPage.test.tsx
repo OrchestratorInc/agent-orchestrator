@@ -294,9 +294,9 @@ describe("NewChatPage", () => {
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
 	});
 
-	// A Cloud standalone agent starts without files: its own project comes
-	// with its session, so a start the files did not reach would leave it behind.
-	it("offers files on a Cloud project's task where the control plane takes them, and not on a Cloud standalone agent", () => {
+	// A Cloud session of its own takes files as a project's task does: they
+	// ride the first message of its Chat session.
+	it("offers files on a Cloud project's task and on a Cloud session where the control plane takes them", () => {
 		h.isCloudProject = true;
 		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
 		renderPage();
@@ -305,10 +305,18 @@ describe("NewChatPage", () => {
 		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
 		cleanup();
 		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
-		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.holdAttachments).toBe(true);
+		expect(h.workspace?.cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		expect(h.workspace?.attachmentsRefusal).toBeUndefined();
+	});
+
+	it("says why a Cloud session takes no files where the control plane takes none", () => {
+		h.isCloudProject = true;
+		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["standalone_agents"], maxAttachmentBytes: undefined };
+		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
 		expect(h.workspace?.cloudAttachments).toBeUndefined();
 		// A draft that brought files from another target keeps them, with why this one takes none.
-		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a standalone agent. Remove them to continue.");
+		expect(h.workspace?.attachmentsRefusal).toBe("File attachments are not supported for cloud tasks yet.");
 	});
 
 	// A send whose answer was lost keeps the files it went with until its

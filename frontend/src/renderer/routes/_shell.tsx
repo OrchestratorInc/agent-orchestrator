@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
@@ -39,6 +40,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useHostUpdatePolling } from "../hooks/useHostUpdates";
 import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
@@ -73,6 +75,7 @@ import { applyWindowTranslucency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
+import { composerDropTargetFor, type ComposerDropTarget } from "../lib/composer-drop-targets";
 import { cn } from "../lib/utils";
 import {
 	isLinuxPlatform,
@@ -81,7 +84,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
@@ -107,8 +110,15 @@ import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 import { markLaunchUsable } from "../lib/launch-telemetry";
 import { useSessionOpenTiming } from "../lib/performance-telemetry";
+import { uiUsage } from "../lib/ui-usage-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
+// The agent update notice checks every installed harness, and on a daemon that
+// has just started each check can hold a connection to it for seconds. The
+// renderer has few (Chromium opens six per host and the event streams keep
+// several), so checks started with the app made the session and Files views
+// opened first wait behind them. They start once launch has settled.
+const HARNESS_UPDATE_CHECKS_DELAY_MS = 15_000;
 
 // Only shown while an orchestrator is starting, but it pulls in the whole chat
 // stack (ChatWorkspace, lexical, markdown). Lazy keeps that off every route.
@@ -368,6 +378,7 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
+	useHostUpdatePolling(remoteHosts);
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -404,6 +415,17 @@ function ShellLayout() {
 			preloadSessionView();
 		});
 	}, [daemonIsReady]);
+	const [harnessUpdateChecksDue, setHarnessUpdateChecksDue] = useState(false);
+	useEffect(() => {
+		if (!daemonIsReady) return;
+		const timer = setTimeout(() => setHarnessUpdateChecksDue(true), HARNESS_UPDATE_CHECKS_DELAY_MS);
+		// A daemon that comes back, or a new one that replaces it, has cold checks
+		// again: wait out its launch too.
+		return () => {
+			clearTimeout(timer);
+			setHarnessUpdateChecksDue(false);
+		};
+	}, [daemonIsReady, daemonStatus.pid, daemonStatus.port]);
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
@@ -418,7 +440,13 @@ function ShellLayout() {
 	// While the full-window onboarding shows, the shell behind it takes no
 	// focus or clicks; Settings opened from it lifts that, as it steps aside.
 	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
-	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
+	// One chain per daemon setting Developer Mode drives: each request waits for
+	// its own previous one, so an older enable cannot finish after a disable.
+	const developerModeSyncRef = useRef<Record<"chatHibernation" | "limitHistory" | "devices", Promise<void>>>({
+		chatHibernation: Promise.resolve(),
+		limitHistory: Promise.resolve(),
+		devices: Promise.resolve(),
+	});
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
@@ -498,7 +526,8 @@ function ShellLayout() {
 		return () => document.removeEventListener("click", handleModifierLinkClick);
 	}, []);
 	// Drop a folder anywhere in the app window to add it as a project, mirroring
-	// VS Code's "drop a folder to open it". A depth counter (not a relatedTarget
+	// VS Code's "drop a folder to open it". Drop files anywhere to attach them
+	// to the nearest chat composer. A depth counter (not a relatedTarget
 	// check) tracks dragenter/dragleave so the overlay doesn't flicker as the
 	// pointer crosses child-element boundaries. XtermTerminal's own drop handler
 	// only swallows (preventDefault/stopPropagation) a drop that is NOT a
@@ -512,6 +541,16 @@ function ShellLayout() {
 			const item = event.dataTransfer?.items?.[0];
 			return item?.webkitGetAsEntry?.()?.isDirectory ?? false;
 		};
+		// Files (not folders) dropped anywhere go to the nearest chat composer,
+		// unless something under the pointer (a terminal, a PR comment box, the
+		// composer itself) already claimed the drag with preventDefault.
+		let highlighted: ComposerDropTarget | undefined;
+		const highlight = (target: ComposerDropTarget | undefined) => {
+			if (highlighted === target) return;
+			highlighted?.setDragging(false);
+			highlighted = target;
+			target?.setDragging(true);
+		};
 		const handleDragEnter = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			event.preventDefault();
@@ -520,21 +559,38 @@ function ShellLayout() {
 		};
 		const handleDragOver = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			if (event.defaultPrevented) {
+				// Claimed below; a composer under the pointer highlights itself.
+				if (highlighted && !highlighted.element()?.contains(event.target as Node)) highlight(undefined);
+				else highlighted = undefined;
+			} else if (!firstEntryIsDirectory(event)) {
+				const target = composerDropTargetFor(event.target);
+				highlight(target?.accepts() ? target : undefined);
+			}
 			event.preventDefault();
 			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		};
 		const handleDragLeave = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-			if (dragDepthRef.current === 0) setIsDragActive(false);
+			if (dragDepthRef.current === 0) {
+				setIsDragActive(false);
+				highlight(undefined);
+			}
 		};
 		const handleDrop = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			const claimed = event.defaultPrevented;
 			event.preventDefault();
 			dragDepthRef.current = 0;
 			setIsDragActive(false);
+			highlight(undefined);
+			if (claimed) return;
 			const item = event.dataTransfer?.items?.[0];
-			if (!item?.webkitGetAsEntry?.()?.isDirectory) return;
+			if (!item?.webkitGetAsEntry?.()?.isDirectory) {
+				composerDropTargetFor(event.target)?.attach(Array.from(event.dataTransfer?.files ?? []));
+				return;
+			}
 			const file = item.getAsFile();
 			if (!file) return;
 			// Must be synchronous, on the File taken directly from dataTransfer, in
@@ -586,6 +642,10 @@ function ShellLayout() {
 				: null,
 		);
 	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
+	// Counts a switch to another session and where it started (sidebar, tab, Cmd+K…).
+	useEffect(() => {
+		if (scopedSession?.id) uiUsage.sessionViewed(sessionUiKey(scopedSession.id, routeParams.hostId));
+	}, [routeParams.hostId, scopedSession?.id]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
@@ -881,7 +941,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "Daemon is not ready.");
+				throw new AoError("DAEMON_NOT_READY", status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
@@ -1121,18 +1181,19 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		const projectKey = sessionUiKey(projectId, hostId);
 		const uiState = useUiStore.getState();
 		if (uiState.provisioningProjectIds.has(projectKey) || uiState.restartingProjectIds.has(projectKey)) return;
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-			openProjectSettings(projectId, hostId);
-			return;
-		}
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
-			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));
+			const activeOrchestrator = newestActiveOrchestrator(workspace.sessions);
+			const sessionId = await openRemoteOrchestrator(hostId, projectId, activeOrchestrator);
 			const refresh = queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			// Only a new orchestrator must be in the list before its route can find it.
 			if (!workspace.sessions.some((session) => session.id === sessionId)) await refresh;
 			void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 		} catch (cause) {
+			if (apiErrorCode(cause) === "AGENT_REQUIRED") {
+				openProjectSettings(projectId, { hostId, section: "agents" });
+				return;
+			}
 			const message = cause instanceof Error ? cause.message : t("shell.couldNotSpawn");
 			setOrchestratorStartupError(projectId, message, hostId);
 			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
@@ -1187,31 +1248,35 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [themeStyle]);
 
 	// The renderer owns Developer Mode; the daemon must know its value before
-	// either the view-close path or the idle sweep can hibernate a provider.
+	// either the view-close path or the idle sweep can hibernate a provider,
+	// and devices (a Developer mode preview) stay off in the daemon until it does.
+	// Each setting syncs and retries on its own: one failing request must not
+	// leave another, such as devices, stuck at its old value.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
-		let retry: ReturnType<typeof setTimeout> | undefined;
-		const sync = () => {
-			// Serialize toggles so an older enable request cannot finish after disable.
-			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
+		const retries = new Set<ReturnType<typeof setTimeout>>();
+		const chains = developerModeSyncRef.current;
+		const sync = (key: keyof typeof chains, send: () => Promise<{ error?: unknown }>) => {
+			chains[key] = chains[key].then(async () => {
 				if (cancelled) return;
-				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
-					body: { enabled: developerMode },
-				});
+				const { error } = await send();
 				if (error) throw error;
-				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
-					body: { enabled: developerMode },
-				});
-				if (limitHistoryError) throw limitHistoryError;
 			}).catch(() => {
-				if (!cancelled) retry = setTimeout(sync, 5_000);
+				if (cancelled) return;
+				const retry = setTimeout(() => {
+					retries.delete(retry);
+					sync(key, send);
+				}, 5_000);
+				retries.add(retry);
 			});
 		};
-		sync();
+		sync("chatHibernation", () => apiClient.PATCH("/api/v1/settings/chat-hibernation", { body: { enabled: developerMode } }));
+		sync("limitHistory", () => apiClient.PUT("/api/v1/usage/limit-history", { body: { enabled: developerMode } }));
+		sync("devices", () => apiClient.PUT("/api/v1/devices/availability", { body: { enabled: developerMode } }));
 		return () => {
 			cancelled = true;
-			clearTimeout(retry);
+			for (const retry of retries) clearTimeout(retry);
 		};
 	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
 
@@ -1631,7 +1696,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonIsReady && harnessUpdateChecksDue} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (

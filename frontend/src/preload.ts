@@ -3,7 +3,7 @@ import type { TriageResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { WINDOW_TRANSPARENCY_CHANGED, type WindowTransparencyState } from "./shared/window-transparency";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
-import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, APP_SHORTCUT_PRESSED_CHANNEL, type AppShortcutId, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import { SIDE_CLOSE_PROTOCOL_VERSION, type SideCloseRequest, type SideCloseState } from "./shared/side-close";
 import {
@@ -37,7 +37,7 @@ import type { DictationEvent } from "./shared/dictation";
 import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
-import type { RemoteHealth } from "./main/remote-request";
+import type { HostUpdateView, RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
 	EditorHandoffStateOptions,
@@ -50,7 +50,7 @@ import type {
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
 import type { TelemetryBootstrap } from "./shared/telemetry";
-import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
+import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
 	TELEMETRY_POLICY_CHANGED_CHANNEL,
@@ -437,6 +437,14 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		// Each app shortcut chord main claimed, by id, for the usage counts.
+		onShortcutPressed: (listener: (id: AppShortcutId) => void) => {
+			const wrapped = (_event: unknown, id: AppShortcutId) => listener(id);
+			ipcRenderer.on(APP_SHORTCUT_PRESSED_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(APP_SHORTCUT_PRESSED_CHANNEL, wrapped);
+			};
+		},
 		// Tells main the first frame that shows the workspace is on screen.
 		reportSessionsShown: () => ipcRenderer.send("app:sessionsShown"),
 		setMenuAvailability: (availability: AppMenuAvailability) => {
@@ -664,6 +672,7 @@ const api = {
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
 		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
 		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,
+		launchSteps: () => ipcRenderer.invoke("telemetry:launchSteps") as Promise<LaunchSteps | null>,
 		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
@@ -1012,7 +1021,7 @@ const api = {
 	// back is password-free (see main/remotes-ipc.ts); a password only travels
 	// renderer -> main on add or credential edit. Account host tokens stay in main.
 	remotes: {
-		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
+		list: () => ipcRenderer.invoke("remotes:list", true) as Promise<RemoteHostView[] | { code: string; message: string; expected?: true }>,
 		// Saves the account's machines from AO Cloud and forgets the ones it no longer lists.
 		syncAccountHosts: (accountId: string) => ipcRenderer.invoke("remotes:syncAccountHosts", accountId) as Promise<void>,
 		// Lists a paired host under the signed-in account.
@@ -1027,6 +1036,9 @@ const api = {
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
 		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		hostUpdate: (url: string) => ipcRenderer.invoke("remotes:hostUpdate", url) as Promise<HostUpdateView | null>,
+		checkHostUpdate: (url: string) => ipcRenderer.invoke("remotes:checkHostUpdate", url) as Promise<string>,
+		startHostUpdate: (url: string, version?: string) => ipcRenderer.invoke("remotes:startHostUpdate", url, version) as Promise<HostUpdateView | null>,
 		// The name this machine is listed under on the account's other devices.
 		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
