@@ -194,7 +194,7 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("Usage limit reached")).toBeInTheDocument();
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute("href", "https://example.com/billing");
+		expect(screen.getByRole("link", { name: "example.com" })).toHaveAttribute("href", "https://example.com/billing");
 	});
 
 	it("resumes an eligible limited prompt after its reset", () => {
@@ -240,7 +240,7 @@ describe("TurnOutcome", () => {
 
 		expect(screen.getByText(/Usage limit reached/)).toBeInTheDocument();
 		expect(screen.getByText(/Manage billing at/)).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute(
+		expect(screen.getByRole("link", { name: "example.com" })).toHaveAttribute(
 			"href",
 			"https://example.com/billing",
 		);

@@ -142,7 +142,8 @@ import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { FileDiffCard, FileReadCard, fileCardPath, readFileLines } from "./ChatFileCard";
 import { ChatFileIcon } from "./ChatFileIcon";
-import { MESSAGE_LINKS_MIN, MessageLinksButton, MessageLinksList, messageWebLinks } from "./MessageLinks";
+import { LinkSiteChipContent, MESSAGE_LINKS_MIN, MessageLinksButton, MessageLinksList, messageWebLinks } from "./MessageLinks";
+import { PULL_REQUEST_CHIP_CLASS } from "./PullRequestLink";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
@@ -3356,14 +3357,40 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 		detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
 	);
 
+	const toggle = () => setOpen((prev) => !prev);
+	// Copy sits where the summary ends, as on a command row: a button cannot hold
+	// another, so the row is its button, then copy, then the rest of the line.
+	const copyText = detail?.command;
+	const riskTone = detail?.riskLevel ? RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground" : undefined;
+	const tail = (
+		<>
+			{detail?.riskLevel ? (
+				<span className={cn("shrink-0 text-xs", riskTone, riskTone === "text-muted-foreground" && "activity-row-target")}>
+					{detail.riskLevel}
+				</span>
+			) : null}
+			{hasBody ? (
+				<ChevronRight
+					aria-hidden="true"
+					className={cn(
+						"size-3 shrink-0 text-muted-foreground/50 transition-all",
+						open ? "rotate-90 opacity-100" : "opacity-0 group-hover/activity:opacity-100",
+					)}
+				/>
+			) : null}
+		</>
+	);
+
 	return (
 		<div className="group/activity border-t border-border first:border-t-0">
+			<div className={copyText ? "group/cmdrow flex min-w-0 items-center" : "contents"}>
 			<Pressable
-				onClick={() => setOpen((prev) => !prev)}
+				onClick={toggle}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
 					"activity-row-toggle flex min-h-[35px] w-full select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
+					copyText && "w-auto min-w-0 flex-initial pr-0",
 					hasBody && "hover:text-foreground",
 					!hasBody && "cursor-default",
 				)}
@@ -3379,29 +3406,26 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				<strong className="shrink-0 font-medium text-foreground">
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
-				<span className="activity-row-label min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground">
+				<span className={cn("activity-row-label min-w-0 truncate font-mono text-caption text-muted-foreground", !copyText && "flex-1")}>
 					<ActivityTitle text={shortenPaths(activity.summary)} />
 				</span>
-				{detail?.riskLevel ? (
-					<span
-						className={cn(
-							"shrink-0 text-xs",
-							RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground",
-						)}
-					>
-						{detail.riskLevel}
-					</span>
-				) : null}
-				{hasBody ? (
-					<ChevronRight
-						aria-hidden="true"
-						className={cn(
-							"size-3 shrink-0 text-muted-foreground/50 transition-all",
-							open ? "rotate-90 opacity-100" : "opacity-0 group-hover/activity:opacity-100",
-						)}
-					/>
-				) : null}
+				{copyText ? null : tail}
 			</Pressable>
+			{copyText ? (
+				<>
+					<CommandCopyReveal text={copyText} scope="row" />
+					<Pressable
+						tabIndex={-1}
+						aria-hidden="true"
+						onClick={toggle}
+						disabled={!hasBody}
+						className={cn("flex min-h-[35px] flex-1 items-center justify-end gap-[9px] self-stretch pr-[11px] pl-2", !hasBody && "cursor-default")}
+					>
+						{tail}
+					</Pressable>
+				</>
+			) : null}
+			</div>
 
 			{open && hasBody ? (
 				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
@@ -3531,9 +3555,10 @@ function ProviderErrorLink({ href }: { href: string }) {
 				event.preventDefault();
 				void openLinkInSystemBrowser(href);
 			}}
-			className="text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"
+			// A bare address reads as its site's chip, as it does in a reply.
+			className={PULL_REQUEST_CHIP_CLASS}
 		>
-			{href}
+			<LinkSiteChipContent url={href} />
 		</AppLink>
 	);
 }
