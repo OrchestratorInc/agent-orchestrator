@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
 import type { PickerSource } from "./AgentSwitchPicker";
-import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
+import { OptionMenu, OptionMenuContent, OptionMenuTrigger } from "../ui/option-menu";
+import { ComposerModeItems, hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
 
 // The agent picker is tested on its own; here only what it is given matters.
 const agentPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined, autoCompact: undefined as { kind: string } | undefined }));
@@ -2062,5 +2063,27 @@ describe("permissions for the agent picked for the next message", () => {
 		await user.click(screen.getByRole("button", { name: note }));
 		await user.click(screen.getByRole("menuitemradio", { name: /Use agent permissions/ }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "kimi", approvalMode: "default" });
+	});
+});
+
+describe("composer add menu", () => {
+	it("leaves Fast mode to the agent picker and keeps the other switches", async () => {
+		const onChangeConfigOption = vi.fn();
+		render(
+			<OptionMenu open>
+				<OptionMenuTrigger>Add</OptionMenuTrigger>
+				<OptionMenuContent>
+					<ComposerModeItems
+						configOptions={[...OPTIONS, { id: "web", name: "Web search", type: "boolean", currentBoolean: false, choices: [] }]}
+						settings={{ model: "opus", fastMode: true }}
+						onChange={vi.fn()}
+						onChangeConfigOption={onChangeConfigOption}
+					/>
+				</OptionMenuContent>
+			</OptionMenu>,
+		);
+		const rows = screen.getAllByRole("menuitem").map((row) => row.textContent);
+		expect(rows).toEqual(["Plan modeTurn plan mode on", "Web searchTurn web search on"]);
+		expect(screen.queryByText("Fast mode")).not.toBeInTheDocument();
 	});
 });
