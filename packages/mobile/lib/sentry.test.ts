@@ -295,6 +295,14 @@ describe("mobile Sentry API context", () => {
 		expect(send?.fingerprint).not.toEqual(sessions?.fingerprint);
 	});
 
+	// The character class alone would let a lowercase project slug through.
+	it("drops an operation with a segment that is not a route word", async () => {
+		const event = await apiEvent("GET /api/v1/projects/acme-secret/sessions");
+		expect(event?.message).toBe("Mobile API error");
+		expect(event?.tags).not.toHaveProperty("ao.operation");
+		expect(JSON.stringify(event)).not.toContain("acme-secret");
+	});
+
 	it("drops an operation that is not a route name", async () => {
 		const event = await apiEvent("GET /api/v1/projects/Acme Secret/sessions");
 		expect(event?.message).toBe("Mobile API error");

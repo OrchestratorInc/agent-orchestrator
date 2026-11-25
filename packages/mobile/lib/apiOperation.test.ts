@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { API_ROUTE_WORDS, apiOperation } from "./apiOperation";
+import { API_ROUTE_WORDS, apiOperation, isApiOperation } from "./apiOperation";
 
 describe("apiOperation", () => {
 	it("keeps route words and replaces ids", () => {
@@ -12,6 +12,25 @@ describe("apiOperation", () => {
 
 	it("drops the query string", () => {
 		expect(apiOperation("GET", "/api/v1/sessions?project=secret-project&active=false")).toBe("GET /api/v1/sessions");
+	});
+
+	// A file named like a route word is still a file.
+	it("collapses a file tail even when its name is a route word", () => {
+		expect(apiOperation("GET", "/api/v1/sessions/s1/preview/files/settings")).toBe("GET /api/v1/sessions/:id/preview/files/*");
+		expect(apiOperation("GET", "/api/v1/sessions/s1/artifact-files/tree")).toBe("GET /api/v1/sessions/:id/artifact-files/*");
+	});
+
+	it("keeps the route words after a render id", () => {
+		expect(apiOperation("GET", "/api/v1/sessions/s1/renders/r1")).toBe("GET /api/v1/sessions/:id/renders/:id");
+	});
+
+	it("accepts only its own operation shape", () => {
+		expect(isApiOperation(apiOperation("POST", "/api/v1/sessions/acme-1/kill"))).toBe(true);
+		expect(isApiOperation("GET /api/v1/sessions/:id/preview/files/*")).toBe(true);
+		expect(isApiOperation("GET /api/v1/projects/acme-secret/sessions")).toBe(false);
+		expect(isApiOperation("GET /api/v1/*/sessions")).toBe(false);
+		expect(isApiOperation("GET api/v1/sessions")).toBe(false);
+		expect(isApiOperation(42)).toBe(false);
 	});
 
 	it("collapses a workspace file path to *", () => {

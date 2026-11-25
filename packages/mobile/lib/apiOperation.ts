@@ -23,8 +23,10 @@ const ROUTE_WORDS = new Set([
 	"switch", "sync", "telemetry", "tree", "trigger", "validate", "workspace",
 ]);
 
-// After these, the rest of the path is a file the user's workspace holds.
-const FILE_PARENTS = new Set(["files", "artifact-files", "renders"]);
+// After these, the rest of the path is a file the user's workspace holds, even
+// when a file happens to share a name with a route word. (`renders` is not one:
+// a render id is followed by route words such as `artifact`.)
+const FILE_PARENTS = new Set(["files", "artifact-files"]);
 
 const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
@@ -42,7 +44,7 @@ export function apiOperation(method: string | undefined, path: string): string {
 		if (ROUTE_WORDS.has(segment)) {
 			out.push(segment);
 			// A file-serving route's tail is a workspace path; keep only that it had one.
-			if (FILE_PARENTS.has(segment) && segments.slice(i + 1).some((rest) => rest !== "" && !ROUTE_WORDS.has(rest))) {
+			if (FILE_PARENTS.has(segment) && segments.slice(i + 1).some((rest) => rest !== "")) {
 				out.push("*");
 				break;
 			}
@@ -51,6 +53,22 @@ export function apiOperation(method: string | undefined, path: string): string {
 		out.push(":id");
 	}
 	return `${METHODS.has(verb) ? verb : "OTHER"} ${out.join("/").slice(0, 160)}`;
+}
+
+const OPERATION = /^(GET|POST|PUT|PATCH|DELETE|OTHER) (\/.{0,160})$/;
+
+/**
+ * Whether `operation` has apiOperation()'s shape: every path segment a route
+ * word or `:id`, with `*` only last. The send-time check, so a caller that
+ * skipped apiOperation() cannot put a name into a Sentry event.
+ */
+export function isApiOperation(operation: unknown): operation is string {
+	if (typeof operation !== "string") return false;
+	const match = OPERATION.exec(operation);
+	if (!match) return false;
+	const segments = match[2].split("/").slice(1);
+	return segments.every((segment, index) =>
+		ROUTE_WORDS.has(segment) || segment === ":id" || (segment === "*" && index === segments.length - 1));
 }
 
 /** The route words, exported for the drift test only. */

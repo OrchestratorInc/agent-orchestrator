@@ -2,12 +2,11 @@ import type { ErrorEvent, StackFrame } from "@sentry/react-native";
 import { classifyError, type ClassifyInput } from "./observability";
 import { safeSentryExceptionType, sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from "../../shared/telemetry/sentry-message";
 import { safeSentryCode, sentryErrorCode } from "../../shared/telemetry/ao-error";
+import { isApiOperation } from "./apiOperation";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
 const SAFE_CATEGORIES = new Set(["native_crash", "render_crash", "http_5xx", "http_4xx", "offline", "timeout"]);
 const INSTALL_ID = /^ins_[0-9a-f-]{36}$/;
-// apiOperation()'s shape: a method and a route of fixed words, `:id` and `*`.
-const SAFE_OPERATION = /^(?:GET|POST|PUT|PATCH|DELETE|OTHER) \/[a-z0-9:/*-]{0,160}$/;
 const UPDATE_ID = /^(?:embedded|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 let initialized = false;
@@ -45,8 +44,8 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 	const severity = typeof event.tags?.["ao.severity"] === "string" && /^P[0-3]$/.test(event.tags["ao.severity"])
 		? event.tags["ao.severity"] : undefined;
 	const kindTitle = event.tags?.["ao.kind"] === "api" ? "Mobile API error" : "Mobile error";
-	const operation = typeof event.tags?.["ao.operation"] === "string" && SAFE_OPERATION.test(event.tags["ao.operation"])
-		? event.tags["ao.operation"] : undefined;
+	// Checked word by word against the route list, not by character class.
+	const operation = isApiOperation(event.tags?.["ao.operation"]) ? event.tags["ao.operation"] : undefined;
 	const title = operation ? `${kindTitle} in ${operation}` : kindTitle;
 	const updateId = observabilityContext.updateId && UPDATE_ID.test(observabilityContext.updateId) ? observabilityContext.updateId : undefined;
 	const exceptions = event.exception?.values ?? [];
