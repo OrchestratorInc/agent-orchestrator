@@ -260,6 +260,7 @@ var shippedMigrations = map[int64]string{
 	20261107181854835: "20261107181854835_session_delete_child_indexes.sql",
 	20261109072438921: "20261109072438921_terminal_titles.sql",
 	20261109120000000: "20261109120000000_conversation_turn_batch_delivery.sql",
+	20261110081433531: "20261110081433531_commit_attribution.sql",
 	20261110172911382: "20261110172911382_conversation_turn_artifacts.sql",
 	20261111020206870: "20261111020206870_shell_terminal_ended.sql",
 	20261116231134450: "20261116231134450_shell_terminal_agent_conversation.sql",
@@ -287,8 +288,12 @@ var shippedMigrations = map[int64]string{
 	20261117090000000: "20261117090000000_allow_tau_harness.sql",
 	20261118180603285: "20261118180603285_report_unacknowledged_attempts.sql",
 	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
+	20261119200201916: "20261119200201916_session_pr_footer_choice.sql",
 	20261121120000000: "20261121120000000_pr_merge_queue.sql",
-	20261124032142084: "20261124032142084_task_preparation_skipped_children.sql",
+	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
+	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
+	20261124180938781: "20261124180938781_review_chat_active_index.sql",
+	20261125054218673: "20261125054218673_task_preparation_skipped_children.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -312,7 +317,10 @@ func burnedVersion(v int64) bool {
 		v == 216 || v == 20261114174124485 ||
 		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
 		// numbers before its migration moved above main's latest version.
-		v == 207 || v == 20261023182047274 || v == 20261114174310512
+		v == 207 || v == 20261023182047274 || v == 20261114174310512 ||
+		// 20261124032142084 was the task-preparation skipped-children draft
+		// number before its migration moved above main's latest version.
+		v == 20261124032142084
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

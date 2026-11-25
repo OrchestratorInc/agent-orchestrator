@@ -51,7 +51,7 @@ import { iconForCommand } from "../lib/command-palette-icons";
 import { startProblemReport } from "../lib/report-problem";
 import { buildChoiceCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "../lib/palette-registry";
 import { previewDocumentThemeStyle } from "../lib/theme";
-import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { commitSessionRename } from "../lib/commit-session-rename";
 import { runAppMenuAction } from "../hooks/useAppMenuCommand";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
@@ -507,7 +507,6 @@ export const CommandPalette = memo(function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
-				developerMode,
 			}, t),
 			...buildShortcutCommands(t, {
 				splitPanes,
@@ -593,11 +592,8 @@ export const CommandPalette = memo(function CommandPalette() {
 					subtitle: t("shell.rename"),
 					disabled: !menuSession || !name || name === menuSession.title,
 					action: { kind: "run", run: () => {
-						if (!menuSession) return;
-						const done = menuSession.cloud
-							? renameCloudSession(queryClient, { id: menuSession.id, cloud: menuSession.cloud }, name)
-							: renameSession(menuSession.id, name, menuSession.hostId).then(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }));
-						done.catch((error: unknown) => useUiStore.getState().showGlobalToast(t("shell.rename"), error instanceof Error ? error.message : undefined, "error"));
+						// Shows at once everywhere; a failure rolls back and says so.
+						if (menuSession) void commitSessionRename(queryClient, menuSession, name);
 					} },
 				}];
 			}

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import { PixelRatio, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, {
 	cancelAnimation,
@@ -39,7 +39,11 @@ const ORIGINS = Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) =>
  * moving while the JS thread is busy streaming the reply. Decorative: the label
  * beside it says what is happening. Under Reduce Motion the lattice holds still.
  */
-export function LatticeLoader({ color }: { color: string }) {
+/**
+ * Memoized: the row around it re-renders every second for its "12s" label,
+ * and the lattice (sixteen animated dots) does not change with it.
+ */
+export const LatticeLoader = memo(function LatticeLoader({ color }: { color: string }) {
 	const reduceMotion = useReducedMotion();
 	const lap = useSharedValue(0);
 	useEffect(() => {
@@ -59,7 +63,7 @@ export function LatticeLoader({ color }: { color: string }) {
 			})}
 		</View>
 	);
-}
+});
 
 function TrailDot({ lap, offset, style }: { lap: SharedValue<number>; offset: number; style: StyleProp<ViewStyle> }) {
 	const trail = useAnimatedStyle(() => ({ opacity: latticeTrailOpacity(lap.value - offset) }));

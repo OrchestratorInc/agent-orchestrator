@@ -77,10 +77,11 @@ type workspaceRepoDetails struct {
 
 // agentConfig mirrors the daemon's typed domain.AgentConfig for the CLI client.
 type agentConfig struct {
-	Model       string `json:"model,omitempty"`
-	Effort      string `json:"effort,omitempty"`
-	Mode        string `json:"mode,omitempty"`
-	Permissions string `json:"permissions,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	Mode               string `json:"mode,omitempty"`
+	Permissions        string `json:"permissions,omitempty"`
+	TerminateOnPRMerge *bool  `json:"terminateOnPrMerge,omitempty"`
 }
 
 // roleOverride mirrors domain.RoleOverride.
@@ -107,6 +108,11 @@ type containerReapConfig struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
+type attributionConfig struct {
+	DisableCommitTrailer bool `json:"disableCommitTrailer,omitempty"`
+	DisablePRFooter      bool `json:"disablePRFooter,omitempty"`
+}
+
 // projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json. Every domain key must be modeled here, or set-config drops it
@@ -129,10 +135,13 @@ type projectConfig struct {
 	Orchestrator          roleOverride         `json:"orchestrator,omitempty"`
 	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
 	AutoReview            bool                 `json:"autoReview,omitempty"`
+	TerminateOnPRMerge    *bool                `json:"terminateOnPrMerge,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
 	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
+	// Attribution must round-trip too, so a CLI edit keeps a project's opt-out.
+	Attribution *attributionConfig `json:"attribution,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for

@@ -6,12 +6,17 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => plain.get(key) ?? null,
 	setItem: vi.fn(async (key: string, value: string) => void plain.set(key, value)),
 	removeItem: async (key: string) => void plain.delete(key),
+	multiRemove: async (keys: string[]) => { for (const key of keys) plain.delete(key); },
+	getAllKeys: async () => [...plain.keys()],
 } }));
 vi.mock("expo-secure-store", () => ({
+	WHEN_UNLOCKED_THIS_DEVICE_ONLY: 5,
 	getItemAsync: async (key: string) => secure.get(key) ?? null,
 	setItemAsync: async (key: string, value: string) => void secure.set(key, value),
 	deleteItemAsync: async (key: string) => void secure.delete(key),
 }));
+vi.mock("expo-file-system", () => import("./chat/savedConversations.fakes").then((fakes) => fakes.fileSystemModule));
+vi.mock("expo-crypto", () => import("./chat/savedConversations.fakes").then((fakes) => fakes.cryptoModule));
 vi.mock("./account", () => ({ loadAccount: async () => null }));
 vi.mock("./push", () => ({ unpairFromServer: async () => {}, retryPendingUnpairs: async () => {} }));
 vi.mock("./pendingUnpair", () => ({ markMachineUnpaired: async () => {} }));
@@ -23,9 +28,12 @@ import { rememberedTurnOptions, rememberTurnOptions } from "./chat/lastTurnOptio
 import { loadConfig, saveConfig } from "./config";
 import { activeHost, loadHosts, migrateLegacyConfig, persistResolvedConfig, saveHost } from "./hosts";
 import { resolveActiveConfig } from "./resolveConfig";
+import { createConversationSaver, loadSavedConversation } from "./chat/savedConversations";
+import { resetSavedChatFakes, savedFileNames } from "./chat/savedConversations.fakes";
+import { resetSavedChatMachines } from "./chat/savedChatMachines";
 
 const host = { id: "h_one", name: "One", platform: "darwin", endpoints: [{ kind: "lan" as const, host: "host-one", port: 3011, secure: false }], token: "secret", lastConnected: 1, accountUserId: "user-a" };
-beforeEach(() => { plain.clear(); secure.clear(); });
+beforeEach(() => { plain.clear(); secure.clear(); resetSavedChatFakes(); resetSavedChatMachines(); });
 
 it("does not resurrect the last account host from cached connection data after sign-out", async () => {
 	await saveHost(host);
@@ -89,4 +97,38 @@ it("drops remembered turn-setting catalogs when a machine is forgotten", async (
 	rememberTurnOptions("chat-on-one", catalog);
 	await forgetServer(host);
 	expect(rememberedTurnOptions("chat-on-one")).toBeUndefined();
+});
+
+it("removes a forgotten machine's chats saved on the phone and keeps another machine's", async () => {
+	await saveHost(host);
+	const saver = createConversationSaver();
+	const page = { sessionId: "s", items: [], turns: [] } as unknown as import("./chat/snapshot").ConversationPage;
+	saver.schedule("host.h_one/s", page);
+	saver.schedule("host.h_other/s", page);
+	await saver.flush();
+	expect(await loadSavedConversation("host.h_one/s")).not.toBeNull();
+
+	await forgetPairedHost(host, { ignoreAccount: false });
+
+	expect(await loadSavedConversation("host.h_one/s")).toBeNull();
+	expect(await loadSavedConversation("host.h_other/s")).not.toBeNull();
+	expect(savedFileNames()).toEqual(["host.h_other%2Fs.page"]);
+});
+
+it("saves none of a forgotten machine's chats from a read that answers late, until it is paired again", async () => {
+	await saveHost(host);
+	const saver = createConversationSaver();
+	const page = { sessionId: "s", items: [], turns: [] } as unknown as import("./chat/snapshot").ConversationPage;
+
+	await forgetPairedHost(host, { ignoreAccount: false });
+	saver.schedule("host.h_one/s", page);
+	saver.schedule("host.h_other/s", page);
+	await saver.flush();
+	expect(savedFileNames()).toEqual(["host.h_other%2Fs.page"]);
+
+	// Paired again: its chats are saved again.
+	await saveHost(host);
+	saver.schedule("host.h_one/s", page);
+	await saver.flush();
+	expect(savedFileNames()).toEqual(["host.h_one%2Fs.page", "host.h_other%2Fs.page"]);
 });
