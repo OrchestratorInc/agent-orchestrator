@@ -713,6 +713,9 @@ export function SessionArtifactsView({
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	// Comments show the published page in place of the local file, and close with the file.
 	const [commentsOpen, setCommentsOpen] = useState(false);
+	// The published link whose page has appeared: until then the local file
+	// stays in view while the page loads, unseen, over it.
+	const [commentsShownFor, setCommentsShownFor] = useState<string | null>(null);
 	const [publishedOutdated, setPublishedOutdated] = useState(false);
 	const shareAvailable = useShareAvailable();
 	const [zoomController] = useState(() => new ArtifactZoomController());
@@ -760,7 +763,7 @@ export function SessionArtifactsView({
 	useEffect(() => { setSelectedPath(null); setAwaitedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
-	useEffect(() => { setCommentsOpen(false); setPublishedOutdated(false); }, [selectedPath, uiKey]);
+	useEffect(() => { setCommentsOpen(false); setCommentsShownFor(null); setPublishedOutdated(false); }, [selectedPath, uiKey]);
 	// Every file, and each look at its page or source, opens at fit.
 	useEffect(() => zoomController.reset(), [htmlSourcePath, previewVersion, selectedPath, uiKey, zoomController]);
 	const onViewerKeyDown = useCallback((event: KeyboardEvent) => {
@@ -904,6 +907,7 @@ export function SessionArtifactsView({
 		const commentsKind = artifactCommentsKind(selected.path);
 		const commentsSlug = shareOwner && shareAvailable && commentsKind && publishedUrl ? sharedArtifactLinkId(publishedUrl) : null;
 		const showingComments = commentsOpen && commentsSlug !== null && commentsKind !== null && previewVersion === null && !showingHtmlSource;
+		const commentsCover = showingComments && commentsShownFor === commentsSlug;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onEngagedChange={onViewerEngagedChange} onExitFullscreen={exitFullscreen} onKeyDown={onViewerKeyDown}>
 				{/* One header row: back, the file's name menu (its view and file actions), an edit's Save, Share, and full screen. */}
@@ -965,6 +969,7 @@ export function SessionArtifactsView({
 									setPreviewVersion(null);
 									setHtmlSourcePath(null);
 									setCommentsOpen(!showingComments);
+									setCommentsShownFor(null);
 								}}
 								open={showingComments}
 								slug={commentsSlug}
@@ -988,16 +993,7 @@ export function SessionArtifactsView({
 					</div>
 				</div>
 				<div className="relative min-h-0 flex-1" ref={contentRef}>
-					{showingComments && commentsSlug && commentsKind ? (
-						<ArtifactCommentsWorkspace
-							kind={commentsKind}
-							onClose={() => setCommentsOpen(false)}
-							outdated={publishedOutdated}
-							sendTarget={{ session, hostId, path: selected.path, name: selected.name }}
-							slug={commentsSlug}
-							title={selected.name}
-						/>
-					) : cloud && !selected.rawUrl ? (
+					{commentsCover ? null : cloud && !selected.rawUrl ? (
 						cloudAccess.isError ? (
 							<PanelMessage action={<RetryButton onClick={() => void cloudAccess.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>
 						) : (
@@ -1042,6 +1038,19 @@ export function SessionArtifactsView({
 							menuActions={fileMenuActions}
 						/>
 					)}
+					{showingComments && commentsSlug && commentsKind ? (
+						<div className={cn("absolute inset-0 bg-background", !commentsCover && "invisible")} data-testid="artifact-comments-layer">
+							<ArtifactCommentsWorkspace
+								kind={commentsKind}
+								onClose={() => { setCommentsOpen(false); setCommentsShownFor(null); }}
+								onShown={() => setCommentsShownFor(commentsSlug)}
+								outdated={publishedOutdated}
+								sendTarget={{ session, hostId, path: selected.path, name: selected.name }}
+								slug={commentsSlug}
+								title={selected.name}
+							/>
+						</div>
+					) : null}
 					<ArtifactZoomControls controller={zoomController} />
 				</div>
 			</ArtifactViewerFrame>

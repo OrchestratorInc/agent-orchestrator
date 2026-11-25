@@ -106,7 +106,13 @@ vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 
 // The published page, framed from its share host: a plain frame naming its link.
 vi.mock("./SharedArtifactFrame", () => ({
-	SharedArtifactFrame: ({ linkId, title }: { linkId: string; title: string }) => <iframe data-link-id={linkId} data-testid="published-frame" title={title} />,
+	SharedArtifactFrame: ({ linkId, onShown, title }: { linkId: string; onShown?: () => void; title: string }) => (
+		<>
+			<iframe data-link-id={linkId} data-testid="published-frame" title={title} />
+			{/* jsdom loads a frame with no src at once; the test says when the page has loaded. */}
+			<button onClick={onShown} type="button">mock: page loaded</button>
+		</>
+	),
 }));
 
 const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
@@ -1275,17 +1281,26 @@ describe("SessionArtifactsView comments", () => {
 		expect(await screen.findByRole("button", { name: "Comments, 2 open" })).toBeInTheDocument();
 	});
 
-	it("swaps the local preview for the published page while comments are open", async () => {
+	it("keeps the local preview until the published page loads, then swaps it in for comments", async () => {
 		renderWithComments(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session(published())} />);
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
-		await userEvent.click(await screen.findByRole("button", { name: "Comments, 2 open" }));
+		const button = await screen.findByRole("button", { name: "Comments, 2 open" });
+		await userEvent.click(button);
+		expect(button).toHaveAttribute("aria-pressed", "true");
 
-		expect(screen.getByTestId("published-frame")).toHaveAttribute("data-link-id", "notes-md");
+		// Loading: the local file stays in view, the published page loads unseen over it.
+		const frame = screen.getByTestId("published-frame");
+		expect(frame).toHaveAttribute("data-link-id", "notes-md");
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		expect(screen.getByTestId("artifact-comments-layer")).toHaveClass("invisible");
+
+		await userEvent.click(screen.getByRole("button", { name: "mock: page loaded" }));
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Comments, 2 open" })).toHaveAttribute("aria-pressed", "true");
-		expect(await screen.findByRole("complementary", { name: "Comments" })).toBeInTheDocument();
+		expect(screen.getByTestId("artifact-comments-layer")).not.toHaveClass("invisible");
+		// Comment mode: counts on the page, nothing pops up until an element is clicked.
+		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "Close comments" }));
+		await userEvent.click(button);
 		expect(screen.queryByTestId("published-frame")).not.toBeInTheDocument();
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
 	});

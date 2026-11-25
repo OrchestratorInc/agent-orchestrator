@@ -1,4 +1,4 @@
-import type { Ref } from "react";
+import { useEffect, useRef, type Ref } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -20,9 +20,11 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * a document, which a video stored without its type turns into a refused
  * download.
  */
-export function SharedArtifactFrame({ frameRef, linkId, title }: {
+export function SharedArtifactFrame({ frameRef, linkId, onShown, title }: {
 	/** The page's frame, for the comments bridge; a video has none. */
 	frameRef?: Ref<HTMLIFrameElement>;
+	/** Called once there is something to see: the page loaded, or a message in its place. */
+	onShown?: () => void;
 	linkId: string;
 	title: string;
 }) {
@@ -37,6 +39,13 @@ export function SharedArtifactFrame({ frameRef, linkId, title }: {
 		retry: (count, error) => !(error instanceof CloudCpError && error.status === 404) && count < 1,
 		queryFn: ({ signal }) => client.viewArtifactShare(linkId, { signal }),
 	});
+	const onShownRef = useRef(onShown);
+	onShownRef.current = onShown;
+	// A message (sign in, gone, error) is something to see; a page is once it loads.
+	const showsMessage = !ready || view.isError;
+	useEffect(() => {
+		if (showsMessage) onShownRef.current?.();
+	}, [showsMessage]);
 	if (!ready) return <PanelMessage>{t("artifacts.sharedSignIn")}</PanelMessage>;
 	if (view.error instanceof CloudCpError && view.error.status === 404) return <PanelMessage>{t("artifacts.sharedUnavailable")}</PanelMessage>;
 	if (view.isError) return <PanelMessage action={<RetryButton onClick={() => { void view.refetch(); }} />}>{t("artifacts.accessError")}</PanelMessage>;
@@ -50,6 +59,7 @@ export function SharedArtifactFrame({ frameRef, linkId, title }: {
 					controls
 					controlsList="nodownload"
 					key={view.data.contentUrl}
+					onLoadedMetadata={() => onShownRef.current?.()}
 					playsInline
 					preload="metadata"
 					src={view.data.contentUrl}
@@ -61,6 +71,7 @@ export function SharedArtifactFrame({ frameRef, linkId, title }: {
 		<iframe
 			className="h-full w-full border-0 bg-background"
 			key={view.data.contentUrl}
+			onLoad={() => onShownRef.current?.()}
 			ref={frameRef}
 			referrerPolicy="no-referrer"
 			sandbox="allow-scripts allow-forms"
