@@ -2994,6 +2994,78 @@ html.sidebar-reordering * {
 	min-width: 0;
 }
 
+/* A thread, like a comment thread: the line drops from an opened row's icon and curves
+   into each child's icon (a file row's first letter), ending at the last child. Every
+   child's first line is a 28px row, so its icon sits 14px down. */
+.activity-thread,
+[data-thread-parent] {
+	/* Stronger than border-strong, which is too faint to follow down a long thread. */
+	--thread-line: color-mix(in oklch, var(--color-text-primary) 22%, transparent);
+	--thread-stroke: 1.5px;
+}
+.activity-thread {
+	--thread-indent: 19px;
+	--thread-row: 14px;
+	--thread-radius: 10px;
+	position: relative;
+	margin-left: calc(7px - var(--thread-stroke) / 2);
+	padding-left: var(--thread-indent);
+}
+.activity-thread > :not(ul),
+.activity-thread > ul > li {
+	position: relative;
+}
+/* The curve into a child, stopping just short of it. A file row's text starts 10px in. */
+.activity-thread > :not(ul)::before,
+.activity-thread > ul > li::before {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: 0;
+	width: calc(var(--thread-indent) - 3px);
+	height: var(--thread-row);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	border-bottom: var(--thread-stroke) solid var(--thread-line);
+	border-bottom-left-radius: var(--thread-radius);
+	pointer-events: none;
+}
+.activity-thread > ul > li::before {
+	width: calc(var(--thread-indent) + 0.625rem - 3px);
+}
+/* Past every child but the last, the line runs straight on, through the gap, to the next. */
+.activity-thread > :not(ul):not(:last-child)::after,
+.activity-thread > ul > li:not(:last-child)::after {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: calc(var(--thread-row) - var(--thread-radius));
+	bottom: calc(-1 * var(--thread-gap, 0px));
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+/* The line's start: from just under the opened row's icon, across any space above the thread. */
+.activity-thread::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: calc(-1 * var(--thread-lead, 0px));
+	height: var(--thread-lead, 0px);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+[data-thread-parent] {
+	position: relative;
+}
+[data-thread-parent]::after {
+	content: "";
+	position: absolute;
+	left: calc(7px - var(--thread-stroke) / 2);
+	top: calc(50% + 10px);
+	bottom: 0;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+
 /* Keep Worked disclosure motion in lockstep with tool-call accordions. Radix
    exposes the measured content height through this variable. */
 @keyframes chat-worked-accordion-down {

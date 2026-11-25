@@ -1962,7 +1962,7 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<ActivityStepBody>
+						<ActivityStepBody text>
 							<div className="flex flex-col items-start gap-1 pb-1.5 text-xs text-muted-foreground">
 								{lines.map((line, index) => <span key={index}>{line}</span>)}
 								{href && descriptor?.linkLabelKey ? (
@@ -1983,17 +1983,18 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * A `running` activity with no completion is a real terminal state here, not a
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
-/** True under a run's rail: an opened step's details hang on that rail instead of drawing their own. */
+/** True under a thread: an opened step's details hang under its row instead of drawing a line of their own. */
 const InsideActivityRail = createContext(false);
 
 /**
- * A thin line under a row's icon that the row's contents hang from: a run's steps, or
- * an opened step's details. One rule for both, so nesting reads the same everywhere.
+ * The thread a row's children hang from: a run's steps, or an edit's files. The line
+ * drops from the row's icon and curves into each child, ending at the last one
+ * (`.activity-thread` in styles.css). One rule for every level, so nesting reads the same.
  */
 export function ActivityRail({ children, className }: { children: ReactNode; className?: string }) {
 	return (
 		<InsideActivityRail.Provider value={true}>
-			<div data-activity-rail="" className={cn("ml-1.5 border-l border-border-strong pl-[13px]", className)}>
+			<div data-activity-rail="" className={cn("activity-thread", className)}>
 				{children}
 			</div>
 		</InsideActivityRail.Provider>
@@ -2001,17 +2002,28 @@ export function ActivityRail({ children, className }: { children: ReactNode; cla
 }
 
 /**
- * An opened step's details, lined up with the step's text. Inside a run they share the
- * run's rail; a step on its own draws a rail under its icon.
+ * An opened step's details. Inside a thread nothing is drawn beside them: a box (output,
+ * a diff) starts under the step's icon, and plain text lines up with the step's label.
+ * A step on its own keeps a straight line under its icon.
  */
-function ActivityStepBody({ children, list = false }: {
+function ActivityStepBody({ children, list = false, text = false, className }: {
 	children: ReactNode;
-	/** A list of its own (an edit's files): it gets a rail even inside a run's. */
+	/** A list of its own (an edit's files): it hangs on a thread of its own. */
 	list?: boolean;
+	/** Plain text rather than a box: it lines up with the step's label. */
+	text?: boolean;
+	className?: string;
 }) {
 	const insideRail = useContext(InsideActivityRail);
-	if (insideRail && !list) return <div className="pl-[22px]">{children}</div>;
-	return <ActivityRail className="pl-[15px]">{children}</ActivityRail>;
+	if (list) return <ActivityRail>{children}</ActivityRail>;
+	if (insideRail) return <div className={cn(text && "pl-[22px]", className)}>{children}</div>;
+	return (
+		<InsideActivityRail.Provider value={true}>
+			<div data-activity-rail="" className="ml-1.5 border-l border-border-strong pl-[15px]">
+				{children}
+			</div>
+		</InsideActivityRail.Provider>
+	);
 }
 
 function GenericActivityRow({
@@ -2082,6 +2094,7 @@ function GenericActivityRow({
 				onClick={() => toggle(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
+				data-thread-parent={open && files.length > 1 ? "" : undefined}
 				className={cn(
 					compactSummary
 						? ACTIVITY_SUMMARY_BUTTON_CLASS
@@ -2798,7 +2811,7 @@ function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 	// nothing when pressed is worse than plain text.
 	if (!hasPatch) {
 		return (
-			<li className="flex min-h-7 items-center gap-1.5 py-0.5 pr-1" aria-label={accessibleName}>
+			<li className="flex min-h-7 items-center gap-1.5 py-0.5 pr-1 pl-2.5" aria-label={accessibleName}>
 				{line}
 			</li>
 		);
@@ -2810,7 +2823,7 @@ function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 				onClick={() => setOpen((prev) => !prev)}
 				aria-expanded={open}
 				aria-label={accessibleName}
-				className="flex min-h-7 items-center gap-1.5 rounded-sm py-0.5 pr-1 text-left"
+				className="flex min-h-7 items-center gap-1.5 rounded-sm py-0.5 pr-1 pl-2.5 text-left"
 			>
 				{line}
 				<ChevronRight
@@ -2821,9 +2834,9 @@ function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 					)}
 				/>
 			</Pressable>
-			{/* Indented under the row like any opened step, not flush with "Edited". */}
+			{/* The diff starts where the row's text does, under "Edited". */}
 			{open ? (
-				<ActivityStepBody>
+				<ActivityStepBody className="pl-2.5">
 					<FileChangePatchCard file={file} hints={{ cwd }} />
 				</ActivityStepBody>
 			) : null}
@@ -3200,7 +3213,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<ActivityStepBody>
+						<ActivityStepBody text>
 						<div className="flex flex-col gap-1 pb-1">
 							{failed && view.error ? (
 								<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-destructive">

@@ -234,7 +234,7 @@ describe("file cards in the timeline", () => {
 		expect(screen.getByRole("button", { name: "Copy output" })).toBeInTheDocument();
 	});
 
-	it("hangs a run's steps on one rail and an opened step on its text column, not a second rail", () => {
+	it("hangs a run's steps on one thread and an opened step's box under its icon, with no line of its own", () => {
 		const { container } = render(
 			<ActivityRun
 				activities={[
@@ -246,8 +246,12 @@ describe("file cards in the timeline", () => {
 		fireEvent.click(container.querySelector(".activity-run-toggle")!);
 		expect(container.querySelectorAll("[data-activity-rail]")).toHaveLength(1);
 		fireEvent.click(container.querySelector('.activity-row-toggle[aria-expanded="false"]')!);
-		expect(container.querySelectorAll("[data-activity-rail]")).toHaveLength(1);
-		expect(container.querySelector("[data-command-line]")?.closest(".pl-\\[22px\\]")).not.toBeNull();
+		const rails = container.querySelectorAll("[data-activity-rail]");
+		expect(rails).toHaveLength(1);
+		expect(rails[0]).toHaveClass("activity-thread");
+		const line = container.querySelector("[data-command-line]");
+		expect(line).not.toBeNull();
+		expect(line?.closest(".pl-\\[22px\\]")).toBeNull();
 	});
 
 	it("draws a rail under a step opened on its own", () => {
@@ -321,7 +325,7 @@ describe("file cards in the timeline", () => {
 		expect(chip.className).not.toMatch(/chat-file/);
 	});
 
-	it("indents a nested edit's diff under its row instead of lining it up with the row's text", () => {
+	it("starts a nested edit's diff where its file row's text starts", () => {
 		const { container } = render(
 			<ActivityRow
 				activity={activity({
@@ -338,7 +342,8 @@ describe("file cards in the timeline", () => {
 		);
 		fireEvent.click(container.querySelector(".activity-row-toggle")!);
 		fireEvent.click(container.querySelectorAll("li button")[0]!);
+		expect(container.querySelectorAll("li button")[0]).toHaveClass("pl-2.5");
 		const card = container.querySelector('[data-chat-file-card="edit"]')!;
-		expect(card.parentElement).toHaveClass("pl-[22px]");
+		expect(card.parentElement).toHaveClass("pl-2.5");
 	});
 });

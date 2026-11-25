@@ -102,6 +102,7 @@ export function ActivityRun({
 			<Pressable
 				onClick={() => updateOverride(disclosureKey ?? "", !open)}
 				aria-expanded={open}
+				data-thread-parent={open ? "" : undefined}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
 				<RunMark activities={activities} />
@@ -163,7 +164,7 @@ export function ActivityRun({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<ActivityRail className="mt-1 flex flex-col gap-1">
+						<ActivityRail className="mt-1 flex flex-col gap-1 [--thread-gap:0.25rem] [--thread-lead:0.25rem]">
 							{subgroups.length === 1
 								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
@@ -331,6 +332,7 @@ function ActivitySubgroup({
 			<Pressable
 				onClick={() => updateOverride(!open)}
 				aria-expanded={open}
+				data-thread-parent={open ? "" : undefined}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
 				<RunMark activities={activities} />
@@ -351,7 +353,7 @@ function ActivitySubgroup({
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<ActivityRail className="mt-1 flex flex-col gap-1">
+						<ActivityRail className="mt-1 flex flex-col gap-1 [--thread-gap:0.25rem] [--thread-lead:0.25rem]">
 							{renderActivityRows(activities, nodesByActivityID)}
 						</ActivityRail>
 					</motion.div>
