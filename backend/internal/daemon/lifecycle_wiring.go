@@ -951,6 +951,8 @@ func (c chatLauncher) HibernateChatForUpdate(ctx context.Context, id domain.Sess
 	return c.svc.HibernateChatForUpdate(ctx, id)
 }
 
+func (c chatLauncher) HasChatView(id domain.SessionID) bool { return c.svc.HasChatView(id) }
+
 func (c chatLauncher) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
 	return c.svc.MoveUsageLimitedSession(ctx, id)
 }

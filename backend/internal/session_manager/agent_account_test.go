@@ -469,13 +469,17 @@ type usageLimitedChat struct {
 	targetErr error
 	target    string
 	moves     int
+	open      bool
 	live      bool
 	moving    func()
 }
 
 func (c *usageLimitedChat) HasLiveChatController(domain.SessionID) bool { return c.live }
 
+func (c *usageLimitedChat) HasChatView(domain.SessionID) bool { return c.open }
+
 func (c *usageLimitedChat) StartChat(ctx context.Context, cfg ChatStart) (ChatStarted, error) {
+	c.open = false
 	c.startErr = c.sourceErr
 	if cfg.Env["CLAUDE_CONFIG_DIR"] == "/accounts/b" {
 		c.startErr = c.targetErr
@@ -499,20 +503,22 @@ func TestUsageLimitedResumeWaitsForTheAccountMove(t *testing.T) {
 		sourceErr error
 		targetErr error
 		target    string
+		closed    bool
 		want      error
 		bound     string
 		moves     int
 	}{
-		{"resumes on the other account", limited, nil, "acct-b", nil, "acct-b", 1},
-		{"no account to move to", limited, nil, "device-claude", ports.ErrChatUsageLimited, "device-claude", 1},
-		{"the other account refuses too", limited, limited, "acct-b", ports.ErrChatUsageLimited, "device-claude", 1},
-		{"other failures stay", ports.ErrChatResumeFailed, nil, "acct-b", ports.ErrChatResumeFailed, "device-claude", 0},
+		{"resumes on the other account", limited, nil, "acct-b", false, nil, "acct-b", 1},
+		{"no account to move to", limited, nil, "device-claude", false, ports.ErrChatUsageLimited, "device-claude", 1},
+		{"nobody has it open", limited, nil, "acct-b", true, ports.ErrChatUsageLimited, "device-claude", 0},
+		{"the other account refuses too", limited, limited, "acct-b", false, ports.ErrChatUsageLimited, "device-claude", 1},
+		{"other failures stay", ports.ErrChatResumeFailed, nil, "acct-b", false, ports.ErrChatResumeFailed, "device-claude", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager, store, _, base, accounts, _ := newAccountTransitionManager(t, domain.SessionModeChat)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			chat := &usageLimitedChat{transitionChat: base, manager: manager, sourceErr: tc.sourceErr, targetErr: tc.targetErr, target: tc.target, moving: cancel}
+			chat := &usageLimitedChat{transitionChat: base, manager: manager, sourceErr: tc.sourceErr, targetErr: tc.targetErr, target: tc.target, open: !tc.closed, moving: cancel}
 			manager.chat = chat
 			rec := store.sessions["session-1"]
 			rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}

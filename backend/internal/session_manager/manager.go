@@ -3951,9 +3951,10 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
-	result, err := m.resumeAgentWithMode(ctx, id, false)
 	mover, ok := m.chat.(ChatUsageLimitMover)
-	if !ok || !errors.Is(err, ports.ErrChatUsageLimited) || !mover.MoveUsageLimitedSession(ctx, id) {
+	open := ok && mover.HasChatView(id)
+	result, err := m.resumeAgentWithMode(ctx, id, false)
+	if !open || !errors.Is(err, ports.ErrChatUsageLimited) || !mover.MoveUsageLimitedSession(ctx, id) {
 		return result, err
 	}
 	m.transitionMu.Lock()
@@ -3971,6 +3972,7 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 
 // ChatUsageLimitMover starts an account move for a usage-limited Chat session.
 type ChatUsageLimitMover interface {
+	HasChatView(id domain.SessionID) bool
 	MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool
 }
 

@@ -168,9 +168,6 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 
 // MoveUsageLimitedSession starts an account move and reports whether it started.
 func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
-	if !s.hasChatView(id) {
-		return false
-	}
 	s.mu.RLock()
 	own := s.usageLimitAccounts
 	s.mu.RUnlock()
@@ -189,14 +186,14 @@ func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.Session
 		model = conversation.Settings.Model
 	}
 	provider, _ := domain.AgentAccountProviderFor(record.Harness)
-	_, limits, err := own.SessionLimits(ctx, id, record.Harness, true)
-	if room, _ := limits.HandoffHeadroom(provider, model); err != nil || room > 0 {
-		s.log.Info("account handoff: usage-limited resume stays; its account is not at a limit", "session", id, "room", room, "error", err)
+	_, limits, limitsErr := own.SessionLimits(ctx, id, record.Harness, true)
+	if room, _ := limits.HandoffHeadroom(provider, model); limitsErr == nil && room > 0 {
+		s.log.Info("account handoff: usage-limited resume stays; its account has room", "session", id, "room", room)
 		return false
 	}
 	target, err := deps.accounts.HandoffTarget(ctx, id, record.Harness, model)
 	if err != nil || target == "" {
-		s.log.Info("account handoff: usage-limited resume stays", "session", id, "error", err)
+		s.log.Info("account handoff: usage-limited resume stays", "session", id, "error", err, "limitsError", limitsErr)
 		return false
 	}
 	if _, err := deps.mover.StartAccountTransition(ctx, id, target, domain.SessionInterfaceTransitionDrain); err != nil {
