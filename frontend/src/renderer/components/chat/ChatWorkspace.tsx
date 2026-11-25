@@ -8233,6 +8233,20 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
+	// The prompts sit out of the flow, pinned to the composer's top edge, and this
+	// spacer holds their room. When they leave, the spacer closes at once and the
+	// heading glides down while the prompts fade where they stood, so nothing that
+	// leaves ever drifts down onto the composer.
+	const promptsRef = useRef<HTMLDivElement>(null);
+	const [promptsHeight, setPromptsHeight] = useState(0);
+	useLayoutEffect(() => {
+		const node = promptsRef.current;
+		if (!promptsOpen || !node) return;
+		setPromptsHeight(node.offsetHeight);
+		const observer = new ResizeObserver(() => setPromptsHeight(node.offsetHeight));
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, [promptsOpen]);
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center">
 			<motion.h1
@@ -8242,11 +8256,13 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 			>
 				{heading}
 			</motion.h1>
-			<AnimatePresence initial={false} mode="popLayout">
+			<div aria-hidden="true" className="w-full shrink-0" style={{ height: promptsOpen ? promptsHeight : 0 }} />
+			<AnimatePresence initial={false}>
 				{promptsOpen ? (
 					<motion.div
+						ref={promptsRef}
 						key="welcome-prompts"
-						className="pointer-events-auto w-full"
+						className="pointer-events-auto absolute inset-x-0 bottom-0"
 						initial={{ opacity: 0, y: -4 }}
 						// Back in once the heading has made room, easing out.
 						animate={{ opacity: 1, y: 0, transition: reducedMotion ? { duration: 0 } : { duration: 0.22, delay: 0.08, ease: [0.23, 1, 0.32, 1] } }}
