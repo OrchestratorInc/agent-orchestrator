@@ -79,9 +79,15 @@ export function TitlebarNav({
     brandNudged.current = true;
     window.dispatchEvent(new Event("resize"));
   }, [showBrand]);
+  const chromeKey = `${isFullScreen}:${zoomFactor}`;
+  const lastChromeKey = useRef(chromeKey);
   useEffect(() => {
-    if (brandNudged.current) window.dispatchEvent(new Event("resize"));
-  }, [isFullScreen, zoomFactor]);
+    if (lastChromeKey.current === chromeKey) return;
+    lastChromeKey.current = chromeKey;
+    if (showBrand) window.dispatchEvent(new Event("resize"));
+    // showBrand is read, not a trigger: a sidebar toggle must not nudge.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chromeKey]);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
