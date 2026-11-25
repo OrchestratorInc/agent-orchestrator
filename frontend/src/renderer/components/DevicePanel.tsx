@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Ban, ChevronLeft, CircleAlert, CircleCheck, Ellipsis, GalleryHorizontal, House, LoaderCircle, Smartphone, Square } from "@/components/app-icons";
+import { Ban, ChevronLeft, CircleAlert, Ellipsis, GalleryHorizontal, House, LoaderCircle, Square } from "@/components/app-icons";
 import { AndroidIcon, AppleIcon } from "./icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import type { components } from "../../api/schema";
@@ -220,19 +220,18 @@ function shortHomePaths(text: string): string {
 
 /**
  * The Device tab's own page: a header in the New project panel's type, over
- * whatever this step offers, sitting a little above the middle of the tab.
+ * whatever this step offers, at the top of the tab like the device list.
  */
-function DevicePage({ back, children, icon, title, description }: { back?: { label: string; onClick: () => void }; children: ReactNode; icon?: ReactNode; title: ReactNode; description?: ReactNode }) {
+function DevicePage({ back, children, title, description }: { back?: { label: string; onClick: () => void }; children: ReactNode; title: ReactNode; description?: ReactNode }) {
 	return (
 		<div className="board-scrollbar flex h-full flex-col overflow-y-auto">
-			<div className="mx-auto my-auto flex w-full max-w-md flex-col px-4 pt-6 pb-[12vh]">
+			<div className="flex w-full max-w-md flex-col px-4 pt-4 pb-6">
 				{back ? (
 					<Button className="-ml-2 mb-3 self-start text-muted-foreground" onClick={back.onClick} size="sm" type="button" variant="quiet">
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 						{back.label}
 					</Button>
 				) : null}
-				{icon ? <span aria-hidden="true" className="mb-4 flex text-muted-foreground">{icon}</span> : null}
 				<h3 className="settings-dialog-title">{title}</h3>
 				{description ? <p className="mt-1 text-[13px] leading-5 text-pretty text-muted-foreground">{description}</p> : null}
 				<div className="mt-5">{children}</div>
@@ -245,7 +244,7 @@ function DevicePage({ back, children, icon, title, description }: { back?: { lab
 function DeviceIntro({ action, error }: { action: ReactNode; error?: string }) {
 	const { t } = useTranslation();
 	return (
-		<DevicePage description={t("device.introBody")} icon={<Smartphone className="size-6" />} title={t("device.introTitle")}>
+		<DevicePage description={t("device.introBody")} title={t("device.introTitle")}>
 			<div className="flex flex-col items-start gap-3">
 				{error ? <p className="text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{error}</p> : null}
 				{action}
@@ -265,7 +264,7 @@ function platformReady(platform: DevicePlatformStatus): "ready" | "setup" | "una
 }
 
 const platformLook = {
-	ready: { icon: CircleCheck, tone: "text-status-ready", label: "device.statusReady" },
+	ready: { icon: null, tone: "", label: "device.statusReady" },
 	setup: { icon: CircleAlert, tone: "text-status-in-review", label: "device.statusSetup" },
 	unavailable: { icon: Ban, tone: "text-muted-foreground", label: "device.statusUnavailable" },
 } as const;
@@ -294,7 +293,7 @@ function PlatformChooser({ onChoose, platforms }: { onChoose: (platform: DeviceP
 						>
 							<span className="flex w-full items-start justify-between gap-2">
 								<Logo aria-hidden="true" className="size-6 text-muted-foreground group-hover:text-foreground" />
-								<StateIcon aria-hidden="true" className={cn("size-icon-base", tone)} />
+								{StateIcon ? <StateIcon aria-hidden="true" className={cn("size-icon-base", tone)} /> : null}
 							</span>
 							<span className="min-w-0">
 								<span className="block text-[14px] font-medium text-foreground">{t(name)}</span>
@@ -331,14 +330,13 @@ function guideSteps(platform: DevicePlatformStatus, t: TFunction): { steps: stri
 
 function PlatformGuide({ checking, onBack, onCheck, platform }: { checking: boolean; onBack: () => void; onCheck: () => void; platform: DevicePlatformStatus }) {
 	const { t } = useTranslation();
-	const { icon: Logo, name } = platformMeta[platform.platform];
+	const { name } = platformMeta[platform.platform];
 	const unavailable = platformReady(platform) === "unavailable";
 	const { steps, note } = guideSteps(platform, t);
 	return (
 		<DevicePage
 			back={{ label: t("device.back"), onClick: onBack }}
 			description={unavailable ? undefined : t("device.guideBody")}
-			icon={<Logo className="size-6" />}
 			title={t(unavailable ? "device.guideUnavailableTitle" : "device.guideTitle", { platform: t(name) })}
 		>
 			<div className="flex flex-col items-start gap-4">
