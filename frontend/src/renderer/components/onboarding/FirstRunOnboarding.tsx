@@ -547,7 +547,9 @@ function StepActions({ setSlot }: { setSlot: (slot: HTMLDivElement | null) => vo
 	const { t } = useTranslation();
 	const onBack = useContext(BackContext);
 	return (
-		<div className="sticky bottom-0 z-10 flex items-center gap-2 bg-background pb-14 pt-8" data-testid="first-run-actions">
+		// The fade above it lets rows scrolling under the row trail off instead of
+		// being cut along a hard edge.
+		<div className="sticky bottom-0 z-10 flex items-center gap-2 bg-background pb-14 pt-8 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-8 before:bg-linear-to-t before:from-background before:to-transparent" data-testid="first-run-actions">
 			{onBack ? (
 				<Button type="button" variant="quiet" className="-ms-2" onClick={onBack}>
 					<ArrowLeft aria-hidden="true" />
@@ -1330,8 +1332,10 @@ function ToolsStep({ onNext, onSkip, login }: {
 						</ul>
 						{showAllAgents && rest.length > 0 ? (
 							<>
-								{/* Every other harness, installable from here too; scrolls past a few rows. */}
-								<ul className={cn(ROW_LIST, "max-h-80 overflow-y-auto")} aria-label={t("firstRun.moreHarnessesList")}>
+								{/* Every other harness, installable from here too. The step scrolls
+								    as one: a list scrolling inside it gave two scrollbars, and on
+								    macOS its rows drew over the action row. */}
+								<ul className={ROW_LIST} aria-label={t("firstRun.moreHarnessesList")}>
 									{rest.map(agentRow)}
 								</ul>
 								<Button type="button" variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setShowAllAgents(false)}>
