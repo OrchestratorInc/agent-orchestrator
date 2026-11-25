@@ -265,12 +265,12 @@ func (e *Engine) markRunRunning(ctx stdctx.Context, run domain.ReviewRun, from [
 
 // markRunsRelaunching moves passes being restarted under a replacement
 // reviewer to launching on that launch.
-func (e *Engine) markRunsRelaunching(ctx stdctx.Context, runs []domain.ReviewRun, launchID string) error {
+func (e *Engine) markRunsRelaunching(ctx stdctx.Context, runs []domain.ReviewRun, launchID, model string) error {
 	now := e.clock()
 	for _, run := range runs {
 		// The replacement must report its own first activity: evidence from the
 		// launch it replaces would skip the never-started check.
-		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunRunning, domain.ReviewRunLaunching}, domain.ReviewRunLaunching, domain.ReviewRunPatch{LaunchID: launchID, LaunchingAt: &now, ClearFirstActivity: true}); err != nil {
+		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunRunning, domain.ReviewRunLaunching}, domain.ReviewRunLaunching, domain.ReviewRunPatch{LaunchID: launchID, ReviewerModel: &model, LaunchingAt: &now, ClearFirstActivity: true}); err != nil {
 			return err
 		}
 	}
@@ -283,7 +283,7 @@ func (e *Engine) revertRelaunch(ctx stdctx.Context, runs []domain.ReviewRun) err
 	var errs []error
 	for _, run := range runs {
 		// Back on the launch that was serving it, with that launch's evidence.
-		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunLaunching}, domain.ReviewRunRunning, domain.ReviewRunPatch{LaunchID: run.LaunchID, FirstActivityAt: run.FirstActivityAt}); err != nil {
+		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunLaunching}, domain.ReviewRunRunning, domain.ReviewRunPatch{LaunchID: run.LaunchID, ReviewerModel: &run.ReviewerModel, FirstActivityAt: run.FirstActivityAt}); err != nil {
 			errs = append(errs, err)
 		}
 	}

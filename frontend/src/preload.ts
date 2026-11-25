@@ -1,7 +1,8 @@
+import type { GitHubIssueArtifact, GitHubIssueArtifactResult, GitHubIssueChoice } from "./shared/github-issue-artifact";
 import type { TriageResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
-import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, APP_SHORTCUT_PRESSED_CHANNEL, type AppShortcutId, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import { SIDE_CLOSE_PROTOCOL_VERSION, type SideCloseRequest, type SideCloseState } from "./shared/side-close";
 import {
@@ -35,7 +36,7 @@ import type { DictationEvent } from "./shared/dictation";
 import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
-import type { RemoteHealth } from "./main/remote-request";
+import type { HostUpdateView, RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
 	EditorHandoffStateOptions,
@@ -48,6 +49,7 @@ import type {
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
 import type { TelemetryBootstrap } from "./shared/telemetry";
+import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
 	TELEMETRY_POLICY_CHANGED_CHANNEL,
@@ -64,7 +66,8 @@ import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareAccess,
 	type CloudShareFile,
-	type CloudShareGrant,
+	type CloudShareGrants,
+	type CloudShareInvite,
 	type CloudShareInspection,
 	type CloudShareLink,
 	type CloudShareLinks,
@@ -102,6 +105,8 @@ import type {
 	BrowserProfileDeleteResult,
 	BrowserProfileMenuInput,
 	BrowserProfileSelectInput,
+	BrowserProfileSwitchConfirmRequest,
+	BrowserProfileSwitchFailure,
 	BrowserProfileViewState,
 } from "./shared/browser-profiles";
 import type {
@@ -300,6 +305,8 @@ const api = {
 		getRepositoryBranch: (path: string) =>
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
 		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
+		findArtifactIssues: (repo: string, query: string) => ipcRenderer.invoke("app:findArtifactIssues", repo, query) as Promise<GitHubIssueChoice[]>,
+		publishIssueArtifact: (input: GitHubIssueArtifact) => ipcRenderer.invoke("app:publishIssueArtifact", input) as Promise<GitHubIssueArtifactResult>,
 		listGitHubRepos: (query: string) =>
 			ipcRenderer.invoke("app:listGitHubRepos", query) as Promise<Array<{ fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string }>>,
 		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
@@ -431,6 +438,14 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		// Each app shortcut chord main claimed, by id, for the usage counts.
+		onShortcutPressed: (listener: (id: AppShortcutId) => void) => {
+			const wrapped = (_event: unknown, id: AppShortcutId) => listener(id);
+			ipcRenderer.on(APP_SHORTCUT_PRESSED_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(APP_SHORTCUT_PRESSED_CHANNEL, wrapped);
+			};
+		},
 		// Tells main the first frame that shows the workspace is on screen.
 		reportSessionsShown: () => ipcRenderer.send("app:sessionsShown"),
 		setMenuAvailability: (availability: AppMenuAvailability) => {
@@ -504,6 +519,8 @@ const api = {
 		// WebContentsView previews (which follow prefers-color-scheme) stay in sync
 		// with the shell. "system" lets both follow the OS.
 		set: (preference: "light" | "dark" | "system") => ipcRenderer.invoke("theme:set", preference) as Promise<void>,
+		// The OS light/dark appearance, even while the app forces Light or Dark.
+		systemAppearance: () => ipcRenderer.invoke("theme:system-appearance") as Promise<"light" | "dark">,
 		persistTerminal: (scheme: "light" | "dark") =>
 			ipcRenderer.invoke("theme:persist-terminal", scheme) as Promise<void>,
 		// The shell goes transparent over a live native browser page, so whatever
@@ -513,6 +530,9 @@ const api = {
 		// the translucent shell blurs the desktop behind it.
 		setWindowTranslucent: (enabled: boolean) =>
 			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
+		// macOS only: Interface v2 moves the native window buttons with its wider
+		// edge spacing.
+		setInterfaceV2: (enabled: boolean) => ipcRenderer.invoke("theme:set-interface-v2", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -556,9 +576,9 @@ const api = {
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
 		setAccess: (baseUrl: string, shareId: string, access: CloudShareAccess) =>
 			ipcRenderer.invoke("cloudShare:setAccess", { baseUrl, shareId, access }) as Promise<CloudShareLink>,
-		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrant[]>,
-		invite: (baseUrl: string, shareId: string, emails: string[]) =>
-			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, emails }) as Promise<CloudShareGrant[]>,
+		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrants>,
+		invite: (baseUrl: string, shareId: string, invite: CloudShareInvite) =>
+			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, ...invite }) as Promise<CloudShareGrants>,
 		removeGrant: (baseUrl: string, shareId: string, grantId: string) =>
 			ipcRenderer.invoke("cloudShare:removeGrant", { baseUrl, shareId, grantId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {
@@ -648,6 +668,9 @@ const api = {
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
+		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
+		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,
+		launchSteps: () => ipcRenderer.invoke("telemetry:launchSteps") as Promise<LaunchSteps | null>,
 		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
@@ -833,6 +856,32 @@ const api = {
 				ipcRenderer.off("browser:profileManage", wrapped);
 			};
 		},
+		/** The main process needs the user to accept a profile switch that reloads loaded pages. */
+		onProfileSwitchConfirm: (listener: (request: BrowserProfileSwitchConfirmRequest) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; profileId?: unknown }) => {
+				if (typeof payload?.viewId !== "string") return;
+				if (payload.profileId !== null && typeof payload.profileId !== "string") return;
+				listener({ viewId: payload.viewId, profileId: payload.profileId });
+			};
+			ipcRenderer.on("browser:profileSwitchConfirm", wrapped);
+			return () => {
+				ipcRenderer.off("browser:profileSwitchConfirm", wrapped);
+			};
+		},
+		onProfileSwitchFailed: (listener: (failure: BrowserProfileSwitchFailure) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; message?: unknown; reason?: unknown }) => {
+				if (typeof payload?.viewId !== "string" || typeof payload.message !== "string") return;
+				listener({
+					viewId: payload.viewId,
+					message: payload.message,
+					...(payload.reason === "agent-active" ? { reason: "agent-active" as const } : {}),
+				});
+			};
+			ipcRenderer.on("browser:profileSwitchFailed", wrapped);
+			return () => {
+				ipcRenderer.off("browser:profileSwitchFailed", wrapped);
+			};
+		},
 		onAnnotationSubmit: (listener: (payload: BrowserAnnotationSubmitPayload) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, payload: BrowserAnnotationSubmitPayload) => listener(payload);
 			ipcRenderer.on("browser:annotation:submitted", wrapped);
@@ -948,6 +997,19 @@ const api = {
 			ipcRenderer.invoke("keybindings:set", overrides) as Promise<KeybindingOverrides>,
 		setRecording: (active: boolean) => ipcRenderer.invoke("keybindings:setRecording", active) as Promise<void>,
 	},
+	awake: {
+		// Main pushes Stay Awake changes on this bridge; stubs set false and keep polling.
+		pushes: true,
+		// Main reads the daemon's Stay Awake state every 5 s for the menu bar and
+		// forwards each change here, so the sidebar need not poll the same endpoint.
+		onState: (listener: (state: unknown) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: unknown) => listener(state);
+			ipcRenderer.on("awake:state", wrapped);
+			return () => {
+				ipcRenderer.off("awake:state", wrapped);
+			};
+		},
+	},
 	updates: {
 		getStatus: () => ipcRenderer.invoke("updates:getStatus") as Promise<UpdateStatus>,
 		check: (options?: UpdateCheckOptions) => ipcRenderer.invoke("updates:check", options) as Promise<void>,
@@ -983,7 +1045,7 @@ const api = {
 	// back is password-free (see main/remotes-ipc.ts); a password only travels
 	// renderer -> main on add or credential edit. Account host tokens stay in main.
 	remotes: {
-		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
+		list: () => ipcRenderer.invoke("remotes:list", true) as Promise<RemoteHostView[] | { code: string; message: string; expected?: true }>,
 		// Saves the account's machines from AO Cloud and forgets the ones it no longer lists.
 		syncAccountHosts: (accountId: string) => ipcRenderer.invoke("remotes:syncAccountHosts", accountId) as Promise<void>,
 		// Lists a paired host under the signed-in account.
@@ -998,6 +1060,9 @@ const api = {
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
 		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		hostUpdate: (url: string) => ipcRenderer.invoke("remotes:hostUpdate", url) as Promise<HostUpdateView | null>,
+		checkHostUpdate: (url: string) => ipcRenderer.invoke("remotes:checkHostUpdate", url) as Promise<string>,
+		startHostUpdate: (url: string, version?: string) => ipcRenderer.invoke("remotes:startHostUpdate", url, version) as Promise<HostUpdateView | null>,
 		// The name this machine is listed under on the account's other devices.
 		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
@@ -1048,6 +1113,20 @@ const api = {
 		},
 		// One that arrived before the window was ready, taken once.
 		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
+		// A published artifact's viewer URL, from "Open on orchestrator" on its web page
+		// (ao-app://shared-artifact): the Artifacts page opens it.
+		onOpenSharedArtifact: (listener: (viewerUrl: string) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, viewerUrl: string) => listener(viewerUrl);
+			ipcRenderer.on("cloud:openSharedArtifact", wrapped);
+			return () => {
+				ipcRenderer.off("cloud:openSharedArtifact", wrapped);
+			};
+		},
+		// One that arrived before the window was ready, taken once.
+		takePendingSharedArtifact: () => ipcRenderer.invoke("cloud:takePendingSharedArtifact") as Promise<string | null>,
+		// Shows it in its own isolated window when the Artifacts page cannot: signed
+		// out of Cloud, or it does not open for this account.
+		openSharedArtifactWindow: (viewerUrl: string) => ipcRenderer.invoke("cloud:openSharedArtifactWindow", viewerUrl) as Promise<void>,
 		// Uploads a local folder into the empty repository AO Cloud made for it
 		// (main/cloud-folder-push.ts); the token stays in main.
 		pushFolderToRepository: (input: PushFolderInput) =>

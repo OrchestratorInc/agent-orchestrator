@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -255,7 +256,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		// SessionStart hook, which injects the standing instructions from the
 		// prompt file) a fresh chat session would start with no AO role or
 		// coordination context.
-		if err := m.prepareWorkspace(ctx, agent, id, in.workspace.Path, in.systemPrompt, in.systemPromptFile, agentConfig, env); err != nil {
+		if err := m.prepareWorkspace(ctx, agent, id, in.workspace.Path, in.systemPrompt, in.systemPromptFile, agentConfig, env, workspaceRestoreContext{}); err != nil {
 			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
 			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnPrepare, err)
 		}
@@ -424,9 +425,24 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 	if m.computerUseEnabled(ctx) {
 		serverEnv[envComputerUse] = "1"
 	}
+	command, args := mcpServerCommand(executable)
 	return []ports.ChatMCPServerConfig{{
-		Name: "ao", Type: "stdio", Command: executable, Args: []string{"mcp"}, Env: serverEnv,
+		Name: "ao", Type: "stdio", Command: command, Args: args, Env: serverEnv,
 	}}
+}
+
+// mcpServerCommand runs the ao-mcp executable next to ao when there is one: it
+// serves the same tools without loading the CLI's commands, database, and
+// services. Otherwise the server is `ao mcp`.
+func mcpServerCommand(executable string) (string, []string) {
+	name := filepath.Base(executable)
+	if name == "ao" || name == "ao.exe" {
+		helper := filepath.Join(filepath.Dir(executable), "ao-mcp"+filepath.Ext(name))
+		if info, err := os.Stat(helper); err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0) {
+			return helper, nil
+		}
+	}
+	return executable, []string{"mcp"}
 }
 
 func (m *Manager) stopChatAfterSpawnFailure(ctx context.Context, id domain.SessionID) {
@@ -600,7 +616,7 @@ func (m *Manager) resumeChatController(
 		// env is applied again first.
 		m.applyImportedConfigEnv(ctx, rec, env)
 		if agent, ok := m.agents.Agent(rec.Harness); ok {
-			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env); err != nil {
+			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env, workspaceRestoreContext{}); err != nil {
 				return RestoreResult{}, relaunchFailed("import workspace preparation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 			}
 		}

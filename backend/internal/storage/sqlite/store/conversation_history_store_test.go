@@ -131,6 +131,35 @@ func TestConversationFailureCodeSurvivesSnapshotReload(t *testing.T) {
 	}
 }
 
+func TestLateProviderBindDoesNotReopenASettledTurn(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1",
+		domain.ConversationMessage{ID: "late-prompt", Text: "hello", Origin: domain.MessageOriginHuman},
+		"late-turn", histClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkTurnDispatching(ctx, "late-turn"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleTurnByID(ctx, "late-turn", domain.TurnStateInterrupted, "", histClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BindTurnToProvider(ctx, "late-turn", "provider-late-turn", histClock); !errors.Is(err, store.ErrTurnSettled) {
+		t.Fatalf("late bind = %v, want ErrTurnSettled", err)
+	}
+	if err := s.MarkTurnDispatching(ctx, "late-turn"); !errors.Is(err, store.ErrTurnSettled) {
+		t.Fatalf("late dispatch mark = %v, want ErrTurnSettled", err)
+	}
+	snapshot, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateInterrupted || snapshot.Turns[0].ProviderTurnID != "" {
+		t.Fatalf("turns = %+v, want the interrupted turn unchanged", snapshot.Turns)
+	}
+}
+
 func TestAppendUserMessageRejectsChangedPayloadForSameClientID(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -928,6 +957,9 @@ func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 			wantHuman, ok := want[turn.ID]
 			if !ok || turn.State != domain.TurnStateFailed || turn.HasHumanPrompt != wantHuman {
 				t.Errorf("%s turn=%s state=%s hasHumanPrompt=%v, want failed/%v", name, turn.ID, turn.State, turn.HasHumanPrompt, wantHuman)
+			}
+			if turn.HasEventPrompt == wantHuman {
+				t.Errorf("%s turn=%s hasEventPrompt=%v, want %v", name, turn.ID, turn.HasEventPrompt, !wantHuman)
 			}
 		}
 	}

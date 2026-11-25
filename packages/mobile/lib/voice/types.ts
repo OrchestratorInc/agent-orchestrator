@@ -62,6 +62,11 @@ export interface VoiceProvider {
 	language(): string | null;
 	/** Prompts on first call. Resolves false if the user declined. */
 	requestPermission(): Promise<boolean>;
+	/**
+	 * Whether permission is granted now, without prompting. Used when the app
+	 * returns from Settings, where the user may have just turned it on.
+	 */
+	checkPermission(): Promise<boolean>;
 	start(cb: VoiceCallbacks, opts?: { mode?: VoiceMode }): Promise<void>;
 	/** Finish and emit a final result. */
 	stop(): void;

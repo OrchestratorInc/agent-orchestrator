@@ -10,6 +10,15 @@ import {
 afterEach(() => resetCloudTelemetryContextForTest());
 
 describe("cloud funnel event allowlist", () => {
+	it.each(["ao.renderer.cloud_limit_reached", "ao.renderer.cloud_plan_refusal_shown"])("keeps the chat source on %s", async (event) => {
+		expect(await sanitizeRendererProperties(event, { code: "WORKER_SLOTS_FULL", shown: false, source: "chat" })).toEqual({
+			code: "WORKER_SLOTS_FULL", shown: false, source: "chat",
+		});
+		expect(await sanitizeRendererProperties(event, { code: "WORKER_SLOTS_FULL", shown: true, source: "private text" })).toEqual({
+			code: "WORKER_SLOTS_FULL", shown: true,
+		});
+	});
+
 	it("keeps vocabulary values and hashes ids", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.cloud_session_failed", {
 			provider: "coder",
@@ -56,6 +65,7 @@ describe("cloud funnel event allowlist", () => {
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_completed", { plan: "starter", trial: "7 days" })).toEqual({ plan: "starter" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", email: "a@b.c" })).toEqual({ method: "workos" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "artifact_publish" })).toEqual({ method: "workos", source: "artifact_publish" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "onboarding" })).toEqual({ method: "workos", source: "onboarding" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "/Users/a/plan.md" })).toEqual({ method: "workos" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", same_account: true })).toEqual({ method: "workos", same_account: true });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", same_account: "user-1" })).toEqual({ method: "workos" });

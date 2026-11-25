@@ -40,7 +40,7 @@ function errorStatus(error: unknown): number | undefined {
 }
 
 /** Where a sign-in can start, for cloud_signed_in's source. Anything without a note is "other". */
-export type CloudSignInSource = "artifact_publish";
+export type CloudSignInSource = "artifact_publish" | "onboarding";
 /** A sign-in started from a source counts as one for this long. */
 const SIGN_IN_SOURCE_TTL_MS = 30 * 60_000;
 /** The source of the sign-in in progress, kept in memory only. */
@@ -164,10 +164,15 @@ const LIMIT_CODES = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
-/** The control plane refused a request for plan reasons; `shown` is whether Upgrade opened. */
-export function reportPlanRefusal(code: string, shown: boolean): void {
+/**
+ * The control plane refused a request for plan reasons; `shown` is whether
+ * Upgrade opened. `source` is "chat" for a refusal read from an agent's tool
+ * output, which the desktop never saw itself, so it stays out of the rate of
+ * refusals the desktop's own requests turned into an Upgrade prompt.
+ */
+export function reportPlanRefusal(code: string, shown: boolean, source?: "chat"): void {
 	const event = LIMIT_CODES.has(code) ? "ao.renderer.cloud_limit_reached" : "ao.renderer.cloud_plan_refusal_shown";
-	void captureRendererEvent(event, { code, shown });
+	void captureRendererEvent(event, source ? { code, shown, source } : { code, shown });
 }
 
 function storage(): Pick<Storage, "getItem" | "setItem" | "removeItem"> | undefined {

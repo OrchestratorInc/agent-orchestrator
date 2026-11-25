@@ -87,7 +87,7 @@ export function PRChecksGroups({ pr }: { pr: SessionPRSummary }) {
 		.filter((group) => group.checks.length > 0);
 	if (groups.length === 0) return null;
 	return (
-		<div className="flex min-w-0 flex-col gap-2" data-testid="pr-checks">
+		<div className="flex min-w-0 flex-col gap-1.5" data-testid="pr-checks">
 			{groups.map((group) => (
 				<PRChecksGroup
 					checks={group.checks}
@@ -101,56 +101,57 @@ export function PRChecksGroups({ pr }: { pr: SessionPRSummary }) {
 	);
 }
 
+/** A check's status in words after its name, as GitHub's list says it. */
+const checkStatusWord: Record<Check["status"], "failed" | "cancelled" | "in_progress" | "queued" | "passed" | "skipped"> = {
+	failed: "failed",
+	cancelled: "cancelled",
+	in_progress: "in_progress",
+	queued: "queued",
+	unknown: "queued",
+	passed: "passed",
+	skipped: "skipped",
+};
+
+/**
+ * One state's checks, laid out like GitHub's merge box: a foldable sentence
+ * heading ("2 failing checks"), then a row per check with a line between rows,
+ * its glyph, its name (which links to the run) and its status in words.
+ */
 function PRChecksGroup({ checks, checksUrl, folded, state }: { checks: Check[]; checksUrl?: string; folded: boolean; state: PRCheckState }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(!folded);
-	const heading = (
-		<>
-			<span>{t(`pr.checks.group.${state}`)}</span>
-			<span className="font-normal tabular-nums text-passive">{checks.length}</span>
-		</>
-	);
 	const hidden = checks.length - PR_CHECKS_SHOWN;
 	return (
 		<section aria-label={t(`pr.checks.count.${state}`, { count: checks.length })} className="min-w-0" data-state={state}>
-			{folded ? (
-				<button
-					aria-expanded={open}
-					className="flex w-full min-w-0 items-center gap-1.5 rounded-sm text-caption font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-					onClick={() => setOpen((value) => !value)}
-					type="button"
-				>
-					{heading}
-					<ChevronDown aria-hidden="true" className={cn("ml-auto size-icon-2xs shrink-0 transition-transform", open && "rotate-180")} />
-				</button>
-			) : (
-				<h5 className="m-0 flex min-w-0 items-center gap-1.5 text-caption font-medium text-muted-foreground">{heading}</h5>
-			)}
+			<button
+				aria-expanded={open}
+				className="inline-flex min-w-0 items-center gap-1 rounded-sm text-caption text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+				onClick={() => setOpen((value) => !value)}
+				type="button"
+			>
+				<span className="tabular-nums">{t(`pr.checks.heading.${state}`, { count: checks.length })}</span>
+				<ChevronDown aria-hidden="true" className={cn("size-icon-2xs shrink-0 transition-transform", open && "rotate-180")} />
+			</button>
 			{open ? (
-				<ul className="m-0 mt-1 flex min-w-0 list-none flex-col gap-1 p-0 text-xs leading-4">
+				<ul className="m-0 mt-0.5 flex min-w-0 list-none flex-col p-0 text-xs leading-4">
 					{checks.slice(0, PR_CHECKS_SHOWN).map((check) => {
-						const name = (
-							<>
-								<span className="min-w-0 truncate">{check.name}</span>
-								<span className="sr-only"> {t(`pr.checks.status.${checkTone[check.status].key}`)}</span>
-							</>
-						);
+						const name = <span className="min-w-0 truncate">{check.name}</span>;
 						return (
-							<li className="flex min-w-0 items-center gap-2 text-muted-foreground" key={check.name}>
+							<li className="flex min-w-0 items-center gap-2 border-t border-border py-1.5 first:border-t-0" key={check.name}>
 								<CheckStateGlyph state={state} />
 								{check.url ? (
-									<ProductExternalLink className="inline-flex min-w-0 items-center gap-0.5 underline-offset-2 hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" href={check.url}>
+									<ProductExternalLink className="inline-flex min-w-0 items-center text-foreground underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" href={check.url}>
 										{name}
-										<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" />
 									</ProductExternalLink>
 								) : (
-									<span className="inline-flex min-w-0 items-center">{name}</span>
+									<span className="inline-flex min-w-0 items-center text-foreground">{name}</span>
 								)}
+								<span className="shrink-0 text-micro text-muted-foreground">{t(`pr.checks.row.${checkStatusWord[check.status]}`)}</span>
 							</li>
 						);
 					})}
 					{hidden > 0 ? (
-						<li className="pl-5 text-passive">
+						<li className="border-t border-border py-1.5 pl-5 text-passive">
 							{checksUrl ? (
 								<ProductExternalLink className="inline-flex items-center gap-0.5 underline-offset-2 hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" href={checksUrl}>
 									{t("pr.checks.more", { count: hidden })}

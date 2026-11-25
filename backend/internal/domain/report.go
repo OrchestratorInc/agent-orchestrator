@@ -48,8 +48,13 @@ const (
 	MaxReportTextCharacters = 1000
 	// ReportBatchFallback is the fixed informational-report fallback deadline.
 	ReportBatchFallback = time.Hour
-	// ReportSettlementWindow is the fixed window opened by a done report.
+	// ReportSettlementWindow is the upper bound a done report waits for other
+	// workers of its project before its batch is delivered.
 	ReportSettlementWindow = 5 * time.Minute
+	// ReportEarlyFlushDebounce delays an early done-batch flush after the
+	// newest done report or worker stop, so completions within seconds of each
+	// other still land in one batch.
+	ReportEarlyFlushDebounce = 15 * time.Second
 )
 
 // ReportState is an optional worker-originated coordination claim.
@@ -108,6 +113,8 @@ const (
 	ReportPending      ReportDeliveryState = "pending"
 	ReportClaimed      ReportDeliveryState = "claimed"
 	ReportAcknowledged ReportDeliveryState = "acknowledged"
+	ReportFailed       ReportDeliveryState = "failed"
+	ReportAbandoned    ReportDeliveryState = "abandoned"
 )
 
 // ReportRecord is the durable report and outbox persistence shape. State and
@@ -167,6 +174,10 @@ func (r ReportRecord) Validate() error {
 		if r.ClaimToken == "" || r.ClaimedAt.IsZero() || r.AcknowledgedAt.IsZero() {
 			return ErrInvalidReport
 		}
+	case ReportFailed, ReportAbandoned:
+		if r.ClaimToken != "" || !r.ClaimedAt.IsZero() || !r.AcknowledgedAt.IsZero() {
+			return ErrInvalidReport
+		}
 	default:
 		return ErrInvalidReport
 	}
@@ -216,4 +227,20 @@ func CoordinationDeliveryID(message string) (string, bool) {
 		return id, true
 	}
 	return deliveryID(message, `<ao-session-delivery id="`)
+}
+
+// IsCoordinationMessage reports a prompt AO wrote itself: a delivery, a handoff
+// request, or a continuation kickoff. A report envelope followed by human text
+// is not coordination. These stay in provider history but aren't
+// the user's latest instruction.
+func IsCoordinationMessage(message string) bool {
+	message = strings.TrimSpace(message)
+	if _, report := ReportDeliveryID(message); report {
+		// A report envelope may share a prompt with a human instruction; only
+		// the bare envelope is coordination.
+		return strings.HasSuffix(message, "</ao-report-delivery>")
+	}
+	_, delivery := CoordinationDeliveryID(message)
+	return delivery || strings.HasPrefix(message, "<ao-handoff-request") ||
+		strings.HasPrefix(message, "AO transferred the previous agent's context in hidden system instructions.")
 }

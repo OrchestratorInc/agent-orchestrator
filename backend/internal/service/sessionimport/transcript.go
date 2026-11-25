@@ -62,6 +62,8 @@ type transcript struct {
 	shortened bool
 	// fingerprint is the optional native-input evidence captured by discovery.
 	fingerprint string
+	// Native model alias used for provider-specific import readiness checks.
+	model string
 	// placeAt is the checkout a chat belongs to once its own folder is gone.
 	placeAt string
 }

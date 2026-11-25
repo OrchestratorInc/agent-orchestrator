@@ -1,6 +1,7 @@
 import type { PlacementChoice } from "../localProject/LocalProjectForm.types";
 import type { ProjectSource } from "./newProject";
 import type { NewCloudProject } from "./useNewCloudProject";
+import type { FormFocus } from "../formFocus";
 
 export const NEW_PROJECT_TITLE = "New cloud project";
 
@@ -36,6 +37,8 @@ export type NewProjectFormProps = {
 	onConnectAgent(): void;
 	/** The Local and Cloud switch, when a paired machine could take the project too. */
 	placement?: PlacementChoice;
+	/** iOS: tracks the form's text fields, so Create can take focus off them first (see useFormFocus). */
+	focus?: FormFocus;
 };
 
 /**

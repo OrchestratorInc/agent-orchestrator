@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -48,6 +49,7 @@ import (
 
 type fakeSessionService struct {
 	artifactsRegistered   []string
+	artifactsWorkingDir   string
 	artifactsUnregistered []string
 	registerArtifactsErr  error
 	deleted               []domain.SessionID
@@ -455,11 +457,12 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	return true, nil
 }
 
-func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error) {
+func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, workingDir string, references []string) (sessionsvc.ArtifactRegistration, error) {
 	if f.registerArtifactsErr != nil {
 		return sessionsvc.ArtifactRegistration{}, f.registerArtifactsErr
 	}
 	f.artifactsRegistered = append(f.artifactsRegistered, references...)
+	f.artifactsWorkingDir = workingDir
 	return sessionsvc.ArtifactRegistration{Registered: references, OtherFiles: 2, OtherRootFiles: []string{"draft.md"}}, nil
 }
 
@@ -879,6 +882,18 @@ func (f *fakeSessionService) SearchWorkspaceFiles(_ context.Context, id domain.S
 	return sessionsvc.WorkspaceFileSearch{SessionID: id, Query: query}, nil
 }
 
+func (f *fakeSessionService) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFilePaths, error) {
+	files, err := f.ListWorkspaceFiles(ctx, id)
+	if err != nil {
+		return sessionsvc.WorkspaceFilePaths{}, err
+	}
+	var paths []string
+	for _, file := range files.Files {
+		paths = append(paths, file.Path)
+	}
+	return sessionsvc.WorkspaceFilePaths{SessionID: id, Paths: paths, Truncated: files.Truncated}, nil
+}
+
 func (f *fakeSessionService) ListWorkspaceTree(_ context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error) {
 	f.workspaceTreePath = path
 	if f.workspaceErr != nil {
@@ -1160,9 +1175,43 @@ func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 	}
 }
 
+// The Merged list on a phone pages archived workers by PR state. The filter
+// reaches the service, and the response echoes it with the match count so the
+// phone can tell this daemon from one that ignored the parameter.
+func TestSessionsAPI_ListFiltersByPRState(t *testing.T) {
+	svc := newFakeSessionService()
+	total := 7
+	svc.listPage = &sessionsvc.ListPage{Sessions: []domain.Session{svc.sessions["ao-1"]}, NextCursor: "more", Total: &total, Version: "9f3a"}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?active=false&kind=worker&prState=merged&limit=50", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if f := svc.lastListFilter; f.PRState != domain.PRStateMerged || f.Active == nil || *f.Active || f.Limit != 50 {
+		t.Fatalf("filter = %+v, want archived merged page of 50", f)
+	}
+	var page struct {
+		PRState    string `json:"prState"`
+		Total      *int   `json:"total"`
+		NextCursor string `json:"nextCursor"`
+		Version    string `json:"version"`
+	}
+	mustJSON(t, body, &page)
+	if page.PRState != "merged" || page.Total == nil || *page.Total != 7 || page.NextCursor != "more" || page.Version != "9f3a" {
+		t.Fatalf("page = %+v, want prState merged, total 7, cursor more, version 9f3a", page)
+	}
+
+	svc.listPage = nil
+	body, _, _ = doRequest(t, srv, "GET", "/api/v1/sessions", "")
+	if strings.Contains(string(body), "prState") || strings.Contains(string(body), "\"total\"") || strings.Contains(string(body), "\"version\"") {
+		t.Fatalf("unfiltered list carries PR-state fields: %s", body)
+	}
+}
+
 func TestSessionsAPI_ListRejectsBadPagingQuery(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
-	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc"} {
+	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc", "prState=shipped"} {
 		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?"+query, "")
 		if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_QUERY") {
 			t.Fatalf("GET sessions?%s = %d %s, want 400 INVALID_QUERY", query, status, body)
@@ -1844,13 +1893,14 @@ func TestSessionsAPI_SpawnRejectsOversizedBody(t *testing.T) {
 	srv := newSessionTestServer(t, svc)
 
 	// A body past the ~135 MiB maxSpawnBodyBytes cap is rejected while decoding
-	// (MaxBytesReader), before the attachment size caps and without materializing
+	// (MaxBytesReader), without materializing
 	// the whole body. The oversized bytes live in an *attachment* payload (not the
 	// prompt, which has its own much smaller PROMPT_TOO_LONG cap), so this pins the
 	// body cap specifically: MaxBytesReader makes the read/decode fail with
-	// INVALID_JSON. If that line were removed the body would decode fully and be
-	// rejected later with an attachment-specific code (ATTACHMENT_TOO_LARGE),
-	// failing this test. 150 MiB of base64 comfortably exceeds the ~135 MiB cap.
+	// INVALID_JSON. If that line were removed the body would decode fully (inline
+	// data has no decoded cap of its own; large files go through
+	// /api/v1/attachment-uploads), failing this test. 150 MiB of base64
+	// comfortably exceeds the ~135 MiB cap.
 	oversized := `{"projectId":"ao","attachments":[{"mimeType":"image/png","data":"` +
 		strings.Repeat("A", 150<<20) + `"}]}`
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", oversized)
@@ -2183,11 +2233,18 @@ func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
 func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script>`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script><a href="mailto:support@example.test">support@example.test</a>`), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "styles.css"), []byte(`body { color: red; }`), 0o644); err != nil {
 		t.Fatalf("write css: %v", err)
+	}
+	// No extension: ServeContent sniffs these, one as HTML and one as text.
+	if err := os.WriteFile(filepath.Join(workspace, "contact"), []byte(`<!doctype html><a href="mailto:support@example.test">support@example.test</a>`), 0o644); err != nil {
+		t.Fatalf("write extensionless html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "notes"), []byte("support@example.test\n"), 0o644); err != nil {
+		t.Fatalf("write extensionless text: %v", err)
 	}
 	s := svc.sessions["ao-1"]
 	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: "index.html"}
@@ -2226,6 +2283,25 @@ func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "styles.css") {
 		t.Fatalf("preview body did not serve index: %s", body)
+	}
+	if !strings.Contains(string(body), `mailto:support@example.test`) || headers.Get("Cache-Control") != "private, no-cache, no-transform" {
+		t.Fatalf("preview HTML changed or is transformable: body=%s Cache-Control=%q", body, headers.Get("Cache-Control"))
+	}
+	_, status, headers = doPreviewOriginRequest(t, srv, preview.PreviewURL, "/styles.css")
+	if status != http.StatusOK || headers.Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("preview CSS cache policy = status %d Cache-Control %q", status, headers.Get("Cache-Control"))
+	}
+	// HTML found by content sniffing is protected like declared HTML, and is
+	// served with the type the policy was decided on.
+	body, status, headers = doPreviewOriginRequest(t, srv, preview.PreviewURL, "/contact")
+	if status != http.StatusOK || !strings.HasPrefix(headers.Get("Content-Type"), "text/html") ||
+		headers.Get("Cache-Control") != "private, no-cache, no-transform" || !strings.Contains(string(body), `mailto:support@example.test`) {
+		t.Fatalf("sniffed HTML = status %d Content-Type %q Cache-Control %q body %s", status, headers.Get("Content-Type"), headers.Get("Cache-Control"), body)
+	}
+	body, status, headers = doPreviewOriginRequest(t, srv, preview.PreviewURL, "/notes")
+	if status != http.StatusOK || !strings.HasPrefix(headers.Get("Content-Type"), "text/plain") ||
+		headers.Get("Cache-Control") != "private, no-cache" || string(body) != "support@example.test\n" {
+		t.Fatalf("sniffed text = status %d Content-Type %q Cache-Control %q body %q", status, headers.Get("Content-Type"), headers.Get("Cache-Control"), body)
 	}
 }
 
@@ -2532,6 +2608,9 @@ func TestSessionsAPI_PreviewFileRawMarkdownBypassesHTMLRendering(t *testing.T) {
 	if !strings.Contains(headers.Get("Content-Type"), "text/html") || !bytes.Contains(body, []byte("<!doctype html>")) {
 		t.Fatalf("rendered markdown response content-type=%q body=%q, want HTML document", headers.Get("Content-Type"), body)
 	}
+	if got := headers.Get("Cache-Control"); got != "no-transform" {
+		t.Fatalf("rendered markdown Cache-Control = %q, want no-transform", got)
+	}
 
 	for _, raw := range []string{"1", "true"} {
 		body, status, headers = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/notes.md?raw="+raw, "")
@@ -2543,6 +2622,9 @@ func TestSessionsAPI_PreviewFileRawMarkdownBypassesHTMLRendering(t *testing.T) {
 		}
 		if strings.Contains(headers.Get("Content-Type"), "text/html") {
 			t.Fatalf("raw=%s markdown content type = %q, want non-HTML", raw, headers.Get("Content-Type"))
+		}
+		if got := headers.Get("Cache-Control"); got != "private, no-cache" {
+			t.Fatalf("raw=%s markdown Cache-Control = %q, want private, no-cache", raw, got)
 		}
 	}
 }
@@ -3764,6 +3846,100 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ManagedPreviewPreservesEmailHTML(t *testing.T) {
+	const page = `<p>support@example.test</p><a href="mailto:support@example.test">Email support</a>`
+	for _, tc := range []struct {
+		name, contentType, cacheControl, wantCacheControl string
+	}{
+		{"html without cache policy", "text/html; charset=utf-8", "", "no-transform"},
+		{"html with cache policy", "text/html", "private, max-age=60", "private, max-age=60, no-transform"},
+		{"html already protected", "application/xhtml+xml", "private, no-transform", "private, no-transform"},
+		{"html with a malformed parameter", "text/html; charset", "", "no-transform"},
+		{"html with a repeated parameter", "text/html; charset=UTF-8; charset=utf-8", "", "no-transform"},
+		{"quoted directive argument", "text/html", `no-cache="Set-Cookie, no-transform, ETag"`, `no-cache="Set-Cookie, no-transform, ETag", no-transform`},
+		{"non-html unchanged", "text/plain", "private, max-age=60", "private, max-age=60"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				if tc.cacheControl != "" {
+					w.Header().Set("Cache-Control", tc.cacheControl)
+				}
+				_, _ = io.WriteString(w, page)
+			}))
+			t.Cleanup(app.Close)
+			parsed, _ := url.Parse(app.URL)
+			port, _ := strconv.Atoi(parsed.Port())
+			svc := newFakeSessionService()
+			session := svc.sessions["ao-1"]
+			session.Metadata.PreviewURL = app.URL + "/"
+			svc.sessions["ao-1"] = session
+			managed := &fakeManagedPreviewServer{status: previewserver.Status{
+				State: previewserver.StateReady, TargetKind: previewserver.TargetApp,
+				URL: session.Metadata.PreviewURL, Port: port,
+			}}
+			srv := newSessionTestServerWithPreview(t, svc, managed)
+			body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/", "")
+			if status != http.StatusOK || string(body) != page {
+				t.Fatalf("proxied page = (%d) %q, want original %q", status, body, page)
+			}
+			if got := strings.Join(headers.Values("Cache-Control"), ", "); got != tc.wantCacheControl {
+				t.Errorf("Cache-Control = %q, want %q", got, tc.wantCacheControl)
+			}
+		})
+	}
+}
+
+// A dev server can answer with no Content-Type at all. The preview proxy's own
+// server then sniffs the body and can send it as text/html, after the response
+// hook ran, so the hook protects an untyped response too.
+func TestSessionsAPI_ManagedPreviewProtectsUntypedHTML(t *testing.T) {
+	const page = `<!doctype html><p>support@example.test</p><a href="mailto:support@example.test">Email support</a>`
+	// Written by hand: an http.Handler's own server would sniff and add a
+	// Content-Type, so the header would not really be missing on the wire.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+					return
+				}
+				_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(page), page)
+			}(conn)
+		}
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.PreviewURL = fmt.Sprintf("http://127.0.0.1:%d/", port)
+	svc.sessions["ao-1"] = session
+	managed := &fakeManagedPreviewServer{status: previewserver.Status{
+		State: previewserver.StateReady, TargetKind: previewserver.TargetApp,
+		URL: session.Metadata.PreviewURL, Port: port,
+	}}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/", "")
+	if status != http.StatusOK || string(body) != page {
+		t.Fatalf("proxied page = (%d) %q, want original %q", status, body, page)
+	}
+	// The proxy's server typed the page by sniffing: the case under test.
+	if !strings.HasPrefix(headers.Get("Content-Type"), "text/html") {
+		t.Fatalf("Content-Type = %q, want the sniffed text/html", headers.Get("Content-Type"))
+	}
+	if got := strings.Join(headers.Values("Cache-Control"), ", "); got != "no-transform" {
+		t.Fatalf("Cache-Control = %q, want no-transform", got)
+	}
+}
+
 func TestSessionsAPI_ManagedPreviewRequiresOwningCapability(t *testing.T) {
 	svc := newFakeSessionService()
 	managed := &fakeManagedPreviewServer{}
@@ -3939,6 +4115,42 @@ func TestSessionsAPI_KillLeavesPreviewTeardownToSessionLifecycle(t *testing.T) {
 	}
 	if managed.stopCalls != 0 {
 		t.Fatalf("controller duplicated managed preview teardown: stop calls = %d", managed.stopCalls)
+	}
+}
+
+func TestSessionsAPI_ListWorkspaceFilePaths(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceFiles = sessionsvc.WorkspaceFiles{
+		SessionID: "ao-1",
+		Files:     []sessionsvc.WorkspaceFileSummary{{Path: "README.md"}, {Path: "src/main.go"}},
+		Truncated: true,
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/workspace/paths", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET workspace paths = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		SessionID string   `json:"sessionId"`
+		Paths     []string `json:"paths"`
+		Truncated bool     `json:"truncated"`
+	}
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || !got.Truncated || len(got.Paths) != 2 || got.Paths[0] != "README.md" || got.Paths[1] != "src/main.go" {
+		t.Fatalf("response = %#v", got)
+	}
+
+	svc.workspaceFiles = sessionsvc.WorkspaceFiles{SessionID: "ao-1"}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/workspace/paths", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"paths":[]`) {
+		t.Fatalf("empty workspace = %d %s, want an empty paths array", status, body)
+	}
+
+	_, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/missing/workspace/paths", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown session = %d, want 404", status)
 	}
 }
 
@@ -4770,6 +4982,20 @@ func TestSessionsAPI_SendValidation(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "MESSAGE_REQUIRED")
 }
 
+// `ao send` into a chat whose next turn cannot apply its settings, such as a
+// model its agent does not offer, must say why rather than answer 500.
+func TestSessionsAPI_SendReportsAnInvalidChatSetting(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("%w: this chat can't switch to %q", ports.ErrChatConfigOptionInvalid, "claude-fable-5-2")
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"continue"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "CHAT_CONFIG_OPTION_INVALID")
+	if !strings.Contains(string(body), "claude-fable-5-2") {
+		t.Fatalf("body = %s, want the reason", body)
+	}
+}
+
 func TestSessionsAPI_DelegateTask(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
@@ -4966,12 +5192,6 @@ func TestSessionsAPI_DelegateTaskRejectsInvalidAttachments(t *testing.T) {
 			body: `{"projectId":"ao","brief":"Fix it","attachments":[{"mimeType":"image/svg+xml","data":"PHN2Zy8+"}]}`,
 			code: "UNSUPPORTED_ATTACHMENT_TYPE",
 		},
-		{
-			name: "too large",
-			body: `{"projectId":"ao","brief":"Fix it","attachments":[{"mimeType":"image/png","data":"` +
-				base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", (50<<20)+1))) + `"}]}`,
-			code: "ATTACHMENT_TOO_LARGE",
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4996,6 +5216,16 @@ func TestSessionsAPI_DelegateTaskRejectsOversizedBody(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 	if svc.delegationInput.ProjectID != "" {
 		t.Fatalf("delegate service called with oversized body: %#v", svc.delegationInput)
+	}
+}
+
+func TestSessionsAPI_SendDuringAHandoffIsARetryableConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrControllerHandoff)
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"hi"}`)
+	if status != http.StatusConflict || !strings.Contains(string(body), "CHAT_INTERFACE_TRANSITION") {
+		t.Fatalf("send = %d %s, want 409 CHAT_INTERFACE_TRANSITION", status, body)
 	}
 }
 

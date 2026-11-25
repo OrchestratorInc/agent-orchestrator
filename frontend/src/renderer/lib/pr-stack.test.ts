@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canStackOn, stackBlocker, stackLayersToLand, type PRStack, type PRStackLayer } from "./pr-stack";
+import { canStackOn, stackBlocker, stackLayersToLand, stackLayerToRebase, stackRebaseMessage, type PRStack, type PRStackLayer } from "./pr-stack";
 
 const layer = (number: number, state: PRStackLayer["state"], extra: Partial<PRStackLayer> = {}): PRStackLayer => ({
 	ci: "passing", headBranch: `b${number}`, headSha: `h${number}`, mergeability: "mergeable", number, reviewDecision: "none", state, title: `L${number}`, url: "u", ...extra,
@@ -33,6 +33,30 @@ describe("stackBlocker", () => {
 	it("doesn't wait on a layer nothing checks", () => {
 		expect(stackBlocker([layer(1, "open", { ci: "unknown", noChecks: true }), layer(2, "open")], 2)).toBeUndefined();
 		expect(stackBlocker([layer(1, "open", { ci: "unknown" }), layer(2, "open")], 2)).toEqual({ number: 1, reason: "checking" });
+	});
+});
+
+describe("rebasing a stack", () => {
+	it("holds the merge on any layer up to this PR that is behind the one below, this PR included", () => {
+		expect(stackBlocker([layer(1, "open"), layer(2, "open", { behindParent: 2 })], 2)).toEqual({ number: 2, reason: "rebase" });
+		expect(stackBlocker([layer(1, "open"), layer(2, "open", { behindParent: 1 }), layer(3, "open")], 3)).toEqual({ number: 2, reason: "rebase" });
+	});
+
+	it("picks the lowest open layer behind the one below it", () => {
+		const layers = [layer(1, "open"), layer(2, "open"), layer(3, "open", { behindParent: 1 }), layer(4, "open", { behindParent: 4 })];
+		expect(stackLayerToRebase(stack(layers))?.layer.number).toBe(3);
+		expect(stackLayerToRebase(stack(layers))?.below.number).toBe(2);
+		expect(stackLayerToRebase(stack([layer(1, "open"), layer(2, "open")]))).toBeUndefined();
+		expect(stackLayerToRebase(stack(layers, false))).toBeUndefined();
+		expect(stackLayerToRebase(stack([layer(1, "open"), layer(2, "closed", { behindParent: 1 })]))).toBeUndefined();
+	});
+
+	it("tells the agent which branch goes onto which, and to leave the rest", () => {
+		const message = stackRebaseMessage(layer(3, "open"), layer(2, "open"));
+		expect(message).toContain("#3 (`b3`) is behind #2 (`b2`)");
+		expect(message).toContain("`git rebase origin/b2`");
+		expect(message).toContain("--onto origin/b2");
+		expect(message).toContain("--force-with-lease");
 	});
 });
 
