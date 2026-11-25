@@ -32,6 +32,12 @@ const INVALIDATE_WINDOW_MS = 150;
 // the window above and refetched the whole workspace every window for hours
 // (#6763), so they refresh it at most once per this interval.
 const ID_ONLY_WORKSPACE_REFRESH_MS = 5_000;
+// The daemon writes a heartbeat frame every 10 s (backend/internal/httpd/events.go).
+// A stream that goes this long without any frame has stopped delivering, whatever
+// the browser reports: open chats then sat on "Thinking" with no text until the
+// user interrupted, because nothing else reopened it. Checked this often.
+export const EVENT_STREAM_STALL_MS = 35_000;
+const EVENT_STREAM_STALL_CHECK_MS = 5_000;
 // EventSource.CLOSED, referenced numerically so test stubs without the static
 // constants still work.
 const EVENTSOURCE_CLOSED = 2;
@@ -90,6 +96,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
+			// When the current local stream last delivered a frame (or was created), on the
+			// monotonic clock so a wall-clock change cannot disarm the check, and whether
+			// this daemon has shown it sends heartbeats. A daemon from before the
+			// heartbeat is never judged stalled, so an idle stream to it is left alone.
+			let lastFrameAt = 0;
+			let heartbeatBaseUrl: string | undefined;
 			// Base URL of a daemon that rejected ?after=latest (built before the cursor
 			// existed). Its stream connects without one, replaying history as before.
 			let cursorUnsupportedBaseUrl: string | undefined;
@@ -578,9 +590,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				// a continuation of the dead one: do not make it serve the delay the
 				// old port earned.
 				if (sourceBaseUrl && sourceBaseUrl !== baseUrl) retries = 0;
+				if (heartbeatBaseUrl !== baseUrl) heartbeatBaseUrl = undefined;
 				source?.close();
 				source = undefined;
 				sourceBaseUrl = baseUrl;
+				lastFrameAt = performance.now();
 				try {
 					// Start at the newest event. Without a cursor the daemon replays the
 					// whole change_log (up to 100k rows under retention) on every connect,
@@ -593,8 +607,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;
 					let opened = false;
+					const sawFrame = () => {
+						if (source === connectedSource) lastFrameAt = performance.now();
+					};
 					source.onopen = () => {
 						if (disposed || source !== connectedSource) return;
+						sawFrame();
 						opened = true;
 						healthAttempt += 1;
 						retries = 0;
@@ -626,10 +644,20 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							},
 						);
 					};
-					source.onmessage = refreshWorkspaces; // unnamed events, if any
+					const delivered = (event: Event) => {
+						sawFrame();
+						refreshWorkspaces(event);
+					};
+					source.onmessage = delivered; // unnamed events, if any
 					for (const type of CDC_EVENT_TYPES) {
-						source.addEventListener(type, refreshWorkspaces);
+						source.addEventListener(type, delivered);
 					}
+					source.addEventListener("cursor", sawFrame);
+					source.addEventListener("heartbeat", () => {
+						if (source !== connectedSource) return;
+						sawFrame();
+						heartbeatBaseUrl = baseUrl;
+					});
 					// EventSource auto-reconnects and resumes via Last-Event-ID while
 					// CONNECTING; scheduleRetry only covers the terminal CLOSED state.
 				} catch {
@@ -644,11 +672,24 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let lastDaemonStatusKey: string | undefined;
 			const removeDaemonListener = aoBridge.daemon.onStatus((status) => {
 				const key = `${status?.state}:${status?.port ?? ""}:${status?.pid ?? ""}`;
-				if (key === lastDaemonStatusKey) return;
+				const changed = key !== lastDaemonStatusKey;
 				lastDaemonStatusKey = key;
-				connectSource();
-				refreshWorkspaces();
+				// An echo also reopens a stream the browser closed without an error, which
+				// scheduled no retry (one that did keeps its backoff). Without this, that
+				// stream stayed closed until the daemon's status changed.
+				if (changed || (source?.readyState === EVENTSOURCE_CLOSED && !retryTimer)) connectSource();
+				if (changed) refreshWorkspaces();
 			});
+			// A stream to a daemon that sends heartbeats and has gone quiet is rebuilt.
+			// Its onopen refreshes every open chat, so a stalled turn catches up at once.
+			// A pending retry already owns the next attempt, and keeps its backoff.
+			const stallWatch = setInterval(() => {
+				if (disposed || retryTimer || !source || heartbeatBaseUrl !== sourceBaseUrl) return;
+				if (performance.now() - lastFrameAt < EVENT_STREAM_STALL_MS) return;
+				source.close();
+				setEventsConnectionState("disconnected");
+				connectSource();
+			}, EVENT_STREAM_STALL_CHECK_MS);
 			// Rebind when the daemon comes back on a different port, independent of
 			// status-event ordering.
 			const removeBaseUrlListener = subscribeApiBaseUrl(connectSource);
@@ -667,6 +708,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				pendingModelCatalogScopes.clear();
 				refreshes.clear();
 				if (retryTimer) clearTimeout(retryTimer);
+				clearInterval(stallWatch);
 				removeDaemonListener();
 				removeBaseUrlListener();
 				removeConnectedHostsListener();
