@@ -962,6 +962,7 @@ func (d *Driver) initialize(
 	conv.dataDir = cfg.DataDir
 	conv.backgroundObserved.SessionID = string(cfg.SessionID)
 	conv.backgroundObserved.Store = backgroundtasks.NewFileStore(cfg.DataDir)
+	conv.backgroundObserved.Log = d.log
 	conv.harness = d.cfg.Harness
 	conv.suppressSessionModes = d.cfg.SuppressSessionModes
 	conv.resetsConversation = d.cfg.ResetsConversation

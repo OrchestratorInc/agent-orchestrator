@@ -4,6 +4,7 @@
 package backgroundtasks
 
 import (
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 type Tracker struct {
 	SessionID string
 	Store     Store
+	Log       *slog.Logger
 
 	mu    sync.Mutex
 	tasks map[string]ports.ChatBackgroundTask
@@ -66,10 +68,14 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 			if task.StartedAt == nil || stored.Before(*task.StartedAt) {
 				task.StartedAt = &stored
 			} else if task.StartedAt != nil && task.StartedAt.Before(stored) {
-				_ = t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt)
+				if err := t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt); err != nil {
+					t.logError("persist task start time failed", "sessionID", t.SessionID, "taskID", task.ID, "runID", runID, "error", err)
+				}
 			}
 		} else if task.StartedAt != nil && !task.StartedAt.IsZero() {
-			_ = t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt)
+			if err := t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt); err != nil {
+				t.logError("persist task start time failed", "sessionID", t.SessionID, "taskID", task.ID, "runID", runID, "error", err)
+			}
 		}
 	}
 	if task.RunID == "" {
@@ -174,6 +180,22 @@ func (t *Tracker) Snapshot(now time.Time) []ports.ChatBackgroundTask {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func (t *Tracker) logError(msg string, args ...any) {
+	if t.Log != nil {
+		t.Log.Error(msg, args...)
+	} else {
+		slog.Default().Error(msg, args...)
+	}
+}
+
+// Get returns the tracked task for the given task ID, if any.
+func (t *Tracker) Get(id string) (ports.ChatBackgroundTask, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	task, ok := t.tasks[id]
+	return task, ok
 }
 
 // Caller holds mu. Keep only identities, not expired labels or timestamps.

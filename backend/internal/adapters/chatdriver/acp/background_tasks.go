@@ -31,14 +31,33 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 						continue
 					}
 					runID := tasks[i].RunID
-					if stored, ok := c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID); ok && !stored.IsZero() {
+					if runID == "" {
+						if observed, ok := c.backgroundObserved.Get(tasks[i].ID); ok && observed.RunID != "" {
+							runID = observed.RunID
+							tasks[i].RunID = runID
+						}
+					}
+					stored, ok := c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID)
+					if !ok && runID != "" {
+						if observed, okObs := c.backgroundObserved.Get(tasks[i].ID); okObs && observed.RunID != "" && observed.RunID != runID {
+							stored, ok = c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, observed.RunID)
+						}
+						if !ok {
+							stored, ok = c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, "")
+						}
+					}
+					if ok && !stored.IsZero() {
 						if tasks[i].StartedAt == nil || stored.Before(*tasks[i].StartedAt) {
 							tasks[i].StartedAt = &stored
 						} else if tasks[i].StartedAt != nil && tasks[i].StartedAt.Before(stored) {
-							_ = c.backgroundObserved.Store.SetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID, *tasks[i].StartedAt)
+							if err := c.backgroundObserved.Store.SetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID, *tasks[i].StartedAt); err != nil {
+								c.log.Error("persist native task start time failed", "sessionID", c.backgroundObserved.SessionID, "taskID", tasks[i].ID, "runID", runID, "error", err)
+							}
 						}
 					} else if tasks[i].StartedAt != nil && !tasks[i].StartedAt.IsZero() {
-						_ = c.backgroundObserved.Store.SetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID, *tasks[i].StartedAt)
+						if err := c.backgroundObserved.Store.SetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID, *tasks[i].StartedAt); err != nil {
+							c.log.Error("persist native task start time failed", "sessionID", c.backgroundObserved.SessionID, "taskID", tasks[i].ID, "runID", runID, "error", err)
+						}
 					}
 				}
 			}
@@ -151,11 +170,11 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 	if kind == "shell" {
 		command = stringField(input, "command", "cmd")
 	}
-	startTime := tool.startedAt
-	if startTime.IsZero() {
-		startTime = now
+	var startPtr *time.Time
+	if !tool.startedAt.IsZero() {
+		startPtr = &tool.startedAt
 	}
-	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, RunID: tool.id, Kind: kind, Description: description, Command: command, State: state, StartedAt: &startTime}, now)
+	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, RunID: tool.id, Kind: kind, Description: description, Command: command, State: state, StartedAt: startPtr}, now)
 	if kind == "agent" {
 		if session := stringField(output, "sessionId", "sessionID", "session_id"); session != "" {
 			c.mu.Lock()
@@ -276,7 +295,11 @@ func (c *conversation) observeAsyncTaskNotification(raw json.RawMessage) bool {
 		if description == "" {
 			description = update.Name
 		}
-		c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: update.ID, RunID: update.ToolCallID, Kind: update.TaskType, Description: description, State: "running", StartedAt: &now}, now)
+		var startPtr *time.Time
+		if !c.historyReplayActive() {
+			startPtr = &now
+		}
+		c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: update.ID, RunID: update.ToolCallID, Kind: update.TaskType, Description: description, State: "running", StartedAt: startPtr}, now)
 	case "async_task_state_update":
 		switch update.State {
 		case "running", "paused", "completed", "failed", "stopped":

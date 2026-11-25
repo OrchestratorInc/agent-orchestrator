@@ -3,8 +3,10 @@ package backgroundtasks
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,14 +43,25 @@ func NewMemoryStore() *MemoryStore {
 }
 
 // GetStartedAt returns the recorded start time for the given task and run identity.
+// If runID is empty, it falls back to matching any recorded run for sessionID and taskID.
 func (m *MemoryStore) GetStartedAt(sessionID, taskID, runID string) (time.Time, bool) {
 	if sessionID == "" || taskID == "" {
 		return time.Time{}, false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	t, ok := m.entries[storeKey(sessionID, taskID, runID)]
-	return t, ok
+	if runID != "" {
+		t, ok := m.entries[storeKey(sessionID, taskID, runID)]
+		return t, ok
+	}
+	prefix := strconv.Itoa(len(sessionID)) + ":" + sessionID + ":" +
+		strconv.Itoa(len(taskID)) + ":" + taskID + ":"
+	for k, t := range m.entries {
+		if strings.HasPrefix(k, prefix) && !t.IsZero() {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // SetStartedAt records the start time for the given task and run identity.
@@ -72,6 +85,16 @@ type persistedTaskRecord struct {
 	StartedAt time.Time `json:"startedAt"`
 }
 
+const (
+	maxPersistedRecords = 256
+	maxPersistedAge     = 7 * 24 * time.Hour
+)
+
+var (
+	storeRegistryMu   sync.Mutex
+	fileStoreRegistry = make(map[string]*fileStore)
+)
+
 type fileStore struct {
 	dataDir string
 	mu      sync.Mutex
@@ -81,14 +104,23 @@ type fileStore struct {
 // NewFileStore returns a Store that persists start times under
 // filepath.Join(dataDir, "chat-hosts", sessionID, "background-tasks.json").
 // If dataDir is empty, an in-memory store is returned.
+// Stores are cached per clean dataDir so multiple conversations share one cache and mutex.
 func NewFileStore(dataDir string) Store {
 	if dataDir == "" {
 		return NewMemoryStore()
 	}
-	return &fileStore{
-		dataDir: dataDir,
+	cleanDir := filepath.Clean(dataDir)
+	storeRegistryMu.Lock()
+	defer storeRegistryMu.Unlock()
+	if s, ok := fileStoreRegistry[cleanDir]; ok {
+		return s
+	}
+	s := &fileStore{
+		dataDir: cleanDir,
 		cache:   make(map[string]map[string]persistedTaskRecord),
 	}
+	fileStoreRegistry[cleanDir] = s
+	return s
 }
 
 func (f *fileStore) taskFilePath(sessionID string) (string, error) {
@@ -99,30 +131,61 @@ func (f *fileStore) taskFilePath(sessionID string) (string, error) {
 }
 
 // Caller holds mu.
-func (f *fileStore) loadLocked(sessionID string) map[string]persistedTaskRecord {
+func (f *fileStore) loadLocked(sessionID string) (map[string]persistedTaskRecord, error) {
 	if m, ok := f.cache[sessionID]; ok {
-		return m
+		return m, nil
 	}
-	m := make(map[string]persistedTaskRecord)
-	f.cache[sessionID] = m
 	filePath, err := f.taskFilePath(sessionID)
 	if err != nil {
-		return m
+		return nil, err
 	}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return m
+		if errors.Is(err, os.ErrNotExist) {
+			m := make(map[string]persistedTaskRecord)
+			f.cache[sessionID] = m
+			return m, nil
+		}
+		return nil, err
 	}
 	var records []persistedTaskRecord
 	if err := json.Unmarshal(data, &records); err != nil {
-		return m
+		return nil, err
 	}
+	m := make(map[string]persistedTaskRecord, len(records))
 	for _, r := range records {
 		if r.TaskID != "" && !r.StartedAt.IsZero() {
 			m[taskKey(r.TaskID, r.RunID)] = r
 		}
 	}
-	return m
+	f.cache[sessionID] = m
+	return m, nil
+}
+
+// Caller holds mu.
+func (f *fileStore) pruneLocked(m map[string]persistedTaskRecord, now time.Time) {
+	if len(m) == 0 {
+		return
+	}
+	for k, r := range m {
+		if !r.StartedAt.IsZero() && now.Sub(r.StartedAt) > maxPersistedAge {
+			delete(m, k)
+		}
+	}
+	if len(m) <= maxPersistedRecords {
+		return
+	}
+	records := make([]persistedTaskRecord, 0, len(m))
+	for _, r := range m {
+		records = append(records, r)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].StartedAt.Before(records[j].StartedAt)
+	})
+	dropCount := len(records) - maxPersistedRecords
+	for i := 0; i < dropCount; i++ {
+		delete(m, taskKey(records[i].TaskID, records[i].RunID))
+	}
 }
 
 // Caller holds mu.
@@ -135,6 +198,7 @@ func (f *fileStore) saveLocked(sessionID string) error {
 	if !ok || len(m) == 0 {
 		return nil
 	}
+	f.pruneLocked(m, time.Now())
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -147,7 +211,7 @@ func (f *fileStore) saveLocked(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	tmp := filePath + ".tmp-" + strconv.Itoa(os.Getpid())
+	tmp := fmt.Sprintf("%s.tmp-%d-%d", filePath, os.Getpid(), time.Now().UnixNano())
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
@@ -164,12 +228,24 @@ func (f *fileStore) GetStartedAt(sessionID, taskID, runID string) (time.Time, bo
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	m := f.loadLocked(sessionID)
-	r, ok := m[taskKey(taskID, runID)]
-	if !ok || r.StartedAt.IsZero() {
+	m, err := f.loadLocked(sessionID)
+	if err != nil {
 		return time.Time{}, false
 	}
-	return r.StartedAt, true
+	if runID != "" {
+		r, ok := m[taskKey(taskID, runID)]
+		if !ok || r.StartedAt.IsZero() {
+			return time.Time{}, false
+		}
+		return r.StartedAt, true
+	}
+	// Fallback when runID is empty: find by taskID alone.
+	for _, r := range m {
+		if r.TaskID == taskID && !r.StartedAt.IsZero() {
+			return r.StartedAt, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (f *fileStore) SetStartedAt(sessionID, taskID, runID string, at time.Time) error {
@@ -178,7 +254,10 @@ func (f *fileStore) SetStartedAt(sessionID, taskID, runID string, at time.Time) 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	m := f.loadLocked(sessionID)
+	m, err := f.loadLocked(sessionID)
+	if err != nil {
+		return err
+	}
 	k := taskKey(taskID, runID)
 	if existing, ok := m[k]; ok && !existing.StartedAt.IsZero() && !at.Before(existing.StartedAt) {
 		return nil

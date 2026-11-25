@@ -683,6 +683,7 @@ func (d *Driver) connectSession(
 			conv.dataDir = dataDir
 			conv.backgroundObserved.SessionID = string(sessionID)
 			conv.backgroundObserved.Store = backgroundtasks.NewFileStore(dataDir)
+			conv.backgroundObserved.Log = d.log
 		}
 		return conv, false, err
 	}
@@ -746,6 +747,7 @@ func (d *Driver) connectSession(
 	conv.dataDir = dataDir
 	conv.backgroundObserved.SessionID = string(sessionID)
 	conv.backgroundObserved.Store = backgroundtasks.NewFileStore(dataDir)
+	conv.backgroundObserved.Log = d.log
 	if transport.Reconnected {
 		// A daemon stopped mid-initialize leaves a host whose app-server never
 		// was, failing every call "Not initialized". An initialized one refuses

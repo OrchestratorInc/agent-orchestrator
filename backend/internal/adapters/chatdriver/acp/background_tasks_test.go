@@ -455,3 +455,101 @@ func TestBackgroundTasksACPNativeReadPersistsStartTime(t *testing.T) {
 		t.Fatalf("re-read did not restore stored start time: %+v, err=%v", tasks2, err)
 	}
 }
+
+func TestBackgroundTasksACPNativeReadRunIDMismatch(t *testing.T) {
+	dataDir := t.TempDir()
+	sessionID := "session-mismatch"
+	store := backgroundtasks.NewFileStore(dataDir)
+
+	c := &conversation{
+		sessionID: sessionID,
+		tools:     make(map[string]*toolState),
+		backgroundObserved: backgroundtasks.Tracker{
+			SessionID: sessionID,
+			Store:     store,
+		},
+	}
+
+	launchTime := time.Now().Add(-15 * time.Minute).Truncate(time.Millisecond).UTC()
+	tool := &toolState{
+		id:        "tool-call-1",
+		kind:      acpsdk.ToolKindExecute,
+		status:    acpsdk.ToolCallStatusCompleted,
+		rawInput:  map[string]any{"command": "pytest", "run_in_background": true},
+		rawOutput: map[string]any{"task_id": "native-job-mismatch"},
+		startedAt: launchTime,
+	}
+	c.tools[tool.id] = tool
+	c.observeBackgroundTool(tool)
+
+	// Case 1: Provider returns mismatched RunID with nil StartedAt.
+	c.backgroundTasks = func(_ context.Context, _ *acpsdk.ClientSideConnection, _ acpsdk.SessionId) ([]ports.ChatBackgroundTask, error) {
+		return []ports.ChatBackgroundTask{
+			{ID: "native-job-mismatch", RunID: "provider-different-run", StartedAt: nil},
+		}, nil
+	}
+
+	tasks, err := c.BackgroundTasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(launchTime) {
+		t.Fatalf("mismatched RunID did not restore start time: %+v, want %v", tasks, launchTime)
+	}
+
+	// Case 2: Provider returns empty RunID with nil StartedAt.
+	c.backgroundTasks = func(_ context.Context, _ *acpsdk.ClientSideConnection, _ acpsdk.SessionId) ([]ports.ChatBackgroundTask, error) {
+		return []ports.ChatBackgroundTask{
+			{ID: "native-job-mismatch", RunID: "", StartedAt: nil},
+		}, nil
+	}
+
+	tasks2, err := c.BackgroundTasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks2) != 1 || tasks2[0].StartedAt == nil || !tasks2[0].StartedAt.Equal(launchTime) {
+		t.Fatalf("empty RunID did not restore start time: %+v, want %v", tasks2, launchTime)
+	}
+	if tasks2[0].RunID != "tool-call-1" {
+		t.Fatalf("empty RunID was not resolved to observed RunID: got %q, want %q", tasks2[0].RunID, "tool-call-1")
+	}
+}
+
+func TestBackgroundTasksACPReplayWithoutStoredTimeDoesNotSetNow(t *testing.T) {
+	dataDir := t.TempDir()
+	sessionID := "session-no-fallback"
+	store := backgroundtasks.NewFileStore(dataDir)
+
+	c := &conversation{
+		sessionID: sessionID,
+		tools:     make(map[string]*toolState),
+		backgroundObserved: backgroundtasks.Tracker{
+			SessionID: sessionID,
+			Store:     store,
+		},
+	}
+
+	// Tool call replayed with zero startedAt and no prior stored time.
+	tool := &toolState{
+		id:        "tool-replayed-1",
+		kind:      acpsdk.ToolKindExecute,
+		status:    acpsdk.ToolCallStatusCompleted,
+		rawInput:  map[string]any{"command": "sleep 100", "run_in_background": true},
+		rawOutput: map[string]any{"task_id": "native-sleep-1"},
+		startedAt: time.Time{},
+	}
+	c.tools[tool.id] = tool
+	c.observeBackgroundTool(tool)
+
+	tasks, err := c.BackgroundTasks(context.Background())
+	if err != nil && !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].StartedAt != nil {
+		t.Fatalf("expected StartedAt to remain nil when no start time was known, got %v", tasks[0].StartedAt)
+	}
+}
