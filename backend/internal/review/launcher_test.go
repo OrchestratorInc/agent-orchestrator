@@ -1191,9 +1191,10 @@ func TestLauncherFallsBackToRawOutputWithoutRenderedScreen(t *testing.T) {
 // records messages under a lock because delivery may run in the background.
 type lateReadyRuntime struct {
 	*fakeRuntime
-	mu    sync.Mutex
-	ready bool
-	sent  []string
+	mu      sync.Mutex
+	ready   bool
+	sent    []string
+	sendErr error
 }
 
 func (f *lateReadyRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
@@ -1208,6 +1209,9 @@ func (f *lateReadyRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) 
 func (f *lateReadyRuntime) SendMessage(_ context.Context, _ ports.RuntimeHandle, msg string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		return f.sendErr
+	}
 	f.sent = append(f.sent, msg)
 	return nil
 }
@@ -1434,6 +1438,41 @@ func TestLauncherDeferredReplacementReadyBeforeTaskSendsDirectly(t *testing.T) {
 	}
 	if sent := rt.messages(); len(sent) != 1 || !strings.Contains(sent[0], "run-1") {
 		t.Fatalf("sent = %q, want the task delivered directly to a ready reviewer", sent)
+	}
+}
+
+func TestLauncherReportsFailedBackgroundDelivery(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Minute, Lines: 20,
+		},
+	}
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}, sendErr: errors.New("host gone")}
+	l := newTestLauncher(t, reviewer, rt)
+	type failure struct {
+		worker domain.SessionID
+		launch string
+	}
+	failures := make(chan failure, 1)
+	l.(*agentLauncher).OnDeliveryFailure(func(_ context.Context, workerID domain.SessionID, launchID string, _ error) {
+		failures <- failure{workerID, launchID}
+	})
+	spec := launchSpec()
+	spec.LaunchID = "launch-1"
+	ctx, cancel := context.WithTimeout(context.Background(), reviewerReadinessDeadlineReserve)
+	defer cancel()
+	if _, err := l.Spawn(ctx, spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	rt.setReady()
+	select {
+	case got := <-failures:
+		if got.worker != "mer-1" || got.launch != "launch-1" {
+			t.Fatalf("failure reported for %+v, want worker mer-1 launch launch-1", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a failed background delivery was not reported")
 	}
 }
 

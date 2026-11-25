@@ -234,6 +234,29 @@ func (e *Engine) failRuns(ctx stdctx.Context, runs []domain.ReviewRun, reason do
 	return errors.Join(errs...)
 }
 
+// failUndeliveredRuns fails the worker's in-flight runs served by launchID
+// when their review task could not be typed after the launch or Notify had
+// already returned. Without it they would stay running with no task.
+func (e *Engine) failUndeliveredRuns(ctx stdctx.Context, workerID domain.SessionID, launchID string, cause error) {
+	active, err := e.store.ListActiveReviewRunsBySession(ctx, workerID)
+	if err != nil {
+		slog.Default().WarnContext(ctx, "list review runs after a failed task delivery", "session", workerID, "err", err)
+		return
+	}
+	var undelivered []domain.ReviewRun
+	for _, run := range active {
+		if launchID != "" && run.LaunchID != launchID {
+			continue
+		}
+		if run.Status == domain.ReviewRunLaunching || run.Status == domain.ReviewRunRunning {
+			undelivered = append(undelivered, run)
+		}
+	}
+	if err := e.failRuns(ctx, undelivered, domain.ReviewFailureLaunchFailed, cause); err != nil {
+		slog.Default().WarnContext(ctx, "fail review runs after a failed task delivery", "session", workerID, "err", err)
+	}
+}
+
 // markRunsLaunching moves freshly queued runs to launching just before the
 // reviewer is started or notified.
 func (e *Engine) markRunsLaunching(ctx stdctx.Context, runs []domain.ReviewRun, launchID string) error {

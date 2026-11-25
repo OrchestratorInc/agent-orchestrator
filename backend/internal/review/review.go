@@ -159,7 +159,7 @@ func New(d Deps) *Engine {
 	if newID == nil {
 		newID = uuid.NewString
 	}
-	return &Engine{
+	e := &Engine{
 		store:        d.Store,
 		harnessUse:   d.HarnessUse,
 		sessions:     d.Sessions,
@@ -173,6 +173,10 @@ func New(d Deps) *Engine {
 		chatRecoveryDone: d.ChatRecoveryDone,
 		runs:             newRunLifecycleState(d.RunLifecycle, clock(), d.AwaitBootPass),
 	}
+	if reporter, ok := d.Launcher.(deliveryFailureReporter); ok {
+		reporter.OnDeliveryFailure(e.failUndeliveredRuns)
+	}
+	return e
 }
 
 // lockWorker serialises Trigger calls for a single worker session and returns

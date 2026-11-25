@@ -179,6 +179,20 @@ type agentLauncher struct {
 	// pending holds review tasks still waiting for their reviewer to become
 	// ready after the launch returned.
 	pending pendingDeliveries
+	// deliveryFailed reports a background task send that failed after the
+	// launch or Notify had already returned. Set once by the engine.
+	deliveryFailed func(ctx context.Context, workerID domain.SessionID, launchID string, err error)
+}
+
+// deliveryFailureReporter lets the engine fail the runs whose task a
+// background delivery could not type.
+type deliveryFailureReporter interface {
+	OnDeliveryFailure(func(ctx context.Context, workerID domain.SessionID, launchID string, err error))
+}
+
+// OnDeliveryFailure registers the handler for background task send failures.
+func (l *agentLauncher) OnDeliveryFailure(fn func(ctx context.Context, workerID domain.SessionID, launchID string, err error)) {
+	l.deliveryFailed = fn
 }
 
 type preLaunchReviewer interface {
@@ -608,11 +622,11 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", agentlaunch.RedactError(err, spec.ProjectEnv))
 	}
 	if spec.DeferInitialMessage {
-		if err := l.gateDeferredTask(ctx, reviewer, handle, strings.TrimSpace(spec.LaunchID)); err != nil {
+		if err := l.gateDeferredTask(ctx, reviewer, handle, spec.WorkerID, strings.TrimSpace(spec.LaunchID)); err != nil {
 			return LaunchResult{}, err
 		}
 	} else if cmd.InitialMessage != "" {
-		if err := l.deliverInitialMessage(ctx, reviewer, handle, strings.TrimSpace(spec.LaunchID), cmd.InitialMessage); err != nil {
+		if err := l.deliverInitialMessage(ctx, reviewer, handle, spec.WorkerID, strings.TrimSpace(spec.LaunchID), cmd.InitialMessage); err != nil {
 			return LaunchResult{}, err
 		}
 	}
@@ -627,7 +641,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 // through Notify until the reviewer shows its readiness marker, as an initial
 // task would be. The gate starts empty: Notify fills it while the reviewer is
 // still starting and sends directly once the gate has retired.
-func (l *agentLauncher) gateDeferredTask(ctx context.Context, reviewer ports.Reviewer, handle ports.RuntimeHandle, launchID string) error {
+func (l *agentLauncher) gateDeferredTask(ctx context.Context, reviewer ports.Reviewer, handle ports.RuntimeHandle, workerID domain.SessionID, launchID string) error {
 	provider, ok := reviewer.(ports.ReviewerPromptReadinessProvider)
 	if !ok {
 		return nil
@@ -640,7 +654,7 @@ func (l *agentLauncher) gateDeferredTask(ctx context.Context, reviewer ports.Rev
 		return nil
 	}
 	pendingCtx, delivery := l.pending.start(context.WithoutCancel(ctx), handle.ID, "")
-	go l.deliverWhenReady(pendingCtx, delivery, handle, hints, hints.InitialDelay, hints.Timeout, launchID)
+	go l.deliverWhenReady(pendingCtx, delivery, handle, hints, hints.InitialDelay, hints.Timeout, workerID, launchID)
 	return nil
 }
 
@@ -649,7 +663,7 @@ func (l *agentLauncher) gateDeferredTask(ctx context.Context, reviewer ports.Rev
 // expires, the task is sent anyway. When the caller's deadline would end the
 // wait first, the launch returns and the wait continues in the background:
 // a task typed into a TUI that has not finished starting is silently lost.
-func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer ports.Reviewer, handle ports.RuntimeHandle, launchID, message string) error {
+func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer ports.Reviewer, handle ports.RuntimeHandle, workerID domain.SessionID, launchID, message string) error {
 	hints := ports.PromptReadinessHints{InitialDelay: defaultReviewerInitialDelay}
 	if provider, ok := reviewer.(ports.ReviewerPromptReadinessProvider); ok {
 		provided, err := provider.ReviewPromptReadinessHints(ctx)
@@ -676,7 +690,7 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 		}
 		if !ready && capped {
 			pendingCtx, delivery := l.pending.start(context.WithoutCancel(ctx), handle.ID, message)
-			go l.deliverWhenReady(pendingCtx, delivery, handle, hints, 0, hints.Timeout-time.Since(started), launchID)
+			go l.deliverWhenReady(pendingCtx, delivery, handle, hints, 0, hints.Timeout-time.Since(started), workerID, launchID)
 			return nil
 		}
 	}
@@ -693,7 +707,7 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 // current work: Cancel, Destroy, or a new launch on the handle drops it, and
 // the pane must still run this launch. Notify replaces its message, so the
 // newest task still waits for readiness.
-func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingDelivery, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, delay, wait time.Duration, launchID string) {
+func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingDelivery, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, delay, wait time.Duration, workerID domain.SessionID, launchID string) {
 	defer l.pending.finish(handle.ID, delivery)
 	if err := sleepContext(ctx, delay); err != nil {
 		return
@@ -713,6 +727,11 @@ func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingD
 	})
 	if sent && err != nil {
 		slog.Default().WarnContext(ctx, "deliver reviewer review task", "handle", handle.ID, "launch", launchID, "err", err)
+		// The caller already returned, so its runs would otherwise stay
+		// running with no task typed.
+		if l.deliveryFailed != nil {
+			l.deliveryFailed(ctx, workerID, launchID, fmt.Errorf("deliver reviewer review task: %w", err))
+		}
 	}
 }
 
