@@ -1606,6 +1606,14 @@ func (c *Controller) readRateLimits() {
 // ProviderConversationID is the handle to persist for resume.
 func (c *Controller) ProviderConversationID() string { return c.conv.ProviderConversationID() }
 
+// providerConversationID is the live provider thread, or empty before one exists.
+func (c *Controller) providerConversationID() string {
+	if c.conv == nil {
+		return ""
+	}
+	return c.conv.ProviderConversationID()
+}
+
 // ConversationID is the durable conversation this controller writes to.
 func (c *Controller) ConversationID() string { return c.conversation.ID }
 
@@ -4318,6 +4326,13 @@ func (c *Controller) applyThreadState(
 	now time.Time,
 ) error {
 	c.mu.Lock()
+	// A conversation outlives its provider thread. What another agent or an
+	// earlier thread reported is not merged into this thread's state.
+	thread := c.providerConversationID()
+	if !c.threadState.AppliesTo(c.harness, thread) {
+		c.threadState = domain.ConversationThreadState{}
+	}
+	c.threadState.Harness, c.threadState.ProviderConversationID = c.harness, thread
 	if update.Status != "" {
 		c.threadState.Status = update.Status
 		// The flags belong to the status report that carried them: an active thread
