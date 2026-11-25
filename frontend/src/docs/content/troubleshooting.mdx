@@ -105,10 +105,10 @@ To verify, relaunch Orchestrator from your usual launcher and run the first chec
 
 <Accordions>
 	<Accordion title="No agent harness is offered">
-		Open **Settings → Harness**, select the agent, and use **Install** or **Login**. From a terminal, sign in with the agent's own login command, then run `ao agent ls --refresh` to check again. The desktop daemon inherits a login-shell environment and reuses each provider's installed binary and authentication, so if a newly installed agent still isn't offered, quit and reopen Orchestrator.
+		Open **Settings → Agents**, select the agent, and use **Install** or **Login**. From a terminal, sign in with the agent's own login command, then run `ao agent ls --refresh` to check again. The desktop daemon inherits a login-shell environment and reuses each provider's installed binary and authentication, so if a newly installed agent still isn't offered, quit and reopen Orchestrator.
 	</Accordion>
 	<Accordion title="Chat preflight fails">
-		Confirm the selected harness supports native Chat and its binary is authenticated. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Check **Settings → Harness** and provider version/permission requirements. Choose Terminal UI when the harness lacks Chat support or preflight cannot connect.
+		Confirm the selected harness supports native Chat and its binary is authenticated. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Check **Settings → Agents** and provider version/permission requirements. Choose Terminal UI when the harness lacks Chat support or preflight cannot connect.
 	</Accordion>
 	<Accordion title="A TUI session will not start on macOS or Linux">
 		New macOS/Linux sessions use detached native PTY hosts. Packaged builds bundle tmux for old sessions/fallback; macOS still validates it. For source runs check configured/system tmux and the native-host launch error. Windows uses ConPTY. See [Runtime](/plugins/runtimes).
