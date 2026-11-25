@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { connectorKeyFrom, joinCommandLine, splitCommandLine, type Connector } from "../../hooks/useConnectors";
@@ -141,9 +141,8 @@ describe("ConnectorsSection", () => {
 				? { data: { connector: created } }
 				: { data: { authorizationUrl: "https://linear.app/oauth/authorize", callbackUrl: "http://127.0.0.1:3011/oauth/mcp/callback", connector: created } }) as never);
 		renderSection();
-		fireEvent.click(await screen.findByRole("button", { name: "Add connector" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Add Linear" }));
 		const dialog = await screen.findByRole("dialog");
-		fireEvent.click(screen.getByRole("button", { name: "Linear" }));
 		expect(screen.getByLabelText("URL")).toHaveValue("https://mcp.linear.app/mcp");
 		expect(screen.getByLabelText("Name")).toHaveValue("linear");
 		fireEvent.click(dialog.querySelector('button[type="submit"]') as HTMLButtonElement);
@@ -151,6 +150,32 @@ describe("ConnectorsSection", () => {
 			body: { key: "linear", name: "Linear", projectId: "", presetId: "linear", transport: "http", url: "https://mcp.linear.app/mcp", auth: "oauth" },
 		}));
 		expect(await screen.findByRole("heading", { name: "Sign in to Linear" })).toBeInTheDocument();
+	});
+
+	it("offers the catalog on shelves, hides what is added, and searches both lists", async () => {
+		mockList();
+		renderSection();
+		await screen.findByText("Linear");
+		const shelf = (name: string) => within(screen.getByRole("list", { name })).getAllByRole("listitem").map((row) => row.textContent);
+		expect(shelf("Popular")).toEqual(["NotionPages and databasesAdd", "SupabasePostgres, projects and Edge FunctionsAdd", "VercelProjects and deploymentsAdd", "StripeCustomers, payments and Stripe docsAdd"]);
+		expect(shelf("Developer tools")).toEqual(["PostHogProduct analytics and feature flagsAdd", "NeonServerless Postgres projectsAdd", "CContext7Current docs for librariesAdd"]);
+		expect(shelf("Productivity")).toHaveLength(3);
+		expect(document.querySelector('[data-connector-preset="notion"] svg[fill="currentColor"] path')).not.toBeNull();
+		expect(document.querySelector('[data-connector="linear"] svg[fill="currentColor"] path')).not.toBeNull();
+		expect(document.querySelector('[data-connector="files"] svg[fill="currentColor"]')).toBeNull();
+		expect(document.querySelector('[data-connector-preset="monday"] svg[fill="currentColor"]')).toBeNull();
+		expect(document.querySelector('[data-connector-preset="monday"]')).toHaveTextContent("Mmonday.com");
+
+		fireEvent.change(screen.getByRole("textbox", { name: "Search connectors" }), { target: { value: "postgres" } });
+		expect(shelf("Popular")).toEqual(["SupabasePostgres, projects and Edge FunctionsAdd"]);
+		expect(shelf("Developer tools")).toEqual(["NeonServerless Postgres projectsAdd"]);
+		expect(screen.queryByRole("list", { name: "Productivity" })).not.toBeInTheDocument();
+		expect(document.querySelector('[data-connector="linear"]')).toBeNull();
+		expect(screen.getByText("No connector matches your search.")).toBeInTheDocument();
+
+		fireEvent.change(screen.getByRole("textbox", { name: "Search connectors" }), { target: { value: "sentry" } });
+		expect(document.querySelector('[data-connector="sentry"]')).not.toBeNull();
+		expect(screen.queryByRole("list", { name: "Developer tools" })).not.toBeInTheDocument();
 	});
 
 	it("keeps what an edit does not show: the other headers, the command's exact words", async () => {

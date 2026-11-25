@@ -20,7 +20,7 @@ import {
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
-import { connectorPresets, type ConnectorPreset } from "./connectorCatalog";
+import type { ConnectorPreset } from "./connectorCatalog";
 import { connectorTarget } from "./ConnectorsSection";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 
@@ -50,9 +50,9 @@ function Field({ id, label, hint, children }: { id: string; label: string; hint?
 	);
 }
 
-export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
+export function ConnectorDialog({ connector, preset, onClose, onSaved }: {
 	connector?: Connector;
-	taken: string[];
+	preset?: ConnectorPreset;
 	onClose: () => void;
 	onSaved: (saved: Connector[]) => void;
 }) {
@@ -60,12 +60,12 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 	const ids = useId();
 	const workspaces = (useWorkspaceQuery().data ?? []).filter((workspace) => !workspace.hostId);
 	const [mode, setMode] = useState<Mode>(connector?.transport === "stdio" ? "command" : "url");
-	const [presetId, setPresetId] = useState(connector?.presetId ?? "");
-	const [name, setName] = useState(connector?.name ?? "");
+	const [presetId, setPresetId] = useState(connector?.presetId ?? preset?.id ?? "");
+	const [name, setName] = useState(connector?.name ?? preset?.name ?? "");
 	const [key, setKey] = useState(connector?.key ?? "");
 	const [keyEdited, setKeyEdited] = useState(Boolean(connector));
-	const [url, setUrl] = useState(connector?.url ?? "");
-	const [auth, setAuth] = useState<Auth>(connector?.auth ?? "oauth");
+	const [url, setUrl] = useState(connector?.url ?? preset?.url ?? "");
+	const [auth, setAuth] = useState<Auth>(connector?.auth ?? preset?.auth ?? "oauth");
 	const [headerName, setHeaderName] = useState(connector?.headerKeys[0] ?? "Authorization");
 	const [headerValue, setHeaderValue] = useState("");
 	const [command, setCommand] = useState(connector?.transport === "stdio" ? joinCommandLine([connector.command ?? "", ...connector.args]) : "");
@@ -103,14 +103,6 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 		onSuccess: onSaved,
 	});
 
-	const applyPreset = (preset: ConnectorPreset) => {
-		setMode("url");
-		setPresetId(preset.id);
-		setName(preset.name);
-		setUrl(preset.url);
-		setAuth(preset.auth);
-		setKeyEdited(false);
-	};
 	const importable = (candidates.data ?? []).filter((candidate) => !candidate.exists);
 	const missingValue = importable.some((candidate) => chosen.has(candidate.id) && (candidate.needsValue ?? []).some((needed) => !typed[candidate.id]?.[needed]));
 	const ready = mode === "import"
@@ -140,13 +132,6 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 					<div className={cn(settingsDialogBodyClass, "gap-3")}>
 						{connector ? null : (
 							<>
-								<div role="group" aria-label={t("settings.connectors.dialog.catalog")} className="flex flex-wrap gap-1.5">
-									{connectorPresets.filter((preset) => !taken.includes(preset.id) && !taken.includes(connectorKeyFrom(preset.name))).map((preset) => (
-										<Button key={preset.id} type="button" variant="secondary" size="xs" shape="pill" aria-pressed={presetId === preset.id} onClick={() => applyPreset(preset)}>
-											{preset.name}
-										</Button>
-									))}
-								</div>
 								<Tabs
 									value={mode}
 									onValueChange={(next) => {

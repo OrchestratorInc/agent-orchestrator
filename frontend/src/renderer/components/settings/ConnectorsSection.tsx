@@ -1,13 +1,15 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Globe, Loader2, LogOut, MoreHorizontal, Pencil, Plus, RefreshCw, Terminal, Trash2 } from "@/components/app-icons";
-import { connectorsApi, connectorsQueryKey, useConnectors, type Connector } from "../../hooks/useConnectors";
+import { Globe, Loader2, LogOut, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Terminal, Trash2 } from "@/components/app-icons";
+import { connectorKeyFrom, connectorsApi, connectorsQueryKey, useConnectors, type Connector } from "../../hooks/useConnectors";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Switch } from "../ui/switch";
+import { connectorPresets, connectorShelves, type ConnectorPreset } from "./connectorCatalog";
 import { ConnectorDialog } from "./ConnectorDialog";
+import { ConnectorIcon } from "./ConnectorIcon";
 import { ConnectorSignInDialog } from "./ConnectorSignInDialog";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -33,7 +35,8 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const query = useConnectors();
-	const [editing, setEditing] = useState<Connector | "new" | null>(null);
+	const [editing, setEditing] = useState<Connector | ConnectorPreset | "new" | null>(null);
+	const [search, setSearch] = useState("");
 	const [signingIn, setSigningIn] = useState<Connector | null>(null);
 	const [removing, setRemoving] = useState<Connector | null>(null);
 	const refresh = () => queryClient.invalidateQueries({ queryKey: connectorsQueryKey });
@@ -52,7 +55,13 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 		onSettled: refresh,
 	});
 	const busyId = act.isPending ? act.variables.connector.id : null;
-	const connectors = query.data ?? [];
+	const all = query.data ?? [];
+	const words = search.trim().toLowerCase();
+	const matches = (...texts: (string | undefined)[]) => !words || texts.some((text) => text?.toLowerCase().includes(words));
+	const connectors = all.filter((connector) => matches(connector.name, connector.key, connector.url, connector.command));
+	const taken = new Set(all.flatMap((connector) => [connector.key, connector.presetId ?? ""]));
+	const offered = query.data === undefined ? [] : connectorPresets.filter((preset) =>
+		!taken.has(preset.id) && !taken.has(connectorKeyFrom(preset.name)) && matches(preset.name, preset.url, t(`settings.connectors.catalog.${preset.id}`)));
 	const statusLine = (connector: Connector) => {
 		if (!connector.enabled) return t("settings.connectors.status.off");
 		if (needsSignIn(connector)) return t("settings.connectors.status.needsSignIn");
@@ -74,6 +83,20 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 				titleHidden={titleHidden}
 				sectionId="connectors"
 				grouped
+				toolbar={(
+					<div className="flex shrink-0 items-center gap-2 pb-3">
+						<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
+							<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
+							<input
+								aria-label={t("settings.connectors.search")}
+								className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted"
+								placeholder={t("settings.connectors.search")}
+								value={search}
+								onChange={(event) => setSearch(event.target.value)}
+							/>
+						</label>
+					</div>
+				)}
 				action={(
 					<Button type="button" variant="ghost" size="sm" onClick={() => setEditing("new")}>
 						<Plus aria-hidden="true" />
@@ -88,18 +111,20 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 				) : query.error && query.data === undefined ? (
 					<div className="settings-row-bar text-caption text-error" role="alert">{query.error.message}</div>
 				) : connectors.length === 0 ? (
-					<div className="settings-row-bar text-caption text-settings-muted">{t("settings.connectors.empty")}</div>
+					<div className="settings-row-bar text-caption text-settings-muted">{t(all.length === 0 ? "settings.connectors.empty" : "settings.connectors.noMatch")}</div>
 				) : (
 					<div role="list" className="divide-y divide-border">
 						{connectors.map((connector) => {
 							const failed = connector.enabled && connector.status === "unavailable";
+							const preset = connectorPresets.find((one) => one.id === connector.presetId || (connector.transport === "http" && one.url === connector.url));
 							const tone = failed ? "text-error" : connector.enabled && (needsSignIn(connector) || connector.status === "needs_signin") ? "text-warning" : undefined;
 							return (
 								<SettingsRow
 									key={connector.id}
 									role="listitem"
 									data-connector={connector.key}
-									icon={connector.transport === "http" ? Globe : Terminal}
+									icon={preset ? undefined : connector.transport === "http" ? Globe : Terminal}
+									leading={preset ? <ConnectorIcon presetId={preset.id} name={connector.name} /> : undefined}
 									label={connector.name}
 									description={(
 										<>
@@ -160,10 +185,35 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 				{act.error && !removing ? <div className="settings-row-bar text-caption text-error" role="alert">{act.error.message}</div> : null}
 			</SettingsSection>
 			<p className="px-(--settings-row-inset) text-control leading-4 text-settings-muted">{t("settings.connectors.note")}</p>
+			{connectorShelves.map((shelf) => {
+				const presets = offered.filter((preset) => preset.shelf === shelf);
+				if (presets.length === 0) return null;
+				return (
+					<SettingsSection key={shelf} title={t(`settings.connectors.shelf.${shelf}`)} grouped>
+						<div role="list" aria-label={t(`settings.connectors.shelf.${shelf}`)} className="divide-y divide-border">
+							{presets.map((preset) => (
+								<SettingsRow
+									key={preset.id}
+									role="listitem"
+									data-connector-preset={preset.id}
+									leading={<ConnectorIcon presetId={preset.id} name={preset.name} />}
+									label={preset.name}
+									description={t(`settings.connectors.catalog.${preset.id}`)}
+								>
+									<Button type="button" variant="ghost" size="sm" aria-label={t("settings.connectors.catalogAddAria", { name: preset.name })} onClick={() => setEditing(preset)}>
+										<Plus aria-hidden="true" />
+										{t("settings.connectors.catalogAdd")}
+									</Button>
+								</SettingsRow>
+							))}
+						</div>
+					</SettingsSection>
+				);
+			})}
 			{editing ? (
 				<ConnectorDialog
-					connector={editing === "new" ? undefined : editing}
-					taken={connectors.flatMap((connector) => [connector.key, connector.presetId ?? ""])}
+					connector={editing !== "new" && "key" in editing ? editing : undefined}
+					preset={editing !== "new" && "shelf" in editing ? editing : undefined}
 					onClose={() => setEditing(null)}
 					onSaved={(saved) => {
 						setEditing(null);
@@ -176,7 +226,7 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 			) : null}
 			{signingIn ? (
 				<ConnectorSignInDialog
-					connector={connectors.find((connector) => connector.id === signingIn.id) ?? signingIn}
+					connector={all.find((connector) => connector.id === signingIn.id) ?? signingIn}
 					onClose={() => {
 						setSigningIn(null);
 						void refresh();
