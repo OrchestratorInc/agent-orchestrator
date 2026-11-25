@@ -4,6 +4,7 @@ import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { cn } from "../lib/utils";
 import { NotificationCenter } from "./NotificationCenter";
+import { useSidebarChromeClearanceRef } from "../hooks/useSidebarChromeGeometry";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 
 /**
@@ -99,8 +100,12 @@ export function PageTopbar({
 	actions?: ReactNode;
 }) {
 	const paddingLeft = usePageTopbarPaddingLeft();
+	// macOS: the sidebar's live width, so the title's clearance (styles.css)
+	// follows the sidebar's animation instead of switching at once.
+	const clearanceRef = useSidebarChromeClearanceRef<HTMLElement>(isMacPlatform());
 	return (
 		<PageTopbarFrame
+			ref={clearanceRef}
 			className={cn("workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-(--gap-topbar-control)", className)}
 			style={{ ...dragStyle, paddingLeft: isMacPlatform() ? undefined : paddingLeft }}
 			{...props}

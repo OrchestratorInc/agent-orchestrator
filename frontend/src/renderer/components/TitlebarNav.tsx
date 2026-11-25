@@ -3,7 +3,8 @@ import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { shellPanelTransition } from "@/lib/motion-spring";
+import { newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { AOMascot } from "./AOMascot";
@@ -69,9 +70,18 @@ export function TitlebarNav({
   // or default width narrower than the label grows to fit it. Fullscreen and
   // zoom move the label with the traffic-light reserve, and the window's own
   // resize fires before that lands, so nudge again once the label has moved.
+  // The label stays mounted while the sidebar is shut, so after its first
+  // showing only fullscreen and zoom can move it. A synthetic resize on every
+  // sidebar toggle woke every resize listener in the app at the toggle's start.
+  const brandNudged = useRef(false);
   useEffect(() => {
-    if (showBrand) window.dispatchEvent(new Event("resize"));
-  }, [showBrand, isFullScreen, zoomFactor]);
+    if (!showBrand || brandNudged.current) return;
+    brandNudged.current = true;
+    window.dispatchEvent(new Event("resize"));
+  }, [showBrand]);
+  useEffect(() => {
+    if (brandNudged.current) window.dispatchEvent(new Event("resize"));
+  }, [isFullScreen, zoomFactor]);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
@@ -92,7 +102,8 @@ export function TitlebarNav({
   // collapsed, the arrows take its place.
   const arrowsVisible = !showBrand;
   const prefersReducedMotion = useReducedMotion();
-  const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
+  const newDesktopUi = useUiStore(newDesktopUiEnabled);
+  const transition = prefersReducedMotion ? { duration: 0 } : shellPanelTransition(newDesktopUi);
 
   // The brand sits in this fixed row, not inside the sidebar, so it does not
   // shrink when a small window caps the sidebar narrower than the label. Cap it
@@ -111,7 +122,8 @@ export function TitlebarNav({
       const available = sidebar.offsetWidth - brand.getBoundingClientRect().left - 12;
       setBrandMaxWidth(Math.max(24, Math.floor(available)));
     };
-    fit();
+    // The observer reports once on attach, so the first fit needs no forced
+    // layout inside the toggle's task.
     const observer = new ResizeObserver(fit);
     observer.observe(sidebar);
     window.addEventListener("resize", fit);

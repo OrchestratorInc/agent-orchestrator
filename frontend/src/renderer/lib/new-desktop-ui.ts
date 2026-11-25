@@ -1,3 +1,4 @@
+import { aoBridge } from "./bridge";
 import { developerModeStorageKey } from "./window-translucency";
 
 export const newDesktopUiStorageKey = "ao.newDesktopUi";
@@ -22,4 +23,6 @@ export function applyNewDesktopUi(enabled: boolean): void {
 	if (typeof document === "undefined") return;
 	if (enabled) document.documentElement.dataset.newDesktopUi = "true";
 	else delete document.documentElement.dataset.newDesktopUi;
+	// The native window buttons move with the wider edge spacing (macOS).
+	void aoBridge.theme?.setInterfaceV2?.(enabled)?.catch(() => undefined);
 }

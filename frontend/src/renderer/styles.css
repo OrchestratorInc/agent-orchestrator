@@ -7410,12 +7410,217 @@ html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--floating-topbar >
 	border-color: color-mix(in srgb, var(--color-border-strong) 15%, transparent);
 }
 
+/* A page with no top bar (new chat) keeps the floating frame with its top at
+ * the window inset. Closing the sidebar reserves the bar's band for the
+ * traffic lights, so the top edge slides down to it, in step with the sidebar,
+ * instead of the panel swapping frames in one frame. */
+html[data-new-desktop-ui] {
+	/* SHELL_PANEL_DRAWER, the sidebar's slide under Interface v2. */
+	--ease-shell-panel: 450ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* The animated top is a separate, non-inherited property that only the
+ * frame reads (the surface's mask, its fill and its edge), so a sidebar
+ * toggle restyles three boxes per frame, not everything in the panel. The
+ * inherited --floating-panel-top that the rest of the panel reads switches
+ * once. */
+@property --floating-panel-edge {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface {
+	--floating-panel-edge: var(--floating-panel-top);
+	transition: --floating-panel-edge var(--ease-shell-panel);
+	-webkit-mask:
+		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-edge) no-repeat,
+		linear-gradient(#000 0 0) 0 calc(var(--floating-panel-edge) + var(--floating-panel-radius)) / 100% calc(100% - var(--floating-panel-edge) - 2 * var(--floating-panel-radius)) no-repeat,
+		linear-gradient(#000 0 0) var(--floating-panel-radius) var(--floating-panel-edge) / calc(100% - 2 * var(--floating-panel-radius)) calc(100% - var(--floating-panel-edge)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 var(--floating-panel-edge) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% var(--floating-panel-edge) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat;
+}
+
+/* The fill and edge run the same transition themselves: an inherited value
+ * that is animating on the surface does not reach its pseudo-elements frame
+ * by frame. */
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::before,
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	--floating-panel-edge: var(--floating-panel-top);
+	inset: var(--floating-panel-edge) 0 0;
+	transition: --floating-panel-edge var(--ease-shell-panel);
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	transition: --floating-panel-edge var(--ease-shell-panel), border-color var(--ease-shell-panel);
+}
+
+/* The open sidebar overlaps the panel's left inset by a negative margin. On
+ * its own 280ms curve that margin outran the sidebar's spring, so the panel
+ * slid flush to the window edge before the sidebar pushed it back; on the
+ * same spring the panel's left edge moves in one line. */
+html[data-new-desktop-ui][data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+	transition: margin-right var(--ease-shell-panel);
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar.center-panel-shell--bare {
+	--size-inspector-tabs: 0px;
+	--spacing-inspector-tabs: 0px;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar.center-panel-shell--bare > .center-panel-surface {
+	--floating-panel-top: var(--size-center-panel-inset-mac);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface,
+	html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after,
+	html[data-new-desktop-ui][data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+		transition: none;
+	}
+}
+
+/* Collapsed sidebar (Interface v2): a rail of the nav buttons instead of
+ * hiding. The container keeps its full width and layout and is clipped to the
+ * rail on the sidebar's spring, so no icon moves; each nav button's pill
+ * narrows to a square around its icon as its label fades, the project and
+ * session lists fade out, and the footer swaps to its rail icons. */
+/* Registered so the sidebar geometry hook reads it back as pixels. */
+@property --sidebar-width-rail {
+	syntax: "<length>";
+	inherits: true;
+	initial-value: 0px;
+}
+html[data-new-desktop-ui] {
+	/* The nav rows' height, so a collapsed row is square. */
+	--sidebar-rail-button: 32px;
+	/* 12px from the window edge to a button and 12px from it to the panel,
+	 * whose own 8px inset sits inside that. */
+	--sidebar-width-rail: calc(var(--sidebar-rail-button) + 16px);
+}
+
+html[data-new-desktop-ui] .sidebar-rail-clip {
+	clip-path: inset(0 0 0 0);
+	transition: clip-path var(--ease-shell-panel);
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] .sidebar-rail-clip {
+	clip-path: inset(0 calc(100% - var(--sidebar-width-rail)) 0 0);
+}
+
+html[data-new-desktop-ui] .sidebar-rail-clip :is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"] {
+	max-width: 100%;
+	transition:
+		max-width var(--ease-shell-panel),
+		margin-left var(--ease-shell-panel),
+		padding-left var(--ease-shell-panel);
+}
+
+/* A 32px square: 9px either side of the 14px icon. The row moves 1px right as
+ * its padding drops 1px, on the same curve, so the icon never moves. */
+html[data-new-desktop-ui] [data-collapsible="rail"] :is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"] {
+	max-width: var(--sidebar-rail-button);
+	margin-left: 1px;
+	padding-left: 9px;
+}
+
+html[data-new-desktop-ui] .sidebar-rail-clip :is(:is([data-sidebar-topnav], [data-sidebar-settings-nav]) .sidebar-expanded-chrome, [data-sidebar-settings-nav] [role="status"], [data-sidebar-sections], [data-sidebar-footer-expanded]) {
+	transition: opacity 150ms ease-out;
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] :is(:is([data-sidebar-topnav], [data-sidebar-settings-nav]) .sidebar-expanded-chrome, [data-sidebar-settings-nav] [role="status"], [data-sidebar-sections], [data-sidebar-footer-expanded]) {
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* The rail's footer icons stack upward from the bottom, in the rail's column. */
+html[data-new-desktop-ui] [data-collapsible="rail"] [data-slot="sidebar-footer"] {
+	overflow: visible;
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] [data-sidebar-rail-footer] {
+	/* The footer starts 3px in; this lands the column on the rail rows' x (12px). */
+	left: 9px;
+	right: auto;
+	/* Matches the 12px from the window's left edge to the buttons. */
+	bottom: 12px;
+	width: var(--sidebar-rail-button);
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Page titles clear the fixed titlebar cluster. Open, the padding is the usual
+ * 18px; at the rail it is the cluster's reach less the rail. In between it
+ * blends on the sidebar's live rail progress (PageTopbar's clearance ref), so
+ * the title's x moves on the sidebar's own spring for the whole slide instead
+ * of riding the panel edge and then stopping dead partway through. */
+html[data-new-desktop-ui] .center-panel-shell--mac .center-panel-titlebar {
+	padding-left: max(
+		var(--space-4_5),
+		calc(var(--ao-titlebar-content-left) - var(--ao-sidebar-layout-width, 0px)),
+		calc(
+			var(--space-4_5) + (var(--ao-titlebar-content-left) - var(--space-4_5) - var(--sidebar-width-rail)) *
+				var(--ao-sidebar-rail-progress, 0)
+		)
+	);
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] [data-sidebar-rail-footer] :is(button, a) {
+	width: var(--sidebar-rail-button);
+	height: var(--sidebar-rail-button);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-new-desktop-ui] .sidebar-rail-clip,
+	html[data-new-desktop-ui] .sidebar-rail-clip :is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"] {
+		transition: none;
+	}
+}
+
 /* Selected tabs are flat: a plain fill, no edge or bevel. Tabs are places,
  * not buttons. */
 html[data-new-desktop-ui] .session-inspector__tab-button[aria-selected="true"],
 html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	border-color: transparent;
 	box-shadow: none;
+}
+
+/* Edges (macOS): everything sits 2px further from the window edges. The
+ * shared panel inset goes from 6px to 8px, and the shell derives the rest
+ * from it: the centre panel's left, right and bottom gaps, the right rail
+ * inside the panel, and the panel corners, which drop to 10px to stay
+ * concentric with the 18px window corner. The top bar keeps its 50px band
+ * (the traffic-light row): its controls get 2px more room above and below
+ * (11px instead of 9px), so they shrink from 31px to 27px and their centre
+ * line stays put. The sidebar's content moves 2px right and its footer 2px
+ * up, and main moves the native window buttons 2px right to match
+ * (MAC_INTERFACE_V2_EDGE_EXTRA in shared/window-chrome.ts). */
+html[data-new-desktop-ui][data-ao-platform="darwin"] {
+	--size-center-panel-inset-mac: 8px;
+	--size-titlebar-cluster-left: calc(86px / var(--ao-window-zoom, 1));
+	/* The original band: the bar plus the 6px inset and its 1px border twice. */
+	--size-traffic-light-clearance: calc(var(--size-toolbar) + 14px);
+}
+
+html[data-new-desktop-ui][data-ao-platform="darwin"] .center-panel-shell.center-panel-shell--floating-topbar {
+	--floating-topbar-height: calc(var(--size-topbar-primary) + 14px);
+	--floating-topbar-gap: calc(var(--space-2) + 3px);
+}
+
+html[data-new-desktop-ui][data-ao-platform="darwin"] [data-slot="sidebar-container"] {
+	padding-left: 3px;
+}
+
+/* The sidebar footer's bottom inset grows by the same 2px (8px to 10px). Its
+ * own padding is an important utility (`!pb-2`), and a layered important rule
+ * beats an unlayered one, so this sits in the utilities layer, where the more
+ * specific selector wins. */
+@layer utilities {
+	html[data-new-desktop-ui][data-ao-platform="darwin"] [data-slot="sidebar-footer"] {
+		padding-bottom: 10px !important;
+	}
 }
 
 /* Dropdown triggers (selects, option menus, any button that opens a menu) are
@@ -7456,17 +7661,17 @@ html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot
  * SOFTWARE.
  */
 
-/* Filled buttons. Primary, accent and secondary (`button-classic`) are the
- * Radix Themes classic button (@radix-ui/themes 3.3.0,
+/* Filled buttons. Primary and accent (`button-classic`) are the Radix Themes
+ * classic button (@radix-ui/themes 3.3.0,
  * src/components/_internal/base-button.css; licence above), with its slate,
- * black and white alpha scales (@radix-ui/colors 3.0.0) inlined. Accent and secondary are the plain classic button with the
- * variant's fill as `--accent-9`; primary (near white in dark, near black in
+ * black and white alpha scales (@radix-ui/colors 3.0.0) inlined. Accent is
+ * the plain classic button with its fill as `--accent-9`; primary (near white in dark, near black in
  * light) is its high-contrast form, with the fill as `--accent-12`. Radix's
  * one-step hover colour (`--accent-10`) is the fill 6% towards the contrast
  * end. The 1px border is dropped (the classic button draws its edge as an
  * inset ring); heights are fixed, so only the width loses 2px. Every other
- * filled button (destructive, triggers, ad hoc raised controls) is flat: its
- * face and a faint edge. */
+ * filled button (secondary, destructive, triggers, ad hoc raised controls) is
+ * flat: its face and a faint edge. */
 html[data-new-desktop-ui] .button-raised:not(.button-classic) {
 	border-color: color-mix(in oklch, var(--color-text-primary) 4%, transparent);
 	box-shadow: none;
@@ -7588,18 +7793,80 @@ html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"]):
 	content: none;
 }
 
-/* Dark composer: its fill plus one faint, even hairline (a ring, so it takes
+/* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
  * no layout space and follows the corners). Light keeps its own ring and
  * shadow. */
 html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 8%, transparent);
 	transition: none;
 }
 
-/* Composer icon buttons (add, dictate, send) share the pills' corner radius
- * (the model and permission pickers beside them) instead of being circles. */
-html[data-new-desktop-ui] .cursor-chat-composer button.rounded-full {
-	border-radius: var(--radius-lg);
+/* With the New Chat tray under it, the composer and the tray read as one
+ * shape with one edge: the composer's bottom edge breaks where the tray
+ * hangs, and the tray's sides flow out of the break through two small
+ * fillets. The tray sits one fillet lower and far enough in that the fillets
+ * start where the composer's corners end; its total height is unchanged. */
+html[data-new-desktop-ui]:not([data-theme="light"]) :is([data-composer-tray], .chat-composer-tray) {
+	--composer-merge-fillet: 6px;
+	--composer-merge-edge: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+	--composer-merge-fill: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-composer-tray] .cursor-chat-composer {
+	box-shadow: none;
+}
+
+/* The outline, with the break in its bottom edge. */
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-composer-tray] .cursor-chat-composer::after {
+	content: "";
+	position: absolute;
+	inset: -1px;
+	border: 1px solid var(--composer-merge-edge);
+	border-radius: calc(var(--radius-chat-composer) + 1px);
+	pointer-events: none;
+	mask:
+		linear-gradient(#000 0 0),
+		linear-gradient(#000 0 0) 50% 100% / calc(100% - 2px - 2 * var(--radius-chat-composer)) 1px no-repeat;
+	mask-composite: exclude;
+}
+
+/* The fillets, and the tray's fill between them, in the one-fillet band
+ * between the composer and the tray. */
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-composer-tray] .cursor-chat-composer::before {
+	--f: var(--composer-merge-fillet);
+	content: "";
+	position: absolute;
+	top: 100%;
+	left: var(--radius-chat-composer);
+	right: var(--radius-chat-composer);
+	height: var(--f);
+	pointer-events: none;
+	background:
+		radial-gradient(circle at 0 100%, transparent calc(var(--f) - 1.25px), var(--composer-merge-edge) calc(var(--f) - 0.75px), var(--composer-merge-edge) calc(var(--f) - 0.25px), var(--composer-merge-fill) calc(var(--f) + 0.25px)) 0 0 / var(--f) var(--f) no-repeat,
+		radial-gradient(circle at 100% 100%, transparent calc(var(--f) - 1.25px), var(--composer-merge-edge) calc(var(--f) - 0.75px), var(--composer-merge-edge) calc(var(--f) - 0.25px), var(--composer-merge-fill) calc(var(--f) + 0.25px)) 100% 0 / var(--f) var(--f) no-repeat,
+		linear-gradient(var(--composer-merge-fill), var(--composer-merge-fill)) var(--f) 0 / calc(100% - 2 * var(--f)) var(--f) no-repeat;
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .chat-composer-tray {
+	margin: calc(-0.5rem + var(--composer-merge-fillet)) calc(var(--radius-chat-composer) + var(--composer-merge-fillet) - 1px) 0;
+	border: 1px solid var(--composer-merge-edge);
+	border-top: 0;
+	padding: calc(var(--tray-inset) - var(--composer-merge-fillet)) calc(var(--tray-inset) - 1px) calc(var(--tray-inset) - 1px);
+	background: var(--composer-merge-fill);
+	background-clip: padding-box;
+}
+
+/* Controls share the centre panel's corner radius: buttons, inputs, select
+ * triggers, top-bar tab pills and split buttons, and the composer's pickers
+ * and icon buttons (add, dictate, send; circles otherwise). */
+html[data-new-desktop-ui] {
+	--radius-control: var(--radius-center-panel);
+	--radius-topbar-control: var(--radius-center-panel);
+}
+
+html[data-new-desktop-ui] .cursor-chat-composer button:is(.rounded-full, .rounded-lg),
+html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::before {
+	border-radius: var(--radius-control);
 }
 
 /* Sidebar row actions (project and session rows, section "+") get no hover,

@@ -33,6 +33,7 @@ export function CenterPanelShell({
 	topbar?: boolean;
 }) {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
+	const newDesktopUi = useUiStore((state) => state.newDesktopUi);
 	const isFullScreen = useWindowFullScreen();
 	const isMac = isMacPlatform();
 	const isLinux = isLinuxPlatform();
@@ -45,6 +46,10 @@ export function CenterPanelShell({
 	// On macOS the top bar floats on the window chrome, except in native fullscreen.
 	const floatingTopbar = align && !isFullScreen;
 	const bare = floatingTopbar && !reservesTopbarBand;
+	// Interface v2 draws a bare panel with the floating bar's frame too, its top
+	// at the window inset, so opening or closing the sidebar only slides the top
+	// edge instead of swapping frames.
+	const floatingFrame = floatingTopbar && (reservesTopbarBand || newDesktopUi);
 	// Tabs are pills on every macOS panel, whatever its band, so no frame can
 	// draw them in the other platforms' flat strip.
 	const pillTabs = align;
@@ -55,7 +60,7 @@ export function CenterPanelShell({
 				"center-panel-shell",
 				align && "center-panel-shell--mac",
 				// The top bar floats on the window chrome; the panel starts below it.
-				floatingTopbar && reservesTopbarBand && "center-panel-shell--floating-topbar",
+				floatingFrame && "center-panel-shell--floating-topbar",
 				bare && "center-panel-shell--bare",
 				pillTabs && "center-panel-shell--tab-pills",
 				titlebarClearance && "center-panel-shell--titlebar-clearance",

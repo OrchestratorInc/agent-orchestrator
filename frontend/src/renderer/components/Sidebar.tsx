@@ -766,9 +766,12 @@ export const Sidebar = memo(function Sidebar({
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
+	// Interface v2 collapses to a rail of the nav buttons; the lists fade away.
+	const newDesktopUi = useUiStore((s) => s.newDesktopUi);
+	const collapsible = newDesktopUi ? "rail" : SIDEBAR_COLLAPSIBLE;
 	// List behavior (force-open sections, lifted Show more caps) belongs to the
 	// icon rail only; toggling an offcanvas sidebar must not change any list.
-	const isIconRail = isCollapsed && SIDEBAR_COLLAPSIBLE === "icon";
+	const isIconRail = isCollapsed && collapsible === "icon";
 	useTelemetrySurface("sidebar", !isCollapsed || isIconRail);
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
 	// One IPC subscription for both footer variants of the restart-to-update prompt.
@@ -1102,7 +1105,7 @@ export const Sidebar = memo(function Sidebar({
 	return (
 		// Pinned sidebars start below shell chrome.
 		<SidebarRoot
-			collapsible={SIDEBAR_COLLAPSIBLE}
+			collapsible={collapsible}
 			resizeScopeRef={resizeScopeRef}
 			data-telemetry-surface="sidebar"
 			data-expanded-chrome={expandedChromeVisible ? "visible" : "hidden"}
@@ -1173,7 +1176,7 @@ export const Sidebar = memo(function Sidebar({
 			) : (
 			<>
 			{/* Keep Search + section chrome fixed above the scrollable sidebar content. */}
-			<div className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
+			<div data-sidebar-topnav="" className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
 				{commandPaletteEnabled ? (
 					<SidebarGroup className="p-0 pb-0.5 group-data-[collapsible=icon]:pb-1">
 						<SidebarGroupContent>
@@ -1215,7 +1218,12 @@ export const Sidebar = memo(function Sidebar({
 				</SidebarMenu>
 			</div>
 
-			<SidebarContent className="scrollbar-none gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
+			<SidebarContent
+				aria-hidden={(isCollapsed && collapsible === "rail") || undefined}
+				inert={isCollapsed && collapsible === "rail"}
+				data-sidebar-sections=""
+				className="scrollbar-none gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5"
+			>
 				<SidebarGroup className="min-h-0 flex-1 p-0">
 					{/* Tree (project-sidebar__tree) */}
 					<SidebarGroupContent
@@ -1374,6 +1382,7 @@ export const Sidebar = memo(function Sidebar({
 					// before the slide finishes. aria-hidden and tabIndex -1 already keep it
 					// out of reach while collapsed.
 					hidden={isIconRail}
+					data-sidebar-footer-expanded=""
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col"
 				>
 					<div className={FOOTER_UPDATES_CLASS}>
@@ -1414,6 +1423,7 @@ export const Sidebar = memo(function Sidebar({
 				{!settingsPage ? (
 					<div
 						aria-hidden={!isCollapsed || undefined}
+						data-sidebar-rail-footer=""
 						className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
 					>
 						<SidebarUpdateRail
@@ -1458,6 +1468,33 @@ export const Sidebar = memo(function Sidebar({
 								</Pressable>
 							</TooltipTrigger>
 							<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
+						</Tooltip>
+					</div>
+				) : collapsible === "rail" ? (
+					// Settings in the rail: the expanded Back row fades with the labels,
+					// so the rail keeps a Back icon in the same bottom slot.
+					<div
+						aria-hidden={!isCollapsed || undefined}
+						data-sidebar-rail-footer=""
+						className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex flex-col items-center justify-end opacity-0 transition-opacity duration-150 ease-out"
+					>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									aria-label={t("settings.back")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									disabled={settingsPage.cueBusy}
+									onClick={settingsPage.close}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<ArrowLeft aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="right">{t("settings.back")}</TooltipContent>
 						</Tooltip>
 					</div>
 				) : null}
@@ -3714,7 +3751,7 @@ function SidebarTopNavRow({
 export function SettingsSidebarNav({ layer }: { layer: NonNullable<ReturnType<typeof useSettingsPage>> }) {
 	const { t } = useTranslation();
 	return (
-		<SidebarContent className="scrollbar-none gap-0 px-2">
+		<SidebarContent className="scrollbar-none gap-0 px-2" data-sidebar-settings-nav="">
 			<SidebarGroup className="p-0">
 				<SidebarGroupContent>
 					<SidebarMenu aria-label={t("settings.navSectionsAria")} className="gap-0.5" role="navigation">

@@ -10,7 +10,7 @@ import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type Rea
 import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { shellPanelTransition } from "@/lib/motion-spring";
 import { MainViewVisibleContext } from "../lib/main-view-visibility";
 import { CommandPalette } from "../components/CommandPalette";
 import { useLatestCallback } from "../hooks/useStable";
@@ -1841,7 +1841,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								// so a var fallback wider than the sidebar would cover the panel.
 								style={sidebarWidthPx ? { width: sidebarWidthPx } : undefined}
 								initial={false}
-								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
+								transition={prefersReducedMotion ? { duration: 0 } : shellPanelTransition(newDesktopUi)}
 							/>
 						</div>
 					) : null}

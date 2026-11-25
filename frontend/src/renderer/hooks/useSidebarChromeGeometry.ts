@@ -1,10 +1,12 @@
 import { useCallback, useLayoutEffect, useRef, type RefCallback, type RefObject } from "react";
 import { isMacPlatform } from "../lib/platform";
 
-export type SidebarChromeGeometry = { width: number; progress: number };
+/** `rail`: 0 open to 1 at the rail, set only for a sidebar that collapses to one. */
+export type SidebarChromeGeometry = { width: number; progress: number; rail?: number };
 
 const WIDTH_VAR = "--ao-sidebar-layout-width";
 const PROGRESS_VAR = "--ao-sidebar-collapse-progress";
+const RAIL_VAR = "--ao-sidebar-rail-progress";
 
 // The sidebar animates its layout width every frame. Publishing that on <html>
 // restyled the whole document each frame, so the value lives in this tiny store
@@ -18,7 +20,7 @@ export function getSidebarChromeGeometry(): SidebarChromeGeometry | null {
 
 export function setSidebarChromeGeometry(next: SidebarChromeGeometry | null): void {
 	if (next === current) return;
-	if (next && current && next.width === current.width && next.progress === current.progress) return;
+	if (next && current && next.width === current.width && next.progress === current.progress && next.rail === current.rail) return;
 	current = next;
 	for (const listener of [...listeners]) listener(next);
 }
@@ -35,7 +37,11 @@ function collapseProgress(width: number, expandedWidth: number): number {
 }
 
 /** Share the sidebar's actual animated layout with the fixed native chrome. */
-export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLDivElement | null>, containerRef: RefObject<HTMLDivElement | null>): void {
+/**
+ * `rail`: the collapsed sidebar keeps a rail, so the gap's width alone says how
+ * far the panel's chrome must clear the native buttons; progress stays 0.
+ */
+export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLDivElement | null>, containerRef: RefObject<HTMLDivElement | null>, rail = false): void {
 	useLayoutEffect(() => {
 		if (!ready || !isMacPlatform()) return;
 		const gap = gapRef.current;
@@ -45,7 +51,11 @@ export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLD
 		// update comes from ResizeObserver entry sizes, which carry no forced layout.
 		let width = gap.getBoundingClientRect().width;
 		let expandedWidth = container.getBoundingClientRect().width;
-		const publish = () => setSidebarChromeGeometry({ width, progress: collapseProgress(width, expandedWidth) });
+		// The rail's width is a registered <length>, so this reads as pixels.
+		const railWidth = rail ? Number.parseFloat(getComputedStyle(gap).getPropertyValue("--sidebar-width-rail")) || 0 : 0;
+		const railProgress = () => (expandedWidth > railWidth ? Math.max(0, Math.min(1, (expandedWidth - width) / (expandedWidth - railWidth))) : 1);
+		const publish = () =>
+			setSidebarChromeGeometry(rail ? { width, progress: 0, rail: railProgress() } : { width, progress: collapseProgress(width, expandedWidth) });
 		publish();
 		const observer = new ResizeObserver((entries) => {
 			for (const entry of entries) {
@@ -61,7 +71,7 @@ export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLD
 			observer.disconnect();
 			setSidebarChromeGeometry(null);
 		};
-	}, [ready, gapRef, containerRef]);
+	}, [ready, gapRef, containerRef, rail]);
 }
 
 /**
@@ -81,9 +91,12 @@ export function useSidebarChromeClearanceRef<T extends HTMLElement>(enabled = tr
 				if (geometry) {
 					element.style.setProperty(WIDTH_VAR, `${geometry.width}px`);
 					element.style.setProperty(PROGRESS_VAR, String(geometry.progress));
+					if (geometry.rail === undefined) element.style.removeProperty(RAIL_VAR);
+					else element.style.setProperty(RAIL_VAR, String(geometry.rail));
 				} else {
 					element.style.removeProperty(WIDTH_VAR);
 					element.style.removeProperty(PROGRESS_VAR);
+					element.style.removeProperty(RAIL_VAR);
 				}
 			};
 			apply(current);

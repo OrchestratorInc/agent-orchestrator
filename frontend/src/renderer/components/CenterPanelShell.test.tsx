@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockIsMac = vi.hoisted(() => vi.fn(() => false));
 const mockIsLinux = vi.hoisted(() => vi.fn(() => false));
 const mockIsFullScreen = vi.hoisted(() => vi.fn(() => false));
-const uiState = vi.hoisted(() => ({ isSidebarOpen: true }));
+const uiState = vi.hoisted(() => ({ isSidebarOpen: true, newDesktopUi: false }));
 vi.mock("../lib/platform", () => ({
 	isMacPlatform: mockIsMac,
 	isLinuxPlatform: mockIsLinux,
@@ -14,7 +14,7 @@ vi.mock("../hooks/useWindowFullScreen", () => ({ useWindowFullScreen: mockIsFull
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button">Notifications</button> }));
 vi.mock("../stores/ui-store", () => ({
 	sidebarOccupiesLayout: (state: { isSidebarOpen: boolean }) => state.isSidebarOpen,
-	useUiStore: (sel: (s: { isSidebarOpen: boolean }) => unknown) => sel(uiState),
+	useUiStore: (sel: (s: { isSidebarOpen: boolean; newDesktopUi: boolean }) => unknown) => sel(uiState),
 }));
 
 const { CenterPanelShell } = await import("./CenterPanelShell");
@@ -25,6 +25,7 @@ describe("CenterPanelShell platform classes", () => {
 		mockIsLinux.mockReturnValue(false);
 		mockIsFullScreen.mockReturnValue(false);
 		uiState.isSidebarOpen = true;
+		uiState.newDesktopUi = false;
 	});
 
 	it("applies center-panel-shell--mac on macOS", () => {
@@ -85,6 +86,14 @@ describe("CenterPanelShell platform classes", () => {
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(true);
 		// A session arriving in this panel never draws its tabs as the flat strip.
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--tab-pills")).toBe(true);
+	});
+
+	it("keeps the floating frame on a bare panel under Interface v2, so the sidebar toggle only slides its top", () => {
+		mockIsMac.mockReturnValue(true);
+		uiState.newDesktopUi = true;
+		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(true);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(true);
 	});
 
 	it("keeps the band for a page without a top bar while the sidebar is closed", () => {
