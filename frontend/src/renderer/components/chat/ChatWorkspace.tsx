@@ -6499,6 +6499,7 @@ const TurnGroup = memo(function TurnGroup({
 					: undefined
 			}
 			rollbackDisabled={rollbackDisabled}
+			retry={run.items[0]?.id === copyableMessageId ? compactionRetry : undefined}
 			onSelectAnnotation={onSelectAnnotation}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
@@ -6681,7 +6682,8 @@ const TurnGroup = memo(function TurnGroup({
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
 			    it on its outcome's row instead. One whose compaction row already said
-			    why it failed has no outcome, so its Retry is here too. */}
+			    why it failed has no outcome, so its Retry is here too, or on its
+			    answer's row when it has one. */}
 			{!copyableMessageId && !group.live && !endsWithOutcome && (canRollback || compactionRetry) ? (
 				<TurnActions
 					retry={compactionRetry}
@@ -6752,6 +6754,7 @@ function TimelineItem({
 	live,
 	onRollback,
 	rollbackDisabled,
+	retry,
 	onSelectAnnotation,
 	status,
 }: {
@@ -6793,6 +6796,8 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
+	/** Retry the failed turn from the answer that owns its action row. */
+	retry?: TurnOutcomeRetryControl;
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
@@ -6806,6 +6811,7 @@ function TimelineItem({
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
+					retry={retry}
 				/>
 			);
 		}

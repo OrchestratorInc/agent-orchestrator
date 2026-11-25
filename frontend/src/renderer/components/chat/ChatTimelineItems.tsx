@@ -1509,6 +1509,7 @@ export function AssistantMessage({
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
+	retry,
 }: {
 	message: ConversationMessage;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
@@ -1522,6 +1523,8 @@ export function AssistantMessage({
 	onRollback?: () => void;
 	/** Keep the rollback action mounted while another response is streaming. */
 	rollbackDisabled?: boolean;
+	/** Retry the failed turn this answer closes, when nothing below it offers that. */
+	retry?: TurnOutcomeRetryControl;
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
@@ -1531,7 +1534,8 @@ export function AssistantMessage({
 	// when the turn settles, so nothing moves.
 	const copyReady = showCopy && !message.streaming && !live;
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
-	const showActions = copyReady || rollbackReady;
+	const retryReady = Boolean(retry) && !live && !renderingStreaming;
+	const showActions = copyReady || rollbackReady || retryReady;
 	return (
 		<div
 			className="group/message relative"
@@ -1548,6 +1552,7 @@ export function AssistantMessage({
 				// visible; only the wall-clock time reveals on hover.
 				<TurnActions
 					className="mt-1"
+					retry={retryReady ? retry : undefined}
 					copyText={copyReady ? message.text : undefined}
 					onRollback={rollbackReady ? onRollback : undefined}
 					rollbackDisabled={rollbackDisabled}

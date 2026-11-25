@@ -6409,6 +6409,52 @@ func TestACPCompactionOutcomeOnlyWaitsForANewerFigure(t *testing.T) {
 	}
 }
 
+// An attachment that reconnects to a running turn gets that turn's updates
+// replayed, but not a context figure from an earlier turn. Each update must
+// still emit the same events as it did the first time, since the store knows a
+// replayed event by its update and its place among that update's events.
+func TestACPReplayedCompactionUpdatesEmitTheSameEvents(t *testing.T) {
+	type step struct {
+		usage  int64
+		report CompactionReport
+	}
+	steps := []step{
+		{report: CompactionReport{Status: "started"}},
+		{usage: 24000},
+		{report: CompactionReport{Status: "completed"}},
+		{report: CompactionReport{Status: "started"}},
+		{report: CompactionReport{Status: "failed", Reason: "Conversation too long"}},
+	}
+	replay := func(c *conversation) [][]string {
+		var updates [][]string
+		for _, step := range steps {
+			var events []string
+			emit := func(event ports.ChatEvent) {
+				events = append(events, event.ProviderItemID+" "+string(event.ActivityStatus))
+			}
+			if step.usage > 0 {
+				// As the client handles a token report.
+				c.trackContext("running", step.usage, 200000)
+				c.settleFinishedCompaction(emit)
+			} else {
+				c.reportCompaction("running", step.report, emit)
+			}
+			updates = append(updates, events)
+		}
+		return updates
+	}
+	first := &conversation{}
+	first.trackContext("earlier", 180000, 200000)
+	live := replay(first)
+	replayed := replay(&conversation{})
+	if !reflect.DeepEqual(replayed, live) {
+		t.Fatalf("replayed updates emit %q, want %q as they did live", replayed, live)
+	}
+	if last := live[len(live)-1]; len(last) != 1 || last[0] != "compaction:running:2 failed" {
+		t.Fatalf("failure settled %q, want the second compaction's row", last)
+	}
+}
+
 // A compaction that starts while a finished one still waits for its figure is a
 // second compaction: the first settles, and the second runs on its own row.
 func TestACPNextCompactionStartSettlesTheFinishedOne(t *testing.T) {

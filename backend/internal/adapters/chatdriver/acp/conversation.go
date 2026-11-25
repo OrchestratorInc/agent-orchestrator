@@ -316,6 +316,8 @@ type conversation struct {
 	// usageReports counts the agent's token reports, so a finished compaction
 	// can tell whether a newer context figure arrived.
 	usageReports int
+	// contextTurn is the turn the latest context figure was reported in.
+	contextTurn string
 
 	claudeRejectedLimits map[string]time.Time
 
@@ -1551,6 +1553,11 @@ type providerCompaction struct {
 	turnID string
 	itemID string
 	before int64
+	// measured is set when before was reported inside this turn. Only such a
+	// figure decides when the compaction settles: an attachment that reconnects
+	// to the turn gets the turn's updates replayed, not those of earlier turns,
+	// and must settle it on the same update, so the events it emits line up.
+	measured bool
 	// finished is set when the agent said it finished without saying what it
 	// freed. Claude reports its result just before the boundary that carries
 	// its figures. The row settles on those figures, or on the next token
@@ -1660,12 +1667,14 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 			return true
 		}
 		open = &providerCompaction{
-			turnID: turnID,
-			itemID: c.nextProviderCompactionIDLocked(turnID),
-			before: c.contextTokens,
+			turnID:   turnID,
+			itemID:   c.nextProviderCompactionIDLocked(turnID),
+			before:   c.contextTokens,
+			measured: c.contextTurn == turnID && c.contextTokens > 0,
 		}
 		if report.TokensBefore > 0 {
 			open.before = report.TokensBefore
+			open.measured = true
 		}
 		c.providerCompaction = open
 		c.settledCompaction = nil
@@ -1782,10 +1791,16 @@ func (c *conversation) nextProviderCompactionIDLocked(turnID string) string {
 	return c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions))
 }
 
-// contextDroppedSince reports whether the agent's context figure is already
-// below where the compaction started. c.mu must be held.
+// contextDroppedSince reports whether the agent's context figure, measured in
+// this turn, is already below where the compaction started. c.mu must be held.
 func (c *conversation) contextDroppedSince(open *providerCompaction) bool {
-	return c.contextTokens > 0 && c.contextTokens < open.before
+	return open.measured && c.contextBelow(open.before)
+}
+
+// contextBelow reports whether the latest context figure is below before.
+// c.mu must be held.
+func (c *conversation) contextBelow(before int64) bool {
+	return c.contextTokens > 0 && c.contextTokens < before
 }
 
 // settleFinishedCompaction settles a compaction that finished without saying
@@ -1803,8 +1818,9 @@ func (c *conversation) settleFinishedCompaction(emit func(ports.ChatEvent)) {
 	// figures that still follow reach this row instead of opening another.
 	c.settledCompaction = open
 	after, window := c.contextTokens, c.contextWindow
-	if c.usageReports == open.usageAtFinish {
-		// Nothing newer than the finish: the figure is from before it.
+	if c.usageReports == open.usageAtFinish && !c.contextBelow(open.before) {
+		// Nothing newer than the finish, and nothing lower than the start: the
+		// figure is from before it.
 		after = 0
 	}
 	c.mu.Unlock()
@@ -1838,11 +1854,12 @@ func compactionFigures(before, after, window int64) []byte {
 	return encoded
 }
 
-func (c *conversation) trackContext(used, window int64) {
+func (c *conversation) trackContext(turnID string, used, window int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.usageReports++
 	c.contextTokens = used
+	c.contextTurn = turnID
 	if window > 0 {
 		c.contextWindow = window
 	}

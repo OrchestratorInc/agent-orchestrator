@@ -906,7 +906,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		// when its configuration changes, so retaining absent entries is wrong.
 		c.replaceAvailableCommands(update.AvailableCommandsUpdate.AvailableCommands)
 	case update.UsageUpdate != nil:
-		c.trackContext(int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
+		c.trackContext(turnID, int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
 		c.settleFinishedCompaction(emit)
 		usage := &ports.ChatUsage{
 			ContextUsed: int64(update.UsageUpdate.Used), ContextWindow: int64(update.UsageUpdate.Size),

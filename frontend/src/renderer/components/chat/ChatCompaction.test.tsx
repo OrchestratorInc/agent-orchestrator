@@ -273,6 +273,35 @@ describe("a compaction under way", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
 		expect(onRetry).toHaveBeenCalledWith(failedTurn);
 	});
+
+	it("offers that Retry on the answer's row when the turn wrote one", async () => {
+		const failedTurn = "worked-then-failed";
+		const asked: ConversationItem = {
+			kind: "message", id: "asked", turnId: failedTurn, sequence: 2, revision: 0,
+			role: "user", origin: "human", text: "Read the remaining API handlers", streaming: false, createdAt: at,
+		};
+		const wrote: ConversationItem = { ...assistantSaid, id: "wrote", turnId: failedTurn, sequence: 3, text: "Next I'll read the orders route." };
+		const failed = compaction({
+			id: "cc-failed", turnId: failedTurn, sequence: 4, status: "failed",
+			detail: { event: "compaction", error: "Conversation too long" },
+		});
+		const onRetry = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([assistantSaid, asked, wrote, failed], [{
+					id: failedTurn, providerTurnId: "provider-worked", state: "failed",
+					requestedAt: at, startedAt: at, completedAt: at, errorMessage: "Conversation too long",
+				}])}
+				retryControl={{ retry: onRetry }}
+			/>,
+		);
+
+		expect(screen.getAllByText("Conversation too long")).toHaveLength(1);
+		const retry = screen.getAllByRole("button", { name: "Retry this turn" });
+		expect(retry).toHaveLength(1);
+		await userEvent.click(retry[0]!);
+		expect(onRetry).toHaveBeenCalledWith(failedTurn);
+	});
 });
 
 describe("the compact control", () => {
