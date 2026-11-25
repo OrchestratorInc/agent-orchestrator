@@ -34,12 +34,12 @@ const buttonVariants = cva(
 		variants: {
 			variant: {
 				/** The one main action in a region. Accent fill. */
-				primary: "button-raised button-emphasis [--button-color:var(--primary)] text-primary-foreground",
+				primary: "button-raised button-classic button-classic-contrast button-emphasis [--button-color:var(--primary)] text-primary-foreground",
 				/** Brand-blue fill for a decision the turn is waiting on (approve, open link). */
-				accent: "button-raised button-emphasis [--button-color:var(--color-brand-logo)] text-logo-accent-foreground",
+				accent: "button-raised button-classic button-emphasis [--button-color:var(--color-brand-logo)] text-logo-accent-foreground",
 				/** Quiet filled surface for secondary actions. */
 				secondary:
-					"button-raised [--button-color:var(--secondary)] text-secondary-foreground",
+					"button-raised button-classic [--button-color:var(--secondary)] text-secondary-foreground",
 				/** Contrast fallback only — prefer secondary. */
 				outline:
 					"border-border bg-background text-foreground hover:bg-muted aria-expanded:bg-muted aria-expanded:text-foreground dark:bg-transparent dark:hover:bg-input/30 active:bg-interactive-active dark:active:bg-interactive-active",

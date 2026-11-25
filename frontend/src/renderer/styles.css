@@ -2253,6 +2253,95 @@ textarea,
 	border-bottom-left-radius: var(--tree-elbow);
 }
 
+/* The same tree rail for nested lists in the chat (Interface v2): the calls in
+   an open tool-call group, related-call subgroups, a subagent's steps and the
+   background updates list. Rows there open in place, so the rail cannot be
+   painted once by the list like the sidebar's: each direct child paints its own
+   piece of the spine (bridging the gap above it) and its arm at its header's
+   centre, and the last child turns the spine into its arm with one rounded
+   elbow. The list sets where the spine sits (--chat-tree-x, from its left
+   edge), its children's header centre (--chat-tree-head) and their gap. */
+html[data-new-desktop-ui] .chat-tree {
+	--chat-tree-x: 4px;
+	--chat-tree-head: calc(var(--spacing) * 0.5 + var(--text-xs) * 2 / 3);
+	--chat-tree-gap: calc(var(--spacing) * 1);
+	--chat-tree-stroke: 1.5px;
+	--chat-tree-arm: 8px;
+	--chat-tree-fillet: 2px;
+	--chat-tree-elbow: 5px;
+	--chat-tree-indent: calc(var(--chat-tree-x) + var(--chat-tree-arm) + 4px);
+	--chat-tree-line: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
+	margin-left: 0;
+	border-left: 0;
+	padding-left: var(--chat-tree-indent);
+}
+
+html[data-new-desktop-ui] .chat-tree > * {
+	position: relative;
+}
+
+html[data-new-desktop-ui] .chat-tree > *::before,
+html[data-new-desktop-ui] .chat-tree > *::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The spine beside a child that has siblings below it. */
+html[data-new-desktop-ui] .chat-tree > :not(:last-child)::before {
+	top: calc(-1 * var(--chat-tree-gap));
+	bottom: 0;
+	left: calc(var(--chat-tree-x) - var(--chat-tree-indent) - var(--chat-tree-stroke) / 2);
+	width: var(--chat-tree-stroke);
+	background: var(--chat-tree-line);
+}
+
+/* Its arm, with a concave fillet above and below where it leaves the spine. */
+html[data-new-desktop-ui] .chat-tree > :not(:last-child)::after {
+	top: calc(var(--chat-tree-head) - var(--chat-tree-stroke) / 2 - var(--chat-tree-fillet));
+	left: calc(var(--chat-tree-x) - var(--chat-tree-indent) + var(--chat-tree-stroke) / 2);
+	width: calc(var(--chat-tree-arm) - var(--chat-tree-stroke) / 2);
+	height: calc(var(--chat-tree-stroke) + var(--chat-tree-fillet) * 2);
+	background:
+		radial-gradient(circle at 100% 0, transparent calc(var(--chat-tree-fillet) - 0.5px), var(--chat-tree-line) var(--chat-tree-fillet))
+			0 0 / var(--chat-tree-fillet) var(--chat-tree-fillet) no-repeat,
+		radial-gradient(circle at 100% 100%, transparent calc(var(--chat-tree-fillet) - 0.5px), var(--chat-tree-line) var(--chat-tree-fillet))
+			0 100% / var(--chat-tree-fillet) var(--chat-tree-fillet) no-repeat,
+		linear-gradient(var(--chat-tree-line), var(--chat-tree-line)) 0 50% / 100% var(--chat-tree-stroke) no-repeat;
+}
+
+/* The last child: the spine runs down to its header and turns into its arm. */
+html[data-new-desktop-ui] .chat-tree > :last-child::before {
+	top: calc(-1 * var(--chat-tree-gap));
+	left: calc(var(--chat-tree-x) - var(--chat-tree-indent) - var(--chat-tree-stroke) / 2);
+	width: calc(var(--chat-tree-arm) + var(--chat-tree-stroke) / 2);
+	height: calc(var(--chat-tree-gap) + var(--chat-tree-head) + var(--chat-tree-stroke) / 2);
+	border-left: var(--chat-tree-stroke) solid var(--chat-tree-line);
+	border-bottom: var(--chat-tree-stroke) solid var(--chat-tree-line);
+	border-bottom-left-radius: var(--chat-tree-elbow);
+}
+
+html[data-new-desktop-ui] .chat-tree > :last-child::after {
+	display: none;
+}
+
+/* The first child's spine starts at the list's top edge, not above it. */
+html[data-new-desktop-ui] .chat-tree > :first-child::before {
+	top: 0;
+}
+
+html[data-new-desktop-ui] .chat-tree > :first-child:last-child::before {
+	height: calc(var(--chat-tree-head) + var(--chat-tree-stroke) / 2);
+}
+
+/* Background updates: the spine drops from the header's 14px icon, and each
+   row's 28px header takes the arm. */
+html[data-new-desktop-ui] .chat-tree.chat-tree-updates {
+	--chat-tree-x: 7px;
+	--chat-tree-head: calc(var(--spacing) * 3.5);
+	--chat-tree-gap: 0px;
+}
+
 /* The live row's label (current step, retry chip, setup label) fades in once when the
    row changes what it is showing; the text inside then updates in place. */
 .chat-live-label {
@@ -7335,7 +7424,153 @@ html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-ov
  * Hover and press still deepen the face. */
 html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
 	border-color: color-mix(in oklch, var(--color-text-primary) 2%, transparent);
+	background-image: none;
 	box-shadow: none;
+}
+
+/* Filled buttons. Primary, accent and secondary (`button-classic`) are the
+ * Radix Themes classic button (@radix-ui/themes 3.3.0,
+ * src/components/_internal/base-button.css, MIT, Copyright (c) 2023 WorkOS),
+ * with its slate, black and white alpha scales (@radix-ui/colors 3.0.0)
+ * inlined. Accent and secondary are the plain classic button with the
+ * variant's fill as `--accent-9`; primary (near white in dark, near black in
+ * light) is its high-contrast form, with the fill as `--accent-12`. Radix's
+ * one-step hover colour (`--accent-10`) is the fill 6% towards the contrast
+ * end. The 1px border is dropped (the classic button draws its edge as an
+ * inset ring); heights are fixed, so only the width loses 2px. Every other
+ * filled button (destructive, triggers, ad hoc raised controls) is flat: its
+ * face and a faint edge. */
+html[data-new-desktop-ui] .button-raised:not(.button-classic) {
+	border-color: color-mix(in oklch, var(--color-text-primary) 4%, transparent);
+	box-shadow: none;
+}
+
+html[data-new-desktop-ui] .button-classic {
+	--accent-9: var(--button-color);
+	--accent-10: color-mix(in oklab, var(--button-color), #000 6%);
+	--gray-a2: #00005506;
+	--gray-a3: #0000330f;
+	--gray-a4: #00002d17;
+	--gray-a5: #0009321f;
+	--gray-a7: #00062e32;
+	--rx-classic-after-inset: 2px;
+	--rx-classic-shadow-top:
+		inset 0 0 0 1px var(--gray-a4),
+		inset 0 -2px 1px var(--gray-a3);
+	--rx-classic-shadow-bottom:
+		inset 0 4px 2px -2px #ffffffb3,
+		inset 0 2px 1px -1px #ffffffb3;
+	--rx-classic-hc-hover-filter: contrast(0.88) saturate(1.1) brightness(1.1);
+	--rx-classic-hc-active-filter: contrast(0.82) saturate(1.2) brightness(1.16);
+	--rx-classic-active-padding-top: 1px;
+	position: relative;
+	z-index: 0;
+	border-width: 0;
+	background-color: var(--accent-9);
+	background-image:
+		linear-gradient(to bottom, transparent 50%, var(--gray-a4)),
+		linear-gradient(to bottom, transparent 50%, var(--accent-9) 80%);
+	box-shadow:
+		var(--rx-classic-shadow-top),
+		inset 0 0 0 1px var(--accent-9),
+		var(--rx-classic-shadow-bottom);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-classic {
+	--accent-10: color-mix(in oklab, var(--button-color), #fff 6%);
+	--gray-a2: #d8f4f609;
+	--gray-a3: #ddeaf814;
+	--gray-a4: #d3edf81d;
+	--gray-a5: #d9edfe25;
+	--gray-a7: #d9edff40;
+	--rx-classic-after-inset: 1px;
+	--rx-classic-shadow-top:
+		inset 0 0 0 1px #ffffff1a,
+		inset 0 4px 2px -2px #ffffff26,
+		inset 0 1px 1px #fff6,
+		inset 0 -1px 1px #0006;
+	--rx-classic-shadow-bottom: 0 0 transparent;
+	--rx-classic-hc-hover-filter: contrast(0.88) saturate(1.3) brightness(1.14);
+	--rx-classic-hc-active-filter: brightness(0.95) saturate(1.2);
+}
+
+html[data-new-desktop-ui] .button-classic::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	border-radius: inherit;
+	pointer-events: none;
+	border: var(--rx-classic-after-inset) solid transparent;
+	background-clip: content-box;
+	background-color: inherit;
+	background-image: linear-gradient(#0000000d, transparent, #ffffff1a);
+	box-shadow: inset 0 2px 3px -1px #fff3;
+}
+
+html[data-new-desktop-ui] .button-classic-contrast::after {
+	background-image: linear-gradient(#00000026, transparent, #ffffff1a);
+}
+
+@media (hover: hover) {
+	html[data-new-desktop-ui] .button-classic:not(.button-classic-contrast):hover:not(:disabled, [aria-disabled="true"])::after {
+		background-color: var(--accent-10);
+		background-image: linear-gradient(#0000001a -15%, transparent, #ffffff26);
+	}
+
+	html[data-new-desktop-ui] .button-classic-contrast:hover:not(:disabled, [aria-disabled="true"]) {
+		filter: var(--rx-classic-hc-hover-filter);
+	}
+
+	html[data-new-desktop-ui] .button-classic-contrast:hover:not(:disabled, [aria-disabled="true"])::after {
+		background-color: var(--accent-9);
+		background-image: linear-gradient(#0000004d, transparent, #ffffff1a);
+	}
+}
+
+html[data-new-desktop-ui] .button-classic:not(.button-classic-contrast)[data-state="open"]::after {
+	background-color: var(--accent-10);
+	background-image: linear-gradient(#0000001a -15%, transparent, #ffffff26);
+}
+
+html[data-new-desktop-ui] .button-classic:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"]) {
+	background-color: var(--accent-9);
+	background-image: linear-gradient(#0000000d, transparent);
+	padding-top: var(--rx-classic-active-padding-top);
+	box-shadow:
+		inset 0 4px 2px -2px var(--gray-a4),
+		inset 0 1px 1px var(--gray-a7),
+		inset 0 0 0 1px var(--gray-a5),
+		inset 0 0 0 1px var(--accent-9),
+		inset 0 3px 2px var(--gray-a3),
+		inset 0 0 0 1px #ffffff80,
+		inset 0 -2px 1px #ffffff4d;
+}
+
+html[data-new-desktop-ui] .button-classic:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"])::after {
+	box-shadow: none;
+	background-color: inherit;
+	background-image: linear-gradient(#0000001a, transparent, #ffffff26);
+}
+
+/* Radix's high-contrast pressed shadow names layers it never defines, so the
+ * declaration is dropped and the pressed button has no shadow. */
+html[data-new-desktop-ui] .button-classic-contrast:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"]) {
+	filter: var(--rx-classic-hc-active-filter);
+	box-shadow: none;
+}
+
+html[data-new-desktop-ui] .button-classic-contrast:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"])::after {
+	background-image: linear-gradient(#0000004d, transparent, #ffffff26);
+}
+
+html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"]) {
+	background-image: none;
+	box-shadow: var(--rx-classic-shadow-top), var(--rx-classic-shadow-bottom);
+}
+
+html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"])::after {
+	content: none;
 }
 
 /* Dark composer: its fill plus one faint, even hairline (a ring, so it takes
