@@ -1,7 +1,7 @@
 import { LoaderCircle } from "@/components/app-icons";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderFor, agentAccountUsable, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
+import { agentAccountChoiceOption, agentAccountProviderFor, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { cloudAgentAccountName, CLOUD_ACCOUNT_SWITCH_HARNESSES, useCloudAgentAccountActions, useCloudAgentAccounts, useCloudSessionAgentAccount } from "../hooks/useCloudAgentAccounts";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -84,7 +84,7 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	const choice = useMemo<AccountChoice | undefined>(() => {
 		if (!shown || !provider) return undefined;
 		return {
-			options: options.map((option) => ({ id: option.id, label: agentAccountLabel(option, options, t), disabled: !agentAccountUsable(option) })),
+			options: options.map((option) => agentAccountChoiceOption(option, options, t)),
 			value: currentId,
 			onPick: (id) => void moveRef.current(id),
 			disabled: moving || options.length < 2,
