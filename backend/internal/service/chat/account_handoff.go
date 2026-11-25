@@ -168,9 +168,9 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 
 // MoveUsageLimitedSession starts moving a session whose resume a usage limit
 // refused to the account with the most room, reporting whether a move started.
-// A wake moves only a chat someone has open, so an event or an update never does.
+// It moves only a chat someone has open, so an event or an update never moves one.
 func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
-	if s.isWaking(id) && !s.hasChatView(id) {
+	if !s.hasChatView(id) {
 		return false
 	}
 	s.handoffMu.Lock()

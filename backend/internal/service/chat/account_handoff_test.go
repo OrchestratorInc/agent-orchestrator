@@ -542,6 +542,12 @@ func TestUsageLimitedResumeMovesToAnotherAccount(t *testing.T) {
 	ctx := context.Background()
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || hh.accounts.calls != 0 {
+		t.Fatal("moved a chat nobody has open")
+	}
+	if err := hh.svc.SetChatView(ctx, testSession, "view", true); err != nil {
+		t.Fatal(err)
+	}
 	hh.enabled.Store(false)
 	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || hh.accounts.calls != 0 {
 		t.Fatal("moved with the setting off")
