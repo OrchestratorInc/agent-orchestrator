@@ -162,21 +162,23 @@ func (f *fileStore) loadLocked(sessionID string) (map[string]persistedTaskRecord
 	return m, nil
 }
 
-// Caller holds mu.
-func (f *fileStore) pruneLocked(m map[string]persistedTaskRecord, now time.Time) {
+// Caller holds mu. Returns a pruned copy of m without mutating m.
+func (f *fileStore) pruneCopy(m map[string]persistedTaskRecord, now time.Time) map[string]persistedTaskRecord {
 	if len(m) == 0 {
-		return
+		return m
 	}
+	pruned := make(map[string]persistedTaskRecord, len(m))
 	for k, r := range m {
 		if !r.StartedAt.IsZero() && now.Sub(r.StartedAt) > maxPersistedAge {
-			delete(m, k)
+			continue
 		}
+		pruned[k] = r
 	}
-	if len(m) <= maxPersistedRecords {
-		return
+	if len(pruned) <= maxPersistedRecords {
+		return pruned
 	}
-	records := make([]persistedTaskRecord, 0, len(m))
-	for _, r := range m {
+	records := make([]persistedTaskRecord, 0, len(pruned))
+	for _, r := range pruned {
 		records = append(records, r)
 	}
 	sort.Slice(records, func(i, j int) bool {
@@ -184,8 +186,9 @@ func (f *fileStore) pruneLocked(m map[string]persistedTaskRecord, now time.Time)
 	})
 	dropCount := len(records) - maxPersistedRecords
 	for i := 0; i < dropCount; i++ {
-		delete(m, taskKey(records[i].TaskID, records[i].RunID))
+		delete(pruned, taskKey(records[i].TaskID, records[i].RunID))
 	}
+	return pruned
 }
 
 // Caller holds mu.
@@ -198,13 +201,13 @@ func (f *fileStore) saveLocked(sessionID string) error {
 	if !ok || len(m) == 0 {
 		return nil
 	}
-	f.pruneLocked(m, time.Now())
+	pruned := f.pruneCopy(m, time.Now())
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	records := make([]persistedTaskRecord, 0, len(m))
-	for _, r := range m {
+	records := make([]persistedTaskRecord, 0, len(pruned))
+	for _, r := range pruned {
 		records = append(records, r)
 	}
 	b, err := json.Marshal(records)
@@ -219,6 +222,7 @@ func (f *fileStore) saveLocked(sessionID string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	f.cache[sessionID] = pruned
 	return nil
 }
 
