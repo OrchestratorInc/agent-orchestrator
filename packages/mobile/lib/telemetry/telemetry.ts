@@ -110,6 +110,10 @@ export function createMobileTelemetry(
 	let desktopOptedOut = false;
 	let userOptedOut = false;
 	let userPreferenceKnown = !(options.awaitUserPreference ?? false);
+	// With awaitPreference, the saved (or live) desktop opt-out must be known too
+	// before anything is released: a phone opt-in made while startup storage
+	// reads are pending must not send while a saved desktop opt-out is unread.
+	let desktopPreferenceKnown = !(options.awaitPreference ?? false);
 	let blocked = options.awaitPreference ?? false;
 	let identityPending = options.awaitIdentityMigration ?? false;
 	let liveStateApplied = false;
@@ -168,6 +172,7 @@ export function createMobileTelemetry(
 
 	const setOptedOut = (next: boolean): void => {
 		desktopOptedOut = next;
+		desktopPreferenceKnown = true;
 		options.onDesktopOptOutChange?.(next);
 		if (!userPreferenceKnown) return;
 		applyOptOut(userOptedOut || desktopOptedOut);
@@ -176,6 +181,8 @@ export function createMobileTelemetry(
 	const setUserOptedOut = (next: boolean): void => {
 		userOptedOut = next;
 		userPreferenceKnown = true;
+		// Recorded now; applied once the desktop value is known (setOptedOut).
+		if (!desktopPreferenceKnown) return;
 		applyOptOut(userOptedOut || desktopOptedOut);
 	};
 
@@ -208,7 +215,7 @@ export function createMobileTelemetry(
 
 	const restoreOptOut = (saved: boolean): void => {
 		if (liveStateApplied) {
-			if (userPreferenceKnown) blocked = false;
+			if (userPreferenceKnown && desktopPreferenceKnown) blocked = false;
 			return;
 		}
 		setOptedOut(saved);
