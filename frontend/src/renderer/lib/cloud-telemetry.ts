@@ -40,7 +40,7 @@ function errorStatus(error: unknown): number | undefined {
 }
 
 /** Where a sign-in can start, for cloud_signed_in's source. Anything without a note is "other". */
-export type CloudSignInSource = "artifact_publish";
+export type CloudSignInSource = "artifact_publish" | "onboarding";
 /** A sign-in started from a source counts as one for this long. */
 const SIGN_IN_SOURCE_TTL_MS = 30 * 60_000;
 /** The source of the sign-in in progress, kept in memory only. */

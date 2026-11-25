@@ -158,9 +158,12 @@ takeover, concurrent provider changes, and worktree preservation can be handled
 together.
 
 `ao report` persists a worker-originated coordination claim before reporting
-success. Checkpoints, free-form messages, and output-only reports batch until
+success. `--note` and free-form text are each limited to 1000 characters.
+Checkpoints, free-form messages, and output-only reports batch until
 another flush or the first report's one-hour fallback. The first `--done`
-report opens a fixed five-minute settlement window. `--needs-input` delivers
+report opens a five-minute settlement window. AO tries to deliver the batch about 15
+seconds after no other worker of the project is still working, and at the
+latest when the window closes. `--needs-input` delivers
 immediately without interrupting current orchestrator work. `--stuck` requests
 an interrupt at most once per worker every three minutes and coalesces equal
 repeats. Reports route to the active project orchestrator at each attempt and
@@ -333,8 +336,10 @@ remote for them. `canonicalRepoURL` requires a valid root origin; it is not a
 workspace child allowlist. Scratch projects cannot claim PRs.
 
 For automatic attribution, workspace sessions recorded on a bare branch such as
-`ao/ws-1` or `ao/ws-1-2` can use hyphen siblings (`ao/ws-1-fix` or
-`ao/ws-1-2-fix`) in registered repositories. Keep the entire recorded branch,
+`orchestrator/ws-1` or `orchestrator/ws-1-2` can use hyphen siblings
+(`orchestrator/ws-1-fix` or `orchestrator/ws-1-2-fix`) in registered
+repositories. Sessions created before the `orchestrator/` prefix keep their
+`ao/` branches, and the same rule applies to them. Keep the entire recorded branch,
 including collision suffixes. Exact and stacked branches and `/root` slash
 siblings remain supported. Matching prefers the most specific owner and leaves
 ambiguous ownership for explicit claiming. Custom branches and single-repository

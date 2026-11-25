@@ -81,6 +81,76 @@ The daemon starts with Chat hibernation disabled; the desktop synchronizes its D
 
 ---
 
+### Session background work
+
+Background task reads cover the Chat registry, with unsupported providers reported
+as unavailable. The board
+uses one batch read; a Chat panel reads only its current controller. Reads never
+wake a hibernated session. OS processes remain separate, optional Diagnostics.
+
+| Chat transport | Source | Coverage |
+| --- | --- | --- |
+| Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
+| Codex | Paginated `thread/backgroundTerminals/list`, launch/turn completion, idle reconnect snapshots and collaboration events | Always partial: shells need launch-lifecycle evidence, and event-derived subagents may predate attachment |
+| Unreal Agent | No background mode in the pinned harness | Unavailable; Bash operations are foreground tool calls |
+| All other ACP bindings | Explicitly backgrounded tool metadata and provider-reported lifecycle events | Reported jobs; complete native inventory is not available in ACP v1 |
+
+The shared ACP path includes Cursor, OpenCode v1/v2, Droid, Kimi, Kimchi, Pi,
+OMP, Qwen, Copilot, Agy, Command Code, and DeepSeek Harness. An adapter that
+emits no background metadata or async-task events cannot expose hidden native
+jobs through ACP; a partial empty reading means no jobs **reported**, not none
+running. Partial readings may miss completions as well as starts. Do not infer
+jobs from foreground tool duration, an idle turn, output prose, or process trees.
+Advertising the Air `asyncTasks` capability is binding-specific and enabled only
+for the verified Claude binding. Other bindings can still report explicit
+background tool metadata. Session IDs are not task handles; native task handles
+and the launching tool-call identity distinguish executions. An unambiguous
+session reference can settle an already observed agent, but never creates a job.
+
+Codex command-start events establish elapsed time. A terminal whose launch ended
+but whose start event was missed has no start timestamp, so elapsed time is hidden.
+The native terminal list also contains foreground commands. A shell is reported
+and stoppable only when a read begun after its launching call or turn completed
+still lists it. Unconfirmed calls and their failures stay out of the reading.
+An overlapping read cannot use a completion that arrived after it began. Settled
+history can recover matching launch evidence after attachment. On live host
+reconnect, background reads also recover terminals whose runtime item IDs or exit
+codes do not match replayed history, or whose commands are absent from history.
+For these unmatched terminals, `thread/read` must show an idle thread both before
+and after the complete terminal inventory, with unchanged turn IDs. A foreground
+turn starting during the read, even if it finishes before the second snapshot,
+invalidates that bracket. Unsettled or malformed reads remain retryable; recovery
+stops fetching history after a stable idle bracket. These reads do not replay the
+transcript or resume a turn. Unknown start timestamps remain hidden. Short-lived
+jobs may end before a qualifying read. Confirmed shells retain outcomes even if a later list omits them
+before completion arrives. Unconfirmed command metadata is bounded to 256
+sanitized labels per conversation.
+Provider labels are one line, capped at 240 characters, and redact obvious
+credential assignments, credential flags with arbitrary prefixes,
+authorization values, and URL userinfo (including token-only userinfo). Query and
+fragment email addresses stay readable. `--sort-key` and `--primary-key` are exempt
+in space and `=` forms. Plain `-u` arguments stay readable; colon-separated
+`-u`/`--user` pairs remain conservatively redacted, including numeric UID:GID
+values, since these can also be credentials. This is not general secret detection.
+A task's command keeps its line breaks and length but gets the same redaction.
+
+Claude stop acknowledgments do not establish completion. After an SDK rejection,
+wait up to one second for native reconciliation. An observed completion maps to
+not-stoppable; a task still live returns a visible retryable error, never a success
+or the UI's silent not-stoppable response. Native notifications or snapshots
+settle task state, and Stop remains retryable if it stays live. Closed-session
+failures still propagate. A notification arriving after the bounded wait can
+still settle the reading, but cannot retroactively turn a failed request into
+success.
+
+`GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
+`ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
+termination/generation checks after provider I/O. Provider reads run outside the
+cache mutex; deferred cleanup releases waiting readers even if a provider panics,
+without caching a sample from that call. Real completion outcomes remain
+visible for 30 seconds. Event-derived running jobs defer ACP hibernation; native
+snapshots remain authoritative where a provider supports them.
+
 ## System overview
 
 ```mermaid
@@ -389,9 +459,9 @@ prompt generate a title and task slug together
 through the selected agent's background-task driver. The call starts with
 provisioning and has a twenty-second deadline, but neither setup nor the agent
 waits for it: the worktree is created at `worktrees/<project-id>/<session-id>` on
-the temporary branch `ao/<session-id>/root` and keeps that folder for its whole
+the temporary branch `orchestrator/<session-id>/root` and keeps that folder for its whole
 life. After launch, a background step renames only the branch to
-`ao/<slug>/root` (numeric suffix when the namespace is occupied) in every
+`orchestrator/<slug>/root` (numeric suffix when the namespace is occupied) in every
 repository of the task and records it on the session and its repository rows
 together, only after a start that succeeded. The session also keeps the
 temporary branch it replaced: a full-row write from an older read never puts it

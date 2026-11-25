@@ -16,6 +16,7 @@ import { Button } from "../ui/button";
 import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
+import { DataRetentionSection } from "./DataRetentionSection";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./SettingsRow";
@@ -27,7 +28,7 @@ import { IS_DEV } from "../../lib/is-dev";
 import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
 import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
 import { githubAuthRequirementQueryOptions, systemRequirementsQueryKey } from "../../hooks/useSystemRequirementsGate";
-import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateCommitAttribution, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -502,6 +503,8 @@ export function GeneralSettingsSection({
 
 			<DefaultCloudSandboxSection />
 
+			<DataRetentionSection />
+
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
 				<AnalyticsRow />
@@ -519,10 +522,10 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				<CliShadowSettingsRow />
-				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
+				{developerMode && <CommitAttributionRow />}
 				{/* Dev builds only: IS_DEV folds to false in production, stripping the row. */}
 				{IS_DEV && developerMode && <SimulateNewMachineRow />}
 				{IS_DEV && developerMode && <ReplayOnboardingRow />}
@@ -615,16 +618,28 @@ function DiagnosticsRow() {
 }
 
 /**
- * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw, and "Add to side chat".
+ * Developer Mode-only beta: credit Orchestrator on new sessions' commits and
+ * PRs. Daemon-owned, because the daemon installs the commit hook at spawn.
  */
-function SideChatsRow() {
+function CommitAttributionRow() {
 	const { t } = useTranslation();
-	const sideChats = useUiStore((state) => state.sideChats);
-	const setSideChats = useUiStore((state) => state.setSideChats);
+	const { settings } = useSettings();
+	const { update, saving, error } = useUpdateCommitAttribution();
 	return (
-		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
-			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		<SettingsRow
+			label={t("settings.commitAttribution")}
+			description={
+				<span className={cn(error && "text-error")} role={error ? "alert" : undefined}>
+					{error ? t("settings.commitAttributionSaveFailed") : t("settings.commitAttributionHint")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.commitAttribution")}
+				checked={settings?.commitAttribution ?? false}
+				disabled={saving || !settings}
+				onCheckedChange={update}
+			/>
 		</SettingsRow>
 	);
 }

@@ -103,6 +103,16 @@ describe("SessionInspectorShellView", () => {
     rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
     expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
   });
+  it("renders the Background tasks view edge to edge under its own tab", () => {
+    const withTasks = [...tabs, { id: "task" as const, icon: <svg />, label: "Background tasks" }];
+    render(<SessionInspectorShellView
+      activeView="task" ariaLabel="Session inspector" browserPoppedOut={false}
+      taskView={<div data-testid="task-slot" />}
+      tabs={withTasks} onViewChange={vi.fn()}
+    />);
+    expect(screen.getByTestId("task-slot").parentElement).toHaveClass("p-0", "overflow-hidden");
+    expect(screen.getByRole("tab", { name: "Background tasks" })).toHaveAttribute("aria-selected", "true");
+  });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
     render(<SessionInspectorShellView

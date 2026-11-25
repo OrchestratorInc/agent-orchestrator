@@ -88,6 +88,7 @@ vi.mock("../lib/api-client", () => ({
   getApiBaseUrl: () => "http://127.0.0.1:3001",
   hasTrustedApiBaseUrl: () => false,
   subscribeApiBaseUrl: () => () => {},
+  apiErrorCode: () => undefined,
   apiErrorMessage: (error: unknown, fallback = "Request failed") => {
     if (error instanceof Error) return error.message;
     if (typeof error === "object" && error !== null && "message" in error) {
@@ -419,6 +420,36 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
   });
 
+  describe("background tasks", () => {
+    const devServer = { id: "task-1", kind: "shell" as const, state: "running" as const, description: "npm run dev", runId: "run-1" };
+    const respondWithTask = () => {
+      const respond = commonGetsResponder();
+      getMock.mockImplementation(async (path: string, ...rest: unknown[]) => {
+        if (path === "/api/v1/sessions/{sessionId}/background-tasks") {
+          return { data: { sessionId: "sess-1", availability: "ready", controllerGeneration: "g1", tasks: [devServer] } };
+        }
+        if (path === "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output") {
+          return { data: { sessionId: "sess-1", taskId: "task-1", availability: "ready", output: "" } };
+        }
+        return (respond as (path: string, ...rest: unknown[]) => Promise<unknown>)(path, ...rest);
+      });
+    };
+
+    it("opens an orchestrator's background task in its tab instead of falling back to Summary", async () => {
+      respondWithTask();
+      useUiStore.getState().openTaskTab(sessionUiKey("sess-1"), devServer);
+      renderWithQuery(<SessionInspector isInspectorVisible orchestrator session={session([], { kind: "orchestrator", mode: "chat" })} view="task" />);
+      expect(await screen.findByRole("tab", { name: "Background tasks" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("never polls this daemon for a session on another host", async () => {
+      respondWithTask();
+      renderWithQuery(<SessionInspector hostId="box-a" session={session([], { mode: "chat" })} />);
+      await screen.findByRole("tab", { name: "Summary" });
+      expect(getMock.mock.calls.some(([path]) => String(path).includes("/background-tasks"))).toBe(false);
+    });
+  });
+
   it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser", async () => {
     vi.stubGlobal("IntersectionObserver", class {
       observe() {}
@@ -546,6 +577,7 @@ describe("SessionInspector tabs", () => {
         "/api/v1/sessions/{sessionId}/workspace/manifest",
         {
           params: { path: { sessionId: "sess-1" } },
+          signal: expect.any(AbortSignal),
         },
       ),
     );
@@ -777,10 +809,9 @@ describe("SessionInspector PR section", () => {
     expect(
       prSection("Pull request").getByText("Checks passing"),
     ).toBeInTheDocument();
-    // The section header carries the number, title and an external link; its icon carries the state.
-    expect(
-      prSection("Pull request").getByRole("link", { name: "Open PR #7" }),
-    ).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
+    // The section header carries the number and title, and its icon carries the state. No GitHub
+    // link beside it: the title opens the PR's tab, which has Open on GitHub.
+    expect(prSection("Pull request").queryByRole("link", { name: "Open PR #7" })).not.toBeInTheDocument();
     expect(prSection("Pull request").getByText("open")).toHaveClass("sr-only");
     expect(
       prSection("Pull request").getByRole("button", { name: "Squash and merge: PR #7" }),
@@ -1026,14 +1057,17 @@ describe("SessionInspector PR section", () => {
     expect(screen.queryByRole("button", { name: /(Squash|Rebase) and merge/ })).not.toBeInTheDocument();
   });
 
-  it("shows a failed state change under the PR's action button", async () => {
+  it("shows a failed state change under the PR's card, below the title row that holds its button", async () => {
     postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/state"
       ? { data: undefined, error: { error: { code: "PR_ACTION_REJECTED", message: "GitHub refused the change" } } }
       : { data: { ok: true }, error: undefined });
     servePR(prSummary(7, "draft", { url: "https://example.com/pr/7" }));
 
     await userEvent.click(await screen.findByRole("button", { name: "Ready for review" }));
-    expect(await within(screen.getByTestId("pr-action-button")).findByRole("status")).toHaveTextContent(/GitHub refused the change|Could not mark PR #7 ready/);
+    const status = await within(await screen.findByTestId("pr-action-status")).findByRole("status");
+    expect(status).toHaveTextContent(/GitHub refused the change|Could not mark PR #7 ready/);
+    // The line goes under the card, not into the title row beside the button.
+    expect(within(screen.getByTestId("pr-action-button")).queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("keeps Merge visible but greyed out with the reason", async () => {
@@ -1048,6 +1082,129 @@ describe("SessionInspector PR section", () => {
     await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
     // Menu items are labels only; the reason lives on the greyed button.
     expect(screen.getByRole("menuitemradio", { name: "Squash and merge" })).toBeInTheDocument();
+  });
+
+  describe("merge queue", () => {
+    const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const queuePR = (overrides: Partial<SessionPRSummary> = {}) => prSummary(7, "open", {
+      url: "https://example.com/pr/7",
+      headSha: head,
+      mergeQueueRequired: true,
+      review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+      ...overrides,
+    });
+    // The daemon serves whatever the PR currently is, so a refetch after a write shows the write.
+    const serveLive = (initial: SessionPRSummary) => {
+      const live = { current: initial };
+      const respond = commonGetsResponder();
+      getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { prs: [live.current], linkedPrs: [] } }
+        : respond(path));
+      renderWithQuery(
+        <SessionInspector session={session([pr(initial.number, initial.state, { url: initial.url })])} />,
+        undefined,
+        (client) => seedPRSummaries(client, [initial]),
+      );
+      return live;
+    };
+
+    it("adds a ready PR to the queue where the base branch requires one", async () => {
+      const live = serveLive(queuePR());
+      postMock.mockImplementation(async (path: string) => {
+        if (path !== "/api/v1/prs/{id}/merge") return { data: { ok: true }, error: undefined };
+        live.current = queuePR({ mergeQueue: { state: "queued", position: 3, estimatedSecondsToMerge: 540 } });
+        return { data: { ok: true, prNumber: 7, method: "squash", state: "open", stateChangedAt: "2026-11-13T09:00:00Z", queue: { state: "queued", position: 3, estimatedSecondsToMerge: 540 } }, error: undefined };
+      });
+
+      const add = await screen.findByRole("button", { name: "Add PR #7 to the merge queue" });
+      expect(add).toHaveTextContent("Add to merge queue");
+      await waitFor(() => expect(add).toBeEnabled());
+      expect(screen.queryByRole("button", { name: /Squash and merge/ })).not.toBeInTheDocument();
+      await userEvent.click(add);
+
+      // The same merge route, pinned to the head on screen; the daemon decides it's an enqueue.
+      await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/merge", {
+        params: { path: { id: "7" } },
+        body: { prUrl: "https://example.com/pr/7", expectedHeadSha: head, method: "squash", allowNoChecks: true },
+      }));
+      const queued = await screen.findByRole("button", { name: "PR #7: Queued · #3" });
+      expect(queued).toBeDisabled();
+      expect(screen.getByTestId("pr-queue-status")).toHaveTextContent("Waiting in the queue · Position 3 · about 9 min");
+      expect(prSection("Pull request").queryByText("merged")).not.toBeInTheDocument();
+    });
+
+    it("leaves the merge method to the queue", async () => {
+      serveLive(queuePR());
+      await screen.findByRole("button", { name: "Add PR #7 to the merge queue" });
+      await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+      expect(screen.getByText("The merge queue sets the merge method.")).toBeInTheDocument();
+      expect(screen.queryByRole("menuitemradio", { name: "Squash and merge" })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Close pull request" })).toBeInTheDocument();
+    });
+
+    it("keeps a queue PR greyed out while something still holds it", async () => {
+      serveLive(queuePR({ ci: { autoInjectCI: true, state: "failing", failingChecks: [{ name: "lint", status: "failed", conclusion: "failure" }], checks: [] } }));
+      const add = await screen.findByRole("button", { name: "Add PR #7 to the merge queue" });
+      expect(add).toBeDisabled();
+      expect(add).toHaveAttribute("title", "Merging opens once the failing checks pass.");
+    });
+
+    it("shows a queued PR's place and takes it out of the queue", async () => {
+      const live = serveLive(queuePR({ mergeQueue: { state: "awaiting_checks", position: 1 } }));
+      postMock.mockImplementation(async (path: string) => {
+        if (path === "/api/v1/prs/{id}/dequeue") live.current = queuePR();
+        return { data: { ok: true, prNumber: 7, changedAt: "2026-11-13T09:05:00Z" }, error: undefined };
+      });
+
+      expect(await screen.findByRole("button", { name: "PR #7: Queued · #1" })).toBeDisabled();
+      expect(screen.getByTestId("pr-queue-status")).toHaveTextContent("Queue checks running · Position 1");
+      // Queued is not blocked: no reason is offered for a merge that is under way.
+      expect(screen.getByRole("button", { name: "PR #7: Queued · #1" })).not.toHaveAttribute("title");
+      expect(screen.queryByRole("button", { name: /merge queue$/ })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+      expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("menuitem", { name: "Remove from queue" }));
+
+      await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/dequeue", {
+        params: { path: { id: "7" } },
+        body: { prUrl: "https://example.com/pr/7" },
+      }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add PR #7 to the merge queue" })).toBeEnabled());
+      expect(screen.queryByTestId("pr-queue-status")).not.toBeInTheDocument();
+      expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
+    });
+
+    it("says why a PR couldn't leave the queue", async () => {
+      serveLive(queuePR({ mergeQueue: { state: "locked", position: 1 } }));
+      postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/dequeue"
+        ? { data: undefined, error: { error: { code: "PR_ACTION_REJECTED", message: "GitHub refused the change" } } }
+        : { data: { ok: true }, error: undefined });
+      await userEvent.click(await screen.findByRole("button", { name: "More actions for PR #7" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Remove from queue" }));
+      const statuses = await within(await screen.findByTestId("pr-action-status")).findAllByRole("status");
+      expect(statuses.some((node) => /GitHub refused the change|Could not remove PR #7/.test(node.textContent ?? ""))).toBe(true);
+    });
+
+    it("says a queued PR is in the queue, not blocked, on its tab", async () => {
+      servePRTab(queuePR({
+        mergeQueue: { state: "queued", position: 4 },
+        // What a direct merge would be told on a queue-protected branch.
+        mergeability: { state: "blocked", reasons: ["blocked_by_provider"], prUrl: "https://example.com/pr/7", conflictFiles: [] },
+      }));
+      const side = within(await screen.findByTestId("pr-tab-side"));
+      expect(side.getByText("In merge queue")).toBeInTheDocument();
+      expect(side.queryByText(/blocked|unavailable/i)).not.toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "PR #7: Queued · #4" })).toBeDisabled();
+    });
+
+    it("leaves a PR on a branch with no queue exactly as it was", async () => {
+      serveLive(queuePR({ mergeQueueRequired: false }));
+      const merge = await screen.findByRole("button", { name: "Squash and merge: PR #7" });
+      await waitFor(() => expect(merge).toBeEnabled());
+      expect(screen.queryByRole("button", { name: /merge queue/ })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("pr-queue-status")).not.toBeInTheDocument();
+    });
   });
 
   const conversationPR = () => prSummary(7, "open", {
@@ -1093,10 +1250,10 @@ describe("SessionInspector PR section", () => {
     expect(within(comments.getByTestId("pr-comments-resolved")).getByRole("button", { name: "Resolved · 1" })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("keeps comments out of the summary: the card shows the description's opening, and the PR's tab holds the comments", async () => {
+  it("opens the PR's tab from its title, with the one action button beside it and no drawer", async () => {
     function OpenTabs() {
       const tabs = usePRTabs(sessionUiKey("sess-1"));
-      return <output data-testid="pr-tabs">{`${tabs.active ?? ""}|${tabs.request?.section ?? ""}`}</output>;
+      return <output data-testid="pr-tabs">{tabs.active ?? ""}</output>;
     }
     const summary = { ...conversationPR(), description: "Adds the search box." };
     const respond = commonGetsResponder();
@@ -1107,15 +1264,70 @@ describe("SessionInspector PR section", () => {
       (client) => seedPRSummaries(client, [summary]),
     );
     const card = within(await screen.findByTestId("pr-card"));
-    expect(card.getByText("Adds the search box.")).toBeInTheDocument();
+    // A few lines of a long body told reviewers too little for the room they took.
+    expect(card.queryByText("Adds the search box.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pr-description")).not.toBeInTheDocument();
 
     // No comments section in the sidebar: it would push the artifacts down, and the PR's tab has them all.
     expect(screen.queryByText("Comments (4)")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-comments")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-comment-composer")).not.toBeInTheDocument();
 
-    await userEvent.click(card.getByRole("button", { name: /^PR #7/ }));
+    // The PR's action button sits in the title row, where Open tab was, not at the card's foot.
+    const title = card.getByRole("button", { name: /^PR #7/ });
+    const row = title.parentElement!;
+    expect(within(row).getByTestId("pr-action-button")).toBeInTheDocument();
+    expect(card.queryByRole("button", { name: "Open tab" })).not.toBeInTheDocument();
+    expect(title).not.toHaveAttribute("aria-haspopup");
+
+    await userEvent.click(title);
+    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(summary.url);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { who: "its owner", shared: false },
+    { who: "a guest", shared: true },
+  ])("keeps a Cloud PR's title plain for $who: AO has no description to show there yet", ({ shared }) => {
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { cloud: { orgId: "cloud-org-1", ...(shared ? { shared: true } : {}) } })} />,
+      undefined,
+      (client) => {
+        client.setQueryData(settingsQueryKey, {
+          defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+          cloudEnabled: true, cloudControlPlaneUrl: "https://cloud.example.test",
+        });
+        client.setQueryData(["cloud-session-scm-summary", "https://cloud.example.test", "cloud-org-1", "sess-1"], { prs: [prSummary(7, "open")], linkedPrs: [] });
+      },
+    );
+    const card = within(screen.getByTestId("pr-card"));
+    expect(card.getByText("PR 7")).toBeInTheDocument();
+    expect(card.queryByRole("button", { name: /^PR #7/ })).not.toBeInTheDocument();
+    expect(card.getByRole("link", { name: "Open PR #7" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens a GitLab merge request's tab from its title: AO reads no GitLab description yet", async () => {
+    function OpenTabs() {
+      const tabs = usePRTabs(sessionUiKey("sess-1"));
+      return <output data-testid="pr-tabs">{`${tabs.active ?? ""}|${tabs.request?.section ?? ""}`}</output>;
+    }
+    const summary = prSummary(7, "open", { url: "https://gitlab.com/acme/repo/-/merge_requests/7", htmlUrl: "https://gitlab.com/acme/repo/-/merge_requests/7", provider: "gitlab" });
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path));
+    renderWithQuery(
+      <><SessionInspector session={session([pr(7, "open", { url: summary.url })])} /><OpenTabs /></>,
+      undefined,
+      (client) => seedPRSummaries(client, [summary]),
+    );
+    const card = within(await screen.findByTestId("pr-card"));
+    const title = card.getByRole("button", { name: /^PR #7/ });
+    expect(title).not.toHaveAttribute("aria-haspopup");
+    // The title already opens the tab.
+    expect(card.queryByRole("button", { name: "Open tab" })).not.toBeInTheDocument();
+    await userEvent.click(title);
     expect(screen.getByTestId("pr-tabs")).toHaveTextContent(`${summary.url}|summary`);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("shows a PR's description and comments in its tab; checks and labels stay on the card", async () => {
@@ -1252,6 +1464,24 @@ describe("SessionInspector PR section", () => {
       expect(getMock).not.toHaveBeenCalledWith("/api/v1/prs/{id}/stack", expect.anything());
     });
 
+    it("shortens the stack's merge label in the card's title row, keeping the full one as its name and tooltip", async () => {
+      const summary = prSummary(2, "open", ready as Partial<SessionPRSummary>);
+      const respond = commonGetsResponder();
+      getMock.mockImplementation(async (path: string) => {
+        if (path === "/api/v1/prs/{id}/stack") return { data: stackOf(layer(1, "open"), layer(2, "open")) };
+        return path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path);
+      });
+      renderWithQuery(<SessionInspector session={session([pr(2, "open", { url: summary.url })])} />, undefined, (client) => seedPRSummaries(client, [summary]));
+      const button = await within(await screen.findByTestId("pr-card")).findByRole("button", { name: "Merge through #2 · 2 PRs" });
+      expect(button).toHaveTextContent("Merge stack · 2");
+      expect(button).toHaveAttribute("title", "Merge through #2 · 2 PRs");
+    });
+
+    it("keeps the full stack merge label in the PR's tab", async () => {
+      serveStack(stackOf(layer(1, "open"), layer(2, "open")));
+      expect(await screen.findByRole("button", { name: "Merge through #2 · 2 PRs" })).toHaveTextContent("Merge through #2 · 2 PRs");
+    });
+
     it("turns Merge into the whole way up, and confirms which PRs land", async () => {
       postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/stack/merge"
         ? { data: { method: "squash", numbers: [1, 2], ok: true, prNumber: 2, stateChangedAt: "2026-11-04T00:00:00Z", status: "merged" } }
@@ -1312,6 +1542,62 @@ describe("SessionInspector PR section", () => {
       await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", {
         body: expect.objectContaining({ baseBranch: "layer-2", brief: "Add the settings page" }),
       }));
+    });
+
+    it("marks a layer behind the one below it, holds Merge, and asks that layer's agent to rebase", async () => {
+      postMock.mockImplementation(async () => ({ data: {} }));
+      serveStack(stackOf(layer(1, "open"), layer(2, "open", { behindParent: 3, sessionId: "sess-2" }), layer(3, "open")));
+      const list = within(await screen.findByRole("list", { name: "Stack #40" }));
+      expect(list.getAllByText("needs rebase")).toHaveLength(1);
+      const button = await screen.findByRole("button", { name: "Merge through #2 · 2 PRs" });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("title", "#2: needs rebase");
+      const row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(row.getByText("#2 is behind #1, the layer below it.")).toBeInTheDocument();
+      expect(row.getByRole("link", { name: "Rebase on GitHub" })).toHaveAttribute("href", "https://github.com/acme/app/pull/2");
+      await userEvent.click(row.getByRole("button", { name: "Ask agent to rebase #2" }));
+      await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/send", {
+        params: { path: { sessionId: "sess-2" } },
+        body: { message: expect.stringContaining("git rebase origin/layer-1") },
+      }));
+      expect(await row.findByText("Asked the agent on #2 to rebase.")).toBeInTheDocument();
+      expect(row.queryByRole("button", { name: "Ask agent to rebase #2" })).not.toBeInTheDocument();
+    });
+
+    it("asks again when the layer below moves after a request, and never confirms for a layer it didn't ask", async () => {
+      postMock.mockImplementation(async () => ({ data: {} }));
+      const view = serveStack(stackOf(layer(1, "open"), layer(2, "open", { behindParent: 3, sessionId: "sess-2" }), layer(3, "open", { headSha: "head-2", sessionId: "sess-3" })));
+      const restack = async (info: unknown) => {
+        const respond = getMock.getMockImplementation()!;
+        getMock.mockImplementation(async (path: string, ...rest: unknown[]) => path === "/api/v1/prs/{id}/stack" ? { data: info } : respond(path, ...rest));
+        await view.queryClient.invalidateQueries();
+      };
+      let row = within(await screen.findByTestId("pr-stack-rebase"));
+      await userEvent.click(row.getByRole("button", { name: "Ask agent to rebase #2" }));
+      expect(await row.findByText("Asked the agent on #2 to rebase.")).toBeInTheDocument();
+      // #1 moves again while #2's head is unchanged: a fresh request is needed.
+      await restack(stackOf(layer(1, "open", { headSha: "head-1b" }), layer(2, "open", { behindParent: 1, sessionId: "sess-2" }), layer(3, "open", { headSha: "head-2", sessionId: "sess-3" })));
+      row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(await row.findByRole("button", { name: "Ask agent to rebase #2" })).toBeInTheDocument();
+      // #2 rebases; #3 still shares #2's old head and is next, never asked.
+      await restack(stackOf(layer(1, "open"), layer(2, "open", { headSha: "head-2b", sessionId: "sess-2" }), layer(3, "open", { behindParent: 1, headSha: "head-2", sessionId: "sess-3" })));
+      row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(await row.findByRole("button", { name: "Ask agent to rebase #3" })).toBeInTheDocument();
+      expect(row.queryByText("Asked the agent on #3 to rebase.")).not.toBeInTheDocument();
+    });
+
+    it("offers only GitHub's rebase for a layer AO doesn't track, and nothing once every layer is current", async () => {
+      serveStack(stackOf(layer(1, "open"), layer(2, "open", { behindParent: 1 })));
+      const row = within(await screen.findByTestId("pr-stack-rebase"));
+      expect(row.getByRole("link", { name: "Rebase on GitHub" })).toBeInTheDocument();
+      expect(row.queryByRole("button", { name: /Ask agent to rebase/ })).not.toBeInTheDocument();
+    });
+
+    it("shows no rebase notice for a current stack", async () => {
+      serveStack(stackOf(layer(1, "open"), layer(2, "open")));
+      await screen.findByRole("list", { name: "Stack #40" });
+      expect(screen.queryByTestId("pr-stack-rebase")).not.toBeInTheDocument();
+      expect(screen.queryByText("needs rebase")).not.toBeInTheDocument();
     });
 
     it("only offers a new task on the top of a stack", async () => {
@@ -2134,14 +2420,15 @@ describe("SessionInspector PR section", () => {
     expect(within(screen.getByTestId("pr-pills")).queryByTestId("pr-pills-earlier")).not.toBeInTheDocument();
   });
 
-  it("links the PR on screen to its url", async () => {
+  it("titles the card with the PR on screen, with no GitHub link beside it", async () => {
     renderWithQuery(
       <SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />,
     );
     const card = within(screen.getByTestId("pr-card"));
-    expect(card.getByRole("link", { name: "Open PR #41" })).toHaveAttribute("href", "https://example.com/pr/41");
+    expect(card.getByRole("button", { name: /^PR #41/ })).toBeInTheDocument();
+    expect(card.queryByRole("link", { name: "Open PR #41" })).not.toBeInTheDocument();
     await userEvent.click(within(screen.getByTestId("pr-pills")).getByRole("button", { name: /^#42/ }));
-    expect(within(screen.getByTestId("pr-card")).getByRole("link", { name: "Open PR #42" })).toHaveAttribute("href", "https://example.com/pr/42");
+    expect(within(screen.getByTestId("pr-card")).getByRole("button", { name: /^PR #42/ })).toBeInTheDocument();
   });
 });
 
@@ -3264,6 +3551,15 @@ describe("SessionInspector tabs", () => {
 
     expect((await screen.findAllByText("Reviewer"))[0]).toBeInTheDocument();
     expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+  });
+
+  it("offers the Device tab to local worker sessions only with Developer mode on", async () => {
+    mockCommonGets([], "", [reviewState(1, "needs_review")]);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    expect(screen.queryByRole("tab", { name: "Device" })).not.toBeInTheDocument();
+
+    act(() => useUiStore.setState({ developerMode: true }));
+    expect(screen.getAllByRole("tab").map((el) => el.textContent?.trim())).toEqual(["Summary", "Files", "Reviews", "Browser", "Device"]);
   });
 
   it("offers a Subagents tab after Side chat while the chat passes its panel", async () => {
@@ -6285,8 +6581,8 @@ describe("SessionInspector branch summary", () => {
     expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "false");
 
     const tree = within(screen.getByTestId("changed-files-list"));
-    // One flat line per file: name, its folder, counts and change.
-    expect(tree.getByRole("button", { name: /page\.tsx.*src\/app.*\+4.*−2/ })).toBeInTheDocument();
+    // One flat line per file: repository-qualified path, counts and change.
+    expect(tree.getByRole("button", { name: /src\/app\/page\.tsx.*\+4.*−2/ })).toBeInTheDocument();
     await userEvent.click(tree.getByRole("button", { name: /page\.tsx/ }));
     expect(onOpenReviewFile).toHaveBeenCalledWith({ path: "src/app/page.tsx" });
 
@@ -6846,14 +7142,19 @@ describe("SessionInspector branch summary", () => {
     expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-micro");
   });
 
-  it("says the PR row opens a tab, until that tab is showing", async () => {
+  it("opens the PR's tab from the PR row's title", async () => {
+    function OpenTabs() {
+      const tabs = usePRTabs(sessionUiKey("sess-1"));
+      return <output data-testid="pr-tabs">{tabs.active ?? ""}</output>;
+    }
     const sessionValue = session([pr(7, "open")], { branchState: pushed(2) });
     const open = prSummary(7, "open");
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [open] });
-    renderWithQuery(<SessionInspector session={sessionValue} />, undefined, (client) => seedPRSummaries(client, [open]));
+    renderWithQuery(<><SessionInspector session={sessionValue} /><OpenTabs /></>, undefined, (client) => seedPRSummaries(client, [open]));
 
-    await userEvent.click(await screen.findByRole("button", { name: /Open tab/ }));
-    await waitFor(() => expect(screen.queryByText("Open tab")).not.toBeInTheDocument());
+    await userEvent.click(within(await screen.findByTestId("pr-card")).getByRole("button", { name: /^PR #7/ }));
+    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(open.url);
+    expect(screen.queryByText("Open tab")).not.toBeInTheDocument();
   });
 
   it("lists the passed checks once they all pass, with the skipped folded away", async () => {

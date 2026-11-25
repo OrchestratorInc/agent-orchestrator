@@ -13,10 +13,12 @@ import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import {
 	artifactShareUrl,
 	CLOUD_SHARE_PROGRESS_CHANNEL,
+	isUnplayableShareVideo,
 	sameShareFingerprint,
 	type CloudShareAccess,
 	type CloudShareFile,
-	type CloudShareGrant,
+	type CloudShareGrants,
+	type CloudShareInvite,
 	type CloudShareInspection,
 	type CloudShareLinks,
 	type CloudSharePageFiles,
@@ -112,11 +114,12 @@ export interface CloudShareIpcDeps extends CloudShareApi {
 	fetchHost: HostFetch;
 }
 
-const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"]);
-
-function isVideo(name: string): boolean {
-	return VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase());
-}
+/**
+ * Refuses a video browsers cannot play before anything is uploaded. Any other
+ * video goes to the control plane, which refuses it (415, shown as coming
+ * soon) while it does not serve videos.
+ */
+const UNPLAYABLE_VIDEO_MESSAGE = "This video format can't be played in a browser. Use MP4, MOV or WebM.";
 
 function accessArgument(value: unknown): CloudShareAccess | undefined {
 	if (value === undefined) return undefined;
@@ -130,6 +133,21 @@ function emailsArgument(value: unknown): string[] | undefined {
 		throw new CloudShareError("invalid_request", "Not a list of emails.");
 	}
 	return value as string[];
+}
+
+function inviteArgument(value: unknown): CloudShareInvite {
+	const { emails, orgId, teamIds, workspace } = (value ?? {}) as Record<string, unknown>;
+	if (orgId !== undefined && typeof orgId !== "string") throw new CloudShareError("invalid_request", "Not a workspace.");
+	if (teamIds !== undefined && (!Array.isArray(teamIds) || !teamIds.every((id) => typeof id === "string"))) {
+		throw new CloudShareError("invalid_request", "Not a list of teams.");
+	}
+	if (workspace !== undefined && typeof workspace !== "boolean") throw new CloudShareError("invalid_request", "Not a workspace.");
+	return {
+		emails: emailsArgument(emails),
+		...(orgId !== undefined ? { orgId } : {}),
+		...(teamIds !== undefined ? { teamIds: teamIds as string[] } : {}),
+		...(workspace !== undefined ? { workspace } : {}),
+	};
 }
 
 function shareFileArgument(value: unknown): CloudShareFile {
@@ -300,7 +318,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		return {
 			name,
 			...(listed ? { size: listed.size } : {}),
-			unsupported: isVideo(name),
+			unsupported: isUnplayableShareVideo(name),
 			fingerprint: listed?.sha256 ?? file.fingerprint ?? "",
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
@@ -308,7 +326,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	};
 
 	const publishCloudFile = async (file: CloudSessionShareFile): Promise<CloudSharePublishResult> => {
-		if (isVideo(file.path)) return { status: "unsupported", message: "Sharing videos is coming soon." };
+		if (isUnplayableShareVideo(file.path)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 		if (!(await deps.getToken())) return { status: "signed_out" };
 		if (!file.fingerprint) return { status: "changed", inspection: await inspectCloudFile(file, true) };
 		try {
@@ -348,7 +366,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		return {
 			name: info.name,
 			size: info.size,
-			unsupported: isVideo(info.name),
+			unsupported: isUnplayableShareVideo(info.name),
 			fingerprint: info.fingerprint,
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
@@ -359,7 +377,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// uploaded as a local file is. Downloading is the first half of the
 	// progress, uploading the second.
 	const publishHostFile = async (file: CloudHostShareFile, sender: IpcMainInvokeEvent["sender"], controller: AbortController): Promise<CloudSharePublishResult> => {
-		if (isVideo(file.path)) return { status: "unsupported", message: "Sharing videos is coming soon." };
+		if (isUnplayableShareVideo(file.path)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 		if (!(await deps.getToken())) return { status: "signed_out" };
 		const located = hostFile(file);
 		const key = await hostRecordKey(file, located.relativePath);
@@ -426,7 +444,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		return {
 			name: resolved.name,
 			size: resolved.size,
-			unsupported: isVideo(resolved.name),
+			unsupported: isUnplayableShareVideo(resolved.name),
 			fingerprint: await statShareFile(resolved),
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
@@ -471,14 +489,16 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		return share;
 	});
 
-	deps.ipcMain.handle("cloudShare:grants", async (_event, value: unknown): Promise<CloudShareGrant[]> =>
+	deps.ipcMain.handle("cloudShare:grants", async (_event, value: unknown): Promise<CloudShareGrants> =>
 		listShareGrants(deps, baseUrlArgument(value), shareIdArgument(value)));
 
-	deps.ipcMain.handle("cloudShare:invite", async (event, value: unknown): Promise<CloudShareGrant[]> => {
+	deps.ipcMain.handle("cloudShare:invite", async (event, value: unknown): Promise<CloudShareGrants> => {
 		requireMainFrame(event);
-		const emails = emailsArgument((value as { emails?: unknown } | null)?.emails);
-		if (!emails || emails.length === 0) throw new CloudShareError("invalid_request", "Not a list of emails.");
-		return inviteShareGrants(deps, baseUrlArgument(value), shareIdArgument(value), emails);
+		const invite = inviteArgument(value);
+		if ((invite.emails?.length ?? 0) === 0 && (invite.teamIds?.length ?? 0) === 0 && !invite.workspace) {
+			throw new CloudShareError("invalid_request", "Not a list of emails.");
+		}
+		return inviteShareGrants(deps, baseUrlArgument(value), shareIdArgument(value), invite);
 	});
 
 	deps.ipcMain.handle("cloudShare:removeGrant", async (event, value: unknown): Promise<void> => {
@@ -524,7 +544,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const fileSnapshots: ShareSnapshot[] = [];
 		try {
 			const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
-			if (isVideo(resolved.name)) return { status: "unsupported", message: "Sharing videos is coming soon." };
+			if (isUnplayableShareVideo(resolved.name)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 			if (!(await deps.getToken())) return { status: "signed_out" };
 			const progress = (sentBytes: number, totalBytes: number) => {
 				if (!sender.isDestroyed()) sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes });
@@ -568,12 +588,14 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			if (!file.fingerprint || !sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
 			if (controller.signal.aborted) return { status: "cancelled" };
 			let copied = taken.size;
-			let pageFiles: { files: PageFileSnapshot[]; skipped: PageFileSkip[]; fingerprints: Record<string, string> } | undefined;
+			let pageFiles: { files: PageFileSnapshot[]; skipped: PageFileSkip[]; fingerprints: Record<string, string>; referenced: Map<string, string> } | undefined;
 			if (found) {
 				const files: PageFileSnapshot[] = [];
 				const skipped = [...found.skipped];
 				// What each file held as it was copied, and what was missing, so a later change shows.
 				const fingerprints: Record<string, string> = {};
+				// Which file the page names by each included path.
+				const referenced = new Map<string, string>();
 				for (const skip of found.skipped) if (skip.relativePath) fingerprints[skip.relativePath] = "";
 				for (const used of found.files) {
 					if (controller.signal.aborted) return { status: "cancelled" };
@@ -585,6 +607,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 						});
 						fileSnapshots.push(copy);
 						files.push({ path: used.path, snapshot: copy });
+						referenced.set(used.path, used.referencedPath);
 						fingerprints[used.referencedPath] = pageFileVersion(used.file, copy.fingerprint);
 					} catch (error) {
 						// A file gone or rewritten while it was copied is left out, not the page.
@@ -594,7 +617,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 					}
 					copied = before + used.file.size;
 				}
-				pageFiles = { files, skipped, fingerprints };
+				pageFiles = { files, skipped, fingerprints, referenced };
 			}
 			// The document is the file's path in its session's artifacts, in its project.
 			const folder = path.posix.dirname(resolved.relativePath);
@@ -609,6 +632,19 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				emails: file.emails,
 				...(pageFiles ? { page: { files: pageFiles.files } } : {}),
 			}, (sentBytes) => progress(copied + sentBytes, total), controller.signal);
+			// A video the control plane refused was left out, as a missing file is.
+			if (pageFiles && result.pageFiles) {
+				const left = [
+					...result.pageFiles.refusedVideos.map((refused) => [refused, "video"] as const),
+					...result.pageFiles.tooLargeVideos.map((refused) => [refused, "too_large"] as const),
+				];
+				for (const [refused, reason] of left) {
+					const relativePath = pageFiles.referenced.get(refused);
+					pageFiles.skipped.push({ reference: refused, reason, ...(relativePath ? { relativePath } : {}) });
+					// A video refused now is offered again once the control plane takes it.
+					if (relativePath && reason === "video") pageFiles.fingerprints[relativePath] = "";
+				}
+			}
 			// The link serves the page's files only when the control plane took them.
 			const served = pageFiles && result.pageFiles && !result.pageFiles.unsupported ? pageFiles.fingerprints : undefined;
 			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share), served);

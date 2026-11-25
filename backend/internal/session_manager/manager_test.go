@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -54,6 +55,12 @@ type fakeStore struct {
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	workspaceRepoErr                   error
+	workspaceRepoErrOnce               bool  // fail only the next lookup
+	commitAttributionErr               error // fails trailer writes
+	commitAttributionMu                sync.Mutex
+	commitAttribution                  map[domain.SessionID]string
+	prFooter                           map[domain.SessionID]bool
 	num                                int
 	deleteErr                          error
 	upsertWTErr                        error
@@ -98,8 +105,47 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	return r, ok, nil
 }
 func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
+	if err := f.workspaceRepoErr; err != nil {
+		if f.workspaceRepoErrOnce {
+			f.workspaceRepoErr = nil
+		}
+		return nil, err
+	}
 	return f.workspaceRepo[projectID], nil
 }
+func (f *fakeStore) SetSessionCommitAttribution(_ context.Context, id domain.SessionID, coAuthor string) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.commitAttributionErr != nil {
+		return f.commitAttributionErr
+	}
+	if f.commitAttribution == nil {
+		f.commitAttribution = map[domain.SessionID]string{}
+	}
+	f.commitAttribution[id] = coAuthor
+	return nil
+}
+func (f *fakeStore) SessionCommitAttribution(_ context.Context, id domain.SessionID) (string, error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	return f.commitAttribution[id], nil
+}
+func (f *fakeStore) SetSessionPRFooter(_ context.Context, id domain.SessionID, footer bool) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.prFooter == nil {
+		f.prFooter = map[domain.SessionID]bool{}
+	}
+	f.prFooter[id] = footer
+	return nil
+}
+func (f *fakeStore) SessionPRFooter(_ context.Context, id domain.SessionID) (footer, recorded bool, err error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	footer, recorded = f.prFooter[id]
+	return footer, recorded, nil
+}
+
 func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	f.num++
 	prefix := string(rec.ProjectID)
@@ -325,6 +371,17 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	rec.Metadata.Branch = current.Metadata.Branch
 	rec.Metadata.WorkspacePath = current.Metadata.WorkspacePath
 	rec.Metadata.WorkspaceRepoPath = current.Metadata.WorkspaceRepoPath
+	f.sessions[id] = rec
+	return true, nil
+}
+
+func (f *fakeStore) SetSessionTerminateOnPRMerge(_ context.Context, id domain.SessionID, terminate bool, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.TerminateOnPRMerge = terminate
+	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil
 }
@@ -1244,6 +1301,9 @@ type fakeWorkspace struct {
 	resolves    []resolveDefaultBranchCall
 	resolved    map[string]ports.WorkspaceDefaultBranch
 	fetchFunc   func(context.Context, string, ports.WorkspaceDefaultBranch) error
+	// resolveRemoteFunc stands in for a live remote lookup during resolution;
+	// it gets the caller's shared network deadline.
+	resolveRemoteFunc func(remoteCtx context.Context, repoPath string) error
 	// createRepoPath, when set, is returned as the RepoPath of a single-repo
 	// Create so tests can assert it survives the spawn->teardown metadata round
 	// trip (production Create resolves this path; the zero default keeps every
@@ -1310,6 +1370,14 @@ func (w *fakeWorkspace) ResolveDefaultBranch(_ context.Context, repoPath, config
 		Branch:  branch,
 		BaseRef: "refs/remotes/origin/" + branch,
 	}, nil
+}
+
+func (w *fakeWorkspace) ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	if w.resolveRemoteFunc != nil {
+		// A lookup that hit the deadline still answers from local refs.
+		_ = w.resolveRemoteFunc(remoteCtx, repoPath)
+	}
+	return w.ResolveDefaultBranch(ctx, repoPath, configuredBranch)
 }
 
 func (w *fakeWorkspace) FetchDefaultBranch(ctx context.Context, repoPath string, target ports.WorkspaceDefaultBranch) error {
@@ -3933,8 +4001,8 @@ func TestSpawn_WorkspaceProjectRecordsRootAndChildWorktrees(t *testing.T) {
 	if rec.Metadata.WorkspacePath != managedPath {
 		t.Fatalf("workspace path = %q, want root worktree path", rec.Metadata.WorkspacePath)
 	}
-	if rec.Metadata.Branch != "ao/mer-1" {
-		t.Fatalf("workspace branch = %q, want ao/mer-1", rec.Metadata.Branch)
+	if rec.Metadata.Branch != "orchestrator/mer-1" {
+		t.Fatalf("workspace branch = %q, want orchestrator/mer-1", rec.Metadata.Branch)
 	}
 	if got := ws.lastProjectCfg.RootRepoPath; got != projectPath {
 		t.Fatalf("root repo path = %q, want %q", got, projectPath)
@@ -5860,8 +5928,8 @@ func TestSpawn_DefaultsBranchFromSessionID(t *testing.T) {
 	}
 	// An empty SpawnConfig.Branch defaults to a unique per-session root branch
 	// under a namespace that can also hold sibling PR branches.
-	if got := st.sessions[s.ID].Metadata.Branch; got != "ao/mer-1/root" {
-		t.Fatalf("default branch = %q, want ao/mer-1/root", got)
+	if got := st.sessions[s.ID].Metadata.Branch; got != "orchestrator/mer-1/root" {
+		t.Fatalf("default branch = %q, want orchestrator/mer-1/root", got)
 	}
 	if !st.sessions[s.ID].AutoInjectReview {
 		t.Fatal("automatic review injection must default to enabled")
@@ -5884,6 +5952,233 @@ func TestSpawn_InheritsAutoReviewFromProjectConfig(t *testing.T) {
 	if !st.sessions[s.ID].AutoReviewEnabled {
 		t.Fatal("auto review must be enabled when project config enables it")
 	}
+}
+
+func TestSpawn_TerminateOnPRMergeResolution(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	t.Run("hardcoded false default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must default to false")
+		}
+	})
+
+	t.Run("global default via env var", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must inherit global env default true")
+		}
+	})
+
+	t.Run("global default via manager deps", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		st := newFakeStore()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		rt := &fakeRuntime{}
+		ws := &fakeWorkspace{}
+		lookPath := func(string) (string, error) { return "/bin/true", nil }
+		m := New(Deps{
+			Runtime:            rt,
+			Agents:             fakeAgents{},
+			Workspace:          ws,
+			Store:              st,
+			Messenger:          &fakeMessenger{},
+			Lifecycle:          &fakeLCM{store: st},
+			LookPath:           lookPath,
+			TerminateOnPRMerge: boolPtr(true),
+		})
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must inherit manager deps default true")
+		}
+	})
+
+	t.Run("project default overrides global default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project default false must override global default true")
+		}
+
+		// Also test project default true overrides global false
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		cfg.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s2, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s2.ID].TerminateOnPRMerge {
+			t.Fatal("project default true must override global default false")
+		}
+	})
+
+	t.Run("project base agentConfig default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project base AgentConfig true must resolve when project root is unset")
+		}
+	})
+
+	t.Run("project root default overrides project base agentConfig", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		cfg.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project root false must override project base AgentConfig true")
+		}
+	})
+
+	t.Run("role override agentConfig wins over project default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		cfg.Worker.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("role override true must win over project default false")
+		}
+	})
+
+	t.Run("explicit spawn config wins over project and global defaults", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+
+		// Explicit false on SpawnConfig
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID:          "mer",
+			Kind:               domain.KindWorker,
+			TerminateOnPRMerge: boolPtr(false),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn config false must win over project true")
+		}
+
+		// Explicit true on SpawnConfig with project false
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s2, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID:          "mer",
+			Kind:               domain.KindWorker,
+			TerminateOnPRMerge: boolPtr(true),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s2.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn config true must win over project false")
+		}
+	})
+
+	t.Run("explicit spawn agentConfig wins over project default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID: "mer",
+			Kind:      domain.KindWorker,
+			AgentConfig: ports.AgentConfig{
+				TerminateOnPRMerge: boolPtr(true),
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn AgentConfig true must win over project false")
+		}
+	})
+
+	t.Run("per-session toggle overrides resolved default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("initial terminate_on_pr_merge must be false")
+		}
+
+		// Toggle on via store and verify
+		ok, err := st.SetSessionTerminateOnPRMerge(ctx, s.ID, true, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge true: %v, %v", ok, err)
+		}
+		got, ok, err := st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if !got.TerminateOnPRMerge {
+			t.Fatal("per-session toggle must override to true")
+		}
+
+		// Toggle off via store and verify
+		ok, err = st.SetSessionTerminateOnPRMerge(ctx, s.ID, false, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge false: %v, %v", ok, err)
+		}
+		got, ok, err = st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if got.TerminateOnPRMerge {
+			t.Fatal("per-session toggle must override to false")
+		}
+	})
 }
 
 func TestPromptProjectContextOmitsAutomaticBranchSentinel(t *testing.T) {
@@ -6008,12 +6303,6 @@ func TestSpawn_SkipsNeedsInitWorkspaceChildrenDuringRefreshAndCreate(t *testing.
 	if got, want := ws.lastProjectCfg.Repos[0].Name, "api"; got != want {
 		t.Fatalf("materialized child = %q, want %q", got, want)
 	}
-	if got, want := len(ws.lastProjectCfg.Assets), 1; got != want {
-		t.Fatalf("materialized asset configs = %d, want %d", got, want)
-	}
-	if got, want := ws.lastProjectCfg.Assets[0].RelativePath, "assets"; got != want {
-		t.Fatalf("materialized asset = %q, want %q", got, want)
-	}
 }
 
 func TestRefreshDefaultBranchesUsesOneOverallFetchBudget(t *testing.T) {
@@ -6068,6 +6357,130 @@ func TestSpawn_FetchesQualifiedDefaultBranchRemote(t *testing.T) {
 	}
 }
 
+func TestSpawn_SkipsFetchWhenResolutionAlreadyFetched(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	ws.resolved = map[string]ports.WorkspaceDefaultBranch{
+		"/repo/mer": {Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main", Fetched: true},
+	}
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none after a resolution that fetched", ws.fetches)
+	}
+
+	// The resolution's fetch also counts for the next start in the window.
+	ws.resolved["/repo/mer"] = ports.WorkspaceDefaultBranch{Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main"}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none within the fetch window", ws.fetches)
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestRefreshDefaultBranchesSharesOneBudgetAcrossResolution(t *testing.T) {
+	m, st, _, ws := newManager()
+	project := domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	for i := 0; i < 3; i++ {
+		name := fmt.Sprintf("child-%d", i)
+		st.workspaceRepo["mer"] = append(st.workspaceRepo["mer"], domain.WorkspaceRepoRecord{Name: name, RelativePath: name})
+	}
+	m.defaultBranchRefreshTimeout = 25 * time.Millisecond
+	// Every repository's live HEAD lookup hangs until the deadline it is given.
+	var deadlines []time.Time
+	ws.resolveRemoteFunc = func(remoteCtx context.Context, _ string) error {
+		deadline, ok := remoteCtx.Deadline()
+		if !ok {
+			t.Error("lookup got no deadline")
+		}
+		deadlines = append(deadlines, deadline)
+		<-remoteCtx.Done()
+		return remoteCtx.Err()
+	}
+
+	started := time.Now()
+	baseRefs := m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	elapsed := time.Since(started)
+
+	// Separate budgets would each get their own deadline, one after another.
+	if got, want := len(deadlines), 4; got != want {
+		t.Fatalf("lookups = %d, want root plus three children (%d)", got, want)
+	}
+	for i, deadline := range deadlines {
+		if !deadline.Equal(deadlines[0]) {
+			t.Fatalf("lookup %d deadline = %s, want the shared deadline %s", i, deadline, deadlines[0])
+		}
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("resolving four stalled repositories took %s, want one shared 25ms budget", elapsed)
+	}
+	if got, want := len(baseRefs), 4; got != want {
+		t.Fatalf("resolved base refs = %d, want root plus three children (%d) from local refs", got, want)
+	}
+}
+
+func TestSpawn_FreshBaseIsRefreshedInBackground(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+
+	// No fetch has succeeded yet, so the first start waits for one.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 1 {
+		t.Fatalf("fetches = %d, want the first start to fetch", len(ws.fetches))
+	}
+
+	// Past the skip window but inside the fresh window: the start goes ahead
+	// with the local base while the fetch is still running.
+	now = now.Add(time.Minute)
+	release := make(chan struct{})
+	var finished atomic.Bool
+	ws.fetchFunc = func(fetchCtx context.Context, _ string, _ ports.WorkspaceDefaultBranch) error {
+		defer finished.Store(true)
+		select {
+		case <-release:
+			return nil
+		case <-fetchCtx.Done():
+			return fetchCtx.Err()
+		}
+	}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Load() {
+		t.Fatal("the start waited for a fetch of a base fetched a minute ago")
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+	close(release)
+	if err := m.WaitBackgroundWorkers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 2 {
+		t.Fatalf("fetches = %d, want the background refresh too", len(ws.fetches))
+	}
+
+	// A base last fetched longer ago than the fresh window is waited for again.
+	ws.fetchFunc = nil
+	now = now.Add(defaultBranchFreshWindow + time.Second)
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 3 {
+		t.Fatalf("fetches = %d, want a start after the fresh window to fetch", len(ws.fetches))
+	}
+}
+
 func TestSpawn_SlashDefaultBranchWithoutKnownRemoteFetchesFromOrigin(t *testing.T) {
 	m, st, _, ws := newManager()
 	cfg := testRoleAgents()
@@ -6097,8 +6510,8 @@ func TestSpawn_DefaultBranchFetchFailureDoesNotBlockWorkerSpawn(t *testing.T) {
 	if len(ws.fetches) != 1 {
 		t.Fatalf("fetches = %d, want 1", len(ws.fetches))
 	}
-	if ws.lastCfg.Branch != "ao/mer-1/root" {
-		t.Fatalf("created branch = %q, want ao/mer-1/root", ws.lastCfg.Branch)
+	if ws.lastCfg.Branch != "orchestrator/mer-1/root" {
+		t.Fatalf("created branch = %q, want orchestrator/mer-1/root", ws.lastCfg.Branch)
 	}
 }
 
@@ -6112,16 +6525,16 @@ func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[worker.ID].Metadata.Branch; got != "ao/dev/mer-1/root" {
-		t.Fatalf("worker branch = %q, want ao/dev/mer-1/root", got)
+	if got := st.sessions[worker.ID].Metadata.Branch; got != "orchestrator/dev/mer-1/root" {
+		t.Fatalf("worker branch = %q, want orchestrator/dev/mer-1/root", got)
 	}
 
 	orchestrator, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[orchestrator.ID].Metadata.Branch; got != "ao/dev/mer-orchestrator" {
-		t.Fatalf("orchestrator branch = %q, want ao/dev/mer-orchestrator", got)
+	if got := st.sessions[orchestrator.ID].Metadata.Branch; got != "orchestrator/dev/mer-orchestrator" {
+		t.Fatalf("orchestrator branch = %q, want orchestrator/dev/mer-orchestrator", got)
 	}
 }
 
@@ -12558,6 +12971,57 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 }
 
+// Archiving a session while its wake holds the resume must wait for the wake
+// and then archive, not fail with ErrOperationInProgress (#8645).
+func TestKill_WaitsForAnInFlightWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	killed := make(chan error, 1)
+	go func() {
+		_, err := m.Kill(ctx, "mer-1")
+		killed <- err
+	}()
+	select {
+	case err := <-killed:
+		m.endAgentResume("mer-1")
+		t.Fatalf("Kill returned while the wake held the session: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	m.endAgentResume("mer-1")
+	if err := <-killed; err != nil {
+		t.Fatalf("Kill after the wake finished: %v", err)
+	}
+	if !st.sessions["mer-1"].IsTerminated || rt.destroyed != 1 || ws.destroyed != 1 {
+		t.Fatalf("terminated=%v runtime=%d workspace=%d, want a full teardown",
+			st.sessions["mer-1"].IsTerminated, rt.destroyed, ws.destroyed)
+	}
+}
+
+// A wake that outlasts the limit leaves Kill's refusal in place and the
+// session untouched.
+func TestKill_GivesUpOnAWedgedWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.killResumeWait = 50 * time.Millisecond
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	defer m.endAgentResume("mer-1")
+	started := time.Now()
+	if _, err := m.Kill(ctx, "mer-1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("Kill = %v, want ErrOperationInProgress", err)
+	}
+	if waited := time.Since(started); waited < m.killResumeWait {
+		t.Fatalf("Kill refused after %v, want a wait of at least %v", waited, m.killResumeWait)
+	}
+	if st.sessions["mer-1"].IsTerminated || rt.destroyed != 0 || ws.destroyed != 0 {
+		t.Fatal("a refused kill touched the session")
+	}
+}
+
 func TestSpawn_ArtifactDirWriteFailureRollsBackSeedRowAndDir(t *testing.T) {
 	m, st, _, _ := newManager()
 	dataDir := t.TempDir()
@@ -12935,4 +13399,25 @@ func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.Sessi
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil
+}
+
+func TestAOSkillPointerNamesDeviceGuideOnlyWhenOffered(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	if pointer := m.aoSkillPointer(false); strings.Contains(pointer, "AO Device panel") {
+		t.Fatalf("device section present with no devices gate:\n%s", pointer)
+	}
+	offered := false
+	m.SetDevicesOffered(func() bool { return offered })
+	if pointer := m.aoSkillPointer(false); strings.Contains(pointer, "AO Device panel") {
+		t.Fatalf("device section present while devices are not offered:\n%s", pointer)
+	}
+	offered = true
+	pointer := m.aoSkillPointer(false)
+	guide := filepath.ToSlash(filepath.Join(dir, "skills", "using-ao", "commands", "device.md"))
+	for _, want := range []string{"## AO Device panel", "`" + guide + "`", "ao device open"} {
+		if !strings.Contains(pointer, want) {
+			t.Fatalf("device section missing %q:\n%s", want, pointer)
+		}
+	}
 }
