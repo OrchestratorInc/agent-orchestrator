@@ -1448,7 +1448,7 @@ func TestLauncherReportsFailedBackgroundDelivery(t *testing.T) {
 			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Minute, Lines: 20,
 		},
 	}
-	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}, sendErr: errors.New("host gone")}
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true, unsupervisedAlive: true}, sendErr: errors.New("host gone")}
 	l := newTestLauncher(t, reviewer, rt)
 	type failure struct {
 		worker domain.SessionID
