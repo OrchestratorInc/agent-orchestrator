@@ -1611,3 +1611,41 @@ func TestModelDiscoveryErrorNamesACrashedCLIsError(t *testing.T) {
 		t.Fatalf("detail = %q, want the error line", detail)
 	}
 }
+
+// Fireworks model IDs are resource names. The label is the model's own name;
+// the ID, which selects the model, is unchanged. Other nested names carry a
+// vendor that is part of the name, so they stay as they are.
+func TestParseProviderIDLinesLabelsAccountModelResourcePaths(t *testing.T) {
+	t.Parallel()
+	models, err := parseProviderIDLines([]byte(strings.Join([]string{
+		"fireworks/accounts/fireworks/models/deepseek-v4-pro",
+		"openrouter/anthropic/claude-sonnet",
+		"openai/gpt-5",
+	}, "\n")))
+	if err != nil {
+		t.Fatalf("parseProviderIDLines() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, model := range models {
+		got[model.ID] = model.Provider + " | " + model.Label
+	}
+	want := map[string]string{
+		"fireworks/accounts/fireworks/models/deepseek-v4-pro": "fireworks | deepseek-v4-pro",
+		"openrouter/anthropic/claude-sonnet":                  "openrouter | anthropic/claude-sonnet",
+		"openai/gpt-5":                                        "openai | gpt-5",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("labels = %v, want %v", got, want)
+	}
+}
+
+// A cached catalog keeps its old labels until its fingerprint changes, so every
+// agent whose list goes through splitProviderID needs a schema version.
+func TestResourcePathLabelsInvalidateCachedCatalogs(t *testing.T) {
+	t.Parallel()
+	for _, agentID := range []string{"aider", "crush", "kilocode", "mimo-code", "opencode", "opencode-v2"} {
+		if catalogSchemaVersions[agentID] == "" {
+			t.Errorf("%s has no catalog schema version; cached labels would never refresh", agentID)
+		}
+	}
+}

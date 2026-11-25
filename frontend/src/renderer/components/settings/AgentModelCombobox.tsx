@@ -210,6 +210,8 @@ export function AgentModelCombobox({
 		[concreteModels],
 	);
 
+	const sharedLabelDetails = useMemo(() => detailsForSharedLabels(searchIndex.models), [searchIndex]);
+
 	const claude = useMemo(
 		() => (agentId === "claude-code" ? splitClaudeModels(searchIndex.models) : undefined),
 		[agentId, searchIndex],
@@ -448,7 +450,10 @@ export function AgentModelCombobox({
 											aria-current={tuning && item.id === shownModel ? true : undefined}
 										>
 											<div className="min-w-0 flex-1">
-												<span className="truncate text-settings-label">{item.label}</span>
+												<span className="block truncate text-settings-label" title={item.id}>{item.label}</span>
+												{sharedLabelDetails.has(item.id) && (
+													<p className="truncate text-xs text-settings-muted">{sharedLabelDetails.get(item.id)}</p>
+												)}
 												{item.model.unavailableReason && (
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 												)}
@@ -709,6 +714,27 @@ function shouldShowModelID(item: IndexedModel, siblings: IndexedModel[], search:
 	if (duplicateLabel) return true;
 
 	return search !== "" && normalizeSearch(item.id).includes(search) && !label.includes(search);
+}
+
+/**
+ * What a compact row shows under a name that several models share, keyed by
+ * model ID: the provider, or the full ID where the provider repeats too.
+ * A name only one model has needs nothing under it.
+ */
+function detailsForSharedLabels(models: IndexedModel[]): Map<string, string> {
+	const byLabel = new Map<string, IndexedModel[]>();
+	for (const item of models) byLabel.set(item.normalizedLabel, [...(byLabel.get(item.normalizedLabel) ?? []), item]);
+	const details = new Map<string, string>();
+	for (const shared of byLabel.values()) {
+		if (shared.length < 2) continue;
+		const providers = new Map<string, number>();
+		for (const item of shared) providers.set(item.normalizedProvider, (providers.get(item.normalizedProvider) ?? 0) + 1);
+		for (const item of shared) {
+			const providerTellsApart = item.provider !== "Other" && providers.get(item.normalizedProvider) === 1;
+			details.set(item.id, providerTellsApart ? item.provider : item.id);
+		}
+	}
+	return details;
 }
 
 function providerFromModelID(modelID: string): string {
