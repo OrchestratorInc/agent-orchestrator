@@ -650,7 +650,8 @@ type SessionArtifactView struct {
 // RegisterArtifactsRequest is the body of POST
 // /api/v1/sessions/{sessionId}/artifact-registrations.
 type RegisterArtifactsRequest struct {
-	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	Paths      []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	WorkingDir string   `json:"workingDir,omitempty" description:"The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there."`
 }
 
 // RegisterArtifactsResponse reports what a registration did, so the agent can
