@@ -3881,7 +3881,7 @@ describe("ChatWorkspace timeline", () => {
 		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator", provisionState: "ready" }} />);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
 		expect(composer.closest("form")).not.toHaveAttribute("data-starting");
-		expect(await screen.findByText("Ask anything about this project")).toBeInTheDocument();
+		expect(await screen.findByText("Ask anything, / for skills, @ for context")).toBeInTheDocument();
 	});
 
 	it("shimmers the composer and queues messages while a Freestyle Chat session starts or wakes", () => {
@@ -4960,21 +4960,19 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
-	it("centers an empty-chat welcome heading above a realistic starter prompt", () => {
-		const random = vi.spyOn(Math, "random").mockReturnValue(0);
+	it("centers an empty-chat welcome heading above the shortcut hint", () => {
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
 		expect(screen.queryByRole("log")).not.toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toHaveClass("font-normal");
 		expect(screen.getByLabelText("Message the agent")).toHaveAttribute(
 			"aria-placeholder",
-			"Fix a failing test in this project",
+			"Ask anything, / for skills, @ for context",
 		);
 		expect(
 			screen
 				.getByTestId("chat-conversation-panel")
 				.querySelector("[data-composer-placement='center']"),
 		).not.toBeNull();
-		random.mockRestore();
 	});
 
 	it("docks the composer once the conversation has content", () => {
