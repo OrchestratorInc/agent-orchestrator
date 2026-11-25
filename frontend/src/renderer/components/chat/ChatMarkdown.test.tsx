@@ -340,7 +340,9 @@ describe("ChatMarkdown", () => {
 		const link = screen.getByRole("link", { name: "the issue" });
 		expect(link).toHaveAttribute("href", "https://example.com/i/1");
 		expect(link).toHaveAttribute("target", "_blank");
-		expect(link).toHaveClass("text-markdown-link", "hover:text-markdown-link-hover");
+		// A worded web link is its site's chip, keeping its own words.
+		expect(link).toHaveClass("inline-flex");
+		expect(link.querySelector("[data-link-words]")).toHaveTextContent("the issue");
 		// Without noreferrer the opened page gets a handle on the renderer.
 		expect(link.getAttribute("rel")).toContain("noreferrer");
 	});
@@ -601,7 +603,7 @@ describe("ChatMarkdown", () => {
 		const onLinkOpen = vi.fn();
 		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onLinkOpen={onLinkOpen}><ChatMarkdown streaming text="[open](ao://sessions/project/session), ao://sessions/project/other and [site](https://example.com)" /></ChatLinkProvider>);
 		expect(screen.getByRole("link", { name: "site" })).toHaveAttribute("href", "https://example.com");
-		expect(container.querySelector("[data-link-favicon]")).toBeInTheDocument();
+		expect(container.querySelector("[data-link-words]")).toHaveTextContent("site");
 		expect(screen.getByRole("link", { name: "ao://sessions/project/other" })).toHaveAttribute("href", "ao://sessions/project/other");
 		const user = userEvent.setup();
 		await user.click(screen.getByRole("link", { name: "open" }));

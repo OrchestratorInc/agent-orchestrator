@@ -87,9 +87,10 @@ import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
 import { ChatFileIcon, FileChip } from "./ChatFileIcon";
-import { LinkSiteChipContent, linkSiteLabel } from "./MessageLinks";
+import { LinkSiteChipContent, LinkSiteIcon, linkSiteLabel } from "./MessageLinks";
 import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
+import { AOMascot } from "../AOMascot";
 import "./code-theme.css";
 
 // Activity titles live inside disclosure buttons: keep inline formatting, but
@@ -602,6 +603,10 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	const site = href && !chip && !sessionLink && isWebLink(href) && !linksImage(node) && text !== undefined && isBareLinkText(href, text)
 		? linkSiteLabel(href)
 		: undefined;
+	// A link to another session reads as that session's chip, with Orchestrator's mark.
+	const sessionChip = Boolean(href && sessionLink && isSessionLink(href) && !linksImage(node));
+	// A web link with words of its own is the same chip: its site's icon, then its words.
+	const worded = Boolean(href && !className && !chip && !site && !sessionLink && isWebLink(href) && !linksImage(node));
 	return (
 		<AppLink
 			href={href}
@@ -637,10 +642,22 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			}}
 			target="_blank"
 			rel="noreferrer noopener"
-			className={chip || site ? PULL_REQUEST_CHIP_CLASS : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
+			className={chip || site || sessionChip ? PULL_REQUEST_CHIP_CLASS : worded ? cn(PULL_REQUEST_CHIP_CLASS, "max-w-full") : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
 			{chip && href ? <PullRequestChipContent href={href} repo={chip.repo} number={chip.number} /> : site && href ? (
 				<LinkSiteChipContent url={href} />
+			) : sessionChip ? (
+				<>
+					<AOMascot className="size-3.5 shrink-0" />
+					<span data-session-chip="">{children}</span>
+				</>
+			) : worded && href ? (
+				<>
+					<LinkSiteIcon url={href} />
+					<span data-link-words="" className="min-w-0 truncate">
+						<InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
+					</span>
+				</>
 			) : (
 				<>
 					{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}

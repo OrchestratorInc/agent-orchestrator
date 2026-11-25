@@ -2697,7 +2697,7 @@ function ActivityState({
 			<span
 				className={cn(
 					"shrink-0 font-mono text-xs tabular-nums",
-					isNonzeroCommandExit(activity) ? "text-muted-foreground/70" : "text-destructive",
+					isNonzeroCommandExit(activity) ? "activity-row-target text-muted-foreground/70" : "text-destructive",
 				)}
 			>
 				{detail?.exitCode !== undefined ? `exit ${detail.exitCode}` : "failed"}
@@ -2706,14 +2706,14 @@ function ActivityState({
 	}
 	if (status === "recovered") {
 		return (
-			<span className="shrink-0 font-mono text-xs text-muted-foreground/70">
+			<span className="activity-row-target shrink-0 font-mono text-xs text-muted-foreground/70">
 				outcome unknown
 			</span>
 		);
 	}
 	if (status === "cancelled") {
 		return (
-			<span className="shrink-0 font-mono text-xs text-muted-foreground/70">
+			<span className="activity-row-target shrink-0 font-mono text-xs text-muted-foreground/70">
 				stopped
 			</span>
 		);
@@ -2949,8 +2949,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// An agent's built-in tool (a read, a web search) is named like a command step;
 	// a call to an MCP server keeps its tool and server name.
 	const step = activityToolStep(activity);
-	// A question to the user gets its own mark, so it does not read as plain text.
-	const StepMark = step ? stepIcon[step.icon] : isQuestionTool(activity) ? ToolQuestion : undefined;
+	// Every tool row has a mark, so none reads as plain text: a built-in step its
+	// own, a question or any other call the question mark.
+	const StepMark = step ? stepIcon[step.icon] : ToolQuestion;
 	const name = mcpToolName(activity);
 	const tool = step ? step[stepTense(activity, step)] : name.tool;
 	const sourceLabel = step
@@ -3015,9 +3016,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 				) : failed ? (
 					<span className="shrink-0 text-xs text-destructive">failed</span>
 				) : activity.status === "recovered" ? (
-					<span className="shrink-0 text-xs text-muted-foreground/70">outcome unknown</span>
+					<span className="activity-row-target shrink-0 text-xs text-muted-foreground/70">outcome unknown</span>
 				) : activity.status === "cancelled" ? (
-					<span className="shrink-0 text-xs text-muted-foreground/70">stopped</span>
+					<span className="activity-row-target shrink-0 text-xs text-muted-foreground/70">stopped</span>
 				) : null}
 				{/* Anything that opens shows it, whatever its state says. */}
 				{hasBody ? (
@@ -3048,13 +3049,6 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/** A tool call that asks the user a question (Claude's AskUserQuestion, or any call carrying questions). */
-function isQuestionTool(activity: ConversationActivity): boolean {
-	const detail = activity.detail;
-	if (detail?.providerToolName === "AskUserQuestion") return true;
-	const input = detail?.input;
-	return Boolean(input && typeof input === "object" && Array.isArray((input as { questions?: unknown }).questions));
-}
 
 function mcpToolHasBody(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
@@ -3124,6 +3118,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
 			>
+				<ToolQuestion aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
 				<strong
 					className={cn(
 						"activity-row-label min-w-0 truncate text-control font-normal",
