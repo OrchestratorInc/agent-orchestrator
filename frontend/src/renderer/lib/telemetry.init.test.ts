@@ -8,6 +8,7 @@ const posthogStub = {
 	init: vi.fn(),
 	register: vi.fn(),
 	unregister: vi.fn(),
+	get_distinct_id: vi.fn(() => "ins_test"),
 	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>, _options?: Record<string, unknown>): object | undefined => ({})),
 	captureException: vi.fn(),
 	addExceptionStep: vi.fn(),
@@ -637,6 +638,26 @@ describe("PostHog identity and opt-out", () => {
 		expect(await init).toBe(false);
 		expect(posthogStub.init).not.toHaveBeenCalled();
 		expect(posthogStub.opt_in_capturing).not.toHaveBeenCalled();
+	});
+
+	it("hands each event, exactly as sent, to the local telemetry log", async () => {
+		const recordExported = vi.fn();
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareIdentity: vi.fn(async () => false), getLifetimeSessions: vi.fn(async () => null), claimFirstOpen: vi.fn(async () => "ineligible"), capture: vi.fn(async () => true), recordExported },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		await initTelemetry();
+		const init = posthogStub.init.mock.calls[0] as unknown as [string, { before_send: (event: Record<string, unknown>) => Record<string, unknown> }];
+		const sent = init[1].before_send({ event: "ao.routes.viewed", properties: { surface: "board" } });
+		expect(recordExported).toHaveBeenLastCalledWith({ event: "ao.routes.viewed", distinctId: expect.any(String), properties: sent.properties });
+		recordExported.mockClear();
+		await applyAnalyticsOptOut(true);
+		init[1].before_send({ event: "ao.routes.viewed", properties: {} });
+		expect(recordExported).not.toHaveBeenCalled();
 	});
 
 	// The website visitor id a sign-in may carry is never aliased into anything.

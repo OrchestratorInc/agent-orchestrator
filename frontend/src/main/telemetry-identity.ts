@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -245,6 +245,53 @@ export class TelemetryIdentityController {
 		} catch {
 			return none;
 		}
+	}
+
+	/**
+	 * Records one renderer event, as handed to PostHog, in the daemon's local
+	 * telemetry log (`ao telemetry log`). Best effort: a down daemon loses the
+	 * log line, never the event.
+	 */
+	async recordExported(entry: { event: string; distinctId: string; properties: Record<string, unknown> }): Promise<void> {
+		const base = this.origin();
+		if (!base || this.isOptedOut()) return;
+		try {
+			await this.request(base, "/internal/telemetry/exported", { method: "POST", body: entry });
+		} catch {
+			// The log is a convenience; the export path does not depend on it.
+		}
+	}
+
+	/**
+	 * Watches the opt-out and account-identity markers, so a change made outside
+	 * this app (`ao telemetry off` in a terminal) reaches the renderer at once,
+	 * not on the next launch. Returns a stop function.
+	 */
+	watchMarkers(): () => void {
+		let optedOut = this.isOptedOut();
+		let share = this.isSharingIdentity();
+		let watcher: FSWatcher | null = null;
+		const check = () => {
+			const nextOptedOut = this.isOptedOut();
+			const nextShare = this.isSharingIdentity();
+			if (nextOptedOut !== optedOut) {
+				optedOut = nextOptedOut;
+				this.broadcast(nextOptedOut);
+			}
+			if (nextShare !== share) {
+				share = nextShare;
+				this.broadcastShareIdentity(nextShare);
+			}
+		};
+		try {
+			watcher = watch(this.dataDir, (_event, filename) => {
+				if (filename === null || filename === TELEMETRY_OPT_OUT_FILE || filename === TELEMETRY_SHARE_IDENTITY_FILE) check();
+			});
+			watcher.on("error", () => watcher?.close());
+		} catch {
+			// No watcher (missing dir, platform limit): the switch still applies at the next launch.
+		}
+		return () => watcher?.close();
 	}
 
 	private async request(base: string, pathname: string, init: { method: string; body?: object }): Promise<Response> {

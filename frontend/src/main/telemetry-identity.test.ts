@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -439,4 +439,35 @@ describe("TelemetryIdentityController after the app quit mid sign-out", () => {
     await expect(access(path.join(dir, "telemetry_bound_user"))).rejects.toThrow();
     expect((await readFile(path.join(dir, "telemetry_anonymous_id"), "utf8")).trim()).not.toBe("anon_linked");
   });
+});
+
+describe("TelemetryIdentityController local telemetry log", () => {
+	it("forwards a renderer event to the daemon's exported log, and nothing while opted out", async () => {
+		const { ctl, fetcher } = await controller();
+		await ctl.recordExported({ event: "ao.routes.viewed", distinctId: "ins_x", properties: { surface: "board" } });
+		const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe(`${ORIGIN}/internal/telemetry/exported`);
+		expect(JSON.parse(init.body as string)).toEqual({ event: "ao.routes.viewed", distinctId: "ins_x", properties: { surface: "board" } });
+		await ctl.setOptedOut(true);
+		await ctl.recordExported({ event: "ao.routes.viewed", distinctId: "ins_x", properties: {} });
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
+	it("broadcasts an opt-out or identity change written outside the app", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const optOut = vi.fn();
+		const share = vi.fn();
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, vi.fn() as never, optOut, share);
+		const stop = ctl.watchMarkers();
+		try {
+			await writeFile(path.join(dir, TELEMETRY_OPT_OUT_FILE), "1\n");
+			await vi.waitFor(() => expect(optOut).toHaveBeenCalledWith(true));
+			await writeFile(path.join(dir, TELEMETRY_SHARE_IDENTITY_FILE), "1\n");
+			await vi.waitFor(() => expect(share).toHaveBeenCalledWith(true));
+			await rm(path.join(dir, TELEMETRY_OPT_OUT_FILE));
+			await vi.waitFor(() => expect(optOut).toHaveBeenLastCalledWith(false));
+		} finally {
+			stop();
+		}
+	});
 });

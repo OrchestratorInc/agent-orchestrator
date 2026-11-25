@@ -294,6 +294,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newSearchCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
+	root.AddCommand(newTelemetryCommand(ctx))
 
 	return root
 }
@@ -305,6 +306,11 @@ type commandContext struct {
 func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	commandPath := telemetrymeta.NormalizeCommandPath(cmd.CommandPath())
 	if telemetrymeta.IsRoutineInternalCLICommand(commandPath) {
+		return false
+	}
+	// Inspecting or switching telemetry is never itself reported: `ao telemetry
+	// off` must not send an event on its way to opting out.
+	if commandPath == "ao telemetry" || strings.HasPrefix(commandPath, "ao telemetry ") {
 		return false
 	}
 	switch commandPath {

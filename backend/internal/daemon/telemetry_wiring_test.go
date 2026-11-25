@@ -19,7 +19,7 @@ import (
 )
 
 func TestNewTelemetrySink_DefaultsToNoopWhenDisabled(t *testing.T) {
-	sink, _, active := newTelemetrySink(config.Config{}, nil, slog.Default())
+	sink, _, _, active := newTelemetrySink(config.Config{}, nil, slog.Default())
 	if active {
 		t.Fatal("remote export active while events disabled")
 	}
@@ -29,7 +29,7 @@ func TestNewTelemetrySink_DefaultsToNoopWhenDisabled(t *testing.T) {
 }
 
 func TestNewTelemetrySink_MetricsOnlyDoesNotEnableEvents(t *testing.T) {
-	sink, _, active := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Metrics: true}}, nil, slog.Default())
+	sink, _, _, active := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Metrics: true}}, nil, slog.Default())
 	if active {
 		t.Fatal("remote export active with metrics only")
 	}
@@ -46,7 +46,7 @@ func TestNewTelemetrySink_UsesLocalSQLiteWhenEnabled(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	sink, _, active := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Events: true}, DataDir: dataDir}, store, slog.Default())
+	sink, _, _, active := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Events: true}, DataDir: dataDir}, store, slog.Default())
 	if active {
 		t.Fatal("remote export active with local sink")
 	}
@@ -66,7 +66,7 @@ func TestNewTelemetrySink_MissingRemoteCredentialsDisablesRemoteUsage(t *testing
 	t.Cleanup(func() { _ = store.Close() })
 	cfg := config.Config{DataDir: dataDir,
 		Telemetry: config.TelemetryConfig{Events: true, Remote: config.TelemetryRemotePostHog}}
-	sink, identity, active := newTelemetrySink(cfg, store, slog.Default())
+	sink, identity, _, active := newTelemetrySink(cfg, store, slog.Default())
 	if active || identity == nil {
 		t.Fatalf("active = %v, identity = %T, want inactive local sink with identity", active, identity)
 	}
@@ -107,7 +107,7 @@ func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	sink, _, active := newTelemetrySink(config.Config{
+	sink, _, _, active := newTelemetrySink(config.Config{
 		DataDir: dataDir,
 		Telemetry: config.TelemetryConfig{
 			Events:      true,
@@ -312,5 +312,51 @@ func TestGitHubLoginResolverSkipsLookupWhileOptedOut(t *testing.T) {
 	}
 	if ident.logins.Load() != 0 {
 		t.Fatal("resolver resolved a GitHub login while opted out")
+	}
+}
+
+func TestTelemetryLocalRecordsExportedEventsAndSwitchesTheOptOut(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := sqlitetest.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ident, err := telemetryadapter.NewIdentity(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := telemetryadapter.NewLocalSQLiteSink(store, slog.New(slog.DiscardHandler), 0)
+	cfg := config.Config{DataDir: dataDir, Telemetry: config.TelemetryConfig{Events: true}}
+	tl := newTelemetryLocal(cfg, store, local, ident, true, func(context.Context) bool { return false })
+
+	tl.Record(t.Context(), telemetryadapter.ExportedEvent{Event: "ao.routes.viewed", Surface: "desktop", DistinctID: "ins_x", Properties: map[string]any{"surface": "board"}})
+	// A raw local event is not an export and must not appear in the log.
+	local.Emit(t.Context(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon", OccurredAt: time.Now(), Payload: map[string]any{"port": 3001}})
+	if err := local.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	events, err := tl.List(t.Context(), time.Unix(0, 0), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Event != "ao.routes.viewed" || events[0].Surface != "desktop" || events[0].DistinctID != "ins_x" || events[0].Properties["surface"] != "board" {
+		t.Fatalf("log = %#v", events)
+	}
+	if st := tl.Status(t.Context()); st.OptedOut || !st.AnalyticsSending || st.RetentionDays != 30 || !st.LocalLog {
+		t.Fatalf("status = %#v", st)
+	}
+
+	if err := tl.SetOptedOut(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !ident.OptedOut() {
+		t.Fatal("ao telemetry off did not write the shared opt-out marker")
+	}
+	if st := tl.Status(t.Context()); !st.OptedOut || st.AnalyticsSending || st.InstallID != "" {
+		t.Fatalf("opted-out status = %#v", st)
+	}
+	if err := tl.SetOptedOut(t.Context(), false); err != nil || ident.OptedOut() {
+		t.Fatalf("ao telemetry on: err=%v optedOut=%v", err, ident.OptedOut())
 	}
 }

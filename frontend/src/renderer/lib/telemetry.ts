@@ -892,7 +892,20 @@ function sanitizePostHogCaptureResult<T>(event: T): T {
 	safe.properties = installId ? { ...properties, install_id: installId } : properties;
 	delete safe.$set;
 	delete safe.$set_once;
+	recordExportedLocally(safe);
 	return safe as T;
+}
+
+// Hands each event, exactly as it goes to PostHog, to the daemon's local log
+// (`ao telemetry log`). Never throws and never delays the send.
+function recordExportedLocally(event: Record<string, unknown>): void {
+	if (analyticsOptedOut || typeof event.event !== "string") return;
+	try {
+		const distinctId = posthogReady ? posthog.get_distinct_id() : "";
+		aoBridge.telemetry.recordExported?.({ event: event.event, distinctId: typeof distinctId === "string" ? distinctId : "", properties: (event.properties as Record<string, unknown>) ?? {} });
+	} catch {
+		// The local log is best effort.
+	}
 }
 
 async function sanitizeRendererContextProperties(properties?: TelemetryProperties): Promise<TelemetryProperties> {

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
@@ -36,21 +38,28 @@ var aggregatedEventNames = []string{
 
 // newTelemetrySink also returns the live telemetry identity (nil when the data
 // dir is unknown), shared with the remote sink so a sign-in or opt-out seen by
-// the identity routes is what the exporter stamps and honors.
-func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, bool) {
+// the identity routes is what the exporter stamps and honors, and the local
+// SQLite sink (nil when local events are off), which also records every
+// exported event for `ao telemetry log`.
+func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, ports.EventSink, bool) {
 	if !cfg.Telemetry.Events {
-		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), false
+		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), nil, false
 	}
 	local := telemetryadapter.NewLocalSQLiteSink(store, log, cfg.Telemetry.LocalRetention)
 	if cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
-		return local, standaloneIdentity(cfg, log), false
+		return local, standaloneIdentity(cfg, log), local, false
 	}
 	remote, err := telemetryadapter.NewPostHogSink(cfg.DataDir, cfg.Telemetry.PostHogKey, cfg.Telemetry.PostHogHost,
 		cfg.Telemetry.AppVersion, cfg.Agent, nil, log)
 	if err != nil {
 		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
-		return local, standaloneIdentity(cfg, log), false
+		return local, standaloneIdentity(cfg, log), local, false
 	}
+	// Every event PostHog accepted is written locally exactly as sent, so
+	// `ao telemetry log` shows what left the machine, not the raw local stream.
+	remote.OnExported(func(name, distinctID string, props map[string]any) {
+		telemetryadapter.RecordExported(context.Background(), local, telemetryadapter.ExportedEvent{Event: name, Surface: "daemon", DistinctID: distinctID, Properties: props})
+	})
 	// app-state.json and update-settings.json live beside running.json.
 	if cfg.RunFilePath != "" {
 		remote.SetInstallStateDir(filepath.Dir(cfg.RunFilePath))
@@ -82,7 +91,78 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
-	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), true
+	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), local, true
+}
+
+// newTelemetryLocal backs `ao telemetry log|status|on|off`. The log reads the
+// exported rows in the local event store; renderer events forwarded by Electron
+// main are recorded there too. The opt-out writes the same marker Settings
+// writes, which the desktop, the daemon and a paired phone all honor.
+func newTelemetryLocal(cfg config.Config, store *sqlite.Store, local ports.EventSink, ident ports.TelemetryIdentityStore, remoteActive bool, errorReports func(context.Context) bool) *httpd.TelemetryLocal {
+	retentionDays := int(telemetryadapter.DefaultRetention / (24 * time.Hour))
+	if cfg.Telemetry.LocalRetention >= telemetryadapter.MinRetention {
+		retentionDays = int(cfg.Telemetry.LocalRetention / (24 * time.Hour))
+	}
+	doNotTrack := config.DoNotTrack(os.Getenv)
+	status := func(ctx context.Context) httpd.TelemetryStatus {
+		st := httpd.TelemetryStatus{
+			DoNotTrack:       doNotTrack,
+			RemoteConfigured: remoteActive,
+			LocalLog:         local != nil && store != nil,
+			RetentionDays:    retentionDays,
+		}
+		if ident != nil {
+			st.OptedOut = ident.OptedOut()
+			st.ShareIdentity = ident.SharesIdentity()
+			if !st.OptedOut {
+				st.InstallID = ident.Snapshot().InstallID
+			}
+		}
+		st.AnalyticsSending = remoteActive && !doNotTrack && ident != nil && !ident.ExportSuppressed()
+		st.ErrorReports = !doNotTrack && errorReports != nil && errorReports(ctx)
+		return st
+	}
+	return &httpd.TelemetryLocal{
+		Status: status,
+		List: func(ctx context.Context, since time.Time, limit int) ([]telemetryadapter.ExportedEvent, error) {
+			if store == nil {
+				return nil, nil
+			}
+			rows, err := store.ListExportedTelemetryEventsSince(ctx, since, int64(limit))
+			if err != nil {
+				return nil, err
+			}
+			return telemetryadapter.DecodeExported(rows), nil
+		},
+		Record: func(ctx context.Context, ev telemetryadapter.ExportedEvent) {
+			if local == nil || (ident != nil && ident.OptedOut()) {
+				return
+			}
+			telemetryadapter.RecordExported(ctx, local, ev)
+		},
+		SetOptedOut: func(_ context.Context, optedOut bool) error {
+			if cfg.DataDir == "" {
+				return errors.New("telemetry data dir unknown")
+			}
+			marker := filepath.Join(cfg.DataDir, telemetryadapter.OptOutFile)
+			if !optedOut {
+				if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				return nil
+			}
+			if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(marker, []byte("1\n"), 0o600); err != nil {
+				return err
+			}
+			// Matches the desktop's opt-out: counts held for the daily CLI
+			// summary are dropped, not sent after a later opt-in.
+			_ = os.Remove(filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
+			return nil
+		},
+	}
 }
 
 const writeLockHeldEvent = "ao.daemon.write_lock_held"

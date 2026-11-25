@@ -328,7 +328,7 @@ func Run(buildVersion string) (retErr error) {
 		return telemetryPolicy.EventsAllowed(ctx, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
 	})
 	defer sentryobs.SetPolicyCheck(nil)
-	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
+	telemetrySink, telemetryIdentity, localTelemetry, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
 	configureUsageRecording(cfg, store, telemetryIdentity)
 	recordSlowWriteLocks(store, telemetrySink)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
@@ -1397,8 +1397,11 @@ func Run(buildVersion string) (retErr error) {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
-		LifetimeSessions:   store.LifetimeSessions,
-		DaemonVersion:      cfg.Telemetry.AppVersion,
+		TelemetryLocal: newTelemetryLocal(cfg, store, localTelemetry, telemetryIdentity, remoteTelemetryActive, func(ctx context.Context) bool {
+			return telemetryPolicy.EventsAllowed(ctx, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit) && publishedSentryDSN(cfg.Telemetry.SentryDSN, cfg.Telemetry.AppVersion) != ""
+		}),
+		LifetimeSessions: store.LifetimeSessions,
+		DaemonVersion:    cfg.Telemetry.AppVersion,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
 				usage.flush(ctx, false)

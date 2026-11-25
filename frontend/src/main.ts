@@ -400,6 +400,8 @@ const telemetryIdentity = new TelemetryIdentityController(
 		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(SHARE_IDENTITY_CHANGED_CHANNEL, share);
 	},
 );
+// `ao telemetry off|on` writes the same marker from a terminal; apply it live.
+telemetryIdentity.watchMarkers();
 const trustedShellWebContents = new Map<number, WebContents>();
 // Launch start per shell page for ao.launches.timed, handed out once so a reload
 // does not report a launch. The first shell window is a cold launch; later
@@ -3753,6 +3755,14 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 });
 ipcMain.handle("telemetry:getGithubIdentity", () => telemetryIdentity.githubIdentity());
 ipcMain.handle("telemetry:getShareIdentity", () => telemetryIdentity.isSharingIdentity());
+// Each renderer event as handed to PostHog, for the local `ao telemetry log`.
+ipcMain.on("telemetry:recordExported", (event, entry: unknown) => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return;
+	if (!entry || typeof entry !== "object") return;
+	const { event: name, distinctId, properties } = entry as Record<string, unknown>;
+	if (typeof name !== "string" || typeof distinctId !== "string" || !properties || typeof properties !== "object" || Array.isArray(properties)) return;
+	void telemetryIdentity.recordExported({ event: name, distinctId, properties: properties as Record<string, unknown> });
+});
 ipcMain.handle("telemetry:setShareIdentity", (event, share: unknown) => {
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || typeof share !== "boolean") throw new Error("invalid GitHub username sharing request");

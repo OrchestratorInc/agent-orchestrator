@@ -44,6 +44,54 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 	return err
 }
 
+const listExportedTelemetryEventsSince = `-- name: ListExportedTelemetryEventsSince :many
+SELECT id, occurred_at, name, source, level, project_id, session_id, request_id, payload_json
+FROM telemetry_event
+WHERE occurred_at >= ? AND source LIKE 'exported:%'
+ORDER BY occurred_at DESC
+LIMIT ?
+`
+
+type ListExportedTelemetryEventsSinceParams struct {
+	OccurredAt time.Time
+	Limit      int64
+}
+
+// Rows recorded when an event was exported (source "exported:<surface>"),
+// newest first, for `ao telemetry log`.
+func (q *Queries) ListExportedTelemetryEventsSince(ctx context.Context, arg ListExportedTelemetryEventsSinceParams) ([]TelemetryEvent, error) {
+	rows, err := q.db.QueryContext(ctx, listExportedTelemetryEventsSince, arg.OccurredAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TelemetryEvent{}
+	for rows.Next() {
+		var i TelemetryEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.OccurredAt,
+			&i.Name,
+			&i.Source,
+			&i.Level,
+			&i.ProjectID,
+			&i.SessionID,
+			&i.RequestID,
+			&i.PayloadJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTelemetryEventsSince = `-- name: ListTelemetryEventsSince :many
 SELECT id, occurred_at, name, source, level, project_id, session_id, request_id, payload_json
 FROM telemetry_event

@@ -427,6 +427,9 @@ type PostHogSink struct {
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
 	// (zero-value sinks in tests) behaves as anonymous and opted in.
 	ident *Identity
+	// onExported records each event PostHog accepted, exactly as sent, for the
+	// local `ao telemetry log`. Nil records nothing.
+	onExported func(name, distinctID string, props map[string]any)
 	// appVersion stamps app_version/ao_version on every exported event. Empty
 	// leaves the properties off entirely rather than reporting a misleading
 	// "unknown" that would show up as a real version in release breakdowns.
@@ -606,6 +609,12 @@ const (
 	postHogSendRetryDelay  = 200 * time.Millisecond
 )
 
+// OnExported registers fn to receive every event PostHog accepted, with the
+// exact distinct ID and properties that were sent. Call before the first Emit.
+func (s *PostHogSink) OnExported(fn func(name, distinctID string, props map[string]any)) {
+	s.onExported = fn
+}
+
 func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	s.sendQueued(ctx, queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)})
 }
@@ -652,6 +661,9 @@ func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) 
 		}
 		retryable, err := s.sendOnce(ctx, payload)
 		if err == nil {
+			if s.onExported != nil {
+				s.onExported(eventName, distinctID, props)
+			}
 			return
 		}
 		if !retryable || attempt == postHogSendMaxAttempts {

@@ -309,6 +309,7 @@ if (typeof window !== "undefined") {
 			setCloudUser: async () => false,
 			getGithubIdentity: async () => ({ login: null, signedIn: false }),
 			getShareIdentity: async () => false,
+			recordExported: () => undefined,
 			setShareIdentity: async (share: boolean) => share,
 			onShareIdentity: () => () => undefined,
 			getLifetimeSessions: async () => null,

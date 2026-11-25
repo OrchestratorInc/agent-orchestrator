@@ -670,6 +670,7 @@ const api = {
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
 		getGithubIdentity: () => ipcRenderer.invoke("telemetry:getGithubIdentity") as Promise<{ login: string | null; signedIn: boolean }>,
 		getShareIdentity: () => ipcRenderer.invoke("telemetry:getShareIdentity") as Promise<boolean>,
+		recordExported: (entry: { event: string; distinctId: string; properties: Record<string, unknown> }) => ipcRenderer.send("telemetry:recordExported", entry),
 		setShareIdentity: (share: boolean) => ipcRenderer.invoke("telemetry:setShareIdentity", share) as Promise<boolean>,
 		onShareIdentity: (listener: (share: boolean) => void) => {
 			const wrapped = (_event: unknown, share: boolean) => listener(share);

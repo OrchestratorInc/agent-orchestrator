@@ -195,3 +195,20 @@ func TestNoPersonProfileOrGeoIPOnAnyEvent(t *testing.T) {
 		t.Fatalf("shared identity missing: %#v", props)
 	}
 }
+
+func TestOnExportedReceivesExactlyWhatPostHogAccepted(t *testing.T) {
+	requests := make(chan map[string]any, 1)
+	sink := newTestSink(t, t.TempDir(), requests, nil)
+	defer func() { _ = sink.Close(context.Background()) }()
+	var gotName, gotDistinct string
+	var gotProps map[string]any
+	sink.OnExported(func(name, distinctID string, props map[string]any) {
+		gotName, gotDistinct, gotProps = name, distinctID, props
+	})
+	sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
+	body := <-requests
+	sent, _ := body["properties"].(map[string]any)
+	if gotName != "ao.daemon.started" || gotDistinct != body["distinct_id"] || gotProps["install_id"] != sent["install_id"] || len(gotProps) != len(sent) {
+		t.Fatalf("recorded %q %q %#v, sent %#v", gotName, gotDistinct, gotProps, body)
+	}
+}
