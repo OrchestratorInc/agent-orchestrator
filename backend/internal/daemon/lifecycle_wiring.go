@@ -102,7 +102,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	reaperStart := make(chan struct{})
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
 	activityStart := make(chan struct{})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart, Rechecks: lcm})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{
 		Logger:   logger,
 		Wake:     sessionChanges,
