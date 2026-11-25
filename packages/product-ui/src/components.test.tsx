@@ -257,7 +257,7 @@ describe("portable leaf components", () => {
 		expect(screen.queryByRole("button", { name: "No conflicts" })).not.toBeInTheDocument();
 	});
 
-	it("says the checks row as counts worst first, each with its own glyph", () => {
+	it("leads the checks row with its worst count, and shows every state in a bar under it", () => {
 		render(
 			<PRCardStatusSummary
 				compactReadiness
@@ -288,14 +288,23 @@ describe("portable leaf components", () => {
 			/>,
 		);
 		const tally = screen.getByTestId("pr-checks-tally");
-		expect(tally).toHaveTextContent("Checks2 failing1 running9 passed");
+		// Screen readers hear every count, worst first; the row shows the worst one.
+		expect(tally).toHaveTextContent("Checks2 failing, 1 running, 9 passed");
 		// The counts stand in for the verdict, so it isn't said twice.
 		expect(screen.queryByText("Checks failing")).not.toBeInTheDocument();
-		expect([...tally.querySelectorAll("[data-state]")].map((count) => count.getAttribute("data-state"))).toEqual(["failed", "running", "passed"]);
-		// Each count has a shape, not only a colour; only the running one spins.
-		expect(tally.querySelector('[data-state="failed"] svg')).toHaveClass("icon-check-failed");
-		expect(tally.querySelector('[data-state="running"] svg')).toHaveClass("motion-safe:animate-spin");
-		expect(tally.querySelector('[data-state="passed"] svg')).not.toHaveClass("motion-safe:animate-spin");
+		const shown = tally.querySelector('[data-state]:not(.sr-only)');
+		expect(shown).toHaveAttribute("data-state", "failed");
+		// The lead count is words only, as on GitHub; "failing" says it without the colour.
+		expect(shown).toHaveTextContent("2 failing");
+		expect(shown?.querySelector("svg")).toBeNull();
+		expect([...tally.querySelectorAll("[data-state].sr-only")].map((count) => count.getAttribute("data-state"))).toEqual(["running", "passed"]);
+		// The bar: done on the left, each state sized by its count; static colours, nothing pulses.
+		const bar = screen.getByTestId("pr-checks-bar");
+		expect([...bar.children].map((segment) => segment.getAttribute("data-state"))).toEqual(["passed", "running", "failed"]);
+		expect((bar.children[0] as HTMLElement).style.flexGrow).toBe("9");
+		expect(bar.querySelector('[data-state="running"]')).toHaveClass("bg-status-working");
+		expect(bar.querySelector("[class*='animate-']")).toBeNull();
+		expect(bar).toHaveAttribute("title", "2 failing · 1 running · 9 passed");
 		// A row without a link of its own has no arrow beside it.
 		expect(screen.queryByRole("link")).not.toBeInTheDocument();
 	});

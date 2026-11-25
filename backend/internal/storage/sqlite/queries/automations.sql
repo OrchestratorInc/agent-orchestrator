@@ -44,6 +44,7 @@ SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort, template_id, use_case
 FROM automations
 WHERE enabled = 1 AND next_run_at <= ?
+  AND project_id IN (SELECT id FROM projects WHERE archived_at IS NULL)
 ORDER BY next_run_at, id
 LIMIT ?;
 
