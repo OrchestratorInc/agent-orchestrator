@@ -8235,8 +8235,8 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
 	// The prompts sit out of the flow, pinned to the composer's top edge, and this
 	// spacer holds their room. When they leave, the spacer closes at once and the
-	// heading glides down while the prompts fade where they stood, so nothing that
-	// leaves ever drifts down onto the composer.
+	// prompts travel down with the heading, tucking behind the composer's top edge
+	// (the stack clips below it) as they fade; coming back, they rise out of it.
 	const promptsRef = useRef<HTMLDivElement>(null);
 	const [promptsHeight, setPromptsHeight] = useState(0);
 	useLayoutEffect(() => {
@@ -8248,7 +8248,7 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 		return () => observer.disconnect();
 	}, [promptsOpen]);
 	return (
-		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center">
+		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
 			<motion.h1
 				layout={reducedMotion ? false : "position"}
 				transition={{ layout: WELCOME_SETTLE }}
@@ -8263,11 +8263,11 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 						ref={promptsRef}
 						key="welcome-prompts"
 						className="pointer-events-auto absolute inset-x-0 bottom-0"
-						initial={{ opacity: 0, y: -4 }}
-						// Back in once the heading has made room, easing out.
-						animate={{ opacity: 1, y: 0, transition: reducedMotion ? { duration: 0 } : { duration: 0.22, delay: 0.08, ease: [0.23, 1, 0.32, 1] } }}
-						// Out quickly, easing in, lifting a little toward the heading that replaces them.
-						exit={{ opacity: 0, y: -4, scale: 0.98, transition: reducedMotion ? { duration: 0 } : { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
+						initial={{ opacity: 0, y: promptsHeight }}
+						// Rise with the heading, on the heading's curve, fading in a little behind it.
+						animate={{ opacity: 1, y: 0, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.24, delay: 0.06, ease: [0.23, 1, 0.32, 1] } } }}
+						// Sink with the heading; the fade finishes before they reach the composer.
+						exit={{ opacity: 0, y: promptsHeight, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.2, ease: [0.4, 0, 1, 1] } } }}
 					>
 						{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
 						<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
