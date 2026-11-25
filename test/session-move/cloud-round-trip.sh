@@ -155,12 +155,12 @@ if not resume:
     }, user["uuid"], requestId="req_synthetic_" + session_id[:8])
     with open(transcript, "a") as f:
         for r in (user, answer):
-            f.write(json.dumps(r) + "\n")
+            f.write(json.dumps(r, separators=(",", ":")) + "\n")
     agent = "a" + session_id.replace("-", "")[:16]
     sub = os.path.join(project, session_id, "subagents", "agent-" + agent + ".jsonl")
     os.makedirs(os.path.dirname(sub), exist_ok=True)
     with open(sub, "w") as f:
-        f.write(json.dumps(record("user", {"role": "user", "content": "List the files in " + cwd}, None, isSidechain=True, agentId=agent)) + "\n")
+        f.write(json.dumps(record("user", {"role": "user", "content": "List the files in " + cwd}, None, isSidechain=True, agentId=agent), separators=(",", ":")) + "\n")
 
 
 def hook_groups(event):
@@ -177,7 +177,7 @@ def hook_groups(event):
 
 
 def hook(event, **payload):
-    body = json.dumps(dict({"session_id": session_id, "transcript_path": transcript, "cwd": cwd, "hook_event_name": event}, **payload))
+    body = json.dumps(dict({"session_id": session_id, "transcript_path": transcript, "cwd": cwd, "hook_event_name": event}, **payload), separators=(",", ":"))
     for group in hook_groups(event):
         for h in group.get("hooks", []):
             if h.get("type", "command") == "command" and h.get("command"):
