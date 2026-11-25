@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -13399,6 +13400,13 @@ func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.Sessi
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil
+}
+
+func TestLaunchBinaryUnwrapsProviderEnvWrapper(t *testing.T) {
+	argv := []string{"sh", "-c", "exec \"$@\"", agentlaunch.ProviderEnvMarker, "env", "A=b", "/opt/agents/memcode", "--resume", "id"}
+	if got, ok := launchBinary(argv); !ok || got != "/opt/agents/memcode" {
+		t.Fatalf("launchBinary = %q, %v; want the wrapped agent", got, ok)
+	}
 }
 
 func TestAOSkillPointerNamesDeviceGuideOnlyWhenOffered(t *testing.T) {

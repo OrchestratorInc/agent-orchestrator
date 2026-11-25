@@ -609,6 +609,7 @@ func (m *Manager) runInterfaceTransition(
 				return
 			}
 			m.augmentAgentRuntimeEnv(bridge, env)
+			m.applyImportedConfigEnv(ctx, rec, env)
 			if bridgeErr := storageBridge.PrepareInterfaceHandoffStorage(ctx, ports.SessionRef{
 				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: transition.NativeConversationID},
@@ -1046,6 +1047,7 @@ func (m *Manager) persistedNativeConversationID(
 	if err != nil {
 		return "", err
 	}
+	m.applyImportedConfigEnv(ctx, rec, env)
 	exists, err := probe.NativeConversationExists(ctx, ports.SessionRef{
 		ID:            string(rec.ID),
 		WorkspacePath: rec.Metadata.WorkspacePath,
@@ -1101,6 +1103,7 @@ func (m *Manager) preflightInterfaceTarget(
 	}
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
+	m.applyImportedConfigEnv(ctx, rec, env)
 	if err := m.preflightLaunchAuth(ctx, agent, rec, env); err != nil {
 		return err
 	}
@@ -1142,17 +1145,27 @@ func (m *Manager) preflightTerminalLaunch(
 	}
 	config := restoredAgentConfig(rec, project.Config)
 	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	_, launchPath, err := m.importLaunch(ctx, "preflight terminal", rec, rec.Metadata.WorkspacePath, env, false)
+	if err != nil {
+		return err
+	}
 	var cmd []string
 	if nativeConversationID == "" {
-		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
+		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath,
 			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", env)
 	} else {
 		var resumable bool
+		restoreRec := rec
+		restoreRec.Metadata.AgentSessionID = nativeConversationID
+		metadata := nativeRestoreMetadata(restoreRec)
+		// Preflight runs before storage bridging. Let adapters validate the
+		// current interface's binding; actual launches get fresh restore metadata.
+		metadata[ports.MetadataKeySessionMode] = string(rec.Mode)
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 			Env: env,
 			Session: ports.SessionRef{
-				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
-				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeConversationID},
+				ID: string(rec.ID), WorkspacePath: launchPath,
+				Metadata: metadata,
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
 			Config: config, Permissions: config.Permissions,

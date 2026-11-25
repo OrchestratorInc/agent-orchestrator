@@ -841,6 +841,16 @@ func Run(buildVersion string) (retErr error) {
 	wireManagedPreviewExit(managedPreview, sessionSvc, log)
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
+	sessionImportSvc.SetImportVersionCheck(func(ctx context.Context, harness domain.AgentHarness) error {
+		agent, ok := agents.Agent(harness)
+		if !ok {
+			return nil
+		}
+		if checker, ok := agent.(ports.AgentImportVersionChecker); ok {
+			return checker.CheckImportVersion(ctx)
+		}
+		return nil
+	})
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
 	// The Orchestrator attribution beta credits Orchestrator on new sessions'
 	// commits and PRs. Wired before tracker intake starts, so a session its

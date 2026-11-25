@@ -105,6 +105,7 @@ import {
 	Pin as MynaPin,
 	Plus as MynaPlus,
 	Presentation as MynaPresentation,
+	Question as MynaQuestion,
 	QuestionCircle as MynaQuestionCircle,
 	Refresh as MynaRefresh,
 	Repeat as MynaRepeat,
@@ -321,6 +322,7 @@ export const CircleArrowUp = fromMyna(MynaArrowUpCircle, "circle-arrow-up");
 export const CircleCheck = fromMyna(MynaCheckCircle, "circle-check");
 export const CircleDashed = fromMyna(MynaCircleDashed, "circle-dashed");
 export const CircleHelp = fromMyna(MynaQuestionCircle, "circle-help");
+export const QuestionMark = fromMyna(MynaQuestion, "question-mark");
 export const CircleMinus = fromMyna(MynaMinusCircle, "circle-minus");
 export const CircleStop = fromMyna(MynaStopCircle, "circle-stop");
 export const CircleX = fromMyna(MynaXCircle, "circle-x");
