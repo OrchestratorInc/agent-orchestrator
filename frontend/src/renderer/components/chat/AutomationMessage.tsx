@@ -32,7 +32,7 @@ import {
 	CornerDownRight,
 	type AppIcon,
 } from "@/components/app-icons";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
@@ -40,7 +40,7 @@ import { GITHUB_HTML_REHYPE_NO_IMAGES } from "../../lib/github-html";
 import { cn } from "../../lib/utils";
 import type { SessionGitActionKind } from "../../stores/session-git-action-store";
 import { Pressable } from "../ui/pressable";
-import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
+import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
 import { formatMessageTimestamp, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
@@ -286,6 +286,52 @@ export const automationOf = cachedBy((item) =>
 	item.kind === "message" && !item.senderSessionId && !/^\s*\[from /.test(item.text) ? readAutomation(item.text) : null,
 );
 
+/**
+ * Review comments AO delivered back to back for one PR, keyed by message id.
+ * The daemon sends each comment as its own message, so a review round arrives
+ * as a burst; its first message maps to the whole burst and draws it as one
+ * event, and every later one maps to null and draws nothing. A lone comment is
+ * not in the map.
+ */
+export function reviewBursts(items: readonly (ConversationItem | undefined)[]): ReadonlyMap<string, readonly ConversationMessage[] | null> {
+	const bursts = new Map<string, readonly ConversationMessage[] | null>();
+	let run: ConversationMessage[] = [];
+	let pr: number | undefined;
+	const close = () => {
+		if (run.length > 1) {
+			bursts.set(run[0]!.id, run);
+			for (const message of run.slice(1)) bursts.set(message.id, null);
+		}
+		run = [];
+		pr = undefined;
+	};
+	for (const item of items) {
+		// Only AO's own nudges join: a human message that reads like one draws as
+		// a bubble, and the comments after it must not hide behind it.
+		const automation = item?.kind === "message" && item.origin === "automation" ? automationOf(item) : null;
+		if (item?.kind === "message" && automation?.kind === "reviewComments") {
+			if (pr !== automation.pr.number) close();
+			run.push(item);
+			pr = automation.pr.number;
+			continue;
+		}
+		close();
+	}
+	close();
+	return bursts;
+}
+
+/** A burst's comments as one event: every comment, the newest PR title, and the newest forge time. */
+function mergedReviewComments(burst: readonly ConversationMessage[]): Extract<Automation, { kind: "reviewComments" }> | null {
+	const each = burst
+		.map((message) => automationOf(message))
+		.filter((automation): automation is Extract<Automation, { kind: "reviewComments" }> => automation?.kind === "reviewComments");
+	const last = each.at(-1);
+	if (!last) return null;
+	const times = each.flatMap((automation) => (automation.at ? [automation.at] : [])).sort();
+	return { kind: "reviewComments", pr: last.pr, comments: each.flatMap((automation) => automation.comments), at: times.at(-1) };
+}
+
 /* -------------------------------------------------------------------------- */
 /* drawing                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -293,12 +339,18 @@ export const automationOf = cachedBy((item) =>
 type UserAction = Extract<Automation, { kind: "fileFeedback" | "diffSelection" | "gitAction" | "browserFeedback" }>;
 type PullRequestAutomation = Extract<Automation, { pr: PullRequestRef }>;
 
-/** An automation message drawn as what it is, or `fallback` when AO cannot tell. */
-export function AutomationMessage({ message, queued, fallback }: { message: ConversationMessage; queued?: boolean; fallback: ReactNode }) {
-	const automation = automationOf(message);
+/**
+ * An automation message drawn as what it is, or `fallback` when AO cannot tell.
+ * `burst` is this message's entry from `reviewBursts`: the messages it draws
+ * for, or null when an earlier message already drew it.
+ */
+export function AutomationMessage({ message, queued, fallback, burst }: { message: ConversationMessage; queued?: boolean; fallback: ReactNode; burst?: readonly ConversationMessage[] | null }) {
+	if (burst === null) return null;
+	const merged = burst ? mergedReviewComments(burst) : null;
+	const automation = merged ?? automationOf(message);
 	if (!automation) return <>{fallback}</>;
 	if (automation.kind === "notice") return <NoticeLine notice={automation.notice} />;
-	if ("pr" in automation) return <PullRequestEvent automation={automation} createdAt={message.createdAt} />;
+	if ("pr" in automation) return <PullRequestEvent automation={automation} createdAt={(merged && burst?.at(-1)?.createdAt) || message.createdAt} />;
 	return (
 		<YourAction queued={queued} createdAt={message.createdAt}>
 			<UserActionBody action={automation} />
@@ -522,16 +574,45 @@ function ForgeLink({ url, className, children }: { url?: string; className?: str
 
 const GITHUB_HTML = GITHUB_HTML_REHYPE_NO_IMAGES;
 
-/** What GitHub reported on the session's PR, in the PR glyph tinted by what it means. */
+// The same check twice in one report (the daemon can list a check run twice) is one row.
+function uniqueChecks(checks: readonly FailedCheck[]): FailedCheck[] {
+	const seen = new Set<string>();
+	return checks.filter((check) => {
+		const key = `${check.name}\n${check.url ?? ""}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
+// Comments read file by file, in line order; general comments come last.
+function byFile(comments: readonly ReviewComment[]): ReviewComment[] {
+	return [...comments].sort((a, b) => {
+		if (!a.path || !b.path) return a.path ? -1 : b.path ? 1 : 0;
+		return a.path.localeCompare(b.path) || (a.line ?? 0) - (b.line ?? 0);
+	});
+}
+
+/**
+ * What GitHub reported on the session's PR, in the PR glyph tinted by what it
+ * means. Failing CI and review comments are one line with their counts that
+ * opens onto the list, so a long report does not bury the conversation.
+ */
 function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {
 	const { t, i18n } = useTranslation();
 	const { pr } = automation;
+	const [open, setOpen] = useState(false);
+	// The list mounts on first open and stays, so closing can animate.
+	const [opened, setOpened] = useState(false);
+	const bodyId = useId();
+	const headingId = useId();
 	// When it happened on the forge, not when AO delivered it: AO holds PR
 	// nudges while the session waits on the user, so delivery can lag by a lot.
 	const at = ("at" in automation && automation.at) || createdAt;
 	const components = {
 		strong: <span className="font-medium text-foreground" />,
-		pr: <ForgeLink url={pr.url} className="font-medium text-foreground" />,
+		// Above the row's toggle, so the PR number still opens the PR.
+		pr: <ForgeLink url={pr.url} className="relative z-[1] font-medium text-foreground" />,
 	};
 	// A narrow key keeps Trans's typing tractable; the full MessageKey union is too complex for it (TS2590).
 	const lead = (key: `chat.automation.${"ciFailing" | "reviewComment" | "changesRequested" | "mergeConflict"}`, author?: string) => (
@@ -539,21 +620,37 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 	);
 	let tone = "text-status-in-review";
 	let heading: ReactNode;
+	let counts: string | undefined;
 	let detail: ReactNode = null;
+	// Failing CI and review comments open from their line; the rest show their detail as before.
+	let collapsible = false;
 	switch (automation.kind) {
-		case "ciFailing":
+		case "ciFailing": {
+			const checks = uniqueChecks(automation.checks);
 			tone = "text-status-exited";
 			heading = lead("chat.automation.ciFailing");
+			counts = t("chat.automation.failedChecks", { count: checks.length });
+			collapsible = true;
 			detail = (
 				<ul className="flex flex-col gap-1">
-					{automation.checks.map((check, index) => <FailedCheckLine key={index} check={check} />)}
+					{checks.map((check, index) => <FailedCheckLine key={index} check={check} />)}
 				</ul>
 			);
 			break;
+		}
 		case "reviewComments": {
-			const authors = [...new Set(automation.comments.map((comment) => `@${comment.author}`))];
-			heading = lead("chat.automation.reviewComment", new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(authors));
-			detail = automation.comments.map((comment, index) => (
+			const { comments } = automation;
+			const authors = [...new Set(comments.map((comment) => `@${comment.author}`))];
+			const files = new Set(comments.flatMap((comment) => (comment.path ? [comment.path] : [])));
+			heading = comments.length === 1
+				? lead("chat.automation.reviewComment", new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(authors))
+				: <Trans t={t} i18nKey="chat.automation.reviewComments" values={{ number: pr.number, count: comments.length }} components={components} />;
+			counts = [
+				...(authors.length > 1 ? [t("chat.automation.reviewers", { count: authors.length })] : []),
+				...(files.size > 0 ? [t("chat.automation.commentFiles", { count: files.size })] : []),
+			].join(", ") || undefined;
+			collapsible = true;
+			detail = byFile(comments).map((comment, index) => (
 				<div key={index} className="min-w-0">
 					{comment.path || authors.length > 1 ? (
 						<div className="mb-1 flex min-w-0 items-center gap-2">
@@ -583,17 +680,56 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			heading = lead("chat.automation.mergeConflict");
 			break;
 	}
+	const toggle = () => {
+		setOpened(true);
+		setOpen((current) => !current);
+	};
+	// Hover lightens the line's text, never a fill behind the row.
+	const hoverText = collapsible ? "transition-colors duration-150 group-hover/pr-event:text-foreground motion-reduce:transition-none" : undefined;
 	return (
 		<div className="relative min-w-0 pl-6" data-testid="pull-request-event">
 			<GitPullRequest aria-hidden="true" className={cn("absolute left-0 top-[6px] size-4", tone)} />
-			<div className="flex min-h-7 min-w-0 items-center gap-2 text-xs text-muted-foreground">
-				<span className="min-w-0 truncate">
+			<div className={cn("relative flex min-h-7 min-w-0 items-center gap-2 text-xs text-muted-foreground", collapsible && "group/pr-event")}>
+				{collapsible ? (
+					// The whole line toggles. The PR link sits above this, so it still opens the PR.
+					<Pressable
+						aria-expanded={open}
+						aria-controls={bodyId}
+						aria-labelledby={headingId}
+						onClick={toggle}
+						className="absolute inset-0 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+					/>
+				) : null}
+				<span id={headingId} className={cn("min-w-0 truncate", hoverText)}>
 					{heading}
 					{pr.title ? <span className="ml-1.5">{pr.title}</span> : null}
 				</span>
+				{counts ? <span className={cn("shrink-0 tabular-nums", hoverText)}>{counts}</span> : null}
+				{collapsible ? (
+					<ChevronRight
+						aria-hidden="true"
+						className={cn("size-3 shrink-0 transition-[color,transform] duration-150 group-hover/pr-event:text-foreground motion-reduce:transition-none", open && "rotate-90")}
+					/>
+				) : null}
 				<time className="ml-auto shrink-0 tabular-nums" dateTime={at}>{formatMessageTimestamp(at)}</time>
 			</div>
-			{detail ? <div className="flex min-w-0 flex-col gap-3 pb-1">{detail}</div> : null}
+			{collapsible ? (
+				// Grid rows 0fr to 1fr: the line never moves and nothing is measured.
+				<div
+					id={bodyId}
+					inert={!open}
+					className={cn(
+						"grid min-w-0 transition-[grid-template-rows,opacity] duration-150 ease-out motion-reduce:transition-none",
+						open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+					)}
+				>
+					<div className="min-h-0 min-w-0 overflow-hidden">
+						{opened ? <div className="flex min-w-0 flex-col gap-3 pb-1 pt-1">{detail}</div> : null}
+					</div>
+				</div>
+			) : detail ? (
+				<div className="flex min-w-0 flex-col gap-3 pb-1">{detail}</div>
+			) : null}
 		</div>
 	);
 }
