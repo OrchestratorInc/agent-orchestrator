@@ -107,36 +107,55 @@ async function connectBridge(): Promise<MessagePort> {
 	const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
 	act(() => { frame.dispatchEvent(new Event("load")); });
 	const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0];
-	port.onmessage = () => undefined;
+	port.onmessage = (event: MessageEvent) => { bridgeReceived.push(event.data); };
 	port.postMessage({ type: "ready", protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION });
 	return port;
 }
 
+/** What the app has sent the bridge since the test began. */
+const bridgeReceived: unknown[] = [];
+
 const newAnchor = { path: "body>main:1>p:2", tag: "p", textHash: "0123456789abcdef", excerpt: "Staging first." };
 
-async function expandFirstGroup() {
-	const card = await screen.findByRole("button", { expanded: false, name: /staging only/ });
-	await userEvent.click(card);
+/** Opens an element's comments as clicking its count would; returns the popover. */
+async function openElement(port: MessagePort, path = thread().anchor.path): Promise<HTMLElement> {
+	port.postMessage({ type: "marker", path });
+	return screen.findByRole("complementary", { name: "Comments" });
 }
+
+/** Renders the workspace, waits for its comments and connects the bridge. */
+async function ready(client: FakeClient, options?: Parameters<typeof renderWorkspace>[1]) {
+	const rendered = renderWorkspace(client, options);
+	await waitFor(() => expect(client.listArtifactShareComments).toHaveBeenCalled());
+	const port = await connectBridge();
+	await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+	return { ...rendered, port };
+}
+
+const twoThreads = () => [
+	thread(),
+	thread({ id: "t2", createdAt: "2026-11-23T09:30:00Z", comments: [{ id: "c3", threadId: "t2", clientId: "k3", author: sam, body: "Title is too long for the sidebar.", createdAt: "2026-11-23T09:30:00Z", editedAt: null, deleted: false }] }),
+];
 
 beforeEach(() => {
 	mocks.send.mockReset();
 	mocks.navigate.mockReset();
 	useUiStore.getState().clearGlobalToast();
+	bridgeReceived.length = 0;
 });
 
 afterEach(() => vi.useRealTimers());
 
 describe("ArtifactCommentsWorkspace", () => {
-	it("frames the published link and lists its threads grouped by element", async () => {
-		const client = fakeClient();
-		renderWorkspace(client);
+	it("frames the published link in comment mode: counts on the elements and no popover", async () => {
+		const client = fakeClient(snapshot({ threads: twoThreads() }));
+		const { port } = await ready(client);
 		expect(screen.getByTestId("published-frame")).toHaveAttribute("data-link-id", "cf-staging-x7");
-		const panel = await screen.findByRole("complementary", { name: "Comments" });
-		expect(await within(panel).findByText(/v3 · 1 open/)).toBeInTheDocument();
-		// Collapsed: the first comment and its reply count, no thread count.
-		expect(within(panel).getByText("1 reply")).toBeInTheDocument();
 		expect(client.listArtifactShareComments).toHaveBeenCalledWith("cf-staging-x7", expect.not.objectContaining({ etag: expect.anything() }));
+		await waitFor(() => expect(bridgeReceived).toContainEqual({ type: "anchors", anchors: [{ path: thread().anchor.path, textHash: thread().anchor.textHash, count: 2 }] }));
+		expect(bridgeReceived).toContainEqual({ type: "mode", on: true, kind: "html" });
+		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
+		port.close();
 	});
 
 	it("says it shows the published version when the local file changed", async () => {
@@ -144,32 +163,63 @@ describe("ArtifactCommentsWorkspace", () => {
 		expect(await screen.findByText("Showing the published version (v3)")).toBeInTheDocument();
 	});
 
+	it("opens only the clicked element's comments, beside it, and selects it on the page", async () => {
+		const other = thread({ id: "t5", anchor: newAnchor, comments: [{ id: "c5", threadId: "t5", clientId: "k5", author: sam, body: "Which account?", createdAt: "2026-11-23T08:30:00Z", editedAt: null, deleted: false }] });
+		const { port } = await ready(fakeClient(snapshot({ threads: [thread(), other] })));
+		const popover = await openElement(port);
+		expect(await within(popover).findByText(/staging only/)).toBeInTheDocument();
+		expect(within(popover).getByText(/1 open/)).toBeInTheDocument();
+		expect(within(popover).queryByText("Which account?")).not.toBeInTheDocument();
+		await waitFor(() => expect(bridgeReceived).toContainEqual({ type: "select", path: thread().anchor.path }));
+		port.close();
+	});
+
+	it("closes the popover with ✕ or Esc and stays in comment mode; a second Esc leaves it", async () => {
+		const { onClose, port } = await ready(fakeClient());
+		const popover = await openElement(port);
+		await userEvent.click(within(popover).getByRole("button", { name: "Close comments" }));
+		await waitFor(() => expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument());
+		await waitFor(() => expect(bridgeReceived).toContainEqual({ type: "clear" }));
+		expect(onClose).not.toHaveBeenCalled();
+		await openElement(port);
+		port.postMessage({ type: "escape" });
+		await waitFor(() => expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument());
+		expect(onClose).not.toHaveBeenCalled();
+		port.postMessage({ type: "escape" });
+		await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+		port.close();
+	});
+
 	it("offers Send to agent to the owner when the file's session is present", async () => {
-		renderWorkspace(fakeClient());
-		await expandFirstGroup();
-		expect(screen.getByRole("button", { name: "Send to agent" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Resolve" })).toBeInTheDocument();
+		const { port } = await ready(fakeClient());
+		const popover = await openElement(port);
+		expect(await within(popover).findByRole("button", { name: "Send to agent" })).toBeInTheDocument();
+		expect(within(popover).getByRole("button", { name: "Resolve" })).toBeInTheDocument();
+		port.close();
 	});
 
 	it("shows no Send to agent without the file's session, not even disabled", async () => {
-		renderWorkspace(fakeClient(), { withSession: false });
-		await expandFirstGroup();
-		expect(screen.getByRole("button", { name: "Resolve" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /Send to agent|Send again/ })).not.toBeInTheDocument();
+		const { port } = await ready(fakeClient(), { withSession: false });
+		const popover = await openElement(port);
+		expect(await within(popover).findByRole("button", { name: "Resolve" })).toBeInTheDocument();
+		expect(within(popover).queryByRole("button", { name: /Send to agent|Send again/ })).not.toBeInTheDocument();
+		port.close();
 	});
 
 	it("shows no Send to agent to someone who isn't the owner", async () => {
-		renderWorkspace(fakeClient(snapshot({ you: { userId: "sam-1", isOwner: false } })));
-		await expandFirstGroup();
-		expect(screen.queryByRole("button", { name: /Send to agent/ })).not.toBeInTheDocument();
+		const { port } = await ready(fakeClient(snapshot({ you: { userId: "sam-1", isOwner: false } })));
+		const popover = await openElement(port);
+		expect(await within(popover).findByRole("button", { name: "Resolve" })).toBeInTheDocument();
+		expect(within(popover).queryByRole("button", { name: /Send to agent/ })).not.toBeInTheDocument();
+		port.close();
 	});
 
 	it("sends the thread with the note, then marks it sent and confirms", async () => {
 		const client = fakeClient();
 		mocks.send.mockResolvedValue(undefined);
-		renderWorkspace(client);
-		await expandFirstGroup();
-		await userEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+		const { port } = await ready(client);
+		const popover = await openElement(port);
+		await userEvent.click(await within(popover).findByRole("button", { name: "Send to agent" }));
 		const dialog = await screen.findByRole("dialog");
 		expect(within(dialog).getByTestId("send-to-agent-session")).toHaveTextContent("cloudflare-video-setup");
 		expect(within(dialog).getByText("cloudflare-staging-setup.html · v3")).toBeInTheDocument();
@@ -189,43 +239,48 @@ describe("ArtifactCommentsWorkspace", () => {
 		expect(toast).toMatchObject({ title: "Sent to cloudflare-video-setup", action: { label: "Open chat" } });
 		toast?.action?.run();
 		expect(mocks.navigate).toHaveBeenCalledWith("proj-1", "sess-1", undefined);
+		port.close();
 	});
 
 	it("keeps the dialog open with the error and does not mark the thread when sending fails", async () => {
 		const client = fakeClient();
 		mocks.send.mockRejectedValue(new Error("The session isn't running."));
-		renderWorkspace(client);
-		await expandFirstGroup();
-		await userEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+		const { port } = await ready(client);
+		const popover = await openElement(port);
+		await userEvent.click(await within(popover).findByRole("button", { name: "Send to agent" }));
 		const dialog = await screen.findByRole("dialog");
 		await userEvent.click(within(dialog).getByRole("button", { name: "Send" }));
 		expect(await within(dialog).findByRole("alert")).toHaveTextContent("The session isn't running.");
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
 		expect(client.markArtifactShareThreadSent).not.toHaveBeenCalled();
+		port.close();
 	});
 
 	it("labels a thread already sent and offers Send again", async () => {
-		renderWorkspace(fakeClient(snapshot({ threads: [thread({ sentToAgentAt: "2026-11-23T10:42:00Z" })] })));
-		await expandFirstGroup();
-		expect(screen.getByText(/^Sent to agent · /)).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Send again" })).toBeInTheDocument();
+		const { port } = await ready(fakeClient(snapshot({ threads: [thread({ sentToAgentAt: "2026-11-23T10:42:00Z" })] })));
+		const popover = await openElement(port);
+		expect(await within(popover).findByText(/^Sent to agent · /)).toBeInTheDocument();
+		expect(within(popover).getByRole("button", { name: "Send again" })).toBeInTheDocument();
+		port.close();
 	});
 
 	it("names a deleted account Former user and a nameless one Orchestrator user", async () => {
 		const base = thread();
-		renderWorkspace(fakeClient(snapshot({ threads: [thread({
+		const { port } = await ready(fakeClient(snapshot({ threads: [thread({
 			status: "resolved",
 			resolvedBy: null,
 			resolvedAt: "2026-11-23T10:00:00Z",
 			comments: [{ ...base.comments[0], author: { id: null, name: "" } }, { ...base.comments[1], author: { id: "u-9", name: "" } }],
 		})] })));
-		await userEvent.click(await screen.findByRole("button", { name: /Resolved \(1\)/ }));
-		expect(screen.getByText("Resolved by Former user")).toBeInTheDocument();
-		expect(screen.getByText("Former user")).toBeInTheDocument();
-		expect(screen.getByText("Orchestrator user")).toBeInTheDocument();
+		const popover = await openElement(port);
+		await userEvent.click(await within(popover).findByRole("button", { name: /1 resolved on this element · Show/ }));
+		expect(within(popover).getByText("Resolved by Former user")).toBeInTheDocument();
+		expect(within(popover).getByText("Former user")).toBeInTheDocument();
+		expect(within(popover).getByText("Orchestrator user")).toBeInTheDocument();
+		port.close();
 	});
 
-	it("hides the frame and panel when access is lost", async () => {
+	it("hides the frame and comments when access is lost", async () => {
 		const { CloudCpError } = await import("../../lib/cloud-cp");
 		const client = fakeClient();
 		client.listArtifactShareComments.mockRejectedValue(new CloudCpError("not found", { status: 404, code: "not_found" }));
@@ -237,179 +292,191 @@ describe("ArtifactCommentsWorkspace", () => {
 	it("shows a reply at once and keeps the text with Retry when it fails", async () => {
 		const client = fakeClient();
 		client.replyArtifactShareThread.mockRejectedValue(new Error("offline"));
-		renderWorkspace(client);
-		await expandFirstGroup();
-		const box = screen.getByRole("textbox", { name: "Reply…" });
+		const { port } = await ready(client);
+		const popover = await openElement(port);
+		const box = await within(popover).findByRole("textbox", { name: "Reply…" });
 		await userEvent.type(box, "On it{Enter}");
-		expect(await screen.findByText("Couldn't post.")).toBeInTheDocument();
+		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
 		expect(box).toHaveValue("On it");
 		expect(client.replyArtifactShareThread).toHaveBeenCalledWith("cf-staging-x7", "t1", { body: "On it", clientId: expect.any(String) });
+		port.close();
 	});
 });
 
-describe("ArtifactCommentsPanel cards and threads", () => {
-	it("opens a box at a new element's place and keeps a failed post's text with Retry under the same client id", async () => {
-		const client = fakeClient();
-		client.createArtifactShareThread
-			.mockRejectedValueOnce(new Error("offline"))
-			.mockResolvedValueOnce(thread({ id: "t9", anchor: newAnchor, comments: [{ id: "c9", threadId: "t9", clientId: "k9", author: aditi, body: "Which account?", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false }] }));
-		renderWorkspace(client);
-		await screen.findByRole("button", { expanded: false, name: /staging only/ });
-		const port = await connectBridge();
-		port.postMessage({ type: "pick", anchor: newAnchor });
-		const box = await screen.findByRole("textbox", { name: "Add a comment…" });
-		// Never a copy of the element's text.
-		expect(screen.queryByText("Staging first.")).not.toBeInTheDocument();
-		await userEvent.type(box, "Which account?");
-		await userEvent.click(screen.getByRole("button", { name: "Comment" }));
-		expect(await screen.findByText("Couldn't post.")).toBeInTheDocument();
-		expect(screen.getByRole("textbox", { name: "Add a comment…" })).toHaveValue("Which account?");
-		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(2));
-		const [first, second] = client.createArtifactShareThread.mock.calls.map(([, input]) => input);
-		expect(second).toEqual(first);
-		expect(first).toMatchObject({ version: 3, anchor: newAnchor, body: "Which account?" });
-		await waitFor(() => expect(screen.queryByRole("textbox", { name: "Add a comment…" })).not.toBeInTheDocument());
-		port.close();
-	});
-
-	it("pops up nothing on an artifact with no comments until an element is picked", async () => {
-		const client = fakeClient(snapshot({ threads: [] }));
-		renderWorkspace(client);
-		await waitFor(() => expect(client.listArtifactShareComments).toHaveBeenCalled());
-		const port = await connectBridge();
-		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
-		// Comment mode is on (the frame is framed for picking), but no popover and no empty state.
-		expect(screen.getByTestId("published-frame")).toBeInTheDocument();
+describe("ArtifactCommentsPanel: one element's comments", () => {
+	it("pops up nothing on an artifact with no comments until an element is picked; Cancel closes it", async () => {
+		const { port } = await ready(fakeClient(snapshot({ threads: [] })));
 		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
-		expect(screen.queryByTestId("artifact-comments-empty")).not.toBeInTheDocument();
 		port.postMessage({ type: "pick", anchor: newAnchor });
 		const popover = await screen.findByRole("complementary", { name: "Comments" });
-		// (No empty-state hint at any point: the popover opens straight to the new comment box.)
-		expect(within(popover).queryByTestId("artifact-comments-empty")).not.toBeInTheDocument();
-		expect(within(popover).getByRole("textbox", { name: "Add a comment…" })).toBeInTheDocument();
+		expect(within(popover).getByRole("textbox", { name: "Add a comment…" })).toHaveFocus();
 		await userEvent.click(within(popover).getByRole("button", { name: "Cancel" }));
 		await waitFor(() => expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument());
 		port.close();
 	});
 
-	it("stays comment mode only on a page with no comments even when its parts can't be picked", async () => {
-		vi.useFakeTimers({ shouldAdvanceTime: true });
-		try {
-			renderWorkspace(fakeClient(snapshot({ threads: [] })));
-			const frame = screen.getByTestId("published-frame") as HTMLIFrameElement;
-			vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
-			act(() => { frame.dispatchEvent(new Event("load")); });
-			// The bridge never answers: past the handshake timeout.
-			await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
-			expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
-			expect(screen.queryByText("This page doesn't support pointing at parts of it.")).not.toBeInTheDocument();
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("floats the comments over the artifact instead of beside it", async () => {
-		renderWorkspace(fakeClient());
+	it("keeps a failed post's text with Retry under the same client id, then shows the new thread", async () => {
+		const posted = thread({ id: "t9", anchor: newAnchor, createdAt: "2026-11-23T11:00:00Z", comments: [{ id: "c9", threadId: "t9", clientId: "k9", author: aditi, body: "Which account?", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false }] });
+		const client = fakeClient();
+		client.createArtifactShareThread
+			.mockRejectedValueOnce(new Error("offline"))
+			.mockImplementationOnce(async () => {
+				client.listArtifactShareComments.mockResolvedValue({ notModified: false, snapshot: snapshot({ threads: [thread(), posted] }), etag: "\"r42-v3\"" });
+				return posted;
+			});
+		const { port } = await ready(client);
+		port.postMessage({ type: "pick", anchor: newAnchor });
 		const popover = await screen.findByRole("complementary", { name: "Comments" });
-		expect(popover).toHaveClass("absolute");
-		expect(popover.parentElement).toContainElement(screen.getByTestId("published-frame"));
-	});
-
-	it("shows an element's threads folded below the box when writing on it", async () => {
-		renderWorkspace(fakeClient());
-		await screen.findByRole("button", { expanded: false, name: /staging only/ });
-		const port = await connectBridge();
-		port.postMessage({ type: "pick", anchor: thread().anchor });
-		expect(await screen.findByRole("textbox", { name: "Add a comment…" })).toBeInTheDocument();
-		expect(screen.getByText("1 reply")).toBeInTheDocument();
-		expect(screen.queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
-		expect(screen.queryByText("Yes, will add.")).not.toBeInTheDocument();
+		const box = within(popover).getByRole("textbox", { name: "Add a comment…" });
+		// Never a copy of the element's text.
+		expect(within(popover).queryByText("Staging first.")).not.toBeInTheDocument();
+		await userEvent.type(box, "Which account?");
+		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
+		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
+		expect(within(popover).getByRole("textbox", { name: "Add a comment…" })).toHaveValue("Which account?");
+		await userEvent.click(within(popover).getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(2));
+		const [first, second] = client.createArtifactShareThread.mock.calls.map(([, input]) => input);
+		expect(second).toEqual(first);
+		expect(first).toMatchObject({ version: 3, anchor: newAnchor, body: "Which account?" });
+		await waitFor(() => expect(within(popover).getByText("Which account?")).toBeInTheDocument());
+		expect(within(popover).getByRole("textbox", { name: "Add a comment…" })).toHaveValue("");
 		port.close();
 	});
 
-	it("collapses an element with several threads to its newest thread and +N more, with no thread count", async () => {
-		const other = thread({ id: "t2", createdAt: "2026-11-23T09:30:00Z", comments: [{ id: "c3", threadId: "t2", clientId: "k3", author: sam, body: "Title is too long for the sidebar.", createdAt: "2026-11-23T09:30:00Z", editedAt: null, deleted: false }] });
-		renderWorkspace(fakeClient(snapshot({ threads: [thread(), other] })));
-		const card = await screen.findByRole("button", { expanded: false, name: /too long/ });
-		expect(within(card).getByText("+1 more")).toBeInTheDocument();
-		expect(within(card).queryByText(/thread/i)).not.toBeInTheDocument();
-		expect(within(card).queryByText(/staging only/)).not.toBeInTheDocument();
+	it("shows an element's threads with a one-line box under them when it is clicked", async () => {
+		const { port } = await ready(fakeClient());
+		port.postMessage({ type: "pick", anchor: thread().anchor });
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		expect(within(popover).getByText("Yes, will add.")).toBeInTheDocument();
+		const box = within(popover).getByRole("textbox", { name: "Add a comment…" });
+		expect(box).not.toHaveFocus();
+		expect(within(popover).queryByRole("button", { name: "Comment" })).not.toBeInTheDocument();
+		await userEvent.type(box, "Another point");
+		expect(within(popover).getByRole("button", { name: "Comment" })).toBeEnabled();
+		port.close();
 	});
 
-	it("keeps one thread open per element: the newest, until another is clicked", async () => {
-		const other = thread({ id: "t2", createdAt: "2026-11-23T09:30:00Z", comments: [{ id: "c3", threadId: "t2", clientId: "k3", author: sam, body: "Title is too long for the sidebar.", createdAt: "2026-11-23T09:30:00Z", editedAt: null, deleted: false }] });
-		renderWorkspace(fakeClient(snapshot({ threads: [thread(), other] })));
-		await userEvent.click(await screen.findByRole("button", { expanded: false, name: /too long/ }));
-		const threadIds = () => [...document.querySelectorAll("[data-thread-id]")].map((node) => [node.getAttribute("data-thread-id"), node.hasAttribute("data-thread-folded")]);
-		// Newest first and open; the older thread is one line with its reply count.
-		expect(threadIds()).toEqual([["t2", false], ["t1", true]]);
-		expect(screen.getAllByRole("textbox", { name: "Reply…" })).toHaveLength(1);
-		const folded = screen.getByRole("button", { expanded: false, name: /staging only/ });
+	it("keeps one thread open: the newest, until another is clicked", async () => {
+		const { port } = await ready(fakeClient(snapshot({ threads: twoThreads() })));
+		const popover = await openElement(port);
+		const threadIds = () => [...popover.querySelectorAll("[data-thread-id]")].map((node) => [node.getAttribute("data-thread-id"), node.hasAttribute("data-thread-folded")]);
+		await waitFor(() => expect(threadIds()).toEqual([["t2", false], ["t1", true]]));
+		expect(within(popover).getAllByRole("textbox", { name: "Reply…" })).toHaveLength(1);
+		const folded = within(popover).getByRole("button", { expanded: false, name: /staging only/ });
 		expect(within(folded).getByText("1 reply")).toBeInTheDocument();
-		// Opening it folds the one that was open.
 		await userEvent.click(folded);
 		expect(threadIds()).toEqual([["t2", true], ["t1", false]]);
-		expect(within(screen.getByRole("button", { expanded: false, name: /too long/ })).getByText("No replies")).toBeInTheDocument();
-		expect(screen.getAllByRole("textbox", { name: "Reply…" })).toHaveLength(1);
+		expect(within(within(popover).getByRole("button", { expanded: false, name: /too long/ })).getByText("No replies")).toBeInTheDocument();
+		port.close();
 	});
 
 	it("opens a thread you just posted on an element, as its newest", async () => {
 		const posted = thread({ id: "t9", createdAt: "2026-11-23T11:00:00Z", comments: [{ id: "c9", threadId: "t9", clientId: "k9", author: aditi, body: "Which account?", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false }] });
 		const client = fakeClient();
 		client.createArtifactShareThread.mockImplementationOnce(async () => {
-			// The server lists it from now on.
 			client.listArtifactShareComments.mockResolvedValue({ notModified: false, snapshot: snapshot({ threads: [thread(), posted] }), etag: "\"r42-v3\"" });
 			return posted;
 		});
-		renderWorkspace(client);
-		await screen.findByRole("button", { expanded: false, name: /staging only/ });
-		const port = await connectBridge();
+		const { port } = await ready(client);
 		port.postMessage({ type: "pick", anchor: thread().anchor });
-		await userEvent.type(await screen.findByRole("textbox", { name: "Add a comment…" }), "Which account?");
-		await userEvent.click(screen.getByRole("button", { name: "Comment" }));
-		await waitFor(() => expect(document.querySelector('[data-thread-id="t9"]')).not.toBeNull());
-		expect(document.querySelector('[data-thread-id="t9"]')).not.toHaveAttribute("data-thread-folded");
-		expect(document.querySelector('[data-thread-id="t1"]')).toHaveAttribute("data-thread-folded", "true");
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		await userEvent.type(within(popover).getByRole("textbox", { name: "Add a comment…" }), "Which account?");
+		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
+		await waitFor(() => expect(popover.querySelector('[data-thread-id="t9"]')).not.toBeNull());
+		expect(popover.querySelector('[data-thread-id="t9"]')).not.toHaveAttribute("data-thread-folded");
+		expect(popover.querySelector('[data-thread-id="t1"]')).toHaveAttribute("data-thread-folded", "true");
 		port.close();
 	});
 
-	it("labels resolved threads with who resolved them and offers Reopen, never Send to agent", async () => {
-		renderWorkspace(fakeClient(snapshot({ threads: [thread({ status: "resolved", resolvedBy: aditi, resolvedAt: "2026-11-23T10:00:00Z" })] })));
-		await userEvent.click(await screen.findByRole("button", { name: /Resolved \(1\)/ }));
-		expect(screen.getByText("Resolved by Aditi")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /Send to agent|Send again/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+	it("keeps resolved threads behind Show, with who resolved them and Reopen, never Send to agent", async () => {
+		const { port } = await ready(fakeClient(snapshot({ threads: [thread({ status: "resolved", resolvedBy: aditi, resolvedAt: "2026-11-23T10:00:00Z" })] })));
+		const popover = await openElement(port);
+		expect(await within(popover).findByRole("button", { name: /1 resolved on this element · Show/ })).toBeInTheDocument();
+		expect(within(popover).queryByText("Resolved by Aditi")).not.toBeInTheDocument();
+		await userEvent.click(within(popover).getByRole("button", { name: /1 resolved on this element · Show/ }));
+		expect(within(popover).getByText("Resolved by Aditi")).toBeInTheDocument();
+		expect(within(popover).getByRole("button", { name: "Reopen" })).toBeInTheDocument();
+		expect(within(popover).queryByRole("button", { name: /Send to agent|Send again/ })).not.toBeInTheDocument();
+		expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+		port.close();
 	});
 
 	it("drops deleted replies, leaves Comment deleted for a deleted first comment, and marks edits", async () => {
 		const base = thread();
-		renderWorkspace(fakeClient(snapshot({ threads: [thread({
+		const { port } = await ready(fakeClient(snapshot({ threads: [thread({
 			comments: [
 				{ ...base.comments[0], body: "", deleted: true },
 				{ ...base.comments[1], editedAt: "2026-11-23T09:30:00Z" },
 				{ id: "c3", threadId: "t1", clientId: "k3", author: sam, body: "", createdAt: "2026-11-23T09:40:00Z", editedAt: null, deleted: true },
 			],
 		})] })));
-		const card = await screen.findByRole("button", { expanded: false, name: /Comment deleted/ });
-		expect(within(card).getByText("1 reply")).toBeInTheDocument();
-		await userEvent.click(card);
-		expect(screen.getAllByText("Comment deleted")).toHaveLength(1);
-		expect(document.querySelector('[data-comment-id="c3"]')).toBeNull();
-		expect(screen.getByText("edited")).toBeInTheDocument();
+		const popover = await openElement(port);
+		expect(await within(popover).findAllByText("Comment deleted")).toHaveLength(1);
+		expect(popover.querySelector('[data-comment-id="c3"]')).toBeNull();
+		expect(within(popover).getByText("edited")).toBeInTheDocument();
+		port.close();
 	});
 
 	it("offers the owner Delete, in red, on someone else's comment and Edit only on their own", async () => {
-		renderWorkspace(fakeClient());
-		await expandFirstGroup();
-		const [samMenu, ownMenu] = screen.getAllByRole("button", { name: "Comment actions" });
+		const { port } = await ready(fakeClient());
+		const popover = await openElement(port);
+		await within(popover).findByText("Yes, will add.");
+		const [samMenu, ownMenu] = within(popover).getAllByRole("button", { name: "Comment actions" });
 		await userEvent.click(samMenu);
 		expect(screen.queryByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveClass("text-destructive");
 		await userEvent.keyboard("{Escape}");
 		await userEvent.click(ownMenu);
 		expect(await screen.findByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
+		port.close();
+	});
+
+	it("floats over the artifact instead of beside it", async () => {
+		const { port } = await ready(fakeClient());
+		const popover = await openElement(port);
+		expect(popover).toHaveClass("absolute");
+		expect(popover.parentElement).toContainElement(screen.getByTestId("published-frame"));
+		port.close();
+	});
+
+	describe("placement", () => {
+		const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+		beforeEach(() => {
+			// A 700px tall frame area; the popover itself measures 0 tall in jsdom, so it always fits.
+			Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+				configurable: true,
+				get(this: HTMLElement) { return this.dataset.testid === "artifact-comments-stage" ? 700 : 0; },
+			});
+			vi.stubGlobal("ResizeObserver", class { constructor(private readonly callback: () => void) {} observe() { this.callback(); } disconnect() {} });
+		});
+		afterEach(() => {
+			if (original) Object.defineProperty(HTMLElement.prototype, "clientHeight", original);
+			vi.unstubAllGlobals();
+		});
+
+		it("sits under the selected element and follows it as the page scrolls", async () => {
+			const { port } = await ready(fakeClient());
+			const popover = await openElement(port);
+			expect(popover.style.top).toBe("8px");
+			port.postMessage({ type: "selection", path: thread().anchor.path, top: 100, bottom: 180 });
+			await waitFor(() => expect(popover.style.top).toBe("188px"));
+			expect(popover.style.maxHeight).toBe("504px");
+			port.postMessage({ type: "selection", path: thread().anchor.path, top: 40, bottom: 120 });
+			await waitFor(() => expect(popover.style.top).toBe("128px"));
+			port.postMessage({ type: "selection", path: null, top: 0, bottom: 0 });
+			await waitFor(() => expect(popover.style.top).toBe("8px"));
+			port.close();
+		});
+
+		it("ignores where an element is when it isn't the selected one", async () => {
+			const { port } = await ready(fakeClient());
+			const popover = await openElement(port);
+			port.postMessage({ type: "selection", path: "body>p:9", top: 100, bottom: 180 });
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			expect(popover.style.top).toBe("8px");
+			port.close();
+		});
 	});
 });
 
@@ -446,7 +513,7 @@ describe("useCommentBridge", () => {
 		document.body.append(frame);
 		const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
 		const onPick = vi.fn();
-		const { result } = renderHook(() => useCommentBridge(frame, { onPick }));
+		renderHook(() => useCommentBridge(frame, { onPick }));
 		act(() => { frame.dispatchEvent(new Event("load")); });
 		expect(post).toHaveBeenCalledWith({ type: ARTIFACT_COMMENTS_CONNECT, protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION }, "*", [expect.any(MessagePort)]);
 		const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0];
@@ -456,7 +523,6 @@ describe("useCommentBridge", () => {
 		act(() => { window.dispatchEvent(new MessageEvent("message", { data: { type: "pick", anchor: { path: "body>p:1", tag: "p", textHash: "0123456789abcdef", excerpt: "Intro" } } })); });
 		expect(onPick).not.toHaveBeenCalled();
 		port.postMessage({ type: "ready", protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION });
-		await waitFor(() => expect(result.current.status).toBe("ready"));
 		port.postMessage({ type: "pick", anchor: { path: "body>p:1", tag: "p", textHash: "0123456789abcdef", excerpt: "Intro" } });
 		await waitFor(() => expect(onPick).toHaveBeenCalledWith({ path: "body>p:1", tag: "p", textHash: "0123456789abcdef", excerpt: "Intro" }));
 		// Theme goes over right after ready.
@@ -465,30 +531,19 @@ describe("useCommentBridge", () => {
 		frame.remove();
 	});
 
-	it("ignores a ready for another protocol version", async () => {
+	it("ignores a ready for another protocol version: nothing from the page counts", async () => {
 		const frame = document.createElement("iframe");
 		document.body.append(frame);
 		const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
-		const { result } = renderHook(() => useCommentBridge(frame, {}));
+		const onPick = vi.fn();
+		renderHook(() => useCommentBridge(frame, { onPick }));
 		act(() => { frame.dispatchEvent(new Event("load")); });
 		const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0];
 		port.postMessage({ type: "ready", protocol: ARTIFACT_COMMENTS_PROTOCOL_VERSION + 1 });
+		port.postMessage({ type: "pick", anchor: { path: "body>p:1", tag: "p", textHash: "0123456789abcdef", excerpt: "Intro" } });
 		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(result.current.status).toBe("connecting");
+		expect(onPick).not.toHaveBeenCalled();
 		port.close();
-		frame.remove();
-	});
-
-	it("says the page can't be pointed at when no ready arrives in 3 seconds", async () => {
-		vi.useFakeTimers();
-		const frame = document.createElement("iframe");
-		document.body.append(frame);
-		vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
-		const { result } = renderHook(() => useCommentBridge(frame, {}));
-		act(() => { frame.dispatchEvent(new Event("load")); });
-		expect(result.current.status).toBe("connecting");
-		act(() => { vi.advanceTimersByTime(3_001); });
-		expect(result.current.status).toBe("unsupported");
 		frame.remove();
 	});
 });

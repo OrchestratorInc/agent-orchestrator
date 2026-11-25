@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageSquare } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
@@ -10,9 +10,10 @@ import { ArtifactCommentsPanel } from "./ArtifactCommentsPanel";
 import {
 	artifactCommentMarkers,
 	groupArtifactCommentThreads,
+	placeCommentsPopover,
+	type CommentsSelectionRect,
 	type ArtifactCommentAnchor,
 	type ArtifactCommentsPickKind,
-	type BridgeAnchorPosition,
 } from "../../../shared/artifact-comments";
 import type { ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { useArtifactComments } from "./useArtifactComments";
@@ -63,20 +64,20 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
 }
 
 /**
- * The open file's published page with its comments: the same bytes the link
- * shows, framed from its share host with this account's view token, and the
- * comments in a popover floating over its top right corner, under the header's
- * Comments button, so the page keeps its full width. Comments belong to the
- * published version, so the local file is not shown while they are open; a
- * notice says so when the local file has changed since publishing.
- *
- * With no comments yet it is comment mode only: the button stays pressed and
- * the page outlines what's under the pointer, with no popover and no empty
- * hint; the popover opens once an element is picked.
+ * The open file's published page in comment mode: the same bytes the link
+ * shows, framed from its share host with this account's view token. Elements
+ * with comments carry a count; the page outlines what's under the pointer.
+ * Clicking an element (or its count) opens a popover beside it with that
+ * element's comments and a box for a new one; nothing else pops up. Comments
+ * belong to the published version, so the local file is not shown meanwhile;
+ * a notice says so when the local file has changed since publishing.
  */
-export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget, slug, title }: {
+export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, sendTarget, slug, title }: {
 	kind: ArtifactCommentsPickKind;
+	/** Leaves comment mode. */
 	onClose: () => void;
+	/** Called once there is something to see: the published page loaded, or a message in its place. */
+	onShown?: () => void;
 	/** The local file changed since it was published (the amber dot on Publish). */
 	outdated: boolean;
 	sendTarget?: ArtifactCommentsSendTarget;
@@ -86,43 +87,65 @@ export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget,
 	const { t } = useTranslation();
 	const comments = useArtifactComments(slug, { panelOpen: true });
 	const [frame, setFrame] = useState<HTMLIFrameElement | null>(null);
-	const [positions, setPositions] = useState<BridgeAnchorPosition[]>([]);
-	const [picked, setPicked] = useState<ArtifactCommentAnchor | null>(null);
-	const [expandedPath, setExpandedPath] = useState<string | null>(null);
+	// The element whose comments are open: a picked one brings its anchor for a new comment.
+	const [element, setElement] = useState<{ path: string; anchor: ArtifactCommentAnchor | null } | null>(null);
+	// Where the selected element is in the frame, from the bridge: the popover sits beside it.
+	const [selection, setSelection] = useState<({ path: string } & CommentsSelectionRect) | null>(null);
+	const closePopover = useCallback(() => setElement(null), []);
+	const elementRef = useRef(element);
+	elementRef.current = element;
 	const bridge = useCommentBridge(frame, {
-		onPick: (anchor) => {
-			setPicked(anchor);
-			setExpandedPath(anchor.path);
+		onPick: (anchor) => setElement({ path: anchor.path, anchor }),
+		onMarker: (path) => setElement({ path, anchor: null }),
+		onSelection: ({ path, top, bottom }) => setSelection(path === null ? null : { path, top, bottom }),
+		// Esc closes the popover first, then leaves comment mode.
+		onEscape: () => {
+			if (elementRef.current === null) onClose();
+			else setElement(null);
 		},
-		onMarker: (path) => {
-			setPicked(null);
-			setExpandedPath(path);
-		},
-		onPositions: setPositions,
-		onEscape: onClose,
 	});
 	const { setAnchors, setMode, select } = bridge;
 	useEffect(() => setMode({ type: "mode", on: true, kind }), [kind, setMode]);
 
 	const threads = comments.snapshot?.threads;
-	const groups = useMemo(() => groupArtifactCommentThreads(threads ?? [], positions), [positions, threads]);
-	// The picked element is reported too, so its new group takes its place in the page.
+	const groups = useMemo(() => groupArtifactCommentThreads(threads ?? []), [threads]);
+	// Counts on the elements; a picked element without comments is sent too, so the bridge can find it.
+	const pickedAnchor = element?.anchor ?? null;
 	const anchorsKey = useMemo(() => {
 		const markers = artifactCommentMarkers(threads ?? []);
-		if (picked && !markers.some((marker) => marker.path === picked.path)) markers.push({ path: picked.path, textHash: picked.textHash, count: 0 });
+		if (pickedAnchor && !markers.some((marker) => marker.path === pickedAnchor.path)) markers.push({ path: pickedAnchor.path, textHash: pickedAnchor.textHash, count: 0 });
 		return JSON.stringify(markers);
-	}, [picked, threads]);
+	}, [pickedAnchor, threads]);
 	useEffect(() => setAnchors(JSON.parse(anchorsKey)), [anchorsKey, setAnchors]);
-	const selectedPath = picked?.path ?? expandedPath;
+	const selectedPath = element?.path ?? null;
 	useEffect(() => select(selectedPath), [select, selectedPath]);
 
-	const expand = useCallback((path: string | null) => {
-		setExpandedPath(path);
-		setPicked((current) => (current && current.path !== path ? null : current));
+	// The popover's place: beside the selected element, so the element, its
+	// highlight and the popover all show.
+	const stageRef = useRef<HTMLDivElement>(null);
+	const [stageHeight, setStageHeight] = useState(0);
+	const [popoverHeight, setPopoverHeight] = useState(0);
+	useEffect(() => {
+		const stage = stageRef.current;
+		if (!stage || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => setStageHeight(stage.clientHeight));
+		observer.observe(stage);
+		setStageHeight(stage.clientHeight);
+		return () => observer.disconnect();
 	}, []);
-	const cancelPick = useCallback(() => setPicked(null), []);
+	const placement = stageHeight > 0
+		? placeCommentsPopover(selection && selection.path === selectedPath ? selection : null, stageHeight, popoverHeight)
+		: null;
 
-	if (comments.lostAccess) {
+	const lostAccess = comments.lostAccess;
+	const onShownRef = useRef(onShown);
+	onShownRef.current = onShown;
+	useEffect(() => {
+		if (lostAccess) onShownRef.current?.();
+	}, [lostAccess]);
+	const shown = useCallback(() => onShownRef.current?.(), []);
+
+	if (lostAccess) {
 		return (
 			<PanelMessage>
 				<span className="font-medium text-foreground">{t("artifactComments.lostAccess")}</span>
@@ -132,9 +155,6 @@ export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget,
 		);
 	}
 	const version = comments.snapshot?.currentVersion;
-	// Comment mode only until there is something to show: threads, a picked
-	// element, or a load error. No comments yet: no popover and no empty hint.
-	const showPopover = (threads?.length ?? 0) > 0 || picked !== null || (Boolean(comments.error) && !comments.snapshot);
 	return (
 		<div className="flex h-full min-h-0 flex-col" data-testid="artifact-comments-workspace">
 			{outdated && version !== undefined ? (
@@ -142,21 +162,18 @@ export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget,
 					{t("artifactComments.publishedVersion", { version })}
 				</p>
 			) : null}
-			<div className="relative min-h-0 flex-1">
-				<SharedArtifactFrame frameRef={setFrame} linkId={slug} title={title} />
-				{showPopover ? (
+			<div className="relative min-h-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
+				<SharedArtifactFrame frameRef={setFrame} linkId={slug} onShown={shown} title={title} />
+				{element ? (
 					<ArtifactCommentsPanel
-						bridgeStatus={bridge.status}
-						className="absolute top-2 right-2 z-overlay max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) animate-popover-in"
+						className="absolute top-2 right-2 z-overlay max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) transition-[top] duration-150 ease-out motion-reduce:transition-none animate-popover-in"
 						comments={comments}
-						expandedPath={expandedPath}
+						element={element}
 						groups={groups}
-						onCancelPick={cancelPick}
-						onClose={onClose}
-						onExpand={expand}
-						picked={picked}
-						positions={positions}
+						onClose={closePopover}
+						onNaturalHeight={setPopoverHeight}
 						sendTarget={sendTarget}
+						style={placement ? { top: placement.top, maxHeight: placement.maxHeight } : undefined}
 					/>
 				) : null}
 			</div>
