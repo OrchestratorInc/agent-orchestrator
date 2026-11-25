@@ -24,6 +24,9 @@ import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarge
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
 
+/** How long a Deny from the notification waits for its machine or organization. */
+const DENY_WAIT_MS = 2 * 60_000;
+
 // Set the foreground presentation policy before any notification can arrive.
 configurePushHandler();
 
@@ -53,6 +56,8 @@ export function PushManager(): null {
 	const cloud = useCloud();
 	const cloudRef = useRef(cloud);
 	cloudRef.current = cloud;
+	// Denies from the notification still waiting for their machine or organization.
+	const pendingDenies = useRef<Array<{ data: PushData; at: number }>>([]);
 	const connected = shouldPoll(AppState.currentState)
 		? hostStates.flatMap(({ config, connection }) => config && connection === "open" ? [config] : [])
 		: [];
@@ -61,6 +66,22 @@ export function PushManager(): null {
 	const connectedKey = JSON.stringify(connected.map(({ hostId, host, httpPort, secure, password }) => [hostId, host, httpPort, secure, password, hostStates.find((state) => state.hostId === hostId)?.name]));
 	const connectedRef = useRef(connected);
 	connectedRef.current = connected;
+
+	// A waiting Deny goes out once its machine connects or Cloud is ready. Past
+	// the approval's own timeout it would only read "already decided": dropped.
+	const openHosts = hostStates.filter(({ connection, config }) => connection === "open" && config).map(({ hostId }) => hostId).join(",");
+	const cloudOrgId = cloud.org?.id;
+	useEffect(() => {
+		const waiting = pendingDenies.current;
+		if (waiting.length === 0) return;
+		pendingDenies.current = [];
+		for (const entry of waiting) {
+			if (Date.now() - entry.at > DENY_WAIT_MS) continue;
+			void sendDeny(entry.data).then((sent) => { if (!sent) pendingDenies.current.push(entry); });
+		}
+		// sendDeny reads the latest hosts and organization through refs.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [openHosts, cloudOrgId]);
 
 	// Create the Android channel once at startup.
 	useEffect(() => {
@@ -136,22 +157,34 @@ export function PushManager(): null {
 	}, [navState?.key]);
 
 	// Deny from the notification, without opening a screen. If it can't send,
-	// the approval times out, which also refuses the action.
+	// the approval times out, which also refuses the action. On a cold start
+	// (iOS wakes the app in the background for the action) no machine is
+	// connected and Cloud has no organization yet, so the Deny waits for them
+	// rather than being dropped.
 	async function denyFromNotification(data: PushData) {
+		if (approvalPushAction(data, "deny")?.kind !== "deny") return;
+		if (!(await sendDeny(data))) pendingDenies.current.push({ data, at: Date.now() });
+	}
+
+	/** Sends a Deny now; false when its machine or organization isn't ready yet. */
+	async function sendDeny(data: PushData): Promise<boolean> {
 		const action = approvalPushAction(data, "deny");
-		if (action?.kind !== "deny") return;
+		if (action?.kind !== "deny") return true;
 		try {
 			if (data.source === "cloud") {
 				const { client, org } = cloudRef.current;
-				if (!org || (action.orgId && action.orgId !== org.id)) return;
+				if (!org) return false;
+				if (action.orgId && action.orgId !== org.id) return true;
 				await decideCloudApproval(client, org.id, action.sessionId, action.approvalId, "deny");
-				return;
+				return true;
 			}
 			const source = hostsRef.current.find(({ hostId }) => hostId === data.hostId);
-			if (source?.config) await decideApproval(source.config, action.approvalId, "deny");
+			if (!source?.config || source.connection !== "open") return false;
+			await decideApproval(source.config, action.approvalId, "deny");
 		} catch (e) {
 			console.warn("[push] deny from notification failed", e);
 		}
+		return true;
 	}
 
 	async function route(data: PushData, coldStart = false) {
