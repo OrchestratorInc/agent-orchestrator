@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	catchupLimit      = 3
 	dueScanLimit      = 100
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
@@ -108,26 +107,20 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 	if !definition.Enabled || definition.NextRunAt.After(now) {
 		return nil
 	}
-	// Walk past every due occurrence (bounded) to find the next future one.
 	// However many occurrences fell due, they coalesce into at most one
 	// pending run: an automation that is still busy, or whose daemon was
-	// down, owes one more run, not one per missed tick.
-	occurrence := definition.NextRunAt.UTC()
-	last := occurrence
-	for steps := 0; !occurrence.After(now) && steps < catchupLimit; steps++ {
-		last = occurrence
-		next, err := NextOccurrence(definition.RRuleText, definition.Timezone, occurrence)
-		if err != nil {
-			return err
-		}
-		occurrence = next
+	// down, owes one more run, not one per missed tick. Like a missed alarm,
+	// that run is for the most recent due occurrence; older ones are dropped.
+	last, err := PreviousOccurrence(definition.RRuleText, definition.Timezone, now)
+	if err != nil {
+		return err
 	}
-	if !occurrence.After(now) {
-		var err error
-		occurrence, err = NextOccurrence(definition.RRuleText, definition.Timezone, now)
-		if err != nil {
-			return err
-		}
+	if last.Before(definition.NextRunAt) {
+		last = definition.NextRunAt.UTC()
+	}
+	occurrence, err := NextOccurrence(definition.RRuleText, definition.Timezone, now)
+	if err != nil {
+		return err
 	}
 	waiting, err := s.coalescePendingRuns(ctx, store, definition.ID, now)
 	if err != nil {
@@ -137,7 +130,7 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 	if !waiting {
 		runs = []domain.AutomationRun{{
 			ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
-			ScheduledFor: definition.NextRunAt.UTC(), Status: domain.AutomationRunPending,
+			ScheduledFor: last, Status: domain.AutomationRunPending,
 			CreatedAt: now, UpdatedAt: now,
 		}}
 	}

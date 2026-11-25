@@ -154,23 +154,45 @@ func embeddedTimezone(value string) string {
 // NextOccurrence calculates the first logical occurrence strictly after the
 // supplied instant using the persisted anchor and named timezone.
 func NextOccurrence(rruleText, timezone string, after time.Time) (time.Time, error) {
-	loc, err := time.LoadLocation(timezone)
+	rule, err := parseRule(rruleText, timezone)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("load timezone %q: %w", timezone, err)
-	}
-	option, err := rrule.StrToROptionInLocation(rruleText, loc)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse rrule: %w", err)
-	}
-	rule, err := rrule.NewRRule(*option)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("build rrule: %w", err)
+		return time.Time{}, err
 	}
 	next := rule.After(after, false)
 	if next.IsZero() {
 		return time.Time{}, fmt.Errorf("schedule has no future occurrence")
 	}
 	return next.UTC(), nil
+}
+
+// PreviousOccurrence calculates the latest logical occurrence at or before the
+// supplied instant. It returns the zero time when the schedule had not started.
+func PreviousOccurrence(rruleText, timezone string, atOrBefore time.Time) (time.Time, error) {
+	rule, err := parseRule(rruleText, timezone)
+	if err != nil {
+		return time.Time{}, err
+	}
+	previous := rule.Before(atOrBefore, true)
+	if previous.IsZero() {
+		return time.Time{}, nil
+	}
+	return previous.UTC(), nil
+}
+
+func parseRule(rruleText, timezone string) (*rrule.RRule, error) {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, fmt.Errorf("load timezone %q: %w", timezone, err)
+	}
+	option, err := rrule.StrToROptionInLocation(rruleText, loc)
+	if err != nil {
+		return nil, fmt.Errorf("parse rrule: %w", err)
+	}
+	rule, err := rrule.NewRRule(*option)
+	if err != nil {
+		return nil, fmt.Errorf("build rrule: %w", err)
+	}
+	return rule, nil
 }
 
 // cronToRRule intentionally accepts the unambiguous minute/hour + optional

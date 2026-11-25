@@ -201,7 +201,7 @@ func (s *recordingSpawner) Kill(_ context.Context, id domain.SessionID) (bool, e
 }
 
 // Missed occurrences coalesce into one durable row: the schedule advances past
-// the whole missed window and only the oldest owed occurrence is dispatched.
+// the whole missed window and the most recent missed occurrence is dispatched.
 func TestTickCoalescesMissedOccurrencesIntoOneRun(t *testing.T) {
 	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	now := base.Add(5 * time.Hour)
@@ -223,8 +223,33 @@ func TestTickCoalescesMissedOccurrencesIntoOneRun(t *testing.T) {
 	if got := spawner.calls[0].AgentConfig; got.Model != "gpt-5" || got.Effort != "high" || got.Mode != "agent" {
 		t.Fatalf("agent config = %#v", got)
 	}
-	if spawner.calls[0].AutomationRunID == nil || store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor != base {
-		t.Fatalf("spawn config = %#v, want oldest occurrence", spawner.calls[0])
+	if spawner.calls[0].AutomationRunID == nil || !store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor.Equal(now) {
+		t.Fatalf("spawn config = %#v, want most recent missed occurrence %s", spawner.calls[0], now)
+	}
+}
+
+// Between occurrences the catch-up run is for the latest one already due, not
+// the first one missed.
+func TestTickCatchupUsesLatestDueOccurrenceBetweenTicks(t *testing.T) {
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	now := base.Add(5*time.Hour + 20*time.Minute)
+	store := newSchedulerStore()
+	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", RRuleText: "DTSTART:20260825T090000Z\nRRULE:FREQ=HOURLY", Timezone: "UTC", Enabled: true, NextRunAt: base}
+	spawner := &recordingSpawner{store: store}
+	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(store.runs) != 1 || len(spawner.calls) != 1 || spawner.calls[0].AutomationRunID == nil {
+		t.Fatalf("runs=%d spawns=%d, want one run dispatched", len(store.runs), len(spawner.calls))
+	}
+	if got := store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor; !got.Equal(base.Add(5 * time.Hour)) {
+		t.Fatalf("scheduled for %s, want %s", got, base.Add(5*time.Hour))
+	}
+	rec := store.automations["automation-1"]
+	if rec.LastRunAt == nil || !rec.LastRunAt.Equal(base.Add(5*time.Hour)) || !rec.NextRunAt.Equal(base.Add(6*time.Hour)) {
+		t.Fatalf("automation last=%v next=%s", rec.LastRunAt, rec.NextRunAt)
 	}
 }
 

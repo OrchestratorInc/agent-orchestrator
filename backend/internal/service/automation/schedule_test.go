@@ -150,3 +150,24 @@ func TestCanonicalizeScheduleKeepsDailyWallClockAcrossDST(t *testing.T) {
 		t.Fatalf("next run = %s, want %s", schedule.NextRunAt, want)
 	}
 }
+
+func TestPreviousOccurrenceIsInclusiveAndZeroBeforeStart(t *testing.T) {
+	const rule = "DTSTART:20260825T090000Z\nRRULE:FREQ=HOURLY"
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		at, want time.Time
+	}{
+		{at: base.Add(-time.Minute), want: time.Time{}},
+		{at: base, want: base},
+		{at: base.Add(2*time.Hour + 59*time.Minute), want: base.Add(2 * time.Hour)},
+		{at: base.Add(3 * time.Hour), want: base.Add(3 * time.Hour)},
+	} {
+		got, err := PreviousOccurrence(rule, "UTC", tc.at)
+		if err != nil {
+			t.Fatalf("PreviousOccurrence(%s): %v", tc.at, err)
+		}
+		if !got.Equal(tc.want) {
+			t.Fatalf("PreviousOccurrence(%s) = %s, want %s", tc.at, got, tc.want)
+		}
+	}
+}
