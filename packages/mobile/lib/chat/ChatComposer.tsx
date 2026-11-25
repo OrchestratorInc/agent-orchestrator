@@ -21,7 +21,7 @@ import { useReducedMotion } from "../useReducedMotion";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { DictationField } from "../voice/DictationField";
 import { useVoiceInput } from "../voice/useVoiceInput";
-import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
+import { activeTurn, sendWaitsInQueue, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
 	findComposerSuggestion,
 	rankComposerCatalog,
@@ -296,6 +296,8 @@ function Composer({
 	const [cancellingQueuedTurnId, setCancellingQueuedTurnId] = useState<string>();
 	const [hiddenQueuedTurnIds, setHiddenQueuedTurnIds] = useState<Set<string>>(() => new Set());
 	const active = Boolean(activeTurn(snapshot));
+	// A send now would wait in the queue: nothing shows it until the daemon has it.
+	const sendWaits = sendWaitsInQueue(snapshot);
 	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const visibleQueuedMessages = useMemo(() => queuedMessages.filter((entry) => !hiddenQueuedTurnIds.has(entry.turnId)), [hiddenQueuedTurnIds, queuedMessages]);
 	// Absent below 70%: a permanent token gauge is chrome nobody reads.
@@ -486,10 +488,12 @@ function Composer({
 		dismissAttachmentNotice();
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
+		const route = composerDeliveryRoute(intent, steerEligible);
 		// A plain message leaves the field the moment it is sent, as the
 		// conversation shows it at once (ChatTimeline's optimistic message); a send
-		// that fails puts it back. One with files or quotes stays until it lands.
-		const clearedAtSend = attachments.length === 0 && quotes.length === 0;
+		// that fails puts it back. One with files or quotes stays until it lands,
+		// and so does one that waits in the queue, which nothing shows until then.
+		const clearedAtSend = attachments.length === 0 && quotes.length === 0 && (route === "steer" || !sendWaits);
 		if (clearedAtSend) {
 			if (draftKey) sendsInFlight.set(draftKey, text);
 			heldSinceSend.current = false;
@@ -505,7 +509,6 @@ function Composer({
 			const excerpts = responseExcerpts(quotes);
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
-			const route = composerDeliveryRoute(intent, steerEligible);
 			const id = route === "steer"
 				? await onSteer(trimmed)
 				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
@@ -545,7 +548,7 @@ function Composer({
 			if (clearedAtSend && draftKey && sendsInFlight.get(draftKey) === text) sendsInFlight.delete(draftKey);
 			setSubmitting(false);
 		}
-	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
+	}, [text, quotes, attachments, steerEligible, sendWaits, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
 
 	// Pasting is a way to attach too, so it follows the same gate as the menu.
 	const pasteLayout = useImagePaste(stopped || submitting || attachmentsUnavailable ? null : (assets, overflow) => {

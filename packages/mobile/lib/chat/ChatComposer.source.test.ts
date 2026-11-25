@@ -79,7 +79,9 @@ describe("chat composer pill", () => {
 	// The conversation shows a plain message the moment it is sent, so the field
 	// empties then too; a failed send puts the text back unless more was typed.
 	it("empties the field at send for a plain message and restores it if the send fails", () => {
-		expect(composer).toContain("const clearedAtSend = attachments.length === 0 && quotes.length === 0;");
+		expect(composer).toContain("const clearedAtSend = attachments.length === 0 && quotes.length === 0 && (route === \"steer\" || !sendWaits);");
+		// A send that waits in the queue has no early copy, so its text stays until it lands.
+		expect(composer).toContain("const sendWaits = sendWaitsInQueue(snapshot);");
 		// The emptied field is not saved as the draft while the send is in flight.
 		expect(composer).toContain("if (sendsInFlight.has(draftKey) && !text && quotes.length === 0 && !heldSinceSend.current) return;");
 		// A draft typed after the send and then cleared is saved as cleared.

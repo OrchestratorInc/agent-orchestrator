@@ -52,7 +52,7 @@ import { controllerStoppedBanner, errorBanner, mcpNoticeKey, reauthBanner, rolle
 import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
-import { activeTurn, brokenMcpServers, can, type ChatExcerpt, type ChatImage, type ChatResource, type ConversationSnapshot } from "./types";
+import { activeTurn, brokenMcpServers, can, sendWaitsInQueue, type ChatExcerpt, type ChatImage, type ChatResource, type ConversationSnapshot } from "./types";
 import { clientMessageId, useMobileConversation } from "./useConversation";
 import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -237,8 +237,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useEffect(() => {
 		if (config && pendingHarness) void prewarmChatAgent(config, pendingHarness).catch(() => {});
 	}, [config, pendingHarness]);
-	const agentBusy = conversation.snapshot?.controller.state === "busy" ||
-		Boolean(conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
+	const agentBusy = sendWaitsInQueue(conversation.snapshot);
 	const otherAgents = useMemo(
 		() => (agentSwitchMenu ? { ...agentSwitchMenu, pending: pendingSwitch, disabled: agentBusy, onPick: setChosenSwitch } : undefined),
 		[agentBusy, agentSwitchMenu, pendingSwitch],
