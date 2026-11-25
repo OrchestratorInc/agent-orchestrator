@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -1638,9 +1639,7 @@ func compactionStatusMeta(meta map[string]any) map[string]any {
 func (c *conversation) reportCompaction(turnID string, report CompactionReport, emit func(ports.ChatEvent)) bool {
 	failure := ""
 	if report.Status == "failed" {
-		if failure = strings.TrimSpace(report.Reason); failure == "" {
-			failure = "Compaction failed"
-		}
+		failure = compactionFailureText(report.Reason)
 	}
 	hasFigures := report.Status == "completed" && report.TokensAfter > 0
 	replaying := c.historyReplayActive()
@@ -1661,6 +1660,13 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 		return true
 	}
 	open := c.providerCompaction
+	if report.Status == "failed" && open == nil && strings.HasPrefix(turnID, providerCyclePrefix) {
+		// A failure between prompts with nothing open is the late report of a
+		// compaction whose turn already ended, as when Stop cancels AO's own
+		// /compact: that turn's row already says so.
+		c.mu.Unlock()
+		return true
+	}
 	if open != nil && open.turnID != turnID {
 		open = nil
 	}
@@ -2462,4 +2468,20 @@ func (c *conversation) promptContent(message ports.ChatUserMessage) ([]acpsdk.Co
 		return nil, errors.New("chat message has no content")
 	}
 	return prompt, nil
+}
+
+// sdkErrorCode matches a bare error code such as "too_few_groups".
+var sdkErrorCode = regexp.MustCompile(`^[a-z0-9]+(_[a-z0-9]+)+$`)
+
+// compactionFailureText is the reason a failed compaction shows: the agent's
+// own words, a readable line for a known SDK code, never the raw code.
+func compactionFailureText(reason string) string {
+	reason = strings.TrimSpace(reason)
+	switch {
+	case reason == "too_few_groups":
+		return "Not enough messages to compact."
+	case reason == "" || sdkErrorCode.MatchString(reason):
+		return "Compaction failed"
+	}
+	return reason
 }

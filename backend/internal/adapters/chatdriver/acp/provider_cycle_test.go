@@ -463,3 +463,43 @@ func TestACPProviderCycleEventsKeepTheOrderItsItemsChanged(t *testing.T) {
 		}
 	})
 }
+
+// Stop during AO's own /compact ends the turn before the agent reports the
+// compaction failed. That late failure has nothing open between prompts and
+// gets no row of its own; a later compaction still gets one.
+func TestACPProviderCycleDropsLateCompactionFailure(t *testing.T) {
+	setProviderCycleWaits(t, 50*time.Millisecond, time.Minute)
+	agent, opened := compactionFailureTestDriver(t)
+	events := opened.Events()
+	push := func(value map[string]any) {
+		t.Helper()
+		if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+			SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+			Update: acpsdk.SessionUpdate{SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+				SessionUpdate: "session_info_update",
+				Meta:          map[string]any{"opencode/compaction": value},
+			}},
+		}); err != nil {
+			t.Fatalf("session/update: %v", err)
+		}
+	}
+	push(map[string]any{"status": "failed", "error": map[string]any{"message": "API Error: Request was aborted."}})
+	push(map[string]any{"status": "started"})
+	got := collectUntil(t, events, func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventCompacted })
+	if first := got[len(got)-1]; first.ActivityStatus != domain.ActivityStatusRunning {
+		t.Fatalf("first compaction row = %q %q, want the later compaction running", first.ActivityStatus, first.Summary)
+	}
+}
+
+func TestCompactionFailureText(t *testing.T) {
+	for reason, want := range map[string]string{
+		"too_few_groups":          "Not enough messages to compact.",
+		"some_new_code":           "Compaction failed",
+		"":                        "Compaction failed",
+		"API Error: rate limited": "API Error: rate limited",
+	} {
+		if got := compactionFailureText(reason); got != want {
+			t.Errorf("compactionFailureText(%q) = %q, want %q", reason, got, want)
+		}
+	}
+}
