@@ -100,7 +100,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	}
 
 	effort, effortOverride := optionalTuningValue(in.Effort)
-	worker, _, _, err := s.spawnWithTelemetry(ctx, ports.SpawnConfig{
+	spawnCfg := ports.SpawnConfig{
 		ClientRequestID:   in.ClientRequestID,
 		ClientRequestHash: in.ClientRequestHash,
 		ProjectID:         in.ProjectID,
@@ -128,7 +128,12 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		TaskPreparation:   in.TaskPreparation,
 		FastMode:          in.FastMode,
 		AutoCompactWindow: in.AutoCompactWindow,
-	}, project)
+	}
+	// This path does not go through spawn, so it runs the same check itself.
+	if err := refuseUnsupportedStartSettings(spawnCfg, project); err != nil {
+		return DelegateTaskOutcome{}, err
+	}
+	worker, _, _, err := s.spawnWithTelemetry(ctx, spawnCfg, project)
 	if err != nil {
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)
 	}
