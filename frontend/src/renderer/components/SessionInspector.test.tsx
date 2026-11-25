@@ -6157,11 +6157,11 @@ describe("SessionInspector Cloud reviews", () => {
     if (shared) {
       await waitFor(() => expect(screen.queryByText("Loading reviews...")).not.toBeInTheDocument());
       expect(screen.queryByRole("switch", { name: "Auto-review" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("combobox", { name: "Select reviewer agent" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Select reviewer agent/ })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Review now" })).not.toBeInTheDocument();
     } else {
       expect(await screen.findByRole("switch", { name: "Auto-review" })).toBeInTheDocument();
-      expect(screen.getByRole("combobox", { name: "Select reviewer agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Select reviewer agent/ })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Review now" })).toBeInTheDocument();
     }
     expect(cloudCpMock.triggerSessionReviews).not.toHaveBeenCalled();
@@ -6275,11 +6275,14 @@ describe("SessionInspector Cloud reviews", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
     await userEvent.click(
-      await screen.findByRole("combobox", { name: /Select reviewer agent/ }),
+      await screen.findByRole("button", { name: /Select reviewer agent/ }),
     );
+    // Each agent says what it still needs: a credential, or its binary on the runtime.
+    expect(await screen.findByRole("menuitemradio", { name: /^Codex/ })).toHaveTextContent("Needs setup");
+    expect(screen.getByRole("menuitemradio", { name: /^Cursor/ })).toHaveTextContent("Not installed");
     await userEvent.click(
-      await screen.findByRole("option", {
-        name: /^Cursor$/i,
+      await screen.findByRole("menuitemradio", {
+        name: /^Cursor/,
       }),
     );
 
