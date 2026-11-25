@@ -18,6 +18,8 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} } }));
 vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
+// Saving the transcript for after a restart is not under test here.
+vi.mock("./savedConversations", () => ({ conversationSaver: { schedule: () => {}, flush: async () => {} }, loadSavedConversation: async () => null }));
 import { useMobileConversation, type MobileConversation } from "./useConversation";
 
 const config = {} as ServerConfig;

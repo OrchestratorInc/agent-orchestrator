@@ -8464,7 +8464,7 @@ components:
           enum: [failed, ready]
         code:
           type: string
-          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied, agent_start_failed]
+          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied, agent_start_failed, conversation_restore_failed]
           description: Required when status is failed.
         message:
           type: string
@@ -10692,10 +10692,11 @@ components:
         runtimeState is "terminated" AO has stopped retrying; otherwise it is
         still trying in the background. The worker-reported codes
         repository_checkout_failed, working_directory_unusable,
-        working_directory_occupied, project_setup_failed and
-        agent_start_failed are the exception: the worker has checked in but
-        could not prepare the workspace or start the terminal agent, so the
-        agent does not start; they stay until the worker reports the workspace
+        working_directory_occupied, project_setup_failed,
+        agent_start_failed and conversation_restore_failed are the exception:
+        the worker has checked in but could not prepare the workspace, restore
+        the session's conversation or start the terminal agent, so the agent
+        does not start; they stay until the worker reports the workspace
         ready (or the agent started) after the user retries or reopens the
         session (a workspace checkout request).
       properties:
@@ -10711,9 +10712,11 @@ components:
             repository_checkout_failed, working_directory_unusable (also
             reported when the Coder bootstrap cannot prepare the project's
             working folder), working_directory_occupied,
-            project_setup_failed or agent_start_failed (the terminal agent
-            could not start in the ready workspace), all reported by the
-            worker. Clients must tolerate codes added later.
+            project_setup_failed, agent_start_failed (the terminal agent
+            could not start in the ready workspace) or
+            conversation_restore_failed (a session woken on a new sandbox could
+            not get back its conversation, so its agent does not start without
+            it), all reported by the worker. Clients must tolerate codes added later.
         message:
           type: string
           description: Human-readable explanation suitable for display as-is.

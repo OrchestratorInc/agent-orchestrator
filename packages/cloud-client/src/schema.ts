@@ -4507,7 +4507,7 @@ export interface components {
              * @description Required when status is failed.
              * @enum {string}
              */
-            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed";
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed" | "conversation_restore_failed";
             /** @description User-facing explanation; required when status is failed. */
             message?: string;
             /** @description Redacted excerpt, for Setup the failed command's output tail. */
@@ -5557,9 +5557,9 @@ export interface components {
             /** @description Every file the session has registered. */
             registered: string[];
         };
-        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed, agent_start_failed and conversation_restore_failed are the exception: the worker has checked in but could not prepare the workspace, restore the session's conversation or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed or agent_start_failed (the terminal agent could not start in the ready workspace), all reported by the worker. Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed, agent_start_failed (the terminal agent could not start in the ready workspace) or conversation_restore_failed (a session woken on a new sandbox could not get back its conversation, so its agent does not start without it), all reported by the worker. Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;

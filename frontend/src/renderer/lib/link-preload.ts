@@ -1,4 +1,5 @@
 import { linkOrigin, linkPreviewQueryKey, preloadLinkPreview } from "../hooks/useLinkPreview";
+import { preloadPullRequestPreview } from "../hooks/usePullRequestPreview";
 import { useUiStore } from "../stores/ui-store";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -48,7 +49,9 @@ function warmImage(src: string, crossOrigin?: "anonymous") {
 }
 
 async function preloadPullRequest(href: string) {
-	const preview = await preloadLinkPreview(href);
+	// The PR's own state colours its chip; the page preview is the card's
+	// fallback when the daemon cannot read the PR.
+	const [preview] = await Promise.all([preloadLinkPreview(href), preloadPullRequestPreview(href)]);
 	// Same request modes as the card, so its images come from the HTTP cache.
 	if (preview?.imageUrl) warmImage(preview.imageUrl);
 	if (preview?.faviconUrl) warmImage(preview.faviconUrl, "anonymous");

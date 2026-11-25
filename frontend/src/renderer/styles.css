@@ -289,6 +289,9 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	--color-logo-accent-foreground: var(--color-brand-logo-foreground);
 	--color-logo-accent-text: var(--color-brand-logo-text);
 	--color-markdown-code: var(--color-text-markdown-code);
+	--color-chat-file: var(--color-chat-file-bg);
+	--color-chat-file-hover: var(--color-chat-file-bg-hover);
+	--color-chat-file-foreground: var(--color-chat-file-text);
 	--color-markdown-link: var(--color-text-markdown-link);
 	--color-markdown-link-hover: var(--color-text-markdown-link-hover);
 	--color-secondary: var(--secondary);
@@ -2860,7 +2863,7 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 		pointer-events: auto;
 	}
 
-	.group\/session-row:hover [data-session-message-age] {
+	.group\/session-row:hover :is([data-session-message-age], [data-session-pin-mark]) {
 		opacity: 0;
 	}
 }
