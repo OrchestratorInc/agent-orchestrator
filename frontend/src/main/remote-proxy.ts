@@ -50,14 +50,13 @@ export type ActiveProxy = {
 	/** A preview's address for a browser outside AO; any other URL unchanged. */
 	externalUrl: (url: string) => string;
 	openLoopbackTunnel: (port: number) => Promise<Duplex>;
+	loopbackReach: () => Promise<boolean>;
 	close: () => Promise<void>;
 };
 
-export class LoopbackTunnelError extends Error {
-	constructor(readonly refused: boolean, message: string) {
-		super(message);
-	}
-}
+const UNUSED_PORT = 1;
+
+class LoopbackPortRefused extends Error {}
 
 // "agent" is the host's agent browser (the Chromium the session's agent drives),
 // streamed through the daemon's agent-browser route. "render" is an agent page
@@ -547,6 +546,51 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		res.end('{"error":"remote daemon unreachable","code":"UPSTREAM_UNAVAILABLE","message":"remote daemon unreachable"}');
 	};
 
+	const openLoopbackTunnel = async (loopbackPort: number): Promise<Duplex> => {
+		if (closing) throw new Error("the host is disconnected");
+		await verifyUpstream();
+		if (closing) throw new Error("the host is disconnected");
+		const socket = new WebSocket(`${secure ? "wss" : "ws"}://${upstream.host}${prefix}/api/v1/loopback-tunnel?port=${loopbackPort}`, {
+			headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
+			perMessageDeflate: false,
+			handshakeTimeout: timing.openMs * 3,
+			...(isIP(hostname) ? {} : { servername: hostname }),
+		});
+		const stream = webSocketTunnelStream(socket);
+		stream.on("error", () => undefined);
+		const drop = () => stream.destroy();
+		tunnels.add(drop);
+		stream.once("close", () => tunnels.delete(drop));
+		try {
+			await new Promise<void>((resolve, reject) => {
+				socket.once("open", () => resolve());
+				socket.once("unexpected-response", (request, response) => {
+					response.resume();
+					request.destroy();
+					const message = `localhost tunnel to port ${loopbackPort} answered ${response.statusCode}`;
+					reject(response.headers["x-ao-loopback-refused"] === "1" ? new LoopbackPortRefused(message) : new Error(message));
+				});
+				socket.once("error", reject);
+			});
+		} catch (error) {
+			stream.destroy();
+			throw error;
+		}
+		return stream;
+	};
+
+	const loopbackReach = (): Promise<boolean> =>
+		openLoopbackTunnel(UNUSED_PORT).then((tunnel) => {
+			tunnel.destroy();
+			return true;
+		}, (error: unknown) => error instanceof LoopbackPortRefused);
+
+	const unmanagedPreview = async (path: string): Promise<string | undefined> => {
+		const [, sessionId, tail] = /\/sessions\/([^/]+)\/preview\/app(\/.*)$/.exec(path) ?? [];
+		const source = sessionId && previewSessions.get(decodeURIComponent(sessionId))?.sourceHref;
+		return source && await loopbackReach() ? new URL(tail!, source).href : undefined;
+	};
+
 	const relayResponse = (
 		res: ProxyResponse,
 		status: number,
@@ -567,8 +611,15 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		}
 		if (kind === "app" && status === 409 && upstreamHeaders["x-ao-preview-managed-required"] === "1") {
 			body.resume();
-			res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-			res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
+			void unmanagedPreview(path).then((location) => {
+				if (location) {
+					res.writeHead(302, { location, "cache-control": "no-store" });
+					res.end();
+					return;
+				}
+				res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+				res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
+			});
 			return;
 		}
 		let dropped = false;
@@ -988,37 +1039,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			parsed.port = String(port);
 			return parsed.href;
 		},
-		openLoopbackTunnel: async (loopbackPort) => {
-			if (closing) throw new LoopbackTunnelError(false, "the host is disconnected");
-			await verifyUpstream();
-			if (closing) throw new LoopbackTunnelError(false, "the host is disconnected");
-			const socket = new WebSocket(`${secure ? "wss" : "ws"}://${upstream.host}${prefix}/api/v1/loopback-tunnel?port=${loopbackPort}`, {
-				headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
-				perMessageDeflate: false,
-				handshakeTimeout: timing.openMs * 3,
-				...(isIP(hostname) ? {} : { servername: hostname }),
-			});
-			const stream = webSocketTunnelStream(socket);
-			stream.on("error", () => undefined);
-			const drop = () => stream.destroy();
-			tunnels.add(drop);
-			stream.once("close", () => tunnels.delete(drop));
-			try {
-				await new Promise<void>((resolve, reject) => {
-					socket.once("open", () => resolve());
-					socket.once("unexpected-response", (request, response) => {
-						response.resume();
-						request.destroy();
-						reject(new LoopbackTunnelError(response.headers["x-ao-loopback-refused"] === "1", `localhost tunnel to port ${loopbackPort} answered ${response.statusCode}`));
-					});
-					socket.once("error", (error: Error) => reject(new LoopbackTunnelError(false, error.message)));
-				});
-			} catch (error) {
-				stream.destroy();
-				throw error;
-			}
-			return stream;
-		},
+		openLoopbackTunnel,
+		loopbackReach,
 		close: () =>
 			new Promise((resolve) => {
 				// close() alone waits on keep-alive and tunnelled sockets forever;

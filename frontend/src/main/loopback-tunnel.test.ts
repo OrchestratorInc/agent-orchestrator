@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as net from "node:net";
 import { Duplex } from "node:stream";
 import { createLoopbackTunnels, join, type RoutedSession } from "./loopback-tunnel";
-import { LoopbackTunnelError } from "./remote-proxy";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -51,15 +50,12 @@ async function socksConnect(proxyPort: number, host: string, port: number, paylo
 	return { code: data[3] ?? -1, echoed: data.subarray(12).toString() };
 }
 
-type Host = { ports?: Record<number, number>; old?: boolean };
+type Host = { ports: Record<number, number> };
 
 function hosts(table: Record<string, Host>) {
 	return async (hostId: string, port: number) => {
-		const host = table[hostId];
-		if (!host) throw new LoopbackTunnelError(false, "not connected");
-		if (host.old) throw new LoopbackTunnelError(false, "no tunnel route");
-		const target = host.ports?.[port];
-		if (!target) throw new LoopbackTunnelError(true, "nothing listening");
+		const target = table[hostId]?.ports[port];
+		if (!target) throw new Error("nothing listening");
 		return connect(target);
 	};
 }
@@ -85,10 +81,10 @@ function fakeSession() {
 describe("loopback tunnels", () => {
 	it("routes a remote session's loopback names through the host and nothing else", async () => {
 		const echo = await echoServer();
-		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: { 5173: echo } } }));
+		const route = createLoopbackTunnels(hosts({ h_box: { ports: { 5173: echo } } }));
 		const { session, state } = fakeSession();
-		await tunnels.route(session, "h_box");
-		await tunnels.route(session, "h_box");
+		await route(session, "h_box");
+		await route(session, "h_box");
 		expect(state.routed).toBe(1);
 		expect(state.proxy?.proxyBypassRules).toBe("*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost");
 		const socksPort = Number(/^socks5:\/\/127\.0\.0\.1:(\d+)$/.exec(state.proxy?.proxyRules ?? "")?.[1]);
@@ -103,21 +99,13 @@ describe("loopback tunnels", () => {
 	});
 
 	it("tries again on the next tab when a partition could not be routed", async () => {
-		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} } }));
+		const route = createLoopbackTunnels(hosts({ h_box: { ports: {} } }));
 		const { session, state } = fakeSession();
 		state.failProxy = true;
-		await expect(tunnels.route(session, "h_box")).rejects.toThrow("proxy refused");
+		await expect(route(session, "h_box")).rejects.toThrow("proxy refused");
 		state.failProxy = false;
-		await tunnels.route(session, "h_box");
+		await route(session, "h_box");
 		expect(state.proxy?.proxyRules).toMatch(/^socks5:\/\/127\.0\.0\.1:\d+$/);
-	});
-
-	it("tells a host that has the tunnel from one that does not", async () => {
-		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} }, h_listening: { ports: { 1: await echoServer() } }, h_old: { old: true } }));
-		expect(await tunnels.reach("h_box")).toBe(true);
-		expect(await tunnels.reach("h_listening")).toBe(true);
-		expect(await tunnels.reach("h_old")).toBe(false);
-		expect(await tunnels.reach("h_gone")).toBe(false);
 	});
 });
 

@@ -1,5 +1,5 @@
 import type { Duplex } from "node:stream";
-import { LoopbackTunnelError, type ActiveProxy } from "./remote-proxy";
+import type { ActiveProxy } from "./remote-proxy";
 import type { RemoteEntry } from "./remotes-store";
 
 export type ConnectedHostView = {
@@ -88,8 +88,13 @@ export class RemoteRegistry {
 
 	openLoopbackTunnel(hostId: string, port: number): Promise<Duplex> {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
-		if (!connected) return Promise.reject(new LoopbackTunnelError(false, `Host ${hostId} is not connected`));
+		if (!connected) return Promise.reject(new Error(`Host ${hostId} is not connected`));
 		return connected.proxy.openLoopbackTunnel(port);
+	}
+
+	loopbackReach(hostId: string): Promise<boolean> {
+		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
+		return connected ? connected.proxy.loopbackReach() : Promise.resolve(false);
 	}
 
 	disconnect(url: string): Promise<void> {

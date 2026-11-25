@@ -380,13 +380,6 @@ describe("ChatMarkdown", () => {
 		openExternal.mockRestore();
 	});
 
-	it("opens a remote IPv6 host-local link in the Browser", () => {
-		const onLinkOpen = vi.fn();
-		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks sessionLinkHostId="box-a"><ChatMarkdown text="[preview](http://[::1]:5173/app)" /></ChatLinkProvider>);
-		fireEvent.click(screen.getByRole("link", { name: "preview" }));
-		expect(onLinkOpen).toHaveBeenCalledWith("http://[::1]:5173/app");
-	});
-
 	it("scopes a session preview to the chat source", async () => {
 		sessionPreview.mockClear();
 		const onSessionLinkOpen = vi.fn();
@@ -447,24 +440,6 @@ describe("ChatMarkdown", () => {
 		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/new.ts", 8);
 		expect(screen.getByText("preview").closest("a")).toBeNull();
 		expect(onLinkOpen).not.toHaveBeenCalled();
-	});
-
-	it("opens a shared host's Mermaid links only in the Browser", async () => {
-		vi.mocked(renderMermaidDiagram).mockResolvedValueOnce('<svg xmlns="http://www.w3.org/2000/svg"><a href="http://localhost:5173"><text>preview</text></a></svg>');
-		const onLinkOpen = vi.fn();
-		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
-		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks sessionLinkHostId="box-a">
-			<ChatMarkdown text={'```mermaid\ngraph LR\n  A-->B\n```'} />
-		</ChatLinkProvider>);
-
-		const preview = await screen.findByText("preview");
-		fireEvent.click(preview);
-		fireEvent.click(preview, { metaKey: true });
-		fireEvent(preview, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
-		fireEvent(preview, new MouseEvent("auxclick", { button: 2, bubbles: true, cancelable: true }));
-		expect(onLinkOpen.mock.calls).toEqual([["http://localhost:5173"], ["http://localhost:5173"], ["http://localhost:5173"]]);
-		expect(openExternal).not.toHaveBeenCalled();
-		openExternal.mockRestore();
 	});
 
 	it("blocks remote host-local links inside Mermaid diagrams", async () => {

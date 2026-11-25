@@ -213,7 +213,7 @@ function chatUrlTransform(url: string, key: string): string | undefined {
 	// the click still goes through the workspace-confined preview endpoint.
 	if (isAoLink(url)) return url;
 	if (key === "href" && isPotentialWorkspaceFileLink(url)) return url;
-	return defaultUrlTransform(url.replace(/^(https?:\/\/)%5B([^/?#]*)%5D/i, "$1[$2]"));
+	return defaultUrlTransform(url);
 }
 
 const streamUrlTransform = (url: string, key: "href" | "src") => {
@@ -715,13 +715,12 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
  * must stay module-level so react-markdown's memoization survives polling.
  */
 function MermaidFence({ code }: { code: string }) {
-	const { open: onLinkOpen, remoteHost, hostLocalLinks } = useContext(OpenChatLink);
+	const { open: onLinkOpen, remoteHost } = useContext(OpenChatLink);
 	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
 		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
 		if (!href || !isHostLocalWebLink(href)) return;
 		event.preventDefault();
 		event.stopPropagation();
-		if (hostLocalLinks && (event.type === "click" || (event.type === "auxclick" && event.button === 1))) onLinkOpen?.(href);
 	};
 	const diagram = <MermaidBlock code={code} onLinkOpen={onLinkOpen} />;
 	return remoteHost

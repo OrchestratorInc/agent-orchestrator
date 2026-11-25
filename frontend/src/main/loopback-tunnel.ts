@@ -1,6 +1,5 @@
 import { createServer, type AddressInfo, type Server, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import { LoopbackTunnelError } from "./remote-proxy";
 import { readRequest, refuse, reply, REPLY_HOST_UNREACHABLE, REPLY_OK, SocketReader } from "./render-check-proxy";
 
 type OpenTunnel = (hostId: string, port: number) => Promise<Duplex>;
@@ -15,7 +14,6 @@ export type RoutedSession = {
 	};
 };
 
-const UNUSED_PORT = 1;
 const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
 const UNSPECIFIED_URLS = ["0.0.0.0", "[::]"].flatMap((host) => ["*", "ws", "wss"].map((scheme) => `${scheme}://${host}/*`));
 
@@ -86,13 +84,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		return port;
 	};
 
-	const reach = (hostId: string): Promise<boolean> =>
-		openTunnel(hostId, UNUSED_PORT).then((tunnel) => {
-			tunnel.destroy();
-			return true;
-		}, (error: unknown) => error instanceof LoopbackTunnelError && error.refused);
-
-	const route = (session: RoutedSession, hostId: string): Promise<void> => {
+	return (session: RoutedSession, hostId: string): Promise<void> => {
 		let ready = routed.get(session);
 		if (!ready) {
 			ready = (async () => {
@@ -105,8 +97,4 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		}
 		return ready;
 	};
-
-	return { route, reach };
 }
-
-export type LoopbackTunnels = ReturnType<typeof createLoopbackTunnels>;

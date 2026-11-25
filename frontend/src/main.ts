@@ -1375,7 +1375,7 @@ async function createWindowInternal(): Promise<void> {
 				platform: process.platform,
 				languages: acceptLanguages(app.getLocale(), app.getPreferredSystemLanguages()),
 			});
-			return hostId ? loopbackTunnels.route(browserSession, hostId) : undefined;
+			return hostId ? routeLoopback(browserSession, hostId) : undefined;
 		},
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
@@ -3829,7 +3829,7 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
-const loopbackTunnels = createLoopbackTunnels((hostId, port) => remoteRegistry.openLoopbackTunnel(hostId, port));
+const routeLoopback = createLoopbackTunnels((hostId, port) => remoteRegistry.openLoopbackTunnel(hostId, port));
 setPasswordCipher(() => protectedStorageAvailable() ? {
 	encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
 	decrypt: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),
@@ -3840,7 +3840,6 @@ void app.whenReady().then(() => sealSavedPasswords(remotesFilePath())).catch((er
 registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
-	tunnels: loopbackTunnels,
 	requireAccount: async () => {
 		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 	},

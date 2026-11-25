@@ -6,7 +6,6 @@ import { promisify } from "node:util";
 import { IncompatibleRemoteVersionError, checkHostUpdate, pairDevice, probeRemote, readAuthErrorCode, readHostUpdate, readRemoteIdentity, startHostUpdate, type HostUpdateView, type PairDeviceResult, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
-import type { LoopbackTunnels } from "./loopback-tunnel";
 import { ACCOUNT_TOKEN, DEVICE_TOKEN_PREFIX, addRemote, holdsAccountToken, holdsPairingPassword, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
 import { captureMainError, ExpectedIpcError } from "./main-error-capture";
 
@@ -47,7 +46,6 @@ type IpcMainLike = {
 export type RemotesIpcDeps = {
 	file: string;
 	registry: RemoteRegistry;
-	tunnels: LoopbackTunnels;
 	requireAccount: () => Promise<void>;
 	getAccountId: () => Promise<string>;
 	localIdentity: () => Promise<string | null>;
@@ -78,7 +76,7 @@ type AccountHost = { hostId: string; label: string; url: string; token: string }
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
 	{
-		file, registry, tunnels, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
+		file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
 		probe = probeRemote, identity = readRemoteIdentity, pair = pairDevice, authErrorCode = readAuthErrorCode, deviceName = computerName,
 		hostUpdate = { read: readHostUpdate, start: startHostUpdate, check: checkHostUpdate },
 	}: RemotesIpcDeps,
@@ -432,6 +430,6 @@ export function registerRemotesIpc(
 	});
 	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => {
 		await requireAccount();
-		return tunnels.reach(hostId);
+		return registry.loopbackReach(hostId);
 	});
 }
