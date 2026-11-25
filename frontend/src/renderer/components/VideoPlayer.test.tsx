@@ -10,10 +10,9 @@ function renderPlayer(props: Partial<Parameters<typeof VideoPlayer>[0]> = {}) {
 	return screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
 }
 
-/** The events a browser sends for a double-click, 80 ms apart, on fake timers. */
+/** The events a browser sends for a double-click, at any speed the system recognizes. */
 function doubleClick(video: HTMLVideoElement) {
 	fireEvent.click(video, { detail: 1 });
-	act(() => vi.advanceTimersByTime(80));
 	fireEvent.click(video, { detail: 2 });
 	fireEvent.doubleClick(video, { detail: 2 });
 }
@@ -108,81 +107,36 @@ describe("VideoPlayer", () => {
 		expect(pause).toHaveBeenCalledTimes(1);
 	});
 
-	it("toggles playback a moment after a single click on the video", () => {
-		vi.useFakeTimers();
+	it("toggles playback at once when the video is clicked", () => {
 		const video = renderPlayer();
-		Object.defineProperty(video, "paused", { configurable: true, value: false });
 		fireEvent.click(video, { detail: 1 });
-		// It waits to see whether a second click makes this a double-click.
-		act(() => vi.advanceTimersByTime(249));
-		expect(pause).not.toHaveBeenCalled();
-		act(() => vi.advanceTimersByTime(1));
+		expect(play).toHaveBeenCalledTimes(1);
+		// A keyboard or assistive click reports no click count.
+		Object.defineProperty(video, "paused", { configurable: true, value: false });
+		fireEvent.click(video, { detail: 0 });
 		expect(pause).toHaveBeenCalledTimes(1);
 	});
 
-	it("toggles at once on a keyboard or assistive click", () => {
-		const video = renderPlayer();
-		fireEvent.click(video, { detail: 0 });
-		expect(play).toHaveBeenCalledTimes(1);
-	});
-
-	it("enters fullscreen on a double-click without pausing a playing clip", () => {
-		vi.useFakeTimers();
+	it("toggles a playing clip once on a double-click instead of stopping and restarting it", () => {
 		const requestFullscreen = stubFullscreen();
 		const video = renderPlayer();
 		Object.defineProperty(video, "paused", { configurable: true, value: false });
 		const pauseEvents = vi.fn();
 		video.addEventListener("pause", pauseEvents);
 		doubleClick(video);
-		act(() => vi.advanceTimersByTime(1000));
-		expect(requestFullscreen).toHaveBeenCalledTimes(1);
-		expect(pauseEvents).not.toHaveBeenCalled();
-		expect(pause).not.toHaveBeenCalled();
+		expect(pauseEvents).toHaveBeenCalledTimes(1);
 		expect(play).not.toHaveBeenCalled();
+		// Fullscreen is on its button and the F key, not the double-click.
+		expect(requestFullscreen).not.toHaveBeenCalled();
 	});
 
-	it("enters fullscreen on a double-click without starting a paused clip", () => {
-		vi.useFakeTimers();
+	it("goes fullscreen from its button and the F key", () => {
 		const requestFullscreen = stubFullscreen();
 		const video = renderPlayer();
-		doubleClick(video);
-		act(() => vi.advanceTimersByTime(1000));
+		fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
 		expect(requestFullscreen).toHaveBeenCalledTimes(1);
-		expect(play).not.toHaveBeenCalled();
-		expect(pause).not.toHaveBeenCalled();
-		expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
-	});
-
-	it("restores playback after a double-click slower than the click delay", () => {
-		vi.useFakeTimers();
-		const requestFullscreen = stubFullscreen();
-		const video = renderPlayer();
-		loadMetadata(video, 2);
-		video.currentTime = 1.92;
-		fireEvent.click(video, { detail: 1 });
-		// The system still counts the second click as a double-click, but the
-		// first one has already started playback.
-		act(() => vi.advanceTimersByTime(350));
-		expect(play).toHaveBeenCalledTimes(1);
-		video.currentTime = 2;
-		fireEvent.click(video, { detail: 2 });
-		fireEvent.doubleClick(video, { detail: 2 });
-		expect(requestFullscreen).toHaveBeenCalledTimes(1);
-		expect(pause).toHaveBeenCalledTimes(1);
-		expect(video.currentTime).toBe(1.92);
-	});
-
-	it("drops a pending click when its pane is hidden before the click delay ends", () => {
-		vi.useFakeTimers();
-		const view = render(<VideoPlayer label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
-		const video = screen.getByLabelText("clips/demo.mp4") as HTMLVideoElement;
-		Object.defineProperty(video, "paused", { configurable: true, value: false });
-		fireEvent.click(video, { detail: 1 });
-		view.rerender(<VideoPlayer active={false} label="clips/demo.mp4" src="http://127.0.0.1:3001/demo.mp4" />);
-		expect(pause).toHaveBeenCalledTimes(1);
-		Object.defineProperty(video, "paused", { configurable: true, value: true });
-		// The click must not start the video behind whatever now covers it.
-		act(() => vi.advanceTimersByTime(1000));
+		fireEvent.keyDown(video, { key: "f" });
+		expect(requestFullscreen).toHaveBeenCalledTimes(2);
 		expect(play).not.toHaveBeenCalled();
 	});
 
@@ -303,6 +257,48 @@ describe("VideoPlayer", () => {
 		expect(screen.getByText("0:00 / 0:00")).toBeInTheDocument();
 		expect(next.loop).toBe(true);
 		expect(next.playbackRate).toBe(2);
+	});
+
+	it("autoplays a new file version that replaces a playing one", () => {
+		const view = render(<VideoPlayer label="demo.mp4" src="http://127.0.0.1:3001/demo.mp4?v=1" />);
+		fireEvent.play(screen.getByLabelText("demo.mp4"));
+		view.rerender(<VideoPlayer label="demo.mp4" src="http://127.0.0.1:3001/demo.mp4?v=2" />);
+		expect(screen.getByLabelText("demo.mp4")).toHaveAttribute("autoplay");
+	});
+
+	it("keeps a new file version paused when the person paused the one it replaces", () => {
+		const view = render(<VideoPlayer label="demo.mp4" src="http://127.0.0.1:3001/demo.mp4?v=1" />);
+		const first = screen.getByLabelText("demo.mp4");
+		fireEvent.play(first);
+		fireEvent.pause(first);
+		view.rerender(<VideoPlayer label="demo.mp4" src="http://127.0.0.1:3001/demo.mp4?v=2" />);
+		expect(screen.getByLabelText("demo.mp4")).not.toHaveAttribute("autoplay");
+		expect(play).not.toHaveBeenCalled();
+	});
+
+	it("keeps a stopped clip's new version paused when its pane is shown again", () => {
+		const player = (active: boolean, version: number) => <VideoPlayer active={active} label="demo.mp4" src={`http://127.0.0.1:3001/demo.mp4?v=${version}`} />;
+		const view = render(player(true, 1));
+		const first = screen.getByLabelText("demo.mp4") as HTMLVideoElement;
+		fireEvent.play(first);
+		// Hidden while playing: it pauses. A rewrite then arrives while it is hidden.
+		Object.defineProperty(first, "paused", { configurable: true, value: false });
+		view.rerender(player(false, 1));
+		expect(pause).toHaveBeenCalledTimes(1);
+		view.rerender(player(false, 2));
+		// Shown again: the new version has never played, but the person's clip was stopped.
+		view.rerender(player(true, 2));
+		expect(play).not.toHaveBeenCalled();
+		expect(screen.getByLabelText("demo.mp4")).not.toHaveAttribute("autoplay");
+	});
+
+	it("ignores a pause reported by the element a new file version replaced", () => {
+		const view = render(<VideoPlayer label="demo.mp4" src="http://127.0.0.1:3001/demo.mp4?v=1" />);
+		const first = screen.getByLabelText("demo.mp4");
+		fireEvent.play(first);
+		view.rerender(<VideoPlayer label="demo.mp4" src="http://127.0.0.1:3001/demo.mp4?v=2" />);
+		fireEvent.pause(first);
+		expect(screen.getByLabelText("demo.mp4")).toHaveAttribute("autoplay");
 	});
 
 	it("plays only while its pane is visible", () => {

@@ -27,6 +27,7 @@ import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { seedCloudOpening } from "../lib/cloud-opening";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 import { forgetSharedSessions, rememberSharedSessions } from "../lib/shared-session-memory";
+import { useMainViewVisible } from "../lib/main-view-visibility";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const annotationOpen = vi.hoisted(() => ({ current: undefined as import("../../shared/chat-file-reference").OpenFileAnnotation | undefined }));
@@ -685,7 +686,7 @@ vi.mock("./SessionFileWorkspace", () => ({
 		split: boolean;
 	}) => {
 		return (
-			<div data-active={String(active)} data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
+			<div data-active={String(active)} data-main-view-visible={String(useMainViewVisible())} data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 				{path}
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
@@ -6303,19 +6304,23 @@ describe("SessionView", () => {
 		}
 	});
 
-	it("marks the center file inactive while the maximized Browser covers it", async () => {
+	it("hides the center file from its video, but keeps the pane active, while the maximized Browser covers it", async () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
 		render(<SessionView sessionId="sess-1" />);
 		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
 		const workspace = await screen.findByTestId("session-file-workspace");
-		expect(workspace).toHaveAttribute("data-active", "true");
+		expect(workspace).toHaveAttribute("data-main-view-visible", "true");
 
 		fireEvent.click(screen.getByRole("button", { name: "pop browser" }));
 		expect(document.querySelector(".browser-popout-overlay")).toBeInTheDocument();
-		expect(workspace).toHaveAttribute("data-active", "false");
+		// A video in the pane pauses...
+		expect(workspace).toHaveAttribute("data-main-view-visible", "false");
+		// ...but the pane stays active, so closing the Browser does not refocus it.
+		expect(workspace).toHaveAttribute("data-active", "true");
 
 		fireEvent.click(screen.getByRole("button", { name: "browser center" }));
 		expect(document.querySelector(".browser-popout-overlay")).not.toBeInTheDocument();
+		expect(workspace).toHaveAttribute("data-main-view-visible", "true");
 		expect(workspace).toHaveAttribute("data-active", "true");
 	});
 

@@ -27,6 +27,7 @@ import { agentLabel } from "../lib/agent-options";
 import { useCloudAgentSwitch } from "../hooks/useCloudAgentSwitch";
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
+import { MainViewVisibleContext, useMainViewVisible } from "../lib/main-view-visibility";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
@@ -780,6 +781,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserPopOutPhase = browserPopOutState.sessionId === sessionId ? browserPopOutState.phase : "docked";
 	const browserPopOutMounted = browserPopOutPhase !== "docked";
 	const browserPoppedOut = browserPopOutPhase === "open";
+	const mainViewVisible = useMainViewVisible();
 	const [browserPopoutTopbarHost, setBrowserPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
 		if (browserPopOutPhase !== "mounting" || !browserPopoutTopbarHost) return;
@@ -2911,7 +2913,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		);
 	}
 
-	return (
+	const view = (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
 			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
@@ -3178,7 +3180,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											>
 												{session?.cloud ? (
 													<CloudFileContentPane
-														active={visible && !filesPoppedOut && !browserPopOutMounted}
+														active={visible && !filesPoppedOut}
 														annotation={fileAnnotation}
 														commitSha={request?.commitSha}
 														initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
@@ -3194,7 +3196,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 													/>
 												) : (
 													<SessionFileWorkspace
-														active={visible && !filesPoppedOut && !browserPopOutMounted}
+														active={visible && !filesPoppedOut}
 														focusRequest={paneFocusRequests[paneKey] ?? 0}
 														fileKey={fileKey}
 														hostId={hostId}
@@ -3443,6 +3445,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: null}
 		</div>
 	);
+	// The maximized Browser covers the whole app without hiding it, so videos
+	// under it learn to pause from the main-view flag. File panes keep their
+	// own `active`, which also moves focus, so closing the Browser leaves focus
+	// where it was.
+	return <MainViewVisibleContext.Provider value={mainViewVisible && !browserPopOutMounted}>{view}</MainViewVisibleContext.Provider>;
 }
 
 /** The key a terminal target's tab has in the strips and the split layout. */
