@@ -284,7 +284,9 @@ Orchestrator.inc sends structured events in a few broad categories:
   `cloud`. `paired` is sent for every pairing finished from Pair a machine, by
   scan or manual entry: a new machine, a re-pair, or an edited connection. A
   manual pairing is reported even if the person left the page while it
-  connected
+  connected.
+  The phone also reports which of its screens are used and how long its
+  launches take (see "Mobile app screens and launches" below)
 - Coarse geographic location (country, and where available region and city),
   derived by PostHog from the connection's IP address when it receives each
   event. Orchestrator.inc does not resolve or send precise coordinates, and does not store
@@ -1051,6 +1053,81 @@ between launches and replaced after each send. Share usage analytics and the
 kill switch control both events. Turning Share usage analytics off stops the
 summary and deletes the window counted so far, so nothing from before is sent
 after it is turned back on.
+
+## Mobile app screens and launches
+
+When mobile telemetry is active, the phone records which of its screens and
+sheets people use, the errors it shows them, and how long it takes to start,
+the mobile counterpart of "UI usage" and "UI responsiveness" above. The
+properties specific to these events are fixed screen names, fixed error kinds,
+counts and durations. Like every phone event they also carry the shared
+context, such as `app_version`. They never include a session, project, PR or
+file name, path, URL, message text, error message, tap position or
+screenshot. There is no session replay.
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `mobile.surfaces.viewed` | A screen or sheet stays on screen for a second. At most once per surface per UTC day | `surface` |
+| `mobile.ui.usage_summary` | When the app goes to the background at least 15 minutes after its window started, or at the next launch for a window that ran out while the app was closed. Not sent when nothing was counted | Window fields and counters (below) |
+| `mobile.ui.error_shown` | A user-visible error shows: a warning toast, a board failure view, or a screen or sheet that failed to draw. The same error on the same screen within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface` |
+| `mobile.launches.timed` | Once per app start: when a machine's live data first shows, when 60 seconds pass without it, or when the app goes to the background first | `launch_kind`, `outcome`, `landing_surface`, `clock_origin`, `to_js_start_ms`, `to_visible_ms`, `to_usable_ms` |
+
+- `surface` is one of the app's screens or sheets: `board`, `projects`,
+  `project`, `compose`, `spawn`, `prs`, `notifications`, `session` (the session
+  screen while it loads), `session_chat`, `session_tui`, `session_cloud`,
+  `conversation_actions`, `review`, `review_actions`, `reviewer`, `files`,
+  `file_viewer`, `files_review`, `files_branch`, `files_changes`, `artifacts`,
+  `artifact`, `artifact_history`, `render`, `preview`, `browser`, `device`,
+  `shell`, `cloud_terminal`, `cloud_new_project`, `cloud_plan`,
+  `conversation_usage`, `model_picker`, `agent_picker`, `account`,
+  `machine_name`, `onboarding`, `pair`, `connect`, `settings`,
+  `settings_theme`, `settings_machine`, `settings_cloud`, or `other` for a
+  screen added later.
+- `presentation` is `toast`, `screen`, or `sheet`. `error_kind` is
+  `render_crash`, `unreachable`, `auth`, `incompatible_host`, `rate_limited`,
+  `server_error`, `phone_offline`, `cloud_unavailable`, or `action_failed` (a
+  warning toast after an action).
+
+`mobile.ui.usage_summary` properties (a counter that stayed at 0 is left out):
+
+| Property | Meaning |
+| --- | --- |
+| `measurement_schema_version` | `1` |
+| `window_seconds` | Wall time from the window's start to the send |
+| `active_seconds` | Time the app was in the foreground |
+| `flush_reason` | `background`, or `startup` for a window that ended while the app was closed |
+| `foreground_count` | Launches and returns to the foreground |
+| `error_shown_count` | User-visible errors, including repeats not sent as their own event |
+| `session_open_count` | Sessions opened |
+| `session_open_from_<source>_count` | Those by where they were opened from: `board`, `project`, `prs`, `spawn`, `notification` (a push tap), `notifications_inbox`, `deep_link`, `restore` (the launch reopened it), or `other` |
+| `surface_<surface>_seconds` | Time that screen was on screen while the app was in the foreground |
+| `surface_<surface>_opens` | Times it came on screen, including returning to it |
+
+Properties on `mobile.launches.timed`:
+
+- `launch_kind` is `first` (the first launch of an install with this
+  telemetry), `update` (the first launch on a new app version or OTA update), or
+  `cold`.
+- `outcome` is `usable`, `timeout`, or `backgrounded`. A launch that went to the
+  background before it was usable sends only `launch_kind`, `outcome` and
+  `landing_surface`.
+- `landing_surface` is the screen on show when the launch ended, such as
+  `board`, or `onboarding` on a phone that is not paired yet.
+- Times are in milliseconds from the app's start, read from React Native's
+  startup marks; `clock_origin` is `process`, or `runtime` when the app's own
+  start was not recorded and the JavaScript runtime's start is used instead.
+  `to_js_start_ms` is the app's JavaScript starting, `to_visible_ms` its first
+  frame, and `to_usable_ms` the first frame after a paired machine's data
+  arrives. A time outside 0 to 10 minutes is left out.
+
+Counting happens in memory and is saved in the app's storage when it goes to
+the background, and at most once a minute while screens change. The phone's
+analytics opt-out (which follows the paired desktop's) drops everything
+counted so far, removes the saved window, and stops counting; nothing counted
+before an opt-out is sent after opting in again. Development builds do not
+count. The once-per-day screen markers are kept only so the same screen is not
+sent twice in a day, and a screen view dropped by the rate limit is tried again
+on the next view.
 
 ## Chat import
 

@@ -10,7 +10,8 @@ import { useApp } from "../../../lib/store";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CLOUD_HOST_ID } from "../../../lib/cloud/mapping";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
-import { useBoardFailure } from "../../../lib/useBoardFailure";
+import { useBoardFailure, useBoardFailureKind } from "../../../lib/useBoardFailure";
+import { useErrorShown } from "../../../lib/telemetry/useErrorShown";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
@@ -223,6 +224,11 @@ export default function FleetScreen() {
 						: workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? "environment"
 							: "idle";
 	const [boardEmpty, setBoardEmpty] = useState(false);
+	const failureKind = useBoardFailureKind();
+	useErrorShown(!boardEmpty ? null
+		: emptyView === "cloud" ? "cloud_unavailable"
+			: emptyView === "error" ? (hostStates.length > 1 ? "unreachable" : failureKind)
+				: null);
 	// The one machine every row is on, when it is a paired machine: the line under
 	// the title speaks for it, since a dot on every row would say the same thing.
 	// With several machines on the board their chips and rows carry the dots.

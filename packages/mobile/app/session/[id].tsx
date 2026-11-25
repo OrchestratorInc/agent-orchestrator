@@ -18,6 +18,7 @@ import {
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
 import { HostScope, useApp } from "../../lib/store";
+import { useSessionSurface } from "../../lib/telemetry/useSessionSurface";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import type { Theme } from "../../lib/theme";
 import { Button, EmptyState } from "../../lib/ui";
@@ -31,6 +32,7 @@ import { Button, EmptyState } from "../../lib/ui";
  */
 export default function MobileSessionRoute() {
 	const { id, hostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
+	useSessionSurface(isCloudHost(hostId) ? "cloud" : null);
 	// Orchestrator Cloud sessions open the same route with the cloud host: their chat and
 	// terminal come from the control plane rather than a paired daemon.
 	if (isCloudHost(hostId)) return <CloudSessionScreen key={String(id ?? "")} sessionId={String(id ?? "")} />;
@@ -132,6 +134,7 @@ function SessionRouteContent() {
 	const shownProjectId = view.kind === "screen" ? view.session.projectId : undefined;
 	const rememberedProjectId = shownProjectId && projects.some((project) => project.id === shownProjectId) ? shownProjectId : undefined;
 	useFocusEffect(useCallback(() => { rememberLastProject(currentHostId, rememberedProjectId); }, [currentHostId, rememberedProjectId]));
+	useSessionSurface(view.kind === "screen" ? view.session.mode : null);
 
 	switch (view.kind) {
 		case "screen":

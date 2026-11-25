@@ -1,0 +1,223 @@
+import { describe, expect, it } from "vitest";
+import { createUiUsageTracker, ERROR_REPEAT_MS, type PersistedUiUsage, UI_EVENTS, UI_WINDOW_MS } from "./uiUsage";
+
+const T0 = Date.UTC(2026, 10, 25, 10, 0, 0);
+
+function setup(options: { accept?: (event: string) => boolean } = {}) {
+	let now = T0;
+	const captures: Array<{ event: string; props: Record<string, unknown> }> = [];
+	const saved: PersistedUiUsage[] = [];
+	let cleared = 0;
+	const tracker = createUiUsageTracker({
+		now: () => now,
+		capture: (event, props) => {
+			if (options.accept && !options.accept(event)) return false;
+			captures.push({ event, props });
+			return true;
+		},
+		save: (state) => saved.push(JSON.parse(JSON.stringify(state))),
+		clear: () => { cleared += 1; },
+	});
+	return {
+		tracker,
+		captures,
+		saved,
+		cleared: () => cleared,
+		advance: (ms: number) => { now += ms; },
+		of: (event: string) => captures.filter((c) => c.event === event),
+	};
+}
+
+describe("surfaces viewed", () => {
+	it("reports a surface after a second on screen, once per day", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.advance(500);
+		t.tracker.setRoute("prs");
+		expect(t.of(UI_EVENTS.viewed)).toEqual([]);
+		t.advance(1_500);
+		t.tracker.setRoute("board");
+		t.advance(2_000);
+		t.tracker.setRoute("prs");
+		expect(t.of(UI_EVENTS.viewed).map((c) => c.props.surface)).toEqual(["prs", "board"]);
+		t.advance(2_000);
+		t.tracker.setRoute("board");
+		expect(t.of(UI_EVENTS.viewed)).toHaveLength(2);
+		t.advance(24 * 3_600_000);
+		t.tracker.setRoute("prs");
+		expect(t.of(UI_EVENTS.viewed).map((c) => c.props.surface)).toEqual(["prs", "board", "board"]);
+	});
+
+	it("tries again when the send was dropped", () => {
+		let accept = false;
+		const t = setup({ accept: () => accept });
+		t.tracker.setRoute("board");
+		t.advance(2_000);
+		t.tracker.setRoute("prs");
+		accept = true;
+		t.tracker.setRoute("board");
+		t.advance(2_000);
+		t.tracker.setRoute("prs");
+		expect(t.of(UI_EVENTS.viewed).map((c) => c.props.surface)).toEqual(["board"]);
+	});
+
+	it("counts the time before the app goes to the background", () => {
+		const t = setup();
+		t.tracker.setRoute("settings");
+		t.advance(3_000);
+		t.tracker.setForeground(false);
+		expect(t.of(UI_EVENTS.viewed).map((c) => c.props.surface)).toEqual(["settings"]);
+	});
+});
+
+describe("usage summary", () => {
+	it("sends counts, durations and fixed ids once the window is over", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.advance(60_000);
+		t.tracker.setRoute("session");
+		t.tracker.setVariant("session", "session_chat");
+		t.tracker.sessionOpened();
+		t.advance(120_000);
+		t.tracker.setForeground(false);
+		expect(t.of(UI_EVENTS.summary)).toEqual([]);
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(true);
+		t.advance(10_000);
+		t.tracker.setForeground(false);
+		const [summary] = t.of(UI_EVENTS.summary);
+		expect(summary.props).toMatchObject({
+			measurement_schema_version: 1,
+			flush_reason: "background",
+			active_seconds: 190,
+			foreground_count: 2,
+			session_open_count: 1,
+			session_open_from_board_count: 1,
+			surface_board_seconds: 60,
+			surface_board_opens: 1,
+			surface_session_chat_seconds: 130,
+			surface_session_chat_opens: 2,
+		});
+		// The route's own label was replaced by the chat it showed.
+		expect(summary.props).not.toHaveProperty("surface_session_opens");
+		expect(Object.values(summary.props).every((v) => typeof v === "number" || v === "background")).toBe(true);
+	});
+
+	it("sends a window that ended while the app was closed at the next launch", () => {
+		const first = setup();
+		first.tracker.setRoute("prs");
+		first.advance(30_000);
+		first.tracker.setForeground(false);
+		const saved = first.saved.at(-1)!;
+		const next = setup();
+		next.advance(UI_WINDOW_MS + 1);
+		next.tracker.restore(saved);
+		expect(next.of(UI_EVENTS.summary)[0].props).toMatchObject({ flush_reason: "startup", window_seconds: 30, surface_prs_seconds: 30 });
+	});
+
+	it("carries a recent window on at launch", () => {
+		const first = setup();
+		first.tracker.setRoute("prs");
+		first.advance(30_000);
+		first.tracker.setForeground(false);
+		const next = setup();
+		next.advance(60_000);
+		next.tracker.restore(first.saved.at(-1)!);
+		next.tracker.setRoute("board");
+		next.advance(UI_WINDOW_MS);
+		next.tracker.setForeground(false);
+		expect(next.of(UI_EVENTS.summary)[0].props).toMatchObject({ surface_prs_seconds: 30, foreground_count: 2 });
+	});
+
+	it("ignores a saved window in an unexpected shape", () => {
+		const t = setup();
+		t.tracker.restore({ window: { startedAt: "x" }, viewedDay: "", viewed: [] } as unknown as PersistedUiUsage);
+		expect(t.captures).toEqual([]);
+	});
+});
+
+describe("session opens", () => {
+	it("credits where the session was opened from", () => {
+		const t = setup();
+		t.tracker.setRoute("projects");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened();
+		t.tracker.setRoute("notifications");
+		t.tracker.openedBy("notification");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened();
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(false);
+		expect(t.of(UI_EVENTS.summary)[0].props).toMatchObject({
+			session_open_count: 2,
+			session_open_from_project_count: 1,
+			session_open_from_notification_count: 1,
+		});
+	});
+
+	it("names the launch's first screen restore and counts a remount once", () => {
+		const t = setup();
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened();
+		t.tracker.sessionOpened();
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(false);
+		expect(t.of(UI_EVENTS.summary)[0].props).toMatchObject({ session_open_count: 1, session_open_from_restore_count: 1 });
+	});
+
+	it("does not credit a push that opened nothing", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.openedBy("deep_link");
+		t.advance(10_000);
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened();
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(false);
+		expect(t.of(UI_EVENTS.summary)[0].props).toMatchObject({ session_open_from_board_count: 1 });
+	});
+});
+
+describe("errors shown", () => {
+	it("sends each error once per five minutes and counts every showing", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.errorShown("screen", "unreachable");
+		t.tracker.errorShown("screen", "unreachable");
+		t.tracker.errorShown("toast", "action_failed");
+		expect(t.of(UI_EVENTS.errorShown).map((c) => c.props)).toEqual([
+			{ presentation: "screen", error_kind: "unreachable", surface: "board" },
+			{ presentation: "toast", error_kind: "action_failed", surface: "board" },
+		]);
+		t.advance(ERROR_REPEAT_MS);
+		t.tracker.errorShown("screen", "unreachable");
+		expect(t.of(UI_EVENTS.errorShown)).toHaveLength(3);
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(false);
+		expect(t.of(UI_EVENTS.summary)[0].props.error_shown_count).toBe(4);
+	});
+});
+
+describe("opt-out", () => {
+	it("drops what was counted, clears the saved copy and stops counting", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.advance(5_000);
+		t.tracker.setEnabled(false);
+		expect(t.cleared()).toBe(1);
+		t.tracker.setRoute("prs");
+		t.advance(5_000);
+		t.tracker.errorShown("toast", "action_failed");
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(false);
+		expect(t.captures).toEqual([]);
+		t.tracker.setForeground(true);
+		t.tracker.setEnabled(true);
+		t.tracker.setRoute("board");
+		t.advance(UI_WINDOW_MS + 2_000);
+		t.tracker.setForeground(false);
+		const summary = t.of(UI_EVENTS.summary)[0].props;
+		expect(summary).not.toHaveProperty("surface_prs_seconds");
+		expect(summary).not.toHaveProperty("error_shown_count");
+	});
+});

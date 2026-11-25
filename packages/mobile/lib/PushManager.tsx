@@ -20,6 +20,7 @@ import { useCloud } from "./cloud/CloudProvider";
 import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarget";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
+import { uiUsage } from "./telemetry/uiUsageRegistry";
 
 // Set the foreground presentation policy before any notification can arrive.
 configurePushHandler();
@@ -125,6 +126,8 @@ export function PushManager(): null {
 	}, [navState?.key]);
 
 	async function route(data: PushData, coldStart = false) {
+		// A session this tap opens counts as opened from a notification.
+		uiUsage()?.openedBy("notification");
 		const cloudTarget = cloudPushTarget(data);
 		if (cloudTarget) {
 			mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target: "cloud", cold_start: coldStart });

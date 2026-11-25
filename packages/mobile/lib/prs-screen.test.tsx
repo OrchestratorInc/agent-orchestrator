@@ -64,7 +64,7 @@ vi.mock("./pr-filter-control", () => ({ PRFilterControl: "PRFilterControl" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
 vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
-vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}) }));
+vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}), useBoardFailureKind: () => "unreachable" }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries: (targets: unknown[]) => {
 	fixture.summaryTargets.push(targets);
