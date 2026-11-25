@@ -65,6 +65,9 @@ type SpawnConfig struct {
 	// AgentAccountID is the provider account the agent runs under. Empty uses
 	// the provider's default account.
 	AgentAccountID string
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool
 
 	// RequestedMode is the caller's explicit session mode, or empty to let the
 	// daemon resolve its default. It is validated and persisted before any

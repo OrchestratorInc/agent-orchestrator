@@ -1,12 +1,13 @@
+import { sentryErrorCode } from "../../../packages/shared/telemetry/ao-error";
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readRemoteIdentity, type PairDeviceResult, type RemoteHealth } from "./remote-request";
+import { IncompatibleRemoteVersionError, checkHostUpdate, pairDevice, probeRemote, readAuthErrorCode, readHostUpdate, readRemoteIdentity, startHostUpdate, type HostUpdateView, type PairDeviceResult, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
 import { ACCOUNT_TOKEN, DEVICE_TOKEN_PREFIX, addRemote, holdsAccountToken, holdsPairingPassword, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
-import { ExpectedIpcError } from "./main-error-capture";
+import { captureMainError, ExpectedIpcError } from "./main-error-capture";
 
 // An isolated desktop run must not read or write the real user's credentials.
 // Without an override, keep the existing ~/.ao location.
@@ -61,9 +62,11 @@ export type RemotesIpcDeps = {
 	pair?: (entry: Pick<RemoteEntry, "url" | "hostId">, secret: string, device: { name: string; platform: string }) => Promise<PairDeviceResult>;
 	authErrorCode?: (entry: RemoteEntry) => Promise<string | undefined>;
 	deviceName?: () => Promise<string>;
+	hostUpdate?: { read: (entry: RemoteEntry) => Promise<HostUpdateView | null>; start: (entry: RemoteEntry, version?: string) => Promise<HostUpdateView | null>; check: (entry: RemoteEntry) => Promise<string> };
 };
 
-class LocalIdentityUnavailableError extends ExpectedIpcError {
+export class LocalIdentityUnavailableError extends ExpectedIpcError {
+	override readonly code: string = "LOCAL_IDENTITY_UNAVAILABLE_ERROR";
 	constructor() { super("Local Orchestrator identity is unavailable; remote connection is offline"); }
 }
 
@@ -80,6 +83,7 @@ export function registerRemotesIpc(
 		file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
 		probe = probeRemote, identity = readRemoteIdentity, pair = pairDevice, authErrorCode = readAuthErrorCode, deviceName = computerName,
 		localDaemonBase = () => null, daemonFetch = fetch,
+		hostUpdate = { read: readHostUpdate, start: startHostUpdate, check: checkHostUpdate },
 	}: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
@@ -168,11 +172,20 @@ export function registerRemotesIpc(
 		return entries.filter((item) => !item.accountUserId || item.accountUserId === account);
 	};
 
-	ipcMain.handle("remotes:list", () => ordered(async () => {
-		await accountID();
-		const localHostId = await localIdentity();
-		const entries = await owned();
-		return toHostViews(entries.filter((entry) => !localHostId || entry.hostId !== localHostId));
+	ipcMain.handle("remotes:list", (_event, includeErrorCode?: true) => ordered(async () => {
+		try {
+			await accountID();
+			const localHostId = await localIdentity();
+			const entries = await owned();
+			return toHostViews(entries.filter((entry) => !localHostId || entry.hostId !== localHostId));
+		} catch (error) {
+			// Electron only serializes the message of an IPC rejection. Send
+			// coded failures as a structured result for the renderer bridge.
+			const code = includeErrorCode === true ? sentryErrorCode(error) : undefined;
+			if (!code || !(error instanceof Error)) throw error;
+			captureMainError({ category: "ipc", reason: "handler", detail: "channel:remotes:list", error });
+			return { code, message: error.toString(), ...(error instanceof ExpectedIpcError ? { expected: true } : {}) };
+		}
 	}));
 	ipcMain.handle("remotes:add", async (_event, input: RemoteEntry) => ordered(async () => {
 		const account = await accountID();
@@ -396,6 +409,38 @@ export function registerRemotesIpc(
 		if (!response.ok) throw new ExpectedIpcError(body.message || `Orchestrator could not save the computer (${response.status}).`);
 		return body;
 	}));
+	const updatableHost = async (url: string) => {
+		const account = await accountID();
+		const entry = (await owned()).find((saved) => saved.url === url);
+		if (!entry?.hostId) throw new ExpectedIpcError("Host does not belong to this account.");
+		const localHostId = await requireLocalIdentity();
+		refuseSelf(entry.hostId, localHostId);
+		let actual: string | undefined;
+		try { actual = await identity(entry); }
+		catch (error) {
+			if (!(error instanceof IncompatibleRemoteVersionError)) return null;
+			actual = error.hostId;
+		}
+		if (actual !== entry.hostId) throw new ExpectedIpcError(`remote host identity changed for ${entry.url}; connection refused`);
+		await checkConnectionContext(localHostId, account);
+		return entry;
+	};
+	ipcMain.handle("remotes:hostUpdate", async (_event, url: string) => {
+		const entry = await updatableHost(url);
+		return entry ? hostUpdate.read(entry) : null;
+	});
+	ipcMain.handle("remotes:checkHostUpdate", async (_event, url: string) => {
+		const entry = await updatableHost(url);
+		if (!entry) throw new ExpectedIpcError(`host ${url} is offline`);
+		try { return await hostUpdate.check(entry); }
+		catch (error) { throw new ExpectedIpcError(error instanceof Error ? error.message : String(error)); }
+	});
+	ipcMain.handle("remotes:startHostUpdate", async (_event, url: string, version?: string) => {
+		const entry = await updatableHost(url);
+		if (!entry) throw new ExpectedIpcError(`host ${url} is offline`);
+		try { return await hostUpdate.start(entry, typeof version === "string" && version ? version : undefined); }
+		catch (error) { throw new ExpectedIpcError(error instanceof Error ? error.message : String(error)); }
+	});
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
 	ipcMain.handle("remotes:computerName", () => computerName());
 	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) => {

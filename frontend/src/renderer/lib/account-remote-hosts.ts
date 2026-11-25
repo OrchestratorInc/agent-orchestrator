@@ -5,6 +5,7 @@ export type AccountRemoteHost = { hostId: string; label: string; url: string };
 
 /** AO Cloud refused a host sync, with the HTTP status it answered. */
 export class AccountHostSyncError extends Error {
+	readonly code: string = "ACCOUNT_HOST_SYNC_ERROR";
 	constructor(message: string, readonly status: number) {
 		super(message);
 	}

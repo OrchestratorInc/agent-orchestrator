@@ -29,6 +29,8 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("../api", () => ({ apiRequest: request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
 vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
+// Saving the transcript for after a restart is not under test here.
+vi.mock("./savedConversations", () => ({ conversationSaver: { schedule: () => {}, flush: async () => {} }, loadSavedConversation: async () => null }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), success: vi.fn(), error: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: (factory: (theme: object) => unknown) => factory({}) }));

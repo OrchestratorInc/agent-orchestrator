@@ -619,6 +619,12 @@ func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionReco
 		}); err != nil {
 			return fmt.Errorf("clear switched conversation model reroute: %w", err)
 		}
+		// The old provider's view of its thread says nothing about the new one.
+		if err := q.UpdateConversationThreadState(ctx, gen.UpdateConversationThreadStateParams{
+			ThreadStateJson: sql.NullString{}, ID: branch.ConversationID,
+		}); err != nil {
+			return fmt.Errorf("clear switched conversation thread state: %w", err)
+		}
 		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID})
 		if err != nil {
 			return fmt.Errorf("allocate provider switch activity sequence: %w", err)

@@ -11,24 +11,18 @@ import { renameCloudSession } from "./rename-session";
 describe("renameCloudSession", () => {
 	beforeEach(() => { h.renameSession.mockReset(); });
 
-	it("renames on the control plane and shows the new title in the cached lists at once", async () => {
+	it("renames on the control plane and returns the stored name, leaving the caches to the commit", async () => {
 		const queryClient = new QueryClient();
 		queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cp.test" });
-		queryClient.setQueryData(["cloud-sessions", "https://cp.test", "org-1"], [
-			{ id: "s-1", displayName: "Old" },
-			{ id: "s-2", displayName: "Other" },
-		]);
+		const cached = [{ id: "s-1", displayName: "Old" }];
+		queryClient.setQueryData(["cloud-sessions", "https://cp.test", "org-1"], cached);
 		h.renameSession.mockResolvedValue({ session: { id: "s-1", displayName: "New name" } });
-		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
-		await renameCloudSession(queryClient, { id: "s-1", cloud: { orgId: "org-1" } }, "New name");
+		await expect(renameCloudSession(queryClient, { id: "s-1", cloud: { orgId: "org-1" } }, "New name")).resolves.toBe("New name");
 
 		expect(h.renameSession).toHaveBeenCalledWith("org-1", "s-1", "New name");
-		expect(queryClient.getQueryData(["cloud-sessions", "https://cp.test", "org-1"])).toEqual([
-			{ id: "s-1", displayName: "New name" },
-			{ id: "s-2", displayName: "Other" },
-		]);
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-sessions"] });
+		// An older answer must not overwrite a newer rename, so showing it is commitSessionRename's job.
+		expect(queryClient.getQueryData(["cloud-sessions", "https://cp.test", "org-1"])).toBe(cached);
 	});
 
 	it("refuses without a configured control plane", async () => {

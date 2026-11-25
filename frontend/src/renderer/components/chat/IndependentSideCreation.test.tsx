@@ -228,3 +228,23 @@ describe("selection creation activation", () => {
 		expect(hook.result.current.error).toBeUndefined();
 	});
 });
+
+describe("side list polling", () => {
+	it("does not re-render when a poll returns the same empty list", async () => {
+		listed = [];
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			let renders = 0;
+			const hook = renderHook(() => { renders++; return useIndependentSideChats("session", [], [], async () => [], false); });
+			await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+			await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+			const listCalls = () => get.mock.calls.filter(([path]) => String(path).endsWith("/side-chats")).length;
+			const before = { renders, calls: listCalls() };
+			await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+			expect(listCalls()).toBeGreaterThanOrEqual(before.calls + 3);
+			expect(renders).toBe(before.renders);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
