@@ -2,7 +2,7 @@ import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { draftStagedPaths, readChatSessionDraft, writeChatAttachments } from "../../lib/chat-drafts";
+import { draftStagedPaths, readChatSessionDraft, writeChatAttachments, writeChatQueuedEdit } from "../../lib/chat-drafts";
 import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChatComposer } from "./ChatComposer";
@@ -64,6 +64,25 @@ describe("draft attachment leases", () => {
 		expect(screen.getByRole("button", { name: "Remove kept.txt" })).toBeInTheDocument();
 		// Dropping a reclaimed chip is not a release of anything still held.
 		expect(releasedPaths(leases)).not.toContain(kept);
+	});
+
+	it("renews the staged files of a restored queued edit", async () => {
+		const sessionId = "leases-queued-edit";
+		const path = ".ao/attachments/attachment-queued01.txt";
+		const staged = { id: "queued", name: "queued.txt", mimeType: "text/plain", bytes: 5, path };
+		writeChatQueuedEdit(sessionId, { turnId: "turn-1", text: "edited", stagedAttachments: [staged] });
+		const leases = vi.fn().mockResolvedValue([]);
+		render(
+			<ChatComposer
+				onSend={vi.fn()}
+				queuedDraftScope={{ sessionId, incarnation: sessionId }}
+				editingQueuedTurnId="turn-1"
+				draftSeed={{ id: "turn-1", text: "edited", stagedAttachments: [staged] }}
+				onStageAttachments={vi.fn()}
+				onUpdateAttachmentLeases={leases}
+			/>,
+		);
+		await waitFor(() => expect(leases).toHaveBeenCalledWith([], [path]));
 	});
 
 	it("does not renew AO Cloud references", async () => {

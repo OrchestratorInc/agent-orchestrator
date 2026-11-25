@@ -857,10 +857,14 @@ export const ChatComposer = memo(function ChatComposer({
 			Boolean(path) && !isCloudAttachmentReference(path!) && !held.has(path!));
 		if (release.length > 0) void onUpdateAttachmentLeases(release).catch(() => undefined);
 	}, [onUpdateAttachmentLeases]);
+	const queuedDraftScopeRef = useRef(queuedDraftScope);
+	queuedDraftScopeRef.current = queuedDraftScope;
 	// A restored draft renews its files so they outlive the lease expiry, and
 	// drops any chip whose file is already gone rather than sending a dead path.
+	// A queued-edit editor has no draft scope of its own; its files live in the
+	// session draft's queued edit.
 	useEffect(() => {
-		const scope = draftScopeRef.current;
+		const scope = draftScopeRef.current ?? queuedDraftScopeRef.current;
 		if (!scope || !onUpdateAttachmentLeases) return;
 		const renew = [...draftStagedPaths(readChatSessionDraft(scope), { composer: true })]
 			.filter((path) => !isCloudAttachmentReference(path));
@@ -874,7 +878,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}, () => undefined);
 		return () => { current = false; };
-	}, [draftScopeKey, onUpdateAttachmentLeases]);
+	}, [attachmentScopeKey, onUpdateAttachmentLeases]);
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
