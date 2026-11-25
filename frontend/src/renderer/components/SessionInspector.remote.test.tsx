@@ -74,7 +74,8 @@ it("sends inspector policy and review mutations to the selected host with equal 
 	await waitFor(() => expect(mutations).toContain("PATCH http://127.0.0.1:4000/api/v1/sessions/same-session/auto-inject-ci"));
 	a.unmount();
 	const b = renderInspector("box-b");
-	await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+	await userEvent.click(screen.getByTestId("inspector-add-tab"));
+	await userEvent.click(screen.getByTestId("inspector-launcher-item-reviews"));
 	await userEvent.click(await screen.findByRole("button", { name: "Review now" }));
 	await waitFor(() => expect(mutations).toContain("POST http://127.0.0.1:4001/api/v1/sessions/same-session/reviews/trigger"));
 	expect(mutations).not.toContain("PATCH http://127.0.0.1:4001/api/v1/sessions/same-session/auto-inject-ci");

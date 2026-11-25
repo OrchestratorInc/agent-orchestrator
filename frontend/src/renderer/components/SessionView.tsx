@@ -1785,10 +1785,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: undefined;
 	const previewUrl = session?.previewUrl?.trim() || undefined;
 	const previewRevision = session?.previewRevision;
+	const [inspectorLauncherOpen, setInspectorLauncherOpen] = useState(false);
 	const browserSlotVisible = Boolean(
 		session &&
 			hasInspector &&
-			(browserPoppedOut || (inspectorPanelVisible && inspectorView === "browser")),
+			(browserPoppedOut || (inspectorPanelVisible && inspectorView === "browser" && !inspectorLauncherOpen)),
 	);
 	useEffect(() => {
 		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
@@ -3485,6 +3486,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							onOpenReviewerChat={selectReviewerChat}
 							onWorkerMessageSent={showChatSurface || reviewerChatId ? selectSessionTerminal : undefined}
 							onToggleBrowserPopOut={handleToggleBrowserPopOut}
+							onLauncherOpenChange={setInspectorLauncherOpen}
 							onViewChange={transitionInspectorView}
 							view={inspectorView}
 							browserView={hostId || inspectorView === "browser" ? browserView : undefined}

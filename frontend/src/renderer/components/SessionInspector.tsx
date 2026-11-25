@@ -25,6 +25,7 @@ import {
 	SessionInspectorShellView,
 	SessionInspectorSummaryView,
 	inspectorEmptyClass,
+	type InspectorLauncherItem,
 	type InspectorPullRequest,
 	type InspectorTimelineEvent,
 	type InspectorView,
@@ -103,7 +104,9 @@ import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
 import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
-import { useUiStore } from "../stores/ui-store";
+import { normalizeInspectorOpenTabs, useUiStore } from "../stores/ui-store";
+import { isMacPlatform } from "../lib/platform";
+import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
@@ -149,6 +152,8 @@ type OpenReviewerTerminal = (target: { handleId: string; harness: string }) => v
 type ReviewerSurface = components["schemas"]["DomainReviewerSurface"];
 
 export type { InspectorView } from "@aoagents/product-ui";
+
+const LAUNCHER_ORDER: readonly InspectorView[] = ["browser", "files", "reviews", "device", "artifacts", "sideChat", "subagents", "task"];
 
 const VIEW_DEFS: {
 	id: InspectorView;
@@ -198,6 +203,7 @@ export const SessionInspector = memo(function SessionInspector({
 	subagentsView,
 	view: viewProp,
 	onViewChange,
+	onLauncherOpenChange,
 	standaloneAgent = false,
 }: {
 	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
@@ -227,22 +233,30 @@ export const SessionInspector = memo(function SessionInspector({
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
+	/** Reports when the modular `+` panel launcher covers the inspector body (hides native browser overlays). */
+	onLauncherOpenChange?: (open: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
+	const uiSessionId = session ? sessionUiKey(session.id, hostId) : undefined;
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
+	const [internalOpenTabs, setInternalOpenTabs] = useState<InspectorView[]>(["summary"]);
+	const [launcherOpen, setLauncherOpen] = useState(false);
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesActionsHost, setFilesActionsHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
+	const storedOpenTabs = useUiStore((state) => (uiSessionId ? state.inspectorSessions[uiSessionId]?.openTabs : undefined));
+	const openInspectorTab = useUiStore((state) => state.openInspectorTab);
+	const closeInspectorTab = useUiStore((state) => state.closeInspectorTab);
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
-		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
+		uiSessionId ? Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen) : false,
 	);
 	const devicesEnabled = useDevicesEnabled();
 	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
 	const artifactsUnseen = useUiStore((state) =>
-		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
+		uiSessionId ? Boolean(state.inspectorSessions[uiSessionId]?.artifactsUnseen) : false,
 	);
 	// The Background tasks tab: every task this chat ran, and one at a time when opened.
 	const uiKey = session ? sessionUiKey(session.id, hostId) : "";
@@ -253,7 +267,7 @@ export const SessionInspector = memo(function SessionInspector({
 	// Only a local chat reports tasks: a session on another host (`hostId` prop or field) never polls this daemon.
 	const tasksWatchable = Boolean(session && !hostId && supportsLocalBackgroundTasks(session));
 	// Polls every 2 s only while the tab shows; each reading asks the provider.
-	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible);
+	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible && !launcherOpen);
 	const tasksReading = tasksQuery.data;
 	// A failed refresh keeps the last reading: still shown, but marked stale.
 	const tasksStale = tasksQuery.isError && tasksReading !== undefined;
@@ -265,6 +279,13 @@ export const SessionInspector = memo(function SessionInspector({
 		if (!tasksWatchable || tasksReading?.availability === "unavailable") useUiStore.getState().syncTaskTabs(uiKey, []);
 		else if (tasksReading) useUiStore.getState().syncTaskTabs(uiKey, tasksReading.tasks);
 	}, [tasksReading, tasksWatchable, uiKey]);
+	const updateLauncherOpen = useCallback((next: boolean) => {
+		setLauncherOpen(next);
+		onLauncherOpenChange?.(next);
+	}, [onLauncherOpenChange]);
+	useEffect(() => {
+		updateLauncherOpen(false);
+	}, [uiSessionId, updateLauncherOpen]);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -298,11 +319,14 @@ export const SessionInspector = memo(function SessionInspector({
 		}
 	}, [artifactRequest, session?.artifactFiles]);
 	const setView = useCallback((next: InspectorView) => {
+		updateLauncherOpen(false);
 		setInternalView(next);
+		setInternalOpenTabs((prev) => normalizeInspectorOpenTabs(prev, next));
+		if (uiSessionId) openInspectorTab(uiSessionId, next);
 		onViewChange?.(next);
 		if (next === "files") onOpenFiles?.();
 		if (next !== "artifacts" && artifactRequest) setSettledArtifactRequestKey(artifactRequest.key);
-	}, [artifactRequest, onOpenFiles, onViewChange]);
+	}, [artifactRequest, onOpenFiles, onViewChange, openInspectorTab, uiSessionId, updateLauncherOpen]);
 	const openReviews = useCallback(() => setView("reviews"), [setView]);
 	const openFilesView = useCallback(() => setView("files"), [setView]);
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
@@ -351,11 +375,32 @@ export const SessionInspector = memo(function SessionInspector({
 		setInternalView(view);
 		onViewChange?.(view);
 	}, [awaitingSubagents, onViewChange, orchestrator, requestedView, sessionLoaded, view]);
-	const tabs = availableViewDefs.map((entry) => {
+	const availableById = new Map(availableViewDefs.map((entry) => [entry.id, entry]));
+	const openTabIds = normalizeInspectorOpenTabs(
+		uiSessionId ? (storedOpenTabs ?? internalOpenTabs) : internalOpenTabs,
+		view,
+	).filter((id) => availableById.has(id));
+	const openTabSet = new Set(openTabIds);
+	const handleCloseTab = useCallback((target: InspectorView) => {
+		if (target === "summary") return;
+		const index = openTabIds.indexOf(target);
+		const nextTabIds = openTabIds.filter((id) => id !== target);
+		const nextView = target === view
+			? (nextTabIds[Math.min(Math.max(index - 1, 0), nextTabIds.length - 1)] ?? "summary")
+			: view;
+		setInternalOpenTabs(nextTabIds);
+		if (uiSessionId) closeInspectorTab(uiSessionId, target);
+		if (target === view) {
+			setInternalView(nextView);
+			onViewChange?.(nextView);
+		}
+	}, [closeInspectorTab, onViewChange, openTabIds, uiSessionId, view]);
+	const buildTab = (entry: (typeof VIEW_DEFS)[number]) => {
 		const label = t(entry.labelKey);
 		return {
 			...entry,
 			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
+			closable: entry.id !== "summary",
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
@@ -363,7 +408,41 @@ export const SessionInspector = memo(function SessionInspector({
 					: label,
 			label,
 		};
-	});
+	};
+	const tabs = openTabIds
+		.map((id) => availableById.get(id))
+		.filter((entry): entry is (typeof VIEW_DEFS)[number] => entry !== undefined)
+		.map(buildTab);
+	const isMac = isMacPlatform();
+	const diffShortcutBinding = defaultShortcutBindings("toggle-diff", isMac)[0];
+	const diffShortcutLabel = diffShortcutBinding ? shortcutBindingLabel(diffShortcutBinding, isMac) : undefined;
+	const launcherTabs: InspectorLauncherItem[] = LAUNCHER_ORDER
+		.map((id) => availableById.get(id))
+		.filter((entry): entry is (typeof VIEW_DEFS)[number] => entry !== undefined)
+		.map((entry) => ({
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
+			count:
+				entry.id === "files"
+					? filesChangedCount
+					: entry.id === "artifacts"
+						? session?.artifactFiles?.length
+						: undefined,
+			icon: entry.icon,
+			id: entry.id,
+			isOpen: openTabSet.has(entry.id),
+			label: t(entry.labelKey),
+			shortcut: entry.id === "files" ? diffShortcutLabel : undefined,
+		}));
+	const toolbar = view === "browser" && !browserPoppedOut ? (
+		<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
+	) : view === "files" && filesView ? (
+		<>
+			<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
+			<div className="session-inspector__trailing flex shrink-0 items-center">
+				<div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} />
+			</div>
+		</>
+	) : undefined;
 	return (
 		// SessionInspectorShellView (packages/product-ui) doesn't accept a
 		// className, but styles.css's native-composition transparency cascade
@@ -383,20 +462,21 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				browserPoppedOut={browserPoppedOut}
-				deviceView={session && deviceAvailable ? <DevicePanel isActive={isInspectorVisible} key={session.id} sessionId={session.id} /> : undefined}
+				deviceView={session && deviceAvailable ? <DevicePanel isActive={isInspectorVisible && !launcherOpen} key={session.id} sessionId={session.id} /> : undefined}
 				browserView={
 					session && (!hostId || browserView) ? (
 						<BrowserView
 							browserPoppedOut={browserPoppedOut}
 							browserAnnotationQueue={browserAnnotationQueue}
 							browserView={browserView}
-							isActive={isInspectorVisible && !browserPoppedOut}
+							isActive={isInspectorVisible && !launcherOpen && !browserPoppedOut}
 							onTogglePopOut={onToggleBrowserPopOut}
 							session={session}
 							topbarHost={browserTopbarHost}
 						/>
 					) : undefined
 				}
+				closeTabLabel={(tabLabel) => t("inspector.closeTab", { tab: tabLabel })}
 				filesView={
 					session ? (
 						<FilesTopbarHostContext.Provider value={filesTopbarHost}>
@@ -406,20 +486,15 @@ export const SessionInspector = memo(function SessionInspector({
 						</FilesTopbarHostContext.Provider>
 					) : undefined
 				}
-				headerActions={
-					<>
-						{view === "browser" && !browserPoppedOut ? (
-							<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
-						) : view === "files" && filesView ? (
-							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
-						) : null}
-						<div className="session-inspector__trailing flex shrink-0 items-center">
-							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
-						</div>
-					</>
-				}
 				isVisible={isInspectorVisible}
+				launcherAriaLabel={t("inspector.launcherAria")}
+				launcherOpen={launcherOpen}
+				launcherTabs={launcherTabs}
 				loadingText={session ? undefined : t("inspector.loadingSession")}
+				newTabLabel={t("inspector.newTab")}
+				onCloseTab={handleCloseTab}
+				onLauncherOpenChange={updateLauncherOpen}
+				onOpenLauncherTab={setView}
 				onViewChange={setView}
 				reviewsView={
 					session ? <ReviewsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onOpenReviewFile={onOpenReviewFile} onOpenReviewerTerminal={onOpenReviewerTerminal} onOpenReviewerChat={onOpenReviewerChat} onWorkerMessageSent={onWorkerMessageSent} session={session} /> : undefined
@@ -429,7 +504,7 @@ export const SessionInspector = memo(function SessionInspector({
 						<SummaryView
 							canOpenReviews={reviewsAvailable}
 							hostId={hostId}
-							inspectorVisible={isInspectorVisible}
+							inspectorVisible={isInspectorVisible && !launcherOpen}
 							key={sessionUiKey(session.id, hostId)}
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
@@ -443,8 +518,9 @@ export const SessionInspector = memo(function SessionInspector({
 				}
 				tabs={tabs}
 				taskView={session && taskTabs?.length ? (
-					<BackgroundTasksPanel isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} stale={tasksStale} tasks={taskTabs} uiKey={uiKey} />
+					<BackgroundTasksPanel isVisible={isInspectorVisible && !launcherOpen} openTask={activeTaskTab} sessionId={session.id} stale={tasksStale} tasks={taskTabs} uiKey={uiKey} />
 				) : undefined}
+				toolbar={toolbar}
 			/>
 		</div>
 	);

@@ -677,12 +677,18 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 
 .center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .center-panel-titlebar,
 .center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-inspector__trailing,
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-inspector__topbar--modular,
 .center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-topbar-actions:not([data-fullscreen]) {
 	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control) - 1px);
 }
 
-.center-panel-shell--floating-topbar .session-inspector__tab-button {
+.center-panel-shell--floating-topbar .session-inspector__tab-button,
+.center-panel-shell--floating-topbar .session-inspector__add-tab {
 	width: var(--size-topbar-control);
+	height: var(--size-topbar-control);
+}
+
+.center-panel-shell--floating-topbar .session-inspector__modular-tab {
 	height: var(--size-topbar-control);
 }
 
@@ -846,18 +852,21 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .session-inspector__tab-button[aria-selected="true"],
+.session-inspector__modular-tab[data-active="true"],
 :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active] {
 	color: var(--secondary-foreground);
 }
 
 @supports (color: contrast-color(red)) {
 	.session-inspector__tab-button[aria-selected="true"],
+	.session-inspector__modular-tab[data-active="true"],
 	:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active] {
 		color: contrast-color(color-mix(in srgb-linear, var(--secondary) 49.796664%, black));
 	}
 }
 
 .session-inspector__tab-button[aria-selected="true"],
+.session-inspector__modular-tab[data-active="true"],
 :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	inset: 0;
 	border-color: color-mix(in oklab, var(--secondary), #000 13%);
@@ -866,12 +875,14 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .session-inspector__tab-button[aria-selected="true"]:hover,
+.session-inspector__modular-tab[data-active="true"]:hover,
 :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]:hover::before {
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
 
 /* Light: the selected tab's fill leans toward the panel's surface, keeps the
  * control edge, and does not darken on hover. */
+html[data-theme="light"] .session-inspector__modular-tab[data-active="true"],
 html[data-theme="light"] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
 }
@@ -884,6 +895,8 @@ html[data-theme="light"] :is(.center-panel-shell--tab-pills, .browser-popout-ove
 /* Muted gray icons wash out on the light chrome; bar icons use the full
  * foreground there. Disabled controls keep their own reduced opacity. */
 html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button:not([aria-selected="true"]),
+html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__modular-tab:not([data-active="true"]),
+html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__add-tab,
 html[data-theme="light"] .center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled),
 html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled) {
 	color: var(--color-foreground);
@@ -4693,6 +4706,27 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	background: var(--bg);
 	color: var(--fg);
 	user-select: none;
+}
+
+.session-inspector__tablist--modular {
+	scrollbar-width: none;
+}
+
+.session-inspector__tablist--modular::-webkit-scrollbar {
+	display: none;
+}
+
+.session-inspector__toolbar {
+	background: var(--bg);
+	color: var(--fg);
+	user-select: none;
+	-webkit-app-region: no-drag;
+}
+
+.session-inspector__toolbar > .browser-panel__topbar-host,
+.session-inspector__toolbar > .files-panel__topbar-host {
+	width: 100%;
+	min-width: 0;
 }
 
 /* In browser mode, center the address field in the space between the tabs and
