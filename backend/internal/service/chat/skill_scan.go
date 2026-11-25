@@ -39,6 +39,9 @@ type skillRoot struct {
 	// source is what the agent itself reports, so the menu's badge does not change
 	// when a session takes over the list.
 	source string
+	// byFrontmatter names a skill by its SKILL.md `name`, as Codex does; Claude
+	// names it by its folder.
+	byFrontmatter bool
 }
 
 // ScanSkills lists the skills an agent would offer in a workspace, read from the
@@ -111,17 +114,17 @@ func codexSkillRoots(workspace, home string) []skillRoot {
 	var roots []skillRoot
 	if workspace != "" {
 		roots = append(roots,
-			skillRoot{dir: filepath.Join(workspace, ".agents", "skills"), source: "repo"},
-			skillRoot{dir: filepath.Join(workspace, ".codex", "skills"), source: "repo"},
+			skillRoot{dir: filepath.Join(workspace, ".agents", "skills"), source: "repo", byFrontmatter: true},
+			skillRoot{dir: filepath.Join(workspace, ".codex", "skills"), source: "repo", byFrontmatter: true},
 		)
 	}
 	if home != "" {
-		roots = append(roots, skillRoot{dir: filepath.Join(home, ".agents", "skills"), source: "user"})
+		roots = append(roots, skillRoot{dir: filepath.Join(home, ".agents", "skills"), source: "user", byFrontmatter: true})
 	}
 	if codexHome != "" {
 		roots = append(roots,
-			skillRoot{dir: filepath.Join(codexHome, "skills"), source: "user"},
-			skillRoot{dir: filepath.Join(codexHome, "skills", ".system"), source: "system"},
+			skillRoot{dir: filepath.Join(codexHome, "skills"), source: "user", byFrontmatter: true},
+			skillRoot{dir: filepath.Join(codexHome, "skills", ".system"), source: "system", byFrontmatter: true},
 		)
 	}
 	return roots
@@ -246,7 +249,6 @@ func scanSkillRoots(roots []skillRoot) []ports.ChatSkill {
 			if strings.HasPrefix(entry.Name(), ".") {
 				continue
 			}
-			// Claude names a skill by its folder, not its frontmatter `name`.
 			folder := entry.Name()
 			dir := filepath.Join(root.dir, folder)
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
@@ -257,8 +259,11 @@ func scanSkillRoots(roots []skillRoot) []ports.ChatSkill {
 				continue
 			}
 			name := folder
+			if frontmatterName := strings.TrimSpace(meta.Name); root.byFrontmatter && frontmatterName != "" {
+				name = frontmatterName
+			}
 			if root.prefix != "" {
-				name = root.prefix + ":" + folder
+				name = root.prefix + ":" + name
 			}
 			if seen[name] {
 				continue
@@ -296,6 +301,10 @@ type commandFile struct {
 // names a nested command by its path: `frontend/component.md` is `frontend:component`.
 func commandFiles(dir string) []commandFile {
 	var files []commandFile
+	// WalkDir does not follow a symlinked root, so resolve it first.
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
 	prefix := dir + string(filepath.Separator)
 	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		// WalkDir reports errors only for folders (the root included): skip one it

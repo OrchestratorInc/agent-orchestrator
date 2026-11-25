@@ -205,3 +205,36 @@ func TestScanSkillsDeduplicatesPluginsByTheirResolvedName(t *testing.T) {
 		t.Fatalf("names = %v", names)
 	}
 }
+
+func TestScanSkillsNamesCodexSkillsByTheirFrontmatter(t *testing.T) {
+	workspace, home := t.TempDir(), t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	writeFile(t, filepath.Join(workspace, ".agents", "skills", "folder-a", "SKILL.md"), "---\nname: other-b\ndescription: Named\n---\n")
+	writeFile(t, filepath.Join(workspace, ".agents", "skills", "unnamed", "SKILL.md"), "---\ndescription: No name\n---\n")
+	writeFile(t, filepath.Join(workspace, ".claude", "skills", "folder-a", "SKILL.md"), "---\nname: other-b\ndescription: Named\n---\n")
+
+	if names := skillNames(ScanSkills("codex", workspace, home)); len(names) != 2 || names[0] != "other-b" || names[1] != "unnamed" {
+		t.Fatalf("codex names = %v, want [other-b unnamed]", names)
+	}
+	if names := skillNames(ScanSkills("claude-code", workspace, home)); len(names) != 1 || names[0] != "folder-a" {
+		t.Fatalf("claude names = %v, want [folder-a]", names)
+	}
+}
+
+func TestScanSkillsFollowsASymlinkedCommandsFolder(t *testing.T) {
+	workspace, home, shared := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	writeFile(t, filepath.Join(shared, "ship.md"), "---\ndescription: Ship\n---\n")
+	writeFile(t, filepath.Join(shared, "ns", "deep.md"), "Deep\n")
+	if err := os.MkdirAll(filepath.Join(workspace, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, filepath.Join(workspace, ".claude", "commands")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if names := skillNames(ScanSkills("claude-code", workspace, home)); len(names) != 2 || names[0] != "ns:deep" || names[1] != "ship" {
+		t.Fatalf("names = %v, want [ns:deep ship]", names)
+	}
+}
