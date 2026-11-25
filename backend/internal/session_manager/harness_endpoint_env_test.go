@@ -2,8 +2,10 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,6 +140,9 @@ func TestRuntimeEnvKeepsCaseVariantProjectEndpointKey(t *testing.T) {
 	if len(values) != 1 || values[0] != projectURL {
 		t.Fatalf("base URL entries = %q, want only the project value", values)
 	}
+	if env["ANTHROPIC_BASE_URL"] != projectURL {
+		t.Fatal("the project value must be restored under the canonical environment key")
+	}
 }
 
 // setupTokenAccount is a session bound to a real Claude setup-token account:
@@ -190,7 +195,10 @@ func TestRuntimeEnvClearsSetupTokenForCustomEndpoint(t *testing.T) {
 
 // A project that points Claude at its own gateway must not receive the saved
 // endpoint's key there: a URL alone gets no saved key, a project key is used
-// when the project sets one, and a URL on the saved origin keeps the saved key.
+// A project that points Claude at its own gateway must not receive the saved
+// endpoint's key there. A URL alone stops the launch; a URL with the project's
+// own key launches with only that key; a URL on the saved origin keeps the
+// saved key.
 func TestRuntimeEnvKeepsEndpointKeyPairedWithItsURL(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
@@ -210,23 +218,116 @@ func TestRuntimeEnvKeepsEndpointKeyPairedWithItsURL(t *testing.T) {
 		return env
 	}
 
-	urlOnly := launch(map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net"})
-	if urlOnly["ANTHROPIC_BASE_URL"] != "https://other.example.net" {
-		t.Fatalf("project URL not kept: %v", urlOnly["ANTHROPIC_BASE_URL"])
+	urlOnly, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net"}, "", "claude-code")
+	if !errors.Is(err, harnessendpoint.ErrIncompleteOverride) || urlOnly != nil {
+		t.Fatalf("a project gateway without its own key must stop the launch: env=%t err=%v", urlOnly != nil, err)
 	}
-	for key, value := range urlOnly {
-		if value == "sk-endpoint" {
-			t.Fatalf("saved endpoint key sent to the project's gateway in %s", key)
-		}
+	if _, _, err := manager.launchRuntimeEnvForHarness("session", "project", "", map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net"}, domain.HarnessClaudeCode); !errors.Is(err, harnessendpoint.ErrIncompleteOverride) {
+		t.Fatalf("terminal launch must stop on an incomplete override: %v", err)
 	}
 
 	withKey := launch(map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net", "ANTHROPIC_API_KEY": "sk-project"})
-	if withKey["ANTHROPIC_API_KEY"] != "sk-project" || withKey["ANTHROPIC_AUTH_TOKEN"] == "sk-endpoint" {
-		t.Fatalf("project gateway must use the project's key only: api=%q token=%q", withKey["ANTHROPIC_API_KEY"], withKey["ANTHROPIC_AUTH_TOKEN"])
+	if withKey["ANTHROPIC_BASE_URL"] != "https://other.example.net" || withKey["ANTHROPIC_API_KEY"] != "sk-project" {
+		t.Fatalf("project gateway and key not applied: url=%q", withKey["ANTHROPIC_BASE_URL"])
+	}
+	if value, ok := withKey["ANTHROPIC_AUTH_TOKEN"]; !ok || value != "" {
+		t.Fatalf("ANTHROPIC_AUTH_TOKEN must be blank beside the project's key (set=%v)", ok)
 	}
 
 	sameOrigin := launch(map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com/v2"})
 	if sameOrigin["ANTHROPIC_BASE_URL"] != "https://gateway.example.com/v2" || sameOrigin["ANTHROPIC_AUTH_TOKEN"] != "sk-endpoint" {
 		t.Fatalf("same-origin override must keep the saved key: %v %v", sameOrigin["ANTHROPIC_BASE_URL"], sameOrigin["ANTHROPIC_AUTH_TOKEN"] == "sk-endpoint")
 	}
+}
+
+// A complete project gateway override (its own URL and key on another origin)
+// survives a bound account: the account's base URL and key must not replace
+// the gateway the project configured.
+func TestRuntimeEnvKeepsCompleteProjectGatewayOverBoundAccount(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:       dir,
+		executable:    func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentAccounts: savedAPIKeyAccount{},
+	}
+	env, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{
+		"ANTHROPIC_BASE_URL":   "https://other.example.net",
+		"ANTHROPIC_AUTH_TOKEN": "sk-project",
+	}, "", "claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://other.example.net" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-project" {
+		t.Fatalf("bound account replaced the project's gateway: url=%q token-is-project=%v", env["ANTHROPIC_BASE_URL"], env["ANTHROPIC_AUTH_TOKEN"] == "sk-project")
+	}
+	if value, ok := env["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("the account's API key rode along to the project's gateway (set=%v, account=%v)", ok, value == "sk-account")
+	}
+	for key, value := range env {
+		if value == "sk-endpoint" {
+			t.Fatalf("saved endpoint key reached the project's gateway via %s", key)
+		}
+	}
+}
+
+func TestRuntimeEnvStopsLaunchOnBrokenEndpointBeforeResolvingAccount(t *testing.T) {
+	dir := t.TempDir()
+	accounts := &preflightEnvAccounts{}
+	manager := &Manager{
+		dataDir:       dir,
+		executable:    func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentAccounts: accounts,
+	}
+	path := writeBrokenEndpoint(t, dir)
+	if env, _, err := manager.launchRuntimeEnvForHarness("session", "project", "", nil, domain.HarnessClaudeCode); err == nil || env != nil {
+		t.Fatalf("broken endpoint must stop terminal launch, got a usable env=%t, err=%v", env != nil, err)
+	}
+	if env, err := manager.chatPreflightEnv(ports.SpawnConfig{Harness: domain.HarnessClaudeCode}, nil); err == nil || env != nil {
+		t.Fatalf("broken endpoint must stop Chat admission, got a usable env=%t, err=%v", env != nil, err)
+	}
+	if len(accounts.ids) != 0 {
+		t.Fatalf("account lookup ran for %q after the endpoint read failed", accounts.ids)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if env, _, err := manager.launchRuntimeEnvForHarness("session", "project", "", nil, domain.HarnessClaudeCode); err != nil || env == nil {
+		t.Fatalf("missing endpoint must allow native launch, got env=%t, err=%v", env != nil, err)
+	}
+}
+
+func TestDefaultChatSpawnRejectsBrokenEndpointBeforeCreatingSession(t *testing.T) {
+	launcher := &recordingLauncher{}
+	manager, store, runtime := newChatManager(launcher)
+	manager.defaults = fixedSessionModeDefaults(domain.SessionModeChat)
+	manager.dataDir = t.TempDir()
+	writeBrokenEndpoint(t, manager.dataDir)
+
+	_, _, _, err := manager.Spawn(t.Context(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+	})
+	if err == nil || !strings.Contains(err.Error(), "load custom endpoint") {
+		t.Fatalf("expected the endpoint error from Spawn, got %v", err)
+	}
+	if len(store.sessions) != 0 || len(launcher.preflighted) != 0 || len(launcher.started) != 0 || runtime.created != 0 {
+		t.Fatal("broken endpoint should stop before Chat admission, state creation, and TUI fallback")
+	}
+}
+
+func writeBrokenEndpoint(t *testing.T, dataDir string) string {
+	t.Helper()
+	path := filepath.Join(dataDir, "harness-endpoints", "claude-code", "endpoint.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

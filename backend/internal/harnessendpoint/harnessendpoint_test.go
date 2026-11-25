@@ -181,6 +181,23 @@ func TestEnvRefusesStoredCleartextRemoteURL(t *testing.T) {
 	}
 }
 
+func TestEnvRejectsIncompleteSavedEndpoint(t *testing.T) {
+	store := NewStore(t.TempDir())
+	path, err := store.path("claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"baseUrl":"https://gateway.example.com"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if env, err := store.Env("claude-code"); err == nil || env != nil {
+		t.Fatalf("incomplete endpoint must fail instead of allowing a native launch, got env=%t, err=%v", env != nil, err)
+	}
+}
+
 func TestSaveReplacesCorruptConfigOnlyWithNewKey(t *testing.T) {
 	store := NewStore(t.TempDir())
 	path, err := store.path("claude-code")
@@ -284,4 +301,48 @@ func TestProjectEnvKeepsKeyWithItsOrigin(t *testing.T) {
 	if env, err := store.ProjectEnv("goose", map[string]string{"ANTHROPIC_BASE_URL": "https://x.example"}, false); env != nil || err != nil {
 		t.Fatalf("unsupported harness: %v %v", env, err)
 	}
+}
+
+// A complete override on another origin replaces the saved endpoint with the
+// project's gateway and key, blanking the other key variable and competing
+// credentials so a bound account's cannot ride along.
+func TestProjectEnvReturnsCompleteProjectOverride(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint", Model: "saved-model"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	env, err := store.ProjectEnv("claude-code", map[string]string{
+		"ANTHROPIC_BASE_URL": "https://other.example.net",
+		"ANTHROPIC_API_KEY":  "sk-project",
+		"ANTHROPIC_MODEL":    "project-model",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"ANTHROPIC_BASE_URL":      "https://other.example.net",
+		"ANTHROPIC_API_KEY":       "sk-project",
+		"ANTHROPIC_AUTH_TOKEN":    "",
+		"ANTHROPIC_MODEL":         "project-model",
+		"CLAUDE_CODE_OAUTH_TOKEN": "",
+		"CLAUDE_CODE_USE_BEDROCK": "",
+		"CLAUDE_CODE_USE_VERTEX":  "",
+		"CLAUDE_CODE_USE_FOUNDRY": "",
+	}
+	if len(env) != len(want) {
+		t.Fatalf("env has %d entries, want %d: %v", len(env), len(want), keysOf(env))
+	}
+	for key, value := range want {
+		if got, ok := env[key]; !ok || got != value {
+			t.Fatalf("env[%s] = %q (set=%v), want %q", key, got, ok, value)
+		}
+	}
+}
+
+func keysOf(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	return keys
 }

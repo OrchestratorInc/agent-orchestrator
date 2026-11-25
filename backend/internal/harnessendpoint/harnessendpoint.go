@@ -182,7 +182,7 @@ func (s *Store) Load(agentID string) (Config, bool, error) {
 		return Config{}, false, fmt.Errorf("parse %s endpoint: %w", agentID, err)
 	}
 	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" {
-		return Config{}, false, nil
+		return Config{}, false, fmt.Errorf("parse %s endpoint: base URL and API key are required", agentID)
 	}
 	return cfg, true, nil
 }
@@ -316,7 +316,7 @@ func (s *Store) Env(agentID string) (map[string]string, error) {
 		return nil, err
 	}
 	if !secureEndpoint(cfg.BaseURL) {
-		return nil, fmt.Errorf("%s endpoint %q would send its key in cleartext", agentID, cfg.BaseURL)
+		return nil, fmt.Errorf("%s endpoint would send its key in cleartext", agentID)
 	}
 	style := cfg.AuthStyle
 	if _, ok := spec.KeyEnv[style]; !ok {
@@ -342,17 +342,20 @@ func (s *Store) Env(agentID string) (map[string]string, error) {
 
 // ErrIncompleteOverride reports a project that points a harness at a different
 // endpoint than the one the user saved, without the credential that endpoint
-// needs. The saved key is not sent there in its place.
+// needs. The launch stops rather than send the saved key, or any other
+// credential, to that gateway.
 var ErrIncompleteOverride = errors.New("project overrides the custom endpoint's base URL without an API key")
 
 // ProjectEnv is Env for a launch that also carries projectEnv. A base URL and
-// its key stay paired: when the project sets the base URL to another origin
-// (or blanks it), the saved endpoint is not applied at all, so its key never
-// reaches a gateway it was not saved for. The project's own key then applies,
-// and a project that set none gets ErrIncompleteOverride. A project URL on the
-// saved endpoint's origin keeps the saved key. Callers still let every project
-// value win key by key. caseInsensitive matches project keys the way Windows
-// environments do.
+// its key stay paired. A project URL on the saved endpoint's origin keeps the
+// saved key. A project that sets the base URL to another origin (or blanks it)
+// gets none of the saved endpoint: when it also sets a key, ProjectEnv returns
+// that project gateway and key in the saved endpoint's place, with the other
+// key variables and ClearEnv blank, so the caller applies them over any bound
+// account's credential; when it sets no key, ProjectEnv returns
+// ErrIncompleteOverride and the launch must stop. Callers still let every
+// project value win key by key. caseInsensitive matches project keys the way
+// Windows environments do.
 func (s *Store) ProjectEnv(agentID string, projectEnv map[string]string, caseInsensitive bool) (map[string]string, error) {
 	env, err := s.Env(agentID)
 	if err != nil || len(env) == 0 {
@@ -371,12 +374,25 @@ func (s *Store) ProjectEnv(agentID string, projectEnv map[string]string, caseIns
 	if !set || sameOrigin(projectURL, env[spec.BaseURLEnv]) {
 		return env, nil
 	}
+	override := map[string]string{spec.BaseURLEnv: projectURL}
+	hasKey := false
 	for _, name := range spec.KeyEnv {
-		if value, ok := lookup(name); ok && strings.TrimSpace(value) != "" {
-			return nil, nil
+		value, _ := lookup(name)
+		hasKey = hasKey || strings.TrimSpace(value) != ""
+		override[name] = value
+	}
+	if !hasKey {
+		return nil, fmt.Errorf("%w: set %s for %s or remove %s from the project", ErrIncompleteOverride, keyEnvNames(spec), agentID, spec.BaseURLEnv)
+	}
+	for _, name := range spec.ClearEnv {
+		override[name] = ""
+	}
+	if spec.ModelEnv != "" {
+		if model, ok := lookup(spec.ModelEnv); ok {
+			override[spec.ModelEnv] = model
 		}
 	}
-	return nil, fmt.Errorf("%w: set %s for %s or remove %s from the project", ErrIncompleteOverride, keyEnvNames(spec), agentID, spec.BaseURLEnv)
+	return override, nil
 }
 
 // sameOrigin reports whether two base URLs reach the same scheme, host and

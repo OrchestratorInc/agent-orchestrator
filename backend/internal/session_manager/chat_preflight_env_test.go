@@ -32,7 +32,10 @@ func TestChatPreflightEnvDoesNotResolveAnAccountForTheUnbornSession(t *testing.T
 	manager.agentAccounts = accounts
 	for _, accountID := range []string{"", "acct-b"} {
 		cfg := ports.SpawnConfig{ProjectID: "mer", Harness: domain.HarnessDockerAgent, AgentAccountID: accountID}
-		env := manager.chatPreflightEnv(cfg, map[string]string{"OPENAI_API_KEY": "project-key"})
+		env, err := manager.chatPreflightEnv(cfg, map[string]string{"OPENAI_API_KEY": "project-key"})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if env["OPENAI_API_KEY"] != "project-key" {
 			t.Fatalf("account %q: preflight env lost the project key: %v", accountID, env)
 		}

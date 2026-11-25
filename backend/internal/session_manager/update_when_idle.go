@@ -117,7 +117,7 @@ func (m *Manager) SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecor
 	if err != nil {
 		return nil, err
 	}
-	return m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness), nil
+	return m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 }
 
 // terminalResumesNatively reports whether a terminal stopped for an update
@@ -141,7 +141,10 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 	// Adapters that look the conversation up through the CLI need the
 	// session's environment: a project-level credential or profile reaches the
 	// session, not the daemon. No browser capability is issued for a probe.
-	probeEnv := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	probeEnv, err := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	if err != nil {
+		return false
+	}
 	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
 		Env: probeEnv,
