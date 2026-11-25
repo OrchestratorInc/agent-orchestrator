@@ -99,14 +99,15 @@ func TestDeviceInstall_SendsAbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The CLI sends the platform's absolute path (C:\... on Windows).
-	want, err := filepath.Abs(filepath.Join("build", "App.app"))
-	if err != nil {
-		t.Fatal(err)
+	var sent struct {
+		Path string `json:"path"`
 	}
-	var body struct{ Path string }
-	if capture.path != "/api/v1/sessions/aa-47/device/install" || json.Unmarshal([]byte(capture.body), &body) != nil || body.Path != want || !filepath.IsAbs(body.Path) {
-		t.Fatalf("request = %s %s, want path %s", capture.path, capture.body, want)
+	if err := json.Unmarshal([]byte(capture.body), &sent); err != nil {
+		t.Fatalf("request body %q: %v", capture.body, err)
+	}
+	// Compare as paths, not text: Windows sends backslashes and a drive letter.
+	if capture.path != "/api/v1/sessions/aa-47/device/install" || !filepath.IsAbs(sent.Path) || filepath.Base(sent.Path) != "App.app" || filepath.Base(filepath.Dir(sent.Path)) != "build" {
+		t.Fatalf("request = %s %s", capture.path, capture.body)
 	}
 	if !strings.Contains(out, "on iPhone 17 Pro") {
 		t.Fatalf("output = %q", out)
