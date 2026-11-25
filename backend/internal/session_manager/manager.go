@@ -7435,16 +7435,16 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		endpointEnv = spec.WithProjectEnv(endpointEnv, projectEnv, caseInsensitive)
 	}
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
-	projectValue := func(key string) (string, bool) {
-		if value, ok := projectEnv[key]; ok || !caseInsensitive {
-			return value, ok
+	projectOverrides := func(key string) bool {
+		if _, ok := projectEnv[key]; ok || !caseInsensitive {
+			return ok
 		}
 		for configured := range projectEnv {
 			if strings.EqualFold(configured, key) {
-				return projectEnv[configured], true
+				return true
 			}
 		}
-		return "", false
+		return false
 	}
 	if m.dataDir != "" {
 		keys, _, err := providerkeys.ForSession(m.dataDir, string(harness))
@@ -7452,7 +7452,7 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 			m.logger.Warn("provider environment unavailable", "error", err)
 		}
 		for key, value := range keys {
-			if _, overridden := projectValue(key); !overridden {
+			if !projectOverrides(key) {
 				setProtectedEnv(env, key, value, caseInsensitive)
 			}
 		}
@@ -7462,7 +7462,7 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		// exported nothing; a value AO never touched is kept. An unreadable
 		// store withholds the harness's subscription keys rather than none.
 		for key, value := range providerkeys.Withheld(m.dataDir, string(harness)) {
-			if _, overridden := projectValue(key); !overridden {
+			if !projectOverrides(key) {
 				setProtectedEnv(env, key, value, caseInsensitive)
 			}
 		}
