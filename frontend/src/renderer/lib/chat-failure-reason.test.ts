@@ -9,6 +9,7 @@ describe("chatFailureReason", () => {
 		["Billing hard limit has been reached (billing_hard_limit_reached)", "quota_exceeded"],
 		["Billing quota exceeded", "quota_exceeded"],
 		["429: billing account quota has been exceeded", "quota_exceeded"],
+		["429: billing quota has run out", "quota_exceeded"],
 		["401 Unauthorized: billing quota endpoint requires authentication", "auth_required"],
 		["401 Unauthorized: billing account authentication token has expired.", "auth_required"],
 		["429 Too Many Requests: see your billing settings for higher limits", "rate_limited"],
