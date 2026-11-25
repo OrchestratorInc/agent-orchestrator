@@ -32,6 +32,7 @@ describe("resumeAgentErrorMessage", () => {
 		["AGENT_NOT_EXITED", "already running"],
 		["AGENT_RESUME_IN_PROGRESS", "already resuming"],
 		["CHAT_RESUME_FAILED", "saved conversation"],
+		["CHAT_USAGE_LIMITED", "usage limit"],
 		["CHAT_AUTH_REQUIRED", "sign-in"],
 	])("explains %s with a next step", (code, fragment) => {
 		expect(resumeAgentErrorMessage({ code, message: "conflict" }, 409)).toContain(fragment);
