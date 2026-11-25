@@ -66,7 +66,7 @@ func (m SessionMovedTo) Pending() bool { return m.SessionID == "" }
 // GitHub, whose names are case-insensitive. Any other origin, such as a local
 // path, keys as itself.
 func RepositoryKey(origin string) string {
-	origin = strings.TrimSpace(origin)
+	origin = CloneURL(origin)
 	id, err := ParseRepositoryIdentity(origin)
 	if err != nil {
 		return strings.TrimSuffix(origin, "/")
@@ -76,4 +76,29 @@ func RepositoryKey(origin string) string {
 		key = strings.ToLower(key)
 	}
 	return key
+}
+
+// CloneURL is a Git remote without the credentials, query or fragment its URL
+// may carry. An SSH user name stays: it selects the server's Git account.
+func CloneURL(origin string) string {
+	origin = strings.TrimSpace(origin)
+	scheme, rest, ok := strings.Cut(origin, "://")
+	if !ok {
+		return origin
+	}
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	authority, path, hasPath := strings.Cut(rest, "/")
+	if i := strings.LastIndex(authority, "@"); i >= 0 {
+		user, _, _ := strings.Cut(authority[:i], ":")
+		authority = authority[i+1:]
+		if strings.Contains(scheme, "ssh") {
+			authority = user + "@" + authority
+		}
+	}
+	if hasPath {
+		authority += "/" + path
+	}
+	return scheme + "://" + authority
 }

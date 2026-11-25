@@ -1150,6 +1150,22 @@ func TestManager_ListIncludesOnlySummarySafeProjectConfig(t *testing.T) {
 	}
 }
 
+func TestManager_ListHidesOriginCredentials(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	repo := gitRepoWithOrigin(t, "https://me:ghp_secret@github.com/acme/web.git?token=ghp_secret")
+	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	list, err := m.List(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+	if list[0].Repo != "https://github.com/acme/web.git" || list[0].RepoKey != "github.com/acme/web" {
+		t.Fatalf("repo = %q, key = %q; want no credentials", list[0].Repo, list[0].RepoKey)
+	}
+}
+
 func TestManager_ReaddAfterRemove(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)

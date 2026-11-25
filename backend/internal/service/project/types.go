@@ -15,7 +15,7 @@ type Summary struct {
 	// AutoSpawnPauses lists the harnesses whose automatic starts (tracker
 	// intake, schedules) stopped after three identical failures in a row.
 	AutoSpawnPauses []domain.AutoSpawnPause `json:"autoSpawnPauses,omitempty"`
-	// Repo is the checkout's origin URL.
+	// Repo is the checkout's origin URL without credentials.
 	Repo string `json:"repo"`
 	// RepoKey identifies the repository across machines (see domain.RepositoryKey).
 	// It is empty for workspace and scratch projects.

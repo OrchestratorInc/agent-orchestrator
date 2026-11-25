@@ -183,7 +183,7 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			SessionPrefix:     resolveSessionPrefix(row),
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
 			FolderMissing:     folderMissing,
-			Repo:              row.RepoOriginURL,
+			Repo:              domain.CloneURL(row.RepoOriginURL),
 			RepoKey:           summaryRepoKey(row),
 		})
 		if pauser, ok := m.sessions.(autoSpawnPauser); ok {
