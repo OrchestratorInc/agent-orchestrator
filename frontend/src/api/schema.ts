@@ -360,7 +360,8 @@ export interface paths {
         delete: operations["removeAgentAccount"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Rename an account and set or clear its color */
+        patch: operations["updateAgentAccount"];
         trace?: never;
     };
     "/api/v1/agents/accounts/{accountId}/api-key": {
@@ -5708,6 +5709,8 @@ export interface components {
             windows: components["schemas"]["AgentAccountLimitWindow"][];
         };
         AgentAccountResponse: {
+            /** @enum {string} */
+            color?: "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink";
             /** Format: date-time */
             createdAt?: null | string;
             default: boolean;
@@ -6783,6 +6786,8 @@ export interface components {
         };
         ControllersAddAgentAccountAPIKeyRequest: {
             apiKey: string;
+            /** @enum {string} */
+            color?: "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink";
             name?: string;
             /** @enum {string} */
             provider: "claude";
@@ -10017,6 +10022,11 @@ export interface components {
         UpdateAccountHandoffRequest: {
             enabled: null | boolean;
         };
+        UpdateAgentAccountRequest: {
+            /** @enum {null|string} */
+            color?: "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | null;
+            name?: null | string;
+        };
         UpdateArtifactFileRequest: {
             /** @description The file's new UTF-8 text content. */
             content: string;
@@ -11729,6 +11739,60 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account identifier; device-claude and device-codex are this computer's own logins. */
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAgentAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

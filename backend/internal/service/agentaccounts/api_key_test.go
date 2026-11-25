@@ -41,20 +41,20 @@ func TestAddAPIKeyAccountChecksTheKeyAndSavesItInItsFolder(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	svc, store, root := newAPIKeyService(t, claude)
 
-	if _, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", "sk-ant-bad-0000000000"); !errors.Is(err, ports.ErrAgentAccountKeyRejected) {
+	if _, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", "sk-ant-bad-0000000000", ""); !errors.Is(err, ports.ErrAgentAccountKeyRejected) {
 		t.Fatalf("rejected key: err = %v, want ErrAgentAccountKeyRejected", err)
 	}
-	if _, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", "sk-ant-unreachable-0000"); !errors.Is(err, ports.ErrAgentAccountKeyUnchecked) {
+	if _, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", "sk-ant-unreachable-0000", ""); !errors.Is(err, ports.ErrAgentAccountKeyUnchecked) {
 		t.Fatalf("unchecked key: err = %v, want ErrAgentAccountKeyUnchecked", err)
 	}
-	if _, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderCodex, "Work", goodKey); !errors.Is(err, ports.ErrAgentAccountProviderMismatch) {
+	if _, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderCodex, "Work", goodKey, ""); !errors.Is(err, ports.ErrAgentAccountProviderMismatch) {
 		t.Fatalf("codex key: err = %v, want ErrAgentAccountProviderMismatch", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(root, "claude")); len(store.accounts) != 0 || len(entries) != 0 {
 		t.Fatalf("a refused key left %d accounts and %d folders", len(store.accounts), len(entries))
 	}
 
-	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "  Work \n key ", "  "+goodKey+"\n")
+	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "  Work \n key ", "  "+goodKey+"\n", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestAPIKeyAccountLaunchesWithItsKeyAndHasNoLimits(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, windows: []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 10, DurationMinutes: 300}}}
 	svc, _, _ := newAPIKeyService(t, claude)
-	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey)
+	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestAPIKeyAccountIsOnlyUsedWhenChosen(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{signedInAs: map[string]string{}}
 	svc, _, _ := newAPIKeyService(t, claude)
-	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey)
+	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestReplaceAPIKeyKeepsTheCurrentKeyWhenItFails(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	svc, store, _ := newAPIKeyService(t, claude)
-	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey)
+	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -67,9 +67,12 @@ func (s *Service) checkKey(ctx context.Context, p domain.AgentAccountProvider, k
 	}
 }
 
-// AddAPIKeyAccount saves key as a new account of p, named name, once the
-// provider accepts it.
-func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountProvider, name, key string) (AccountView, error) {
+// AddAPIKeyAccount saves key as a new account of p, named name and tinted
+// color (empty for none), once the provider accepts it.
+func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountProvider, name, key, color string) (AccountView, error) {
+	if color != "" && !domain.ValidAgentAccountColor(color) {
+		return AccountView{}, ports.ErrAgentAccountColorInvalid
+	}
 	provider := s.providers[p]
 	approver, ok := provider.(apiKeyApprover)
 	if provider == nil || !ok || apiKeyEnv[p] == "" {
@@ -105,7 +108,7 @@ func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountPro
 	}
 	account := domain.AgentAccount{
 		ID: id, Provider: p, Home: home, Kind: domain.AgentAccountKindAPIKey,
-		Name: cleanAPIKeyName(name), KeyHint: apiKeyHint(key), CreatedAt: s.now(),
+		Name: cleanAPIKeyName(name), KeyHint: apiKeyHint(key), Color: color, CreatedAt: s.now(),
 	}
 	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
 		return AccountView{}, err
@@ -113,6 +116,30 @@ func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountPro
 	keep = true
 	s.read(ctx, account)
 	s.notifyDefaultChanged(p)
+	return s.view(ctx, id)
+}
+
+// UpdateIdentity renames an account and sets its color. A nil field is left as
+// it is; an empty name falls back to the account's email in the app, and an
+// empty color clears the color.
+func (s *Service) UpdateIdentity(ctx context.Context, id string, name, color *string) (AccountView, error) {
+	if color != nil && *color != "" && !domain.ValidAgentAccountColor(*color) {
+		return AccountView{}, ports.ErrAgentAccountColorInvalid
+	}
+	account, err := s.find(ctx, id)
+	if err != nil {
+		return AccountView{}, err
+	}
+	newName, newColor := account.Name, account.Color
+	if name != nil {
+		newName = cleanAPIKeyName(*name)
+	}
+	if color != nil {
+		newColor = *color
+	}
+	if err := s.store.UpdateAgentAccountIdentity(ctx, id, newName, newColor); err != nil {
+		return AccountView{}, err
+	}
 	return s.view(ctx, id)
 }
 

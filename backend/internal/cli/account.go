@@ -19,6 +19,7 @@ type agentAccount struct {
 	Kind     string `json:"kind,omitempty"`
 	Name     string `json:"name,omitempty"`
 	KeyHint  string `json:"keyHint,omitempty"`
+	Color    string `json:"color,omitempty"`
 	Email    string `json:"email,omitempty"`
 	Plan     string `json:"plan,omitempty"`
 	Default  bool   `json:"default"`

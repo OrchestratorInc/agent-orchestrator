@@ -186,6 +186,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersAgentAccountUsageQuery":                    "AgentAccountUsageQuery",
 	"ControllersAgentAccountResponse":                      "AgentAccountResponse",
 	"ControllersAgentAccountsResponse":                     "AgentAccountsResponse",
+	"ControllersUpdateAgentAccountRequest":                 "UpdateAgentAccountRequest",
 	"ControllersStartAgentAccountLoginRequest":             "StartAgentAccountLoginRequest",
 	"ControllersStartAgentAccountLoginResponse":            "StartAgentAccountLoginResponse",
 	"ControllersVerifyAgentAccountLoginResponse":           "VerifyAgentAccountLoginResponse",
@@ -2779,6 +2780,12 @@ func agentOperations() []operation {
 			summary: "Spend one Codex usage-limit reset of an account", pathParams: []any{controllers.AgentAccountIDParam{}},
 			reqBody: controllers.ConsumeAgentAccountResetCreditRequest{},
 			resps:   []respUnit{{http.StatusOK, controllers.ConsumeAgentAccountResetCreditResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/agents/accounts/{accountId}", id: "updateAgentAccount", tag: "agents",
+			summary: "Rename an account and set or clear its color", pathParams: []any{controllers.AgentAccountIDParam{}},
+			reqBody: controllers.UpdateAgentAccountRequest{},
+			resps:   []respUnit{{http.StatusOK, controllers.AgentAccountResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodDelete, path: "/api/v1/agents/accounts/{accountId}", id: "removeAgentAccount", tag: "agents",
