@@ -1572,6 +1572,7 @@ paths:
       operationId: listSessions
       tags: [Sessions]
       parameters:
+        - $ref: "#/components/parameters/ClientFeatures"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
         - name: projectId
@@ -1640,6 +1641,8 @@ paths:
     get:
       operationId: getSession
       tags: [Sessions]
+      parameters:
+        - $ref: "#/components/parameters/ClientFeatures"
       responses:
         "200":
           description: Session details.
@@ -1742,6 +1745,100 @@ paths:
             SESSION_CONTENT_EXPIRED. The session is older than its creator's
             data retention period (GET /me/data-retention), so its content is
             being deleted, and it cannot be restored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/fork-options:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getSessionForkOptions
+      tags: [Sessions]
+      description: >-
+        Whether the session can be forked now, and if not why, with where it
+        was forked from and the sessions forked from it. The shape and the
+        refusal codes and messages match the desktop daemon's fork options
+        for a local session, so a client's Fork controls work the same for
+        both. With turnId, whether that finished turn can be forked. Offered
+        when offering.features lists session-fork; 404 otherwise.
+      parameters:
+        - name: turnId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The session's fork options.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionForkOptions"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/forks:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: forkSession
+      tags: [Sessions]
+      description: >-
+        Fork the session into a new session as one of its finished turns left
+        it: the conversation up to that turn, the files as that turn left them,
+        and the agent's memory of the conversation, copied natively by Claude
+        Code and Codex and as text for other agents. Without turnId the latest
+        finished turn is forked. The original is never changed. The fork is
+        named "Fork of <title>", or "Fork N of <title>" counted against the
+        first session forked. It belongs to the caller and runs on the
+        caller's default account for the session's agent; a fork of a
+        standalone agent is the caller's own standalone agent, with no access
+        to the original's repositories. A fork never owns, pushes to or
+        comments on the original's pull requests. The fork is returned while
+        its files and conversation are still being copied; a copy that fails
+        becomes its startupError (fork_capture_failed or
+        fork_seed_apply_failed for clients that send X-AO-Client-Features with
+        session-fork), and startup-retry copies again. Anyone who may create a
+        session in the original's project may fork it; for a standalone agent
+        only its owner and those it is shared with for writing. Replaying the
+        same Idempotency-Key returns the same fork with 200. Offered when
+        offering.features lists session-fork; 404 otherwise.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkSessionInput"
+      responses:
+        "201":
+          description: The fork was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForkSessionResult"
+        "200":
+          description: The fork an earlier request with the same Idempotency-Key created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForkSessionResult"
+        "403":
+          description: forbidden. The caller may not create a session in the original's project, or only watches it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            The session can't be forked now. code is one of the
+            SessionForkRefusal codes and message says why, suitable to show
+            as-is.
           content:
             application/json:
               schema:
@@ -2874,6 +2971,72 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/SharedSessionParticipants"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/rollback:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/TurnId"
+    get:
+      operationId: previewTurnRollback
+      tags: [Sessions]
+      description: >-
+        What rolling the session back to before turnId would do: the turns it
+        discards (turnId and every later turn) and, when the files from
+        before turnId were saved and can be restored, each file it would
+        change. When they can't, available is false and unavailable says why
+        in words a person can act on; rolling back then changes only the
+        conversation. Nothing changes. Offered when offering.features lists
+        session-rollback; 404 otherwise.
+      responses:
+        "200":
+          description: The rollback's preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RollbackPreview"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: rollbackTurn
+      tags: [Sessions]
+      description: >-
+        Roll the session back to before turnId: discard turnId and every later
+        turn from the agent's memory, and with filePlanId from the preview
+        restore the files as they were before turnId. Ignored files and
+        dependency folders are never touched. The files are restored only if
+        they still match the preview (409 ROLLBACK_FILES_CHANGED otherwise:
+        preview again); what a restore overwrites is kept so the rollback
+        doesn't lose it. The rolled-back turns get rolledBackAt and the
+        session's stream gets session.rolled_back. Refused with 409
+        SESSION_BUSY while a turn runs, a fork is copying the session, or an
+        interface transition is under way. Offered when offering.features
+        lists session-rollback; 404 otherwise.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RollbackTurnInput"
+      responses:
+        "200":
+          description: The session was rolled back.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RollbackTurnResult"
+        "409":
+          description: >-
+            ROLLBACK_FILES_CHANGED: the files changed since the preview.
+            SESSION_BUSY: a turn, a fork's copy or an interface transition is
+            running. SESSION_TERMINATED: the session ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer:
@@ -5217,6 +5380,18 @@ components:
         items:
           type: string
           maxLength: 64
+    ClientFeatures:
+      name: X-AO-Client-Features
+      in: header
+      required: false
+      description: >-
+        Features this client understands, comma separated. With session-fork
+        the control plane reports a fork's startup errors with their own
+        codes, fork_capture_failed and fork_seed_apply_failed; without it, as
+        repository_checkout_failed with the same message.
+      schema:
+        type: string
+        maxLength: 200
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -6029,7 +6204,9 @@ components:
             whose sessions run on Coder may run its orchestrator on Coder too
             (ProjectOrchestratorSandboxProvider): the deployment offers coder
             and freestyle, and the organization may run Coder as its own
-            (customCoder). Empty when none apply.
+            (customCoder), session-fork when sessions can be forked
+            (forkSession), session-rollback when a turn can be rolled back
+            with its files (rollbackTurn). Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -7664,6 +7841,10 @@ components:
         completedAt:
           type: string
           format: date-time
+        rolledBackAt:
+          type: string
+          format: date-time
+          description: When the turn was rolled back (rollbackTurn). A rolled-back turn can't be forked.
         createdAt:
           type: string
           format: date-time
@@ -8103,7 +8284,7 @@ components:
           enum: [failed, ready]
         code:
           type: string
-          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied, agent_start_failed, conversation_restore_failed]
+          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied, agent_start_failed, conversation_restore_failed, fork_capture_failed, fork_seed_apply_failed]
           description: Required when status is failed.
         message:
           type: string
@@ -9000,6 +9181,168 @@ components:
             The effort the terminal agent starts at, as the Chat ran it. Chat
             to terminal handoff only; validated as a Chat turn's effort. With
             targetHarness, the effort the new agent starts at.
+    SessionForkOptions:
+      type: object
+      additionalProperties: false
+      required: [allowed]
+      description: >-
+        Whether a session can be forked now (getSessionForkOptions), with the
+        same fields as the desktop daemon's fork options.
+      properties:
+        allowed:
+          type: boolean
+        refusal:
+          $ref: "#/components/schemas/SessionForkRefusal"
+        suggestedName:
+          type: string
+          description: What the fork will be called.
+        anyTurn:
+          type: boolean
+          description: Every finished turn can be forked, not only the latest.
+        forkedFrom:
+          $ref: "#/components/schemas/SessionForkOrigin"
+        forks:
+          type: array
+          description: The sessions forked from this one, oldest first.
+          items:
+            $ref: "#/components/schemas/SessionForkSummary"
+    SessionForkRefusal:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      description: >-
+        Why a session can't be forked now. message is suitable to show as-is.
+        The codes and messages match the desktop daemon's where the meaning is
+        the same: FORK_ORCHESTRATOR, FORK_SOURCE_TERMINATED, FORK_SOURCE_BUSY,
+        FORK_SOURCE_PREPARING, FORK_TURN_NOT_FINISHED, FORK_AGENT_UNSUPPORTED,
+        FORK_NATIVE_SESSION_MISSING, FORK_TURN_FILES_MISSING ("The files from
+        this turn weren't saved, so it can't be forked."),
+        FORK_OLDER_TURN_UNSUPPORTED, FORK_WORKSPACE_UNMANAGED and
+        FORK_TURN_HAS_REPOSITORY ("This turn's files include a git repository,
+        so it can be forked only from its latest turn."). Cloud adds
+        FORK_SOURCE_PAUSED ("Open this session to wake it, then fork it."),
+        FORK_WORKER_UNSUPPORTED ("This session's workspace runs an older
+        Orchestrator worker. Restart the session to fork it."),
+        FORK_TURN_FILES_EXPIRED ("This turn's saved files were removed after
+        200 newer turns, so it can't be forked.") and
+        FORK_AGENT_TOOLS_MISSING. Clients must tolerate codes added later and
+        show message.
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    SessionForkOrigin:
+      type: object
+      additionalProperties: false
+      required: [sessionId, title, sourceExists]
+      description: The session a fork was copied from.
+      properties:
+        sessionId:
+          type: string
+        title:
+          type: string
+          description: The original's current name, or its name when forked if it was deleted since.
+        turnId:
+          type: string
+          description: The turn forked.
+        sourceExists:
+          type: boolean
+          description: False once the original has been deleted.
+        textHandoff:
+          type: boolean
+          description: >-
+            The fork's agent couldn't copy the original's conversation and was
+            given it as text instead.
+    SessionForkSummary:
+      type: object
+      additionalProperties: false
+      required: [sessionId, title, exists]
+      description: One session forked from this one.
+      properties:
+        sessionId:
+          type: string
+        title:
+          type: string
+        exists:
+          type: boolean
+          description: False once the fork has been deleted.
+    ForkSessionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        turnId:
+          type: string
+          description: The finished turn to fork; the latest finished turn when omitted.
+    ForkSessionResult:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
+    RollbackPreview:
+      type: object
+      additionalProperties: false
+      required: [available, files, turns]
+      description: What rolling back to before a turn would do (previewTurnRollback).
+      properties:
+        available:
+          type: boolean
+          description: The files from before the turn can be restored.
+        unavailable:
+          type: string
+          description: >-
+            Why they can't, in words a person can act on, when available is
+            false: for example that the files from before the turn weren't
+            saved, or that the workspace holds too many or too large files to
+            restore safely. The conversation can still be rolled back.
+        files:
+          type: array
+          description: Each file restoring would change, by path within the workspace.
+          items:
+            $ref: "#/components/schemas/RollbackFileChange"
+        filePlanId:
+          type: string
+          description: >-
+            Pass to rollbackTurn to restore the files. It stops matching as soon
+            as the files change, so nothing the preview didn't list is ever
+            overwritten.
+        turns:
+          type: integer
+          minimum: 1
+          description: How many turns the rollback discards.
+    RollbackFileChange:
+      type: object
+      additionalProperties: false
+      required: [path, change]
+      properties:
+        path:
+          type: string
+        change:
+          type: string
+          enum: [restored, reverted, removed]
+          description: >-
+            restored brings back a file deleted since, reverted puts back a
+            changed file's contents, removed deletes a file created since.
+    RollbackTurnInput:
+      type: object
+      additionalProperties: false
+      properties:
+        filePlanId:
+          type: string
+          description: >-
+            The preview's filePlanId, to restore the files too. Omitted, only
+            the conversation is rolled back.
+    RollbackTurnResult:
+      type: object
+      additionalProperties: false
+      required: [rolledBack]
+      properties:
+        rolledBack:
+          type: integer
+          minimum: 1
+          description: How many turns were discarded.
     Session:
       type: object
       additionalProperties: false
@@ -9107,6 +9450,9 @@ components:
             Coder or other providers.
         activeTurn:
           $ref: "#/components/schemas/Turn"
+        forkedFrom:
+          $ref: "#/components/schemas/SessionForkOrigin"
+          description: Set when the session is a fork, naming the session it was forked from.
         isTerminated:
           type: boolean
         requestedOutput:
@@ -10120,7 +10466,13 @@ components:
             could not start in the ready workspace) or
             conversation_restore_failed (a session woken on a new sandbox could
             not get back its conversation, so its agent does not start without
-            it), all reported by the worker. Clients must tolerate codes added later.
+            it), all reported by the worker, and for a fork
+            fork_capture_failed (the original's files or conversation could
+            not be copied) or fork_seed_apply_failed (the copy could not be
+            put in the fork's workspace), both cleared by startup-retry and
+            sent only to clients that send X-AO-Client-Features with
+            session-fork; other clients get repository_checkout_failed with
+            the same message. Clients must tolerate codes added later.
         message:
           type: string
           description: Human-readable explanation suitable for display as-is.
@@ -11638,6 +11990,67 @@ components:
         createdAt:
           type: string
           format: date-time
+    SessionForkedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: A fork of this session was created (forkSession).
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: session.forked
+        payload:
+          type: object
+          additionalProperties: false
+          required: [forkSessionId, title]
+          properties:
+            forkSessionId:
+              type: string
+              format: uuid
+            title:
+              type: string
+              description: The fork's name, such as "Fork 2 of Fix login".
+            turnId:
+              type: string
+              description: The turn forked; absent for a session with no turns, such as a terminal session.
+        createdAt:
+          type: string
+          format: date-time
+    SessionRolledBackEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: The session was rolled back to before a turn (rollbackTurn).
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: session.rolled_back
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnIds, filesRestored]
+          properties:
+            turnIds:
+              type: array
+              description: The turns discarded, oldest first; the first is the turn rolled back to before.
+              items:
+                type: string
+            filesRestored:
+              type: boolean
+              description: The files were restored too, not only the conversation.
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -11653,6 +12066,8 @@ components:
         - $ref: "#/components/schemas/TurnSteerFailedEvent"
         - $ref: "#/components/schemas/ScriptStepEvent"
         - $ref: "#/components/schemas/AgentSwitchedEvent"
+        - $ref: "#/components/schemas/SessionForkedEvent"
+        - $ref: "#/components/schemas/SessionRolledBackEvent"
     ClientEventPage:
       type: object
       additionalProperties: false

@@ -949,6 +949,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/fork-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Whether the session can be forked now, and if not why, with where it was forked from and the sessions forked from it. The shape and the refusal codes and messages match the desktop daemon's fork options for a local session, so a client's Fork controls work the same for both. With turnId, whether that finished turn can be forked. Offered when offering.features lists session-fork; 404 otherwise. */
+        get: operations["getSessionForkOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/forks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Fork the session into a new session as one of its finished turns left it: the conversation up to that turn, the files as that turn left them, and the agent's memory of the conversation, copied natively by Claude Code and Codex and as text for other agents. Without turnId the latest finished turn is forked. The original is never changed. The fork is named "Fork of <title>", or "Fork N of <title>" counted against the first session forked. It belongs to the caller and runs on the caller's default account for the session's agent; a fork of a standalone agent is the caller's own standalone agent, with no access to the original's repositories. A fork never owns, pushes to or comments on the original's pull requests. The fork is returned while its files and conversation are still being copied; a copy that fails becomes its startupError (fork_capture_failed or fork_seed_apply_failed for clients that send X-AO-Client-Features with session-fork), and startup-retry copies again. Anyone who may create a session in the original's project may fork it; for a standalone agent only its owner and those it is shared with for writing. Replaying the same Idempotency-Key returns the same fork with 200. Offered when offering.features lists session-fork; 404 otherwise. */
+        post: operations["forkSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin": {
         parameters: {
             query?: never;
@@ -1767,6 +1807,28 @@ export interface paths {
         get: operations["listSessionParticipants"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        /** @description What rolling the session back to before turnId would do: the turns it discards (turnId and every later turn) and, when the files from before turnId were saved and can be restored, each file it would change. When they can't, available is false and unavailable says why in words a person can act on; rolling back then changes only the conversation. Nothing changes. Offered when offering.features lists session-rollback; 404 otherwise. */
+        get: operations["previewTurnRollback"];
+        put?: never;
+        /** @description Roll the session back to before turnId: discard turnId and every later turn from the agent's memory, and with filePlanId from the preview restore the files as they were before turnId. Ignored files and dependency folders are never touched. The files are restored only if they still match the preview (409 ROLLBACK_FILES_CHANGED otherwise: preview again); what a restore overwrites is kept so the rollback doesn't lose it. The rolled-back turns get rolledBackAt and the session's stream gets session.rolled_back. Refused with 409 SESSION_BUSY while a turn runs, a fork is copying the session, or an interface transition is under way. Offered when offering.features lists session-rollback; 404 otherwise. */
+        post: operations["rollbackTurn"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3386,7 +3448,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder), session-fork when sessions can be forked (forkSession), session-rollback when a turn can be rolled back with its files (rollbackTurn). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -4152,6 +4214,11 @@ export interface components {
             startedAt?: string;
             /** Format: date-time */
             completedAt?: string;
+            /**
+             * Format: date-time
+             * @description When the turn was rolled back (rollbackTurn). A rolled-back turn can't be forked.
+             */
+            rolledBackAt?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -4378,7 +4445,7 @@ export interface components {
              * @description Required when status is failed.
              * @enum {string}
              */
-            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed" | "conversation_restore_failed";
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed" | "conversation_restore_failed" | "fork_capture_failed" | "fork_seed_apply_failed";
             /** @description User-facing explanation; required when status is failed. */
             message?: string;
             /** @description Redacted excerpt, for Setup the failed command's output tail. */
@@ -4803,6 +4870,78 @@ export interface components {
              */
             reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
         };
+        /** @description Whether a session can be forked now (getSessionForkOptions), with the same fields as the desktop daemon's fork options. */
+        SessionForkOptions: {
+            allowed: boolean;
+            refusal?: components["schemas"]["SessionForkRefusal"];
+            /** @description What the fork will be called. */
+            suggestedName?: string;
+            /** @description Every finished turn can be forked, not only the latest. */
+            anyTurn?: boolean;
+            forkedFrom?: components["schemas"]["SessionForkOrigin"];
+            /** @description The sessions forked from this one, oldest first. */
+            forks?: components["schemas"]["SessionForkSummary"][];
+        };
+        /** @description Why a session can't be forked now. message is suitable to show as-is. The codes and messages match the desktop daemon's where the meaning is the same: FORK_ORCHESTRATOR, FORK_SOURCE_TERMINATED, FORK_SOURCE_BUSY, FORK_SOURCE_PREPARING, FORK_TURN_NOT_FINISHED, FORK_AGENT_UNSUPPORTED, FORK_NATIVE_SESSION_MISSING, FORK_TURN_FILES_MISSING ("The files from this turn weren't saved, so it can't be forked."), FORK_OLDER_TURN_UNSUPPORTED, FORK_WORKSPACE_UNMANAGED and FORK_TURN_HAS_REPOSITORY ("This turn's files include a git repository, so it can be forked only from its latest turn."). Cloud adds FORK_SOURCE_PAUSED ("Open this session to wake it, then fork it."), FORK_WORKER_UNSUPPORTED ("This session's workspace runs an older Orchestrator worker. Restart the session to fork it."), FORK_TURN_FILES_EXPIRED ("This turn's saved files were removed after 200 newer turns, so it can't be forked.") and FORK_AGENT_TOOLS_MISSING. Clients must tolerate codes added later and show message. */
+        SessionForkRefusal: {
+            code: string;
+            message: string;
+        };
+        /** @description The session a fork was copied from. */
+        SessionForkOrigin: {
+            sessionId: string;
+            /** @description The original's current name, or its name when forked if it was deleted since. */
+            title: string;
+            /** @description The turn forked. */
+            turnId?: string;
+            /** @description False once the original has been deleted. */
+            sourceExists: boolean;
+            /** @description The fork's agent couldn't copy the original's conversation and was given it as text instead. */
+            textHandoff?: boolean;
+        };
+        /** @description One session forked from this one. */
+        SessionForkSummary: {
+            sessionId: string;
+            title: string;
+            /** @description False once the fork has been deleted. */
+            exists: boolean;
+        };
+        ForkSessionInput: {
+            /** @description The finished turn to fork; the latest finished turn when omitted. */
+            turnId?: string;
+        };
+        ForkSessionResult: {
+            session: components["schemas"]["Session"];
+        };
+        /** @description What rolling back to before a turn would do (previewTurnRollback). */
+        RollbackPreview: {
+            /** @description The files from before the turn can be restored. */
+            available: boolean;
+            /** @description Why they can't, in words a person can act on, when available is false: for example that the files from before the turn weren't saved, or that the workspace holds too many or too large files to restore safely. The conversation can still be rolled back. */
+            unavailable?: string;
+            /** @description Each file restoring would change, by path within the workspace. */
+            files: components["schemas"]["RollbackFileChange"][];
+            /** @description Pass to rollbackTurn to restore the files. It stops matching as soon as the files change, so nothing the preview didn't list is ever overwritten. */
+            filePlanId?: string;
+            /** @description How many turns the rollback discards. */
+            turns: number;
+        };
+        RollbackFileChange: {
+            path: string;
+            /**
+             * @description restored brings back a file deleted since, reverted puts back a changed file's contents, removed deletes a file created since.
+             * @enum {string}
+             */
+            change: "restored" | "reverted" | "removed";
+        };
+        RollbackTurnInput: {
+            /** @description The preview's filePlanId, to restore the files too. Omitted, only the conversation is rolled back. */
+            filePlanId?: string;
+        };
+        RollbackTurnResult: {
+            /** @description How many turns were discarded. */
+            rolledBack: number;
+        };
         Session: {
             /** Format: uuid */
             id: string;
@@ -4844,6 +4983,8 @@ export interface components {
              */
             coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
+            /** @description Set when the session is a fork, naming the session it was forked from. */
+            forkedFrom?: components["schemas"]["SessionForkOrigin"];
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /**
@@ -5321,7 +5462,7 @@ export interface components {
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed, agent_start_failed and conversation_restore_failed are the exception: the worker has checked in but could not prepare the workspace, restore the session's conversation or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed, agent_start_failed (the terminal agent could not start in the ready workspace) or conversation_restore_failed (a session woken on a new sandbox could not get back its conversation, so its agent does not start without it), all reported by the worker. Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed, agent_start_failed (the terminal agent could not start in the ready workspace) or conversation_restore_failed (a session woken on a new sandbox could not get back its conversation, so its agent does not start without it), all reported by the worker, and for a fork fork_capture_failed (the original's files or conversation could not be copied) or fork_seed_apply_failed (the copy could not be put in the fork's workspace), both cleared by startup-retry and sent only to clients that send X-AO-Client-Features with session-fork; other clients get repository_checkout_failed with the same message. Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
@@ -6059,7 +6200,41 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["TurnSteerRequestedEvent"] | components["schemas"]["TurnSteerFailedEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AgentSwitchedEvent"];
+        /** @description A fork of this session was created (forkSession). */
+        SessionForkedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "session.forked";
+            payload: {
+                /** Format: uuid */
+                forkSessionId: string;
+                /** @description The fork's name, such as "Fork 2 of Fix login". */
+                title: string;
+                /** @description The turn forked; absent for a session with no turns, such as a terminal session. */
+                turnId?: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description The session was rolled back to before a turn (rollbackTurn). */
+        SessionRolledBackEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "session.rolled_back";
+            payload: {
+                /** @description The turns discarded, oldest first; the first is the turn rolled back to before. */
+                turnIds: string[];
+                /** @description The files were restored too, not only the conversation. */
+                filesRestored: boolean;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["TurnSteerRequestedEvent"] | components["schemas"]["TurnSteerFailedEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AgentSwitchedEvent"] | components["schemas"]["SessionForkedEvent"] | components["schemas"]["SessionRolledBackEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -6357,6 +6532,8 @@ export interface components {
         After: number;
         /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
         EventTypes: string[];
+        /** @description Features this client understands, comma separated. With session-fork the control plane reports a fork's startup errors with their own codes, fork_capture_failed and fork_seed_apply_failed; without it, as repository_checkout_failed with the same message. */
+        ClientFeatures: string;
         /** @description Reusing a key with the same command returns the original result.
          *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
          *      */
@@ -8016,7 +8193,10 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 projectId?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Features this client understands, comma separated. With session-fork the control plane reports a fork's startup errors with their own codes, fork_capture_failed and fork_seed_apply_failed; without it, as repository_checkout_failed with the same message. */
+                "X-AO-Client-Features"?: components["parameters"]["ClientFeatures"];
+            };
             path: {
                 orgId: components["parameters"]["OrgId"];
             };
@@ -8099,7 +8279,10 @@ export interface operations {
     getSession: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Features this client understands, comma separated. With session-fork the control plane reports a fork's startup errors with their own codes, fork_capture_failed and fork_seed_apply_failed; without it, as repository_checkout_failed with the same message. */
+                "X-AO-Client-Features"?: components["parameters"]["ClientFeatures"];
+            };
             path: {
                 orgId: components["parameters"]["OrgId"];
                 sessionId: components["parameters"]["SessionId"];
@@ -8218,6 +8401,92 @@ export interface operations {
             };
             /** @description SESSION_CONTENT_EXPIRED. The session is older than its creator's data retention period (GET /me/data-retention), so its content is being deleted, and it cannot be restored. */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionForkOptions: {
+        parameters: {
+            query?: {
+                turnId?: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's fork options. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionForkOptions"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    forkSession: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForkSessionInput"];
+            };
+        };
+        responses: {
+            /** @description The fork an earlier request with the same Idempotency-Key created. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForkSessionResult"];
+                };
+            };
+            /** @description The fork was created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForkSessionResult"];
+                };
+            };
+            /** @description forbidden. The caller may not create a session in the original's project, or only watches it. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The session can't be forked now. code is one of the SessionForkRefusal codes and message says why, suitable to show as-is. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9505,6 +9774,74 @@ export interface operations {
                     "application/json": {
                         sessions: components["schemas"]["SharedSessionParticipants"][];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewTurnRollback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rollback's preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RollbackPreview"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rollbackTurn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackTurnInput"];
+            };
+        };
+        responses: {
+            /** @description The session was rolled back. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RollbackTurnResult"];
+                };
+            };
+            /** @description ROLLBACK_FILES_CHANGED: the files changed since the preview. SESSION_BUSY: a turn, a fork's copy or an interface transition is running. SESSION_TERMINATED: the session ended. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
