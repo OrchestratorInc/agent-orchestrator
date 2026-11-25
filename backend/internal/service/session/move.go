@@ -29,7 +29,8 @@ const CloudPromptMaxBytes = 65_536
 
 // MoveNoter renders the handoff note a moved session starts from.
 type MoveNoter interface {
-	MoveNote(ctx context.Context, rec domain.SessionRecord, movedFrom string, wip bool, maxBytes int) (string, error)
+	// wipCommit is the commit the move made of the uncommitted work, or "".
+	MoveNote(ctx context.Context, rec domain.SessionRecord, movedFrom, wipCommit string, maxBytes int) (string, error)
 }
 
 type sessionMoveStore interface {
@@ -169,7 +170,7 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 		AutoInjectReview: rec.AutoInjectReview, AutoInjectCI: rec.AutoInjectCI,
 	}
 	if s.moveNotes != nil {
-		if out.HandoffNote, err = s.moveNotes.MoveNote(ctx, rec, label, out.Manifest.WIP, CloudPromptMaxBytes); err != nil {
+		if out.HandoffNote, err = s.moveNotes.MoveNote(ctx, rec, label, c.Commit, CloudPromptMaxBytes); err != nil {
 			return MoveExport{}, err
 		}
 	}
@@ -289,6 +290,9 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		in.Manifest.Harness = domain.HarnessOpenCodeV2
 	}
 	m := in.Manifest
+	if !validPermissionMode(m.Permissions) {
+		m.Permissions = ""
+	}
 	if in.MoveID == "" || m.Branch == "" || m.Tip == "" || m.Harness == "" {
 		return MoveImportOutcome{}, apierr.Invalid("MOVE_MANIFEST_INVALID", "moveId, branch, tip and harness are required", nil)
 	}
@@ -321,10 +325,24 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		return MoveImportOutcome{}, s.moveAPIError(ctx, err)
 	}
 
+	// A session that moved from here to this Cloud session supplies what Cloud
+	// did not send: its name and its approval mode.
+	if origin, ok := s.sessionMovedTo(ctx, m.SourceSessionID); ok {
+		if m.DisplayName == "" {
+			m.DisplayName = origin.DisplayName
+		}
+		if m.Permissions == "" {
+			m.Permissions = origin.Metadata.Permissions
+		}
+	}
 	// AO Cloud writes paths under the user's home folder with a placeholder.
 	prompt := nativetransfer.FillCloudHomeText(in.HandoffNote)
 	if prompt == "" {
 		prompt = "This Orchestrator-managed session moved here from " + m.SourceLabel + ". Check the branch's files and git log, then wait for the user."
+	}
+	wipNotice := moveWIPNotice(m)
+	if wipNotice != "" && !strings.Contains(prompt, m.Tip) {
+		prompt += "\n\n" + wipNotice
 	}
 	cfg := ports.SpawnConfig{
 		ProjectID: in.ProjectID, IssueID: m.IssueID, ClientRequestID: in.MoveID, ClientRequestHash: hash,
@@ -333,7 +351,8 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		EffortOverride:  m.Effort != "",
 		RequestedMode:   m.Mode,
 		RequestedOutput: m.RequestedOutput,
-		DisplayName:     m.DisplayName, KeepDisplayName: m.DisplayName != "",
+		// The session's own name outranks the title Claude Code gives its terminal.
+		DisplayName: m.DisplayName, KeepDisplayName: m.DisplayName != "", DisplayNameExplicit: m.DisplayName != "",
 	}
 	var warnings []string
 	incomplete := false
@@ -355,7 +374,7 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 			incomplete = true
 		} else {
 			// The resumed conversation holds the task; the note is only its fallback.
-			cfg.Transfer = &ports.SpawnTransfer{NativeArchive: archive, FallbackPrompt: prompt}
+			cfg.Transfer = &ports.SpawnTransfer{NativeArchive: archive, FallbackPrompt: prompt, SystemNote: wipNotice}
 			cfg.Prompt = ""
 		}
 	}
@@ -783,6 +802,50 @@ func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHar
 		err = cerr
 	}
 	return archive, warning, sidecarErr, err
+}
+
+// moveWIPNotice tells the agent the move committed the source's uncommitted
+// work, so it does not take that commit for one it made; "" without one.
+func moveWIPNotice(m MoveManifest) string {
+	if !m.WIP {
+		return ""
+	}
+	source := strings.TrimSpace(m.SourceLabel)
+	if source == "" {
+		source = "Orchestrator Cloud"
+	}
+	return fmt.Sprintf("This session moved here from %s. The move committed the work that was not committed there as commit %s on branch %s. Orchestrator made that commit, not you or the user. Keep it, amend it, or squash it.",
+		source, m.Tip, m.Branch)
+}
+
+// validPermissionMode accepts an approval mode this machine knows, and none.
+func validPermissionMode(mode domain.PermissionMode) bool {
+	switch mode {
+	case "", domain.PermissionModeDefault, domain.PermissionModeAcceptEdits, domain.PermissionModeAuto, domain.PermissionModeBypassPermissions:
+		return true
+	}
+	return false
+}
+
+// sessionMovedTo finds the session on this machine that moved to AO Cloud
+// session cloudSessionID, when there is one.
+func (s *Service) sessionMovedTo(ctx context.Context, cloudSessionID domain.SessionID) (domain.SessionRecord, bool) {
+	lister, ok := s.store.(interface {
+		ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	})
+	if cloudSessionID == "" || !ok {
+		return domain.SessionRecord{}, false
+	}
+	recs, err := lister.ListAllSessions(ctx)
+	if err != nil {
+		return domain.SessionRecord{}, false
+	}
+	for _, rec := range recs {
+		if rec.MovedTo != nil && rec.MovedTo.SessionID == string(cloudSessionID) {
+			return rec, true
+		}
+	}
+	return domain.SessionRecord{}, false
 }
 
 // moveLog is the service's logger, or one that drops records when it has none.

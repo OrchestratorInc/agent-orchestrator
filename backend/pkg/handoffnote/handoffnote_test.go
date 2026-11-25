@@ -229,7 +229,8 @@ func TestBuildMovedNoteHidesTheHomeFolder(t *testing.T) {
 	got := Build(Input{
 		SourceHarness: "claude-code", TargetHarness: "claude-code", SessionTitle: "Importer", Branch: "feat/move",
 		MovedFrom: "the user's computer", MovedWIP: true, MovedWIPCommit: "WIP: uncommitted changes from a local session",
-		HomeDir: "/Users/ann/",
+		MovedWIPSHA: "3f2a91c0d4e5f60718293a4b5c6d7e8f90a1b2c3",
+		HomeDir:     "/Users/ann/",
 		Turns: []Turn{{
 			UserRequest:   "read /Users/ann/.config/app.toml and /Users/ann",
 			AgentResponse: "done; /Users/anna/notes.md is someone else's, see ~/x and /tmp/Users/ann/y",
@@ -238,7 +239,8 @@ func TestBuildMovedNoteHidesTheHomeFolder(t *testing.T) {
 	})
 	for _, want := range []string{
 		"/ao-moved/home/.config/app.toml", "and /ao-moved/home", "/Users/anna/notes.md", "/tmp/Users/ann/y",
-		`"WIP: uncommitted changes from a local session"`, "not committed on the user's computer",
+		`as commit 3f2a91c0d4e5f60718293a4b5c6d7e8f90a1b2c3, "WIP: uncommitted changes from a local session", on branch feat/move`,
+		"not committed on the user's computer", "Orchestrator made that commit, not you or the user.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("note is missing %q:\n%s", want, got)

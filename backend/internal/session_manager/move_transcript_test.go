@@ -116,7 +116,7 @@ func TestSpawnTransferResumesOrFallsBackToTheNote(t *testing.T) {
 			})
 			rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
 				ProjectID: "mer", Kind: domain.KindWorker, Harness: tc.harness,
-				Transfer: &ports.SpawnTransfer{NativeArchive: tc.archive, FallbackPrompt: "NOTE"},
+				Transfer: &ports.SpawnTransfer{NativeArchive: tc.archive, FallbackPrompt: "NOTE", SystemNote: "MOVE-WIP-NOTE"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -128,6 +128,15 @@ func TestSpawnTransferResumesOrFallsBackToTheNote(t *testing.T) {
 				}
 				if rec.Metadata.AgentSessionID != want {
 					t.Fatalf("recorded conversation = %q, want %s", rec.Metadata.AgentSessionID, want)
+				}
+				// The move's note reaches the resumed launch's system prompt, not a turn.
+				system := agent.lastRestore.SystemPrompt
+				if file := agent.lastRestore.SystemPromptFile; file != "" {
+					data, _ := os.ReadFile(file)
+					system += string(data)
+				}
+				if !strings.Contains(system, "MOVE-WIP-NOTE") || agent.lastRestore.Prompt != "" {
+					t.Fatalf("restore system prompt %q, prompt %q; want the note in the system prompt and no turn", system, agent.lastRestore.Prompt)
 				}
 				return
 			}

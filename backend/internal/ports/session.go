@@ -181,6 +181,10 @@ type SpawnTransfer struct {
 	// FallbackPrompt starts the agent on a new conversation when the moved
 	// one cannot be resumed here.
 	FallbackPrompt string
+	// SystemNote is added to the launch's system prompt: what the agent must
+	// know about the move, such as the WIP commit it made, without a turn
+	// being sent to the resumed conversation.
+	SystemNote string
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the

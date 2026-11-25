@@ -1958,6 +1958,11 @@ paths:
                       properties:
                         path: { type: string }
                         status: { type: string, enum: [added, modified, deleted] }
+                        untracked:
+                          type: boolean
+                          description: >-
+                            An added file git did not track in the sandbox, which
+                            the user may not expect the move to commit and push.
                   transcript:
                     type: object
                     description: >-
@@ -2014,6 +2019,12 @@ paths:
                       harness: { type: string }
                       model: { type: string }
                       displayName: { type: string }
+                      permissions:
+                        type: string
+                        enum: [default, accept-edits, auto, bypass-permissions]
+                        description: >-
+                          The session's approval mode, which the moved session
+                          keeps. Absent when the session has none of its own.
                   handoffNote: { type: string }
                   transcript:
                     type: object

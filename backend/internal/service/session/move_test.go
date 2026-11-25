@@ -624,7 +624,7 @@ func TestImportMoveReplayNeedsTheRecordedPlacement(t *testing.T) {
 
 type failingMoveNoter struct{}
 
-func (failingMoveNoter) MoveNote(context.Context, domain.SessionRecord, string, bool, int) (string, error) {
+func (failingMoveNoter) MoveNote(context.Context, domain.SessionRecord, string, string, int) (string, error) {
 	return "", errors.New("note failed")
 }
 
@@ -774,5 +774,89 @@ func TestExportMoveRecordsTheMoveBeforePushing(t *testing.T) {
 	}
 	if got := st.sessions["mer-2"].MoveStarted; got != "m-1" {
 		t.Fatalf("MoveStarted = %q, want m-1", got)
+	}
+}
+
+// A session moved back from AO Cloud keeps its name, which outranks the title
+// Claude Code gives its terminal, and its approval mode: Cloud's when its
+// manifest sends them, else those of the session that moved from here.
+func TestImportMoveKeepsTheNameAndApprovalMode(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	for _, tc := range []struct {
+		name            string
+		displayName     string
+		permissions     domain.PermissionMode
+		wantName        string
+		wantPermissions domain.PermissionMode
+	}{
+		{"from the session that moved", "", "", "Fix login", domain.PermissionModeBypassPermissions},
+		{"from Cloud's manifest", "Fix login (cloud)", domain.PermissionModeAcceptEdits, "Fix login (cloud)", domain.PermissionModeAcceptEdits},
+		{"an unknown mode is ignored", "", "yolo", "Fix login", domain.PermissionModeBypassPermissions},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			st.sessions["mer-1"] = domain.SessionRecord{
+				ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true, DisplayName: "Fix login",
+				MovedTo:  &domain.SessionMove{MoveID: "m-out", OrgID: "org-1", SessionID: "cloud-7"},
+				Metadata: domain.SessionMetadata{Permissions: domain.PermissionModeBypassPermissions},
+			}
+			var spawned ports.SpawnConfig
+			fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				spawned = cfg
+				return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+			}}
+			manifest := importManifest(tip)
+			manifest.SourceSessionID, manifest.DisplayName, manifest.Permissions = "cloud-7", tc.displayName, tc.permissions
+			if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+				ProjectID: "mer", MoveID: "m-back-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: manifest,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if spawned.DisplayName != tc.wantName || !spawned.DisplayNameExplicit || spawned.AgentConfig.Permissions != tc.wantPermissions {
+				t.Fatalf("spawned name %q (explicit %v), permissions %q; want %q, explicit, %q",
+					spawned.DisplayName, spawned.DisplayNameExplicit, spawned.AgentConfig.Permissions, tc.wantName, tc.wantPermissions)
+			}
+		})
+	}
+}
+
+// The agent is told the move made the WIP commit, by its sha and branch: in
+// the system prompt when it resumes the conversation, and in the note when it
+// starts from one.
+func TestImportMoveTellsTheAgentAboutTheWIPCommit(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	for _, withTranscript := range []bool{false, true} {
+		st := newFakeStore()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+		var spawned ports.SpawnConfig
+		fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+			spawned = cfg
+			return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+		}}
+		manifest := importManifest(tip)
+		manifest.WIP = true
+		in := MoveImportInput{ProjectID: "mer", MoveID: fmt.Sprintf("m-wip-%v", withTranscript), Manifest: manifest, HandoffNote: "NOTE"}
+		if withTranscript {
+			const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+			var gz bytes.Buffer
+			zw := gzip.NewWriter(&gz)
+			_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","sessionId":"` + id + `","message":{"role":"user","content":"hi"}}` + "\n"))
+			_ = zw.Close()
+			in.Transcript = &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
+		}
+		if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+		want := "as commit " + tip + " on branch feat/move. Orchestrator made that commit, not you or the user."
+		if withTranscript {
+			if spawned.Transfer == nil || !strings.Contains(spawned.Transfer.SystemNote, want) || !strings.Contains(spawned.Transfer.FallbackPrompt, want) {
+				t.Fatalf("transfer = %+v, want the WIP commit in its system note and fallback", spawned.Transfer)
+			}
+			continue
+		}
+		if !strings.HasPrefix(spawned.Prompt, "NOTE") || !strings.Contains(spawned.Prompt, want) {
+			t.Fatalf("prompt = %q, want the note and the WIP commit", spawned.Prompt)
+		}
 	}
 }

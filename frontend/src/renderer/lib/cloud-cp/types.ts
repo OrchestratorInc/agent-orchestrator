@@ -1506,7 +1506,8 @@ export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 /** GET /orgs/{orgId}/sessions/{sessionId}/move/preview: what move/export would push now. */
 export interface CloudCpMovePreviewResponse {
 	branch: string;
-	changes: { path: string; status: "added" | "modified" | "deleted" }[];
+	/** untracked marks a file git did not track in the sandbox; absent from a control plane that does not say. */
+	changes: { path: string; status: "added" | "modified" | "deleted"; untracked?: boolean }[];
 	/** The Claude Code conversation the move would carry; bytes count its sidecar folder too. */
 	transcript?: { bytes: number; subagents?: number };
 }
@@ -1523,6 +1524,8 @@ export interface CloudCpMoveExportResponse {
 		harness: string;
 		model?: string;
 		displayName?: string;
+		/** The session's approval mode; absent from a control plane that does not carry it. */
+		permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
 	};
 	handoffNote: string;
 	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */

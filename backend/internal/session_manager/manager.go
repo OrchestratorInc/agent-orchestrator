@@ -1434,6 +1434,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if cfg.Transfer != nil {
 		// The resumed conversation already holds the task; the prompt is a note about the move.
 		prompt = cfg.Prompt
+		if note := strings.TrimSpace(cfg.Transfer.SystemNote); note != "" && err == nil {
+			systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + note)
+		}
 	}
 	if err != nil {
 		m.cleanupArtifactDir(id)

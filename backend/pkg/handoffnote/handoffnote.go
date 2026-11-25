@@ -120,8 +120,9 @@ type Input struct {
 	// MovedWIP says the branch's top commit holds the work that was not
 	// committed on MovedFrom.
 	MovedWIP bool
-	// MovedWIPCommit is that commit's subject.
+	// MovedWIPCommit is that commit's subject, and MovedWIPSHA its id.
 	MovedWIPCommit string
+	MovedWIPSHA    string
 	// HomeDir is the user's home folder on MovedFrom. Paths under it are
 	// written as HomePlaceholder, so the note names no local user or folder.
 	HomeDir string
@@ -281,7 +282,12 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 		if subject == "" {
 			subject = "WIP: uncommitted changes"
 		}
-		fmt.Fprintf(&b, "\n## Code\nThe branch's top commit, %q, holds the work that was not committed on %s. Keep it, amend it, or squash it.\n", subject, in.MovedFrom)
+		if in.MovedWIPSHA != "" {
+			fmt.Fprintf(&b, "\n## Code\nThe move committed the work that was not committed on %s as commit %s, %q, on branch %s. Orchestrator made that commit, not you or the user. Keep it, amend it, or squash it.\n",
+				in.MovedFrom, in.MovedWIPSHA, subject, in.Branch)
+		} else {
+			fmt.Fprintf(&b, "\n## Code\nThe branch's top commit, %q, holds the work that was not committed on %s. Keep it, amend it, or squash it.\n", subject, in.MovedFrom)
+		}
 	}
 
 	if len(in.Artifacts) > 0 && in.MovedFrom != "" {

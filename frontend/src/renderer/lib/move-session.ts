@@ -85,6 +85,13 @@ export function cloudReasoningEffort(local: string | undefined): string | undefi
 	return CLOUD_EFFORTS.has(effort) ? effort : undefined;
 }
 
+const CLOUD_APPROVAL_MODES = new Set(["default", "accept-edits", "auto", "bypass-permissions"]);
+
+/** The session's approval mode as Cloud's createSession takes it, or undefined to leave Cloud's. */
+export function cloudApprovalMode(local: string | undefined): CloudSessionRequest["approvalMode"] {
+	return local && CLOUD_APPROVAL_MODES.has(local) ? (local as CloudSessionRequest["approvalMode"]) : undefined;
+}
+
 /** The body AO Cloud's createSession takes. */
 export type CloudSessionRequest = Parameters<CloudCpClient["createSession"]>[1];
 
@@ -287,6 +294,8 @@ export async function moveSession(
 	const m = exported.data.manifest;
 	const sameAgent = target.harness === cloudHarness(m.harness);
 	const effort = sameAgent ? cloudReasoningEffort(m.effort) : undefined;
+	// The approval mode is a session setting like review and CI: it moves with the session.
+	const approvalMode = sameAgent ? cloudApprovalMode(m.permissions) : undefined;
 	// Cloud resumes a conversation only in the agent that wrote it.
 	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, state.key ?? moveId, target.harness);
 	const request: CloudSessionRequest = state.current ?? {
@@ -298,6 +307,7 @@ export async function moveSession(
 		branch: m.branch,
 		...(sameAgent && m.model ? { model: m.model } : {}),
 		...(effort ? { reasoningEffort: effort } : {}),
+		...(approvalMode ? { approvalMode } : {}),
 		...(transcriptImportId ? { transcriptImportId } : {}),
 	};
 	state.current = request;

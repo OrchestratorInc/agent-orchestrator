@@ -241,6 +241,41 @@ describe("moveSession", () => {
 		expect(second[2]).toEqual({ idempotencyKey: "m-3" });
 	});
 
+	it("keeps the session's approval mode in Orchestrator Cloud", async () => {
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok({ ...exported, manifest: { ...exported.manifest, permissions: "bypass-permissions" } }),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		}, []);
+		const cp = cloud();
+		await moveSession({ sessionId: "app-1", moveId: "m-2", target }, { source, cloud: cp });
+		expect(cp.createSession.mock.calls[0][1]).toMatchObject({ approvalMode: "bypass-permissions" });
+		// Another agent's modes are its own, and an unknown one is left to Cloud.
+		const other = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok({ ...exported, manifest: { ...exported.manifest, permissions: "yolo" } }),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		}, []);
+		await moveSession({ sessionId: "app-1", moveId: "m-3", target }, { source: other, cloud: cp });
+		expect(cp.createSession.mock.calls[1][1]).not.toHaveProperty("approvalMode");
+	});
+
+	it("exports under the same move id on Try again after the export got no answer", async () => {
+		const calls: string[] = [];
+		const replies: Record<string, Reply> = {
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		};
+		const source = fakeDaemon(replies, calls);
+		const cp = cloud();
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-4", target }, { source, cloud: cp })).rejects.toMatchObject({ step: "export", followUp: "unknown" });
+		replies["/api/v1/sessions/{sessionId}/move/export"] = ok(exported);
+		await moveSession({ sessionId: "app-1", moveId: "m-4", target }, { source, cloud: cp });
+		const exports = (source.POST as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0] === "/api/v1/sessions/{sessionId}/move/export");
+		expect(exports.map((call) => (call[1] as { body: { moveId: string } }).body.moveId)).toEqual(["m-4", "m-4"]);
+		expect(cp.createSession.mock.calls[0][2]).toEqual({ idempotencyKey: "m-4" });
+	});
+
 	it("hands each Cloud request over before creating it, so a relaunch can finish the move", async () => {
 		const order: string[] = [];
 		const source = fakeDaemon({

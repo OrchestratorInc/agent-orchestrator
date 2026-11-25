@@ -188,15 +188,18 @@ func (s *Service) ForkHandoffNote(ctx context.Context, source domain.SessionReco
 // machine. It leaves out what only exists on movedFrom, writes paths under the
 // user's home folder with a placeholder, and keeps within maxBytes when the
 // destination sets a smaller prompt limit.
-func (s *Service) MoveNote(ctx context.Context, record domain.SessionRecord, movedFrom string, wip bool, maxBytes int) (string, error) {
+//
+// wipCommit is the commit the move made of the uncommitted work, or "" when
+// there was none; the note names it, so the agent does not take it for its own.
+func (s *Service) MoveNote(ctx context.Context, record domain.SessionRecord, movedFrom, wipCommit string, maxBytes int) (string, error) {
 	input, err := s.handoffNoteInput(ctx, record, record.Harness, "")
 	if err != nil {
 		return "", err
 	}
 	input.ChangedFiles = handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
-	input.MovedFrom, input.MovedWIP, input.MaxBytes = movedFrom, wip, maxBytes
-	if wip {
-		input.MovedWIPCommit = sessionmove.WIPCommitSubject
+	input.MovedFrom, input.MovedWIP, input.MaxBytes = movedFrom, wipCommit != "", maxBytes
+	if wipCommit != "" {
+		input.MovedWIPCommit, input.MovedWIPSHA = sessionmove.WIPCommitSubject, wipCommit
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		input.HomeDir = home

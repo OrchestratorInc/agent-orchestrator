@@ -8571,6 +8571,8 @@ export interface operations {
                             path: string;
                             /** @enum {string} */
                             status: "added" | "modified" | "deleted";
+                            /** @description An added file git did not track in the sandbox, which the user may not expect the move to commit and push. */
+                            untracked?: boolean;
                         }[];
                         /** @description The agent's conversation the move would carry: a Claude Code, Codex, OpenCode or Cursor conversation. Absent for another agent or when there is none. */
                         transcript?: {
@@ -8620,6 +8622,11 @@ export interface operations {
                             harness: string;
                             model?: string;
                             displayName?: string;
+                            /**
+                             * @description The session's approval mode, which the moved session keeps. Absent when the session has none of its own.
+                             * @enum {string}
+                             */
+                            permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
                         };
                         handoffNote: string;
                         /** @description The agent's conversation, checkpointed after the push, for the daemon to resume: a Claude Code, Codex, OpenCode or Cursor conversation, as that agent stores it (for OpenCode, its session export document). Absent for another agent or when none was captured. */

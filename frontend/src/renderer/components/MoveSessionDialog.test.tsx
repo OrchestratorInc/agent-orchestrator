@@ -569,6 +569,30 @@ describe("moving a Cloud session to this computer", () => {
 		await user.click(screen.getByRole("button", { name: "Open session" }));
 		expect(navigate).toHaveBeenCalledWith("app", "local-9");
 	});
+	it("marks Cloud's untracked files, which the move commits and pushes too", async () => {
+		cloud.previewSessionMove.mockResolvedValue({
+			branch: "feat/login",
+			changes: [{ path: "README.md", status: "modified" }, { path: "scratch/creds.json", status: "added", untracked: true }],
+			transcript: { bytes: 524288, subagents: 2 },
+		});
+		renderHere();
+		expect((await screen.findByText("scratch/creds.json", { exact: false })).closest("li")?.textContent).toBe("?? scratch/creds.json");
+		expect(screen.getByText("?? marks untracked files. They are committed and pushed too, so check them for secrets.")).toBeTruthy();
+	});
+
+	it("tries again after Cloud's export timed out, and moves", async () => {
+		cloud.exportSessionMove.mockRejectedValueOnce(new CloudCpError("The worker did not answer in time.", { status: 504, code: "WORKER_TIMEOUT" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("The worker did not answer in time.")).toBeTruthy();
+		expect(cloud.restartSessionAgent).toHaveBeenCalledTimes(1);
+		await user.click(screen.getByRole("button", { name: "Try again" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(cloud.exportSessionMove).toHaveBeenCalledTimes(2);
+		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/sessions/move/import")).toHaveLength(1);
+	});
+
 	it("keeps the Cloud session when its export leaves out the conversation the preview listed", async () => {
 		cloud.exportSessionMove.mockResolvedValue({
 			manifest: { sourceSessionId: "cloud-1", sourceLabel: "AO Cloud", repoKey: "github.com/acme/app", branch: "feat/login", tip, wip: true, harness: "claude-code" },
