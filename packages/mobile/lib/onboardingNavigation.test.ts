@@ -23,8 +23,8 @@ describe("completeOnboarding", () => {
 	// Onboarding has no skip: pairing or signing in are the ways on, and each completes it.
 	it("is used after pairing from onboarding", () => {
 		const pair = readFileSync(fileURLToPath(new URL("../app/pair.tsx", import.meta.url)), "utf8");
-		expect(pair).toContain("if (fromOnboarding) completeOnboarding(navigation);");
-		expect(pair).toContain("else backOr(router);");
+		// QR and manual pairing both finish here, and both complete the funnel.
+		expect(pair).toMatch(/if \(fromOnboarding\) \{[^}]*capture\(MOBILE_EVENTS\.onboardingCompleted\);\s*completeOnboarding\(navigation\);\s*\} else backOr\(router\);/);
 	});
 
 	it("is used after signing in from onboarding brings in a machine", () => {

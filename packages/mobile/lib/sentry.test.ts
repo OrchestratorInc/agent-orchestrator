@@ -276,3 +276,46 @@ it.each([
 	expect(event?.fingerprint?.at(-2)).toBe("sha256");
 	expect(JSON.stringify(event)).not.toMatch(privateText);
 });
+
+describe("mobile Sentry API context", () => {
+	async function apiEvent(operation: string, setup?: (sentry: typeof import("./sentry")) => void) {
+		const sentry = await import("./sentry");
+		setup?.(sentry);
+		sentry.setMobileSentryConsent(true);
+		await sentry.initMobileSentry();
+		sentry.captureMobileApiError(operation, "http_5xx", 500);
+		const [message, hint] = sdk.captureMessage.mock.calls.at(-1) ?? [];
+		return sentry.sanitizeMobileSentryEvent({ type: undefined, message, tags: hint?.tags });
+	}
+
+	it("names and groups an API failure by its route", async () => {
+		const sessions = await apiEvent("GET /api/v1/sessions");
+		expect(sessions).toMatchObject({ message: "Mobile API error in GET /api/v1/sessions", tags: { "ao.operation": "GET /api/v1/sessions" } });
+		const send = await apiEvent("POST /api/v1/sessions/:id/send");
+		expect(send?.fingerprint).not.toEqual(sessions?.fingerprint);
+	});
+
+	it("drops an operation that is not a route name", async () => {
+		const event = await apiEvent("GET /api/v1/projects/Acme Secret/sessions");
+		expect(event?.message).toBe("Mobile API error");
+		expect(event?.tags).not.toHaveProperty("ao.operation");
+		expect(JSON.stringify(event)).not.toMatch(/Acme|Secret/);
+	});
+
+	it("tags the OTA update as dist and the paired daemon's version", async () => {
+		const id = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+		const event = await apiEvent("GET /api/v1/sessions", (sentry) => {
+			sentry.setMobileSentryContext({ release: "2.4.0@12", updateId: id });
+			sentry.setMobileDaemonVersion("1.9.0");
+		});
+		expect(event).toMatchObject({ dist: id, tags: { "ao.update_id": id, "ao.daemon_version": "1.9.0" } });
+	});
+
+	it("forgets the daemon version when the phone unpairs", async () => {
+		const event = await apiEvent("GET /api/v1/sessions", (sentry) => {
+			sentry.setMobileDaemonVersion("1.9.0");
+			sentry.setMobileDaemonVersion(undefined);
+		});
+		expect(event?.tags).not.toHaveProperty("ao.daemon_version");
+	});
+});

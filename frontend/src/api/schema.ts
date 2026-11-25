@@ -9911,6 +9911,7 @@ export interface components {
         };
         TelemetryIdentityResponse: {
             cloudUserId?: string;
+            daemonVersion?: string;
             distinctId: string;
             githubLogin?: string;
             installId?: string;

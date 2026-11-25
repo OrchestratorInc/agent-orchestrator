@@ -103,8 +103,14 @@ The sender checks consent both before capture and immediately before network
 send, so an event still queued when opt-out arrives is discarded.
 
 Mobile Sentry sends application codes and applies the same normalized first-line display rule for JavaScript engine errors. Other uncoded errors contribute only a hash of the cleaned-up text. It also receives the error category, safe stack line numbers with generic
-frame names, release version and build number, and the production or preview
-environment. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
+frame names, release version and build number, the running OTA update ID
+(`embedded` for the bundle in the binary) as `dist` and `ao.update_id`, the
+paired daemon's version as `ao.daemon_version`, and the production or preview
+environment. A failed daemon request is named by its method and route as
+`ao.operation`, such as `POST /api/v1/sessions/:id/send`: only the app's fixed
+route words are kept, every other path segment becomes `:id`, and a workspace
+file path becomes `*`, so no session, project, branch or file name is sent.
+The request ID is not sent. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
 desktop installation ID only. It is absent before pairing, during repair, and
 after unpairing or a failed identity refresh. The phone retains its separate
 PostHog identity across those changes. A paired Sentry error can therefore be
@@ -266,7 +272,12 @@ Orchestrator.inc sends structured events in a few broad categories:
   while its desktop identity is known,
   and one-way hashes of project or session identifiers when an event needs them
 - Coarse mobile-app usage, such as pairing, reconnecting, completing onboarding,
-  opening a notification, or using a core action
+  opening a notification, or using a core action. Phone events also carry the
+  running OTA update as `update_id` (a UUID, or `embedded` for the bundle in the
+  binary) and `update_channel` (`production`, `preview`, `development`, or
+  `other`), and while a desktop is paired its daemon's version as
+  `paired_daemon_version`. `notification_opened` reports its `target` as
+  `session`, `review`, `prs`, or `cloud`
 - Coarse geographic location (country, and where available region and city),
   derived by PostHog from the connection's IP address when it receives each
   event. Orchestrator.inc does not resolve or send precise coordinates, and does not store
@@ -1664,7 +1675,7 @@ renamed event. Events not listed keep their names.
 | `ao.v2.mobile_app.paired` | `mobile.app.paired` |
 | `ao.v2.mobile_app.onboarding_started` | `mobile.app.onboarding_started` |
 | `ao.v2.mobile_app.onboarding_completed` | `mobile.app.onboarding_completed` |
-| `ao.v2.mobile_app.onboarding_skipped` | `mobile.app.onboarding_skipped` |
+| `ao.v2.mobile_app.onboarding_skipped` | `mobile.app.onboarding_skipped` (retired: onboarding has no skip, so it is not sent) |
 | `ao.v2.mobile_app.feature_used` | `mobile.app.feature_used` |
 | `ao.v2.mobile_app.notification_opened` | `mobile.app.notification_opened` |
 | `ao.usage.*` (`worker_pr_associated`, `worker_pr_merged`, `messages_sent`) | unchanged |

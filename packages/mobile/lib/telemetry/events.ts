@@ -21,9 +21,10 @@ export const MOBILE_EVENTS = {
 	// The stored config reconnected on launch (no user pairing action).
 	connected: "mobile.app.connected",
 
+	// Onboarding has no skip since the native rebuild (#7838): a start with no
+	// completion is the drop-off. mobile.app.onboarding_skipped is retired.
 	onboardingStarted: "mobile.app.onboarding_started",
 	onboardingCompleted: "mobile.app.onboarding_completed",
-	onboardingSkipped: "mobile.app.onboarding_skipped",
 
 	// A push notification opened the app. The retention signal.
 	notificationOpened: "mobile.app.notification_opened",
@@ -62,10 +63,10 @@ export const MOBILE_ALLOWLIST: Record<string, Readonly<Record<string, PropRule>>
 	},
 	[MOBILE_EVENTS.onboardingStarted]: {},
 	[MOBILE_EVENTS.onboardingCompleted]: {},
-	[MOBILE_EVENTS.onboardingSkipped]: {},
 	[MOBILE_EVENTS.notificationOpened]: {
-		// notificationView already maps a push to a small set of destinations.
-		target: { oneOf: ["session", "prs"] },
+		// notificationView maps a push to a small set of destinations; `cloud` is
+		// an Orchestrator Cloud notification, opened on its Cloud page.
+		target: { oneOf: ["session", "review", "prs", "cloud"] },
 		cold_start: { flag: true },
 	},
 	[MOBILE_EVENTS.featureUsed]: {

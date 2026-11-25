@@ -6,6 +6,9 @@ import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
 const SAFE_CATEGORIES = new Set(["native_crash", "render_crash", "http_5xx", "http_4xx", "offline", "timeout"]);
 const INSTALL_ID = /^ins_[0-9a-f-]{36}$/;
+// apiOperation()'s shape: a method and a route of fixed words, `:id` and `*`.
+const SAFE_OPERATION = /^(?:GET|POST|PUT|PATCH|DELETE|OTHER) \/[a-z0-9:/*-]{0,160}$/;
+const UPDATE_ID = /^(?:embedded|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 let initialized = false;
 let permitted = false;
@@ -41,7 +44,11 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 		? event.tags["ao.category"] : "other";
 	const severity = typeof event.tags?.["ao.severity"] === "string" && /^P[0-3]$/.test(event.tags["ao.severity"])
 		? event.tags["ao.severity"] : undefined;
-	const title = event.tags?.["ao.kind"] === "api" ? "Mobile API error" : "Mobile error";
+	const kindTitle = event.tags?.["ao.kind"] === "api" ? "Mobile API error" : "Mobile error";
+	const operation = typeof event.tags?.["ao.operation"] === "string" && SAFE_OPERATION.test(event.tags["ao.operation"])
+		? event.tags["ao.operation"] : undefined;
+	const title = operation ? `${kindTitle} in ${operation}` : kindTitle;
+	const updateId = observabilityContext.updateId && UPDATE_ID.test(observabilityContext.updateId) ? observabilityContext.updateId : undefined;
 	const exceptions = event.exception?.values ?? [];
 	const identity = sentryMessageIdentity(
 		exceptions.at(-1)?.value ?? (event.message === "Mobile API error" ? undefined : event.message),
@@ -76,17 +83,21 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 		level: event.level,
 		platform: "javascript",
 		release: observabilityContext.release,
+		// The OTA bundle under this release; one store build runs several.
+		...(updateId ? { dist: updateId } : {}),
 		environment: environment(observabilityContext.channel),
 		message: sentryIdentityTitle(identity, title),
 		exception: values?.length ? { values } : undefined,
 		tags: {
 			"ao.platform": "mobile",
 			"ao.category": category,
+			...(operation ? { "ao.operation": operation } : {}),
+			...(updateId ? { "ao.update_id": updateId } : {}),
 			...(identity.code ? { "ao.code": identity.code } : {}),
 			...(severity ? { "ao.severity": severity } : {}),
 			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
 		},
-		fingerprint: ["mobile", title, category, ...(primary ? [primary.type] : []),
+		fingerprint: ["mobile", kindTitle, category, ...(operation ? [operation] : []), ...(primary ? [primary.type] : []),
 			...(identity.code ? ["code", identity.code] : messageFingerprint)],
 		user: pairedInstallId ? { id: pairedInstallId } : undefined,
 	};
@@ -94,14 +105,15 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 	return clean;
 }
 
-export type MobileObservabilityContext = { release?: string; channel?: string };
+export type MobileObservabilityContext = { release?: string; channel?: string; updateId?: string };
 
 export function setMobileSentryContext(context: MobileObservabilityContext): void {
 	observabilityContext = context;
 	if (permitted) void initMobileSentry();
 }
 
-export function setMobileDaemonVersion(version: string): void {
+/** The paired daemon's release, tagged on every event; undefined while unpaired. */
+export function setMobileDaemonVersion(version: string | undefined): void {
 	daemonVersion = version;
 }
 
@@ -203,13 +215,14 @@ export function captureMobileException(error: unknown, meta: CaptureMeta = {}): 
 	});
 }
 
-export function captureMobileApiError(_path: string, category: string, status?: number, code?: string, _requestId?: string, message?: string): void {
+/** `operation` is apiOperation()'s route name; anything else is dropped at send. */
+export function captureMobileApiError(operation: string, category: string, status?: number, code?: string, message?: string): void {
 	if (!initialized || !permitted) return;
 	const triage = classifyError({ category, httpStatus: status, code });
 	if (!triage.report) return;
 	sentry?.captureMessage(typeof message === "string" && message.length <= 4096 && message ? message : "Mobile API error", {
 		level: triage.level,
-		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.kind": "api", ...(safeSentryCode(code) ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.kind": "api", "ao.operation": operation, ...(safeSentryCode(code) ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
 	});
 }
 

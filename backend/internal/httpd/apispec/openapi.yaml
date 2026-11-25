@@ -27937,6 +27937,8 @@ components:
       properties:
         cloudUserId:
           type: string
+        daemonVersion:
+          type: string
         distinctId:
           type: string
         githubLogin:
