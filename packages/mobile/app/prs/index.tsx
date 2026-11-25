@@ -82,7 +82,8 @@ function PRList() {
 	const [refreshToken, setRefreshToken] = useState(0);
 	// Each machine that pages its archive is read for the PRs of sessions that
 	// have ended: merged ones once Merged or All is open, closed ones once All
-	// is. A machine with an empty archive has none to read.
+	// is. Both are counted from the start, so every filter's number is right
+	// before it is opened. A machine with an empty archive has none to read.
 	const archivedSources = useMemo<ArchivedPRSource[]>(() => visibleHosts.flatMap((host) => {
 		if (isCloudHost(host.hostId) || !host.archive) return [];
 		const projectId = projectFilter === "all" ? undefined : projectFilter;
@@ -126,8 +127,9 @@ function PRList() {
 	// than presenting a flat stream in daemon order.
 	const filtered = useMemo(() => prs.filter(({ pr }) => prInFilter(filter, prLifecycle(pr))), [prs, filter]);
 	const sections = useMemo(() => prListSections(prs, filter), [prs, filter]);
-	// Archived sessions still loading each hold a PR in the state they were
-	// asked for, so the counts do not climb page by page.
+	// Archived sessions not loaded yet (counted, or still loading) each hold a PR
+	// in their state, so the counts neither jump on a first open nor climb page
+	// by page.
 	const { merged: unloadedMerged, closed: unloadedClosed } = archived.unloaded;
 	const counts = useMemo(() => {
 		const loaded = prFilterCounts(prs);

@@ -8,9 +8,10 @@ import { useApp } from "./store";
 // The poll fetches live workers only, so a pull request merged or closed by a
 // session that has since ended is in no row the PR list reads. A machine whose
 // daemon pages its archive is asked for those sessions separately, all of
-// them: merged ones while Merged or All is open, closed ones while All is. A
-// machine that still sends its archive with the poll needs none of this: its
-// ended sessions are already rows.
+// them: merged ones while Merged or All is open, closed ones while All is.
+// Until then each is counted with a one-row page, so the filter counts do not
+// jump when Merged or All is first opened. A machine that still sends its
+// archive with the poll needs none of this: its ended sessions are already rows.
 
 /** One machine's archive, optionally narrowed to a project, read for its PRs. */
 export type ArchivedPRSource = {
@@ -35,9 +36,32 @@ type Stream = {
 	complete: boolean;
 	/** The daemon's version of the list the rows came from, when complete. */
 	version: string | null;
+	/** When the read that set `total` started (see `ProbedTotal.at`); null until a page lands. */
+	countedAt: number | null;
 };
 
-const EMPTY_STREAM: Stream = { rows: [], total: 0, loading: false, supported: true, error: null, complete: false, version: null };
+const EMPTY_STREAM: Stream = { rows: [], total: 0, loading: false, supported: true, error: null, complete: false, version: null, countedAt: null };
+
+/**
+ * A list's size read from a one-row page, before or without reading the list:
+ * the filter counts are right from the first frame instead of jumping when
+ * Merged or All is first opened. `at` orders it against the full reads.
+ */
+export type ProbedTotal = { total: number; at: number };
+
+/** Every state an ended session's PRs are counted in, whichever filter is open. */
+const COUNTED_STATES: readonly ArchivedPRState[] = ["merged", "closed"];
+
+/**
+ * A stream as the counts read it: its total is the newest answer, its own or a
+ * probe's. A full read that has not landed a page yet keeps the probed total,
+ * so the count does not dip while the first page loads.
+ */
+export function countedStream(stream: Stream | undefined, probe: ProbedTotal | undefined): Pick<Stream, "rows" | "total" | "supported"> {
+	const held = stream ?? EMPTY_STREAM;
+	if (!probe || (held.countedAt !== null && held.countedAt > probe.at)) return held;
+	return { rows: held.rows, total: probe.total, supported: true };
+}
 
 /** Reads of a list that keeps moving under the cursor stop after this many tries. */
 const MAX_READ_ATTEMPTS = 3;
@@ -153,15 +177,23 @@ export function mergeArchivedRows(lists: readonly (readonly HostedSession[])[]):
  * `refreshToken` changes; a first read shows its pages as they land, a re-read
  * keeps the rows on screen until it has them all. A state no longer asked for
  * keeps what it read, so going back to its filter shows it at once.
+ *
+ * Every state not being read is counted with a one-row page instead, on mount
+ * and again when the archive's size moves or `refreshToken` changes, so
+ * `unloaded` holds every filter's archived PRs before any is opened.
  */
 export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { states: readonly ArchivedPRState[]; refreshToken: number }) {
 	const { configForHost } = useApp();
 	const [streams, setStreams] = useState<Record<string, Stream>>({});
 	const streamsRef = useRef(streams);
 	streamsRef.current = streams;
+	const [probes, setProbes] = useState<Record<string, ProbedTotal>>({});
 	const sourcesRef = useRef(sources);
 	sourcesRef.current = sources;
 	const runs = useRef(new Map<string, { controller: AbortController; archived: number; refreshToken: number; inFlight: boolean; offline: boolean }>());
+	const probeRuns = useRef(new Map<string, { controller: AbortController; archived: number; refreshToken: number }>());
+	// Orders every read and probe by when it started: the newest answer counts.
+	const sequence = useRef(0);
 	// Bumped when a read settles, so a count that moved while it ran is checked then.
 	const [settled, setSettled] = useState(0);
 
@@ -176,6 +208,7 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 			getArchivedPRSessions(config, { prState: state, cursor, projectId: source.projectId }, { signal: controller.signal });
 		const held = streamsRef.current[key] ?? EMPTY_STREAM;
 		const firstRead = held.rows.length === 0;
+		const started = ++sequence.current;
 		try {
 			// A moved archive count is checked against the first page before
 			// anything is shown as loading; most ended workers change nothing here.
@@ -201,25 +234,25 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 						versions.add(page.version);
 						if (progressive) {
 							const shown = [...rows];
-							update(key, (stream) => ({ ...stream, rows: shown, total: page.total }));
+							update(key, (stream) => ({ ...stream, rows: shown, total: page.total, countedAt: started }));
 						}
 					},
 					controller.signal,
 				);
 				if (outcome === "aborted") return;
 				if (outcome === "unsupported") {
-					update(key, () => ({ ...EMPTY_STREAM, supported: false }));
+					update(key, () => ({ ...EMPTY_STREAM, supported: false, countedAt: started }));
 					return;
 				}
 				if (readIsConsistent(rows.length, total, versions)) {
 					const [version] = versions;
-					update(key, () => ({ rows, total, loading: false, supported: true, error: null, complete: true, version: version ?? null }));
+					update(key, () => ({ rows, total, loading: false, supported: true, error: null, complete: true, version: version ?? null, countedAt: started }));
 					return;
 				}
 				if (attempt >= MAX_READ_ATTEMPTS) {
 					// The list kept moving under the cursor: show what was read, count
 					// only that, and let the next change or refresh read it again.
-					update(key, () => ({ rows, total: rows.length, loading: false, supported: true, error: null, complete: false, version: null }));
+					update(key, () => ({ rows, total: rows.length, loading: false, supported: true, error: null, complete: false, version: null, countedAt: started }));
 					return;
 				}
 			}
@@ -229,11 +262,28 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 			// total shrinks to it, so the counts claim no PR the list cannot show,
 			// and the stream is no longer complete, so the next check reads it all.
 			update(key, (stream) => ({
-				...stream, total: stream.rows.length, loading: false, complete: false, version: null,
+				...stream, total: stream.rows.length, loading: false, complete: false, version: null, countedAt: started,
 				error: userFacingError(cause, "Couldn't load past pull requests."),
 			}));
 		}
 	}, [configForHost, update]);
+
+	// One row is enough: every page carries the list's whole total. False when
+	// it failed, so the next change tries again.
+	const probe = useCallback(async (source: ArchivedPRSource, state: ArchivedPRState, key: string, controller: AbortController) => {
+		const config = configForHost(source.hostId);
+		if (!config) return false;
+		const started = ++sequence.current;
+		try {
+			const page = await getArchivedPRSessions(config, { prState: state, projectId: source.projectId, limit: 1 }, { signal: controller.signal });
+			if (controller.signal.aborted) return true;
+			// A daemon without the filter counts nothing; its full read says so too.
+			if (page) setProbes((current) => ({ ...current, [key]: { total: page.total, at: started } }));
+			return true;
+		} catch {
+			return controller.signal.aborted;
+		}
+	}, [configForHost]);
 
 	// Whether each machine can be reached is part of the plan: its config appears
 	// without the lookup itself changing, and a source skipped while its machine
@@ -243,15 +293,19 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 	useEffect(() => {
 		const current = new Set(sourcesRef.current.map(sourceKey));
 		const stillShown = (key: string) => current.has(key.slice(0, key.lastIndexOf("\n")));
-		for (const [key, run] of runs.current) {
-			if (stillShown(key)) continue;
-			run.controller.abort();
-			runs.current.delete(key);
+		for (const started of [runs.current, probeRuns.current]) {
+			for (const [key, run] of started) {
+				if (stillShown(key)) continue;
+				run.controller.abort();
+				started.delete(key);
+			}
 		}
-		setStreams((existing) => {
+		const keepShown = <T,>(existing: Record<string, T>) => {
 			const kept = Object.entries(existing).filter(([key]) => stillShown(key));
 			return kept.length === Object.keys(existing).length ? existing : Object.fromEntries(kept);
-		});
+		};
+		setStreams(keepShown);
+		setProbes(keepShown);
 		const start = (source: ArchivedPRSource, state: ArchivedPRState, key: string, mode: ReadMode) => {
 			const controller = new AbortController();
 			const run = { controller, archived: source.archived, refreshToken: options.refreshToken, inFlight: true, offline: false };
@@ -297,11 +351,32 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 				start(source, state, key, "check");
 			}
 		}
+		// Every state not being read is counted instead, unless a read or a count
+		// already answered for this archive size and refresh. A failed count is
+		// forgotten, so the next change (the machine coming back) tries again.
+		const answered = (run: { archived: number; refreshToken: number } | undefined, source: ArchivedPRSource) =>
+			run !== undefined && run.archived === source.archived && run.refreshToken === options.refreshToken;
+		for (const state of COUNTED_STATES) {
+			if (options.states.includes(state)) continue;
+			for (const source of sourcesRef.current) {
+				if (!configForHost(source.hostId)) continue;
+				const key = streamKey(source, state);
+				if (answered(runs.current.get(key), source) || answered(probeRuns.current.get(key), source)) continue;
+				probeRuns.current.get(key)?.controller.abort();
+				const run = { controller: new AbortController(), archived: source.archived, refreshToken: options.refreshToken };
+				probeRuns.current.set(key, run);
+				void probe(source, state, key, run.controller).then((ok) => {
+					if (!ok && probeRuns.current.get(key) === run) probeRuns.current.delete(key);
+				});
+			}
+		}
 		// `wanted` stands for `options.states`.
-	}, [plan, wanted, options.refreshToken, read, configForHost, settled]);
+	}, [plan, wanted, options.refreshToken, read, probe, configForHost, settled]);
 	useEffect(() => () => {
-		for (const run of runs.current.values()) run.controller.abort();
-		runs.current.clear();
+		for (const started of [runs.current, probeRuns.current]) {
+			for (const run of started.values()) run.controller.abort();
+			started.clear();
+		}
 	}, []);
 
 	// Keyed on the plan, not the array: a host sync rebuilds `sources` with the
@@ -316,10 +391,17 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 		() => mergeArchivedRows([...shown.merged, ...shown.closed].map((stream) => stream.rows)),
 		[shown],
 	);
+	const unloaded = useMemo(() => {
+		const byState = (state: ArchivedPRState) => unloadedArchivedSessions(sourcesRef.current.map((source) => {
+			const key = streamKey(source, state);
+			return countedStream(streams[key], probes[key]);
+		}));
+		return { merged: byState("merged"), closed: byState("closed") };
+	}, [plan, streams, probes]);
 	const all = [...shown.merged, ...shown.closed];
 	return {
 		sessions,
-		unloaded: { merged: unloadedArchivedSessions(shown.merged), closed: unloadedArchivedSessions(shown.closed) },
+		unloaded,
 		loading: { merged: shown.merged.some((stream) => stream.loading), closed: shown.closed.some((stream) => stream.loading) },
 		error: all.find((stream) => stream.error)?.error ?? null,
 	};

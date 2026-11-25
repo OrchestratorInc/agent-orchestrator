@@ -199,6 +199,11 @@ describe("mobile Chat API boundaries", () => {
 		expect(page?.sessions.map((s) => s.id)).toEqual(["w-2"]);
 		expect(page?.sessions[0]?.prs?.[0]).toMatchObject({ number: 7, state: "merged" });
 
+		// A one-row page still carries the whole list's total: the filter counts read it.
+		vi.mocked(fetch).mockResolvedValueOnce(response({ prState: "closed", total: 42, nextCursor: "after-w-8", version: "9f3a", sessions: [] }));
+		expect(await getArchivedPRSessions(cfg, { prState: "closed", limit: 1 })).toMatchObject({ total: 42 });
+		expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://ao.test:3011/api/v1/sessions?active=false&kind=worker&prState=closed&limit=1");
+
 		// A page without a version reads as null: nothing can be proven unchanged.
 		vi.mocked(fetch).mockResolvedValueOnce(response({ prState: "merged", total: 0, sessions: [] }));
 		expect((await getArchivedPRSessions(cfg, { prState: "merged" }))?.version).toBeNull();

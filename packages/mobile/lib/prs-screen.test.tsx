@@ -11,6 +11,8 @@ const fixture = vi.hoisted(() => ({
 	summaries: new Map<string, SessionPRSummary>(),
 	reload: vi.fn(), refreshAll: vi.fn(async () => {}), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
 	getArchivedPRSessions: vi.fn(),
+	// One-row pages read for a list's total only; they count nothing unless a test says so.
+	countArchivedPRs: vi.fn(),
 	theme: new Proxy({}, { get: () => "#888888" }),
 	router: { push: vi.fn(), navigate: vi.fn(), back: vi.fn(), canGoBack: () => true, replace: vi.fn() },
 }));
@@ -46,7 +48,11 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {} }));
 vi.mock("expo-secure-store", () => ({}));
 vi.mock("./installId", () => ({}));
 vi.mock("./sentry", () => ({}));
-vi.mock("./api", async (importOriginal) => ({ ...(await importOriginal<typeof import("./api")>()), getArchivedPRSessions: fixture.getArchivedPRSessions }));
+vi.mock("./api", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./api")>()),
+	getArchivedPRSessions: (config: unknown, options: { limit?: number }, init: unknown) =>
+		(options?.limit === 1 ? fixture.countArchivedPRs : fixture.getArchivedPRSessions)(config, options, init),
+}));
 vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all" }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: object) => object) => factory(fixture.theme) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
@@ -97,6 +103,8 @@ beforeEach(() => {
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
 	fixture.reload.mockClear(); fixture.refreshAll.mockReset(); fixture.refreshAll.mockImplementation(async () => {}); fixture.focus = undefined; fixture.summaryTargets = [];
 	fixture.getArchivedPRSessions.mockReset();
+	fixture.countArchivedPRs.mockReset();
+	fixture.countArchivedPRs.mockResolvedValue(null);
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -335,6 +343,33 @@ it("adds the closed PRs of ended sessions under All", async () => {
 	expect(sections.map((section) => section.key)).toEqual(["review", "merged", "closed"]);
 	expect(sections.at(-1)?.data.map((item) => item.session.id)).toEqual(["gave-up"]);
 	expect(header().props.counts).toMatchObject({ open: 2, merged: 1, all: 4 });
+});
+
+// Merged and All counted only live workers until their filter was first
+// opened, then jumped to include the archive (Merged 19 became Merged 153).
+it("counts ended sessions' merged and closed PRs before any filter opens", async () => {
+	fixture.hostStates = fixture.hostStates.map((host, index) => index === 0 ? { ...host, archive: { total: 140, byProject: {} } } : host);
+	fixture.allSessions = [session("mac"), { ...session("windows"), pr: { number: 8, url: "https://github.com/ao/test/pull/8", state: "merged" } }];
+	fixture.countArchivedPRs.mockImplementation(async (_config: unknown, options: { prState: string }) =>
+		({ sessions: [], nextCursor: null, version: "v1", total: options.prState === "merged" ? 134 : 2 }));
+	let release!: (page: PRStatePage) => void;
+	fixture.getArchivedPRSessions.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+	await act(async () => { renderer = create(<PRsScreen />); });
+	const control = () => (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as { props: { children: { type: unknown; props: Record<string, unknown> }[] } })
+		.props.children.find((child) => child?.type === "PRFilterControl")!;
+
+	// Only the machine with an archive is counted, and no list is read yet.
+	expect(fixture.countArchivedPRs.mock.calls.map((call) => (call[1] as { prState: string }).prState).sort()).toEqual(["closed", "merged"]);
+	expect(fixture.getArchivedPRSessions).not.toHaveBeenCalled();
+	expect(control().props.filter).toBe("open");
+	expect(control().props.counts).toEqual({ open: 1, merged: 135, all: 138 });
+
+	// Opening Merged starts its read; the counts hold while it loads and after.
+	await act(async () => (control().props.onChange as (filter: string) => void)("merged"));
+	expect(control().props.counts).toEqual({ open: 1, merged: 135, all: 138 });
+	const ended = (n: number): HostedSession => ({ ...session("mac"), id: `ended-${n}`, isTerminated: true, pr: undefined, prs: [{ number: n, url: `https://github.com/ao/test/pull/${n}`, state: "merged" }] });
+	await act(async () => release({ sessions: Array.from({ length: 134 }, (_, i) => ended(100 + i)), nextCursor: null, total: 134, version: "v1" }));
+	expect(control().props.counts).toEqual({ open: 1, merged: 135, all: 138 });
 });
 
 // With viewable-item reporting on, React Native runs the key extractor on
