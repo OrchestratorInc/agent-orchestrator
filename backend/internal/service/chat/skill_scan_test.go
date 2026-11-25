@@ -125,3 +125,26 @@ func TestScanSkillsLeavesProjectPluginsOutOfOtherChats(t *testing.T) {
 		t.Fatalf("with no project: %v", names)
 	}
 }
+
+func TestScanSkillsLabelsASkillFromItsOwnFolder(t *testing.T) {
+	workspace, home := t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	writeFile(t, filepath.Join(workspace, ".claude", "skills", "review", "SKILL.md"), "---\ndescription: Claude review\n---\n")
+	// A same-named skill Claude does not load must not lend it a label.
+	writeSkillMetadata(t, filepath.Join(workspace, ".agents", "skills"), "review",
+		"interface:\n  display_name: \"Other Review\"\n  short_description: \"Not this one\"\n")
+	writeFile(t, filepath.Join(workspace, ".claude", "skills", "ship", "SKILL.md"), "---\ndescription: Ship\n---\n")
+	writeSkillMetadata(t, filepath.Join(workspace, ".claude", "skills"), "ship",
+		"interface:\n  display_name: \"Ship It\"\n  short_description: \"Open the PR\"\n")
+
+	got := ScanSkills("claude-code", workspace, home)
+	if len(got) != 2 {
+		t.Fatalf("skills = %+v", got)
+	}
+	if got[0].Name != "review" || got[0].DisplayName != "review" || got[0].Description != "Claude review" {
+		t.Errorf("review borrowed another folder's metadata: %+v", got[0])
+	}
+	if got[1].DisplayName != "Ship It" || got[1].Description != "Open the PR" {
+		t.Errorf("ship lost its own metadata: %+v", got[1])
+	}
+}

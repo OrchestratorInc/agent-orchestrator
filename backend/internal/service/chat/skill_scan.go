@@ -59,8 +59,7 @@ func ScanSkills(agentID, workspace, home string) []ports.ChatSkill {
 	default:
 		return nil
 	}
-	skills := scanSkillRoots(roots)
-	return withSkillMetadata(skills, skillRoots(workspace, home))
+	return scanSkillRoots(roots)
 }
 
 func claudeConfigDir(home string) string {
@@ -219,7 +218,7 @@ func scanSkillRoots(roots []skillRoot) []ports.ChatSkill {
 			continue
 		}
 		for _, entry := range entries {
-			var file, folder string
+			var file, folder, dir string
 			if root.commands {
 				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 					continue
@@ -230,7 +229,7 @@ func scanSkillRoots(roots []skillRoot) []ports.ChatSkill {
 				if strings.HasPrefix(entry.Name(), ".") {
 					continue
 				}
-				dir := filepath.Join(root.dir, entry.Name())
+				dir = filepath.Join(root.dir, entry.Name())
 				if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 					continue
 				}
@@ -249,13 +248,26 @@ func scanSkillRoots(roots []skillRoot) []ports.ChatSkill {
 				continue
 			}
 			seen[name] = true
-			skills = append(skills, ports.ChatSkill{
+			skill := ports.ChatSkill{
 				Name:        name,
 				DisplayName: name,
 				Description: strings.TrimSpace(meta.Description),
 				InputHint:   strings.TrimSpace(meta.ArgumentHint),
 				Source:      root.source,
-			})
+			}
+			// The label comes from the folder that supplied the skill, never from a
+			// same-named skill in another root; with none, the scanned values stay.
+			if dir != "" {
+				if display, found := readSkillMetadataFile(filepath.Join(dir, "agents", "openai.yaml")); found {
+					if label := strings.TrimSpace(display.Interface.DisplayName); label != "" {
+						skill.DisplayName = label
+					}
+					if summary := strings.TrimSpace(display.Interface.ShortDescription); summary != "" {
+						skill.Description = summary
+					}
+				}
+			}
+			skills = append(skills, skill)
 		}
 	}
 	return skills
