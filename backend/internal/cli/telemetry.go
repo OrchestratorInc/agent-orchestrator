@@ -201,7 +201,7 @@ func writeTelemetryLog(w io.Writer, events []telemetryLogEvent) error {
 func newTelemetrySwitchCommand(ctx *commandContext, use string, optOut bool) *cobra.Command {
 	short := "Turn off Share usage analytics (desktop, daemon and paired phone)"
 	if !optOut {
-		short = "Turn Share usage analytics back on"
+		short = "Turn Share usage analytics back on (a phone's own opt-out still applies)"
 	}
 	return &cobra.Command{
 		Use:   use,
