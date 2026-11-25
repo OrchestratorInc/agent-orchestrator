@@ -23,6 +23,7 @@ import { createMobileTelemetry, type MobileTelemetry } from "./telemetry";
 import { launchKind, launchProperties, LAUNCH_TIMEOUT_MS, type LaunchOutcome, type StartupMarks } from "./launchTiming";
 import { createUiUsageTracker, type PersistedUiUsage, type UiUsageTracker } from "./uiUsage";
 import { setUiUsageTracker } from "./uiUsageRegistry";
+import { createUserOptOut } from "./userOptOut";
 
 // The one file that touches the SDK and the native runtime. Everything else in
 // telemetry/ is pure and unit-tested; this wires the real PostHog client and is
@@ -167,6 +168,14 @@ const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
 const USER_OPT_OUT_STORAGE_KEY = "ao.telemetry.userOptedOut";
 const PHONE_IDENTITY_MIGRATION_KEY = "ao.telemetry.phoneIdentity.v2";
 
+// Orders Settings changes to the phone's switch against each other and against
+// the startup restore (see userOptOut.ts).
+const userOptOut = createUserOptOut({
+	apply: (optedOut) => telemetry?.setUserOptedOut(optedOut),
+	save: () => AsyncStorage.setItem(USER_OPT_OUT_STORAGE_KEY, "1"),
+	clear: () => AsyncStorage.removeItem(USER_OPT_OUT_STORAGE_KEY),
+});
+
 /** Restores the persisted opt-out and releases capture. Awaited before the first heartbeat. */
 export async function loadMobileOptOut(): Promise<void> {
 	if (telemetry) {
@@ -188,12 +197,15 @@ export async function loadMobileOptOut(): Promise<void> {
 	// desktop marker stays opted in rather than guess, as before; an unreadable
 	// phone switch fails closed for this launch, since the person may have
 	// turned it off and nothing else can confirm otherwise.
+	const startedAt = userOptOut.generation();
 	const [desktopRead, userRead] = await Promise.allSettled([AsyncStorage.getItem(OPT_OUT_STORAGE_KEY), AsyncStorage.getItem(USER_OPT_OUT_STORAGE_KEY)]);
 	const stored = desktopRead.status === "fulfilled" && desktopRead.value === "1";
 	const user = userRead.status !== "fulfilled" || userRead.value === "1";
 	// Both applied in one synchronous step, so capture is released only once
-	// the phone's own switch is known too.
-	telemetry?.setUserOptedOut(user);
+	// the phone's own switch is known too. A Settings change made while these
+	// reads ran is newer than what they returned, so it wins; until that change
+	// lands, capture stays held.
+	userOptOut.restore(user, startedAt);
 	telemetry?.restoreOptOut(stored);
 	// After the preference, so an opted-out phone never sends a saved window.
 	await restoreUiUsage();
@@ -214,17 +226,11 @@ export async function loadUserMobileOptOut(): Promise<boolean> {
  * paired desktop, stops PostHog and Sentry on the phone at once, and is saved
  * so it holds across launches.
  */
-export async function setUserMobileOptOut(optedOut: boolean): Promise<void> {
+export function setUserMobileOptOut(optedOut: boolean): Promise<void> {
 	// Opting out stops capture before saving; opting back in clears the saved
 	// opt-out first, so a failed write never leaves capture on behind a switch
-	// that shows off.
-	if (optedOut) {
-		telemetry?.setUserOptedOut(true);
-		await AsyncStorage.setItem(USER_OPT_OUT_STORAGE_KEY, "1");
-		return;
-	}
-	await AsyncStorage.removeItem(USER_OPT_OUT_STORAGE_KEY);
-	telemetry?.setUserOptedOut(false);
+	// that shows off, and a later change supersedes an opt-in still saving.
+	return userOptOut.set(optedOut);
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
