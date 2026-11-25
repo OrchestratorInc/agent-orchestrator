@@ -1511,6 +1511,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report device support: opt-in, platform availability, simulators and emulators, and leases */
+        get: operations["getDeviceStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn devices on or off for every client; the desktop app sends its Developer mode, and devices start off on every daemon boot */
+        put: operations["setDeviceAvailability"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn device support on: install the pinned device tools and start the device hub */
+        post: operations["setupDevices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/endpoints": {
         parameters: {
             query?: never;
@@ -2570,6 +2621,41 @@ export interface paths {
         put?: never;
         /** Exchange a one-time pairing code, or the pairing password, for this device's own token */
         post: operations["pairRemoteHostDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-host/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report this host's version and the state of its last self-hosted update */
+        get: operations["getRemoteHostUpdate"];
+        put?: never;
+        /** Install the newest release of this self-hosted host's channel and restart it */
+        post: operations["startRemoteHostUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-host/update/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask a host that runs the desktop app which version it installs next */
+        post: operations["checkRemoteHostUpdate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3846,6 +3932,159 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the device a session holds */
+        get: operations["getSessionDevice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/button": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Press a hardware button on the session's device through the provider, where the stream socket cannot */
+        post: operations["pressSessionDeviceButton"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release the session's device, optionally shutting it down */
+        post: operations["closeSessionDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/hub/*": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Proxy the leased device's stream, input socket and screenshots from the device hub */
+        get: operations["getSessionDeviceHub"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Install a built app on the session's device */
+        post: operations["installSessionDeviceApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Launch an installed app on the session's device */
+        post: operations["launchSessionDeviceApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pick, boot and lease a simulator or emulator to a session */
+        post: operations["openSessionDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/quality": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set how much the session's device stream costs the link: high, balanced or low (resets when the lease ends) */
+        post: operations["setSessionDeviceQuality"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/device/screenshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capture the session's device screen as a PNG */
+        get: operations["getSessionDeviceScreenshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/exit-agent": {
         parameters: {
             query?: never;
@@ -4914,6 +5153,23 @@ export interface paths {
         patch: operations["updateChatHibernation"];
         trace?: never;
     };
+    "/api/v1/settings/commit-attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether new sessions credit Orchestrator on their commits and PRs (beta) */
+        patch: operations["updateCommitAttribution"];
+        trace?: never;
+    };
     "/api/v1/settings/computer-use": {
         parameters: {
             query?: never;
@@ -5795,6 +6051,10 @@ export interface components {
             bytes: number;
             uploadId: string;
         };
+        AttributionConfig: {
+            disableCommitTrailer?: boolean;
+            disablePRFooter?: boolean;
+        };
         AutoSpawnPause: {
             effort?: string;
             errorCode: string;
@@ -5990,8 +6250,14 @@ export interface components {
              * @enum {string}
              */
             availability: "ready" | "unavailable";
+            /** @description True when the task's command writes a log that output leaves out because it can't be shown as this run's: a later run writes the same file, the file was written after the run ended, or the run's final log isn't kept yet and no earlier read of it was saved. Output then holds only what the task printed itself. */
+            logOmitted?: boolean;
+            /** @description True when the task's command writes its output to a log file outside the session's workspace, which is not read. */
+            logOutsideWorkspace?: boolean;
             /** @description The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed. */
             output: string;
+            /** @description The run this output belongs to, when the provider gives runs their own ID. Output for another run of a reused task ID is not the requested run's. */
+            runId?: string;
             sessionId: string;
             /** @description True when the provider stopped sending this task's output, so anything it printed since is missing. */
             stale?: boolean;
@@ -6207,6 +6473,10 @@ export interface components {
             name?: null | string;
             projectId?: null | string;
             remoteUrl: string;
+        };
+        CloseSessionDeviceRequest: {
+            /** @description Also power the simulator or emulator off. */
+            shutdown?: boolean;
         };
         CodewhaleLifecycleEvent: {
             /** Format: date-time */
@@ -6683,6 +6953,12 @@ export interface components {
             hostId: string;
             hostKey: string;
             token: string;
+        };
+        ControllersRemoteHostUpdateCheckResponse: {
+            version: string;
+        };
+        ControllersRemoteHostUpdateRequest: {
+            version?: string;
         };
         ControllersReplaceAgentAccountAPIKeyRequest: {
             apiKey: string;
@@ -7344,6 +7620,54 @@ export interface components {
         DevImportProjectsResponse: {
             report: components["schemas"]["DevImportProjectsReport"];
         };
+        DeviceAgentControl: {
+            args: string[];
+            command: string;
+        };
+        DeviceAvailabilityRequest: {
+            enabled: null | boolean;
+        };
+        DeviceAvailabilityResponse: {
+            enabled: boolean;
+        };
+        DeviceLease: {
+            agentDevice: components["schemas"]["DeviceAgentControl"];
+            device: components["schemas"]["DeviceSummary"];
+            /** Format: date-time */
+            openedAt: string;
+            /** @description Provider serving the device, e.g. local. */
+            provider: string;
+            /** @description Why the resolver picked this provider. */
+            reason: string;
+            sessionId: string;
+        };
+        DevicePlatformStatus: {
+            available: boolean;
+            /** @enum {string} */
+            platform: "ios" | "android";
+            reason?: string;
+        };
+        DeviceStatusResponse: {
+            /** @description Whether devices are available: the desktop app's Developer mode is on. While false, only status, a session's lease and releasing a device are served. */
+            available: boolean;
+            devices: components["schemas"]["DeviceSummary"][];
+            /** @description Whether the user turned device support on. */
+            enabled: boolean;
+            error?: string;
+            leases: components["schemas"]["DeviceLease"][];
+            platforms: components["schemas"]["DevicePlatformStatus"][];
+            /** @enum {string} */
+            state: "off" | "installing" | "ready" | "error";
+        };
+        DeviceSummary: {
+            booted: boolean;
+            /** @description Simulator UDID or emulator serial (AVD name while stopped). */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            platform: "ios" | "android";
+            version?: string;
+        };
         DomainActivity: {
             /** Format: date-time */
             lastActivityAt: string;
@@ -7607,6 +7931,10 @@ export interface components {
             /** @description Seconds until the next installer download attempt. */
             retryInSeconds?: number;
         };
+        InstallSessionDeviceRequest: {
+            /** @description Absolute path to a .app bundle (iOS) or .apk (Android). */
+            path: string;
+        };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
             sessionId?: string;
@@ -7636,6 +7964,10 @@ export interface components {
             freed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        LaunchSessionDeviceRequest: {
+            /** @description Bundle identifier (iOS) or package name (Android). */
+            appId: string;
         };
         LinkPreviewResponse: {
             description?: string;
@@ -7942,6 +8274,12 @@ export interface components {
             operation: components["schemas"]["CodexAccountLoginResponse"];
             shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
         };
+        OpenSessionDeviceRequest: {
+            /** @description Simulator UDID, emulator serial, or device name. */
+            deviceId?: string;
+            /** @enum {string} */
+            platform?: "ios" | "android";
+        };
         OpenShellTerminalRequest: {
             /** @description Initial terminal columns. With rows, the shell starts immediately at this grid instead of waiting for the client to attach (startOnAttach is then ignored). */
             cols?: number;
@@ -8050,6 +8388,10 @@ export interface components {
             ok: boolean;
             taskPreparation?: string;
         };
+        PressSessionDeviceButtonRequest: {
+            /** @description home, back or recents. */
+            button: string;
+        };
         PreviewServerStatusResponse: {
             configuration?: string;
             error?: string;
@@ -8097,6 +8439,7 @@ export interface components {
             agentConfig?: components["schemas"]["AgentConfig"];
             agentRules?: string;
             agentRulesFile?: string;
+            attribution?: components["schemas"]["AttributionConfig"];
             autoReview?: boolean;
             canonicalRepoURL?: string;
             containerReap?: components["schemas"]["ContainerReapConfig"];
@@ -8251,6 +8594,15 @@ export interface components {
         };
         ReloadConversationMCPServersResponse: {
             servers: components["schemas"]["ConversationMCPServerPayload"][];
+        };
+        RemoteHostUpdateResponse: {
+            error?: string;
+            /** @enum {string} */
+            method?: "service" | "app";
+            /** @enum {string} */
+            state: "idle" | "updating" | "failed";
+            supported: boolean;
+            version: string;
         };
         RemoveProjectResult: {
             projectId: string;
@@ -8573,6 +8925,9 @@ export interface components {
             remoteBranch?: string;
             remoteHead?: string;
             unpushed: number;
+        };
+        SessionDeviceResponse: {
+            lease: null | components["schemas"]["DeviceLease"];
         };
         SessionHistoryResponse: {
             offset: number;
@@ -9079,6 +9434,10 @@ export interface components {
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
         };
+        SetSessionDeviceQualityRequest: {
+            /** @description high, balanced or low. */
+            quality: string;
+        };
         SetSessionMergePolicyRequest: {
             terminateOnPrMerge: boolean;
         };
@@ -9110,6 +9469,8 @@ export interface components {
             client: string;
             cloudControlPlaneUrl: string;
             cloudEnabled: boolean;
+            /** @description Beta: new sessions add a Co-authored-by: orchestrator-inc[bot] trailer to commits and an Generated by Orchestrator line to PR bodies, unless the project turns them off. */
+            commitAttribution: boolean;
             /** @description New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents). */
             computerUse: boolean;
             /** @enum {string} */
@@ -9653,6 +10014,9 @@ export interface components {
             useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown" | null;
         };
         UpdateChatHibernationRequest: {
+            enabled: null | boolean;
+        };
+        UpdateCommitAttributionRequest: {
             enabled: null | boolean;
         };
         UpdateComputerUseRequest: {
@@ -15304,6 +15668,124 @@ export interface operations {
             };
         };
     };
+    getDeviceStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceStatusResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setDeviceAvailability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceAvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceAvailabilityResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setupDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceStatusResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getEndpoints: {
         parameters: {
             query?: never;
@@ -18794,6 +19276,133 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getRemoteHostUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostUpdateResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startRemoteHostUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersRemoteHostUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostUpdateResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkRemoteHostUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersRemoteHostUpdateCheckResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -23728,6 +24337,714 @@ export interface operations {
             };
         };
     };
+    getSessionDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    pressSessionDeviceButton: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PressSessionDeviceButtonRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    closeSessionDevice: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CloseSessionDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionDeviceHub: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    installSessionDeviceApp: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstallSessionDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    launchSessionDeviceApp: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LaunchSessionDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    openSessionDevice: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["OpenSessionDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setSessionDeviceQuality: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetSessionDeviceQualityRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionDeviceScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     exitAgent: {
         parameters: {
             query?: never;
@@ -28309,6 +29626,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateChatHibernationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateCommitAttribution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCommitAttributionRequest"];
             };
         };
         responses: {
