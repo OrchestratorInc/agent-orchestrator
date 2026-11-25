@@ -744,7 +744,7 @@ Window fields:
 
 | Property | Meaning |
 | --- | --- |
-| `measurement_schema_version` | `1` |
+| `measurement_schema_version` | `2`. In `1`, `shortcut_count` counted every key chord the page saw rather than app shortcuts, and there was no `shortcuts` list |
 | `window_id` | A random UUID for this window, not tied to anything else |
 | `window_duration_seconds` | Wall time from the window's start to the send |
 | `active_seconds` | Time the window was focused and visible, with input in the last 5 minutes |
@@ -768,7 +768,7 @@ Counters (a counter that stayed at 0 is left out):
 | `mention_menu_open_count`, `mention_menu_pick_count`, `mention_menu_abandon_count` | The composer's `@` menu |
 | `notifications_panel_open_count` | Notification panel opens |
 | `click_count`, `keyboard_activation_count` | Pointer clicks, and clicks made with Enter or Space on a focused control |
-| `shortcut_count` | Key chords (Cmd, Ctrl or Alt with a key). Copy, paste, cut, undo, redo and select all inside a text field are not counted |
+| `shortcut_count` | App shortcuts run by their key chord, all of them (each one is in `shortcuts`). Running one from Cmd+K or the menu bar is not counted here |
 | `hover_click_count`, `hover_only_count` | On controls with a hover card or preview: clicks after hovering for at least 500 ms, and hovers of 500 ms or more that ended without a click |
 | `rage_click_count` | Rage clicks (below) |
 | `dead_click_count` | Dead clicks (below) |
@@ -790,8 +790,17 @@ window. Each entry has `surface` and any of these that are above 0:
 
 `controls` is a list with one entry per named control used in the window.
 Each entry has `control_id` and any of `click_count`, `keyboard_count`,
-`hover_click_count`, `hover_only_count`, and `rage_click_count` that are above
-0. `control_id` is a stable product name from a fixed list, not a DOM path or
+`shortcut_count`, `hover_click_count`, `hover_only_count`, and
+`rage_click_count` that are above 0. `shortcut_count` is the key chord of the
+shortcut that does the same thing as the control, so clicks and shortcuts can
+be compared: `topbar.new_task` (`new-session`), `sidebar.settings`
+(`open-settings`), `sidebar.collapse` (`toggle-sidebar`), `topbar.inspector`
+(`toggle-inspector`), `topbar.open_orchestrator` (`open-orchestrator`),
+`topbar.open_editor` (`open-in-editor`), `sidebar.session_archive`
+(`archive-session`), `composer.model_picker` (`model-picker`),
+`composer.dictation` (`dictate`), `tab.close` (`close-shell-terminal`),
+`sidebar.session_row` (the session switching shortcuts) and `tab.select`
+(`previous-tab`, `next-tab`). `control_id` is a stable product name from a fixed list, not a DOM path or
 label:
 
 - Sidebar: `sidebar.home`, `sidebar.collapse`, `sidebar.new_project`,
@@ -815,6 +824,23 @@ label:
 
 Hover counts are kept for `sidebar.session_row`, `tab.select`, and
 `board.card`. Retry clicks are `chat.retry` and `daemon_banner.retry`.
+
+`shortcuts` is a list with one entry per app shortcut used in the window. Each
+entry has `shortcut_id` and any of `key_count` (run by its key chord) and
+`cmdk_count` (run from Cmd+K) that are above 0. Which keys were pressed, and
+any custom binding, are never sent. Running a shortcut's action from the menu
+bar is not counted. `shortcut_id` is the shortcut's id in the keyboard
+shortcuts list: `find-in-chat`, `add-selection-to-chat`, `new-session`,
+`command-palette`, `quick-open-file`, `open-settings`, `keyboard-shortcuts`,
+`previous-session`, `next-session`, `jump-to-session`,
+`previous-attention-session`, `next-attention-session`, `history-back`,
+`history-forward`, `previous-tab`, `next-tab`, `new-shell-terminal`,
+`split-shell-terminal`, `split-shell-terminal-down`, `close-shell-terminal`,
+`reopen-closed-tab`, `archive-session`, `open-in-editor`,
+`copy-session-path`, `model-picker`, `dictate`, `open-orchestrator`,
+`toggle-sidebar`, `toggle-inspector`, `toggle-terminal`, `toggle-diff`, or
+`toggle-browser-devtools`. A session switch made by a shortcut counts as
+`switch_from_shortcut_count`.
 
 ### Definitions
 
@@ -853,7 +879,8 @@ layout. Hover is checked
 at most once per animation frame, for the last element the mouse entered. The
 only layout read is for a click on nothing interactive: the clicked element's
 box and cursor, read after the click's frame has painted, to tell a dead click
-from a scrollbar or a pointer-cursor element.
+from a scrollbar or a pointer-cursor element. App shortcuts are reported by
+the main process as one small message per press, sent with the shortcut itself.
 
 ## UI responsiveness
 
