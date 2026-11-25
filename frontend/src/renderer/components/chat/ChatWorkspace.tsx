@@ -6344,6 +6344,8 @@ const TurnGroup = memo(function TurnGroup({
 			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
 			item.detail?.error?.trim() === group.outcome?.error?.trim());
 	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldFailure);
+	// Only the failure is told once: the turn can still be retried.
+	const compactionRetry = compactionToldFailure ? retry : undefined;
 	// A message refused for its login, in a turn that did nothing else, says what
 	// happens to it under its own bubble, so the turn needs no outcome of its own.
 	const loginNoteMessageId = login?.align === "end"
@@ -6410,17 +6412,21 @@ const TurnGroup = memo(function TurnGroup({
 						!isCompaction(item),
 				)
 		: undefined;
+	// Setup and a provider retry say so on the live row before anything else.
+	const liveRowTaken = Boolean(startup || group.liveStartupLabel || group.liveProviderFailure);
 	// A compaction under way takes over the live row ("Compacting conversation 1m")
 	// instead of drawing a row of its own; its row joins the turn when it settles.
-	const liveCompaction = group.live
+	// While the live row says something else, it keeps its own running row.
+	const liveCompaction = group.live && !liveRowTaken
 		? [...group.items]
 				.reverse()
 				.find((item): item is ConversationActivity => item.kind === "activity" && isCompaction(item) && item.status === "running")
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
-	// is done and has had its moment on the live row.
-	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
+	// is done and has had its moment on the live row. While a compaction holds the
+	// live row, the step keeps its own row.
+	const liveStep = useLiveRowStep(group, liveRowTaken || Boolean(liveCompaction));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
 	const renderRun = (run: TimelineRun) => {
@@ -6674,10 +6680,12 @@ const TurnGroup = memo(function TurnGroup({
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
-			    it on its outcome's row instead. */}
-			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+			    it on its outcome's row instead. One whose compaction row already said
+			    why it failed has no outcome, so its Retry is here too. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && (canRollback || compactionRetry) ? (
 				<TurnActions
-					onRollback={() => onRollback(group.turnId as string)}
+					retry={compactionRetry}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}

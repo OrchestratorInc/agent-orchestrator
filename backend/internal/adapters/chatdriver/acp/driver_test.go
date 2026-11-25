@@ -6299,6 +6299,142 @@ func TestACPSkippedCompactionRecordsNoCompaction(t *testing.T) {
 	}
 }
 
+// On AO's own compaction turn, an agent that finds nothing to compact leaves the
+// history as it was: the turn's row says so, and claims no compaction.
+func TestACPCompactionTurnWithNothingToCompactSaysSo(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessQwen,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityCompaction: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+			switch text {
+			case "Compressing context...":
+				return CompactionReport{Status: "started"}, true
+			case "Nothing to compress.":
+				return CompactionReport{Status: "skipped"}, true
+			}
+			return CompactionReport{}, false
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	_ = nextEvent(t, opened.Events()) // controller.ready
+	agent.mu.Lock()
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		for _, text := range []string{"Compressing context...", "Nothing to compress."} {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+				AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+			}})
+		}
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	agent.mu.Unlock()
+	if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted {
+		t.Fatalf("turn state = %v, want completed", result.turn.TurnState)
+	}
+	if result.compacted || len(result.rows) != 1 || result.failure != "Nothing to compact" {
+		t.Fatalf("compaction = compacted %v, %d rows, failure %q; want one row saying there was nothing to compact",
+			result.compacted, len(result.rows), result.failure)
+	}
+}
+
+// An agent that reports only that a compaction finished, with no start and no
+// figures, gets a row that waits for a newer context figure, so it never shows
+// the one from before the compaction as what is left.
+func TestACPCompactionOutcomeOnlyWaitsForANewerFigure(t *testing.T) {
+	for name, test := range map[string]struct {
+		// usageAfter is the context figure the agent reports once it finished.
+		usageAfter int
+		wantAfter  int64
+	}{
+		"newer figure":    {usageAfter: 24000, wantAfter: 24000},
+		"agent writes on": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					UsageUpdate: &acpsdk.SessionUsageUpdate{Used: 180000, Size: 200000},
+				}})
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": map[string]any{"status": "completed"}},
+					},
+				}})
+				if test.usageAfter > 0 {
+					_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+						UsageUpdate: &acpsdk.SessionUsageUpdate{Used: test.usageAfter, Size: 200000},
+					}})
+				}
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock("Picking up where I left off.")},
+				}})
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			result := awaitCompactionTurn(t, opened)
+			if !result.compacted || len(result.rows) != 1 {
+				t.Fatalf("compaction = compacted %v, %d rows; want one settled row", result.compacted, len(result.rows))
+			}
+			var detail struct {
+				TokensAfter int64 `json:"tokensAfter"`
+			}
+			if err := json.Unmarshal(result.last.Detail, &detail); err != nil {
+				t.Fatalf("unmarshal detail: %v", err)
+			}
+			if detail.TokensAfter != test.wantAfter {
+				t.Fatalf("tokensAfter = %d, want %d (detail %s)", detail.TokensAfter, test.wantAfter, result.last.Detail)
+			}
+		})
+	}
+}
+
+// Compactions are numbered per turn. An attachment that reconnects to a running
+// turn gets that turn's updates replayed, so it names the turn's compactions as
+// the attachment before it did, however many earlier turns had: a replayed one
+// reaches its stored row, and a new one gets a row of its own.
+func TestACPProviderCompactionIDsAreCountedPerTurn(t *testing.T) {
+	var ids []string
+	record := func(event ports.ChatEvent) { ids = append(ids, event.ProviderItemID) }
+	earlier := &conversation{}
+	earlier.reportCompaction("before", CompactionReport{Status: "failed"}, record)
+	earlier.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	// The next attachment gets only the running turn's updates, then more.
+	next := &conversation{}
+	next.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	next.reportCompaction("running", CompactionReport{Status: "failed"}, record)
+	next.reportCompaction("running", CompactionReport{Status: "started"}, record)
+	want := []string{
+		"compaction:before:1",
+		"compaction:running:1",
+		"compaction:running:1", "compaction:running:1",
+		"compaction:running:2",
+	}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("compaction rows = %v, want %v", ids, want)
+	}
+}
+
 // Claude (through AO's patched adapter) and OpenCode report a compaction they
 // start on their own as status. It gets one row that runs, then settles with
 // what the token reports either side of it show.

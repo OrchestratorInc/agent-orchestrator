@@ -170,6 +170,42 @@ describe("a compaction under way", () => {
 		expect(container.textContent).not.toMatch(/Compacting\.\.\./);
 	});
 
+	// The live row says the provider is retrying first, so the compaction keeps
+	// its own row meanwhile rather than vanishing from both.
+	it("keeps its own running row while the provider retries", () => {
+		const running = compaction({
+			id: "cc-live", turnId, sequence: 3, status: "running", summary: "Compacting the conversation history",
+			detail: { event: "compaction", tokensBefore: 180000, contextWindow: 200000 },
+		});
+		const retrying: ConversationItem = {
+			kind: "activity", id: "provider-retry", turnId, sequence: 4, revision: 0,
+			activityKind: "system", status: "running", summary: "Reconnecting to the provider",
+			detail: { event: "provider.failure", text: "stream disconnected" }, createdAt: at,
+		};
+		render(<ChatWorkspace snapshot={liveTurn([prompt, said, running, retrying])} />);
+
+		expect(screen.getByTestId("compaction-row")).toHaveTextContent(/^Compacting conversation$/);
+		expect(screen.getByTestId("live-working-task")).not.toHaveTextContent(/Compacting/);
+	});
+
+	// A tool call can still be running when the agent starts compacting. The live
+	// row names the compaction, so the step keeps its own row with its command.
+	it("leaves a step that is still running in its own row", () => {
+		const reading: ConversationItem = {
+			kind: "activity", id: "read", turnId, sequence: 3, revision: 0,
+			activityKind: "command", status: "running", summary: "sed -n '1,40p' orders.ts",
+			detail: { command: "sed -n '1,40p' orders.ts" }, createdAt: at,
+		};
+		const running = compaction({
+			id: "cc-live", turnId, sequence: 4, status: "running", summary: "Compacting the conversation history",
+			detail: { event: "compaction" },
+		});
+		const { container } = render(<ChatWorkspace snapshot={liveTurn([prompt, said, reading, running])} />);
+
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Compacting conversation$/);
+		expect(container.querySelector("[data-chat-activity-id='read']")).not.toBeNull();
+	});
+
 	it("settles in place, and the live row goes back to the turn's work", () => {
 		const settled = compaction({ id: "cc-live", turnId, sequence: 3 });
 		render(<ChatWorkspace snapshot={liveTurn([prompt, said, settled])} />);
@@ -210,6 +246,32 @@ describe("a compaction under way", () => {
 
 		expect(within(screen.getByTestId("compaction-row")).getByText("Conversation too long")).toBeInTheDocument();
 		expect(screen.getAllByText("Conversation too long")).toHaveLength(1);
+	});
+
+	it("still offers Retry when the failure is told on its row", async () => {
+		const failedTurn = "compact-asked";
+		const asked: ConversationItem = {
+			kind: "message", id: "asked", turnId: failedTurn, sequence: 2, revision: 0,
+			role: "user", origin: "human", text: "/compact", streaming: false, createdAt: at,
+		};
+		const failed = compaction({
+			id: "cc-failed", turnId: failedTurn, sequence: 3, status: "failed",
+			detail: { event: "compaction", error: "Conversation too long" },
+		});
+		const onRetry = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([assistantSaid, asked, failed], [{
+					id: failedTurn, providerTurnId: "provider-compact", state: "failed",
+					requestedAt: at, startedAt: at, completedAt: at, errorMessage: "Conversation too long",
+				}])}
+				retryControl={{ retry: onRetry }}
+			/>,
+		);
+
+		expect(screen.getAllByText("Conversation too long")).toHaveLength(1);
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetry).toHaveBeenCalledWith(failedTurn);
 	});
 });
 

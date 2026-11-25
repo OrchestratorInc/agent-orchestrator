@@ -297,12 +297,16 @@ type conversation struct {
 	compactionBefore  int64
 	compactionSummary string
 	compactionFailure string
+	// compactionSkipped is set when the agent found nothing to compact on AO's
+	// own compaction turn, so the turn settles its row as such.
+	compactionSkipped bool
 	compactedTurn     string
 	// providerCompaction is a compaction the agent started on its own inside a
 	// turn, reported through its compaction status; providerCompactions numbers
-	// them so each gets a row of its own.
-	providerCompaction  *providerCompaction
-	providerCompactions int
+	// them within providerCompactionTurn so each gets a row of its own.
+	providerCompaction     *providerCompaction
+	providerCompactions    int
+	providerCompactionTurn string
 	// settledCompaction is the last one that settled without the agent's own
 	// figures, so figures that arrive just after it still reach its row.
 	settledCompaction *providerCompaction
@@ -1331,6 +1335,7 @@ func (c *conversation) finishPrompt(
 			c.compactionBefore = 0
 			c.compactionSummary = ""
 			c.compactionFailure = ""
+			c.compactionSkipped = false
 			c.compactionReport = nil
 			c.mu.Unlock()
 			switch {
@@ -1428,6 +1433,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.compactionBefore = before
 	c.compactionSummary = ""
 	c.compactionFailure = ""
+	c.compactionSkipped = false
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
@@ -1487,21 +1493,37 @@ func (c *conversation) settleCompaction(turnID string) {
 	after := c.contextTokens
 	window := c.contextWindow
 	summary := c.compactionSummary
+	reported := c.compactionReport
+	skipped := c.compactionSkipped && reported == nil
 	c.compactingTurnID = ""
 	c.compactionBefore = 0
 	c.compactionSummary = ""
 	c.compactionFailure = ""
-	c.compactedTurn = turnID
-	if reported := c.compactionReport; reported != nil {
+	c.compactionSkipped = false
+	c.compactionReport = nil
+	if !skipped {
+		c.compactedTurn = turnID
+	}
+	if reported != nil {
 		// The agent's own figures, when it gave them, beat the bracket.
 		after = reported.TokensAfter
 		if reported.TokensBefore > 0 {
 			before = reported.TokensBefore
 		}
 	}
-	c.compactionReport = nil
 	c.mu.Unlock()
 
+	if skipped {
+		// The agent found nothing to compact. The history did not change, so the
+		// row says so rather than claim a compaction, as one the agent ran on its
+		// own does.
+		c.emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: c.compactionItemID(turnID),
+			ActivityStatus: domain.ActivityStatusFailed, Summary: "Nothing to compact",
+			Detail: compactionFigures(before, 0, window),
+		})
+		return
+	}
 	if before > after && after > 0 {
 		summary = compactionSummary(before, after)
 	} else if summary == "" {
@@ -1589,10 +1611,11 @@ func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any,
 
 // reportCompaction applies one step of a compaction the agent reported.
 //
-// On AO's own compaction turn it only records a failure: OpenCode ends a failed
-// compaction with a normal end_turn, so the status is the only sign that the
-// history was left as it was. Inside any other turn the agent compacted on its
-// own, and the steps drive a row that runs and then settles in place.
+// On AO's own compaction turn it only records a failure, or that there was
+// nothing to compact: OpenCode ends a failed compaction with a normal end_turn,
+// so the status is the only sign that the history was left as it was. Inside
+// any other turn the agent compacted on its own, and the steps drive a row that
+// runs and then settles in place.
 func (c *conversation) reportCompaction(turnID string, report CompactionReport, emit func(ports.ChatEvent)) bool {
 	failure := ""
 	if report.Status == "failed" {
@@ -1605,6 +1628,8 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 	c.mu.Lock()
 	if c.compactingTurnID == turnID {
 		c.compactionFailure = failure
+		// The latest step decides: a start after "nothing to compact" is a new try.
+		c.compactionSkipped = report.Status == "skipped"
 		if hasFigures {
 			c.compactionReport = &report
 		}
@@ -1627,10 +1652,9 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 			c.mu.Unlock()
 			return true
 		}
-		c.providerCompactions++
 		open = &providerCompaction{
 			turnID: turnID,
-			itemID: c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions)),
+			itemID: c.nextProviderCompactionIDLocked(turnID),
 			before: c.contextTokens,
 		}
 		if report.TokensBefore > 0 {
@@ -1677,6 +1701,21 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 		}
 		c.mu.Unlock()
 		return true
+	case report.Status == "completed" && !hasFigures && open == nil:
+		// Done, with no start seen (an agent that reports only the outcome, or a
+		// reattach mid-compaction) and no figures: the context figure here is
+		// from before it. Wait for a newer one, as a compaction that started
+		// does, and claim none if the agent moves on without one.
+		c.providerCompaction = &providerCompaction{
+			turnID:        turnID,
+			itemID:        c.nextProviderCompactionIDLocked(turnID),
+			before:        report.TokensBefore,
+			finished:      true,
+			usageAtFinish: c.usageReports,
+		}
+		c.settledCompaction = nil
+		c.mu.Unlock()
+		return true
 	}
 	c.providerCompaction = nil
 	if open == nil && hasFigures && c.settledCompaction != nil && c.settledCompaction.turnID == turnID {
@@ -1684,12 +1723,11 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 		open = c.settledCompaction
 	}
 	if open == nil {
-		// No start was seen: an agent that reports only the outcome, or a
-		// reattach mid-compaction. The outcome still gets a row of its own.
-		c.providerCompactions++
+		// No start was seen, and the outcome needs no newer figure: it failed,
+		// or the agent gave its own. It still gets a row of its own.
 		open = &providerCompaction{
 			turnID: turnID,
-			itemID: c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions)),
+			itemID: c.nextProviderCompactionIDLocked(turnID),
 		}
 	}
 	// A row settled without the agent's own figures stays known, so figures
@@ -1720,6 +1758,21 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 		Detail:  compactionFigures(before, after, window),
 	})
 	return true
+}
+
+// nextProviderCompactionIDLocked names the next compaction the agent reported
+// in turnID. They are counted per turn: an attachment that reconnects to a
+// running turn gets every update of that turn replayed by the host, so it
+// numbers the turn's compactions as the attachment before it did. A replayed
+// one reaches the row already stored, and a new one gets a number no earlier
+// attachment used. c.mu must be held.
+func (c *conversation) nextProviderCompactionIDLocked(turnID string) string {
+	if c.providerCompactionTurn != turnID {
+		c.providerCompactionTurn = turnID
+		c.providerCompactions = 0
+	}
+	c.providerCompactions++
+	return c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions))
 }
 
 // contextDroppedSince reports whether the agent's context figure is already
