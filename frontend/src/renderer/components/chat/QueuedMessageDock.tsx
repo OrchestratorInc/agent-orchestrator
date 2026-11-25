@@ -20,7 +20,11 @@ import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import type { ConversationContentSummary, ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
-import { labelInlineImages } from "./messageAttachments";
+import { attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, labelInlineImages, stagedAttachmentParts } from "./messageAttachments";
+import { ChatImageDialog } from "./ChatImage";
+import { readAttachmentNames } from "../../lib/chat-attachment-names";
+import { mediaCrossOrigin } from "../../lib/file-media";
+import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { withoutAnnotationPlaceholder } from "./ChatTimelineItems";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 import { formatFileChatReference } from "../../../shared/file-annotations";
@@ -34,6 +38,8 @@ export type QueuedMessage = {
 
 const QUEUE_DOCK_VISIBLE_ROWS = 5;
 const REORDER_ACTIVATION_DISTANCE = 4;
+/** The most image thumbnails a row draws before it counts the rest. */
+const ROW_IMAGE_LIMIT = 4;
 /** How much of a quoted excerpt the row and its tooltip keep; the row truncates further. */
 const ROW_QUOTE_LENGTH = 120;
 const TOOLTIP_QUOTE_LENGTH = 300;
@@ -49,6 +55,41 @@ function messageReferences(message: ConversationMessage): ConversationContentSum
 function oneLine(text: string, max: number): string {
 	const chars = Array.from(text.replace(/\s+/g, " ").trim());
 	return chars.length > max ? `${chars.slice(0, max).join("").trimEnd()}…` : chars.join("");
+}
+
+/** Where the dock reads a queued message's staged files from. */
+export type QueuedAttachmentSource = { sessionId: string; apiBaseUrl: string | null };
+
+/**
+ * One attached image as a small thumbnail that opens at full size. A message
+ * just sent draws from the composer's copy; otherwise the daemon serves it.
+ */
+function QueuedImageThumbnail({ path, name, source }: { path: string; name: string; source: { sessionId: string; apiBaseUrl: string } }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	const local = useSentAttachmentPreview(path);
+	const [failedUrl, setFailedUrl] = useState<string>();
+	const url = local.url ?? attachmentURL(source.apiBaseUrl, source.sessionId, path);
+	// A file that cannot be read shows its name, not a broken image.
+	if (url === failedUrl) return <span className="max-w-32 truncate text-xs text-muted-foreground" title={name}>{name}</span>;
+	return (
+		<>
+			<Pressable
+				onClick={() => setOpen(true)}
+				aria-label={t("chat.image.open", { name })}
+				className="size-6 shrink-0 cursor-zoom-in overflow-hidden rounded-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+			>
+				<img
+					crossOrigin={mediaCrossOrigin(url)}
+					src={url}
+					alt=""
+					onError={local.onError ?? (() => setFailedUrl(url))}
+					className="block size-full object-cover"
+				/>
+			</Pressable>
+			<ChatImageDialog open={open} onOpenChange={setOpen} url={url} label={name} />
+		</>
+	);
 }
 
 /** Keep queue drags inside the scroll list, matching sidebar session rows. */
@@ -116,8 +157,10 @@ function QueuedMessageRowContent({
 	reorderEnabled,
 	dragHandleRef,
 	dragHandleProps,
+	attachmentSource,
 }: {
 	message: ConversationMessage;
+	attachmentSource?: QueuedAttachmentSource;
 	showPersistentSteer?: boolean;
 	/** Cmd/Ctrl+Enter in the empty composer steers this row; the button shows the key. */
 	enterSteers?: boolean;
@@ -157,10 +200,25 @@ function QueuedMessageRowContent({
 			: t("chat.excerpt.flowchartAttached");
 		return item.comment?.trim() ? `${oneLine(item.comment, max)} · ${quote}` : quote;
 	};
-	const typed = labelInlineImages(
-		withoutAnnotationPlaceholder(message.text, references.length),
-		(index) => t("chat.image.numbered", { index }),
-	);
+	// The block naming the attached files is for the agent: the row shows the
+	// images themselves and the names of any other files instead.
+	const { body, attachments } = annotations
+		? { body: message.text, attachments: [] as string[] }
+		: stagedAttachmentParts(withoutAnnotationPlaceholder(message.text, references.length));
+	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	const originalNames = readAttachmentNames();
+	const imageLabel = (index: number) => t("chat.image.numbered", { index });
+	const imageName = (path: string) => originalNames[path] ?? imageLabel(images.indexOf(path) + 1);
+	const fileNames = attachments
+		.filter((path) => !images.includes(path))
+		.map((path) => originalNames[path] ?? attachmentName(path));
+	const typed = labelInlineImages(body, images, imageLabel);
+	// Without a way to read the files (a remote host offline), images read as their names.
+	const imageSource = images.length > 0 && attachmentSource && attachmentSource.apiBaseUrl !== null
+		? { sessionId: attachmentSource.sessionId, apiBaseUrl: attachmentSource.apiBaseUrl }
+		: undefined;
+	const attachmentNames = [...images.map(imageName), ...fileNames];
+	const namedInRow = (imageSource ? fileNames : attachmentNames).join(", ");
 	const showReferences = !typed.trim() && references.length > 0;
 	// Several excerpts show the first, with a count kept clear of its truncation.
 	const referenceCount = showReferences && references.length > 1
@@ -175,7 +233,7 @@ function QueuedMessageRowContent({
 		: references.length > 0
 			? [...(typed.trim() ? [typed] : []),
 				...references.map((item, index) => `${index + 1}. ${referenceLabel(item, TOOLTIP_QUOTE_LENGTH)}`)].join("\n")
-			: text;
+			: [...(typed.trim() ? [typed] : []), ...(attachmentNames.length > 0 ? [attachmentNames.join(", ")] : [])].join("\n");
 	// Relayed user-authored text is generated, so it can be steered or cancelled
 	// but not edited; the chat may narrow which human messages it can edit.
 	const editable = message.origin === "human" && (canEditMessage?.(message) ?? true);
@@ -194,12 +252,33 @@ function QueuedMessageRowContent({
 				className="size-3 shrink-0 text-muted-foreground/60"
 			/>
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-				<p
-					className="queue-dock-row-text min-w-0 truncate text-xs leading-relaxed text-foreground"
-					title={tooltip}
-				>
-					{text}
-				</p>
+				{imageSource ? (
+					<span className="flex shrink-0 items-center gap-1" data-testid="queued-message-images">
+						{images.slice(0, ROW_IMAGE_LIMIT).map((path) => (
+							<QueuedImageThumbnail key={path} path={path} name={imageName(path)} source={imageSource} />
+						))}
+						{images.length > ROW_IMAGE_LIMIT ? (
+							<span className="text-xs tabular-nums text-muted-foreground" title={attachmentNames.join(", ")}>+{images.length - ROW_IMAGE_LIMIT}</span>
+						) : null}
+					</span>
+				) : null}
+				{text.trim() || attachments.length === 0 ? (
+					<p
+						className="queue-dock-row-text min-w-0 truncate text-xs leading-relaxed text-foreground"
+						title={tooltip}
+					>
+						{text}
+					</p>
+				) : null}
+				{namedInRow ? (
+					<span
+						className={cn("truncate text-xs leading-relaxed text-muted-foreground", text.trim() ? "max-w-40 shrink-0" : "min-w-0")}
+						title={attachmentNames.join(", ")}
+						data-testid="queued-message-files"
+					>
+						{namedInRow}
+					</span>
+				) : null}
 				{referenceCount ? (
 					<span className="shrink-0 text-xs leading-relaxed text-muted-foreground">{referenceCount}</span>
 				) : null}
@@ -324,9 +403,11 @@ function SortableQueuedMessageRow({
 	isReordering,
 	dragSnapshot,
 	onRowHoverChange,
+	attachmentSource,
 }: {
 	turnId: string;
 	message: ConversationMessage;
+	attachmentSource?: QueuedAttachmentSource;
 	hiddenFromView?: boolean;
 	showPersistentSteer?: boolean;
 	enterSteers?: boolean;
@@ -382,6 +463,7 @@ function SortableQueuedMessageRow({
 			}}
 		>
 			<QueuedMessageRowContent
+				attachmentSource={attachmentSource}
 				busy={busy}
 				steady={steady}
 				canSteer={canSteer}
@@ -434,8 +516,11 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	cancelPendingTurnId,
 	steeringTurnIds,
 	steerErrors,
+	attachmentSource,
 }: {
 	messages: QueuedMessage[];
+	/** Where rows read attached images from; without it, images show by name. */
+	attachmentSource?: QueuedAttachmentSource;
 	disabled?: boolean;
 	/** The composer is sending: row actions wait for it, without dimming. */
 	sending?: boolean;
@@ -656,6 +741,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	);
 
 	const rowProps = {
+		attachmentSource,
 		canSteer,
 		onPromoteQueuedTurn,
 		onBeginQueuedEdit,

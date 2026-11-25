@@ -1978,11 +1978,22 @@ function ChatWorkspaceContent({
 		() => (queuedSteerErrors && Object.keys(queuedSteerErrors).length > 0 ? { ...queuedSteerErrors, ...steerErrors } : steerErrors),
 		[queuedSteerErrors, steerErrors],
 	);
+	// The composer sits outside the timeline's image source, so its dock is told
+	// where staged files are read from, the same way the timeline resolves them.
+	const queuedLocalBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const queuedAttachmentSource = useMemo(
+		() => ({
+			sessionId: snapshot.sessionId,
+			apiBaseUrl: activeRemoteHostId ? assetBaseUrl ?? null : assetBaseUrl ?? queuedLocalBaseUrl,
+		}),
+		[activeRemoteHostId, assetBaseUrl, queuedLocalBaseUrl, snapshot.sessionId],
+	);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
 				<QueuedMessageDock
 					messages={visibleQueuedMessages}
+					attachmentSource={queuedAttachmentSource}
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
@@ -2020,6 +2031,7 @@ function ChatWorkspaceContent({
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
+			queuedAttachmentSource,
 			queuedSteerFailures,
 			steeringTurnIds,
 			visibleQueuedMessages,

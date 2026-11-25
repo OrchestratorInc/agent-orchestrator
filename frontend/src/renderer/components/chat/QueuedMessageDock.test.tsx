@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -400,6 +400,73 @@ describe("QueuedMessageDock excerpt rows", () => {
 		render(<QueuedMessageDock messages={queuedMessages([placeholder(1)])} />);
 
 		expect(rowText()).toHaveTextContent(placeholder(1));
+	});
+});
+
+describe("QueuedMessageDock attachment rows", () => {
+	const shot = ".ao/attachments/attachment-6803746e3bc.png";
+	const notes = ".ao/attachments/attachment-notes.md";
+	const withFiles = (text: string, paths: string[]) =>
+		`${text ? `${text}\n\n` : ""}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+	const source = { sessionId: "sess-1", apiBaseUrl: "http://127.0.0.1:3001" };
+	const row = () => screen.getByTestId("queued-message-queued-1");
+	const rowText = () => row().querySelector(".queue-dock-row-text");
+	const fileNames = () => within(row()).getByTestId("queued-message-files");
+	const shotURL = "http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/.ao/attachments/attachment-6803746e3bc.png";
+
+	it("shows an image-only message as its image, not the reference block", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [shot])])} attachmentSource={source} />);
+
+		const image = within(row()).getByRole("button", { name: "Open image: Image 1" }).querySelector("img");
+		expect(image).toHaveAttribute("src", shotURL);
+		expect(row()).not.toHaveTextContent("Attached files");
+		expect(image).toHaveAttribute("crossorigin", "anonymous");
+		expect(rowText()).toBeNull();
+	});
+
+	it("shows the typed text beside the image, with inline images numbered", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles(`fix ${shot} please`, [shot])])} attachmentSource={source} />);
+
+		expect(within(row()).getByRole("button", { name: "Open image: Image 1" })).toBeInTheDocument();
+		expect(rowText()).toHaveTextContent(/^fix \[Image 1\] please$/);
+	});
+
+	it("names attached files that are not images", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [notes])])} attachmentSource={source} />);
+
+		expect(fileNames()).toHaveTextContent(/^attachment-notes\.md$/);
+		expect(row()).not.toHaveTextContent("Attached files");
+	});
+
+	it("names attached files beside the typed text and its images", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("compare these", [shot, notes])])} attachmentSource={source} />);
+
+		expect(within(row()).getByRole("button", { name: "Open image: Image 1" })).toBeInTheDocument();
+		expect(rowText()).toHaveTextContent(/^compare these$/);
+		expect(fileNames()).toHaveTextContent(/^attachment-notes\.md$/);
+	});
+
+	it("draws a few images and counts the rest, so the text keeps its room", () => {
+		const shots = Array.from({ length: 6 }, (_, index) => `.ao/attachments/attachment-shot${index}.png`);
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("all of them", shots)])} attachmentSource={source} />);
+
+		expect(within(row()).getAllByRole("button", { name: /^Open image:/ })).toHaveLength(4);
+		expect(screen.getByTestId("queued-message-images")).toHaveTextContent(/^\+2$/);
+	});
+
+	it("shows the name of an image that cannot be read", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [shot])])} attachmentSource={source} />);
+
+		fireEvent.error(within(row()).getByRole("button", { name: "Open image: Image 1" }).querySelector("img")!);
+		expect(within(row()).queryByRole("button", { name: /^Open image/ })).not.toBeInTheDocument();
+		expect(screen.getByTestId("queued-message-images")).toHaveTextContent(/^Image 1$/);
+	});
+
+	it("names images when there is nowhere to read them from", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [shot])])} attachmentSource={{ sessionId: "sess-1", apiBaseUrl: null }} />);
+
+		expect(within(row()).queryByRole("button", { name: /^Open / })).not.toBeInTheDocument();
+		expect(fileNames()).toHaveTextContent(/^Image 1$/);
 	});
 });
 

@@ -94,6 +94,14 @@ async function pasteImage(field: HTMLElement, name = "shot.png") {
 }
 
 describe("queued message attachments", () => {
+	it("shows an attached image in the queue row instead of the reference block", () => {
+		setup(suffix);
+		const row = screen.getByTestId("queued-message-q1");
+		const image = within(row).getByRole("button", { name: "Open image: Image 1" }).querySelector("img");
+		expect(image?.getAttribute("src")).toContain(`/sessions/${encodeURIComponent(chatFixture.sessionId)}/preview/files/.ao/attachments/attachment-shot.png`);
+		expect(row).not.toHaveTextContent("Attached files");
+	});
+
 	it("keeps a reused delivery key locked for recovery", async () => {
 		const { edit } = setup();
 		edit.mockRejectedValue({ code: "CHAT_QUEUED_EDIT_IDEMPOTENCY_CONFLICT", message: "Recovery key conflict" });
