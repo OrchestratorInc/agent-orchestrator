@@ -692,12 +692,7 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
 			return
 		}
-		// Which file the path names once symlinks are followed, for a shared
-		// page's files (see previewutil.ResolvedPathHeader).
-		if resolved, ok := previewutil.ResolvedPath(sess.Metadata.ArtifactDir, assetPath); ok {
-			w.Header().Set(previewutil.ResolvedPathHeader, resolved)
-		}
-		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
+		serveArtifactPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
 	if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok && c.Attachments != nil {
@@ -1153,6 +1148,24 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 		return
 	}
 	defer func() { _ = file.Close() }()
+	serveOpenedPreviewFile(w, r, file, info, clean)
+}
+
+// serveArtifactPreviewFile serves an artifact file as serveRootedPreviewFile
+// does, naming in previewutil.ResolvedPathHeader the path the opened file
+// resolves to once symlinks are followed, for a shared page's files. It is
+// resolved after the open and checked to be that same file, so it always
+// names the bytes served; when it cannot be, the header is left out.
+func serveArtifactPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	if resolved, ok := previewutil.ResolvedPath(rootPath, clean, info); ok {
+		w.Header().Set(previewutil.ResolvedPathHeader, resolved)
+	}
 	serveOpenedPreviewFile(w, r, file, info, clean)
 }
 
