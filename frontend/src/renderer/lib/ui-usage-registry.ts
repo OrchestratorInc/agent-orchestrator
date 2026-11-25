@@ -182,6 +182,18 @@ export const ERROR_CODES = [
 	"AUTH_REQUIRED",
 	"PROVIDER_KEY_MISSING",
 	"USAGE_LIMIT",
+	// A chat turn failure read from its error text (lib/chat-failure-reason.ts).
+	"QUOTA_EXCEEDED",
+	"RATE_LIMITED",
+	"PROVIDER_OVERLOADED",
+	"CONTEXT_TOO_LONG",
+	"MODEL_UNAVAILABLE",
+	"NETWORK_ERROR",
+	"TIMED_OUT",
+	"PROVIDER_SERVER_ERROR",
+	"AGENT_NOT_INSTALLED",
+	"AGENT_EXITED",
+	"CONTENT_REFUSED",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 

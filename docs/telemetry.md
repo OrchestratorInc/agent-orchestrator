@@ -729,8 +729,13 @@ heatmap and no session replay.
   `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
   `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
   `PROVIDER_KEY_MISSING`, or `USAGE_LIMIT` when the agent's account hit its
-  usage limit). Any other code is dropped, and it is omitted when there is
-  none.
+  usage limit). Any other chat turn failure is named by matching its error
+  text, in the app, against fixed patterns: `QUOTA_EXCEEDED`, `RATE_LIMITED`,
+  `PROVIDER_OVERLOADED`, `CONTEXT_TOO_LONG`, `MODEL_UNAVAILABLE`,
+  `NETWORK_ERROR`, `TIMED_OUT`, `PROVIDER_SERVER_ERROR`,
+  `AGENT_NOT_INSTALLED`, `AGENT_EXITED`, or `CONTENT_REFUSED`. The error text
+  itself is never sent. Any other code is dropped, and it is omitted when there
+  is none or no pattern matches.
 - `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
   for a toast, the surface you used in the 10 seconds before it. It is omitted
   when neither is known.
