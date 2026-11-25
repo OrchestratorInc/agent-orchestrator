@@ -51,13 +51,13 @@ async function socksConnect(proxyPort: number, host: string, port: number, paylo
 	return { code: data[3] ?? -1, echoed: data.subarray(12).toString() };
 }
 
-type Host = { ports?: Record<number, number>; off?: boolean };
+type Host = { ports?: Record<number, number>; old?: boolean };
 
 function hosts(table: Record<string, Host>) {
 	return async (hostId: string, port: number) => {
 		const host = table[hostId];
 		if (!host) throw new LoopbackTunnelError(false, "not connected");
-		if (host.off) throw new LoopbackTunnelError(false, "turned off");
+		if (host.old) throw new LoopbackTunnelError(false, "no tunnel route");
 		const target = host.ports?.[port];
 		if (!target) throw new LoopbackTunnelError(true, "nothing listening");
 		return connect(target);
@@ -112,11 +112,11 @@ describe("loopback tunnels", () => {
 		expect(state.proxy?.proxyRules).toMatch(/^socks5:\/\/127\.0\.0\.1:\d+$/);
 	});
 
-	it("tells a host that shares its localhost from one that does not", async () => {
-		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} }, h_listening: { ports: { 1: await echoServer() } }, h_off: { off: true } }));
+	it("tells a host that has the tunnel from one that does not", async () => {
+		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} }, h_listening: { ports: { 1: await echoServer() } }, h_old: { old: true } }));
 		expect(await tunnels.reach("h_box")).toBe(true);
 		expect(await tunnels.reach("h_listening")).toBe(true);
-		expect(await tunnels.reach("h_off")).toBe(false);
+		expect(await tunnels.reach("h_old")).toBe(false);
 		expect(await tunnels.reach("h_gone")).toBe(false);
 	});
 });

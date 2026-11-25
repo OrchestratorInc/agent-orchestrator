@@ -12,7 +12,7 @@ export function useLoopbackReach(hostId?: string): boolean | undefined {
 	return useQuery({
 		...reachQuery(hostId),
 		enabled: Boolean(hostId),
-		refetchInterval: (query) => (query.state.data === false ? 10_000 : false),
+		refetchInterval: (query) => (query.state.data === false ? 60_000 : false),
 	}).data;
 }
 
