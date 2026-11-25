@@ -84,7 +84,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 			{
 				Key:         "model",
 				Type:        ports.ConfigFieldString,
-				Description: "Model override written to the AO-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
+				Description: "Model override written to the Orchestrator-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
 			},
 		},
 	}, nil
@@ -137,6 +137,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, nil
 	}
 
+	if err := validateKiloImportedWorkspace(ports.WorkspaceHookConfig{ImportConfigDir: cfg.Session.Metadata[ports.MetadataKeyImportConfigDir], NativeSessionID: agentSessionID, Env: cfg.Env}); err != nil {
+		return nil, false, err
+	}
+
 	binary, err := p.kilocodeBinary(ctx)
 	if err != nil {
 		return nil, false, err
@@ -152,6 +156,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		cmd = append(cmd, "--agent", agentName)
 	}
 	cmd = append(cmd, "--session", agentSessionID)
+	if cfg.Session.Metadata[ports.MetadataKeyImportConfigDir] != "" {
+		// Release-channel binaries may default to kilo-rc.db. Resume the exact
+		// stable database that AO discovered and prepared, independent of channel.
+		cmd = append([]string{"env", "KILO_DB=kilo.db"}, cmd...)
+	}
 	return cmd, true, nil
 }
 

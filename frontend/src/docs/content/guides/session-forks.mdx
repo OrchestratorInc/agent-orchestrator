@@ -1,0 +1,59 @@
+---
+title: Forking sessions
+description: Copy a session at any turn into a new session that tries a different direction, without touching the original.
+---
+
+A fork copies a session as one of its turns left it into a new session. The fork gets the conversation up to that turn, the files as they were then, and the agent's own memory of the conversation. You can then take it in another direction while the original carries on unchanged.
+
+## Fork a session
+
+In a Chat session, finished turns show **Fork** beside Copy and Roll back. Click it and the fork opens straight away as its own session, named "Fork of *title*". A later fork of the same session is "Fork 2 of *title*", and forking a fork counts against the first session's title.
+
+- Claude Code and Codex can be forked at any finished turn.
+- Other agents can be forked at their latest turn only.
+- Terminal sessions have no turn rows: choose **Fork session** from the session's menu (⋮ beside its name, or right-click it in the sidebar). They are forked at their current state.
+
+Every agent can be forked. An agent that can copy its own conversation gives the fork that copy. For one that can't, the fork starts a fresh agent and gives it the original's conversation as text: the turns AO recorded, the files that changed, the session's artifacts and, for a terminal session, the end of its screen. Long conversations are shortened to fit, keeping the latest turn whole, and the fork's agent can read the rest with `ao session history <original-id>`. These forks say **Conversation copied as text** in the inspector, and a new Chat fork says so above the composer until its first message.
+
+From the CLI:
+
+```bash
+ao session fork <session-id>           # fork at the latest finished turn
+ao session fork <session-id> --check   # only say whether it can be forked
+```
+
+When Fork is greyed out, its tooltip, or the line under **Fork session** in the menu, says why: for example while the agent is still working, or for an orchestrator.
+
+## What a fork gets
+
+| | What the fork has |
+|---|---|
+| Worktree and branch | Its own, starting at the commit the original was on at that turn |
+| Files | The files as that turn left them, including uncommitted and new files |
+| Conversation | The turns up to and including the forked turn. A fork given the conversation as text starts with an empty chat, and its agent has the text |
+| Agent memory | The agent's own copy of the conversation, or, for an agent that can't copy it, the conversation as text |
+| Dependencies | `node_modules` and `.venv` are cloned from the original with copy-on-write where the disk supports it |
+| Setup | The project's setup runs as for any new session, with `AO_FORK=1` set |
+| Attachments and artifacts | Copies, so editing them in the fork leaves the original's alone |
+| Agent and settings | The original's agent, model, effort, permissions, and account |
+
+Files from an older turn come from the snapshot AO saves before each turn. A turn from before this version of AO has no snapshot and can't be forked.
+
+## The original's pull requests
+
+A fork never owns the original's pull requests. The inspector's **Forks** section shows them as read-only links, and the fork's agent is told not to push to them, comment on them, or review them. `ao review trigger` from the fork refuses a PR the original owns.
+
+If the fork's work should go in its own PR, ask its agent to open one from the fork's branch. If the fork becomes the main line, run `ao session claim-pr <pr>` in the fork. The PR moves to the fork and the original's agent is told.
+
+## Bringing work back
+
+Nothing syncs between a fork and its original after the fork is made. To keep a fork's work:
+
+- **Merge the branch:** both worktrees share one repository, so ask the original's agent to merge the fork's branch. No push is needed.
+- **Read its history:** `ao session history <fork-id>` lets another agent read what the fork did.
+
+The inspector's **Forks** section links a fork to its original, and an original to its forks.
+
+## Deleting a fork
+
+Archiving and deleting a fork removes its worktree, its copied artifacts, and the agent's own copy of the conversation. The original is untouched. Deleting the original leaves its forks working.

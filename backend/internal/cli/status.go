@@ -3,7 +3,10 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -15,6 +18,11 @@ import (
 )
 
 const probeTimeout = 2 * time.Second
+
+// maxProbeBody caps a /healthz or /readyz response. The daemon's is a few
+// hundred bytes; the cap keeps an unverified process on the run-file's port
+// from making the CLI buffer an arbitrarily large body.
+const maxProbeBody = 64 << 10
 
 type statusOptions struct {
 	json bool
@@ -47,6 +55,10 @@ type daemonStatus struct {
 	Ready          string     `json:"ready,omitempty"`
 	Error          string     `json:"error,omitempty"`
 	owned          bool
+	// pidVisible records whether inspection saw the daemon's PID alive, as
+	// opposed to verifying it only over loopback (probeOwnedDaemon). Checking
+	// again later could match an unrelated process reusing that PID number.
+	pidVisible bool
 }
 
 type probeResult struct {
@@ -61,7 +73,7 @@ func newStatusCommand(ctx *commandContext) *cobra.Command {
 	var opts statusOptions
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show AO daemon status",
+		Short: "Show Orchestrator daemon status",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := ctx.inspectDaemon(cmd.Context())
@@ -99,22 +111,37 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 	st.StartedAt = &startedAt
 	st.Uptime = formatUptime(c.deps.Now().Sub(info.StartedAt))
 
-	if !c.deps.ProcessAlive(info.PID) {
-		st.State = stateStale
-		st.Error = "run-file points to a dead process"
-		return st, nil
-	}
-
-	health, err := c.readProbe(ctx, info.Port, "healthz")
-	if err != nil {
-		st.State = stateUnhealthy
-		st.Error = err.Error()
-		return st, nil
-	}
-	if err := verifyProbeOwner(health, info.PID, "healthz"); err != nil {
-		st.State = stateStale
-		st.Error = err.Error()
-		return st, nil
+	var health probeResult
+	st.pidVisible = c.deps.ProcessAlive(info.PID)
+	if st.pidVisible {
+		health, err = c.readProbe(ctx, info.Port, "healthz")
+		if err != nil {
+			st.State = stateUnhealthy
+			st.Error = err.Error()
+			return st, nil
+		}
+		if err := verifyProbeOwner(health, info.PID, "healthz"); err != nil {
+			st.State = stateStale
+			st.Error = err.Error()
+			return st, nil
+		}
+	} else {
+		// The PID may only be hidden, not dead: see probeOwnedDaemon.
+		probe, err := c.probeOwnedDaemon(ctx, info)
+		if err != nil {
+			if c.pidMayBeHidden() && probeTimedOut(err) {
+				// A probe that times out proves neither a dead daemon nor a
+				// live one. Calling it stale would let `ao stop` delete the
+				// run-file of a daemon that is still running.
+				st.State = stateUnhealthy
+				st.Error = fmt.Sprintf("daemon pid %d is not visible from here and %v", info.PID, err)
+				return st, nil
+			}
+			st.State = stateStale
+			st.Error = "run-file points to a dead process"
+			return st, nil
+		}
+		health = probe
 	}
 	st.owned = true
 	st.ExecutablePath = health.ExecutablePath
@@ -153,7 +180,12 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 	if err != nil {
 		return probeResult{}, err
 	}
-	resp, err := c.deps.HTTPClient.Do(req)
+	// Never follow a redirect: the answer must come from the run-file's
+	// loopback port itself, and an unverified process there must not be able
+	// to send the CLI to another host.
+	client := *c.deps.HTTPClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
 		return probeResult{}, fmt.Errorf("%s: %w", path, err)
 	}
@@ -162,7 +194,7 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 		return probeResult{}, fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
 	}
 	var body probeResult
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProbeBody)).Decode(&body); err != nil {
 		return probeResult{}, fmt.Errorf("%s: decode response: %w", path, err)
 	}
 	if body.Status == "" {
@@ -171,9 +203,61 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 	return body, nil
 }
 
+// probeOwnedDaemon asks the run-file's loopback port whether the daemon it
+// records is still serving. It is the fallback for a failed PID check: a CLI
+// running inside a sandbox with its own PID namespace (Codex on Linux runs
+// every shell command in one) cannot see the daemon's process, although the
+// daemon answers on loopback. The daemon counts as alive only when /healthz
+// identifies itself as the Orchestrator daemon with the run-file's PID, so a
+// different process that reuses the port is not mistaken for it.
+//
+// That claim is unauthenticated, so it is only consulted where a PID can be
+// hidden but alive (Deps.PIDMayBeHidden). Elsewhere a failed PID check means
+// the daemon is dead, and the run-file is stale whatever answers on its port.
+func (c *commandContext) probeOwnedDaemon(ctx context.Context, info *runfile.Info) (probeResult, error) {
+	if !c.pidMayBeHidden() {
+		return probeResult{}, errPIDCannotBeHidden
+	}
+	if info == nil || info.PID <= 0 || info.Port <= 0 {
+		return probeResult{}, errors.New("run-file has no daemon pid or port")
+	}
+	health, err := c.readProbe(ctx, info.Port, "healthz")
+	if err != nil {
+		return probeResult{}, err
+	}
+	if err := verifyProbeOwner(health, info.PID, "healthz"); err != nil {
+		return probeResult{}, err
+	}
+	return health, nil
+}
+
+var errPIDCannotBeHidden = errors.New("a dead pid cannot be hidden on this platform")
+
+func (c *commandContext) pidMayBeHidden() bool {
+	return c.deps.PIDMayBeHidden != nil && c.deps.PIDMayBeHidden()
+}
+
+// probeTimedOut reports whether a probe failed by timing out, which says
+// nothing about whether the daemon is alive.
+func probeTimedOut(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
+}
+
+// daemonAlive reports whether the daemon the run-file records is running: its
+// PID is visible and alive, or, when it is not, the daemon itself answers on
+// loopback (probeOwnedDaemon).
+func (c *commandContext) daemonAlive(ctx context.Context, info *runfile.Info) bool {
+	if c.deps.ProcessAlive(info.PID) {
+		return true
+	}
+	_, err := c.probeOwnedDaemon(ctx, info)
+	return err == nil
+}
+
 func verifyProbeOwner(probe probeResult, wantPID int, path string) error {
 	if probe.Service != daemonmeta.ServiceName {
-		return fmt.Errorf("%s: response is not from AO daemon", path)
+		return fmt.Errorf("%s: response is not from the Orchestrator daemon", path)
 	}
 	if probe.PID != wantPID {
 		return fmt.Errorf("%s: daemon pid %d does not match run-file pid %d", path, probe.PID, wantPID)
@@ -183,7 +267,7 @@ func verifyProbeOwner(probe probeResult, wantPID int, path string) error {
 
 func writeStatus(cmd *cobra.Command, st daemonStatus) error {
 	out := cmd.OutOrStdout()
-	if _, err := fmt.Fprintf(out, "AO daemon: %s\n", st.State); err != nil {
+	if _, err := fmt.Fprintf(out, "Orchestrator daemon: %s\n", st.State); err != nil {
 		return err
 	}
 	if st.PID != 0 {

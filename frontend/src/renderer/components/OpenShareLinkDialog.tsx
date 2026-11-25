@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -12,6 +11,7 @@ import { CloudCpError } from "../lib/cloud-cp/errors";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { parseShareLink, type ShareLinkTarget } from "../lib/share-links";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	Dialog,
 	DialogClose,
@@ -118,9 +118,7 @@ export function ShareLinkHost() {
 				data-open-share-link-dialog
 			>
 				<DialogClose asChild>
-					<button type="button" className="settings-dialog-close-button settings-close-button" aria-label={t("confirm.close")}>
-						<X className="size-4" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("confirm.close")} />
 				</DialogClose>
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
 					<DialogTitle className="settings-dialog-title text-base">{t("shareLink.title")}</DialogTitle>

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Loader2, Minus } from "lucide-react";
+import { Check, ExternalLink, Loader2, Minus } from "@/components/app-icons";
 import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -87,7 +87,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
 				<div className="settings-row-bar">
 					<p className="text-xs text-error">{t("settings.billing.loadFailed")}</p>
-					<Button variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
+					<Button variant="quiet" size="sm" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
 				</div>
 			</SettingsSection>
 		);
@@ -104,6 +104,12 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			await action();
 		} catch (error) {
 			setActionError(billingActionError(error, t));
+			// The plan changed after this page read it (a Checkout finished, or a trial
+			// started, in another window or device): read it again so the page shows it.
+			if (error instanceof CloudCpError && (error.code === "ALREADY_SUBSCRIBED" || error.code === "CHECKOUT_COMPLETED")) {
+				setPollUntil(Date.now() + POLL_WINDOW_MS);
+				void billing.refetch();
+			}
 		} finally {
 			setPending(null);
 		}
@@ -129,6 +135,16 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const lapsed = summary.subscriptionStatus === "past_due" || summary.subscriptionStatus === "unpaid";
 	// A plan set to cancel stays current until it ends, then the org moves to Free.
 	const endsAt = subscribed && summary.cancelAt ? formatDay(summary.cancelAt) : "";
+	// A free trial is a live subscription that took a card at Checkout. Stripe charges
+	// that card for the plan when the trial ends unless the trial was canceled first;
+	// the trial's end is the current period's end. A trial set to cancel says so in
+	// endsAt instead, and the org moves to Free when it ends.
+	const onTrial = subscribed && summary.subscriptionStatus === "trialing";
+	const trialing = onTrial && !endsAt;
+	const trialEnds = trialing && summary.currentPeriodEnd ? formatDay(summary.currentPeriodEnd) : "";
+	// A subscription that ended (a canceled trial or plan) leaves the org on Free:
+	// its cloud sessions are paused and new ones answer PLAN_REQUIRED.
+	const planEnded = !subscribed && summary.subscriptionStatus === "canceled";
 	const offers = summary.plans ?? [];
 	const limits = summary.limits;
 	const usage = summary.usage;
@@ -145,9 +161,27 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							{t("settings.billing.cancelNotice", { plan: planName(currentPlan), date: endsAt })}
 						</p>
 						{manage ? (
-							<Button size="sm" variant="ghost" className={ghostAction} disabled={pending !== null} onClick={() => void openPortal()}>
+							<Button size="sm" variant="quiet" disabled={pending !== null} onClick={() => void openPortal()}>
 								{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
 								{t("settings.billing.keepPlan", { plan: planName(currentPlan) })}
+							</Button>
+						) : null}
+					</div>
+				) : null}
+				{planEnded ? (
+					<p className="settings-row-bar text-pretty text-xs text-settings-muted">{t("settings.billing.planEnded")}</p>
+				) : null}
+				{trialing ? (
+					<div className="settings-row-bar">
+						<p className="min-w-0 text-pretty text-xs text-settings-muted">
+							{trialEnds
+								? t("settings.billing.trialNotice", { plan: planName(currentPlan), date: trialEnds })
+								: t("settings.billing.trialNoticeNoDate", { plan: planName(currentPlan) })}
+						</p>
+						{manage ? (
+							<Button size="sm" variant="quiet" disabled={pending !== null} onClick={() => void openPortal()}>
+								{pending === "portal" && portalFor === "" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
+								{t("settings.billing.manageBilling")}
 							</Button>
 						) : null}
 					</div>
@@ -194,7 +228,9 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							setPortalFor(offer.name);
 							void openPortal();
 						};
-						let label = t("settings.billing.upgrade");
+						// The control plane sets trialDays only when this org can still start a free trial.
+						const trialDays = offer.trialDays ?? 0;
+						let label = trialDays > 0 ? t("settings.billing.startTrial", { count: trialDays }) : t("settings.billing.upgrade");
 						let onClick: () => void = () => void openCheckout(offer.name);
 						if (isCurrent) {
 							label = t("settings.billing.manage");
@@ -211,6 +247,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 								{...offerPrice(offer, t)}
 								{...(offer.limits ? planFeatures(offer.name, offer.limits, t) : { features: [] })}
 								current={isCurrent}
+								trial={isCurrent && onTrial}
 								recommended={recommended}
 								action={manage ? (
 									<Button size="sm" variant={recommended ? "primary" : "secondary"}
@@ -282,7 +319,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 								? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
 								: t("settings.billing.resetNoneLeft", { date: formatDate(usage.manualResetsRenewAt) })}
 						>
-							<Button size="sm" variant="ghost" className={ghostAction} disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
+							<Button size="sm" variant="quiet" disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
 								{t("settings.billing.resetNow")}
 							</Button>
 						</SettingsRow> : null}
@@ -316,9 +353,6 @@ function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boo
 		</SettingsSection>
 	);
 }
-
-/** Muted ghost row action, the settings default for every non-primary action. */
-const ghostAction = "text-settings-muted hover:text-settings-label";
 
 /** A theme token as a hex string, resolved from the live document so every theme style is followed. */
 function tokenHex(name: string): string | null {
@@ -422,7 +456,7 @@ function PlanGlow() {
  * cloud agents (local agents are never limited). The current or recommended
  * plan sits on the raised surface; the rest stay on the quiet one, with no outlines.
  */
-function PlanCard({ plan, name, amount, interval, intro, features, excluded = [], cloudLimits = [], current, recommended, action, t }: {
+function PlanCard({ plan, name, amount, interval, intro, features, excluded = [], cloudLimits = [], current, trial, recommended, action, t }: {
 	/** Stable id (not the translated name) for tests and hooks. */
 	plan: string;
 	name: string;
@@ -435,6 +469,8 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 	/** Limits that apply only to cloud agents, grouped under their own label. */
 	cloudLimits?: string[];
 	current: boolean;
+	/** The current plan is a free trial, so its status says so instead of Current. */
+	trial?: boolean;
 	recommended?: boolean;
 	action: React.ReactNode;
 	t: TFunction;
@@ -459,7 +495,7 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 				<h3 className="text-control font-medium text-settings-label">{name}</h3>
 				{current || recommended ? (
 					<span className="text-xs font-medium text-settings-label">
-						{t(current ? "settings.billing.current" : "settings.billing.recommended")}
+						{t(current ? (trial ? "settings.billing.freeTrial" : "settings.billing.current") : "settings.billing.recommended")}
 					</span>
 				) : null}
 			</div>
@@ -641,6 +677,7 @@ function billingActionError(error: unknown, t: TFunction): string {
 	if (error instanceof CloudCpError) {
 		if (error.status === 403) return t("settings.billing.adminOnly");
 		if (error.code === "ALREADY_SUBSCRIBED") return t("settings.billing.alreadySubscribed");
+		if (error.code === "CHECKOUT_COMPLETED") return t("settings.billing.checkoutCompleted");
 		if (error.code === "NO_RESETS_LEFT") return t("settings.billing.noResetsLeft");
 	}
 	return t("settings.billing.actionFailed");

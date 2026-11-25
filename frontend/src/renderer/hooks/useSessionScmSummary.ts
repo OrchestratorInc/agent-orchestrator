@@ -1,10 +1,11 @@
 import type { PROpener } from "@aoagents/product-ui";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
+import { noPRDetails } from "../lib/pr-display";
 import type { CloudCpPullRequestSummary } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "../lib/cloud-cp/renderer-client";
 import { useCloudSessionEventListener } from "./useCloudSessionEvents";
@@ -31,10 +32,11 @@ export function cloudPRSummaryToSessionPRSummary(
 	autoInjectCI: boolean,
 ): SessionPRSummary {
 	return {
+		...noPRDetails(),
 		...pr,
 		provider: pr.provider === "gitlab" ? "gitlab" : "github",
 		repo: pr.repository,
-		ci: { ...pr.ci, autoInjectCI },
+		ci: { ...pr.ci, checks: [], autoInjectCI },
 		review: pr.review,
 		mergeability: {
 			...pr.mergeability,
@@ -51,6 +53,72 @@ export function sessionScmSummaryQueryOptions(sessionId: string, hostId?: string
 		retry: 1,
 		...(hostId ? { refetchInterval: 15_000 } : {}),
 	};
+}
+
+/** How long the SCM events a Cloud session's stream delivers are folded into one refresh. */
+export const CLOUD_SCM_REFRESH_DELAY_MS = 500;
+
+interface CloudScmRefresh {
+	timer?: ReturnType<typeof setTimeout>;
+	running: boolean;
+	again: boolean;
+}
+
+const cloudScmRefreshes = new WeakMap<QueryClient, Map<string, CloudScmRefresh>>();
+
+/**
+ * Re-reads a Cloud session's pull requests after SCM events on its stream,
+ * once per burst rather than once per event. A stream that opens with nothing
+ * to resume from replays the session's history, one scm.updated for every
+ * refresh of every pull request it ever held, and every mounted view of the
+ * session hears each one. Invalidating per event started a request per event
+ * and view: invalidateQueries cancels a read in flight, but only in the
+ * renderer; the main process completes every request (cloudCpFetch). On
+ * 2026-11-16 one orchestrator view sent 1,873 reads in 3 s and stalled the
+ * control plane. Events are folded for CLOUD_SCM_REFRESH_DELAY_MS, and reads
+ * never overlap: one already under way finishes, then one more read starts,
+ * so the result still reflects every event folded in.
+ */
+export function scheduleCloudScmRefresh(queryClient: QueryClient, queryKey: QueryKey): void {
+	let refreshes = cloudScmRefreshes.get(queryClient);
+	if (!refreshes) {
+		refreshes = new Map();
+		cloudScmRefreshes.set(queryClient, refreshes);
+	}
+	const id = hashKey(queryKey);
+	let refresh = refreshes.get(id);
+	if (!refresh) {
+		refresh = { running: false, again: false };
+		refreshes.set(id, refresh);
+	}
+	if (refresh.running) {
+		refresh.again = true;
+		return;
+	}
+	if (refresh.timer !== undefined) return;
+	const pending = refresh;
+	const all = refreshes;
+	pending.timer = setTimeout(() => {
+		pending.timer = undefined;
+		pending.running = true;
+		void runCloudScmRefresh(queryClient, queryKey).finally(() => {
+			pending.running = false;
+			if (pending.again) {
+				pending.again = false;
+				scheduleCloudScmRefresh(queryClient, queryKey);
+			} else if (pending.timer === undefined) {
+				all.delete(id);
+			}
+		});
+	}, CLOUD_SCM_REFRESH_DELAY_MS);
+}
+
+async function runCloudScmRefresh(queryClient: QueryClient, queryKey: QueryKey): Promise<void> {
+	// A read under way may predate the events; let it finish, then read again.
+	if (queryClient.getQueryState(queryKey)?.fetchStatus === "fetching") {
+		await queryClient.refetchQueries({ queryKey, exact: true }, { cancelRefetch: false }).catch(() => undefined);
+	}
+	await queryClient.invalidateQueries({ queryKey, exact: true }, { cancelRefetch: false });
 }
 
 export function useSessionScmSummary(
@@ -83,7 +151,7 @@ export function useSessionScmSummary(
 				event.type === "pull_request.created" ||
 				event.type === "pull_request.claimed"
 			) {
-				void queryClient.invalidateQueries({ queryKey });
+				scheduleCloudScmRefresh(queryClient, queryKey);
 			}
 		},
 	});

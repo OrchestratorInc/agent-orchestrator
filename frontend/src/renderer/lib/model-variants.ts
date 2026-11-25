@@ -1,7 +1,8 @@
 /**
  * Cursor lists one entry per model, effort, thinking and speed ("Claude Opus 4.7 1M High
- * Thinking Fast" and ~250 siblings). Pickers show each model once with the settings as
- * controls; the variant id is still what is sent to the agent.
+ * Thinking Fast" and ~250 siblings), and Antigravity one per model and effort ("Claude
+ * Opus 5.5 (High)"). Pickers show each model once with the settings as controls; the
+ * variant id is still what is sent to the agent.
  */
 
 export interface ModelVariant {
@@ -27,12 +28,17 @@ export interface ModelFamily {
 }
 
 const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-/** A setting word at the end of a label. The two-word ones come first so they are taken whole. */
-const LABEL_SUFFIX = / (no thinking|extra high|thinking|fast|high|medium|low|max|none|minimal)$/i;
+/**
+ * A setting word at the end of a label. The two-word ones come first so they are taken whole.
+ * Antigravity puts its effort in parentheses: "Gemini 4 Neon (XHigh)".
+ */
+const LABEL_SUFFIX = / (\((?:xhigh|high|medium|low|minimal)\)|no thinking|extra high|thinking|fast|high|medium|low|max|none|minimal)$/i;
 const VENDORS: Array<[RegExp, string]> = [
 	[/^claude\b/i, "Anthropic"],
 	[/^(gpt|codex|o\d)\b/i, "OpenAI"],
 	[/^gemini\b/i, "Google"],
+	// Antigravity's gemini-pro-orchestrator models.
+	[/^orchestrator\b/i, "Google"],
 	[/^grok\b/i, "xAI"],
 	[/^(composer|auto)\b/i, "Cursor"],
 	[/^glm\b/i, "Z.ai"],
@@ -44,7 +50,7 @@ const VENDORS: Array<[RegExp, string]> = [
 
 /** Agents whose catalogs fold settings into the model id. */
 export function listsModelVariants(harness: string | undefined): boolean {
-	return harness === "cursor";
+	return harness === "cursor" || harness === "agy";
 }
 
 /** The vendor a model belongs to, read from the start of its name. */
@@ -159,7 +165,7 @@ export function pickModelVariant(
 }
 
 const UPPERCASE_WORDS = new Set(["gpt", "glm", "ai", "api"]);
-const GROUP_NAMES: Record<string, string> = { openai: "OpenAI", xai: "xAI", deepseek: "DeepSeek", "z.ai": "Z.ai" };
+const GROUP_NAMES: Record<string, string> = { openai: "OpenAI", xai: "xAI", deepseek: "DeepSeek", "z.ai": "Z.ai", opencode: "OpenCode", zai: "Z.ai" };
 
 /** A readable name for a model listed only by id ("gpt-5.3-codex-spark" is "GPT-5.3 Codex Spark"); written-out labels are kept. */
 export function readableModelLabel(label: string): string {
@@ -178,13 +184,22 @@ export function readableModelLabel(label: string): string {
 	return words.join(" ");
 }
 
-/** A running agent's "<provider>/<model>" choice (Pi's chat) named as its catalog shows it, under its provider. */
+/** A running agent's "<provider>/<model>" choice named as its catalog shows it, under its provider. */
 export function providerQualifiedChoice<T extends { value: string; name: string; group?: string; groupName?: string }>(choice: T, harness: string): T {
 	const slash = choice.value.indexOf("/");
 	if (slash <= 0 || choice.group || choice.groupName) return choice;
 	const provider = choice.value.slice(0, slash);
-	if (!choice.name.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) return choice;
-	return { ...choice, name: readableModelLabel(choice.name.slice(slash + 1)), group: modelGroupLabel(provider, harness) };
+	const namedByProvider = choice.name.toLowerCase().startsWith(`${provider.toLowerCase()}/`);
+	const isOpenCode = harness === "opencode" || harness === "opencode-v2";
+	if (!namedByProvider && !isOpenCode) return choice;
+	return {
+		...choice,
+		name: namedByProvider ? readableModelLabel(choice.name.slice(slash + 1)) : choice.name,
+		// OpenCode's provider IDs are distinct routes, even its own opencode and
+		// opencode-go. Suppressing either group lets same-name choices collapse.
+		group: isOpenCode ? provider : modelGroupLabel(provider, harness),
+		...(isOpenCode ? { groupName: readableProviderName(provider) } : {}),
+	};
 }
 
 /**
@@ -198,7 +213,13 @@ export function modelGroupLabel(group: string | undefined, harness: string): str
 	if (!id || id.startsWith("[")) return undefined;
 	const own = harness.toLowerCase().replace(/[^a-z0-9]/g, "");
 	if (own && id.replace(/[^a-z0-9]/g, "").includes(own)) return undefined;
+	return readableProviderName(raw);
+}
+
+// Provider display names are independent of whether a harness hides its own group.
+function readableProviderName(raw: string): string {
 	// Vendor names from a variant catalog are already written out.
 	if (/[A-Z]/.test(raw)) return raw;
+	const id = raw.slice(raw.lastIndexOf(":") + 1).toLowerCase();
 	return id.split(/[-_\s]+/).map((word) => GROUP_NAMES[word] ?? word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 }

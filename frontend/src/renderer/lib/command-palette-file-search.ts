@@ -1,6 +1,7 @@
+import { apiErrorException } from "./api-error-exception";
 import type { CloudCpClient } from "./cloud-cp";
 import { CloudCpError } from "./cloud-cp/errors";
-import { apiClient, apiErrorMessage } from "./api-client";
+import { apiClient } from "./api-client";
 import { clientForSessionHost } from "./host-clients";
 import { cloudWorkspaceReviewSearchQueryOptions } from "../hooks/useCloudWorkspaceReview";
 import { sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
@@ -28,6 +29,7 @@ type CommandPaletteFileSearchQueryOptions = {
 	queryKey: readonly unknown[];
 	queryFn: (context?: { signal?: AbortSignal }) => Promise<CommandPaletteFileSearchResponse>;
 	retry?: (failureCount: number, error: Error) => boolean;
+	retryDelay?: (failureCount: number, error: Error) => number;
 };
 
 function normalizeSearchResponse(response: {
@@ -131,7 +133,7 @@ export function commandPaletteContentSearchQueryOptions(
 				params: { path: { sessionId: target.sessionId }, query: { query } },
 				signal,
 			});
-			if (error) throw new Error(apiErrorMessage(error, errorMessage));
+			if (error) throw apiErrorException(error, errorMessage);
 			if (!data) throw new Error(errorMessage);
 			return data;
 		},
@@ -216,7 +218,7 @@ export function commandPaletteChatSearchQueryOptions(query: string, errorMessage
 				params: { query: { query } },
 				signal,
 			});
-			if (error) throw new Error(apiErrorMessage(error, errorMessage));
+			if (error) throw apiErrorException(error, errorMessage);
 			if (!data) throw new Error(errorMessage);
 			return data;
 		},

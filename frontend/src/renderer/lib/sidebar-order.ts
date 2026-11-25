@@ -1,9 +1,11 @@
 import {
 	attentionZone,
+	isOrchestratorSession,
 	sessionNeedsAttention,
 	sortedWorkerSessions,
-	workerSessions,
+	ownScratchpadWorkspaces,
 	STANDALONE_PROJECT_KIND,
+	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
@@ -31,6 +33,65 @@ export function applyOrder<T>(
 	return unplaced === "start" ? [...rest, ...placed] : [...placed, ...rest];
 }
 
+/** Stable partition: pinned ids first, each group keeping its incoming order. */
+export function pinnedFirst<T>(items: readonly T[], idOf: (item: T) => string, pinnedIds: readonly string[]): T[] {
+	if (pinnedIds.length === 0) return [...items];
+	const pinned = new Set(pinnedIds);
+	return [...items.filter((item) => pinned.has(idOf(item))), ...items.filter((item) => !pinned.has(idOf(item)))];
+}
+
+/** A worker the user pinned. Pins live in the session's own sidebar group. */
+export function isPinnedWorker(session: WorkspaceSession): boolean {
+	return session.isPinned === true && !isOrchestratorSession(session);
+}
+
+/**
+ * A group's saved drag order, kept per part. A row that gains or loses its pin
+ * after the drag is new to its part, so a fresh pin still lands on top instead
+ * of taking the slot it had while unpinned.
+ */
+export type GroupOrder = { readonly pinned: readonly string[]; readonly rest: readonly string[] };
+
+export const EMPTY_GROUP_ORDER: GroupOrder = { pinned: [], rest: [] };
+
+/** Splits a group's shown order into its parts, by each session's pin now. */
+export function splitGroupOrder(order: readonly string[], sessions: readonly WorkspaceSession[]): GroupOrder {
+	const pinned = new Set(sessions.filter(isPinnedWorker).map((session) => session.id));
+	return { pinned: order.filter((id) => pinned.has(id)), rest: order.filter((id) => !pinned.has(id)) };
+}
+
+/**
+ * Drops each listed session from the saved part it no longer belongs to, so a
+ * session that loses or regains its pin is new to its part and is not put back
+ * in its old slot. Sessions that kept their pin state keep their drag order.
+ * Returns `order` itself when nothing changed.
+ */
+export function pruneGroupOrder(order: GroupOrder, sessions: readonly WorkspaceSession[]): GroupOrder {
+	const listed = new Set(sessions.map((session) => session.id));
+	const pinnedNow = new Set(sessions.filter(isPinnedWorker).map((session) => session.id));
+	const pinned = order.pinned.filter((id) => !listed.has(id) || pinnedNow.has(id));
+	const rest = order.rest.filter((id) => !listed.has(id) || !pinnedNow.has(id));
+	return pinned.length === order.pinned.length && rest.length === order.rest.length ? order : { pinned, rest };
+}
+
+/**
+ * One sidebar group's sessions (a project's, or the Sessions section's) in
+ * the order the group lists them: its pinned workers on top, newest pin first,
+ * then everything else. A drag order reorders each part within itself, so a
+ * drag never moves a row across the pin boundary. `arrangeRest` sorts the
+ * unpinned part further (a project floats sessions that need attention).
+ */
+export function orderGroupSessions(
+	sessions: readonly WorkspaceSession[],
+	order: GroupOrder,
+	arrangeRest: (rest: WorkspaceSession[]) => WorkspaceSession[] = (rest) => rest,
+): WorkspaceSession[] {
+	const pinned = sessions.filter(isPinnedWorker).sort((a, b) => pinnedTime(b) - pinnedTime(a));
+	const rest = sessions.filter((session) => !isPinnedWorker(session));
+	const idOf = (session: WorkspaceSession) => session.id;
+	return [...applyOrder(pinned, idOf, order.pinned, "start"), ...arrangeRest(applyOrder(rest, idOf, order.rest, "start"))];
+}
+
 export type SidebarNavSession = {
 	sessionId: string;
 	projectId: string;
@@ -43,6 +104,8 @@ export type SidebarOrderInput = {
 	remoteWorkspaces?: readonly WorkspaceSummary[];
 	/** Saved drag order of the project list. */
 	projectOrder?: readonly string[];
+	/** Projects pinned to the top of the list. */
+	pinnedProjectIds?: readonly string[];
 	/** Drag order of each project's sessions, keyed by `sessionUiKey(projectId, hostId)`. */
 	sessionOrders?: Readonly<Record<string, readonly string[]>>;
 };
@@ -53,20 +116,23 @@ function listedSessions(
 	sessionOrders: SidebarOrderInput["sessionOrders"],
 ): WorkspaceSession[] {
 	const visible = sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true);
-	return applyOrder(visible, (session) => session.id, sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? [], "start");
+	// The published order is what the group shows now, so splitting it by each
+	// session's current pin reproduces that list exactly.
+	return orderGroupSessions(visible, splitGroupOrder(sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? [], visible));
 }
 
 /**
  * Every session reachable from the sidebar, in the order the sidebar shows
- * them: pinned sessions, then projects in the user's order, then remote hosts,
- * then the Scratchpad. A session that appears twice (pinned and under its
- * project) counts once, at its first position. Keyboard navigation and the
+ * them: Sessions (the projectless agents), then projects (pinned first) in the
+ * user's order, then remote hosts. Each group lists its own pinned sessions
+ * first. A session is listed once, keyed by host. Keyboard navigation and the
  * ⌘1–9 jump both walk this list so they always agree with what is on screen.
  */
 export function buildSidebarSessionOrder({
 	workspaces,
 	remoteWorkspaces = [],
 	projectOrder = [],
+	pinnedProjectIds = [],
 	sessionOrders,
 }: SidebarOrderInput): SidebarNavSession[] {
 	const entries: SidebarNavSession[] = [];
@@ -83,20 +149,23 @@ export function buildSidebarSessionOrder({
 		});
 	};
 
-	const pinned = [...workspaces, ...remoteWorkspaces]
-		.flatMap((workspace) => workerSessions(workspace.sessions).map((session) => ({ workspace, session })))
-		.filter(({ session }) => session.isPinned && session.isTerminated !== true)
-		.sort((a, b) => pinnedTime(b.session) - pinnedTime(a.session));
-	for (const { workspace, session } of pinned) add(session, workspace);
-
-	const projects = workspaces.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND);
-	for (const workspace of applyOrder(projects, (item) => item.id, projectOrder, "start")) {
+	const scratchpads = ownScratchpadWorkspaces(workspaces);
+	// The Sessions section, above Projects, lists its local sessions and the
+	// person's Cloud standalone agents as one list, in its own order; each agent
+	// still routes by its project.
+	const scratchpadOf = new Map(scratchpads.flatMap((workspace) => workspace.sessions.map((session) => [session.id, workspace] as const)));
+	const scratchpad: WorkspaceSummary = {
+		...(scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND) ??
+			{ id: STANDALONE_WORKSPACE_ID, name: "", kind: STANDALONE_PROJECT_KIND, path: "" }),
+		sessions: scratchpads.flatMap((workspace) => workspace.sessions),
+	};
+	for (const session of listedSessions(scratchpad, sessionOrders)) add(session, scratchpadOf.get(session.id) ?? scratchpad);
+	const projects = workspaces.filter((workspace) => !scratchpads.includes(workspace));
+	const orderedProjects = pinnedFirst(applyOrder(projects, (item) => item.id, projectOrder, "start"), (item) => item.id, pinnedProjectIds);
+	for (const workspace of orderedProjects) {
 		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
 	}
 	for (const workspace of remoteWorkspaces) {
-		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
-	}
-	for (const workspace of workspaces.filter((item) => item.kind === STANDALONE_PROJECT_KIND)) {
 		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
 	}
 	return entries;
