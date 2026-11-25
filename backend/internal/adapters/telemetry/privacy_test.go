@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,5 +212,57 @@ func TestOnExportedReceivesExactlyWhatPostHogAccepted(t *testing.T) {
 	sent, _ := body["properties"].(map[string]any)
 	if gotName != "ao.daemon.started" || gotDistinct != body["distinct_id"] || gotProps["install_id"] != sent["install_id"] || len(gotProps) != len(sent) {
 		t.Fatalf("recorded %q %q %#v, sent %#v", gotName, gotDistinct, gotProps, body)
+	}
+}
+
+// Sharing turned off while the first attempt is in flight: the retry must not
+// carry the account identifiers, and keeps the uuid PostHog deduplicates on.
+func TestRetryDropsAccountIdentityWhenSharingTurnsOff(t *testing.T) {
+	dir := t.TempDir()
+	shareIdentityMarker(t, dir, true)
+	var bodies []map[string]any
+	sink, err := NewPostHogSink(dir, "phc_test", "https://example.test", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		bodies = append(bodies, body)
+		if len(bodies) == 1 {
+			shareIdentityMarker(t, dir, false)
+			return &http.Response{StatusCode: http.StatusInternalServerError, Body: http.NoBody}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close(context.Background()) }()
+	sink.Identity().SetGitHubLogin("octocat")
+	if err := sink.Identity().SetCloudUserID(context.Background(), "user_01HABC"); err != nil {
+		t.Fatal(err)
+	}
+	var exported map[string]any
+	sink.OnExported(func(_, _ string, props map[string]any) { exported = props })
+	sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.projects.created", Payload: map[string]any{"kind": "git", "github_org": "octocat"}})
+
+	if len(bodies) != 2 {
+		t.Fatalf("attempts = %d, want 2", len(bodies))
+	}
+	first, _ := bodies[0]["properties"].(map[string]any)
+	retry, _ := bodies[1]["properties"].(map[string]any)
+	if first["github_actor"] != "octocat" || first["ao_cloud_user_id"] != "user_01HABC" || first["github_org"] != "octocat" {
+		t.Fatalf("first attempt missing shared identity: %#v", first)
+	}
+	for _, key := range []string{"github_actor", "github_org", "ao_cloud_user_id"} {
+		if _, ok := retry[key]; ok {
+			t.Fatalf("retry after sharing was turned off still carries %s", key)
+		}
+		if _, ok := exported[key]; ok {
+			t.Fatalf("local log records %s that was not sent", key)
+		}
+	}
+	if retry["kind"] != "git" || bodies[0]["uuid"] != bodies[1]["uuid"] {
+		t.Fatalf("retry lost other properties or its uuid: %#v", bodies[1])
 	}
 }

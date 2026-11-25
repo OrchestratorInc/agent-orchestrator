@@ -659,6 +659,17 @@ func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) 
 		if s.suppressed() {
 			return
 		}
+		// Likewise "Include my account identity" turned off since the payload
+		// was built: this attempt goes without the account identifiers, under
+		// the same uuid so PostHog still deduplicates it.
+		if stripped, ok := s.withoutUnsharedIdentity(props); ok {
+			props = stripped
+			body["properties"] = props
+			if payload, err = json.Marshal(body); err != nil {
+				s.log.Warn("telemetry posthog payload marshal failed", "name", ev.Name, "error", err)
+				return
+			}
+		}
 		retryable, err := s.sendOnce(ctx, payload)
 		if err == nil {
 			if s.onExported != nil {
@@ -816,6 +827,31 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 	if uid != "" {
 		props["ao_cloud_user_id"] = uid
 	}
+}
+
+// withoutUnsharedIdentity returns props minus the account identifiers when
+// they are present but sharing is now off; ok is false when nothing changes.
+func (s *PostHogSink) withoutUnsharedIdentity(props map[string]any) (map[string]any, bool) {
+	if s.ident != nil && s.ident.SharesIdentity() {
+		return props, false
+	}
+	found := false
+	for k := range accountIdentityProperties {
+		if _, ok := props[k]; ok {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return props, false
+	}
+	out := make(map[string]any, len(props))
+	for k, v := range props {
+		if !accountIdentityProperties[k] {
+			out[k] = v
+		}
+	}
+	return out, true
 }
 
 // accountIdentityProperties name who the user is on GitHub or AO Cloud. They
