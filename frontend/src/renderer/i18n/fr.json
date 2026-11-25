@@ -5565,6 +5565,8 @@
 	"move.retry": "Réessayer",
 	"move.consequenceClean": "{{branch}} est poussée sur GitHub. La session est ensuite archivée ici et son worktree supprimé, fichiers ignorés compris.",
 	"move.consequence": "Les fichiers non commités sont poussés sur GitHub en un seul commit sur {{branch}}. La session est ensuite archivée ici et son worktree supprimé, fichiers ignorés compris.",
+	"move.consequenceKept": "Les fichiers non commités sont poussés sur GitHub en un seul commit sur {{branch}}. La session est ensuite archivée ici. Son worktree reste sur cet ordinateur, avec ces fichiers et les fichiers ignorés.",
+	"move.consequenceCleanKept": "{{branch}} est poussée sur GitHub. La session est ensuite archivée ici. Son worktree reste sur cet ordinateur, avec ces fichiers et les fichiers ignorés.",
 	"move.uncommittedNone": "Aucun",
 	"move.uncommitted": "Fichiers non commités",
 	"move.cloudProject": "Projet Cloud",

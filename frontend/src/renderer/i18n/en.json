@@ -5378,6 +5378,8 @@
 	"move.retry": "Try again",
 	"move.consequenceClean": "{{branch}} is pushed to GitHub. The session is then archived here and its worktree is removed, ignored files included.",
 	"move.consequence": "Uncommitted files are pushed to GitHub as one commit on {{branch}}. The session is then archived here and its worktree is removed, ignored files included.",
+	"move.consequenceKept": "Uncommitted files are pushed to GitHub as one commit on {{branch}}. The session is then archived here. Its worktree stays on this computer, with these files and any ignored files.",
+	"move.consequenceCleanKept": "{{branch}} is pushed to GitHub. The session is then archived here. Its worktree stays on this computer, with these files and any ignored files.",
 	"move.uncommittedNone": "None",
 	"move.uncommitted": "Uncommitted files",
 	"move.cloudProject": "Cloud project",

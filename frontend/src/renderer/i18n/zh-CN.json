@@ -5380,6 +5380,8 @@
 	"move.retry": "重试",
 	"move.consequenceClean": "{{branch}} 将推送到 GitHub。随后会话在此电脑上归档，其 worktree 连同被忽略的文件一起删除。",
 	"move.consequence": "未提交的文件会作为 {{branch}} 上的一个提交推送到 GitHub。随后会话在此电脑上归档，其 worktree 连同被忽略的文件一起删除。",
+	"move.consequenceKept": "未提交的文件会作为 {{branch}} 上的一个提交推送到 GitHub。随后会话在此电脑上归档，其 worktree 连同这些文件和被忽略的文件一起保留在这台电脑上。",
+	"move.consequenceCleanKept": "{{branch}} 将推送到 GitHub。随后会话在此电脑上归档，其 worktree 连同这些文件和被忽略的文件一起保留在这台电脑上。",
 	"move.uncommittedNone": "无",
 	"move.uncommitted": "未提交的文件",
 	"move.cloudProject": "Cloud 项目",

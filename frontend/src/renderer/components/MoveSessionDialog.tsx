@@ -172,6 +172,8 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 			? { orgId: org.id, projectId: createdProject.current ?? project?.id ?? "", harness }
 			: undefined;
 	const changes = preview.data?.changes ?? [];
+	// Secret environment files the move leaves on this computer.
+	const withheld = preview.data?.withheld ?? [];
 	const transcript = preview.data?.transcript;
 	// Cloud resumes the agent's conversation; without it the session starts from the handoff note.
 	const carriesTranscript =
@@ -300,9 +302,16 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 									<dd className="text-settings-label">{changes.length || t("move.uncommittedNone")}</dd>
 								</dl>
 								<UncommittedList changes={changes} />
-								<WithheldList files={preview.data?.withheld ?? []} />
+								<WithheldList files={withheld} />
 								<p className="text-sm text-settings-muted">
-									{changes.length > 0 ? t("move.consequence", { branch }) : t("move.consequenceClean", { branch })}
+									{/* The archive keeps a worktree that still holds files (the withheld ones), so it is removed only when none stay. */}
+									{withheld.length > 0
+										? changes.length > 0
+											? t("move.consequenceKept", { branch })
+											: t("move.consequenceCleanKept", { branch })
+										: changes.length > 0
+											? t("move.consequence", { branch })
+											: t("move.consequenceClean", { branch })}
 								</p>
 								<p className="text-sm text-settings-muted">{carriesTranscript ? t("move.conversationUploaded") : t("move.noteUploaded")}</p>
 							</>

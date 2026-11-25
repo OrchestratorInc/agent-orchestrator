@@ -5398,6 +5398,8 @@
 	"move.retry": "Erneut versuchen",
 	"move.consequenceClean": "{{branch}} wird zu GitHub gepusht. Danach wird die Sitzung hier archiviert und ihr Worktree entfernt, einschließlich ignorierter Dateien.",
 	"move.consequence": "Nicht committete Dateien werden als ein Commit auf {{branch}} zu GitHub gepusht. Danach wird die Sitzung hier archiviert und ihr Worktree entfernt, einschließlich ignorierter Dateien.",
+	"move.consequenceKept": "Nicht committete Dateien werden als ein Commit auf {{branch}} zu GitHub gepusht. Danach wird die Sitzung hier archiviert. Ihr Worktree bleibt auf diesem Computer, mit diesen Dateien und allen ignorierten Dateien.",
+	"move.consequenceCleanKept": "{{branch}} wird zu GitHub gepusht. Danach wird die Sitzung hier archiviert. Ihr Worktree bleibt auf diesem Computer, mit diesen Dateien und allen ignorierten Dateien.",
 	"move.uncommittedNone": "Keine",
 	"move.uncommitted": "Nicht committete Dateien",
 	"move.cloudProject": "Cloud-Projekt",

@@ -5565,6 +5565,8 @@
 	"move.retry": "Reintentar",
 	"move.consequenceClean": "{{branch}} se sube a GitHub. Después la sesión se archiva aquí y su worktree se elimina, incluidos los archivos ignorados.",
 	"move.consequence": "Los archivos sin confirmar se suben a GitHub como un commit en {{branch}}. Después la sesión se archiva aquí y su worktree se elimina, incluidos los archivos ignorados.",
+	"move.consequenceKept": "Los archivos sin confirmar se suben a GitHub como un commit en {{branch}}. Después la sesión se archiva aquí. Su worktree se queda en este ordenador, con estos archivos y los archivos ignorados.",
+	"move.consequenceCleanKept": "{{branch}} se sube a GitHub. Después la sesión se archiva aquí. Su worktree se queda en este ordenador, con estos archivos y los archivos ignorados.",
 	"move.uncommittedNone": "Ninguno",
 	"move.uncommitted": "Archivos sin confirmar",
 	"move.cloudProject": "Proyecto de Cloud",

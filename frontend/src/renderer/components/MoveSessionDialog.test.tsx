@@ -361,6 +361,22 @@ it("says which secret environment files stay on this computer and won't move", a
 	expect(Array.from(list.querySelectorAll("li")).map((li) => li.textContent)).toEqual([".env", "config/.env.local"]);
 	// They are not among the files the move pushes.
 	expect(screen.getByRole("list", { name: "Uncommitted files" }).textContent).not.toContain(".env");
+	// The archive keeps a worktree that holds them, so the dialog must not say it is removed.
+	expect(screen.getByText(/The session is then archived here\. Its worktree stays on this computer, with these files and any ignored files\./)).toBeTruthy();
+	expect(screen.queryByText(/worktree is removed/)).toBeNull();
+});
+
+it("says the worktree stays when only secret environment files are left uncommitted", async () => {
+	daemon.preview = { data: { branch: "feat/x", changes: [], withheld: [".env"] } };
+	renderDialog();
+	expect(await screen.findByText("feat/x is pushed to GitHub. The session is then archived here. Its worktree stays on this computer, with these files and any ignored files.")).toBeTruthy();
+	expect(screen.queryByText(/worktree is removed/)).toBeNull();
+});
+
+it("says the worktree is removed when nothing stays on this computer", async () => {
+	daemon.preview = { data: { branch: "feat/x", changes: [{ path: "README.md", status: "modified" }] } };
+	renderDialog();
+	expect(await screen.findByText(/The session is then archived here and its worktree is removed, ignored files included\./)).toBeTruthy();
 });
 
 it("saves the move before Cloud's create, so a relaunch finishes it under the same id", async () => {

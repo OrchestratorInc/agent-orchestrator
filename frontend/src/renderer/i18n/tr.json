@@ -5418,6 +5418,8 @@
 	"move.retry": "Yeniden dene",
 	"move.consequenceClean": "{{branch}} GitHub'a gönderilir. Ardından oturum burada arşivlenir ve çalışma ağacı, yok sayılan dosyalar dahil kaldırılır.",
 	"move.consequence": "Commit edilmemiş dosyalar {{branch}} üzerinde tek bir commit olarak GitHub'a gönderilir. Ardından oturum burada arşivlenir ve çalışma ağacı, yok sayılan dosyalar dahil kaldırılır.",
+	"move.consequenceKept": "Commit edilmemiş dosyalar {{branch}} üzerinde tek bir commit olarak GitHub'a gönderilir. Ardından oturum burada arşivlenir. Çalışma ağacı bu dosyalar ve yok sayılan dosyalarla birlikte bu bilgisayarda kalır.",
+	"move.consequenceCleanKept": "{{branch}} GitHub'a gönderilir. Ardından oturum burada arşivlenir. Çalışma ağacı bu dosyalar ve yok sayılan dosyalarla birlikte bu bilgisayarda kalır.",
 	"move.uncommittedNone": "Yok",
 	"move.uncommitted": "Commit edilmemiş dosyalar",
 	"move.cloudProject": "Cloud projesi",
