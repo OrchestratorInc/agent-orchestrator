@@ -8,6 +8,8 @@ describe("chatFailureReason", () => {
 		["Your credit balance is too low to access the Anthropic API.", "quota_exceeded"],
 		["Billing hard limit has been reached (billing_hard_limit_reached)", "quota_exceeded"],
 		["Billing quota exceeded", "quota_exceeded"],
+		["429: billing account quota has been exceeded", "quota_exceeded"],
+		["401 Unauthorized: billing quota endpoint requires authentication", "auth_required"],
 		["401 Unauthorized: billing account authentication token has expired.", "auth_required"],
 		["429 Too Many Requests: see your billing settings for higher limits", "rate_limited"],
 		["429 Too Many Requests: rate limit reached for requests", "rate_limited"],
