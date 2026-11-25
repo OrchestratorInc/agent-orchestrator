@@ -130,10 +130,11 @@ func TestBundleChainResolvesRelativePaths(t *testing.T) {
 	}
 	work := t.TempDir()
 	t.Chdir(work)
-	if err := os.Symlink(filepath.Join(repo, ".git"), filepath.Join(work, "src.git")); err != nil {
+	src, err := filepath.Rel(work, filepath.Join(repo, ".git"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := BundleChain(ctx, "src.git", ref, "", "base.bundle"); err != nil {
+	if _, err := BundleChain(ctx, src, ref, "", "base.bundle"); err != nil {
 		t.Fatalf("BundleChain with relative paths: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(work, "base.bundle")); err != nil {
