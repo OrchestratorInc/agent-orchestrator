@@ -950,8 +950,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsTruncated={truncated}
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
-				// An archived session's worktree is gone until the restore its first message
-				// runs, so files are taken once that restore is under way and staged once it is back.
 				onStageAttachments={sessionIsActive(session) || commands.resumingAgent ? stageAttachments : undefined}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a

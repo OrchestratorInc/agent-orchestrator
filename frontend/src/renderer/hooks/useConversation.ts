@@ -35,7 +35,7 @@ import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-up
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
-import { useRestoreSession } from "./useRestoreSession";
+import { restoreInFlight, type RestoreSessionResult, useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
@@ -970,7 +970,13 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 /** Restoring an archived session before its message failed, so the message never left. ChatComposer treats this code as a definitive refusal. */
 const SESSION_RESTORE_FAILED = "SESSION_RESTORE_FAILED";
 
-const restoresInFlight = new Map<string, Promise<void>>();
+function assertRestored(restored: RestoreSessionResult): void {
+	// Restored meanwhile from another window or device: it is live, as asked.
+	const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
+	if (restored.status !== "success" && !alreadyLive) {
+		throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
+	}
+}
 
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
@@ -1247,20 +1253,7 @@ export function useConversationCommands(
 			// The daemon refuses to resume a terminated session. Only a restore, which
 			// also brings its worktree back, can start it again.
 			if (terminated) {
-				const key = `${hostId ?? "local"}:${sessionId}`;
-				const restore = restoreSession(sessionId as string, hostId).then((restored) => {
-					// Restored meanwhile from another window or device: it is live, as asked.
-					const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
-					if (restored.status !== "success" && !alreadyLive) {
-						throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
-					}
-				});
-				restoresInFlight.set(key, restore);
-				try {
-					await restore;
-				} finally {
-					restoresInFlight.delete(key);
-				}
+				assertRestored(await restoreSession(sessionId as string, hostId));
 				// Stay pending until the chat reads the live agent: its cached snapshot
 				// still says stopped, which would flash as a crash. A send that restored
 				// the session waits on this too, so it reaches the live agent.
@@ -2432,14 +2425,16 @@ export function useStageAttachments(sessionId: string | undefined, hostId?: stri
 	return useCallback(
 		async (attachments: OutgoingAttachment[], signal?: AbortSignal): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
+			const restored = await restoreInFlight(sessionId, hostId);
+			if (restored) assertRestored(restored);
 			// A file too large to inline is streamed from disk to this session's
 			// daemon first, and the request names the upload.
 			const wire = await toWireAttachments(attachments, hostId, signal);
-			await restoresInFlight.get(`${hostId ?? "local"}:${sessionId}`);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
 				// The daemon names staged files itself; only the bytes go.
 				body: { attachments: wire },
+				signal,
 			});
 			if (error) throw error;
 			return data?.paths ?? [];

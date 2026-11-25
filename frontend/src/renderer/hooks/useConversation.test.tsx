@@ -33,6 +33,7 @@ import {
 	useStageAttachments,
 	toSnapshot,
 } from "./useConversation";
+import { useRestoreSession } from "./useRestoreSession";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
@@ -1738,6 +1739,30 @@ describe("controller recovery", () => {
 			});
 			await expect(staging).resolves.toEqual([".ao/attachments/a.png"]);
 			expect(paths().indexOf(RESTORE)).toBeLessThan(paths().indexOf(ATTACHMENTS));
+		});
+
+		it("stages a file only once a restore started outside the chat is done", async () => {
+			const ATTACHMENTS = "/api/v1/sessions/{sessionId}/attachments";
+			const restored = deferred<{ data: object; error: undefined }>();
+			postMock.mockImplementation((path: string) => path === RESTORE
+				? restored.promise
+				: Promise.resolve({ data: { paths: [".ao/attachments/a.png"] }, error: undefined }));
+			const queryClient = archivedClient();
+			const { result } = renderHook(() => ({ restore: useRestoreSession(), stage: useStageAttachments("ao-1") }), {
+				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+			});
+
+			const restoring = result.current.restore("ao-1");
+			const staging = result.current.stage([{ mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+			await act(async () => {});
+			expect(paths()).toEqual([RESTORE]);
+
+			await act(async () => {
+				restored.resolve({ data: {}, error: undefined });
+				await restoring;
+			});
+			await expect(staging).resolves.toEqual([".ao/attachments/a.png"]);
+			expect(paths()).toEqual([RESTORE, ATTACHMENTS]);
 		});
 
 		it("stages nothing when the restore fails", async () => {

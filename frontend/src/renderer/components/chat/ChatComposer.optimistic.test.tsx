@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Activity } from "react";
 import { CONTROLLED_TEXT_INSERTION_COMMAND, HISTORY_PUSH_TAG, type LexicalEditor, REDO_COMMAND, UNDO_COMMAND } from "lexical";
 import { describe, expect, it, vi } from "vitest";
 import { readChatSessionDraft, writeChatComposerText } from "../../lib/chat-drafts";
@@ -130,6 +131,176 @@ describe("optimistic message delivery", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
 		expect(pending.onSend.mock.calls[1][0]).toContain(".ao/attachments/next.png");
+	});
+
+	function pasteImages(field: HTMLElement, ...names: string[]) {
+		fireEvent.paste(field, {
+			clipboardData: {
+				files: names.map((name) => new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" })),
+				items: [],
+				getData: () => "",
+				setData: () => undefined,
+			},
+		});
+	}
+
+	function stagerHeldAfterFirst() {
+		let finish!: (paths: string[]) => void;
+		let fail!: (error: unknown) => void;
+		const stage = vi.fn((files: unknown[]) => stage.mock.calls.length === 1
+			? Promise.resolve(files.map((_, index) => `.ao/attachments/sent-${index}.png`))
+			: new Promise<string[]>((resolve, reject) => { finish = resolve; fail = reject; }));
+		return { stage, finish: (paths: string[]) => finish(paths), fail: (error: unknown) => fail(error) };
+	}
+
+	it("does not send a file again after its chat was hidden while the send landed", async () => {
+		const sessionId = "optimistic-sent-file-once";
+		const pending = pendingSend();
+		const held = stagerHeldAfterFirst();
+		const chat = (mode: "visible" | "hidden") => (
+			<TooltipProvider>
+				<Activity mode={mode}>
+					<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={held.stage} />
+				</Activity>
+			</TooltipProvider>
+		);
+		const view = render(chat("visible"));
+		pasteImages(screen.getByLabelText("Message the agent"), "sent.png");
+		await screen.findByLabelText("Remove sent.png");
+		const field = await startSend(pending.onSend, "first message");
+		pasteImages(field, "next.png");
+		await waitFor(() => expect(held.stage).toHaveBeenCalledTimes(2));
+
+		view.rerender(chat("hidden"));
+		await act(async () => pending.resolve());
+		await act(async () => held.finish([".ao/attachments/next.png"]));
+		view.rerender(chat("visible"));
+
+		await screen.findByLabelText("Remove next.png");
+		expect(screen.queryByLabelText("Remove sent.png")).not.toBeInTheDocument();
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.attachments.map((attachment) => attachment.path)).toEqual([".ao/attachments/next.png"]));
+		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Enter" });
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls[1][0]).toContain(".ao/attachments/next.png");
+		expect(pending.onSend.mock.calls[1][0]).not.toContain("sent-0.png");
+	});
+
+	it("keeps a next file a remounted chat took when the first chat's send lands", async () => {
+		const sessionId = "optimistic-remount-next-file";
+		const pending = pendingSend();
+		const stage = vi.fn(async (files: unknown[]) => files.map(() => `.ao/attachments/${stage.mock.calls.length}.png`));
+		const chat = () => (
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+			</TooltipProvider>
+		);
+		const first = render(chat());
+		pasteImages(screen.getByLabelText("Message the agent"), "sent.png");
+		await screen.findByLabelText("Remove sent.png");
+		await startSend(pending.onSend, "first message");
+		first.unmount();
+		render(chat());
+		pasteImages(screen.getByLabelText("Message the agent"), "next.png");
+		await screen.findByLabelText("Remove next.png");
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(screen.getByLabelText("Remove next.png")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Remove sent.png")).not.toBeInTheDocument();
+		expect(readChatSessionDraft(sessionId).composer.attachments.map((attachment) => attachment.name)).toEqual(["next.png"]);
+	});
+
+	it("gives the next message its own file limit during a send and lets its files be removed", async () => {
+		const sessionId = "optimistic-next-message-limit";
+		const pending = pendingSend();
+		const stage = vi.fn(async (files: unknown[]) => files.map((_, index) => `.ao/attachments/${stage.mock.calls.length}-${index}.png`));
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+			</TooltipProvider>,
+		);
+		pasteImages(screen.getByLabelText("Message the agent"), ...Array.from({ length: 8 }, (_, index) => `sent-${index}.png`));
+		await screen.findByLabelText("Remove sent-7.png");
+		const field = await startSend(pending.onSend, "first message");
+
+		pasteImages(field, "next.png");
+
+		const remove = await screen.findByLabelText("Remove next.png");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		await userEvent.click(remove);
+		expect(screen.queryByLabelText("Remove next.png")).not.toBeInTheDocument();
+		expect(readChatSessionDraft(sessionId).composer.attachments).toEqual([]);
+		await act(async () => pending.resolve());
+	});
+
+	it("sends a file entered on its own during a send right after that send", async () => {
+		const sessionId = "optimistic-next-file-only-enter";
+		const pending = pendingSend();
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/next.png"]);
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		pasteImages(field, "next.png");
+		await screen.findByLabelText("Remove next.png");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(pending.onSend).toHaveBeenCalledOnce();
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls[1][0]).toContain(".ao/attachments/next.png");
+	});
+
+	it("keeps a refused message beside the box when only a file was taken for the next one", async () => {
+		const sessionId = "optimistic-refused-next-file-only";
+		const pending = pendingSend();
+		const stage = vi.fn(async (files: unknown[]) => files.map(() => `.ao/attachments/${stage.mock.calls.length}.png`));
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+			</TooltipProvider>,
+		);
+		pasteImages(screen.getByLabelText("Message the agent"), "sent.png");
+		await screen.findByLabelText("Remove sent.png");
+		const field = await startSend(pending.onSend, "first message");
+		pasteImages(field, "next.png");
+		await screen.findByLabelText("Remove next.png");
+
+		await act(async () => pending.reject({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("first message");
+		expect(field).toHaveAttribute("contenteditable", "true");
+		expect(field).not.toHaveTextContent("first message");
+		expect(screen.getByLabelText("Remove next.png")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Remove sent.png")).not.toBeInTheDocument();
+	});
+
+	it("says why a restore failed rather than that its file was not attached", async () => {
+		const sessionId = "optimistic-restore-failed-reason";
+		const pending = pendingSend();
+		const held = stagerHeldAfterFirst();
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={held.stage} />
+			</TooltipProvider>,
+		);
+		pasteImages(screen.getByLabelText("Message the agent"), "sent.png");
+		await screen.findByLabelText("Remove sent.png");
+		const field = await startSend(pending.onSend, "first message");
+		pasteImages(field, "next.png");
+		await waitFor(() => expect(held.stage).toHaveBeenCalledTimes(2));
+		const refusal = { code: "SESSION_RESTORE_FAILED", message: "Its branch is gone" };
+
+		await act(async () => {
+			held.fail(refusal);
+			pending.reject(refusal);
+		});
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Its branch is gone");
 	});
 
 	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {

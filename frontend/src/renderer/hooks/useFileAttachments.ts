@@ -78,7 +78,10 @@ export type FileAttachmentOptions = {
 	 * size is accepted.
 	 */
 	maxAttachmentBytes?: number;
+	unsentAttachments?: (attachments: FileAttachment[]) => FileAttachment[];
 };
+
+const everyAttachment = (attachments: FileAttachment[]) => attachments;
 
 type PendingFileAttachment = Pick<FileAttachment, "id" | "name">;
 
@@ -386,6 +389,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		prepareEach = false,
 		onAttachmentsChange,
 		maxAttachmentBytes,
+		unsentAttachments = everyAttachment,
 	} = options;
 	const [attachments, setAttachments] = useState<FileAttachment[]>(() => initialAttachments);
 	const [error, setError] = useState<string | null>(null);
@@ -470,7 +474,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 					errors.add(`Each file must be under ${mb(maxAttachmentBytes)} MB.`);
 					continue;
 				}
-				if (attachmentsRef.current.length + results.length >= MAX_ATTACHMENTS) {
+				if (unsentAttachments(attachmentsRef.current).length + results.length >= MAX_ATTACHMENTS) {
 					errors.add(`You can attach up to ${MAX_ATTACHMENTS} files.`);
 					break;
 				}
@@ -508,7 +512,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			});
 		}
 
-		const accepted = [...attachmentsRef.current];
+		const accepted = [...unsentAttachments(attachmentsRef.current)];
 		const acceptedFresh: FileAttachment[] = [];
 		for (const a of fresh) {
 			if (accepted.length >= MAX_ATTACHMENTS) {
@@ -590,7 +594,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		setError(nextError);
 		if (initialKey) notifySharedAttachmentEntry(initialKey, { error: nextError });
 		return added;
-	}, [initialKey, maxAttachmentBytes, onAttachmentsChange, prepareAttachments, prepareEach]);
+	}, [initialKey, maxAttachmentBytes, onAttachmentsChange, prepareAttachments, prepareEach, unsentAttachments]);
 
 	/** Resolves with the attachments this batch actually added, staged when staging is on. */
 	const addFiles = useCallback((files: Iterable<File>): Promise<FileAttachment[]> => {
@@ -670,6 +674,17 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		setError(null);
 	}, [initialKey, onAttachmentsChange]);
 
+	const dropSent = useCallback((sent: readonly { id: string }[] = []) => {
+		if (sent.length === 0) return;
+		const keep = (files: FileAttachment[]) => files.filter((file) => !sent.some((item) => item.id === file.id));
+		attachmentsRef.current = keep(attachmentsRef.current);
+		setAttachments(attachmentsRef.current);
+		const shared = initialKey ? sharedAttachmentEntries.get(initialKey)?.attachments : undefined;
+		if (initialKey && shared) {
+			notifySharedAttachmentEntry(initialKey, { attachments: keep(shared) }, listenerTokenRef.current);
+		}
+	}, [initialKey]);
+
 	const clear = useCallback(() => {
 		generationRef.current++;
 		pendingReadsRef.current.clear();
@@ -737,6 +752,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		remove,
 		cancelPending,
 		dismissError,
+		dropSent,
 		clear,
 		reconcilePersistedAttachments,
 		getAttachments: () => attachmentsRef.current,
