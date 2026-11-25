@@ -64,11 +64,11 @@ func TestPlanCloudflaredDownloadsThePinnedRelease(t *testing.T) {
 	}
 }
 
-// No pinned asset means today's package-manager route, unchanged.
+// No pinned asset means the package-manager route uses the headless winget plan.
 func TestPlanCloudflaredWithoutAPinnedAssetUsesThePackageManager(t *testing.T) {
 	s, _ := newDownloadService("windows", "arm64", nil, "winget")
 	plan := s.planFor(TargetCloudflared)
-	if plan.download != nil || strings.Join(plan.Command, " ") != "winget install -e --id Cloudflare.cloudflared" {
+	if plan.download != nil || strings.Join(plan.Command, " ") != "winget install -e --id Cloudflare.cloudflared --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" {
 		t.Fatalf("plan = %+v, want the winget fallback", plan)
 	}
 }

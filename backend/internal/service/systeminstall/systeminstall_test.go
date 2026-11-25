@@ -246,7 +246,7 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "cloudflared windows uses winget", target: TargetCloudflared, goos: "windows", found: []string{"winget"},
-			wantCommand: []string{"winget", "install", "-e", "--id", "Cloudflare.cloudflared"},
+			wantCommand: []string{"winget", "install", "-e", "--id", "Cloudflare.cloudflared", "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
 		},
 		{
 			name: "cloudflared windows without winget is unsupported", target: TargetCloudflared, goos: "windows",
@@ -261,7 +261,7 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "gh windows uses winget", target: TargetGH, goos: "windows", found: []string{"winget"},
-			wantCommand: []string{"winget", "install", "-e", "--id", "GitHub.cli"},
+			wantCommand: []string{"winget", "install", "-e", "--id", "GitHub.cli", "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
 		},
 		{
 			name: "gh windows without winget is unsupported", target: TargetGH, goos: "windows",
@@ -293,7 +293,7 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "opencode windows uses winget", target: TargetOpencode, goos: "windows", found: []string{"winget"},
-			wantCommand: []string{"winget", "install", "-e", "--id", "SST.opencode", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
+			wantCommand: []string{"winget", "install", "-e", "--id", "SST.opencode", "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"},
 		},
 		{
 			name: "opencode darwin remote script is manual", target: TargetOpencode, goos: "darwin", found: []string{"curl", "bash"},
