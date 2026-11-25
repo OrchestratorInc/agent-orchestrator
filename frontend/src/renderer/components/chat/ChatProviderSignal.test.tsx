@@ -197,19 +197,25 @@ describe("auto review", () => {
 	it("reads as a decision taken for the user, not one they made", async () => {
 		render(<ActivityRow activity={review} />);
 		expect(screen.getByText("Auto-approved")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button"));
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
 		expect(screen.getByText(/You were not asked/)).toBeInTheDocument();
+	});
+
+	it("hangs its boxes on the step line under its icon when opened on its own", async () => {
+		render(<ActivityRow activity={review} />);
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(screen.getByText(/You were not asked/).closest(".activity-step-line")).not.toBeNull();
 	});
 
 	it("makes the rationale reachable", async () => {
 		render(<ActivityRow activity={review} />);
-		await userEvent.click(screen.getByRole("button"));
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
 		expect(screen.getByText("Read-only request to an allow-listed host.")).toBeInTheDocument();
 	});
 
 	it("carries the provider's own word for who decided", async () => {
 		render(<ActivityRow activity={review} />);
-		await userEvent.click(screen.getByRole("button"));
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
 		// "agent" means a model made the call, which is materially different from a
 		// policy rule matching — so it is not flattened to "automatically".
 		expect(screen.getByText("agent · 812ms")).toBeInTheDocument();
@@ -217,7 +223,7 @@ describe("auto review", () => {
 
 	it("shows the risk the provider assessed", () => {
 		render(<ActivityRow activity={review} />);
-		expect(screen.getByTitle("Risk assessed as low")).toBeInTheDocument();
+		expect(screen.getByText("low")).toBeInTheDocument();
 	});
 
 	it("calls a denial a denial", () => {
@@ -762,11 +768,13 @@ describe("file changes", () => {
 		expect(screen.getByText("modified")).toBeInTheDocument();
 	});
 
-	it("shows the full path when hovering an edited basename", async () => {
+	it("keeps an edited file's chip free of a hover tooltip", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={edit} />);
 		await user.click(screen.getByRole("button", { name: /Edited 2 files/ }));
 		await user.hover(screen.getByText("a.ts"));
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/a.ts");
+		// A row is there to scan; its text opens no tooltip.
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		expect(screen.queryByRole("tooltip")).toBeNull();
 	});
 });

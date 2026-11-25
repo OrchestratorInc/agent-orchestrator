@@ -34,11 +34,6 @@ const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 /** At most this many avatars stack in the header; the count says the rest. */
 const STACKED_AVATARS = 3;
 /**
- * How far the rows sit in under the header: one stacked mark's step (18px marks, 6px
- * overlap). The same for one child or fifteen, so the list keeps one left edge.
- */
-const ROW_INSET = 12;
-/**
  * Claude's default agent type. It says nothing a reader can act on, so a row names
  * only a specialized type, such as `Explore`, `Plan` or a project's own agent.
  */
@@ -108,10 +103,12 @@ export function SubagentTeam({
 				type="button"
 				onClick={() => setOpen(teamKey, !open)}
 				aria-expanded={open}
+				// The thread under an opened team starts at its first mark (18px wide).
+				data-thread-parent={open ? "" : undefined}
 				// One line: the count, the states beside it, then the chevron right after them,
 				// the way "Worked for" carries its own.
 				// The chat draws no focus rings (styles.css), so keyboard focus is the rows' fill.
-				className="activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none focus-visible:rounded-md focus-visible:bg-interactive-hover"
+				className="activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none focus-visible:rounded-md focus-visible:bg-interactive-hover [--thread-drop:12px] [--thread-x:9px]"
 			>
 				{/* Overlapping marks, each cut back short of the one over it, so two agents read
 				    as two marks rather than one shape. A mask, not a halo: the chat's canvas is
@@ -154,7 +151,8 @@ export function SubagentTeam({
 					>
 						{/* Plain rows on the chat's canvas, working or finished: only the spinner and the
 						    live line tell a working child apart, so nothing changes shape as it ends. */}
-						<ul className="mt-1 flex min-w-0 flex-col" style={{ paddingLeft: ROW_INSET }}>
+						{/* Threaded from the team's mark into each agent's, like a run's steps. */}
+						<ul className="subagent-thread mt-1 flex min-w-0 flex-col [--thread-lead:0.25rem]">
 							<AnimatePresence initial={false}>
 								{agents.map((agent) => {
 									const agentKey = `${teamKey}:agent:${agent.launch.id}`;
@@ -259,6 +257,7 @@ export function SubagentRowButton({
 			type="button"
 			onClick={onClick}
 			aria-expanded={expanded}
+			data-thread-anchor=""
 			// A list row, not a raised button: `activity-summary-button` keeps the chat's
 			// press-scale off it, the same as the other timeline disclosures.
 			// The mark, the time and the chevron are centred on the row's two lines. Like the
