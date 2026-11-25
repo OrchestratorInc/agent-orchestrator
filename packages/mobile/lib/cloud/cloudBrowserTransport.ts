@@ -1,5 +1,5 @@
 import { AoError } from "../../../shared/telemetry/ao-error";
-import { toViewState, type BrowserCapabilities, type BrowserCommand, type BrowserControl, type BrowserDialog, type BrowserFrame, type BrowserTransport, type BrowserTransportHandlers, type BrowserViewState, type FocusedEditable } from "../browserTransport";
+import { toViewState, type BrowserCapabilities, type BrowserCommand, type BrowserControl, type BrowserDialog, type BrowserFrame, type BrowserPickedFile, type BrowserTransport, type BrowserTransportHandlers, type BrowserViewState, type FocusedEditable } from "../browserTransport";
 import { CLOUD_API_PREFIX, cloudWebSocketBase } from "./config";
 
 /**
@@ -29,7 +29,23 @@ export type CloudBrowserTransportOptions = {
 	createSocket?(url: string, headers: Record<string, string>): SocketLike;
 	/** App foreground/background changes; the stream closes in the background so the sandbox's browser can idle out. */
 	subscribeAppState?(listener: (state: string) => void): () => void;
+	/** Sends one picked file's bytes to the host; defaults to a streamed HTTP POST of the file. */
+	upload?(url: string, headers: Record<string, string>, file: BrowserPickedFile): Promise<void>;
+	/** Random bytes for an upload's folder name; defaults to expo-crypto (Hermes has no Web Crypto). */
+	randomBytes?(count: number): Uint8Array;
 };
+
+async function nativeRandomBytes(count: number): Promise<Uint8Array> {
+	const Crypto = await import("expo-crypto");
+	return Crypto.getRandomBytes(count);
+}
+
+// Streamed from the file's own URI, so its size never sits in JS memory.
+async function uploadFile(url: string, headers: Record<string, string>, file: BrowserPickedFile): Promise<void> {
+	const body = await (await fetch(file.uri)).blob();
+	const response = await fetch(url, { method: "POST", headers: { ...headers, ...(file.type ? { "Content-Type": file.type } : {}) }, body });
+	if (!response.ok) throw new TypeError(`The upload was refused (${response.status}).`);
+}
 
 const OPEN = 1;
 // The host's own viewer pings every 2 s. Without traffic a still page sends
@@ -43,7 +59,17 @@ const KEY_CODES: Record<string, number> = {
 	PageUp: 33, PageDown: 34, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46,
 };
 const EDITABLE_KINDS = new Set(["text", "password", "email", "number", "url", "search", "tel", "textarea", "contenteditable"]);
-const DIALOG_KINDS = new Set(["alert", "confirm", "prompt", "beforeunload", "auth"]);
+const DIALOG_KINDS = new Set(["alert", "confirm", "prompt", "beforeunload"]);
+// The page writes these: shown as plain text, never longer than this.
+const PAGE_TEXT_MAX = 1000;
+const OPTION_TEXT_MAX = 200;
+const OPTIONS_MAX = 1000;
+const pageText = (value: unknown, max = PAGE_TEXT_MAX) => String(value ?? "").slice(0, max);
+
+/** The session's agent browser over HTTP: uploads and downloads. */
+export function cloudBrowserHTTPBase(baseUrl: string, orgId: string, sessionId: string): string {
+	return `${baseUrl.replace(/\/+$/, "")}${CLOUD_API_PREFIX}/orgs/${encodeURIComponent(orgId)}/sessions/${encodeURIComponent(sessionId)}/agent-browser`;
+}
 
 export function cloudBrowserURL(baseUrl: string, orgId: string, sessionId: string): string {
 	return `${cloudWebSocketBase(baseUrl.replace(/\/+$/, ""))}${CLOUD_API_PREFIX}/orgs/${encodeURIComponent(orgId)}/sessions/${encodeURIComponent(sessionId)}/agent-browser/ws/cdp`;
@@ -105,7 +131,7 @@ export function parseViewerFrame(buffer: ArrayBuffer, fallback = { width: 1280, 
 type HostTab = { id: string; url: string; title: string };
 
 export class CloudBrowserTransport implements BrowserTransport {
-	readonly capabilities: BrowserCapabilities = { text: true, keys: true, viewport: true, quality: true, control: true, dialogs: true };
+	readonly capabilities: BrowserCapabilities = { text: true, keys: true, viewport: true, quality: true, control: true, dialogs: true, auth: true, select: true, files: true, downloads: true };
 	private socket: SocketLike | null = null;
 	private closed = false;
 	// Bumped by every connect, close and trip to the background: a dial that
@@ -190,6 +216,10 @@ export class CloudBrowserTransport implements BrowserTransport {
 	}
 
 	send(command: BrowserCommand): void {
+		if (command.type === "files") {
+			void this.sendFiles(command.payload.files, command.payload.folder);
+			return;
+		}
 		const message = this.encode(command);
 		if (message && this.socket?.readyState === OPEN) this.socket.send(JSON.stringify(message));
 	}
@@ -236,6 +266,45 @@ export class CloudBrowserTransport implements BrowserTransport {
 			// The host has no explicit take: the person's input takes it.
 			case "control": return command.payload.action === "release" ? { t: "release" } : null;
 			case "dialog": return { t: "dialog", accept: command.payload.accept, promptText: command.payload.promptText ?? "" };
+			case "auth": return "cancel" in command.payload
+				? { t: "authResp", origin: command.payload.origin, cancel: true }
+				: { t: "authResp", origin: command.payload.origin, username: command.payload.username, password: command.payload.password };
+			case "select": return { t: "selectResp", id: command.payload.id, index: command.payload.index, ...(command.payload.ctx !== undefined ? { ctx: command.payload.ctx } : {}) };
+			// Sent over HTTP first (sendFiles); the host has no message for a cancel.
+			case "files": return null;
+		}
+	}
+
+	/** Where to fetch a download, with the person's sign-in. */
+	async downloadRequest(id: string): Promise<{ url: string; headers: Record<string, string> }> {
+		const token = await this.options.getToken();
+		return {
+			url: `${cloudBrowserHTTPBase(this.options.baseUrl, this.options.orgId, this.options.sessionId)}/download/${encodeURIComponent(id)}`,
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		};
+	}
+
+	// Each file reaches the host over HTTP (any size), then the page's input
+	// gets them all at once. One that fails leaves the input as it was.
+	private async sendFiles(files: BrowserPickedFile[], folder: boolean): Promise<void> {
+		if (!files.length) return;
+		const socket = this.socket;
+		// Every step, getting ready included, reports a failure: send() doesn't wait for this.
+		let current = files[0]!;
+		try {
+			const token = await this.options.getToken();
+			if (!token) throw new TypeError("Not signed in");
+			const bytes = this.options.randomBytes ? this.options.randomBytes(12) : await nativeRandomBytes(12);
+			const dir = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+			const base = cloudBrowserHTTPBase(this.options.baseUrl, this.options.orgId, this.options.sessionId);
+			const upload = this.options.upload ?? uploadFile;
+			for (const file of files) {
+				current = file;
+				await upload(`${base}/upload?dir=${dir}&name=${encodeURIComponent(file.name)}`, { Authorization: `Bearer ${token}` }, file);
+			}
+			if (this.socket === socket && socket?.readyState === OPEN) socket.send(JSON.stringify({ t: "upload", dir, names: files.map((file) => file.name), folder }));
+		} catch {
+			if (this.socket === socket) this.handlers.onStatus("open", `Couldn't send ${current.name} to the page.`);
 		}
 	}
 
@@ -314,9 +383,43 @@ export class CloudBrowserTransport implements BrowserTransport {
 			}
 			case "dialog": {
 				const kind = String(message.type ?? "");
-				if (DIALOG_KINDS.has(kind)) this.handlers.onDialog?.({ kind: kind as BrowserDialog["kind"], message: String(message.message ?? "") });
+				if (!DIALOG_KINDS.has(kind)) return;
+				const text = pageText(message.message);
+				this.handlers.onDialog?.(kind === "prompt"
+					? { kind, message: text, ...(typeof message.defaultPrompt === "string" ? { defaultPrompt: pageText(message.defaultPrompt) } : {}) }
+					: { kind: kind as "alert" | "confirm" | "beforeunload", message: text });
 				return;
 			}
+			case "dialogClosed": this.handlers.onDialogClosed?.(); return;
+			case "auth":
+				if (typeof message.origin !== "string" || !message.origin) return;
+				this.handlers.onDialog?.({
+					kind: "auth",
+					origin: pageText(message.origin, OPTION_TEXT_MAX),
+					...(message.realm ? { realm: pageText(message.realm, OPTION_TEXT_MAX) } : {}),
+					failed: Boolean(message.failed),
+				});
+				return;
+			case "select": {
+				const data = (message.data ?? {}) as { id?: unknown; options?: unknown; selected?: unknown };
+				if (typeof data.id !== "string" || !Array.isArray(data.options) || !data.options.length) return;
+				const options = (data.options as Array<{ label?: unknown; disabled?: unknown }>).slice(0, OPTIONS_MAX).map((option) => ({
+					label: pageText(option?.label, OPTION_TEXT_MAX),
+					...(option?.disabled ? { disabled: true } : {}),
+				}));
+				this.handlers.onDialog?.({
+					kind: "select", id: data.id, selected: Number.isInteger(data.selected) ? Number(data.selected) : -1, options,
+					...(typeof message.ctx === "string" ? { ctx: message.ctx } : {}),
+				});
+				return;
+			}
+			case "filechooser":
+				this.handlers.onDialog?.({ kind: "filechooser", multiple: message.mode === "selectMultiple", accept: pageText(message.accept, OPTION_TEXT_MAX), folder: Boolean(message.folder) });
+				return;
+			case "download":
+				if (typeof message.guid !== "string" || !message.guid) return;
+				this.handlers.onDownload?.({ id: message.guid, name: pageText(message.name, OPTION_TEXT_MAX) || "download", size: Math.max(0, Number(message.size) || 0) });
+				return;
 			default: return;
 		}
 		this.handlers.onState(this.viewState());

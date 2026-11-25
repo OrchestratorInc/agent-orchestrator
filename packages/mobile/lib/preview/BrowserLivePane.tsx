@@ -6,7 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-na
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { LocalBrowserTransport } from "../browserLive";
-import { commandSupported, type BrowserCommand, type BrowserFrame, type BrowserTransport, type BrowserViewState } from "../browserTransport";
+import { commandSupported, type BrowserCommand, type BrowserDialog, type BrowserDownload, type BrowserFrame, type BrowserTransport, type BrowserViewState } from "../browserTransport";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { machineState, rejectedMachineLine } from "../hostRoute";
 import { useApp } from "../store";
@@ -17,6 +17,8 @@ import { duration, radius, space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
 import { useToast } from "../useToast";
+import { saveDownload } from "./browserAsk";
+import { BrowserAskSheet } from "./BrowserAskSheet";
 import { bottomToolbarHeight, browserMenu, browserToolbar, hasBottomToolbar, type BrowserControls, type BrowserTab } from "./browserControls";
 import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, type FrameSize, type FrameZoom } from "./frameZoom";
 import { LoadingBar } from "./LoadingBar";
@@ -33,6 +35,10 @@ const TAP_MAX_MS = 10_000;
 const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
 const BROWSER_UNPAIRED_COPY = "Pair this phone with the desktop app first.";
+/** How long an answer waits for the stream to come back, as after a system picker. */
+const PENDING_ANSWER_MS = 120_000;
+/** The downloads the browser menu lists, newest first. */
+const DOWNLOADS_KEPT = 20;
 const BROWSER_OFFLINE_COPY = "This machine is offline. The browser connects once the app reconnects.";
 
 export type BrowserLivePaneProps = {
@@ -104,6 +110,29 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const frameWidth = useRef(1);
 	frameWidth.current = frameSize.width;
 	const blank = page !== null && !page.url;
+	// What the page asks now, answered once through the sheet; and its downloads.
+	const [ask, setAsk] = useState<BrowserDialog | null>(null);
+	const askRef = useRef<BrowserDialog | null>(null);
+	askRef.current = ask;
+	// A file chooser being answered in the system picker, which sends the app
+	// to the background and so drops the stream: its answer still counts, and
+	// waits for the next stream.
+	const pickingRef = useRef<BrowserDialog | null>(null);
+	// Held only for this session and this ask: a closed or replaced ask, or
+	// another session, drops it (Cloud files name no chooser, so they would
+	// otherwise reach the newer input).
+	const pendingRef = useRef<{ command: BrowserCommand; until: number; sessionID: string } | null>(null);
+	// This stream is open and has said what its page is (and so what it takes).
+	const streamReady = useRef(false);
+	// The session the pane shows now; an ask answered for another is dropped.
+	const sessionRef = useRef(sessionID);
+	if (sessionRef.current !== sessionID) {
+		sessionRef.current = sessionID;
+		pickingRef.current = null;
+		pendingRef.current = null;
+	}
+	streamReady.current = status === "open" && page !== null;
+	const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
 
 	// The last frame is kept only for the session that drew it.
 	const frameSession = useRef(sessionID);
@@ -116,6 +145,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	useEffect(() => {
 		setPage(null);
 		setFrameIsLive(false);
+		setAsk(null);
 		if (!localConfig && !transport) {
 			if (away === "reconnecting") {
 				setStatus("connecting");
@@ -153,6 +183,24 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				pageWidth.current = state.width;
 				setPage(state);
 			},
+			onDialog: (dialog) => {
+				if (disposed) return;
+				pickingRef.current = dialog.kind === "filechooser" ? dialog : null;
+				pendingRef.current = null;
+				setAsk(dialog);
+			},
+			// The page moved on (or the host answered it): the sheet goes, and a late tap on it sends nothing.
+			onDialogClosed: () => {
+				if (disposed) return;
+				pickingRef.current = null;
+				pendingRef.current = null;
+				setAsk(null);
+			},
+			onDownload: (download) => {
+				if (disposed) return;
+				setDownloads((list) => [download, ...list.filter((item) => item.id !== download.id)].slice(0, DOWNLOADS_KEPT));
+				showNotice(`Downloaded ${download.name}. Save it from the browser menu.`);
+			},
 			onFrame: (frame) => {
 				if (disposed) return;
 				try {
@@ -188,6 +236,42 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		if (live && commandSupported(live.capabilities, command)) live.send(command);
 	}, []);
 	const navigate = useCallback((action: NavigateAction) => send({ type: "navigate", payload: { action } }), [send]);
+	const control = page?.control ?? "none";
+	// Only the dialog on screen is answered, once; never while the agent drives.
+	const answerAsk = useCallback((dialog: BrowserDialog, command: BrowserCommand | null) => {
+		const picking = pickingRef.current === dialog;
+		if (askRef.current !== dialog && !picking) return;
+		if (askRef.current === dialog) setAsk(null);
+		if (picking) pickingRef.current = null;
+		if (!command) return;
+		if (control === "agent") {
+			showNotice("The agent is using the browser. Your answer wasn't sent.");
+			return;
+		}
+		// Read now, not when the sheet opened: the stream may have changed since.
+		const live = client.current;
+		if (streamReady.current && live && commandSupported(live.capabilities, command)) send(command);
+		else pendingRef.current = { command, until: Date.now() + PENDING_ANSWER_MS, sessionID: sessionRef.current };
+	}, [control, send, showNotice]);
+	// An answer held over a reconnect goes once the new stream can carry it.
+	useEffect(() => {
+		const pending = pendingRef.current;
+		const live = client.current;
+		if (!pending || status !== "open" || !page || !live) return;
+		if (Date.now() > pending.until || pending.sessionID !== sessionID) {
+			pendingRef.current = null;
+			return;
+		}
+		if (!commandSupported(live.capabilities, pending.command)) return;
+		pendingRef.current = null;
+		send(pending.command);
+	}, [page, send, sessionID, status]);
+	const saveDownloadById = useCallback((id: string) => {
+		const live = client.current;
+		const download = downloads.find((item) => item.id === id);
+		if (!live?.downloadRequest || !download) return;
+		saveDownload(download, (downloadId) => live.downloadRequest!(downloadId)).catch(() => showNotice(`Couldn't save ${download.name}.`));
+	}, [downloads, showNotice]);
 	const [prompting, setPrompting] = useState(false);
 	const openURL = useCallback((url: string) => send({ type: "navigate", payload: { action: "open", url } }), [send]);
 	const closePrompt = useCallback(() => setPrompting(false), []);
@@ -213,10 +297,12 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		onReload: () => navigate("reload"),
 		onStop: () => navigate("stop"),
 		onOpenURL: () => setPrompting(true),
+		downloads,
+		onSaveDownload: saveDownloadById,
 		onNewTab: () => send({ type: "tab", payload: { action: "new" } }),
 		onSelectTab: (tabId) => send({ type: "tab", payload: { action: "select", tabId } }),
 		onCloseTab: (tabId) => send({ type: "tab", payload: { action: "close", tabId } }),
-	}), [canGoBack, canGoForward, loading, navigate, send, status, t.accent, t.bgElevated, t.textFaint, tabs]);
+	}), [canGoBack, canGoForward, downloads, loading, navigate, saveDownloadById, send, status, t.accent, t.bgElevated, t.textFaint, tabs]);
 	// Android: a bottom toolbar. iOS: one menu in the header.
 	const toolbarShown = hasBottomToolbar();
 	const bottomBar = useMemo(() => toolbarShown ? browserToolbar(controls) : null, [controls, toolbarShown]);
@@ -368,6 +454,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		</View>
 		{bottomBar}
 		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} browserName={browserName} />
+		<BrowserAskSheet dialog={ask} onAnswer={answerAsk} />
 		<ToastHost toast={toast} bottomOffset={toolbarShown ? toolbarClearance + space.md : undefined} />
 	</View>;
 }

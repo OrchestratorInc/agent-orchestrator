@@ -42,7 +42,7 @@ const RECOVERABLE_ERRORS = new Map<string, string | null>([
 /** The desktop's browser, streamed through the daemon's live socket. */
 export class LocalBrowserTransport implements BrowserTransport {
 	// The desktop accepts key and text input; the rest arrive in later releases.
-	readonly capabilities: BrowserCapabilities = { text: true, keys: true, viewport: false, quality: false, control: false, dialogs: false };
+	readonly capabilities: BrowserCapabilities = { text: true, keys: true, viewport: false, quality: false, control: false, dialogs: false, auth: false, select: false, files: false, downloads: false };
 	private socket: WebSocket | null = null;
 	private closed = false;
 	private reportedError = false;

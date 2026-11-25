@@ -2,8 +2,10 @@ import { Stack } from "expo-router";
 import type { ReactElement } from "react";
 import { Platform, type ColorValue } from "react-native";
 import type { BrowserLiveState } from "../browserLive";
+import type { BrowserDownload } from "../browserTransport";
 import { toolbarIcon } from "../toolbarIcon";
 import { space } from "../tokens";
+import { downloadLabel } from "./browserAsk";
 
 /**
  * Whether the controls go in a bottom toolbar: Material 3's floating toolbar,
@@ -46,6 +48,9 @@ export type BrowserControls = {
 	onReload(): void;
 	onStop(): void;
 	onOpenURL(): void;
+	/** Files the page downloaded on the host, newest first. */
+	downloads?: readonly BrowserDownload[];
+	onSaveDownload?(id: string): void;
 	onNewTab(): void;
 	onSelectTab(tabId: string): void;
 	onCloseTab(tabId: string): void;
@@ -153,6 +158,19 @@ function tabActions(controls: BrowserControls): ReactElement[] {
 			<Stack.Toolbar.MenuAction key="close" icon={ios ? "xmark" : undefined} destructive disabled={disabled} onPress={() => controls.onCloseTab(active.id)}>
 				Close this tab
 			</Stack.Toolbar.MenuAction>,
+		);
+	}
+	const downloads = controls.downloads ?? [];
+	if (downloads.length && controls.onSaveDownload) {
+		const save = controls.onSaveDownload;
+		actions.push(
+			<Stack.Toolbar.Menu key="downloads" title="Downloads" icon={ios ? "arrow.down.circle" : undefined}>
+				{downloads.map((download) => (
+					<Stack.Toolbar.MenuAction key={download.id} icon={ios ? "square.and.arrow.down" : undefined} onPress={() => save(download.id)}>
+						{downloadLabel(download)}
+					</Stack.Toolbar.MenuAction>
+				))}
+			</Stack.Toolbar.Menu>,
 		);
 	}
 	return actions;

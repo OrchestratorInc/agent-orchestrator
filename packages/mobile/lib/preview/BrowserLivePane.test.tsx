@@ -1,13 +1,16 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserLiveState } from "../browserLive";
-import type { BrowserCapabilities, BrowserTransport } from "../browserTransport";
+import type { BrowserCapabilities, BrowserDialog, BrowserDownload, BrowserTransport } from "../browserTransport";
 
 type Handlers = {
 	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
 	onState(state: BrowserLiveState): void;
 	onFrame(frame: { sequence: bigint; capturedAtMs: bigint; width: number; height: number; jpeg: ArrayBuffer }): void;
 	onDisabled?(): void;
+	onDialog?(dialog: BrowserDialog): void;
+	onDialogClosed?(): void;
+	onDownload?(download: BrowserDownload): void;
 };
 
 const fixtures = vi.hoisted(() => ({
@@ -110,6 +113,15 @@ vi.mock("./OpenURLPrompt", async () => {
 	const React = await import("react");
 	return { OpenURLPrompt: (props: object) => React.createElement("OpenURLPrompt", props) };
 });
+vi.mock("./BrowserAskSheet", async () => {
+	const React = await import("react");
+	return { BrowserAskSheet: (props: object) => React.createElement("BrowserAskSheet", props) };
+});
+const saved = vi.hoisted(() => ({ calls: [] as unknown[] }));
+vi.mock("./browserAsk", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./browserAsk")>()),
+	saveDownload: async (download: unknown, request: (id: string) => Promise<unknown>) => { saved.calls.push([download, await request((download as { id: string }).id)]); },
+}));
 
 import { BrowserLivePane } from "./BrowserLivePane";
 
@@ -490,7 +502,7 @@ describe("transport contract", () => {
 	function fakeTransport(capabilities: Partial<BrowserCapabilities> = {}) {
 		const record = { handlers: null as Handlers | null, sent: [] as unknown[], closed: false };
 		const transport: BrowserTransport = {
-			capabilities: { text: false, keys: false, viewport: false, quality: false, control: false, dialogs: false, ...capabilities },
+			capabilities: { text: false, keys: false, viewport: false, quality: false, control: false, dialogs: false, auth: false, select: false, files: false, downloads: false, ...capabilities },
 			connect(handlers) { record.handlers = handlers as Handlers; handlers.onStatus("connecting"); },
 			send(command) { record.sent.push(command); },
 			close() { record.closed = true; },
@@ -562,5 +574,123 @@ describe("transport contract", () => {
 		const tap = gesture("tap");
 		await act(async () => { tap.onEnd({ x: 195, y: 300 }, true); });
 		expect(sent().map((command) => (command as { payload: { kind: string } }).payload.kind)).toEqual(["pointer", "pointer"]);
+	});
+
+	describe("pages that ask things", () => {
+		const sheet = () => nodes("BrowserAskSheet")[0]!;
+		async function asking(control: "agent" | "human" = "human") {
+			const fake = fakeTransport({ dialogs: true, auth: true, select: true, files: true, downloads: true });
+			fake.transport.downloadRequest = vi.fn(async (id: string) => ({ url: `https://h/download/${id}`, headers: { Authorization: "Bearer t" } }));
+			await act(async () => { screen = create(<BrowserLivePane sessionID="cloud-1" transport={fake.factory} />); });
+			await act(async () => {
+				fake.record.handlers!.onStatus("open");
+				fake.record.handlers!.onState({ ...page, control } as never);
+			});
+			return fake;
+		}
+
+		it("shows what the page asks and sends the answer", async () => {
+			const fake = await asking();
+			const confirm = { kind: "confirm", message: "Sure?" } as const;
+			await act(async () => fake.record.handlers!.onDialog!(confirm));
+			expect(sheet().props.dialog).toBe(confirm);
+			await act(async () => sheet().props.onAnswer(confirm, { type: "dialog", payload: { accept: true } }));
+			expect(fake.record.sent).toEqual([{ type: "dialog", payload: { accept: true } }]);
+			expect(sheet().props.dialog).toBeNull();
+		});
+
+		it("late decision on a closed dialog is not sent", async () => {
+			const fake = await asking();
+			const prompt = { kind: "prompt", message: "Name?" } as const;
+			await act(async () => fake.record.handlers!.onDialog!(prompt));
+			// The page navigated: the host closed its dialog.
+			await act(async () => fake.record.handlers!.onDialogClosed!());
+			expect(sheet().props.dialog).toBeNull();
+			await act(async () => sheet().props.onAnswer(prompt, { type: "dialog", payload: { accept: true, promptText: "x" } }));
+			expect(fake.record.sent).toEqual([]);
+		});
+
+		it("answers only the newest of two dialogs", async () => {
+			const fake = await asking();
+			const first = { kind: "alert", message: "1" } as const;
+			const second = { kind: "alert", message: "2" } as const;
+			await act(async () => { fake.record.handlers!.onDialog!(first); fake.record.handlers!.onDialog!(second); });
+			await act(async () => sheet().props.onAnswer(first, { type: "dialog", payload: { accept: true } }));
+			expect(fake.record.sent).toEqual([]);
+			await act(async () => sheet().props.onAnswer(second, { type: "dialog", payload: { accept: true } }));
+			expect(fake.record.sent).toHaveLength(1);
+		});
+
+		// Found on the Android emulator: the system file picker sends the app to
+		// the background, which drops the stream; the picked files must still go.
+		it("sends a file chooser's files after the stream reconnects for the picker", async () => {
+			const first = await asking();
+			const chooser = { kind: "filechooser", multiple: false, accept: "", folder: false } as const;
+			await act(async () => first.record.handlers!.onDialog!(chooser));
+			const answer = sheet().props.onAnswer as (dialog: unknown, command: unknown) => void;
+			// The app goes to the background for the picker, and comes back on a new stream.
+			const second = fakeTransport({ dialogs: true, auth: true, select: true, files: true, downloads: true });
+			await act(async () => { screen.update(<BrowserLivePane sessionID="cloud-1" transport={second.factory} />); });
+			const files = { type: "files", payload: { files: [{ uri: "file:///n.txt", name: "n.txt" }], folder: false } };
+			await act(async () => answer(chooser, files));
+			expect(second.record.sent).toEqual([]);
+			await act(async () => {
+				second.record.handlers!.onStatus("open");
+				second.record.handlers!.onState({ ...page, control: "human" } as never);
+			});
+			expect(second.record.sent).toEqual([files]);
+			expect(first.record.sent).toEqual([]);
+		});
+
+		it.each([
+			["the host closes the ask", async (handlers: Handlers) => handlers.onDialogClosed!()],
+			["a newer ask replaces it", async (handlers: Handlers) => handlers.onDialog!({ kind: "filechooser", multiple: true, accept: "", folder: false })],
+		])("drops a held file answer when %s before the stream is ready", async (_name, interrupt) => {
+			const first = await asking();
+			const chooser = { kind: "filechooser", multiple: false, accept: "", folder: false } as const;
+			await act(async () => first.record.handlers!.onDialog!(chooser));
+			const answer = sheet().props.onAnswer as (dialog: unknown, command: unknown) => void;
+			const second = fakeTransport({ dialogs: true, auth: true, select: true, files: true, downloads: true });
+			await act(async () => { screen.update(<BrowserLivePane sessionID="cloud-1" transport={second.factory} />); });
+			await act(async () => answer(chooser, { type: "files", payload: { files: [{ uri: "file:///old.txt", name: "old.txt" }], folder: false } }));
+			await act(async () => {
+				second.record.handlers!.onStatus("open");
+				await interrupt(second.record.handlers!);
+				second.record.handlers!.onState({ ...page, control: "human" } as never);
+			});
+			expect(second.record.sent).toEqual([]);
+		});
+
+		it("drops a held file answer when the pane moves to another session", async () => {
+			const first = await asking();
+			const chooser = { kind: "filechooser", multiple: false, accept: "", folder: false } as const;
+			await act(async () => first.record.handlers!.onDialog!(chooser));
+			const answer = sheet().props.onAnswer as (dialog: unknown, command: unknown) => void;
+			const second = fakeTransport({ dialogs: true, auth: true, select: true, files: true, downloads: true });
+			await act(async () => { screen.update(<BrowserLivePane sessionID="cloud-2" transport={second.factory} />); });
+			await act(async () => answer(chooser, { type: "files", payload: { files: [{ uri: "file:///old.txt", name: "old.txt" }], folder: false } }));
+			await act(async () => {
+				second.record.handlers!.onStatus("open");
+				second.record.handlers!.onState({ ...page, control: "human" } as never);
+			});
+			expect(second.record.sent).toEqual([]);
+		});
+
+		it("sends no answer while the agent drives", async () => {
+			const fake = await asking("agent");
+			const auth = { kind: "auth", origin: "https://a.example", failed: false } as const;
+			await act(async () => fake.record.handlers!.onDialog!(auth));
+			await act(async () => sheet().props.onAnswer(auth, { type: "auth", payload: { origin: "https://a.example", username: "u", password: "p" } }));
+			expect(fake.record.sent).toEqual([]);
+		});
+
+		it("lists downloads in the browser menu and saves one through the transport", async () => {
+			saved.calls.length = 0;
+			const fake = await asking();
+			await act(async () => fake.record.handlers!.onDownload!({ id: "g1", name: "report.pdf", size: 2048 }));
+			const item = screen.root.findAll((node) => (node.type as unknown) === "StackToolbarMenuAction" && node.props.children === "report.pdf · 2.0 KB")[0]!;
+			await act(async () => item.props.onPress());
+			expect(saved.calls).toEqual([[{ id: "g1", name: "report.pdf", size: 2048 }, { url: "https://h/download/g1", headers: { Authorization: "Bearer t" } }]]);
+		});
 	});
 });

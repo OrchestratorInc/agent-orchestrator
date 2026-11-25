@@ -28,7 +28,10 @@ function viewerFrame(header: object, jpeg = [0xff, 0xd8, 0xff]): ArrayBuffer {
 	return buffer;
 }
 
-async function connected() {
+async function connected(
+	upload = vi.fn(async (_url: string, _headers: Record<string, string>, _file: { uri: string; name: string; type?: string }) => undefined),
+	randomBytes: (count: number) => Uint8Array = (count) => new Uint8Array(count).map((_, i) => i * 17),
+) {
 	let socket!: FakeSocket;
 	const transport = new CloudBrowserTransport({
 		baseUrl: "https://api.example.dev",
@@ -36,12 +39,14 @@ async function connected() {
 		sessionId: "s/1",
 		getToken: async () => "tok",
 		createSocket: (url, headers) => (socket = new FakeSocket(url, headers)),
+		upload,
+		randomBytes,
 	});
-	const handlers = { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDialog: vi.fn() };
+	const handlers = { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDialog: vi.fn(), onDialogClosed: vi.fn(), onDownload: vi.fn() };
 	transport.connect(handlers);
 	await vi.waitFor(() => expect(socket).toBeDefined());
 	socket.open();
-	return { transport, socket, handlers, lastState: () => handlers.onState.mock.lastCall?.[0] as BrowserViewState };
+	return { transport, socket, handlers, upload, lastState: () => handlers.onState.mock.lastCall?.[0] as BrowserViewState };
 }
 
 describe("cloud browser transport", () => {
@@ -229,5 +234,120 @@ describe("cloud browser transport", () => {
 		transport.connect({ onStatus, onState: vi.fn(), onFrame: vi.fn() });
 		await vi.waitFor(() => expect(onStatus).toHaveBeenLastCalledWith("error", "Sign in to Orchestrator Cloud first."));
 		expect(createSocket).not.toHaveBeenCalled();
+	});
+
+	describe("pages that ask things", () => {
+		it("passes on the page's dialogs, closed or not", async () => {
+			const { socket, handlers } = await connected();
+			socket.message({ t: "dialog", type: "prompt", message: "Your name?", defaultPrompt: "Ada", url: "https://a.example/" });
+			expect(handlers.onDialog).toHaveBeenLastCalledWith({ kind: "prompt", message: "Your name?", defaultPrompt: "Ada" });
+			socket.message({ t: "dialog", type: "beforeunload", message: "" });
+			expect(handlers.onDialog).toHaveBeenLastCalledWith({ kind: "beforeunload", message: "" });
+			socket.message({ t: "dialogClosed" });
+			expect(handlers.onDialogClosed).toHaveBeenCalled();
+			// The page's words are capped: it writes whatever it likes.
+			socket.message({ t: "dialog", type: "alert", message: "x".repeat(10_000) });
+			expect((handlers.onDialog.mock.lastCall![0] as { message: string }).message.length).toBeLessThanOrEqual(1000);
+			socket.message({ t: "dialog", type: "nonsense", message: "?" });
+			expect(handlers.onDialog).toHaveBeenCalledTimes(3);
+		});
+
+		it("asks to sign in, and answers or cancels", async () => {
+			const { socket, transport, handlers } = await connected();
+			socket.message({ t: "auth", origin: "https://intranet.example", url: "https://intranet.example/x", realm: "Staff", failed: true });
+			expect(handlers.onDialog).toHaveBeenLastCalledWith({ kind: "auth", origin: "https://intranet.example", realm: "Staff", failed: true });
+			socket.sent.length = 0;
+			transport.send({ type: "auth", payload: { origin: "https://intranet.example", username: "ada", password: "pw" } });
+			transport.send({ type: "auth", payload: { origin: "https://intranet.example", cancel: true } });
+			expect(socket.sent).toEqual([
+				{ t: "authResp", origin: "https://intranet.example", username: "ada", password: "pw" },
+				{ t: "authResp", origin: "https://intranet.example", cancel: true },
+			]);
+		});
+
+		it("never logs what is typed to sign in", async () => {
+			const logged: unknown[] = [];
+			for (const method of ["log", "info", "warn", "error", "debug"] as const) vi.spyOn(console, method).mockImplementation((...args) => { logged.push(...args); });
+			try {
+				const { socket, transport } = await connected();
+				socket.message({ t: "auth", origin: "https://a.example", realm: "", failed: false });
+				transport.send({ type: "auth", payload: { origin: "https://a.example", username: "ada", password: "s3cret-pw" } });
+				expect(JSON.stringify(logged)).not.toContain("s3cret");
+			} finally { vi.restoreAllMocks(); }
+		});
+
+		it("offers a select's options and answers with the picked one", async () => {
+			const { socket, transport, handlers } = await connected();
+			socket.message({ t: "select", data: { id: "sel-1", options: [{ label: "Red" }, { label: "Green", disabled: true }, { label: "Blue" }], selected: 2, x: 10, y: 20 }, ctx: "S:3", dx: 0, dy: 0 });
+			expect(handlers.onDialog).toHaveBeenLastCalledWith({
+				kind: "select", id: "sel-1", ctx: "S:3", selected: 2,
+				options: [{ label: "Red" }, { label: "Green", disabled: true }, { label: "Blue" }],
+			});
+			socket.sent.length = 0;
+			transport.send({ type: "select", payload: { id: "sel-1", index: 0, ctx: "S:3" } });
+			expect(socket.sent).toEqual([{ t: "selectResp", id: "sel-1", index: 0, ctx: "S:3" }]);
+		});
+
+		it("drops a select with no options and caps a long list", async () => {
+			const { socket, handlers } = await connected();
+			socket.message({ t: "select", data: { id: "x", options: [] }, ctx: "" });
+			expect(handlers.onDialog).not.toHaveBeenCalled();
+			socket.message({ t: "select", data: { id: "y", options: Array.from({ length: 5000 }, (_, i) => ({ label: `o${i}` })), selected: 0 }, ctx: "" });
+			expect((handlers.onDialog.mock.lastCall![0] as { options: unknown[] }).options.length).toBeLessThanOrEqual(1000);
+		});
+
+		it("asks for files, uploads them over HTTP, then hands them to the page", async () => {
+			const { socket, transport, handlers, upload } = await connected();
+			socket.message({ t: "filechooser", mode: "selectMultiple", accept: "image/*", folder: false });
+			expect(handlers.onDialog).toHaveBeenLastCalledWith({ kind: "filechooser", multiple: true, accept: "image/*", folder: false });
+			socket.sent.length = 0;
+			transport.send({ type: "files", payload: { folder: false, files: [{ uri: "file:///a.png", name: "a.png", type: "image/png" }, { uri: "file:///b b.jpg", name: "b b.jpg" }] } });
+			await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+			const sent = socket.sent[0] as { t: string; dir: string; names: string[]; folder: boolean };
+			expect(sent).toMatchObject({ t: "upload", names: ["a.png", "b b.jpg"], folder: false });
+			expect(sent.dir).toMatch(/^[0-9a-f]{24}$/);
+			expect(upload).toHaveBeenCalledTimes(2);
+			const [url, headers, file] = upload.mock.calls[1]!;
+			expect(url).toBe(`https://api.example.dev/api/cloud/v1/orgs/org%201/sessions/s%2F1/agent-browser/upload?dir=${sent.dir}&name=b%20b.jpg`);
+			expect(headers).toEqual({ Authorization: "Bearer tok" });
+			expect(file).toEqual({ uri: "file:///b b.jpg", name: "b b.jpg" });
+		});
+
+		it("gives the page no files when an upload fails, and says so", async () => {
+			const upload = vi.fn(async () => { throw new TypeError("network down"); });
+			const { socket, transport, handlers } = await connected(upload);
+			socket.sent.length = 0;
+			transport.send({ type: "files", payload: { folder: false, files: [{ uri: "file:///a", name: "a" }] } });
+			await vi.waitFor(() => expect(handlers.onStatus).toHaveBeenLastCalledWith("open", expect.stringContaining("a")));
+			expect(socket.sent).toEqual([]);
+		});
+
+		it("says so when an upload can't even start", async () => {
+			const { socket, transport, handlers, upload } = await connected(undefined, () => { throw new TypeError("no random source"); });
+			socket.sent.length = 0;
+			transport.send({ type: "files", payload: { folder: false, files: [{ uri: "file:///a", name: "a.png" }] } });
+			await vi.waitFor(() => expect(handlers.onStatus).toHaveBeenLastCalledWith("open", "Couldn't send a.png to the page."));
+			expect(upload).not.toHaveBeenCalled();
+			expect(socket.sent).toEqual([]);
+		});
+
+		it("sends nothing for a chooser the person cancelled", async () => {
+			const { socket, transport, upload } = await connected();
+			socket.sent.length = 0;
+			transport.send({ type: "files", payload: { folder: false, files: [] } });
+			await Promise.resolve();
+			expect(socket.sent).toEqual([]);
+			expect(upload).not.toHaveBeenCalled();
+		});
+
+		it("lists downloads and fetches them through the relay", async () => {
+			const { socket, transport, handlers } = await connected();
+			socket.message({ t: "download", guid: "g-1", name: "report.pdf", size: 2048 });
+			expect(handlers.onDownload).toHaveBeenCalledWith({ id: "g-1", name: "report.pdf", size: 2048 });
+			await expect(transport.downloadRequest("g-1")).resolves.toEqual({
+				url: "https://api.example.dev/api/cloud/v1/orgs/org%201/sessions/s%2F1/agent-browser/download/g-1",
+				headers: { Authorization: "Bearer tok" },
+			});
+		});
 	});
 });
