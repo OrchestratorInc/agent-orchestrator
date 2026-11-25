@@ -96,12 +96,15 @@ func (m *Manager) createTaskPreparation(ctx context.Context, prep *taskPreparati
 	}, prep.record.ID, prep.record.Metadata.Branch, baseRefs)
 	// Persist any partial worktree before rollback: a cancellation can arrive
 	// after git has created a path/branch but before Create returned success.
+	// Skipped children are recorded even when a later store write failed, so a
+	// preparation whose rollback also fails is not rejected at startup cleanup
+	// for a child it omitted on purpose.
 	recordCtx, recordCancel := spawnRollbackContext(ctx)
 	defer recordCancel()
-	if err == nil && workspaceProject != nil {
+	if workspaceProject != nil {
 		for name, path := range workspaceProject.SkippedChildren {
 			if recordErr := m.store.RecordTaskPreparationSkippedChild(recordCtx, prep.record.ID, name, path); recordErr != nil {
-				err = recordErr
+				err = errors.Join(err, recordErr)
 				break
 			}
 		}

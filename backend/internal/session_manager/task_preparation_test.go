@@ -1099,3 +1099,32 @@ func TestInterruptedPreparationWithSkippedChild(t *testing.T) {
 		})
 	}
 }
+
+// A store write that fails after the workspace project exists must still leave
+// its skipped children on record, so a preparation whose rollback also fails is
+// not rejected by startup cleanup for a child it skipped on purpose.
+func TestFailedPreparationRecordsSkippedChildBeforeRollback(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("/api\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runManagerGit(t, root, "add", ".gitignore")
+	runManagerGit(t, root, "commit", "-m", "ignore child repository")
+	project := st.projects["mer"]
+	project.Kind = domain.ProjectKindWorkspace
+	st.projects["mer"] = project
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "api", RelativePath: "api", GitStatus: domain.GitStatusReady}}
+	st.upsertWTErr = errors.New("worktree row write failed")
+	token, err := m.PrepareTaskWorkspace(context.Background(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep := m.taskPreparations[token]
+	if prep.err == nil {
+		t.Fatal("preparation succeeded, want the worktree row write to fail it")
+	}
+	skipped := st.skippedChildren[domain.SessionID(token)]
+	if _, ok := skipped["api"]; !ok {
+		t.Fatalf("skipped children = %v, want api recorded before rollback", skipped)
+	}
+}
