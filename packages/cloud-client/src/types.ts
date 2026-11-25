@@ -39,6 +39,8 @@ export type InvokeCueInput = Schemas["InvokeCueInput"];
 export type InvokeCueResult = Schemas["InvokeCueResult"];
 
 export type ArtifactShareCommentAnchor = Schemas["ArtifactShareCommentAnchor"];
+export type ArtifactShareCommentLineRange = Schemas["ArtifactShareCommentLineRange"];
+export type ArtifactShareCommentRegion = Schemas["ArtifactShareCommentRegion"];
 export type ArtifactShareCommentAuthor = Schemas["ArtifactShareCommentAuthor"];
 export type ArtifactShareComment = Schemas["ArtifactShareComment"];
 export type ArtifactShareCommentThreadStatus = Schemas["ArtifactShareCommentThreadStatus"];
