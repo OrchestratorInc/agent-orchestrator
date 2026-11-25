@@ -22,8 +22,7 @@ import (
 // own, with no prompt, no messageId, and no start or end marker, and closes
 // each model response with a usage_update.
 func TestACPProviderCycleAfterTurnSettlesAndStaysOutOfTheNextTurn(t *testing.T) {
-	restore := setProviderCycleWaits(50*time.Millisecond, time.Minute)
-	defer restore()
+	setProviderCycleWaits(t, 50*time.Millisecond, time.Minute)
 
 	agent := &fakeAgent{}
 	var prompts int
@@ -175,8 +174,7 @@ func TestACPProviderCycleAfterTurnSettlesAndStaysOutOfTheNextTurn(t *testing.T) 
 // completion must not end the cycle at the short grace; the new response's
 // own usage_update does.
 func TestACPProviderCycleWaitsForTheResponseAfterAToolCompletes(t *testing.T) {
-	restore := setProviderCycleWaits(20*time.Millisecond, time.Hour)
-	defer restore()
+	setProviderCycleWaits(t, 20*time.Millisecond, time.Hour)
 	conv := &conversation{
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sessionID: "s", events: make(chan ports.ChatEvent, 32),
@@ -211,8 +209,7 @@ func TestACPProviderCycleWaitsForTheResponseAfterAToolCompletes(t *testing.T) {
 // Claude Code reports its own running and idle states; its idle ends the
 // cycle, and AO adds no state of its own.
 func TestACPProviderCycleEndsOnTheProvidersOwnIdle(t *testing.T) {
-	restore := setProviderCycleWaits(time.Hour, time.Hour)
-	defer restore()
+	setProviderCycleWaits(t, time.Hour, time.Hour)
 	conv := &conversation{
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sessionID: "s", events: make(chan ports.ChatEvent, 32),
@@ -258,8 +255,7 @@ func TestACPProviderCycleCompactionGetsATurnlessRow(t *testing.T) {
 		"left open": {want: "No result reported"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			restore := setProviderCycleWaits(50*time.Millisecond, time.Minute)
-			defer restore()
+			setProviderCycleWaits(t, 50*time.Millisecond, time.Minute)
 			agent, opened := compactionFailureTestDriver(t)
 			events := opened.Events()
 			push := func(value map[string]any) {
@@ -302,10 +298,13 @@ func TestACPProviderCycleCompactionGetsATurnlessRow(t *testing.T) {
 	}
 }
 
-func setProviderCycleWaits(grace, quiet time.Duration) func() {
+// Registered as a cleanup before the test opens a driver, so it restores the
+// waits only after the driver's goroutines, which read them, have stopped.
+func setProviderCycleWaits(t *testing.T, grace, quiet time.Duration) {
+	t.Helper()
 	oldGrace, oldQuiet := providerCycleSettleGrace, providerCycleQuietWait
 	providerCycleSettleGrace, providerCycleQuietWait = grace, quiet
-	return func() { providerCycleSettleGrace, providerCycleQuietWait = oldGrace, oldQuiet }
+	t.Cleanup(func() { providerCycleSettleGrace, providerCycleQuietWait = oldGrace, oldQuiet })
 }
 
 func usageUpdate() acpsdk.SessionUpdate {
