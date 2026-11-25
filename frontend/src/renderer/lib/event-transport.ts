@@ -661,7 +661,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// EventSource auto-reconnects and resumes via Last-Event-ID while
 					// CONNECTING; scheduleRetry only covers the terminal CLOSED state.
 				} catch {
+					// No source means no error event and nothing for the stall check or a
+					// status echo to reopen, so retry here or the stream never comes back.
 					source = undefined;
+					setEventsConnectionState("disconnected");
+					scheduleRetry();
 				}
 			};
 
