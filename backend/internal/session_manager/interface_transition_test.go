@@ -567,22 +567,20 @@ func (r *transitionRuntime) GetStyledOutput(ctx context.Context, handle ports.Ru
 }
 
 type transitionChat struct {
-	preparedAccountMove bool
-	armedAccountMove    bool
-	log                 *[]string
-	armed               chan domain.SessionInterfaceTransitionPolicy
-	aborted             chan struct{}
-	armErr              error
-	preparedPolicy      domain.SessionInterfaceTransitionPolicy
-	start               ChatStart
-	preflightErr        error
-	startErr            error
-	preflightStarted    chan struct{}
-	preflightRelease    chan struct{}
-	relayMessages       []string
-	relayIDs            []string
-	supportsChat        bool
-	switchMarks         []string // account moves that told the chat why its turn stopped
+	log              *[]string
+	armed            chan domain.SessionInterfaceTransitionPolicy
+	aborted          chan struct{}
+	armErr           error
+	preparedPolicy   domain.SessionInterfaceTransitionPolicy
+	start            ChatStart
+	preflightErr     error
+	startErr         error
+	preflightStarted chan struct{}
+	preflightRelease chan struct{}
+	relayMessages    []string
+	relayIDs         []string
+	supportsChat     bool
+	switchMarks      []string // account moves that told the chat why its turn stopped
 }
 
 type historyPolicyTransitionChat struct {
@@ -797,8 +795,7 @@ func (c *transitionChat) StopChat(_ context.Context, _ domain.SessionID) error {
 	*c.log = append(*c.log, "stop:chat")
 	return nil
 }
-func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, accountMove bool) error {
-	c.armedAccountMove = accountMove
+func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	select {
 	case c.armed <- policy:
 	default:
@@ -809,9 +806,8 @@ func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID
 	c.switchMarks = append(c.switchMarks, accountID)
 	return nil
 }
-func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, accountMove bool) error {
+func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	c.preparedPolicy = policy
-	c.preparedAccountMove = accountMove
 	*c.log = append(*c.log, "prepare:chat:"+string(policy))
 	return nil
 }
@@ -2201,7 +2197,7 @@ func TestInterfaceTransitionTUIToChatReportsDurablePendingDecisionWithoutSurface
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
 			err := manager.prepareSourceHandoff(
-				ctx, rec, domain.SessionInterfaceTransitionDrain, false, time.Time{},
+				ctx, rec, domain.SessionInterfaceTransitionDrain, time.Time{},
 			)
 			if !errors.Is(err, errDrainDecisionPending) {
 				t.Fatalf("prepare source with durable %s = %v, want errDrainDecisionPending", state, err)
@@ -2631,9 +2627,6 @@ func TestInterfaceTransitionChatToTUIInterruptsThenStopsBeforeStarting(t *testin
 	}
 	if chat.preparedPolicy != domain.SessionInterfaceTransitionInterrupt {
 		t.Fatalf("prepared policy = %s", chat.preparedPolicy)
-	}
-	if chat.armedAccountMove || chat.preparedAccountMove {
-		t.Fatal("chat-to-terminal switch handed off as an account move")
 	}
 	rec := store.sessions["session-1"]
 	if rec.Mode != domain.SessionModeTUI {

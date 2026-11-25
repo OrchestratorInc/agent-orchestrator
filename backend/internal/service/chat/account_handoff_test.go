@@ -541,7 +541,7 @@ func TestAccountHandoffMoveKeepsTheHeldQueueOffTheLimitedAccount(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 	if err := hh.svc.Stop(ctx, testSession); err != nil {
@@ -553,6 +553,41 @@ func TestAccountHandoffMoveKeepsTheHeldQueueOffTheLimitedAccount(t *testing.T) {
 	assertTurnStaysQueued(t, hh.harness, "queued note")
 }
 
+func TestAccountHandoffMoveDrainsAQueueNothingHolds(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i, text := range []string{"finish this task", "note 1", "note 2"} {
+		if _, err := hh.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: text, ClientMessageID: fmt.Sprintf("c%d", i), Origin: domain.MessageOriginHuman}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := hh.mover.StartAccountTransition(ctx, testSession, handoffTarget, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatal(err)
+	}
+	prepared := make(chan error, 1)
+	go func() {
+		prepared <- hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain)
+	}()
+	for _, text := range []string{"finish this task", "note 1", "note 2"} {
+		var running string
+		hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+			running = ""
+			for _, turn := range s.Turns {
+				if turn.State == domain.TurnStateRunning {
+					running = turn.ProviderTurnID
+				}
+			}
+			return running != "" && turnStateByText(t, s)[text] == domain.TurnStateRunning
+		})
+		hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running,
+			TurnState: domain.TurnStateFailed, Err: errors.New("API Error: 529 overloaded")})
+	}
+	if err := <-prepared; err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+}
+
 func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
@@ -560,7 +595,7 @@ func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *test
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
+	if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
 		t.Fatal(err)
 	}
 	if err := hh.svc.Stop(ctx, testSession); err != nil {
@@ -575,32 +610,37 @@ func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *test
 	}
 }
 
-func TestHeldQueueFailsWhenTheAgentStopsOutsideAnAccountMove(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		accountMove bool
-	}{{"terminal switch", false}, {"aborted account move", true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-			ctx := context.Background()
-			failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
-			if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, tc.accountMove); err != nil {
-				t.Fatal(err)
-			}
-			if tc.accountMove {
-				hh.svc.AbortChatHandoff(testSession)
-			}
-			if err := hh.svc.Stop(ctx, testSession); err != nil {
-				t.Fatal(err)
-			}
-			snapshot, err := hh.st.LoadConversationSnapshot(ctx, hh.ctrl.ConversationID())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := turnStateByText(t, snapshot)["queued note"]; got != domain.TurnStateFailed {
-				t.Fatalf("queued note = %q after the agent stopped", got)
-			}
+func TestAccountHandoffRollbackKeepsTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+	if err := hh.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	hh.mover.finish(t, domain.SessionInterfaceTransitionTargetStarting)
+
+	for _, agent := range []string{"new account's agent", "restored agent"} {
+		provider := newFakeConversation()
+		svc := chatsvc.New(chatsvc.Options{
+			Store: hh.st, Reader: fullSnapshotReader(hh.st), PageReader: boundedSnapshotReader(hh.st), Sessions: hh.st,
+			Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, NewID: uuid.NewString, Now: hh.now,
 		})
+		if _, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject,
+			Harness: domain.HarnessClaudeCode, WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1"}); err != nil {
+			t.Fatalf("start the %s: %v", agent, err)
+		}
+		if err := svc.Stop(ctx, testSession); err != nil {
+			t.Fatalf("stop the %s: %v", agent, err)
+		}
+		assertTurnStaysQueued(t, hh.harness, "queued note")
+		if got := provider.sentTexts(); len(got) != 0 {
+			t.Fatalf("the %s received %v", agent, got)
+		}
 	}
 }
 
@@ -727,6 +767,23 @@ func TestAccountHandoffFailedMoveKeepsTheQueueHeld(t *testing.T) {
 	}
 }
 
+func TestAccountHandoffCancelledMoveKeepsTheQueueHeld(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCancelled)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("prepare handoff after the move was cancelled = %v", err)
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if got := hh.conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("provider received %v, want nothing more on the limited account", got)
+	}
+}
+
 func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
@@ -734,7 +791,7 @@ func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 	hh.svc.AbortChatHandoff(testSession)

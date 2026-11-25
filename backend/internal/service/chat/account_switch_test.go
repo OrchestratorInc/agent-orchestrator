@@ -49,7 +49,7 @@ func TestMarkAccountSwitchTurnsTheStoppedTurnIntoASwitch(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	stopped := startRunningTurn(t, h, "long work", "provider-turn-1")
-	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt, false); err != nil {
+	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 	// The reply the old agent sent as it was stopped, with no usable state.
@@ -96,7 +96,7 @@ func TestMarkAccountSwitchMarksTheTurnTheHandoffStopped(t *testing.T) {
 		t.Fatalf("queue a message: %v", err)
 	}
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 3 })
-	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt, false); err != nil {
+	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1"})
@@ -124,7 +124,7 @@ func TestMarkAccountSwitchWithoutAStoppedTurnAddsNothing(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["short work"] == domain.TurnStateCompleted
 	})
-	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, false); err != nil {
+	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 	if err := h.svc.MarkAccountSwitch(ctx, testSession, "acct-b"); err != nil {

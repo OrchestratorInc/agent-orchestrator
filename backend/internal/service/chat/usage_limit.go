@@ -41,7 +41,6 @@ type queueHoldStore interface {
 	ReleaseConversationQueue(context.Context, string) error
 	ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error
 	ReleaseConversationQueueAfterTurn(ctx context.Context, conversationID, providerTurnID string) error
-	CleanupOwnedControllerWorkKeepingHeldQueue(context.Context, domain.SessionID, string, string, time.Time) (bool, error)
 }
 
 func (c *Controller) queueHeld(ctx context.Context) (bool, error) {

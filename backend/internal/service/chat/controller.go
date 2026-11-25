@@ -318,8 +318,7 @@ type Controller struct {
 	// an account move; interface interrupt and an idle branch mutation stop
 	// dispatch entirely. The target controller is not started until this
 	// controller reports quiescent and is closed.
-	handoff  controllerHandoff
-	keepHeld bool
+	handoff controllerHandoff
 	// handoffInterrupted is the provider turn an interrupt-policy handoff
 	// stopped, so the move can say on that exact turn why it ended.
 	handoffInterrupted string
@@ -2472,7 +2471,6 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 func (c *Controller) ArmHandoff(
 	ctx context.Context,
 	policy domain.SessionInterfaceTransitionPolicy,
-	accountMove bool,
 ) error {
 	if !policy.Valid() {
 		return fmt.Errorf("invalid interface handoff policy %q", policy)
@@ -2495,7 +2493,6 @@ func (c *Controller) ArmHandoff(
 		return ErrControllerHandoff
 	}
 	c.handoff = want
-	c.keepHeld = accountMove && policy == domain.SessionInterfaceTransitionDrain
 	c.mu.Unlock()
 	return nil
 }
@@ -2507,12 +2504,10 @@ func (c *Controller) ArmHandoff(
 func (c *Controller) BeginHandoff(
 	ctx context.Context,
 	policy domain.SessionInterfaceTransitionPolicy,
-	accountMove bool,
 ) error {
-	if err := c.ArmHandoff(ctx, policy, accountMove); err != nil {
+	if err := c.ArmHandoff(ctx, policy); err != nil {
 		return err
 	}
-	keepHeld := accountMove && policy == domain.SessionInterfaceTransitionDrain
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
 		// Target preflight has succeeded. Settle every accepted queue row while
@@ -2576,12 +2571,17 @@ func (c *Controller) BeginHandoff(
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
 				held, err := c.queueHeld(ctx)
-				if err == nil && held && keepHeld {
-					c.sendMu.Unlock()
-					return nil
-				}
 				if err == nil && held {
-					err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
+					var transition domain.SessionInterfaceTransition
+					var active bool
+					transition, active, err = activeTransition(ctx, c.store, c.sessionID)
+					if err == nil && transition.AccountMove() {
+						c.sendMu.Unlock()
+						return nil
+					}
+					if err == nil && active {
+						err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
+					}
 				}
 				if err == nil {
 					err = c.drainLocked(ctx, true)
@@ -3509,13 +3509,6 @@ func (c *Controller) projectUnit(
 func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
 	if c.reviewID != "" {
 		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
-		return err
-	}
-	c.mu.Lock()
-	keepHeld := c.handoff == controllerHandoffInterfaceDrain && c.keepHeld
-	c.mu.Unlock()
-	if store, ok := c.store.(queueHoldStore); ok && keepHeld {
-		_, err := store.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, c.sessionID, c.conversation.ID, c.generation, now)
 		return err
 	}
 	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)

@@ -121,35 +121,79 @@ func TestOnlyAUsageLimitFailureHoldsTheQueue(t *testing.T) {
 	}
 }
 
-func TestCleanupKeepsOnlyTheHeldConversationsQueue(t *testing.T) {
+func TestCleanupKeepsOnlyAHeldQueueThatIsMovingAccounts(t *testing.T) {
 	ctx := context.Background()
-	s, session, conversation := seededChatConversation(t)
-	other, err := s.CreateConversation(ctx, "conversation-other", domain.ConversationScopeProject, "branches", session.ID, testNow)
-	mustNoError(t, err)
-	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
-	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
-	mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
-	for id, queued := range map[string]string{conversation.ID: "held", other.ID: "elsewhere"} {
-		if _, err := s.AppendUserMessage(ctx, id, session.ID, "generation-root", domain.ConversationMessage{
-			ID: "message-" + queued, Origin: domain.MessageOriginAutomation, Text: queued, ClientMessageID: "client-" + queued,
-		}, "turn-"+queued, testNow); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cleanup := func(heldState domain.TurnState) {
-		t.Helper()
-		if owned, err := s.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, session.ID, conversation.ID, "generation-root", testNow); err != nil || !owned {
-			t.Fatalf("cleanup = %v, %v", owned, err)
-		}
-		for id, want := range map[string]domain.TurnState{"turn-held": heldState, "turn-elsewhere": domain.TurnStateFailed} {
-			if turn, err := s.TurnByID(ctx, id); err != nil || turn.State != want {
-				t.Fatalf("%s = %q, %v, want %q", id, turn.State, err, want)
+	const drain, interrupt = domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionInterrupt
+	for _, tc := range []struct {
+		name         string
+		target       string
+		mode         domain.SessionMode
+		policy       domain.SessionInterfaceTransitionPolicy
+		phase        domain.SessionInterfaceTransitionPhase
+		released     bool
+		otherSession bool
+		want         domain.TurnState
+	}{
+		{"account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionDraining, false, false, domain.TurnStateQueued},
+		{"account move starting the new agent", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionActivating, false, false, domain.TurnStateQueued},
+		{"account move, hold released", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionDraining, true, false, domain.TurnStateFailed},
+		{"another session's account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionDraining, false, true, domain.TurnStateFailed},
+		{"account move that stops the turn", "acct-b", domain.SessionModeChat, interrupt, domain.SessionInterfaceTransitionDraining, false, false, domain.TurnStateFailed},
+		{"cancelled account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionCancelled, false, false, domain.TurnStateFailed},
+		{"completed account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionCompleted, false, false, domain.TurnStateFailed},
+		{"failed account move", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionFailed, false, false, domain.TurnStateFailed},
+		{"account move that needs recovery", "acct-b", domain.SessionModeChat, drain, domain.SessionInterfaceTransitionRecovery, false, false, domain.TurnStateFailed},
+		{"terminal switch", "", domain.SessionModeTUI, drain, domain.SessionInterfaceTransitionDraining, false, false, domain.TurnStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, session, conversation := seededChatConversation(t)
+			other, err := s.CreateConversation(ctx, "conversation-other", domain.ConversationScopeProject, "branches", session.ID, testNow)
+			mustNoError(t, err)
+			appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+			const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+			mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
+			for queued, id := range map[string]string{"held": conversation.ID, "running": conversation.ID, "elsewhere": other.ID} {
+				if _, err := s.AppendUserMessage(ctx, id, session.ID, "generation-root", domain.ConversationMessage{
+					ID: "message-" + queued, Origin: domain.MessageOriginAutomation, Text: queued, ClientMessageID: "client-" + queued,
+				}, "turn-"+queued, testNow); err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
+			mustNoError(t, s.BindTurnToProvider(ctx, "turn-running", "provider-running", testNow))
+			if tc.released {
+				mustNoError(t, s.ReleaseConversationQueue(ctx, conversation.ID))
+			}
+			moving := session
+			if tc.otherSession {
+				rec := sampleRecord("branches")
+				rec.Mode = domain.SessionModeChat
+				moving, err = s.CreateSession(ctx, rec)
+				mustNoError(t, err)
+			}
+			_, created, err := s.CreateSessionInterfaceTransition(ctx, domain.SessionInterfaceTransition{
+				ID: "move", SessionID: moving.ID, SourceMode: domain.SessionModeChat, TargetMode: tc.mode, Policy: tc.policy,
+				HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict, Phase: domain.SessionInterfaceTransitionRequested,
+				TargetAccountID: tc.target, CreatedAt: testNow, UpdatedAt: testNow,
+			})
+			if err != nil || !created {
+				t.Fatalf("transition: created=%v err=%v", created, err)
+			}
+			if ok, err := s.AdvanceSessionInterfaceTransition(ctx, "move", domain.SessionInterfaceTransitionRequested, tc.phase, "", "", "", testNow); err != nil || !ok {
+				t.Fatalf("advance transition: %v, %v", ok, err)
+			}
+
+			if owned, err := s.CleanupOwnedControllerWork(ctx, session.ID, conversation.ID, "generation-root", testNow); err != nil || !owned {
+				t.Fatalf("cleanup = %v, %v", owned, err)
+			}
+			for id, want := range map[string]domain.TurnState{
+				"turn-held": tc.want, "turn-elsewhere": domain.TurnStateFailed, "turn-running": domain.TurnStateFailed,
+			} {
+				if turn, err := s.TurnByID(ctx, id); err != nil || turn.State != want {
+					t.Fatalf("%s = %q, %v, want %q", id, turn.State, err, want)
+				}
+			}
+		})
 	}
-	cleanup(domain.TurnStateQueued)
-	mustNoError(t, s.ReleaseConversationQueue(ctx, conversation.ID))
-	cleanup(domain.TurnStateFailed)
 }
 
 func TestQueueHoldFollowsTheTurnThatOwnsIt(t *testing.T) {

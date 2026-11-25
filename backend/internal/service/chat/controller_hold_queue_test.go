@@ -349,25 +349,37 @@ func TestUsageLimitOnAutomationPromptLeavesTheQueueUnheld(t *testing.T) {
 	})
 }
 
+func startTerminalSwitch(t *testing.T, h *harness) {
+	t.Helper()
+	if _, created, err := h.st.CreateSessionInterfaceTransition(context.Background(), domain.SessionInterfaceTransition{
+		ID: "terminal-switch", SessionID: testSession, SourceMode: domain.SessionModeChat, TargetMode: domain.SessionModeTUI,
+		Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
+		Phase: domain.SessionInterfaceTransitionRequested, CreatedAt: h.now(), UpdatedAt: h.now(),
+	}); err != nil || !created {
+		t.Fatalf("terminal switch: created=%v err=%v", created, err)
+	}
+}
+
 func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
 	for _, afterAccountMove := range []bool{false, true} {
 		t.Run(fmt.Sprintf("after account move %v", afterAccountMove), func(t *testing.T) {
-			h := newHarness(t)
+			hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+			h := hh.harness
 			failUsageLimitedTurnBehindQueue(t, h, "queued note")
+			if afterAccountMove {
+				hh.tick(t)
+				hh.mover.finish(t, domain.SessionInterfaceTransitionFailed)
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if afterAccountMove {
-				if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, false); err != nil {
+			startTerminalSwitch(t, h)
+			if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
 				t.Fatal(err)
 			}
 			prepared := make(chan error, 1)
 			go func() {
-				prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, false)
+				prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain)
 			}()
 			var running string
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
@@ -402,12 +414,13 @@ func TestInterfaceHandoffDrainsPastANewUsageLimit(t *testing.T) {
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
 		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
 	failedTurnSnapshot(t, h, turn.ID)
+	startTerminalSwitch(t, h)
 
 	prepareCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	prepared := make(chan error, 1)
 	go func() {
-		prepared <- h.svc.PrepareChatHandoff(prepareCtx, testSession, domain.SessionInterfaceTransitionDrain, false)
+		prepared <- h.svc.PrepareChatHandoff(prepareCtx, testSession, domain.SessionInterfaceTransitionDrain)
 	}()
 	for _, step := range []struct {
 		text  string

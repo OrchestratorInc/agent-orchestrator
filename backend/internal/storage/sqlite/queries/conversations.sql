@@ -819,7 +819,7 @@ SET state = 'failed',
     completed_at = ?
 WHERE handled_by_session_id = ? AND state IN ('queued', 'running');
 
--- name: SettleOrphanedConversationTurnsKeepingHeldQueue :exec
+-- name: SettleStoppedControllerTurns :exec
 UPDATE conversation_turns
 SET state = 'failed',
     error_message = 'controller ended before the turn completed',
@@ -827,9 +827,13 @@ SET state = 'failed',
 WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
   AND (state = 'running' OR (state = 'queued' AND NOT EXISTS (
       SELECT 1 FROM conversations
-      WHERE conversations.id = sqlc.arg(conversation_id)
-        AND conversations.id = conversation_turns.conversation_id
-        AND conversations.queue_held_turn_id IS NOT NULL)));
+      JOIN session_interface_transitions AS move
+        ON move.session_id = conversation_turns.handled_by_session_id
+      WHERE conversations.id = conversation_turns.conversation_id
+        AND conversations.queue_held_turn_id IS NOT NULL
+        AND move.target_account_id <> ''
+        AND move.policy = 'drain'
+        AND move.phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required'))));
 
 -- Reviewer Chat has its own controller generation on review, separate from
 -- the worker session. Settle only turns owned by that review conversation.
