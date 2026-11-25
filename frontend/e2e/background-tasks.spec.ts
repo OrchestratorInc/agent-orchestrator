@@ -299,3 +299,66 @@ test("a task opens in the side panel's Background tasks tab and follows its outp
 	await expect(page.getByRole("region", { name: "Tests" }).getByText("No output yet")).toBeVisible();
 	await expect(tasksTab).toHaveAttribute("aria-selected", "true");
 });
+
+test("a task's command uses the panel's height, and shares it with output @T0", async ({ page }, testInfo) => {
+	// A CI wait several lines long, from a chat that reports no output for it.
+	const wait = "until s=$(gh run view 45435541901 -R OrchestratorInc/agent-orchestrator --json status --jq .status) && [ \"$s\" = \"completed\" ]; do sleep 30; done; gh run view 45435541901 -R OrchestratorInc/agent-orchestrator --json conclusion,jobs --jq '{conclusion, failed: [.jobs[] | select(.conclusion == \"failure\") | .name]}'";
+	const script = Array.from({ length: 120 }, (_, i) => `echo "step ${i + 1}"`).join("\n");
+	const fixture: Fixture = {
+		tasks: [
+			{ id: "wait", kind: "shell", description: "Wait for the re-run to finish", command: wait, state: "running", startedAt: ago(3), stoppable: true },
+			{ id: "release", kind: "shell", description: "Run the release script", command: script, state: "running", startedAt: ago(2), stoppable: true },
+			{ id: "setup", kind: "shell", description: "Replay the setup steps", command: script, state: "running", startedAt: ago(1), stoppable: true },
+		],
+		output: (taskId) => (taskId === "release" ? { output: Array.from({ length: 200 }, (_, i) => `step ${i + 1}`).join("\n") } : undefined),
+	};
+	await openWorker(page, fixture);
+	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
+	const strip = page.getByRole("region", { name: "Background tasks" });
+	await strip.getByRole("button", { name: /3 running/ }).click({ timeout: 15_000 });
+	await strip.getByRole("button", { name: /^Wait for the re-run to finish/ }).click();
+	const scrolls = (command: Locator) => command.evaluate((element) => element.scrollHeight > element.clientHeight + 1);
+	const openFromList = async (name: string) => {
+		await page.getByRole("button", { name: "All background tasks" }).click();
+		await page.getByRole("group", { name: "Running" }).getByRole("button", { name: new RegExp(`^${name}`) }).click();
+		return page.getByRole("region", { name });
+	};
+
+	// A command longer than a few lines shows in full, with the note right under it.
+	let panel = page.getByRole("region", { name: "Wait for the re-run to finish" });
+	let command = panel.locator("code");
+	const note = panel.getByText("This agent doesn't report this task's output");
+	await expect(note).toBeVisible();
+	await expect(command).toHaveText(wait);
+	expect(await command.evaluate((element) => element.scrollHeight)).toBeGreaterThan(5 * 18);
+	expect(await scrolls(command)).toBe(false);
+	expect((await box(note)).top).toBeGreaterThanOrEqual((await box(command)).bottom);
+	const full = testInfo.outputPath("background-task-long-command.png");
+	await page.screenshot({ path: full });
+	await testInfo.attach("a long command shown in full", { path: full, contentType: "image/png" });
+
+	// Beside output, a command taller than the panel keeps half of it and scrolls there.
+	panel = await openFromList("Run the release script");
+	command = panel.locator("code");
+	const output = panel.getByRole("region", { name: "Output" });
+	await expect(output).toContainText("step 200");
+	expect(await scrolls(command)).toBe(true);
+	const shared = await box(panel);
+	const outputBox = await box(output);
+	expect(outputBox.top).toBeGreaterThanOrEqual((await box(command)).bottom);
+	expect(outputBox.bottom - outputBox.top).toBeGreaterThanOrEqual((shared.bottom - shared.top) / 2 - 20);
+	expect((await box(command)).bottom - (await box(command)).top).toBeGreaterThan((shared.bottom - shared.top) / 3);
+	const split = testInfo.outputPath("background-task-command-beside-output.png");
+	await page.screenshot({ path: split });
+	await testInfo.attach("a long command beside output", { path: split, contentType: "image/png" });
+
+	// Beside a note, it takes everything but the note's line.
+	panel = await openFromList("Replay the setup steps");
+	command = panel.locator("code");
+	const setupNote = panel.getByText("This agent doesn't report this task's output");
+	await expect(setupNote).toBeVisible();
+	expect(await scrolls(command)).toBe(true);
+	const alone = await box(panel);
+	expect((await box(setupNote)).bottom).toBeLessThanOrEqual(alone.bottom + 0.5);
+	expect((await box(command)).bottom - (await box(command)).top).toBeGreaterThan((alone.bottom - alone.top) * 0.6);
+});

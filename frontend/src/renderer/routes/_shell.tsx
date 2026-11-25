@@ -11,6 +11,7 @@ import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { MainViewVisibleContext } from "../lib/main-view-visibility";
 import { CommandPalette } from "../components/CommandPalette";
 import { useLatestCallback } from "../hooks/useStable";
 import { isRemoveTarget, useRemoveProject } from "../hooks/useRemoveProject";
@@ -199,7 +200,10 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 	return (
 		<>
 			<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
-				<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				{/* Settings and a starting chat hide the page but keep it mounted; videos in it pause. */}
+				<MainViewVisibleContext.Provider value={!settingsOpen && !startingChat}>
+					<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				</MainViewVisibleContext.Provider>
 				{startingChat}
 			</div>
 			<SettingsPane />
