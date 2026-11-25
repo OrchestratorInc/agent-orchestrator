@@ -477,7 +477,7 @@ export interface RenderRef {
 	heights?: Array<[number, number]>;
 }
 
-/** An HTML session artifact the agent reported with `ao report --artifact`, shown inline in its turn. */
+/** An HTML session artifact the agent reported with `ao report --artifact`, named (not framed) in its turn. */
 export interface ArtifactRef {
 	/** Relative to the session's artifact directory, slash-separated. */
 	path: string;

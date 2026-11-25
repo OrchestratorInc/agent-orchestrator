@@ -61,7 +61,9 @@ report, a dashboard, or a document. Write it to the artifact directory that your
 prompt names, run `ao artifact add <path>` so it is listed, and attach it with
 `ao report --artifact <path>`.
 In a chat session, an HTML file from the artifact directory that you attach
-with `--artifact` also shows in the thread.
+with `--artifact` shows in the thread as a row naming it, not as the page
+itself; the reader opens it in the Artifacts tab. If the reader should read the
+page in the thread, use `ao render`.
 
 To keep a rendered page as an artifact as well, add `--artifact` to `ao render`
 (or set `artifact: true` in `html_render`). Do this only when the user asks to keep

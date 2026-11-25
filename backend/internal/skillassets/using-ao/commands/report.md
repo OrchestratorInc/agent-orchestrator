@@ -34,7 +34,9 @@ artifact directory; mention issues, links, and other URLs in the note.
 `--artifact` does not make a file appear as a session artifact: run
 [`ao artifact add`](artifact.md) for that, before you report it.
 In a chat session, an HTML file from the artifact directory that you attach
-with `--artifact` also shows in the thread.
+with `--artifact` shows in the thread as a row naming it, not as the page
+itself; the reader opens it in the Artifacts tab. If the reader should read the
+page in the thread, use `ao render`.
 
 Routine test logs, command output, scratch notes, and intermediate diagnostics
 are working material, not deliverables. Do not attach them unless requested or

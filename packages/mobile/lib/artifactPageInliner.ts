@@ -39,9 +39,6 @@ export type InlineLimits = {
 /** The limits `ao render` holds a page to: the viewer, where the page is read in full. */
 export const FULL_PAGE_LIMITS: InlineLimits = { name: "full", imageBytes: 10 << 20, pageBytes: 25 << 20 };
 
-/** A page in a chat turn: ordinary screenshots fit, while many frames share the app's memory. */
-export const FRAME_PAGE_LIMITS: InlineLimits = { name: "frame", imageBytes: 2 << 20, pageBytes: 6 << 20 };
-
 /**
  * A page drawn small on a gallery card, where a dozen may load at once: small
  * images (icons, logos, charts) come along, a full-size screenshot does not.

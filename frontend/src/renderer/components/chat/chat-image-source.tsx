@@ -10,19 +10,19 @@ import { createContext, useContext, useMemo, useState, useSyncExternalStore, typ
 import { getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { isAbsoluteMarkdownAssetSrc, resolveMarkdownImageSrc } from "../../lib/markdown-image-resolver";
 import type { SessionArtifact, WorkspaceSession } from "../../types/workspace";
-import { isInlineArtifactUrl } from "../../../shared/agent-page-url";
 
-type ChatImageSource = { sessionId: string; version: number; baseUrl?: string; remoteHost: boolean; artifacts?: SessionArtifact[]; cloud?: WorkspaceSession["cloud"] };
+type ChatImageSource = { sessionId: string; hostId?: string; version: number; baseUrl?: string; remoteHost: boolean; artifacts?: SessionArtifact[]; cloud?: WorkspaceSession["cloud"] };
 
 const ChatImageSourceContext = createContext<ChatImageSource | undefined>(undefined);
 
-export function ChatImageSourceProvider({ sessionId, assetBaseUrl, remoteHost = false, artifacts, cloud, children }: { sessionId: string; assetBaseUrl?: string; remoteHost?: boolean; artifacts?: SessionArtifact[]; cloud?: WorkspaceSession["cloud"]; children: ReactNode }) {
+/** hostId names the host a remote-host chat's session runs on, so requests about it reach that session's view. */
+export function ChatImageSourceProvider({ sessionId, hostId, assetBaseUrl, remoteHost = false, artifacts, cloud, children }: { sessionId: string; hostId?: string; assetBaseUrl?: string; remoteHost?: boolean; artifacts?: SessionArtifact[]; cloud?: WorkspaceSession["cloud"]; children: ReactNode }) {
 	// The blob route is no-store, so a mount-specific version makes rewritten
 	// workspace images reload when the chat is reopened.
 	const [version] = useState(() => Date.now());
 	const localBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const baseUrl = remoteHost ? assetBaseUrl : assetBaseUrl ?? localBaseUrl;
-	const value = useMemo(() => ({ sessionId, version, baseUrl, remoteHost, artifacts, cloud }), [sessionId, version, baseUrl, remoteHost, artifacts, cloud]);
+	const value = useMemo(() => ({ sessionId, hostId, version, baseUrl, remoteHost, artifacts, cloud }), [sessionId, hostId, version, baseUrl, remoteHost, artifacts, cloud]);
 	return <ChatImageSourceContext.Provider value={value}>{children}</ChatImageSourceContext.Provider>;
 }
 
@@ -54,13 +54,13 @@ export function useChatRemoteHost(): boolean {
 }
 
 /**
- * What the session lists for one of its artifact files, by path: the Browser
- * panel URL, and the URL that frames the page inline from its own origin.
+ * The open chat's session and host, when it lists the artifact file at path;
+ * undefined when it does not, so nothing offers to open a file the session
+ * cannot show.
  */
-export function useChatArtifactLinks(path: string | undefined): { sessionId: string; previewUrl?: string; inlineUrl?: string } | undefined {
+export function useChatArtifactLinks(path: string | undefined): { sessionId: string; hostId?: string } | undefined {
 	const source = useContext(ChatImageSourceContext);
 	const artifact = path === undefined ? undefined : source?.artifacts?.find((candidate) => candidate.path === path);
 	if (!source || !artifact) return undefined;
-	const inlineUrl = artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
-	return { sessionId: source.sessionId, previewUrl: artifact.previewUrl, inlineUrl };
+	return { sessionId: source.sessionId, hostId: source.hostId };
 }

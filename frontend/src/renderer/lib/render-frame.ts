@@ -3,7 +3,6 @@ import type { ArtifactRef, ConversationActivity, RenderRef } from "../types/conv
 export const RENDER_MIN_HEIGHT = 80;
 export const RENDER_MAX_HEIGHT = 2000;
 const RENDER_PATH = /^\/api\/v1\/sessions\/[^/]+\/renders\/[^/]+$/;
-const ARTIFACT_URL = /^(\/api\/v1\/sessions\/[^/]+\/artifact-files\/).+/;
 const MAX_MEASURED_WIDTHS = 16;
 
 export function clampRenderHeight(height: number): number {
@@ -30,25 +29,19 @@ export function readRenderRef(detail: ConversationActivity["detail"]): RenderRef
 	return ref;
 }
 
-/** The HTML artifact an `artifact` activity points at, or undefined for anything malformed. */
-export function readArtifactRef(detail: ConversationActivity["detail"]): ArtifactRef | undefined {
+/** What the thread shows of a reported artifact: it names the file, and opens it by its path. */
+export type ReportedArtifact = Pick<ArtifactRef, "path" | "name">;
+
+/**
+ * The HTML artifact an `artifact` activity points at, or undefined for anything
+ * malformed. The thread never loads the page, so the event's `url` is not read.
+ */
+export function readArtifactRef(detail: ConversationActivity["detail"]): ReportedArtifact | undefined {
 	const artifact = detail?.event === "artifact" ? detail.artifact : undefined;
-	if (
-		!artifact ||
-		typeof artifact.path !== "string" ||
-		!isRelativePath(artifact.path) ||
-		typeof artifact.name !== "string" ||
-		typeof artifact.url !== "string" ||
-		!staysUnder(artifact.url, ARTIFACT_URL.exec(artifact.url)?.[1])
-	) {
+	if (!artifact || typeof artifact.path !== "string" || !isRelativePath(artifact.path) || typeof artifact.name !== "string") {
 		return undefined;
 	}
-	return { path: artifact.path, name: artifact.name, url: artifact.url };
-}
-
-/** Whether url, once the browser resolves its dot segments (escaped ones too), is still under prefix. */
-function staysUnder(url: string, prefix: string | undefined): boolean {
-	return prefix !== undefined && new URL(url, "http://127.0.0.1").pathname.startsWith(prefix);
+	return { path: artifact.path, name: artifact.name };
 }
 
 /** Non-empty, not rooted or drive-lettered, and no `..` segment. */

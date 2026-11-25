@@ -19,8 +19,6 @@ vi.mock("expo-router/react-navigation", async () => {
 	const subscribe = (listener: () => void) => { navigation.listeners.add(listener); return () => { navigation.listeners.delete(listener); }; };
 	return { useIsFocused: () => React.useSyncExternalStore(subscribe, () => navigation.focused) };
 });
-// Inlining an artifact page has its own tests; these frames are renders.
-vi.mock("../useInlinedArtifactPage", () => ({ useInlinedArtifactPage: () => ({ failed: false }) }));
 vi.mock("expo-linking", () => ({ openURL: vi.fn() }));
 vi.mock("../config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), httpBase: () => "http://lab:3011", machineIdentity: () => "host.lab-host" }));
 vi.mock("../haptics", () => ({ haptics: { tap: () => {} } }));

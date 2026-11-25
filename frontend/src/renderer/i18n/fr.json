@@ -3346,6 +3346,7 @@
 	"chat.render.sourceError": "Impossible de charger la source de la page.",
 	"chat.render.remoteHost": "Ouvrez cette session sur son hôte pour voir la page.",
 	"chat.artifact.openInPanel": "Ouvrir dans l’onglet Artefacts",
+	"chat.artifact.openNamed": "Ouvrir {{name}} dans l’onglet Artefacts",
 	"chat.artifact.label": "Artifact",
 	"chat.image.numbered": "Image {{index}}",
 	"chat.edit.cancel": "Annuler la modification",

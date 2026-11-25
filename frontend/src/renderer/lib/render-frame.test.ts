@@ -27,10 +27,10 @@ describe("render-frame helpers", () => {
 		expect(clampRenderHeight(3)).toBe(80);
 	});
 
-	it("accepts only a relative artifact path with an artifact-files URL", () => {
+	it("accepts only a relative artifact path and a name, and keeps only those", () => {
 		const artifact = { path: "q3/Q3 (final).html", name: "Q3 (final).html", url: "/api/v1/sessions/p-1/artifact-files/q3/Q3%20%28final%29.html" };
 		const read = (fields: Record<string, unknown>) => readArtifactRef({ event: "artifact" as const, artifact: { ...artifact, ...fields } as never });
-		expect(read({})).toEqual(artifact);
+		expect(read({})).toEqual({ path: "q3/Q3 (final).html", name: "Q3 (final).html" });
 		for (const bad of [
 			{ path: "" },
 			{ path: "/etc/report.html" },
@@ -41,12 +41,6 @@ describe("render-frame helpers", () => {
 			{ path: "q3\\..\\report.html" },
 			{ path: 7 },
 			{ name: undefined },
-			{ url: "/api/v1/sessions/p-1/renders/r1" },
-			{ url: "/api/v1/sessions/p-1/artifact-files/" },
-			{ url: "https://evil.example/api/v1/sessions/p-1/artifact-files/x.html" },
-			{ url: "/api/v1/sessions/p-1/artifact-files/../../../config" },
-			{ url: "/api/v1/sessions/p-1/artifact-files/%2e%2e/renders/r1" },
-			{ url: "/api/v1/sessions/../artifact-files/x.html" },
 		]) {
 			expect(read(bad), JSON.stringify(bad)).toBeUndefined();
 		}

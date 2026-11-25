@@ -3346,6 +3346,7 @@
 	"chat.render.sourceError": "No se pudo cargar el código fuente de la página.",
 	"chat.render.remoteHost": "Abre esta sesión en su host para ver la página.",
 	"chat.artifact.openInPanel": "Abrir en la pestaña Artefactos",
+	"chat.artifact.openNamed": "Abrir {{name}} en la pestaña Artefactos",
 	"chat.artifact.label": "Artifact",
 	"chat.image.numbered": "Imagen {{index}}",
 	"chat.edit.cancel": "Cancelar edición",

@@ -3428,6 +3428,7 @@
 	"chat.render.sourceError": "Не удалось загрузить исходный код страницы.",
 	"chat.render.remoteHost": "Чтобы увидеть страницу, откройте эту сессию на компьютере, где она запущена.",
 	"chat.artifact.openInPanel": "Открыть во вкладке «Артефакты»",
+	"chat.artifact.openNamed": "Открыть {{name}} во вкладке «Артефакты»",
 	"chat.artifact.label": "Артефакт",
 	"chat.image.numbered": "Изображение {{index}}",
 	"chat.edit.cancel": "Отменить редактирование",
