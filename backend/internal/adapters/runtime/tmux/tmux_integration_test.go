@@ -675,6 +675,57 @@ func TestSupervisorProcessHelper(t *testing.T) {
 	time.Sleep(2 * time.Second)
 }
 
+// TestSendMessageUsesBracketedPasteIntegration reproduces issue #3626. Codex
+// (like most TUIs) enables bracketed paste, and every `ao send` is multiline
+// (the <ao-session-delivery> envelope). Typed as plain keystrokes, codex's
+// paste-burst heuristic could treat the trailing Enter as part of the burst
+// and leave the prompt unsubmitted. Delivered as a bracketed paste, the TUI
+// knows exactly where the pasted text ends, so the Enter after it submits.
+func TestSendMessageUsesBracketedPasteIntegration(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	ctx := context.Background()
+	id := strings.ReplaceAll(t.Name(), "/", "_")
+	r := New(Options{Timeout: 5 * time.Second, EnterDelay: 10 * time.Millisecond})
+	_ = r.Destroy(ctx, ports.RuntimeHandle{ID: id})
+	t.Cleanup(func() { _ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id}) })
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "received")
+	// A stand-in TUI: take the tty raw (so CR and LF arrive unchanged),
+	// request bracketed paste like codex does, then record the raw bytes it
+	// receives. READY appears in the pane only after tmux has parsed the
+	// mode switch printed ahead of it.
+	script := `stty raw -echo; printf '\033[?2004hREADY'; exec cat > "$1"`
+	h, err := r.Create(ctx, ports.RuntimeConfig{
+		SessionID:     domain.SessionID(id),
+		WorkspacePath: dir,
+		Argv:          []string{"sh", "-c", script, "sh", out},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := waitForOutput(t, r, h, "READY", 5*time.Second); !strings.Contains(got, "READY") {
+		t.Fatalf("stand-in TUI never became ready; pane = %q", got)
+	}
+
+	if err := r.SendMessage(ctx, h, "line one\nline two"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	want := "\x1b[200~line one\nline two\x1b[201~\r"
+	var got string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		b, _ := os.ReadFile(out)
+		if got = string(b); strings.HasSuffix(got, "\r") {
+			break
+		}
+	}
+	if got != want {
+		t.Fatalf("pane received %q, want %q (one bracketed paste, then Enter)", got, want)
+	}
+}
+
 // waitForOutput polls GetOutput until out contains want or the deadline passes.
 func waitForOutput(t *testing.T, r *Runtime, h ports.RuntimeHandle, want string, deadline time.Duration) string {
 	t.Helper()
