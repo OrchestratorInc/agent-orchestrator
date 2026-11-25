@@ -452,7 +452,7 @@ export function AgentModelCombobox({
 											<div className="min-w-0 flex-1">
 												<span className="block wrap-anywhere text-settings-label" title={item.id}>{item.label}</span>
 												{sharedLabelDetails.has(item.id) && (
-													<p className="truncate text-xs text-settings-muted">{sharedLabelDetails.get(item.id)}</p>
+													<p className="wrap-anywhere text-xs text-settings-muted">{sharedLabelDetails.get(item.id)}</p>
 												)}
 												{item.model.unavailableReason && (
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>

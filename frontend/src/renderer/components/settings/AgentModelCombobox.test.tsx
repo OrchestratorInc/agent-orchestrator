@@ -87,6 +87,10 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByRole("menuitem", { name: /deepseek-v4-pro\s*deepseek$/ })).toBeInTheDocument();
 		// Where the provider repeats too, the full ID is what differs.
 		expect(screen.getByRole("menuitem", { name: /kimi\s*fireworks\/accounts\/team\/models\/kimi/ })).toBeInTheDocument();
+		// A long ID wraps too, or the part that differs would be cut off again.
+		const detail = screen.getByText("fireworks/accounts/team/models/kimi");
+		expect(detail).toHaveClass("wrap-anywhere");
+		expect(detail).not.toHaveClass("truncate");
 		// A name that appears once stays on its own, with the full ID on hover.
 		const unique = screen.getByRole("menuitem", { name: "only-here" });
 		expect(unique).toBeInTheDocument();

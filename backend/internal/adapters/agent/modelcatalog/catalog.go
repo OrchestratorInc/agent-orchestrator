@@ -1113,13 +1113,15 @@ var accountModelPathPattern = regexp.MustCompile(`^accounts/[^/]+/models/([^/]+)
 // splitProviderID labels a provider/model selector with its provider and the
 // name after the first slash, reporting whether the ID had both parts. A
 // resource path is labelled with its model's name; any other nested name
-// (a router's vendor/model) is kept whole, as the vendor is part of it.
+// (a router's vendor/model) is kept whole, as the vendor is part of it. So is
+// a path to a model literally named "default", because normalize reads that
+// label as the default-model marker.
 func splitProviderID(item *ports.AgentModelInfo) bool {
 	provider, name, ok := strings.Cut(item.ID, "/")
 	if !ok || provider == "" || name == "" {
 		return false
 	}
-	if match := accountModelPathPattern.FindStringSubmatch(name); match != nil {
+	if match := accountModelPathPattern.FindStringSubmatch(name); len(match) == 2 && !strings.EqualFold(match[1], "default") {
 		name = match[1]
 	}
 	item.Provider, item.Label = provider, name

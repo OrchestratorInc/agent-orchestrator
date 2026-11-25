@@ -1649,3 +1649,20 @@ func TestResourcePathLabelsInvalidateCachedCatalogs(t *testing.T) {
 		}
 	}
 }
+
+// normalize reads a label of "default" as the default-model marker. A resource
+// path whose model happens to be named "default" is a real model, so it keeps
+// its path as the label and is not marked as the default.
+func TestResourcePathModelNamedDefaultIsNotTheDefaultMarker(t *testing.T) {
+	t.Parallel()
+	models, err := parseMiMoModels([]byte("fireworks/accounts/team/models/default — Custom deployment"))
+	if err != nil {
+		t.Fatalf("parseMiMoModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models = %+v, want one", models)
+	}
+	if got := models[0]; got.Label != "accounts/team/models/default" || got.IsDefault {
+		t.Fatalf("model = %+v, want the path as its label and not the default", got)
+	}
+}
