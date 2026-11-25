@@ -52,6 +52,12 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 			DataDir:           m.dataDir,
 			Env:               maps.Clone(env),
 		})
+		var refused *ports.ImportRefusedError
+		if errors.As(err, &refused) {
+			// The adapter wrote why, e.g. the CLI changed between import and
+			// first open; the user can act on it.
+			return rec, fmt.Errorf("%w: %w", importNotice(refused.Message), err)
+		}
 		if err != nil {
 			return rec, err
 		}

@@ -48,8 +48,9 @@ func openImportAssetDir(parent *os.Root, name string) (*os.Root, error) {
 // Agy 1.5.13 owns conversations/<id>.meta and brain/<id> alongside its DB;
 // brain contains artifacts and .system_generated conversation logs. Nothing
 // else in the provider profile is part of this snapshot. Missing optional
-// assets stay missing, including an absent brain parent. Native reopens check
-// confinement/types without applying the initial snapshot's byte/count cap.
+// assets stay missing, including an absent brain parent. Links inside brain/<id>
+// are skipped, never followed. Native reopens check confinement/types without
+// applying the initial snapshot's byte/count cap.
 func readImportAssets(ctx context.Context, provider *os.Root, mode, id string, contents bool) (map[string]importAsset, error) {
 	assets := make(map[string]importAsset)
 	storage, err := openImportAssetDir(provider, mode)
@@ -133,6 +134,12 @@ func readImportAssets(ctx context.Context, provider *os.Root, mode, id string, c
 		key := filepath.Join("brain", id, filepath.FromSlash(path))
 		if entry.IsDir() {
 			assets[key] = importAsset{dir: true}
+			return nil
+		}
+		// Agy's scratch space can hold a venv or node_modules full of links.
+		// They are never followed or copied, so they neither block the
+		// snapshot nor a reopen; the conversation does not depend on them.
+		if entry.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		return readFile(brain, path, key)

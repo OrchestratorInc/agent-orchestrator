@@ -147,6 +147,13 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
+	// Droid resumes in lastCwd ?? cwd, and a /cwd or --cwd in the original
+	// chat leaves lastCwd at the user's checkout. Drop it, as Droid's own fork
+	// does, so the copy runs in the AO workspace.
+	header, err = importcopy.DeleteField(header, "lastCwd")
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
 	copyBody := append(append(header, '\n'), body[newline+1:]...)
 	if err := validateDroidHistory(copyBody, target, launch); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -433,7 +440,7 @@ func (p *Plugin) verifyImportVersion(ctx context.Context, env map[string]string)
 		return errors.New("droid: could not verify installed version")
 	}
 	if strings.TrimSpace(out.String()) != "0.251.0" {
-		return errors.New("droid: session import supports only verified version 0.251.0")
+		return &ports.ImportRefusedError{Message: "droid: session import supports only verified version 0.251.0"}
 	}
 	return nil
 }

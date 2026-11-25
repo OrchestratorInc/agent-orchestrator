@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,6 +228,79 @@ func checkImportCredentialFormat(path string) error {
 	return nil
 }
 
+// importEndpointKeys are configuration keys that point a provider at a
+// non-default endpoint, compared case-insensitively.
+var importEndpointKeys = map[string]bool{"baseurl": true, "base_url": true, "endpoint": true, "apibase": true, "api_base": true}
+
+const importEndpointRefusal = "deepseek: this chat's DeepSeek Harness profile sets a custom endpoint in cordis.patch.yml, which an imported chat does not carry over; import refused so its history and key are not sent to the default endpoint"
+
+// checkImportEndpointOverride refuses an import when the user's own profile
+// patches set a custom endpoint. The private DSH_HOME holds only AO's patch,
+// so the copy would silently fall back to dsh's default endpoint. Any provider
+// endpoint is treated the same way; none is special-cased.
+func checkImportEndpointOverride(home string) error {
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	paths := []string{"cordis.patch.yml"}
+	if profiles, err := fs.ReadDir(root.FS(), "profiles"); err == nil {
+		for i, profile := range profiles {
+			if i >= 64 {
+				break
+			}
+			if profile.IsDir() {
+				paths = append(paths, filepath.Join("profiles", profile.Name(), "cordis.patch.yml"))
+			}
+		}
+	}
+	for _, path := range paths {
+		info, err := root.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			return &ports.ImportRefusedError{Message: "deepseek: this chat's DeepSeek Harness profile patch is unreadable; import refused"}
+		}
+		data, err := root.ReadFile(path)
+		var doc any
+		if err != nil || yaml.Unmarshal(data, &doc) != nil {
+			return &ports.ImportRefusedError{Message: "deepseek: this chat's DeepSeek Harness profile patch is unreadable; import refused"}
+		}
+		if setsImportEndpoint(doc, 0) {
+			return &ports.ImportRefusedError{Message: importEndpointRefusal}
+		}
+	}
+	return nil
+}
+
+func setsImportEndpoint(node any, depth int) bool {
+	if depth > 32 {
+		return true
+	}
+	switch v := node.(type) {
+	case map[string]any:
+		for key, value := range v {
+			if importEndpointKeys[strings.ToLower(key)] {
+				if text, ok := value.(string); !ok || strings.TrimSpace(text) != "" {
+					return true
+				}
+			}
+			if setsImportEndpoint(value, depth+1) {
+				return true
+			}
+		}
+	case []any:
+		for _, value := range v {
+			if setsImportEndpoint(value, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // privateImportPatch contains only paths and policy. Native credentials are
 // resolved by the installed provider from its original store, never copied.
 // Account/OAuth adapters are disabled: this API-key path must not refresh or
@@ -287,6 +361,9 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, err
 	}
 	if err := p.checkImportVersion(ctx); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if err := checkImportEndpointOverride(r.ConfigDir); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	a, err := ReadImportArchive(ctx, r.ConfigDir, r.TranscriptPath)

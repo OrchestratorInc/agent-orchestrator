@@ -6803,3 +6803,21 @@ func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
 		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
 	}
 }
+
+// An imported chat whose agent CLI changed between import and first open shows
+// the adapter's version message, not the generic "check the daemon log".
+func TestResumeAgentShowsImportVersionMessage(t *testing.T) {
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	versionErr := &ports.ImportRefusedError{Message: "droid: session import supports only verified version 0.251.0"}
+	cause := sessionmanager.RelaunchError{Step: "prepare_import", Err: fmt.Errorf("prepare imported session: %w", versionErr)}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: &fakeTelemetrySink{}})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_IMPORT_RESUME_FAILED" || apiErr.Message != versionErr.Message {
+		t.Fatalf("err = %#v, want SESSION_IMPORT_RESUME_FAILED with the version message", err)
+	}
+}

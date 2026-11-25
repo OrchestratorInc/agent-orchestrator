@@ -132,7 +132,7 @@ func TestImportSnapshotsOnlySelectedConversationAssets(t *testing.T) {
 }
 
 func TestImportRejectsAssetLinksAndOversizeWithoutPublication(t *testing.T) {
-	for _, kind := range []string{"meta link", "brain link", "nested link", "oversize"} {
+	for _, kind := range []string{"meta link", "brain link", "oversize"} {
 		t.Run(kind, func(t *testing.T) {
 			p, r, _ := assetImportFixture(t, CLIStorageDir, false)
 			meta := strings.TrimSuffix(r.TranscriptPath, ".db") + ".meta"
@@ -147,10 +147,6 @@ func TestImportRejectsAssetLinksAndOversizeWithoutPublication(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(t.TempDir(), path); err != nil {
-					t.Skipf("symlinks unavailable: %v", err)
-				}
-			case "nested link":
-				if err := os.Symlink(t.TempDir(), filepath.Join(brain, "outside")); err != nil {
 					t.Skipf("symlinks unavailable: %v", err)
 				}
 			case "oversize":
@@ -376,5 +372,43 @@ func TestPreparedImportReopensAfterGrowingPastSourceBudget(t *testing.T) {
 	r.DataDir = t.TempDir()
 	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
 		t.Fatal("new preparation admitted an oversized source")
+	}
+}
+
+// A venv or node_modules under brain/<id> is full of links. They are never
+// followed or copied, and they block neither the import nor a later reopen.
+func TestImportSkipsLinksInsideBrain(t *testing.T) {
+	p, r, _ := assetImportFixture(t, CLIStorageDir, false)
+	brain := filepath.Join(r.ConfigDir, CLIStorageDir, "brain", importTestID)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("outside-sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(brain, "scratch", ".venv", "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(brain, "scratch", "outside")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink("/usr/bin/python3", filepath.Join(brain, "scratch", ".venv", "bin", "python")); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatalf("links inside brain blocked the import: %v", err)
+	}
+	copied := filepath.Join(ref.ConfigDir, CLIStorageDir, "brain", importTestID, "scratch")
+	if _, err := os.Lstat(filepath.Join(copied, "outside")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("link was copied into the private root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(copied, ".venv", "bin")); err != nil {
+		t.Fatalf("plain directories around the links were not copied: %v", err)
+	}
+	// The agent adds its own venv links to the private copy; reopen ignores them.
+	if err := os.Symlink(outside, filepath.Join(copied, "outside-again")); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := p.LocateTranscript(context.Background(), ref); err != nil || !found {
+		t.Fatalf("links inside brain blocked a reopen: %v, %v", found, err)
 	}
 }

@@ -450,3 +450,38 @@ func TestImportedDroidRestoreAllowsHistoryToGrowBeyondSourceLimit(t *testing.T) 
 		t.Fatalf("source changed: %v", err)
 	}
 }
+
+// Droid resumes in lastCwd ?? cwd. A /cwd or --cwd in the original chat leaves
+// lastCwd at the user's checkout, so the copy must drop it to run in AO's
+// workspace, while the original keeps it.
+func TestPrepareImportedSessionDropsLastCwd(t *testing.T) {
+	p, r, _ := importFixture(t)
+	header, _ := json.Marshal(map[string]any{"type": "session_start", "id": importTestID, "cwd": r.SourceCWD, "lastCwd": r.SourceCWD, "version": 2})
+	original, err := os.ReadFile(r.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := append(header, original[bytes.IndexByte(original, '\n'):]...)
+	if err := os.WriteFile(r.TranscriptPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.SourceFingerprint = NativeHistoryFingerprint(body)
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyBody, err := os.ReadFile(ref.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copied map[string]any
+	if err := json.Unmarshal(copyBody[:bytes.IndexByte(copyBody, '\n')], &copied); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := copied["lastCwd"]; ok || copied["cwd"] != r.LaunchCWD {
+		t.Fatalf("copy header = %v, want cwd %q and no lastCwd", copied, r.LaunchCWD)
+	}
+	if got, _ := os.ReadFile(r.TranscriptPath); !bytes.Equal(got, body) {
+		t.Fatal("original modified")
+	}
+}

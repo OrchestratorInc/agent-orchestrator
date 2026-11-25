@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -802,5 +803,52 @@ func TestPreparedRootWithOlderProofVersionStillValidates(t *testing.T) {
 	empty := rehome("")
 	if _, err := validatePrivateImport(ctx, empty, importTestID, r.LaunchCWD); err == nil {
 		t.Fatal("reopen accepted a proof without a recorded version")
+	}
+}
+
+// The private DSH_HOME carries only AO's patch, so an import of a chat whose
+// own profile patch sets a custom endpoint would silently use dsh's default
+// one. Such an import is refused with a message the user can act on.
+func TestImportRefusesProfileCustomEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, patch string
+		refused           bool
+	}{
+		{"profile baseURL", filepath.Join("profiles", "acp", "cordis.patch.yml"), "- id: llm-openai-compatible\n  config:\n    baseURL: https://llm.example.test/v1\n", true},
+		{"root base_url", "cordis.patch.yml", "providers:\n  custom:\n    base_url: https://llm.example.test/v1\n", true},
+		{"unparseable patch", "cordis.patch.yml", "- id: [unterminated\n", true},
+		{"patch without endpoint", filepath.Join("profiles", "acp", "cordis.patch.yml"), "- id: llm-deepseek\n  config:\n    model: deepseek-chat\n", false},
+		{"empty endpoint", "cordis.patch.yml", "- id: llm-deepseek\n  config:\n    baseURL: \"\"\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, path, cwd := importFixture(t, false)
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, tc.path)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, tc.path), []byte(tc.patch), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			a, err := ReadImportArchive(context.Background(), root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := New()
+			p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
+			r := ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: t.TempDir(), DataDir: t.TempDir(), SourceFingerprint: a.Fingerprint, Env: map[string]string{credentialsPathEnv: ""}}
+			_, err = p.PrepareImportedSession(context.Background(), r)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("patch without a custom endpoint refused: %v", err)
+				}
+				return
+			}
+			var refused *ports.ImportRefusedError
+			if !errors.As(err, &refused) || strings.Contains(err.Error(), "example.test") {
+				t.Fatalf("custom endpoint import error = %v, want a user-facing refusal without the endpoint", err)
+			}
+			if entries, _ := os.ReadDir(filepath.Join(r.DataDir, "native-imports", adapterID)); len(entries) != 0 {
+				t.Fatalf("refused import left private state: %v", entries)
+			}
+		})
 	}
 }

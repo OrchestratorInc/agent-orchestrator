@@ -170,3 +170,11 @@ type AgentImportedSessionPreparer interface {
 type AgentImportVersionChecker interface {
 	CheckImportVersion(context.Context) error
 }
+
+// ImportRefusedError reports that an imported conversation cannot be prepared
+// for a reason the user can fix, such as an agent CLI version that changed
+// between import and first open. Message is fixed adapter text: never a path,
+// configured value or command output, so it may be shown to the user.
+type ImportRefusedError struct{ Message string }
+
+func (e *ImportRefusedError) Error() string { return e.Message }
