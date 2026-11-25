@@ -441,6 +441,28 @@ describe("cloudShare IPC", () => {
 			expect(requests.filter((request) => request.includes("/artifact-files/"))).toEqual([`GET /api/cloud/v1/artifact-files/acc-tok/site/index.html`]);
 		});
 
+		it("offers to republish the page when a file it uses is committed again, deleted or appears, though the page did not", async () => {
+			const files = session();
+			const { invoke, records } = setup({ cloudFiles: files, sharePageFiles: { included: 3, refusedVideos: [], tooLargeVideos: [], missing: [] } });
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({ status: "published" });
+			const inspect = () => invoke("cloudShare:inspect", page) as Promise<{ pageFilesChanged?: boolean }>;
+			expect((await inspect()).pageFilesChanged).toBeUndefined();
+			// Each file the page used, by its path in the session, with its committed SHA-256; a missing one as "".
+			await expect(records.publishedPageFiles(shareRecordKey("https://cp.test", `cloud:${ORG_ID}/${CLOUD_SESSION_ID}`, PAGE))).resolves.toEqual({
+				"site/img/a.png": sha("png-a"), "site/img/b.png": sha("png-b"), "site/clip.webm": sha("video"), "site/gone.png": "",
+			});
+			files.set("site/img/a.png", "png-a-v2");
+			expect((await inspect()).pageFilesChanged).toBe(true);
+			files.set("site/img/a.png", "png-a");
+			expect((await inspect()).pageFilesChanged).toBeUndefined();
+			files.delete("site/img/b.png");
+			expect((await inspect()).pageFilesChanged).toBe(true);
+			files.set("site/img/b.png", "png-b");
+			// gone.png was missing when the page was published.
+			files.set("site/gone.png", "png");
+			expect((await inspect()).pageFilesChanged).toBe(true);
+		});
+
 		it("publishes the page alone, and says so, to a control plane that predates a page's files", async () => {
 			const { invoke, bodies } = setup({ cloudFiles: session(), sharePredatesFiles: true });
 			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({

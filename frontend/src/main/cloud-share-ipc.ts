@@ -384,6 +384,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const name = listed?.name ?? (file.path.split("/").pop() || file.path);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
+		const pageFiles = shareId ? await deps.records.publishedPageFiles(key) : undefined;
 		return {
 			name,
 			...(listed ? { size: listed.size } : {}),
@@ -391,7 +392,17 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			fingerprint: listed?.sha256 ?? file.fingerprint ?? "",
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
+			...(pageFiles && await cloudPageFilesChanged(file, pageFiles) ? { pageFilesChanged: true } : {}),
 		};
+	};
+
+	// Whether any file a published cloud page used changed since: committed
+	// again, deleted, or committed though it was missing. Read from one list of
+	// the session's files.
+	const cloudPageFilesChanged = async (file: CloudSessionShareFile, recorded: Record<string, string>): Promise<boolean> => {
+		if (Object.keys(recorded).length === 0) return false;
+		const listed = new Map((await listCloudSessionArtifacts(deps, file.baseUrl, file)).map((artifact) => [artifact.path, artifact.sha256]));
+		return Object.entries(recorded).some(([artifactPath, sha256]) => (listed.get(artifactPath) ?? "") !== sha256);
 	};
 
 	// The files a cloud session's HTML page uses, found in the page as the
@@ -399,7 +410,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// control plane copies them beside the page. Null when the session
 	// committed another version of the page than the one the person was shown;
 	// undefined for a page too large to look in.
-	const findCloudPageFiles = async (file: CloudSessionShareFile & { fingerprint: string }, signal?: AbortSignal): Promise<PageFilesTaken<CloudSessionShareFileRef> | null | undefined> => {
+	const findCloudPageFiles = async (file: CloudSessionShareFile & { fingerprint: string }, signal?: AbortSignal): Promise<(PageFilesTaken<CloudSessionShareFileRef> & { fingerprints: Record<string, string> }) | null | undefined> => {
 		const listed = await listCloudSessionArtifacts(deps, file.baseUrl, file, signal);
 		const page = listed.find((artifact) => artifact.path === file.path);
 		if (!page || page.sha256 !== file.fingerprint) return null;
@@ -412,10 +423,15 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			if (!artifact) throw new CloudShareError("file_missing", "The file is no longer available.");
 			return { ...artifact, relativePath: relative };
 		});
+		// Each file's committed version, and "" for one missing, so a later commit shows.
+		const fingerprints: Record<string, string> = {};
+		for (const skip of found.skipped) if (skip.relativePath) fingerprints[skip.relativePath] = "";
+		for (const used of found.files) fingerprints[used.referencedPath] = used.file.sha256;
 		return {
 			files: found.files.map((used) => ({ path: used.path, artifactPath: used.referencedPath })),
 			skipped: [...found.skipped],
 			referenced: new Map(found.files.map((used) => [used.path, used.referencedPath])),
+			fingerprints,
 		};
 	};
 
@@ -446,16 +462,20 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				for (const missing of result.pageFiles?.missing ?? []) {
 					const relativePath = pageFiles.referenced.get(missing);
 					pageFiles.skipped.push({ reference: missing, reason: "missing", ...(relativePath ? { relativePath } : {}) });
+					if (relativePath) pageFiles.fingerprints[relativePath] = "";
 				}
 			}
+			const servesFiles = Boolean(result.pageFiles) && !unsupported;
+			// A video refused now is offered again once the control plane takes it.
 			const outcome = pageFiles ? pageFilesOutcome(pageFiles, {
 				included: result.pageFiles?.included ?? 0,
-				unsupported: unsupported || !result.pageFiles,
+				unsupported: !servesFiles,
 				refusedVideos: result.pageFiles?.refusedVideos ?? [],
 				tooLargeVideos: result.pageFiles?.tooLargeVideos ?? [],
-			}) : undefined;
+			}, (relativePath) => { pageFiles.fingerprints[relativePath] = ""; }) : undefined;
 			const key = await cloudRecordKey(deps.records, file.baseUrl, file);
-			await deps.records.set(key, result.share.id, sha256, artifactShareUrl(result.share), shareAccess(result.share));
+			// The link serves the page's files only when the control plane took them.
+			await deps.records.set(key, result.share.id, sha256, artifactShareUrl(result.share), shareAccess(result.share), pageFiles && servesFiles ? pageFiles.fingerprints : undefined);
 			return { status: "published", share: result.share, replaced: result.replaced, ...(outcome ? { pageFiles: outcome } : {}) };
 		} catch (error) {
 			// Another version was committed since: offer the newest.
