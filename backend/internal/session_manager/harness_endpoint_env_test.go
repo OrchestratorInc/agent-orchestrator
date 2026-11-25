@@ -139,7 +139,7 @@ func TestRuntimeEnvKeepsCaseVariantProjectEndpointKey(t *testing.T) {
 	if len(values) != 1 || values[0] != projectURL {
 		t.Fatalf("base URL entries = %q, want only the project value", values)
 	}
-	if env["ANTHROPIC_BASE_URL"] != "https://project.example.com" {
+	if env["ANTHROPIC_BASE_URL"] != projectURL {
 		t.Fatal("the project value must be restored under the canonical environment key")
 	}
 }
