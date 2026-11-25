@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ContextMeter } from "./ContextMeter";
@@ -68,6 +68,36 @@ describe("ContextMeter", () => {
 			await userEvent.hover(screen.getByRole("progressbar"));
 			await userEvent.click(await screen.findByRole("button", { name: "Compact now" }));
 			expect(await screen.findByRole("alert")).toHaveTextContent("Conversation history could not be compacted. Try again.");
+		});
+
+		it("is reached from the meter with the keyboard, and Escape or Tab returns there", async () => {
+			const user = userEvent.setup();
+			render(<ContextMeter usage={usage()} onCompact={vi.fn()} />);
+			const meter = screen.getByRole("progressbar");
+			for (const leave of ["{Escape}", "{Tab}"]) {
+				act(() => meter.focus());
+				await user.keyboard("{Enter}");
+				const button = await screen.findByRole("button", { name: "Compact now" });
+				await waitFor(() => expect(button).toHaveFocus());
+				await user.keyboard(leave);
+				await waitFor(() => expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument());
+				expect(meter).toHaveFocus();
+				act(() => meter.blur());
+			}
+		});
+
+		it("returns focus to the meter after compacting from the keyboard", async () => {
+			const user = userEvent.setup();
+			const onCompact = vi.fn().mockResolvedValue(undefined);
+			render(<ContextMeter usage={usage()} onCompact={onCompact} />);
+			const meter = screen.getByRole("progressbar");
+			act(() => meter.focus());
+			await user.keyboard("{ArrowDown}");
+			await waitFor(() => expect(screen.getByRole("button", { name: "Compact now" })).toHaveFocus());
+			await user.keyboard("{Enter}");
+			expect(onCompact).toHaveBeenCalledTimes(1);
+			await waitFor(() => expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument());
+			expect(meter).toHaveFocus();
 		});
 
 		it("is absent without a compact action", async () => {

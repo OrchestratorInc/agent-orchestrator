@@ -49,7 +49,10 @@ export function EffortSlider({
 	// A level just sent stays on screen until the agent reports it, so the thumb does not jump back
 	// meanwhile. If the agent never does (it refused), the reported level shows again shortly.
 	const [sent, setSent] = useState<number | undefined>();
-	useEffect(() => setSent(undefined), [value]);
+	// Cleared when the agent reports a level, or when the levels change (another model): the index held
+	// would point at another level, or past the end.
+	const levels = choices.map((choice) => choice.value).join("\n");
+	useEffect(() => setSent(undefined), [value, levels]);
 	useEffect(() => {
 		if (sent === undefined) return;
 		const timer = window.setTimeout(() => setSent(undefined), SENT_HOLD_MS);
@@ -67,7 +70,9 @@ export function EffortSlider({
 	const commit = (next: number) => {
 		setDrag(undefined);
 		const choice = choices[next];
-		if (!choice || choice.value === value) return setSent(undefined);
+		// Compared with the level last asked for, not the reported one: moving back to the reported level
+		// while another is still being applied has to be sent too, or that other level is what lands.
+		if (!choice || next === (sent ?? chosen)) return;
 		setSent(next);
 		onCommit(choice.value);
 	};

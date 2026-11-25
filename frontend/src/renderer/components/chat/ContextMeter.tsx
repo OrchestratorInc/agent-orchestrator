@@ -12,7 +12,7 @@
  * required, which matters for something glanced at rather than studied.
  */
 
-import { useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
@@ -189,35 +189,113 @@ function ContextReadout({ usage, compactsAt, compact }: { usage: ConversationUsa
  * the tooltip does, and stays open while the pointer is on it.
  */
 function ReadoutCard({ trigger, compact, children }: { trigger: ReactElement; compact?: CompactControl; children: ReactNode }) {
-	// A border separates it without the layered shadow's hover halos.
-	const surface = "border border-(--color-border-overlay) shadow-none";
+	// Controlled, so a key on the meter can open it without waiting out the hover delay.
+	const [open, setOpen] = useState(false);
 	if (!compact) {
 		return (
 			<Tooltip>
 				<TooltipTrigger asChild>{trigger}</TooltipTrigger>
-				<TooltipContent className={surface}>{children}</TooltipContent>
+				<TooltipContent className={READOUT_SURFACE}>{children}</TooltipContent>
 			</Tooltip>
 		);
 	}
 	return (
-		<HoverCard openDelay={150}>
-			<HoverCardTrigger asChild>{trigger}</HoverCardTrigger>
-			<HoverCardContent side="top" align="center" animation="enter" className={cn("w-fit max-w-72 rounded-md px-3 py-1.5 text-xs", surface)}>
+		<HoverCard openDelay={150} open={open} onOpenChange={setOpen}>
+			<CompactCard trigger={trigger} compact={compact} onShow={() => setOpen(true)}>
 				{children}
-				<CompactButton {...compact} />
-			</HoverCardContent>
+			</CompactCard>
 		</HoverCard>
 	);
 }
 
-function CompactButton({ onCompact, blockedReason }: CompactControl) {
-	const { t } = useTranslation();
+// A border separates it without the layered shadow's hover halos.
+const READOUT_SURFACE = "border border-(--color-border-overlay) shadow-none";
+const ENTER_CARD_KEYS = new Set(["Enter", " ", "ArrowDown"]);
+
+/**
+ * Radix keeps a hover card's content out of the tab order, so the keyboard reaches the compact
+ * button from the meter: Enter, Space or Down moves focus onto it, and Escape or Tab closes the
+ * card back to the meter.
+ */
+function CompactCard({ trigger, compact, onShow, children }: { trigger: ReactElement; compact: CompactControl; onShow: () => void; children: ReactNode }) {
 	const close = useHoverCardDismiss();
+	const triggerRef = useRef<HTMLElement | null>(null);
+	const contentRef = useRef<HTMLDivElement>(null);
+	const buttonRef = useRef<HTMLButtonElement | null>(null);
+	// Set when a key asks for the button before the card shows: the button takes focus as it mounts.
+	const focusOnMount = useRef(false);
+	// Whether the keyboard brought focus into the card, so it goes back to the meter when the card closes.
+	const enteredByKey = useRef(false);
+	const setTrigger = useCallback((node: HTMLElement | null) => {
+		triggerRef.current = node;
+	}, []);
+	const setButton = useCallback((node: HTMLButtonElement | null) => {
+		buttonRef.current = node;
+		if (!node || !focusOnMount.current) return;
+		focusOnMount.current = false;
+		node.focus();
+	}, []);
+	const leave = () => {
+		close();
+		if (enteredByKey.current) triggerRef.current?.focus();
+		enteredByKey.current = false;
+	};
+	return (
+		<>
+			<HoverCardTrigger
+				asChild
+				ref={setTrigger}
+				onKeyDown={(event) => {
+					if (!ENTER_CARD_KEYS.has(event.key)) return;
+					event.preventDefault();
+					enteredByKey.current = true;
+					if (buttonRef.current) return buttonRef.current.focus();
+					focusOnMount.current = true;
+					onShow();
+				}}
+				// Focus moving onto the card's button leaves the card open.
+				onBlur={(event) => {
+					if (event.relatedTarget instanceof Node && contentRef.current?.contains(event.relatedTarget)) event.preventDefault();
+				}}
+			>
+				{trigger}
+			</HoverCardTrigger>
+			<HoverCardContent
+				ref={contentRef}
+				side="top"
+				align="center"
+				animation="enter"
+				className={cn("w-fit max-w-72 rounded-md px-3 py-1.5 text-xs", READOUT_SURFACE)}
+				onEscapeKeyDown={(event) => {
+					event.preventDefault();
+					leave();
+				}}
+				onKeyDown={(event) => {
+					if (event.key !== "Tab") return;
+					event.preventDefault();
+					leave();
+				}}
+			>
+				{children}
+				<CompactButton {...compact} buttonRef={setButton} onCompacted={leave} />
+			</HoverCardContent>
+		</>
+	);
+}
+
+function CompactButton({
+	onCompact,
+	blockedReason,
+	buttonRef,
+	onCompacted,
+}: CompactControl & { buttonRef: (node: HTMLButtonElement | null) => void; onCompacted: () => void }) {
+	const { t } = useTranslation();
 	const [pending, setPending] = useState(false);
 	const [failed, setFailed] = useState(false);
 	return (
 		<div className="mt-2 flex flex-col items-start gap-1">
 			<Button
+				ref={buttonRef}
 				size="xs"
 				variant="secondary"
 				disabled={Boolean(blockedReason) || pending}
@@ -226,7 +304,7 @@ function CompactButton({ onCompact, blockedReason }: CompactControl) {
 					setFailed(false);
 					try {
 						await onCompact();
-						close();
+						onCompacted();
 					} catch {
 						setFailed(true);
 					} finally {

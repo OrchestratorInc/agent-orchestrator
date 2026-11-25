@@ -102,12 +102,13 @@ describe("AgentModelPicker", () => {
 		await user.keyboard("{ArrowRight}");
 		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
 		// Home and End jump to the lowest and highest level, and keep the menu's highlight on the slider.
-		// The lowest here is High, the level already running, so Home sends nothing.
+		// The lowest here is High, the level already running; Home still sends it, since Max is not applied yet.
 		await user.keyboard("{Home}");
 		expect(effort).toHaveAttribute("aria-valuetext", "High");
+		expect(current.onPickEffort).toHaveBeenLastCalledWith("high");
 		expect(effort).toHaveFocus();
 		await user.keyboard("{End}");
-		expect(current.onPickEffort).toHaveBeenCalledTimes(2);
+		expect(current.onPickEffort).toHaveBeenCalledTimes(3);
 		expect(current.onPickEffort).toHaveBeenLastCalledWith("max");
 		expect(effort).toHaveFocus();
 		await user.keyboard("{Enter}");
