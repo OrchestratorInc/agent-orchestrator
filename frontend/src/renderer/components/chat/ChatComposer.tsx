@@ -2470,6 +2470,10 @@ export const ChatComposer = memo(function ChatComposer({
 		// A copy carrying both an image and text still pastes its text, unless that
 		// text becomes a file.
 		if (text === "" || textAsFile) event.preventDefault();
+		if (historyBrowse.current) {
+			historyBrowse.current = null;
+			persistComposerText(textRef.current);
+		}
 		uiUsage.attachmentAdded("paste");
 		attachFiles(files);
 	}

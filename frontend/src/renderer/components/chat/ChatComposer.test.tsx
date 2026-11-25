@@ -1519,6 +1519,19 @@ describe("sent message recall", () => {
 		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
 	});
 
+	it("makes a recalled message the draft once a long paste is attached to it", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.txt"]);
+		const { field } = renderComposer({ sentMessages: SENT, draftSessionId: "composer-recall-paste", onStageAttachments: stage });
+		await typeInComposer(field, "my draft");
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(true);
+		fireEvent.paste(field, { clipboardData: textClipboard("log\n".repeat(2000)) });
+		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowDown")).toBe(false);
+		expect(composerWireText(field)).toBe("latest question");
+	});
+
 	it("leaves the arrows to a text selection, even one starting at the very start", async () => {
 		const { field } = renderComposer({ sentMessages: SENT });
 		await typeInComposer(field, "my draft");
