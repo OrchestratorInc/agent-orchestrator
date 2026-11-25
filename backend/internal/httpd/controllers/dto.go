@@ -4869,7 +4869,7 @@ type AddAgentAccountAPIKeyRequest struct {
 // color clears the color.
 type UpdateAgentAccountRequest struct {
 	Name  *string `json:"name,omitempty"`
-	Color *string `json:"color,omitempty" enum:"red,orange,amber,green,teal,blue,violet,pink"`
+	Color *string `json:"color,omitempty" enum:",red,orange,amber,green,teal,blue,violet,pink"`
 }
 
 // ReplaceAgentAccountAPIKeyRequest saves a new key for an API key account.

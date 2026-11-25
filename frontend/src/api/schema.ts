@@ -9996,7 +9996,7 @@ export interface components {
         };
         UpdateAgentAccountRequest: {
             /** @enum {null|string} */
-            color?: "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | null;
+            color?: "" | "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | null;
             name?: null | string;
         };
         UpdateArtifactFileRequest: {

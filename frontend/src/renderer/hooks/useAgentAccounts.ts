@@ -201,7 +201,7 @@ export function useAgentAccountActions(hostId?: HostId) {
 			setAccounts(unwrap(await client(hostId).POST("/api/v1/agents/accounts/api-keys", { body: { provider, name, apiKey, ...(color ? { color } : {}) } })).accounts),
 		/** Renames a saved account and sets its color; an empty color clears it. */
 		update: async (accountId: string, change: { name?: string; color?: AgentAccountColor | "" }) => {
-			const updated = unwrap(await client(hostId).PATCH("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId } }, body: change as components["schemas"]["UpdateAgentAccountRequest"] }));
+			const updated = unwrap(await client(hostId).PATCH("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId } }, body: change }));
 			await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
 			return updated;
 		},
