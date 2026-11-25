@@ -49,6 +49,18 @@ describe("chatDiff", () => {
 		]);
 	});
 
+	it("keeps every character of a new or deleted file sent whole, with no markers (Codex)", () => {
+		const added = chatDiff("This is a note.\n- a bullet\n+ not a marker\n", "added");
+		expect(added.numbered).toBe(true);
+		expect(added.rows.filter((row) => row.kind === "add").map((row) => [row.newNo, row.text])).toEqual([
+			[1, "This is a note."],
+			[2, "- a bullet"],
+			[3, "+ not a marker"],
+		]);
+		const deleted = chatDiff("gone\nfor good", "deleted");
+		expect(deleted.rows.filter((row) => row.kind === "del").map((row) => [row.oldNo, row.text])).toEqual([[1, "gone"], [2, "for good"]]);
+	});
+
 	it("numbers a new file from 1 and drops its trailing newline", () => {
 		const { rows, numbered } = chatDiff(`--- ${root}/a.sh\n+++ ${root}/a.sh\n+#!/bin/sh\n+echo hi\n+`, "added");
 		expect(numbered).toBe(true);
@@ -133,6 +145,49 @@ describe("file cards in the timeline", () => {
 		expect(card).toHaveTextContent("export const two = 2;");
 		expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Copy file" })).toBeInTheDocument();
+	});
+
+	it("opens another agent's read, known by its kind, onto the same file card", () => {
+		render(
+			<ActivityRow
+				activity={activity({
+					activityKind: "mcp_tool",
+					summary: "ReadFile src/lib/money.ts",
+					detail: { protocol: "acp", toolKind: "read", input: { absolute_path: `${root}/src/lib/money.ts` }, output: "export const one = 1;\nexport const two = 2;" },
+				} as Partial<ConversationActivity>)}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { expanded: false }));
+		const card = document.querySelector('[data-chat-file-card="read"]');
+		expect(card).toHaveTextContent("src/lib/money.ts");
+		expect(card).toHaveTextContent("export const two = 2;");
+		expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+	});
+
+	it("gives a command's read a card only when its harness reported a clean exit", () => {
+		const read = (exitCode?: number) => activity({
+			activityKind: "command",
+			summary: "cat",
+			detail: { command: "cat missing.ts", output: "cat: missing.ts: No such file or directory", ...(exitCode === undefined ? {} : { exitCode }) },
+		} as Partial<ConversationActivity>);
+		const { unmount } = render(<ActivityRow activity={read()} />);
+		fireEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(document.querySelector('[data-chat-file-card="read"]')).toBeNull();
+		unmount();
+		render(<ActivityRow activity={read(0)} />);
+		fireEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(document.querySelector('[data-chat-file-card="read"]')).not.toBeNull();
+	});
+
+	it("marks another agent's tool by its kind, and keeps the question mark for questions", () => {
+		const edit = render(<ActivityRow activity={activity({ activityKind: "mcp_tool", summary: "Edit a.ts", detail: { protocol: "acp", toolKind: "edit", input: {} } } as Partial<ConversationActivity>)} />);
+		expect(edit.container.querySelector(".icon-file-pen")).not.toBeNull();
+		edit.unmount();
+		const other = render(<ActivityRow activity={activity({ activityKind: "mcp_tool", summary: "list_issues", detail: { toolName: "list_issues", server: "linear", arguments: {} } } as Partial<ConversationActivity>)} />);
+		expect(other.container.querySelector(".icon-wrench")).not.toBeNull();
+		other.unmount();
+		const question = render(<ActivityRow activity={activity({ activityKind: "mcp_tool", summary: "Where?", detail: { protocol: "acp", toolKind: "other", input: { questions: [{ question: "Where?" }] } } } as Partial<ConversationActivity>)} />);
+		expect(question.container.querySelector(".icon-tool-question")).not.toBeNull();
 	});
 
 	it("names one read file in a chip with its icon, and leaves other targets plain", () => {

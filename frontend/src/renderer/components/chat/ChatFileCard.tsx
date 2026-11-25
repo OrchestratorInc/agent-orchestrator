@@ -100,7 +100,7 @@ function gutterWidth(largest: number): string {
 
 export type FileLines = { lines: { no?: number; text: string }[] };
 
-const NUMBERED_LINE = /^\s*(\d+)(?:\t|→)(.*)$/;
+const NUMBERED_LINE = /^\s*(\d+)(?:\t|→|\| )(.*)$/;
 const SYSTEM_REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 
 /**
@@ -187,6 +187,13 @@ export function chatDiff(patch: string, status?: string): ChatDiff {
 	while (header < lines.length && /^(?:--- |\+\+\+ |diff --git |index )/.test(lines[header]!)) header += 1;
 	const body = lines.slice(header);
 	const hunks = body.filter((line) => line.startsWith("@@"));
+	// A tool that sends a new or deleted file whole (Codex) sends its plain text: no
+	// hunk and no markers, so every line is the file's own, not a marker and the rest.
+	const whole = status === "added" ? "+" : status === "deleted" ? "-" : undefined;
+	if (whole && hunks.length === 0 && body.some((line) => line !== "" && !line.startsWith(whole))) {
+		const text = body.at(-1) === "" ? body.slice(0, -1) : body;
+		return { rows: parseUnifiedDiff(["@@ -1 +1 @@", ...text.map((line) => whole + line)].join("\n")), numbered: true };
+	}
 	if (hunks.length > 0 && hunks.every((line) => HUNK_RANGE.test(line))) {
 		return { rows: parseUnifiedDiff(body.join("\n")), numbered: true };
 	}

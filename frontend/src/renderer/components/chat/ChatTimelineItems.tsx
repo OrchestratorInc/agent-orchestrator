@@ -161,7 +161,7 @@ import {
 	commandBinaryLabel,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, type CommandStep, type StepIcon } from "./activity-step";
+import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, ranCommand, type CommandStep, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -2329,11 +2329,12 @@ type FileRead = { path: string; label: string; file: NonNullable<ReturnType<type
  */
 function commandFileRead(activity: ConversationActivity): FileRead | undefined {
 	const detail = activity.detail;
-	if (activity.status !== "completed" || !detail?.command || typeof detail.output !== "string") return undefined;
-	if ((detail.exitCode ?? 0) !== 0 || detail.outputTruncated || detail.outputBytes !== undefined || detail.terminalInput) return undefined;
-	let command = detail.command.trim();
-	const wrapped = /^(?:\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(command);
-	if (wrapped) command = wrapped[2]!.trim();
+	if (activity.status !== "completed" || typeof detail?.output !== "string") return undefined;
+	// Only an exit the harness reported as clean: one that reports none may have
+	// failed, and its error message must not read as the file.
+	if (detail.exitCode !== 0 || detail.outputTruncated || detail.outputBytes !== undefined || detail.terminalInput) return undefined;
+	const command = ranCommand(detail);
+	if (!command) return undefined;
 	if (/[|;&<>$`\n]/.test(command)) return undefined;
 	const words = command.split(/\s+/).map((word) => word.replace(/^(['"])(.*)\1$/, "$2"));
 	const [binary, ...args] = words;
@@ -2359,14 +2360,25 @@ function commandFileRead(activity: ConversationActivity): FileRead | undefined {
 /** Claude Code's Read tool, finished: the lines it returned, as the file. */
 function toolFileRead(activity: ConversationActivity): FileRead | undefined {
 	const detail = activity.detail;
-	if (activity.status !== "completed" || detail?.providerToolName !== "Read" || detail.error || detail.success === false) return undefined;
+	if (activity.status !== "completed" || !detail || detail.error || detail.success === false) return undefined;
+	const claudeRead = detail.providerToolName === "Read";
+	// Another ACP agent names no tool; its read says so by kind.
+	const agentRead = !detail.providerToolName && detail.toolKind === "read";
+	if (!claudeRead && !agentRead) return undefined;
 	const input = detail.input && typeof detail.input === "object" ? (detail.input as Record<string, unknown>) : {};
-	const path = typeof input.file_path === "string" ? input.file_path : typeof input.path === "string" ? input.path : undefined;
+	const locations = (detail as { locations?: unknown }).locations;
+	const located = Array.isArray(locations) ? (locations[0] as { path?: unknown } | undefined)?.path : undefined;
+	const path = [input.file_path, input.path, input.filePath, input.absolute_path, input.absolutePath, located].find((value): value is string => typeof value === "string" && value !== "");
 	if (!path) return undefined;
-	const raw = typeof detail.output === "string" && detail.output ? detail.output : normalizeToolCode(toolContentText(detail.content));
+	// An image read keeps its card: there is no text to show.
+	if (Array.isArray(detail.content) && JSON.stringify(detail.content).includes('"type":"image"')) return undefined;
+	let raw = typeof detail.output === "string" && detail.output ? detail.output : normalizeToolCode(toolContentText(detail.content));
+	// OpenCode wraps a read in <file>…</file> with a closing note after it.
+	if (agentRead) raw = raw.replace(/^<file>\n/, "").replace(/\n?<\/file>[\s\S]*$/, "");
 	const lines = readFileLines(raw);
-	// Read numbers every line it returns; anything else (an image, a notice) keeps its card.
-	if (!lines || lines.lines.every((line) => line.no === undefined)) return undefined;
+	if (!lines) return undefined;
+	// Claude's Read numbers every line it returns; anything else from it (a notice) keeps its card.
+	if (claudeRead && lines.lines.every((line) => line.no === undefined)) return undefined;
 	return { path, label: fileCardPath(path, { cwd: detail.cwd, summary: activity.summary }), file: lines };
 }
 
@@ -2404,7 +2416,7 @@ const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: Co
  */
 function CommandExploreBody({ activity, showCommand = true }: { activity: ConversationActivity; showCommand?: boolean }) {
 	const detail = activity.detail;
-	const command = detail?.command?.trim();
+	const command = ranCommand(detail);
 	const reason = (detail?.reason ?? detail?.text)?.trim();
 	const binary = command ? commandBinaryLabel(command) : undefined;
 	const showPrompt = Boolean(reason && reason !== command);
@@ -2934,6 +2946,36 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	return <GenericMcpToolRow activity={activity} />;
 }
 
+/** A tool call that asks the user a question: Claude's AskUserQuestion, or any call carrying questions. */
+function isQuestionTool(activity: ConversationActivity): boolean {
+	const detail = activity.detail;
+	if (detail?.providerToolName === "AskUserQuestion") return true;
+	const input = detail?.input;
+	return Boolean(input && typeof input === "object" && Array.isArray((input as { questions?: unknown }).questions));
+}
+
+/** A tool's mark by the kind its harness gives it (ACP's read, edit, execute…); a call with none a wrench. */
+function toolKindMark(kind: string | undefined): typeof SquareTerminal {
+	switch (kind) {
+		case "read":
+			return FileText;
+		case "edit":
+			return FilePen;
+		case "delete":
+			return Trash2;
+		case "move":
+			return ArrowRightLeft;
+		case "search":
+			return Search;
+		case "execute":
+			return SquareTerminal;
+		case "fetch":
+			return Globe;
+		default:
+			return Wrench;
+	}
+}
+
 function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// A choice made on the live row carries over when the call moves up from there.
 	const stepChoices = useContext(LiveStepChoices);
@@ -2951,9 +2993,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// An agent's built-in tool (a read, a web search) is named like a command step;
 	// a call to an MCP server keeps its tool and server name.
 	const step = activityToolStep(activity);
-	// Every tool row has a mark, so none reads as plain text: a built-in step its
-	// own, a question or any other call the question mark.
-	const StepMark = step ? stepIcon[step.icon] : ToolQuestion;
+	// Every tool row has a mark, so none reads as plain text: a built-in step its own,
+	// a question the question mark, and any other call what its kind says it does.
+	const StepMark = step ? stepIcon[step.icon] : isQuestionTool(activity) ? ToolQuestion : toolKindMark(detail?.toolKind);
 	const name = mcpToolName(activity);
 	const tool = step ? step[stepTense(activity, step)] : name.tool;
 	const sourceLabel = step
@@ -3120,7 +3162,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
 			>
-				<ToolQuestion aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
+				<Bot aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
 				<strong
 					className={cn(
 						"activity-row-label min-w-0 truncate text-control font-normal",
@@ -3359,7 +3401,10 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 
 	// What was approved, one ruled row each.
 	const facts: { term: string; value: ReactNode; strong?: boolean }[] = [];
-	if (detail?.command) facts.push({ term: "command", value: detail.command, strong: true });
+	const command = ranCommand(detail);
+	if (command) facts.push({ term: "command", value: command, strong: true });
+	// The summary names the command as the backend kept it, escapes and all; it reads as it ran.
+	const summary = command && detail?.command && command !== detail.command ? activity.summary.replace(detail.command, command) : activity.summary;
 	if (detail?.cwd) facts.push({ term: "cwd", value: shortenPaths(detail.cwd) });
 	if (detail?.host) facts.push({ term: "host", value: detail.host });
 	if (paths.length) facts.push({ term: "files", value: paths.map((path) => shortenPaths(path)).join(", ") });
@@ -3373,7 +3418,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const toggle = () => setOpen((prev) => !prev);
 	// Copy sits where the summary ends, as on a command row: a button cannot hold
 	// another, so the row is its button, then copy, then the rest of the line.
-	const copyText = detail?.command;
+	const copyText = command;
 	const riskTone = detail?.riskLevel ? RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground" : undefined;
 	const tail = (
 		<>
@@ -3420,7 +3465,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
 				<span className={cn("activity-row-label min-w-0 truncate font-mono text-caption text-muted-foreground", !copyText && "flex-1")}>
-					<ActivityTitle text={shortenPaths(activity.summary)} />
+					<ActivityTitle text={shortenPaths(summary)} />
 				</span>
 				{copyText ? null : tail}
 			</Pressable>

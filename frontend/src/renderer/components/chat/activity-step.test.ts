@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
-import { activityCommandStep, activityToolStep, describeCommandStep, isExploratoryTool, isOrchestratorPlumbing, type CommandStep, isFileStepCommand, unwrapShellCommand } from "./activity-step";
+import { activityCommandStep, activityToolStep, describeCommandStep, isExploratoryTool, isOrchestratorPlumbing, type CommandStep, isFileStepCommand, ranCommand, unwrapShellCommand } from "./activity-step";
 
 /** The finished row's text, as it reads: verb, then target. */
 function done(command: string): string {
@@ -495,5 +495,17 @@ describe("unwrapShellCommand", () => {
 	it("keeps a wrapper it cannot read whole", () => {
 		expect(unwrapShellCommand("bash -lc 'a' && b")).toBe("bash -lc 'a' && b");
 		expect(unwrapShellCommand("npm test")).toBe("npm test");
+	});
+});
+
+describe("ranCommand", () => {
+	it("gives the command as it ran, unescaping the wrapper's quoting from the original", () => {
+		// The backend drops the wrapper but keeps the quoting inside it in `command`.
+		const script = "echo 'hi'";
+		const quoted = script.replace(/'/g, "'\\''");
+		expect(ranCommand({ command: quoted, rawCommand: `/bin/zsh -lc '${quoted}'` })).toBe(script);
+		expect(ranCommand({ command: "npm test" })).toBe("npm test");
+		expect(ranCommand({ command: "npm test", rawCommand: "npm test" })).toBe("npm test");
+		expect(ranCommand({})).toBeUndefined();
 	});
 });

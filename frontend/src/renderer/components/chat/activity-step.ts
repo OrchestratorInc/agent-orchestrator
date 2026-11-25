@@ -61,7 +61,7 @@ const GENERIC_STEP: CommandStep = { done: "Ran command", live: "Running command"
  * no command line, only a summary, so that case is read from the summary.
  */
 export function activityCommandStep(activity: ConversationActivity): CommandStep {
-	const command = activity.detail?.command?.trim();
+	const command = ranCommand(activity.detail);
 	if (command) return withCommandTitle(describeCommandStep(command), command);
 
 	const title = activity.summary.trim();
@@ -83,6 +83,22 @@ export function activityCommandStep(activity: ConversationActivity): CommandStep
  * A name like "Type-checked" or "Ran node" hides what actually ran. Orchestrator's
  * own `ao` commands keep their sentences: they are its actions, not a shell's.
  */
+/**
+ * The command as it ran. A harness that wraps it (`/bin/zsh -lc '…'`) keeps the
+ * original in `rawCommand`; its `command` drops the wrapper but keeps the quoting
+ * inside, so `echo 'hi'` would read `echo '\''hi'\''`. The original, unwrapped here
+ * with the shell's own quoting, is what ran and what copy should give.
+ */
+export function ranCommand(detail: { command?: string; rawCommand?: string } | undefined): string | undefined {
+	const raw = detail?.rawCommand?.trim();
+	if (raw) {
+		const script = unwrapShellCommand(raw);
+		if (script !== raw) return script;
+	}
+	const command = detail?.command?.trim();
+	return command ? unwrapShellCommand(command) : undefined;
+}
+
 function withCommandTitle(step: CommandStep, command: string): CommandStep {
 	if (isFileStepCommand(command) || mainSegment(unwrapShellCommand(command))?.binary === "ao") return step;
 	return { ...step, command: unwrapShellCommand(command) };
