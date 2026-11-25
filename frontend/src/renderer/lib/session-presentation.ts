@@ -114,7 +114,8 @@ export function getSessionStatusDotView(
  *  - "attention", red: something went wrong that you have to fix (CI failing,
  *    merge conflicts or changes requested)
  *  - "ready", green: a PR you can merge
- *  - "review", orange alert: a person's review is next
+ *  - "review", amber alert: a person's review is next (same amber as "input";
+ *    the shape tells them apart)
  *  - "merged", purple and dimmed: a PR that has landed, nothing left to do
  */
 export type SessionRowMarker = "input" | "attention" | "ready" | "review" | "merged";

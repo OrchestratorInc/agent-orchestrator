@@ -621,10 +621,11 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: an
 // amber question mark is the agent asking you something, a red alert is
-// something to fix (CI, conflicts, changes requested), an orange alert is a
-// person's review next, a green pull request is ready to merge. A question is
-// not an error, so it never takes the red. A row's blue spinner (working) and
-// its dot are drawn by SessionActivityGlyph.
+// something to fix (CI, conflicts, changes requested), an amber alert (the
+// same amber, a different shape) is a person's review next, a green pull
+// request is ready to merge. A question is not an error, so it never takes the
+// red. A row's blue spinner (working) and its dot are drawn by
+// SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
 	input: { Icon: QuestionMark, tone: "text-status-in-review" },
 	attention: { Icon: CircleAlert, tone: "text-destructive" },

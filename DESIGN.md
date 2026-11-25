@@ -159,7 +159,7 @@ Sidebar session rows apply these rules with distinct shapes, so colour is never 
 
 - Working: blue spinner (`--color-status-working`). The title sweep is tinted toward the same blue at low strength (40% mixed into the foreground). The open row keeps the spinner without the sweep, and reduced motion stops both.
 - Waiting on the user (a question, a decision or a permission prompt): amber question mark with no circle (`--color-status-in-review`). A question is not an error, so it never takes the red.
-- CI failing, merge conflicts, changes requested: red alert icon. A person's review next: orange alert icon.
+- CI failing, merge conflicts, changes requested: red alert icon. A person's review next: amber alert icon. The question mark and the review alert share the amber and differ only by shape: `?` is the agent asking you, `!` is a review that is yours.
 - Ready to merge: green pull-request icon. Merged: dimmed purple merge icon.
 - A session that changed since the user last opened it: filled muted dot. Once opened: hollow muted ring. The dots stay grey so the sidebar's colour goes to working and to what needs the user.
 - A collapsed project shows its strongest state, in this order: an amber question mark in place of its icon when any session waits on the user (an amber corner dot in the icon rail); otherwise its icon keeps the orchestrator button's corner dot, breathing muted while any agent works and solid accent for an unopened finished turn.
