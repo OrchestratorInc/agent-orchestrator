@@ -1163,4 +1163,10 @@ describe("commentTextLines", () => {
     expect(commentTextLines("_⚠️ Potential issue_\n\n**Rename `snake_case_name`.**\n\n___")).toEqual(["⚠️ Potential issue", "Rename snake_case_name."]);
     expect(commentTextLines("Keep my_var and `_private_` as written.")).toEqual(["Keep my_var and _private_ as written."]);
   });
+
+  it("previews a GitHub alert by its text, not its [!NOTE] marker", () => {
+    expect(commentTextLines("> [!NOTE]\n> Free review of this PR on us.")).toEqual(["Free review of this PR on us."]);
+    expect(commentTextLines("[!warning]\nCheck the migration.")).toEqual(["Check the migration."]);
+    expect(commentTextLines("> [!NOTE]\n> ## Reviews paused\n> - Resume with a comment")).toEqual(["Reviews paused", "Resume with a comment"]);
+  });
 });
