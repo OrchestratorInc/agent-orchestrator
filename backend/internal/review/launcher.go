@@ -569,7 +569,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	handleID := reviewerHandleID(spec.WorkerID)
 	// A task still waiting for the previous reviewer on this handle belongs to
 	// work this launch replaces.
-	l.pending.drop(handleID)
+	l.pending.dropReviewer(handleID)
 	// The reviewer handle is stable per worker, so a still-live pane from a
 	// previous pass would otherwise block `tmux new-session` (duplicate name) or,
 	// worse, keep serving under its old harness. Destroy any stale pane on this
@@ -607,7 +607,11 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", agentlaunch.RedactError(err, spec.ProjectEnv))
 	}
-	if cmd.InitialMessage != "" && !spec.DeferInitialMessage {
+	if spec.DeferInitialMessage {
+		if err := l.gateDeferredTask(ctx, reviewer, handle, strings.TrimSpace(spec.LaunchID)); err != nil {
+			return LaunchResult{}, err
+		}
+	} else if cmd.InitialMessage != "" {
 		if err := l.deliverInitialMessage(ctx, reviewer, handle, strings.TrimSpace(spec.LaunchID), cmd.InitialMessage); err != nil {
 			return LaunchResult{}, err
 		}
@@ -617,6 +621,27 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		agentSessionID = strings.TrimSpace(spec.AgentSessionID)
 	}
 	return LaunchResult{HandleID: handle.ID, LaunchID: strings.TrimSpace(spec.LaunchID), AgentSessionID: agentSessionID, NativeResumed: nativeResumed}, nil
+}
+
+// gateDeferredTask holds the task a deferred replacement receives later
+// through Notify until the reviewer shows its readiness marker, as an initial
+// task would be. The gate starts empty: Notify fills it while the reviewer is
+// still starting and sends directly once the gate has retired.
+func (l *agentLauncher) gateDeferredTask(ctx context.Context, reviewer ports.Reviewer, handle ports.RuntimeHandle, launchID string) error {
+	provider, ok := reviewer.(ports.ReviewerPromptReadinessProvider)
+	if !ok {
+		return nil
+	}
+	hints, err := provider.ReviewPromptReadinessHints(ctx)
+	if err != nil {
+		return fmt.Errorf("reviewer prompt readiness: %w", err)
+	}
+	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
+		return nil
+	}
+	pendingCtx, delivery := l.pending.start(context.WithoutCancel(ctx), handle.ID, "")
+	go l.deliverWhenReady(pendingCtx, delivery, handle, hints, hints.InitialDelay, hints.Timeout, launchID)
+	return nil
 }
 
 // deliverInitialMessage types the review task once the reviewer's readiness
@@ -651,7 +676,7 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 		}
 		if !ready && capped {
 			pendingCtx, delivery := l.pending.start(context.WithoutCancel(ctx), handle.ID, message)
-			go l.deliverWhenReady(pendingCtx, delivery, handle, hints, hints.Timeout-time.Since(started), launchID)
+			go l.deliverWhenReady(pendingCtx, delivery, handle, hints, 0, hints.Timeout-time.Since(started), launchID)
 			return nil
 		}
 	}
@@ -661,14 +686,18 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 	return nil
 }
 
-// deliverWhenReady finishes a readiness wait the caller's deadline cut short.
+// deliverWhenReady finishes a readiness wait the caller's deadline cut short,
+// or gates a deferred replacement's task.
 // The reviewer handle is stable per worker and its pane outlives cancellation
 // and reuse, so the task is typed only while it is still the reviewer's
 // current work: Cancel, Destroy, or a new launch on the handle drops it, and
 // the pane must still run this launch. Notify replaces its message, so the
 // newest task still waits for readiness.
-func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingDelivery, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, wait time.Duration, launchID string) {
+func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingDelivery, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, delay, wait time.Duration, launchID string) {
 	defer l.pending.finish(handle.ID, delivery)
+	if err := sleepContext(ctx, delay); err != nil {
+		return
+	}
 	if _, err := l.waitForPromptReadiness(ctx, handle, hints, wait); err != nil {
 		return
 	}
@@ -688,7 +717,7 @@ func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingD
 }
 
 // pendingDeliveries tracks at most one background task delivery per
-// reviewer handle.
+// reviewer handle, keyed by the exact handle a launch returned.
 type pendingDeliveries struct {
 	mu         sync.Mutex
 	deliveries map[string]*pendingDelivery
@@ -698,13 +727,14 @@ type pendingDelivery struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	// message is the task to type once the reviewer is ready; Notify may
-	// replace it. Guarded by pendingDeliveries.mu.
+	// replace it, and a deferred launch's gate starts empty. Guarded by
+	// pendingDeliveries.mu.
 	message string
 }
 
-// pendingDeliveryKey ignores a runtime prefix (ptyhost-v1:review-<worker>),
-// so the handle a launch returns and the bare stable handle name match.
-func pendingDeliveryKey(handleID string) string {
+// reviewerHandleName drops a runtime prefix (ptyhost-v1:review-<worker>),
+// leaving the stable per-worker reviewer name.
+func reviewerHandleName(handleID string) string {
 	if i := strings.LastIndex(handleID, ":"); i >= 0 {
 		return handleID[i+1:]
 	}
@@ -714,28 +744,39 @@ func pendingDeliveryKey(handleID string) string {
 func (p *pendingDeliveries) start(parent context.Context, handleID, message string) (context.Context, *pendingDelivery) {
 	ctx, cancel := context.WithCancel(parent)
 	delivery := &pendingDelivery{ctx: ctx, cancel: cancel, message: message}
-	key := pendingDeliveryKey(handleID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.deliveries == nil {
 		p.deliveries = map[string]*pendingDelivery{}
 	}
-	if previous := p.deliveries[key]; previous != nil {
+	if previous := p.deliveries[handleID]; previous != nil {
 		previous.cancel()
 	}
-	p.deliveries[key] = delivery
+	p.deliveries[handleID] = delivery
 	return ctx, delivery
 }
 
 // drop abandons the handle's pending delivery. It serializes with deliver, so
 // a task is either typed before drop returns or never.
 func (p *pendingDeliveries) drop(handleID string) {
-	key := pendingDeliveryKey(handleID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if delivery := p.deliveries[key]; delivery != nil {
+	if delivery := p.deliveries[handleID]; delivery != nil {
 		delivery.cancel()
-		delete(p.deliveries, key)
+		delete(p.deliveries, handleID)
+	}
+}
+
+// dropReviewer abandons every pending delivery for the worker's reviewer,
+// whichever runtime its earlier launch ran under.
+func (p *pendingDeliveries) dropReviewer(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for handleID, delivery := range p.deliveries {
+		if reviewerHandleName(handleID) == name {
+			delivery.cancel()
+			delete(p.deliveries, handleID)
+		}
 	}
 }
 
@@ -745,7 +786,7 @@ func (p *pendingDeliveries) drop(handleID string) {
 func (p *pendingDeliveries) replace(handleID, message string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delivery := p.deliveries[pendingDeliveryKey(handleID)]
+	delivery := p.deliveries[handleID]
 	if delivery == nil || delivery.ctx.Err() != nil {
 		return false
 	}
@@ -755,26 +796,28 @@ func (p *pendingDeliveries) replace(handleID, message string) bool {
 
 // deliver sends the current task only while delivery is still the handle's
 // current one, and retires it before unlocking so a later replace sends
-// directly. The send stays under the lock so drop and replace cannot
-// interleave with it; runtimes bound their writes, so a stalled terminal host
-// fails the send instead of holding the lock.
+// directly. An empty gate retires without sending. The send stays under the
+// lock so drop and replace cannot interleave with it; runtimes bound their
+// writes, so a stalled terminal host fails the send instead of holding the
+// lock.
 func (p *pendingDeliveries) deliver(handleID string, delivery *pendingDelivery, send func(string) error) (bool, error) {
-	key := pendingDeliveryKey(handleID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.deliveries[key] != delivery || delivery.ctx.Err() != nil {
+	if p.deliveries[handleID] != delivery || delivery.ctx.Err() != nil {
 		return false, nil
 	}
-	delete(p.deliveries, key)
+	delete(p.deliveries, handleID)
+	if delivery.message == "" {
+		return false, nil
+	}
 	return true, send(delivery.message)
 }
 
 func (p *pendingDeliveries) finish(handleID string, delivery *pendingDelivery) {
-	key := pendingDeliveryKey(handleID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.deliveries[key] == delivery {
-		delete(p.deliveries, key)
+	if p.deliveries[handleID] == delivery {
+		delete(p.deliveries, handleID)
 	}
 	delivery.cancel()
 }

@@ -1372,6 +1372,71 @@ func TestLauncherNotifyWaitsForReviewerStillStarting(t *testing.T) {
 	}
 }
 
+func TestLauncherDeferredReplacementTaskWaitsForReadiness(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Minute, Lines: 20,
+		},
+	}
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}}
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.DeferInitialMessage = true
+	launch, err := l.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	// The engine stops the previous reviewer, then hands the replacement its
+	// task while the replacement is still starting.
+	if err := l.Notify(context.Background(), launch.HandleID, launchSpec()); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if sent := rt.messages(); len(sent) != 0 {
+		t.Fatalf("sent %q before the replacement reviewer was ready", sent)
+	}
+	rt.setReady()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(rt.messages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sent := rt.messages(); len(sent) != 1 || !strings.Contains(sent[0], "run-1") {
+		t.Fatalf("sent = %q, want the replacement task once the reviewer is ready", sent)
+	}
+}
+
+func TestLauncherDeferredReplacementReadyBeforeTaskSendsDirectly(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Minute, Lines: 20,
+		},
+	}
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}}
+	rt.setReady()
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.DeferInitialMessage = true
+	launch, err := l.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	// The gate retires once the reviewer is ready and holds no task.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !l.(*agentLauncher).pending.replace(launch.HandleID, "") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := l.Notify(context.Background(), launch.HandleID, launchSpec()); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if sent := rt.messages(); len(sent) != 1 || !strings.Contains(sent[0], "run-1") {
+		t.Fatalf("sent = %q, want the task delivered directly to a ready reviewer", sent)
+	}
+}
+
 func TestLauncherCancelCanSendReviewerMessage(t *testing.T) {
 	reviewer := &fakeCancellableReviewer{mode: ports.ReviewCancelMessage, message: "stop reviewing"}
 	rt := &fakeRuntime{}
