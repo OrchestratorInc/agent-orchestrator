@@ -80,7 +80,6 @@ type fakeLAN struct {
 	accountHash string
 	stopCalls   int
 	bindHost    string
-	loopbackOff bool
 }
 
 func (f *fakeLAN) Start(port int) (int, error) {
@@ -106,34 +105,10 @@ func (f *fakeLAN) BoundPort() int {
 	}
 	return 3011
 }
-func (f *fakeLAN) SetPasswordHash(h string)      { f.hash = h }
-func (f *fakeLAN) PasswordHash() string          { return f.hash }
-func (f *fakeLAN) SetAccountTokenHash(h string)  { f.accountHash = h }
-func (f *fakeLAN) AccountTokenHash() string      { return f.accountHash }
-func (f *fakeLAN) SetLoopbackTunnelOff(off bool) { f.loopbackOff = off }
-
-func TestLoopbackTunnelSwitchPersistsAndSurvivesEnable(t *testing.T) {
-	b, lan := newKeepAwakeBridge(t, nil)
-	if res := b.Status(); !res.LoopbackTunnel {
-		t.Fatal("a fresh host must share its localhost")
-	}
-	res, err := b.SetLoopbackTunnel(false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.LoopbackTunnel || !lan.loopbackOff {
-		t.Fatalf("turned off: status %v, listener off %v", res.LoopbackTunnel, lan.loopbackOff)
-	}
-	if _, err := b.Enable(); err != nil {
-		t.Fatal(err)
-	}
-	if st, _ := mobilebridge.Load(b.ConfigPath); !st.NoLoopbackTunnel || !lan.loopbackOff {
-		t.Fatalf("enable turned the tunnel back on: %+v, listener off %v", st, lan.loopbackOff)
-	}
-	if res, err := b.SetLoopbackTunnel(true); err != nil || !res.LoopbackTunnel || lan.loopbackOff {
-		t.Fatalf("turned on: %+v, %v, listener off %v", res.LoopbackTunnel, err, lan.loopbackOff)
-	}
-}
+func (f *fakeLAN) SetPasswordHash(h string)     { f.hash = h }
+func (f *fakeLAN) PasswordHash() string         { return f.hash }
+func (f *fakeLAN) SetAccountTokenHash(h string) { f.accountHash = h }
+func (f *fakeLAN) AccountTokenHash() string     { return f.accountHash }
 
 func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile", "config.json")

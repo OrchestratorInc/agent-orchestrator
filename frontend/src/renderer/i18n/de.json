@@ -5357,7 +5357,5 @@
 	"backgroundTasks.kind.other": "Hintergrundaufgabe",
 	"backgroundTasks.state.running": "Läuft",
 	"backgroundTasks.state.paused": "Pausiert",
-	"backgroundTasks.state.failed": "Fehlgeschlagen",
-	"remote.shareLocalhost": "localhost freigeben",
-	"remote.shareLocalhostDescription": "Deine anderen Geräte können Server auf diesem Computer öffnen."
+	"backgroundTasks.state.failed": "Fehlgeschlagen"
 }

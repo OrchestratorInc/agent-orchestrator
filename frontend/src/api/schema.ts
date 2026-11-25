@@ -1887,23 +1887,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/mobile/loopback-tunnel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Let paired desktops reach this machine's localhost ports, or stop them */
-        post: operations["setMobileLoopbackTunnel"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/mobile/pairing-code": {
         parameters: {
             query?: never;
@@ -6865,9 +6848,6 @@ export interface components {
             enabled: boolean;
             lidClosed?: null | boolean;
         };
-        ControllersSetLoopbackTunnelRequest: {
-            enabled: boolean;
-        };
         ControllersSetRequireDeviceCredentialsRequest: {
             enabled: boolean;
         };
@@ -7929,7 +7909,6 @@ export interface components {
             hostId: string;
             keepAwake: components["schemas"]["ControllersKeepAwakeStatus"];
             loopbackOnly: boolean;
-            loopbackTunnel: boolean;
             noPublicTunnel: boolean;
             password: string;
             /** Format: date-time */
@@ -16273,57 +16252,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ControllersSetKeepAwakeRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MobileStatusResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    setMobileLoopbackTunnel: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ControllersSetLoopbackTunnelRequest"];
             };
         };
         responses: {

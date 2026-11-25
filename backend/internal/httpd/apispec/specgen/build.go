@@ -2810,17 +2810,6 @@ func mobileOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodPost, path: "/api/v1/mobile/loopback-tunnel", id: "setMobileLoopbackTunnel", tag: "mobile",
-			summary: "Let paired desktops reach this machine's localhost ports, or stop them",
-			reqBody: controllers.SetLoopbackTunnelRequest{},
-			resps: []respUnit{
-				{http.StatusOK, controllers.MobileStatusResponse{}},
-				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusForbidden, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-			},
-		},
-		{
 			method: http.MethodGet, path: "/api/v1/mobile/status", id: "getMobileStatus", tag: "mobile",
 			summary: "Check whether Connect Mobile's LAN bridge is enabled",
 			resps: []respUnit{

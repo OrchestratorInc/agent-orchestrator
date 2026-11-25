@@ -5524,7 +5524,5 @@
 	"backgroundTasks.state.failed": "Falhou",
 	"backgroundTasks.shells_many": "{{count}} shells ainda em execução",
 	"backgroundTasks.agents_many": "{{count}} agentes em segundo plano em execução",
-	"backgroundTasks.tasks_many": "{{count}} tarefas em segundo plano em execução",
-	"remote.shareLocalhost": "Compartilhar localhost",
-	"remote.shareLocalhostDescription": "Seus outros dispositivos podem abrir os servidores deste computador."
+	"backgroundTasks.tasks_many": "{{count}} tarefas em segundo plano em execução"
 }

@@ -3389,7 +3389,6 @@ type MobileStatusResponse struct {
 	// devices may not list the machine, and linking again repairs both.
 	AccountLinkRefused  bool `json:"accountLinkRefused"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
-	LoopbackTunnel      bool `json:"loopbackTunnel"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
 	// NoPublicTunnel means the user disabled the managed public connector.
@@ -3441,11 +3440,6 @@ type PairDeviceResponse struct {
 
 // SetRequireDeviceCredentialsRequest turns the pairing password off or on.
 type SetRequireDeviceCredentialsRequest struct {
-	Enabled bool `json:"enabled"`
-}
-
-// SetLoopbackTunnelRequest turns the localhost tunnel for paired desktops on or off.
-type SetLoopbackTunnelRequest struct {
 	Enabled bool `json:"enabled"`
 }
 

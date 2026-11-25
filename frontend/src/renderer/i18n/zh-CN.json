@@ -5339,7 +5339,5 @@
 	"backgroundTasks.kind.other": "后台任务",
 	"backgroundTasks.state.running": "运行中",
 	"backgroundTasks.state.paused": "已暂停",
-	"backgroundTasks.state.failed": "失败",
-	"remote.shareLocalhost": "共享 localhost",
-	"remote.shareLocalhostDescription": "你的其他设备可以打开这台电脑上的服务器。"
+	"backgroundTasks.state.failed": "失败"
 }

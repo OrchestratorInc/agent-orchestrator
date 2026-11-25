@@ -4701,43 +4701,6 @@ paths:
       summary: Keep this Mac from idle-sleeping while Connect Mobile is on
       tags:
       - mobile
-  /api/v1/mobile/loopback-tunnel:
-    post:
-      operationId: setMobileLoopbackTunnel
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ControllersSetLoopbackTunnelRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MobileStatusResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "403":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Forbidden
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-      summary: Let paired desktops reach this machine's localhost ports, or stop them
-      tags:
-      - mobile
   /api/v1/mobile/pairing-code:
     post:
       operationId: createMobilePairingCode
@@ -19955,13 +19918,6 @@ components:
       required:
       - enabled
       type: object
-    ControllersSetLoopbackTunnelRequest:
-      properties:
-        enabled:
-          type: boolean
-      required:
-      - enabled
-      type: object
     ControllersSetRequireDeviceCredentialsRequest:
       properties:
         enabled:
@@ -22776,8 +22732,6 @@ components:
           $ref: '#/components/schemas/ControllersKeepAwakeStatus'
         loopbackOnly:
           type: boolean
-        loopbackTunnel:
-          type: boolean
         noPublicTunnel:
           type: boolean
         password:
@@ -22804,7 +22758,6 @@ components:
       - accountLinked
       - accountLinkRefused
       - browserRemoteAccess
-      - loopbackTunnel
       - loopbackOnly
       - noPublicTunnel
       - endpoints

@@ -5524,7 +5524,5 @@
 	"backgroundTasks.state.failed": "Échec",
 	"backgroundTasks.shells_many": "{{count}} shells sont toujours en cours",
 	"backgroundTasks.agents_many": "{{count}} agents en arrière-plan en cours",
-	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours",
-	"remote.shareLocalhost": "Partager localhost",
-	"remote.shareLocalhostDescription": "Vos autres appareils peuvent ouvrir les serveurs de cet ordinateur."
+	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours"
 }

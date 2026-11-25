@@ -5357,7 +5357,5 @@
 	"backgroundTasks.kind.other": "バックグラウンドタスク",
 	"backgroundTasks.state.running": "実行中",
 	"backgroundTasks.state.paused": "一時停止中",
-	"backgroundTasks.state.failed": "失敗",
-	"remote.shareLocalhost": "localhost を共有",
-	"remote.shareLocalhostDescription": "他のデバイスからこのコンピュータのサーバーを開けます。"
+	"backgroundTasks.state.failed": "失敗"
 }

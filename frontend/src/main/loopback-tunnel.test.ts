@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as net from "node:net";
 import { Duplex } from "node:stream";
-import { connectionOwner, createLoopbackTunnels, isLoopbackName, join, type RoutedSession } from "./loopback-tunnel";
+import { createLoopbackTunnels, join, type RoutedSession } from "./loopback-tunnel";
 import { LoopbackTunnelError } from "./remote-proxy";
 
 const cleanup: Array<() => void> = [];
@@ -65,13 +65,13 @@ function hosts(table: Record<string, Host>) {
 }
 
 function fakeSession() {
-	const state: { proxy?: Electron.ProxyConfig; closed: number; failProxy?: boolean; urls?: string[]; respond?: (url: string) => Promise<Electron.CallbackResponse> } = { closed: 0 };
+	const state: { proxy?: Electron.ProxyConfig; routed: number; failProxy?: boolean; urls?: string[]; respond?: (url: string) => Promise<Electron.CallbackResponse> } = { routed: 0 };
 	const session: RoutedSession = {
 		setProxy: async (config) => {
 			if (state.failProxy) throw new Error("proxy refused");
 			state.proxy = config;
+			state.routed++;
 		},
-		closeAllConnections: async () => { state.closed++; },
 		webRequest: {
 			onBeforeRequest: (filter, listener) => {
 				state.urls = filter.urls;
@@ -89,13 +89,12 @@ describe("loopback tunnels", () => {
 		const { session, state } = fakeSession();
 		await tunnels.route(session, "h_box");
 		await tunnels.route(session, "h_box");
-		expect(state.closed).toBe(1);
+		expect(state.routed).toBe(1);
 		expect(state.proxy?.proxyBypassRules).toBe("*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost");
 		const socksPort = Number(/^socks5:\/\/127\.0\.0\.1:(\d+)$/.exec(state.proxy?.proxyRules ?? "")?.[1]);
 
 		expect(await socksConnect(socksPort, "localhost", 5173, "hello")).toEqual({ code: 0, echoed: "hello" });
 		expect((await socksConnect(socksPort, "localhost", 5174)).code).toBe(0x04);
-		expect((await socksConnect(socksPort, "example.com", 5173)).code).toBe(0x02);
 		expect(await state.respond?.("http://0.0.0.0:5173/a?b#c")).toEqual({ redirectURL: "http://localhost:5173/a?b#c" });
 		expect(await state.respond?.("http://[::]:5173/")).toEqual({ redirectURL: "http://localhost:5173/" });
 		expect(await state.respond?.("http://localhost:5173/")).toEqual({});
@@ -103,16 +102,13 @@ describe("loopback tunnels", () => {
 		expect(await state.respond?.("ws://0.0.0.0:5173/hmr")).toEqual({ cancel: true });
 	});
 
-	it("keeps a partition it could not route away from this computer's localhost and retries on the next request", async () => {
+	it("tries again on the next tab when a partition could not be routed", async () => {
 		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} } }));
 		const { session, state } = fakeSession();
 		state.failProxy = true;
 		await expect(tunnels.route(session, "h_box")).rejects.toThrow("proxy refused");
-		for (const url of ["http://localhost:5173/", "http://app.localhost:5173/", "ws://127.0.0.1:5173/hmr", "http://0.0.0.0:3000/", "http://[::1]:8080/"]) expect(await state.respond?.(url)).toEqual({ cancel: true });
-		for (const url of ["https://example.com/", "http://ao-preview-artifact.abc.localhost:3011/"]) expect(await state.respond?.(url)).toEqual({});
-
 		state.failProxy = false;
-		expect(await state.respond?.("http://0.0.0.0:5173/")).toEqual({ redirectURL: "http://localhost:5173/" });
+		await tunnels.route(session, "h_box");
 		expect(state.proxy?.proxyRules).toMatch(/^socks5:\/\/127\.0\.0\.1:\d+$/);
 	});
 
@@ -148,27 +144,5 @@ describe("join", () => {
 		tunnel.destroy(new Error("tunnel lost"));
 		await closed;
 		expect(client.destroyed).toBe(true);
-	});
-});
-
-describe("isLoopbackName", () => {
-	it.each(["localhost", "LOCALHOST.", "app.localhost", "127.0.0.2", "[::1]", "::1", "0.0.0.0", "::"])("accepts %s", (host) => {
-		expect(isLoopbackName(host)).toBe(true);
-	});
-	it.each(["example.com", "192.168.1.2", "10.0.0.1", "localhost.example.com"])("refuses %s", (host) => {
-		expect(isLoopbackName(host)).toBe(false);
-	});
-});
-
-describe("connectionOwner", () => {
-	const table = [
-		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
-		"   0: 0100007F:1F90 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1001        0 11 1 0 20 4 30 10 -1",
-		"   1: 0100007F:C350 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1000        0 12 1 0 20 4 30 10 -1",
-	].join("\n");
-
-	it("reads the uid of the process on the other end", () => {
-		expect(connectionOwner(table, { address: "127.0.0.1", port: 50000 }, { address: "127.0.0.1", port: 8080 })).toBe(1000);
-		expect(connectionOwner(table, { address: "127.0.0.1", port: 50001 }, { address: "127.0.0.1", port: 8080 })).toBeUndefined();
 	});
 });

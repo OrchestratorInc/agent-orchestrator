@@ -17,7 +17,6 @@ const loopbackTunnelPath = "/api/v1/loopback-tunnel"
 
 const (
 	loopbackRefusedHeader = "X-AO-Loopback-Refused"
-	loopbackOffMessage    = "The localhost tunnel is turned off on this host."
 	loopbackDialTimeout   = 5 * time.Second
 )
 
@@ -25,10 +24,6 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 	port, err := strconv.Atoi(r.URL.Query().Get("port"))
 	if err != nil || port < 1 || port > 65535 || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		http.Error(w, "a WebSocket upgrade with port 1-65535 is required", http.StatusBadRequest)
-		return
-	}
-	if m.loopbackOff.Load() {
-		http.Error(w, loopbackOffMessage, http.StatusForbidden)
 		return
 	}
 	if m.isOwnPort(port) {
@@ -41,11 +36,6 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer func() { _ = upstream.Close() }()
-	defer m.untrackLoopback(upstream)
-	if !m.trackLoopback(upstream) {
-		http.Error(w, loopbackOffMessage, http.StatusForbidden)
-		return
-	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
 	if err != nil {
 		return
@@ -77,32 +67,4 @@ func (m *LANManager) SetDaemonPort(port int) { m.daemonPort.Store(int64(port)) }
 
 func (m *LANManager) isOwnPort(port int) bool {
 	return int64(port) == m.daemonPort.Load() || port == m.BoundPort()
-}
-
-// SetLoopbackTunnelOff turns the localhost tunnel off or on. Off closes open tunnels.
-func (m *LANManager) SetLoopbackTunnelOff(off bool) {
-	if m.loopbackOff.Swap(off) == off || !off {
-		return
-	}
-	m.loopbackMu.Lock()
-	defer m.loopbackMu.Unlock()
-	for conn := range m.loopbackConns {
-		_ = conn.Close()
-	}
-}
-
-func (m *LANManager) trackLoopback(conn net.Conn) bool {
-	m.loopbackMu.Lock()
-	if m.loopbackConns == nil {
-		m.loopbackConns = map[net.Conn]struct{}{}
-	}
-	m.loopbackConns[conn] = struct{}{}
-	m.loopbackMu.Unlock()
-	return !m.loopbackOff.Load()
-}
-
-func (m *LANManager) untrackLoopback(conn net.Conn) {
-	m.loopbackMu.Lock()
-	delete(m.loopbackConns, conn)
-	m.loopbackMu.Unlock()
 }

@@ -40,10 +40,7 @@ type LANManager struct {
 	bound        int
 	bindHost     string
 
-	daemonPort    atomic.Int64
-	loopbackOff   atomic.Bool
-	loopbackMu    sync.Mutex
-	loopbackConns map[net.Conn]struct{}
+	daemonPort atomic.Int64
 }
 
 // NewLANManager wraps handler in the LAN control-block and authMiddleware
@@ -147,10 +144,7 @@ func IsLANControlBlockedPathForTest(path string) bool { return isLANControlBlock
 // since it is unexported; this gives them a LANManager that owns one, and the
 // daemon rotates the connection password exclusively via SetPasswordHash.
 func NewMobileLAN(handler http.Handler, hostID string, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
-	guard := expectedHostGuard(hostID)
-	m := NewLANManager(guard(handler), &authState{}, defaultPort, log, sink)
-	m.loopback = guard(m.loopback)
-	return m
+	return NewLANManager(expectedHostGuard(hostID)(handler), &authState{}, defaultPort, log, sink)
 }
 
 // expectedHostGuard prevents a saved address from sending work to a different

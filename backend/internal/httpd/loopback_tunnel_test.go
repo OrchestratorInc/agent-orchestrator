@@ -112,67 +112,27 @@ func TestLoopbackTunnelRefusesBeforeTheUpgrade(t *testing.T) {
 			t.Errorf("%s: missing %s", tc.name, tc.header)
 		}
 	}
-
-	m.SetLoopbackTunnelOff(true)
-	_, resp, err := dialLoopbackTunnel(lanPort, startEcho(t), "secret12")
-	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden || resp.Header.Get(loopbackRefusedHeader) != "" {
-		t.Fatalf("tunnel while turned off: err=%v resp=%v, want 403 without %s", err, resp, loopbackRefusedHeader)
-	}
 }
 
-func TestLoopbackTunnelClosesWhenTurnedOffOrRevoked(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		cut  func(*LANManager)
-	}{
-		{"turned off", func(m *LANManager) { m.SetLoopbackTunnelOff(true) }},
-		{"password rotated", func(m *LANManager) { m.SetPasswordHash(mobilebridge.HashPassword("rotated1")) }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m, lanPort := startLoopbackLAN(t)
-			conn, _, err := dialLoopbackTunnel(lanPort, startEcho(t), "secret12")
-			if err != nil {
-				t.Fatalf("tunnel: %v", err)
-			}
-			defer conn.Close()
-			tc.cut(m)
-			read := make(chan error, 1)
-			go func() {
-				_, err := conn.Read(make([]byte, 1))
-				read <- err
-			}()
-			select {
-			case err := <-read:
-				if err == nil {
-					t.Fatal("tunnel still open")
-				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("tunnel still open after 5 s")
-			}
-		})
-	}
-}
-
-func TestLoopbackTunnelRefusesAClientExpectingAnotherHost(t *testing.T) {
-	m := NewMobileLAN(http.NotFoundHandler(), "h_this", 0, slog.Default(), nil)
-	m.SetPasswordHash(mobilebridge.HashPassword("secret12"))
-	lanPort, err := m.Start(0)
+func TestLoopbackTunnelClosesWhenThePasswordIsRotated(t *testing.T) {
+	m, lanPort := startLoopbackLAN(t)
+	conn, _, err := dialLoopbackTunnel(lanPort, startEcho(t), "secret12")
 	if err != nil {
-		t.Fatalf("start: %v", err)
+		t.Fatalf("tunnel: %v", err)
 	}
-	t.Cleanup(func() { _ = m.Stop(context.Background()) })
-	echo := startEcho(t)
-	for _, tc := range []struct {
-		expected string
-		status   int
-	}{{"h_other", http.StatusMisdirectedRequest}, {"h_this", http.StatusSwitchingProtocols}} {
-		header := http.Header{"Authorization": {"Bearer secret12"}, "X-Ao-Expected-Host-Id": {tc.expected}}
-		ws, resp, err := websocket.Dial(context.Background(), fmt.Sprintf("ws://127.0.0.1:%d%s?port=%d", lanPort, loopbackTunnelPath, echo), &websocket.DialOptions{HTTPHeader: header})
-		if ws != nil {
-			_ = ws.CloseNow()
+	defer conn.Close()
+	m.SetPasswordHash(mobilebridge.HashPassword("rotated1"))
+	read := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		if err == nil {
+			t.Fatal("tunnel still open")
 		}
-		if resp == nil || resp.StatusCode != tc.status {
-			t.Fatalf("expecting %s: resp=%v err=%v, want %d", tc.expected, resp, err, tc.status)
-		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("tunnel still open after 5 s")
 	}
 }

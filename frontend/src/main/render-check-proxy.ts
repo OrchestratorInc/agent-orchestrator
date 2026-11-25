@@ -14,7 +14,7 @@ import ipaddr from "ipaddr.js";
 export type RenderNetwork = "public" | "none";
 
 export const REPLY_OK = 0x00;
-export const REPLY_NOT_ALLOWED = 0x02;
+const REPLY_NOT_ALLOWED = 0x02;
 export const REPLY_HOST_UNREACHABLE = 0x04;
 const REPLY_COMMAND_UNSUPPORTED = 0x07;
 const REPLY_ADDRESS_UNSUPPORTED = 0x08;
