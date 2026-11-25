@@ -326,7 +326,7 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: textClipboard(log) });
 		expect(await screen.findByRole("button", { name: "Remove pasted-text-2.txt" })).toBeInTheDocument();
 	});
-	it("holds a send made while a long paste stages when that paste fails", async () => {
+	it("holds a send made while a long paste stages, and puts the text in the box when that paste fails", async () => {
 		let fail: (error: Error) => void = () => undefined;
 		const stage = vi.fn(() => new Promise<string[]>((_, reject) => { fail = reject; }));
 		const { field, onSend } = renderComposer({ draftSessionId: "composer-paste-fails", onStageAttachments: stage });
@@ -336,8 +336,18 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		fail(new Error("disk full"));
 		expect(await screen.findByText(/Nothing was attached/)).toBeInTheDocument();
+		await waitFor(() => expect(composerWireText(field)).toBe(`what failed?${"line\n".repeat(1000)}`));
 		expect(onSend).not.toHaveBeenCalled();
-		expect(composerWireText(field)).toBe("what failed?");
+	});
+	it("leaves a long paste out of the box when its upload is cancelled", async () => {
+		const stage = vi.fn((_payloads: unknown, signal?: AbortSignal) => new Promise<string[]>((_resolve, reject) => {
+			signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+		}));
+		const { field } = renderComposer({ draftSessionId: "composer-paste-cancel", onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: textClipboard("line\n".repeat(1000)) });
+		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching pasted-text.txt" }));
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+		expect(composerWireText(field)).toBe("");
 	});
 	it("attaches a long text that comes with an image as a file beside the image", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.txt"]);

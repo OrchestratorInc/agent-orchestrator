@@ -670,6 +670,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
 	const plainPasteShortcut = useRef(false);
 	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
+	const failedStaging = useRef(new WeakSet<File>());
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -762,7 +763,10 @@ export const ChatComposer = memo(function ChatComposer({
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			// A file too large to inline goes as its handle on disk; the stager
 			// streams it to the daemon (toWireAttachments).
-			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal);
+			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal).catch((error: unknown) => {
+				if (!signal.aborted) for (const { file } of attachments) if (file) failedStaging.current.add(file);
+				throw error;
+			});
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
 			}
@@ -2478,8 +2482,13 @@ export const ChatComposer = memo(function ChatComposer({
 		uiUsage.attachmentAdded("paste");
 		const attached = attachFiles(files);
 		if (!textAsFile) return;
-		const pastedName = files[files.length - 1]!.name;
-		const landed = attached.then((added) => added.some((attachment) => attachment.name === pastedName));
+		const pasted = files[files.length - 1]!;
+		const scope = restoredSessionId.current;
+		const landed = attached.then((added) => {
+			if (added.some((attachment) => attachment.name === pasted.name)) return true;
+			if (failedStaging.current.has(pasted) && restoredSessionId.current === scope) editor.current?.insertText(text);
+			return false;
+		});
 		pendingTextPastes.current.add(landed);
 		void landed.then(() => pendingTextPastes.current.delete(landed));
 	}
