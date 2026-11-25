@@ -5723,5 +5723,12 @@
 	"artifactComments.play": "Lire",
 	"artifactComments.pause": "Pause",
 	"artifactComments.seek": "Avancer",
+	"artifactComments.annotate": "Annoter",
+	"artifactComments.annotateHint": "Dessinez un cadre ou cliquez sur un point de l’image en pause pour le commenter",
+	"artifactComments.addComment": "Ajouter un commentaire",
+	"artifactComments.timelinePoint": "Commentaires à {{time}} : {{n}} ouverts",
+	"artifactComments.onPoint": "sur un point",
+	"artifactComments.onRegion": "dans un cadre",
+	"artifactComments.videoEmpty": "Aucun commentaire pour l’instant. Activez Annoter pour dessiner sur l’image, ou commentez le moment actuel.",
 	"artifactComments.markerLabel": "{{label}} : {{n}} ouverts"
 }

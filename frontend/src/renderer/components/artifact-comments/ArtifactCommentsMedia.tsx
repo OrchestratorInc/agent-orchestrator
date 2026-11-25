@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { Pencil } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import {
 	artifactCommentAnchorKey,
@@ -28,19 +29,43 @@ const percent = (value: number) => `${value * 100}%`;
 const regionStyle = (region: ArtifactCommentRegion) => ({ left: percent(region.x), top: percent(region.y), width: percent(region.w), height: percent(region.h) });
 const pinStyle = (region: ArtifactCommentRegion) => (isPointRegion(region) ? { left: percent(region.x), top: percent(region.y) } : regionStyle(region));
 
-const PIN = "absolute flex h-5 min-w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-background bg-logo-accent px-1 text-[11px] leading-none font-semibold text-logo-accent-foreground tabular-nums shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground";
+const PIN = "pointer-events-auto absolute flex h-5 min-w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-background bg-logo-accent px-1 text-[11px] leading-none font-semibold text-logo-accent-foreground tabular-nums shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground";
+
+/** Comments closer than this share one point on the seek bar (a fraction of its length). */
+const SAME_POINT = 0.012;
+
+/** A point on the seek bar: the open groups at (about) one moment. */
+type TimelinePoint = { time: number; groups: ArtifactCommentGroup[]; count: number };
+
+/** Open video groups as points on the seek bar, those at about the same moment merged. */
+export function artifactCommentTimelinePoints(groups: readonly ArtifactCommentGroup[], duration: number): TimelinePoint[] {
+	const points: TimelinePoint[] = [];
+	const sorted = [...groups].sort((a, b) => (a.anchor.time ?? 0) - (b.anchor.time ?? 0));
+	for (const group of sorted) {
+		const time = group.anchor.time ?? 0;
+		const last = points[points.length - 1];
+		if (last && duration > 0 && (time - last.time) / duration < SAME_POINT) {
+			last.groups.push(group);
+			last.count += group.openCount;
+		} else {
+			points.push({ time, groups: [group], count: group.openCount });
+		}
+	}
+	return points;
+}
 
 /**
- * A published image or video in comment mode (the app's comment workspace
- * is comment mode). The app draws the file itself, so an overlay on the
- * drawn picture picks: a click is a point, a drag a rectangle, as fractions
- * of the picture. Open groups show as numbered pins or outlined rectangles; a
- * click opens the group's popover. A video plays under the timeline's own
- * controls (the overlay takes clicks on the frame): a dot per open group,
- * "Comment at 01:23" for a moment without a place; picking pauses it, and
- * selecting a group seeks to its time and pauses.
+ * A published image or video in the app's comment workspace. The app draws
+ * the file itself, so an overlay on the drawn picture picks: a click is a
+ * point, a drag a rectangle, as fractions of the picture. Open groups show as
+ * numbered pins or outlined rectangles; a click opens the group. An image is
+ * always picking. A video is one player: its control bar has play and pause,
+ * the time, a seek bar with a point per comment moment, and Annotate. With
+ * Annotate off a click on the frame plays or pauses; with it on, the frame
+ * picks (and "Comment at 01:23" comments on the moment alone). Picking pauses
+ * the video, and selecting a group seeks to its time and pauses.
  */
-export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onShown, picked, selected, src, threads, title }: {
+export function ArtifactCommentsMedia({ annotate = true, kind, onAnnotateChange, onPick, onSelect, onSelection, onShown, picked, selected, src, threads, title }: {
 	kind: "image" | "video";
 	src: string;
 	title: string;
@@ -54,6 +79,9 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	/** The selected pin, rectangle or dot's top and bottom inside this view, for the popover; null when none. */
 	onSelection: (rect: CommentsSelectionRect | null) => void;
 	onShown?: () => void;
+	/** A video: whether a click or drag on the frame picks (Annotate). An image always picks. */
+	annotate?: boolean;
+	onAnnotateChange?: (on: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -142,15 +170,23 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	});
 	const pickedHere = picked && artifactCommentAnchorKind(picked) === kind ? picked : null;
 	const draftRegion = drag ? artifactCommentRegionFromDrag(drag.from, drag.to) : pickedHere?.region;
+	const picking = kind === "image" || annotate;
+	const togglePlay = () => {
+		const video = videoRef.current;
+		if (!video) return;
+		if (video.paused) void video.play()?.catch(() => undefined);
+		else video.pause();
+	};
 	const markerLabel = (group: ArtifactCommentGroup) => t("artifactComments.markerLabel", { label: artifactCommentAnchorText(t, group.anchor) ?? "", n: group.openCount });
 
 	const overlay = box ? (
 		<div
-			className="absolute cursor-crosshair touch-none"
+			className={cn("absolute", picking ? "cursor-crosshair touch-none" : "pointer-events-none")}
+			data-annotating={picking ? "" : undefined}
 			data-testid="artifact-comments-media-overlay"
 			onPointerCancel={() => setDrag(null)}
 			onPointerDown={(event) => {
-				if (event.button !== 0) return;
+				if (event.button !== 0 || !picking) return;
 				event.preventDefault();
 				event.currentTarget.setPointerCapture?.(event.pointerId);
 				videoRef.current?.pause();
@@ -239,7 +275,13 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	};
 	return (
 		<div className="flex h-full w-full flex-col bg-background" ref={rootRef}>
-			<div className="relative min-h-0 flex-1">
+			<div
+				className={cn("relative min-h-0 flex-1", !picking && "cursor-pointer")}
+				data-testid="artifact-comments-video-stage"
+				onClick={(event) => {
+					if (!picking && !(event.target as HTMLElement).closest("button")) togglePlay();
+				}}
+			>
 				<video
 					aria-label={title}
 					className="absolute inset-0 h-full w-full object-contain"
@@ -263,12 +305,7 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 				<button
 					aria-label={playing ? t("artifactComments.pause") : t("artifactComments.play")}
 					className="grid size-7 place-items-center rounded-md text-foreground hover:bg-muted"
-					onClick={() => {
-						const video = videoRef.current;
-						if (!video) return;
-						if (video.paused) void video.play()?.catch(() => undefined);
-						else video.pause();
-					}}
+					onClick={togglePlay}
 					type="button"
 				>
 					<svg aria-hidden="true" className="size-4" fill="currentColor" viewBox="0 0 24 24">
@@ -299,34 +336,55 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 				>
 					<span className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-muted-foreground/50" style={{ width: duration > 0 ? percent(Math.min(1, time / duration)) : 0 }} />
 					{duration > 0
-						? groups.map((group) => {
-							const isSelected = group.path === selected && !pickedHere;
+						? artifactCommentTimelinePoints(groups, duration).map((point) => {
+							const isSelected = !pickedHere && point.groups.some((group) => group.path === selected);
+							const first = point.groups[0]!;
 							return (
 								<button
-									aria-label={markerLabel(group)}
+									aria-label={t("artifactComments.timelinePoint", { time: formatArtifactCommentTime(point.time), n: point.count })}
 									className={cn(PIN, "top-1/2 h-3.5 min-w-3.5 text-[9px]", isSelected && "ring-2 ring-logo-accent ring-offset-1")}
-									data-selection-target={isSelected && !group.anchor.region ? "" : undefined}
-									key={group.path}
-									onClick={() => onSelect(group.path)}
-									style={{ left: percent(Math.min(1, (group.anchor.time ?? 0) / duration)) }}
+									data-selection-target={isSelected && !point.groups.some((group) => group.anchor.region) ? "" : undefined}
+									data-testid="artifact-comments-timeline-point"
+									key={first.path}
+									onClick={() => onSelect((point.groups.find((group) => group.path === selected) ?? first).path)}
+									style={{ left: percent(Math.min(1, point.time / duration)) }}
+									title={formatArtifactCommentTime(point.time)}
 									type="button"
 								>
-									{group.openCount > 1 ? group.openCount : null}
+									{point.count > 1 ? (point.count > 99 ? "99+" : point.count) : null}
 								</button>
 							);
 						})
 						: null}
 				</div>
+				{annotate ? (
+					<button
+						className="shrink-0 rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted"
+						onClick={() => {
+							const video = videoRef.current;
+							video?.pause();
+							onPick(videoCommentAnchor(video?.currentTime ?? 0));
+						}}
+						type="button"
+					>
+						{t("artifactComments.commentAt", { time: formatArtifactCommentTime(time) })}
+					</button>
+				) : null}
 				<button
-					className="shrink-0 rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted"
+					aria-pressed={annotate}
+					className={cn(
+						"flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 hover:bg-muted",
+						annotate ? "border-logo-accent bg-logo-accent/15 text-logo-accent-text" : "border-border text-foreground",
+					)}
 					onClick={() => {
-						const video = videoRef.current;
-						video?.pause();
-						onPick(videoCommentAnchor(video?.currentTime ?? 0));
+						if (!annotate) videoRef.current?.pause();
+						onAnnotateChange?.(!annotate);
 					}}
+					title={t("artifactComments.annotateHint")}
 					type="button"
 				>
-					{t("artifactComments.commentAt", { time: formatArtifactCommentTime(time) })}
+					<Pencil aria-hidden="true" className="size-3.5" />
+					{t("artifactComments.annotate")}
 				</button>
 			</div>
 		</div>

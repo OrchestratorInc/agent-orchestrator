@@ -5527,5 +5527,12 @@
 	"artifactComments.play": "Play",
 	"artifactComments.pause": "Pause",
 	"artifactComments.seek": "Seek",
+	"artifactComments.annotate": "Annotate",
+	"artifactComments.annotateHint": "Draw a box or click a point on the paused frame to comment on it",
+	"artifactComments.addComment": "Add comment",
+	"artifactComments.timelinePoint": "Comments at {{time}}: {{n}} open",
+	"artifactComments.onPoint": "on a point",
+	"artifactComments.onRegion": "on a box",
+	"artifactComments.videoEmpty": "No comments yet. Turn on Annotate to draw on the frame, or comment at the current time.",
 	"artifactComments.markerLabel": "{{label}}: {{n}} open"
 }

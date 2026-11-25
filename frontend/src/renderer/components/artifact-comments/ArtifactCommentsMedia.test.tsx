@@ -145,37 +145,116 @@ describe("comments on an image", () => {
 		expect(within(popover).getByText("Blurry")).toBeInTheDocument();
 		expect(within(popover).queryByTestId("artifact-comments-where")).toBeNull();
 	});
+
+	it("adds another comment on the same point from its pin", async () => {
+		stubSizes();
+		const anchor = imageCommentAnchor({ x: 0.6, y: 0.6, w: 0.3, h: 0.3 });
+		const client = fakeClient([thread("t1", anchor, "Blurry")]);
+		await renderWorkspace(client, "image");
+		await userEvent.click(screen.getByRole("button", { name: "Region near bottom-right: 1 open" }));
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		await userEvent.click(within(popover).getByRole("button", { name: "Add comment" }));
+		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add a comment…" }), "And too dark");
+		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
+		expect(client.createArtifactShareThread.mock.calls[0]![1]).toMatchObject({ anchor, body: "And too dark" });
+	});
 });
 
 describe("comments on a video", () => {
-	it("comments at the current moment, paused, and seeks to a group from its timeline dot", async () => {
+	it("is one player with comment points on its seek bar and a side panel by timestamp", async () => {
 		stubSizes();
 		const video = stubVideo(250);
-		const client = fakeClient([thread("t1", videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0, h: 0 }), "Typo in the title card")]);
+		const client = fakeClient([
+			thread("t1", videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0, h: 0 }), "Typo in the title card", "2026-11-23T08:00:00Z"),
+			thread("t2", videoCommentAnchor(84), "Music too loud", "2026-11-23T09:00:00Z"),
+			thread("t3", videoCommentAnchor(12), "Intro drags", "2026-11-23T10:00:00Z"),
+		]);
 		await renderWorkspace(client, "video");
 		const element = document.querySelector("video")!;
-		expect(element.controls).toBe(false);
 		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
-		await userEvent.click(screen.getAllByRole("button", { name: "At 01:23, point near top-left: 1 open" })[0]!);
-		expect(video.time).toBe(83.5);
-		expect(video.paused).toBe(true);
-		const popover = await screen.findByRole("complementary", { name: "Comments" });
-		expect(within(popover).getByText("Typo in the title card")).toBeInTheDocument();
+		// One player: no native controls, one Play button, Annotate off.
+		expect(element.controls).toBe(false);
+		expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
+		expect(screen.getByRole("button", { name: "Annotate" })).toHaveAttribute("aria-pressed", "false");
+		expect(screen.queryByRole("button", { name: /^Comment at/ })).not.toBeInTheDocument();
+		// Comments at about the same moment share one point on the seek bar.
+		expect(screen.getAllByTestId("artifact-comments-timeline-point").map((point) => point.getAttribute("aria-label")))
+			.toEqual(["Comments at 00:12: 1 open", "Comments at 01:23: 2 open"]);
+		// The side panel lists every moment by time, with its newest comment.
+		const panel = screen.getByTestId("artifact-comments-video-panel");
+		const rows = within(panel).getAllByTestId("artifact-comments-video-row");
+		expect(rows.map((row) => row.textContent)).toEqual([
+			expect.stringContaining("00:12"),
+			expect.stringContaining("01:23"),
+			expect.stringContaining("01:24"),
+		]);
+		expect(rows[1]).toHaveTextContent("Typo in the title card");
 
-		await userEvent.click(screen.getByRole("button", { name: "Play" }));
+		// A row seeks the video to its frame, paused, and opens in place.
+		await userEvent.click(within(rows[0]!).getByRole("button"));
+		expect(video.time).toBe(12);
+		expect(video.paused).toBe(true);
+		expect(within(panel).getAllByTestId("artifact-comments-video-row")[0]).toHaveAttribute("data-selected", "");
+		// So does a point on the seek bar.
+		await userEvent.click(screen.getByRole("button", { name: "Comments at 01:23: 2 open" }));
+		expect(video.time).toBe(83.5);
+		expect(within(panel).getAllByTestId("artifact-comments-video-row")[1]).toHaveAttribute("data-selected", "");
+
+		// With Annotate off, the frame plays and pauses and draws nothing.
+		const stage = screen.getByTestId("artifact-comments-video-stage");
+		const overlay = screen.getByTestId("artifact-comments-media-overlay");
+		fireEvent.pointerDown(overlay, { button: 0, clientX: 100, clientY: 150 });
+		fireEvent.pointerUp(overlay, { button: 0, clientX: 100, clientY: 150 });
+		expect(screen.queryByTestId("artifact-comments-media-draft")).not.toBeInTheDocument();
+		await userEvent.click(stage);
 		expect(video.paused).toBe(false);
 		video.time = 125.25;
 		act(() => { element.dispatchEvent(new Event("timeupdate")); });
-		await userEvent.click(screen.getByRole("button", { name: "Comment at 02:05" }));
+
+		// Annotate on: it pauses; "Comment at" comments on the moment alone.
+		await userEvent.click(screen.getByRole("button", { name: "Annotate" }));
 		expect(video.paused).toBe(true);
-		const box = await within(popover).findByRole("textbox", { name: "Add a comment…" });
-		expect(within(popover).getByTestId("artifact-comments-where")).toHaveTextContent("At 02:05");
+		expect(screen.getByRole("button", { name: "Annotate" })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(screen.getByRole("button", { name: "Comment at 02:05" }));
+		const box = await within(panel).findByRole("textbox", { name: "Add a comment…" });
+		// The new comment is a row at its time, the last one.
+		expect(within(panel).getAllByTestId("artifact-comments-video-row").at(-1)).toHaveTextContent("02:05");
 		await userEvent.type(box, "Cut here");
-		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
+		await userEvent.click(within(panel).getByRole("button", { name: "Comment" }));
 		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
 		const input = client.createArtifactShareThread.mock.calls[0]![1];
 		expect(input.anchor).toMatchObject({ kind: "video", time: 125.25 });
 		expect(input.anchor).not.toHaveProperty("region");
+	});
+
+	it("draws a box on the frame with Annotate on, and adds another comment on the same moment", async () => {
+		stubSizes();
+		stubVideo(250);
+		const anchor = videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0, h: 0 });
+		const client = fakeClient([thread("t1", anchor, "Typo in the title card")]);
+		await renderWorkspace(client, "video");
+		act(() => { document.querySelector("video")!.dispatchEvent(new Event("loadedmetadata")); });
+		const panel = screen.getByTestId("artifact-comments-video-panel");
+
+		// Another comment on an existing moment and point: Add comment.
+		await userEvent.click(within(within(panel).getAllByTestId("artifact-comments-video-row")[0]!).getAllByRole("button")[0]!);
+		await userEvent.click(within(panel).getByRole("button", { name: "Add comment" }));
+		await userEvent.type(await within(panel).findByRole("textbox", { name: "Add a comment…" }), "Also the colour");
+		await userEvent.click(within(panel).getByRole("button", { name: "Comment" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(1));
+		expect(client.createArtifactShareThread.mock.calls[0]![1].anchor).toEqual(anchor);
+
+		// A box: Annotate on, then drag on the frame.
+		await userEvent.click(screen.getByRole("button", { name: "Annotate" }));
+		const overlay = screen.getByTestId("artifact-comments-media-overlay");
+		fireEvent.pointerDown(overlay, { button: 0, clientX: 200, clientY: 200 });
+		fireEvent.pointerMove(overlay, { button: 0, clientX: 360, clientY: 260 });
+		fireEvent.pointerUp(overlay, { button: 0, clientX: 360, clientY: 260 });
+		await userEvent.type(await within(panel).findByRole("textbox", { name: "Add a comment…" }), "Logo too big");
+		await userEvent.click(within(panel).getByRole("button", { name: "Comment" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(2));
+		expect(client.createArtifactShareThread.mock.calls[1]![1].anchor).toMatchObject({ kind: "video", region: { x: 0.5, y: 0.5, w: 0.4, h: 0.3 } });
 	});
 });
 

@@ -5723,5 +5723,12 @@
 	"artifactComments.play": "Reproduzir",
 	"artifactComments.pause": "Pausar",
 	"artifactComments.seek": "Buscar",
+	"artifactComments.annotate": "Anotar",
+	"artifactComments.annotateHint": "Desenhe uma caixa ou clique em um ponto do quadro pausado para comentar",
+	"artifactComments.addComment": "Adicionar comentário",
+	"artifactComments.timelinePoint": "Comentários em {{time}}: {{n}} abertos",
+	"artifactComments.onPoint": "em um ponto",
+	"artifactComments.onRegion": "em uma caixa",
+	"artifactComments.videoEmpty": "Ainda não há comentários. Ative Anotar para desenhar no quadro ou comente no momento atual.",
 	"artifactComments.markerLabel": "{{label}}: {{n}} abertos"
 }

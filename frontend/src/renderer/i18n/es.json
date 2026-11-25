@@ -5723,5 +5723,12 @@
 	"artifactComments.play": "Reproducir",
 	"artifactComments.pause": "Pausar",
 	"artifactComments.seek": "Buscar",
+	"artifactComments.annotate": "Anotar",
+	"artifactComments.annotateHint": "Dibuja un recuadro o haz clic en un punto del fotograma en pausa para comentarlo",
+	"artifactComments.addComment": "Añadir comentario",
+	"artifactComments.timelinePoint": "Comentarios en {{time}}: {{n}} abiertos",
+	"artifactComments.onPoint": "en un punto",
+	"artifactComments.onRegion": "en un recuadro",
+	"artifactComments.videoEmpty": "Aún no hay comentarios. Activa Anotar para dibujar en el fotograma o comenta en el momento actual.",
 	"artifactComments.markerLabel": "{{label}}: {{n}} abiertos"
 }

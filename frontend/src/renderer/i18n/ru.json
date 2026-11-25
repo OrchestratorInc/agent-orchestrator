@@ -5888,5 +5888,12 @@
 	"artifactComments.play": "Воспроизвести",
 	"artifactComments.pause": "Пауза",
 	"artifactComments.seek": "Перемотка",
+	"artifactComments.annotate": "Аннотации",
+	"artifactComments.annotateHint": "Нарисуйте рамку или нажмите на точку на остановленном кадре, чтобы оставить комментарий",
+	"artifactComments.addComment": "Добавить комментарий",
+	"artifactComments.timelinePoint": "Комментарии на {{time}}: открыто {{n}}",
+	"artifactComments.onPoint": "в точке",
+	"artifactComments.onRegion": "в рамке",
+	"artifactComments.videoEmpty": "Комментариев пока нет. Включите аннотации, чтобы рисовать на кадре, или прокомментируйте текущий момент.",
 	"artifactComments.markerLabel": "{{label}}: открыто {{n}}"
 }

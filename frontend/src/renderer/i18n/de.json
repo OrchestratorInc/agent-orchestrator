@@ -5547,5 +5547,12 @@
 	"artifactComments.play": "Abspielen",
 	"artifactComments.pause": "Pause",
 	"artifactComments.seek": "Springen",
+	"artifactComments.annotate": "Annotieren",
+	"artifactComments.annotateHint": "Zeichne einen Rahmen oder klicke auf einen Punkt im angehaltenen Bild, um ihn zu kommentieren",
+	"artifactComments.addComment": "Kommentar hinzufügen",
+	"artifactComments.timelinePoint": "Kommentare bei {{time}}: {{n}} offen",
+	"artifactComments.onPoint": "an einem Punkt",
+	"artifactComments.onRegion": "in einem Rahmen",
+	"artifactComments.videoEmpty": "Noch keine Kommentare. Schalte Annotieren ein, um im Bild zu zeichnen, oder kommentiere die aktuelle Stelle.",
 	"artifactComments.markerLabel": "{{label}}: {{n}} offen"
 }

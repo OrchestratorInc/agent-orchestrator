@@ -5547,5 +5547,12 @@
 	"artifactComments.play": "再生",
 	"artifactComments.pause": "一時停止",
 	"artifactComments.seek": "シーク",
+	"artifactComments.annotate": "注釈",
+	"artifactComments.annotateHint": "一時停止したフレームで枠を描くか点をクリックしてコメントします",
+	"artifactComments.addComment": "コメントを追加",
+	"artifactComments.timelinePoint": "{{time}} のコメント: {{n}} 件未解決",
+	"artifactComments.onPoint": "点",
+	"artifactComments.onRegion": "枠",
+	"artifactComments.videoEmpty": "まだコメントはありません。注釈をオンにしてフレームに描くか、現在の時点にコメントしてください。",
 	"artifactComments.markerLabel": "{{label}}: {{n}} 件未解決"
 }

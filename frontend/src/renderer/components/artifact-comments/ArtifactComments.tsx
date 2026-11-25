@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PanelMessage } from "../WorkspaceDiffView";
 import { ArtifactCommentsMedia } from "./ArtifactCommentsMedia";
 import { ArtifactCommentsPanel, ArtifactCommentsReadOnlyList } from "./ArtifactCommentsPanel";
+import { ArtifactCommentsVideoPanel } from "./ArtifactCommentsVideoPanel";
 import {
 	artifactCommentAnchorKey,
 	artifactCommentMarkers,
@@ -130,6 +131,10 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 	});
 	const { setAnchors, setMode, select, unsupported } = bridge;
 	const media = kind === "image" || kind === "video" ? kind : null;
+	// A video's Annotate: off, the frame plays and pauses; on, it picks.
+	const [annotate, setAnnotate] = useState(false);
+	// A new comment on a place that already has comments (an image's pin, a video's moment).
+	const writeOn = useCallback((anchor: ArtifactCommentAnchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor }), []);
 	useEffect(() => {
 		if (!media) setMode({ type: "mode", on: true, kind: kind as ArtifactCommentsPickKind });
 	}, [kind, media, setMode]);
@@ -189,14 +194,17 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 					{t("artifactComments.publishedVersion", { version })}
 				</p>
 			) : null}
-			<div className="relative min-h-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
+			<div className="flex min-h-0 flex-1">
+			<div className="relative min-h-0 min-w-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
 				<SharedArtifactFrame
 					frameRef={setFrame}
 					linkId={slug}
 					onShown={shown}
 					renderMedia={media ? (contentUrl, mediaShown) => (
 						<ArtifactCommentsMedia
+							annotate={annotate}
 							kind={media}
+							onAnnotateChange={setAnnotate}
 							onPick={(anchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor })}
 							onSelect={(key) => setElement({ path: key, anchor: null })}
 							onSelection={(rect) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null)}
@@ -219,12 +227,16 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						onNaturalHeight={setPopoverHeight}
 						style={placement ? { top: placement.top, maxHeight: placement.maxHeight } : undefined}
 					/>
-				) : element ? (
+				) : element && media !== "video" ? (
 					<ArtifactCommentsPanel
 						className={POPOVER_CLASS}
 						comments={comments}
 						element={element}
 						groups={groups}
+						onAddComment={media === "image" ? () => {
+							const group = groups.open.find((item) => item.path === element.path) ?? groups.resolved.find((item) => item.path === element.path);
+							if (group) writeOn(group.anchor);
+						} : undefined}
 						onClose={closePopover}
 						onNaturalHeight={setPopoverHeight}
 						onPosted={showThreads}
@@ -232,6 +244,20 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						style={placement ? { top: placement.top, maxHeight: placement.maxHeight } : undefined}
 					/>
 				) : null}
+			</div>
+			{media === "video" ? (
+				<ArtifactCommentsVideoPanel
+					comments={comments}
+					element={element}
+					groups={groups}
+					onClose={onClose}
+					onDeselect={closePopover}
+					onPosted={showThreads}
+					onSelect={(key) => setElement({ path: key, anchor: null })}
+					onWriteOn={writeOn}
+					sendTarget={sendTarget}
+				/>
+			) : null}
 			</div>
 		</div>
 	);

@@ -5529,5 +5529,12 @@
 	"artifactComments.play": "播放",
 	"artifactComments.pause": "暂停",
 	"artifactComments.seek": "跳转",
+	"artifactComments.annotate": "标注",
+	"artifactComments.annotateHint": "在暂停的画面上画框或点击一个点来评论",
+	"artifactComments.addComment": "添加评论",
+	"artifactComments.timelinePoint": "{{time}} 的评论：{{n}} 条未解决",
+	"artifactComments.onPoint": "在一个点上",
+	"artifactComments.onRegion": "在一个框内",
+	"artifactComments.videoEmpty": "还没有评论。打开标注在画面上绘制，或在当前时间点评论。",
 	"artifactComments.markerLabel": "{{label}}：{{n}} 条未解决"
 }

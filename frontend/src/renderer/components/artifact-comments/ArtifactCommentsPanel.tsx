@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, ArrowUp, Check, MoreHorizontal, RotateCcw, Send, X } from "@/components/app-icons";
+import { ArrowRight, ArrowUp, Check, MoreHorizontal, Plus, RotateCcw, Send, X } from "@/components/app-icons";
 import { formatTimeTerse } from "../../lib/format-time";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -21,7 +21,7 @@ import { artifactCommentAnchorText } from "./anchor-label";
 import { SendThreadToAgentDialog, type ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { isPendingId, type ArtifactCommentsState } from "./useArtifactComments";
 
-type Viewer = { userId: string; isOwner: boolean };
+export type Viewer = { userId: string; isOwner: boolean };
 
 function initials(name: string): string {
 	const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -48,7 +48,7 @@ export function artifactCommentAvatarColor(seed: string): string {
 	return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-function useAuthorName() {
+export function useAuthorName() {
 	const { t } = useTranslation();
 	const label = useArtifactCommentAuthorLabel();
 	// Your own comment shows as You until it has your display name (an instant copy has none).
@@ -56,7 +56,7 @@ function useAuthorName() {
 		comment.author?.id === viewer.userId && !comment.author.name.trim() ? t("artifactComments.you") : label(comment.author);
 }
 
-function Avatar({ author, name }: { author: ArtifactCommentAuthor | null; name: string }) {
+export function Avatar({ author, name }: { author: ArtifactCommentAuthor | null; name: string }) {
 	return (
 		<span
 			aria-hidden="true"
@@ -458,6 +458,13 @@ export type ArtifactCommentsPanelProps = {
 	style?: CSSProperties;
 	/** The height the popover would take with nothing capping it, as it changes. */
 	onNaturalHeight?: (height: number) => void;
+	/**
+	 * Offered on a group's threads: a new comment on the same point, region or
+	 * moment (images and videos, where the place can't be clicked again).
+	 */
+	onAddComment?: () => void;
+	/** Inside the video's side panel: no header of its own, full width. */
+	embedded?: boolean;
 };
 
 /**
@@ -470,7 +477,9 @@ export function ArtifactCommentsPanel({
 	className,
 	comments,
 	element,
+	embedded = false,
 	groups,
+	onAddComment,
 	onClose,
 	onNaturalHeight,
 	onPosted,
@@ -537,7 +546,7 @@ export function ArtifactCommentsPanel({
 	return (
 		<aside
 			aria-label={t("artifactComments.title")}
-			className={cn("flex w-[340px] flex-col", className)}
+			className={cn("flex flex-col", embedded ? "w-full" : "w-[340px]", className)}
 			onKeyDown={(event) => {
 				if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLTextAreaElement)) {
 					// Handled here: full screen's own Esc leaves it alone.
@@ -548,18 +557,20 @@ export function ArtifactCommentsPanel({
 			ref={asideRef}
 			style={style}
 		>
-			<div className="flex h-10 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-3">
-				<h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-					{t("artifactComments.title")}
-					{!anchor && threads.length > 0 ? <span className="font-normal text-muted-foreground">{" · "}{t("artifactComments.openCount", { n: threads.length })}</span> : null}
-				</h2>
-				<Button aria-label={t("artifactComments.close")} onClick={onClose} size="icon-sm" type="button" variant="quiet">
-					<X aria-hidden="true" className="size-icon-sm" />
-				</Button>
-			</div>
-			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto" ref={scrollRef}>
-				<div className="flex flex-col gap-2.5 p-2.5" ref={contentRef}>
-					{where ? <p className="text-caption font-medium text-muted-foreground tabular-nums" data-testid="artifact-comments-where">{where}</p> : null}
+			{embedded ? null : (
+				<div className="flex h-10 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-3">
+					<h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+						{t("artifactComments.title")}
+						{!anchor && threads.length > 0 ? <span className="font-normal text-muted-foreground">{" · "}{t("artifactComments.openCount", { n: threads.length })}</span> : null}
+					</h2>
+					<Button aria-label={t("artifactComments.close")} onClick={onClose} size="icon-sm" type="button" variant="quiet">
+						<X aria-hidden="true" className="size-icon-sm" />
+					</Button>
+				</div>
+			)}
+			<div className={cn("min-h-0 flex-1", !embedded && "board-scrollbar overflow-y-auto")} ref={scrollRef}>
+				<div className={cn("flex flex-col gap-2.5", embedded ? "px-2.5 pb-2.5" : "p-2.5")} ref={contentRef}>
+					{where && !embedded ? <p className="text-caption font-medium text-muted-foreground tabular-nums" data-testid="artifact-comments-where">{where}</p> : null}
 					{!snapshot && comments.error ? (
 						<div className="flex flex-col items-center gap-2 p-4 text-center text-xs text-muted-foreground" role="alert">
 							{t("artifactComments.loadError")}
@@ -590,6 +601,11 @@ export function ArtifactCommentsPanel({
 							</button>
 							{showResolved ? <div className="flex flex-col divide-y divide-border">{resolvedThreads.map(threadView)}</div> : null}
 						</div>
+					) : null}
+					{!anchor && onAddComment && (threads.length > 0 || resolvedThreads.length > 0) ? (
+						<Button className="self-start" onClick={onAddComment} size="xs" type="button" variant="secondary">
+							<Plus aria-hidden="true" className="size-3" />{t("artifactComments.addComment")}
+						</Button>
 					) : null}
 					{snapshot && anchor ? (
 						<NewCommentBox
