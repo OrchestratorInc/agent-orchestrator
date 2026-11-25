@@ -2119,6 +2119,8 @@ function ChatWorkspaceContent({
 	const composerBoxRef = useRef<HTMLDivElement>(null);
 	const wasConversationEmpty = useRef(conversationEmpty);
 	const [welcomeLeaving, setWelcomeLeaving] = useState(false);
+	// The open welcome stack's height, so wrapped sample prompts get their room too.
+	const [welcomeRoom, setWelcomeRoom] = useState(0);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
 	const composerSessionRef = useRef(uiSessionId);
@@ -2423,7 +2425,15 @@ function ChatWorkspaceContent({
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
 
-						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
+						{/* An empty chat centers the composer on its own; the heading and sample
+						    prompts stand in a stack above it. The top padding is that stack's
+						    room, measured with the prompts shown so it holds while they come and
+						    go, and so the composer sits where the centered group used to put it. */}
+						<div
+							ref={composerDockRef}
+							className="cursor-chat-composer-dock shrink-0 px-4 pb-3"
+							style={conversationEmpty ? { paddingTop: `max(6.5rem, ${welcomeRoom}px)` } : undefined}
+						>
 							<div
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
@@ -2444,19 +2454,6 @@ function ChatWorkspaceContent({
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
 									/>
 								) : null}
-								{conversationEmpty ? (
-									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
-									</h1>
-								) : null}
-								<WelcomePromptSuggestions
-									// While an orchestrator starts the prompts stay put, disabled, so they don't
-									// pop in at the handoff. Other fenced chats keep them hidden.
-									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
-									artifact={artifactSession}
-									unavailable={newWorkDisabled || pendingInPlaceStart}
-									onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
-								/>
 								{/* The guided tour's last stop (GuidedTour). */}
 								<div
 									ref={composerBoxRef}
@@ -2464,6 +2461,18 @@ function ChatWorkspaceContent({
 									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
 									data-tour="composer"
 								>
+									{conversationEmpty ? (
+										<WelcomeStack
+											heading={welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											// While an orchestrator starts the prompts stay put, disabled, so they don't
+											// pop in at the handoff. Other fenced chats keep them hidden.
+											promptsOpen={composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
+											artifact={artifactSession}
+											unavailable={newWorkDisabled || pendingInPlaceStart}
+											onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
+											onRoom={setWelcomeRoom}
+										/>
+									) : null}
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -8206,57 +8215,105 @@ const CHAT_PROMPTS = [
 	{ prompt: "chat.welcome.prompt.simplify", chip: "chat.welcome.chip.simplify", icon: WandSparkles },
 ] as const;
 
+/** The heading settling into the space the sample prompts leave: a soft deceleration. */
+const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
+
 /**
- * Sample requests above an empty chat's composer; picking one fills the composer.
- * The list collapses its height, and the gap below it, on the way in and out so the
- * centered composer glides instead of jumping.
+ * An empty chat's heading and sample requests, standing on the composer's top
+ * edge. Picking a request fills the composer.
+ *
+ * The stack hangs from the composer instead of sharing its centered column, so the
+ * composer never moves while the prompts come and go: typing fades them where they
+ * stand and the heading glides down into their place. Every frame is a transform or
+ * an opacity, so the animation that starts on the first keystroke never relays out
+ * the page while the user types.
  */
-function WelcomePromptSuggestions({ open, artifact, unavailable = false, onPick }: { open: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void }) {
+function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
+	// The prompts sit out of the flow, pinned to the composer's top edge, and this
+	// spacer holds their room. When they leave, the spacer closes at once and the
+	// prompts travel down with the heading, tucking behind the composer's top edge
+	// (the stack clips below it) as they fade; coming back, they rise out of it.
+	//
+	// Their height comes from an invisible copy that is always laid out, so the
+	// stack's full room is known from the first frame even when a restored draft
+	// keeps the prompts hidden, and it never changes as typing hides or shows them.
+	// The composer keeps that room above it, so it stays put.
+	const headingRef = useRef<HTMLHeadingElement>(null);
+	const ghostRef = useRef<HTMLUListElement>(null);
+	const [promptsHeight, setPromptsHeight] = useState(0);
+	useLayoutEffect(() => {
+		const heading = headingRef.current;
+		const ghost = ghostRef.current;
+		if (!heading || !ghost) return;
+		const measure = () => {
+			setPromptsHeight(ghost.offsetHeight);
+			onRoom(heading.offsetHeight + (Number.parseFloat(getComputedStyle(heading).marginBottom) || 0) + ghost.offsetHeight);
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(heading);
+		observer.observe(ghost);
+		return () => observer.disconnect();
+	}, [onRoom]);
+	const chips = (onClick?: (text: string) => void) => prompts.map(({ prompt, chip, icon: Icon }) => (
+		<li key={prompt}>
+			<Button
+				type="button"
+				variant="quiet"
+				shape="pill"
+				title={onClick ? t(prompt) : undefined}
+				tabIndex={onClick ? undefined : -1}
+				className="welcome-prompt-suggestion border-border"
+				disabled={unavailable}
+				onClick={onClick ? () => onClick(t(prompt)) : undefined}
+			>
+				<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
+				<span className="whitespace-nowrap">{t(chip)}</span>
+			</Button>
+		</li>
+	));
 	return (
-		<AnimatePresence initial={false}>
-			{open ? (
-				<motion.div
-					key="welcome-prompts"
-					initial={{ height: 0, opacity: 0 }}
-					animate={{ height: "auto", opacity: 1, transition: { duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] } }}
-					// The chips fade first, then the row folds away with a soft ease in and out,
-					// so the composer below settles instead of being yanked up.
-					exit={{
-						height: 0,
-						opacity: 0,
-						transition: reducedMotion ? { duration: 0 } : {
-							height: { duration: 0.32, ease: [0.65, 0, 0.35, 1] },
-							opacity: { duration: 0.14, ease: "easeOut" },
-						},
-					}}
-					// The dock's gap-2 sits outside this box. Cancel it and put the space back as
-					// padding inside, so it collapses with the height instead of snapping.
-					className="-mb-2 overflow-hidden"
-				>
-					{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
-						{prompts.map(({ prompt, chip, icon: Icon }) => (
-							<li key={prompt}>
-								<Button
-									type="button"
-									variant="quiet"
-									shape="pill"
-									title={t(prompt)}
-									className="welcome-prompt-suggestion border-border"
-									disabled={unavailable}
-									onClick={() => onPick(t(prompt))}
-								>
-									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
-									<span className="whitespace-nowrap">{t(chip)}</span>
-								</Button>
-							</li>
-						))}
-					</ul>
-				</motion.div>
-			) : null}
-		</AnimatePresence>
+		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
+			<motion.h1
+				ref={headingRef}
+				layout={reducedMotion ? false : "position"}
+				// Glide only when the prompts come or go. The first measurement fills the
+				// spacer on mount, and a resize can change it; neither is a move to animate,
+				// or every new chat would open with the heading rising into place.
+				layoutDependency={promptsOpen}
+				transition={{ layout: WELCOME_SETTLE }}
+				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
+				// Anchored on the composer box alone: a group-has variant would restyle the app
+				// on every DOM change (style-invalidation.test.ts).
+				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
+			>
+				{heading}
+			</motion.h1>
+			<div aria-hidden="true" className="w-full shrink-0" style={{ height: promptsOpen ? promptsHeight : 0 }} />
+			<ul ref={ghostRef} aria-hidden="true" className="invisible absolute inset-x-0 bottom-0 flex flex-wrap justify-center gap-2 pb-4">
+				{chips()}
+			</ul>
+			<AnimatePresence initial={false}>
+				{promptsOpen ? (
+					<motion.div
+						key="welcome-prompts"
+						className="pointer-events-auto absolute inset-x-0 bottom-0"
+						initial={{ opacity: 0, y: promptsHeight }}
+						// Rise with the heading, on the heading's curve, fading in a little behind it.
+						animate={{ opacity: 1, y: 0, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.24, delay: 0.06, ease: [0.23, 1, 0.32, 1] } } }}
+						// Sink with the heading; the fade finishes before they reach the composer.
+						exit={{ opacity: 0, y: promptsHeight, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.2, ease: [0.4, 0, 1, 1] } } }}
+					>
+						{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
+						<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
+							{chips(onPick)}
+						</ul>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
 	);
 }

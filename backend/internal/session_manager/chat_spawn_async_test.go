@@ -262,6 +262,39 @@ func TestSpawnAsyncChat_FailedStartKeepsSessionAndReason(t *testing.T) {
 	}
 }
 
+// #8905: a chat start whose project folder lost its .git must tell the user
+// how to recover in the "Session setup failed" card, not show git's raw exit
+// 128 from the background workspace step.
+func TestSpawnAsyncChat_ProjectNotARepoShowsRecoveryGuidance(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	m.browserCapabilities = browsersvc.NewAuthority()
+	deferred := deferredBackground(m)
+	ws := m.workspace.(*fakeWorkspace)
+	ws.createErr = fmt.Errorf("gitworktree: worktree list: %w", &ports.WorkspaceNotARepoError{
+		Path: "/work/ws",
+		Err:  errors.New("git -C /work/ws worktree list --porcelain: exit status 128: fatal: not a git repository (or any of the parent directories): .git"),
+	})
+
+	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	(*deferred)[0]()
+
+	stored := st.sessions[rec.ID]
+	if stored.ProvisionState != domain.SessionProvisionFailed {
+		t.Fatalf("provision state = %q, want failed", stored.ProvisionState)
+	}
+	if strings.Contains(stored.ProvisionError, "exit status 128") {
+		t.Fatalf("provision error leaked the raw git failure: %q", stored.ProvisionError)
+	}
+	want, _, _, _ := ProjectNotARepoGuidance(ws.createErr)
+	if stored.ProvisionError != want || !strings.Contains(want, "/work/ws") || !strings.Contains(want, "git init") {
+		t.Fatalf("provision error = %q, want recovery guidance %q", stored.ProvisionError, want)
+	}
+}
+
 func TestSpawnAsyncChat_DrainFailureLeavesRetryableSession(t *testing.T) {
 	launcher := &recordingLauncher{drainErr: errors.New("controller stopped before dispatch")}
 	m, st, _ := newChatManager(launcher)
