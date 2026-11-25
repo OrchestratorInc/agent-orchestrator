@@ -3011,9 +3011,42 @@ html.sidebar-reordering * {
    colour, with its details where the step's text starts (22px). A row whose icon sits
    further in (an auto-approval's) sets the icon's centre and the gap to its text. */
 .activity-step-line {
+	position: relative;
 	margin-left: calc(var(--step-line-x, 7px) - var(--thread-stroke) / 2);
 	border-left: var(--thread-stroke) solid var(--thread-line);
 	padding-left: calc(var(--step-line-gap, 15px) - var(--thread-stroke) / 2);
+}
+/* Like a thread's, the line starts 3px under the opened row's icon: down the rest of the
+   row from its button, then up through any space above the details (cut off by the
+   details' own frame, so it never reaches past the row). */
+.activity-step-line::before {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-stroke));
+	top: calc(-1 * var(--step-line-lead, 12px));
+	height: var(--step-line-lead, 12px);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+:is(
+	div:has(> div > .activity-step-line, > .activity-step-line) > .activity-row-toggle,
+	div:has(> div > .activity-step-line, > .activity-step-line) > div > .activity-row-toggle
+)[aria-expanded="true"] {
+	--thread-line: color-mix(in oklch, var(--color-text-primary) 22%, var(--solid-bg-primary, var(--color-bg-primary)));
+	--thread-stroke: 1.5px;
+	position: relative;
+}
+:is(
+	div:has(> div > .activity-step-line, > .activity-step-line) > .activity-row-toggle,
+	div:has(> div > .activity-step-line, > .activity-step-line) > div > .activity-row-toggle
+)[aria-expanded="true"]::after {
+	content: "";
+	position: absolute;
+	left: calc(var(--step-line-x, 7px) - var(--thread-stroke) / 2);
+	top: calc(50% + 10px);
+	bottom: 0;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
 }
 .activity-thread {
 	--thread-indent: 19px;

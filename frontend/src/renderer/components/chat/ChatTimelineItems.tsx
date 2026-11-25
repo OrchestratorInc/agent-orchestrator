@@ -3471,7 +3471,9 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	);
 
 	return (
-		<div className="group/activity border-t border-border first:border-t-0">
+		// Its icon sits 11px in, so its step line runs under that icon (18.5px), its details
+		// line up with the label, and the line needs no lead: the details follow the row.
+		<div className="group/activity border-t border-border first:border-t-0 [--step-line-gap:16.5px] [--step-line-lead:0px] [--step-line-x:18.5px]">
 			<div className={copyText ? "group/cmdrow flex min-w-0 items-center" : "contents"}>
 			<Pressable
 				onClick={toggle}
@@ -3520,7 +3522,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				// Like any opened step: inside a thread the boxes start under the row's icon with
 				// nothing beside them; a row on its own hangs them on a straight line under its
 				// icon (11px inset, 15px icon), lined up with the label.
-				<div className={cn("flex flex-col gap-2 pr-[11px] pb-2.5", insideRail ? "pl-[11px]" : "activity-step-line [--step-line-gap:16.5px] [--step-line-x:18.5px]")}>
+				<div className={cn("flex flex-col gap-2 pr-[11px] pb-2.5", insideRail ? "pl-[11px]" : "activity-step-line")}>
 					<div className="flex flex-col gap-1.5 rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 text-xs leading-relaxed">
 						{/* Said in full rather than implied by the label: "auto-approved" alone
 						    leaves it ambiguous whether the user set something up that did this. */}
