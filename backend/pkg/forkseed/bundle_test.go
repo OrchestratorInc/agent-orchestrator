@@ -151,3 +151,25 @@ func TestBundleResolvesRelativePaths(t *testing.T) {
 		t.Fatalf("Unbundle with a relative path: %v", err)
 	}
 }
+
+func TestUnbundleReportsOtherFailuresAsThemselves(t *testing.T) {
+	ctx := context.Background()
+	_, src, _ := pushedSource(t)
+	ref := RefPrefix + "s1"
+	if _, err := Capture(ctx, src, ref); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "seed.bundle")
+	if _, err := Bundle(ctx, src, ref, out); err != nil {
+		t.Fatal(err)
+	}
+	notRepo := t.TempDir()
+	if err := Unbundle(ctx, notRepo, out, ref); err == nil || errors.Is(err, ErrPrerequisiteMissing) {
+		t.Fatalf("Unbundle into a folder that isn't a repository = %v, want its own error", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := Unbundle(cancelled, src, out, ref); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Unbundle with a cancelled context = %v, want context.Canceled", err)
+	}
+}

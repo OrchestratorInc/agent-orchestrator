@@ -181,3 +181,32 @@ func TestFetchChainIgnoresAnInheritedObjectDirectory(t *testing.T) {
 		t.Fatalf("notes.txt = %q; the objects went elsewhere", got)
 	}
 }
+
+// Only a missing earlier link is a broken chain. A store that isn't a
+// repository, or a cancelled request, keeps its own error.
+func TestFetchChainReportsOtherFailuresAsThemselves(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	first, second := Ref("s1", "turn-2"), Ref("s1", "turn-3")
+	if err := Capture(ctx, repo, first); err != nil {
+		t.Fatal(err)
+	}
+	write(t, repo, "notes.txt", "later\n")
+	if err := Capture(ctx, repo, second); err != nil {
+		t.Fatal(err)
+	}
+	// A link needs the commits of the link before it, so its check runs.
+	out := filepath.Join(t.TempDir(), "link.bundle")
+	if prerequisites, err := BundleChain(ctx, filepath.Join(repo, ".git"), second, first, out); err != nil || len(prerequisites) == 0 {
+		t.Fatalf("BundleChain = %v, %v; want a link with prerequisites", prerequisites, err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.git")
+	if err := FetchChain(ctx, missing, []string{out}); err == nil || errors.Is(err, ErrChainBroken) {
+		t.Fatalf("FetchChain into a store that isn't a repository = %v, want its own error", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := FetchChain(cancelled, bareStore(t), []string{out}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FetchChain with a cancelled context = %v, want context.Canceled", err)
+	}
+}

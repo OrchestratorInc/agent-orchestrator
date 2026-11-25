@@ -1,12 +1,14 @@
 package forkseed
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/gitbundle"
 )
 
@@ -52,20 +54,60 @@ func Unbundle(ctx context.Context, worktree, bundle, ref string) error {
 	if err != nil {
 		return fmt.Errorf("forkseed: read bundle: %w", err)
 	}
-	var missing []string
-	for _, commit := range prerequisites {
-		if _, err := run(ctx, worktree, nil, "cat-file", "-e", commit+"^{commit}"); err != nil {
-			missing = append(missing, commit)
-		}
+	missing, err := missingCommits(ctx, worktree, prerequisites)
+	if err != nil {
+		return failure(ctx, fmt.Errorf("forkseed: check required commits: %w", err))
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("%w: %s", ErrPrerequisiteMissing, strings.Join(missing, ", "))
 	}
 	if _, err := run(ctx, worktree, nil, "bundle", "verify", "--quiet", bundle); err != nil {
-		return fmt.Errorf("forkseed: verify bundle: %w", err)
+		return failure(ctx, fmt.Errorf("forkseed: verify bundle: %w", err))
 	}
 	if _, err := run(ctx, worktree, nil, "fetch", "--quiet", "--no-write-fetch-head", "--no-prune", bundle, ref+":"+ref); err != nil {
-		return fmt.Errorf("forkseed: fetch bundle: %w", err)
+		return failure(ctx, fmt.Errorf("forkseed: fetch bundle: %w", err))
 	}
 	return nil
+}
+
+// missingCommits are the commits the repository at worktree lacks. git
+// cat-file --batch-check names each one missing and fails only when it can't
+// read the repository, so a missing commit is never confused with another
+// failure: plain cat-file -e exits the same way for both.
+func missingCommits(ctx context.Context, worktree string, commits []string) ([]string, error) {
+	if len(commits) == 0 {
+		return nil, nil
+	}
+	var input strings.Builder
+	for _, commit := range commits {
+		input.WriteString(commit + "^{commit}\n")
+	}
+	cmd := aoprocess.CommandContext(ctx, "git", "-C", worktree, "cat-file", "--batch-check=%(objecttype)")
+	cmd.Env = processEnv()
+	cmd.Stdin = strings.NewReader(input.String())
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git cat-file: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	types := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	if len(types) != len(commits) {
+		return nil, fmt.Errorf("git cat-file --batch-check answered %d lines for %d commits", len(types), len(commits))
+	}
+	var missing []string
+	for i, kind := range types {
+		if kind != "commit" {
+			missing = append(missing, commits[i])
+		}
+	}
+	return missing, nil
+}
+
+// failure is err, or the context's own error when it was cancelled, which is
+// why git failed.
+func failure(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
