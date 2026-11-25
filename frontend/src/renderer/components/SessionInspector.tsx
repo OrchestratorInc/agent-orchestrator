@@ -6,7 +6,9 @@ import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
-import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
+import { Chat, CheckWaves, Folder, List, Package, Smartphone, SquareTerminal } from "@/components/app-icons";
+import { DevicePanel } from "./DevicePanel";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
 import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
@@ -37,7 +39,6 @@ import {
 import {
 	Archive,
 	ArrowUpRight,
-	PanelLeft,
 	GitPullRequest,
 	GitMerge,
 	Info,
@@ -54,6 +55,9 @@ import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { useBackgroundTasks, useReleaseTaskOutputs } from "../hooks/useBackgroundTasks";
+import { BackgroundTasksPanel } from "./BackgroundTaskPanel";
+import { supportsLocalBackgroundTasks } from "./BackgroundTasks";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -64,7 +68,7 @@ import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifac
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { SessionForksSection } from "./SessionForksSection";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
+import { openPRTab } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
 import { ClassicSessionBranchSummary } from "./ClassicSessionBranchSummary";
 import { CopyButton } from "./chat/CopyButton";
@@ -75,7 +79,6 @@ import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
-import { PRDescriptionDrawer } from "./PRDescriptionDrawer";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
@@ -86,6 +89,8 @@ import {
 } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { cloudWorkspaceReviewSummaryQueryOptions } from "../hooks/useCloudWorkspaceReview";
+import { useCloudWorkspaceReady } from "../hooks/useCloudWorkspaceReady";
 import { useSendToSessionWorker } from "../hooks/useSendToSessionWorker";
 import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
@@ -137,10 +142,12 @@ const INSPECTOR_SURFACES: Record<InspectorView, UiSurface> = {
 	summary: "inspector_summary",
 	reviews: "inspector_reviews",
 	browser: "inspector_browser",
+	device: "inspector_device",
 	sideChat: "inspector_side_chat",
 	subagents: "inspector_subagents",
 	files: "inspector_files",
 	artifacts: "inspector_artifacts",
+	task: "inspector_background_tasks",
 };
 
 type ProjectConfig = components["schemas"]["ProjectConfig"];
@@ -151,16 +158,18 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.device" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title" | "backgroundTasks.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
 	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
 	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "device", labelKey: "inspector.device", icon: <Smartphone aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
 	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
+	{ id: "task", labelKey: "backgroundTasks.title", icon: <SquareTerminal /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -236,10 +245,32 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	const devicesEnabled = useDevicesEnabled();
 	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
 	);
+	// The Background tasks tab: every task this chat ran, and one at a time when opened.
+	const uiKey = session ? sessionUiKey(session.id, hostId) : "";
+	const taskTabs = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.taskTabs : undefined));
+	useReleaseTaskOutputs(session?.id ?? "", taskTabs);
+	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
+	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
+	// Only a local chat reports tasks: a session on another host (`hostId` prop or field) never polls this daemon.
+	const tasksWatchable = Boolean(session && !hostId && supportsLocalBackgroundTasks(session));
+	// Polls every 2 s only while the tab shows; each reading asks the provider.
+	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible);
+	const tasksReading = tasksQuery.data;
+	// A failed refresh keeps the last reading: still shown, but marked stale.
+	const tasksStale = tasksQuery.isError && tasksReading !== undefined;
+	useEffect(() => {
+		if (!uiKey) return;
+		// An ended session sends no more readings, and an unavailable one means its
+		// agent isn't reporting: a task still shown as live would offer a Stop that
+		// can't land. Mark it ended; a reading that lists it again restores it.
+		if (!tasksWatchable || tasksReading?.availability === "unavailable") useUiStore.getState().syncTaskTabs(uiKey, []);
+		else if (tasksReading) useUiStore.getState().syncTaskTabs(uiKey, tasksReading.tasks);
+	}, [tasksReading, tasksWatchable, uiKey]);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -249,14 +280,15 @@ export const SessionInspector = memo(function SessionInspector({
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
 	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudOrgId = session?.cloud?.orgId;
+	const cloudWorkspaceReady = useCloudWorkspaceReady(session);
 	const cloudReview = useQuery({
-		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session?.id ?? "", "summary"],
-		// Only a connected worker answers for its files, as in the Files panel: a
-		// waking session's count is not polled until its worker is back, and the
-		// count read before stays on the tab meanwhile.
-		enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined && session.runtimeConnected === true,
-		refetchInterval: 5_000,
-		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session!.id),
+		...cloudWorkspaceReviewSummaryQueryOptions({
+			client: cloudCpClient, baseUrl: cloudBaseUrl, orgId: cloudOrgId ?? "", sessionId: session?.id ?? "",
+			// Only a worker with its workspace ready answers for its files, as in
+			// the Files panel: a waking or starting session's count is not polled
+			// until it is, and the count read before stays on the tab meanwhile.
+			enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined && cloudWorkspaceReady,
+		}),
 	});
 	const cloudFilesChangedCount = cloudReview.data?.summary.files;
 	const filesChangedCount = session?.cloud ? (cloudFilesChangedCount ? cloudFilesChangedCount : undefined) : localFilesChangedCount;
@@ -282,20 +314,36 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
+	// Simulators and emulators run on this machine: the Device tab serves
+	// local worker sessions only until remote and cloud providers exist, and
+	// only with Developer mode on.
+	const deviceAvailable = devicesEnabled && session !== undefined && !session.cloud && !hostId && !orchestrator;
+	// The orchestrator's rail also offers its chat's Subagents panel while it lists
+	// any, and Background tasks once its composer strip has opened one.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
 		|| (entry.id === "subagents" && subagentsView !== undefined)
+		|| (entry.id === "task" && Boolean(taskTabs?.length))
 		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			&& (entry.id !== "subagents" || subagentsView !== undefined)
+			&& (entry.id !== "device" || deviceAvailable)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
-			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)
+			// Background tasks shows once the chat has run one.
+			&& (entry.id !== "task" || Boolean(taskTabs?.length)));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	useTelemetrySurface(INSPECTOR_SURFACES[view], Boolean(isInspectorVisible));
+	// A failure shown in its tab has been seen: the composer strip stops raising it.
+	const shownFailure = view === "task" && isInspectorVisible && activeTaskTab && !activeTaskTab.ended && activeTaskTab.task.state === "failed"
+		? activeTaskTab.task
+		: undefined;
+	useEffect(() => {
+		if (uiKey && shownFailure) useUiStore.getState().acknowledgeFailedTask(uiKey, shownFailure);
+	}, [shownFailure, uiKey]);
 	const sessionLoaded = session !== undefined;
 	// The chat reports its subagents just after it mounts, so on the way back to a
 	// session the Subagents tab is briefly missing. Show Summary through that gap but
@@ -339,6 +387,7 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				browserPoppedOut={browserPoppedOut}
+				deviceView={session && deviceAvailable ? <DevicePanel isActive={isInspectorVisible} key={session.id} sessionId={session.id} /> : undefined}
 				browserView={
 					session && (!hostId || browserView) ? (
 						<BrowserView
@@ -397,6 +446,9 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				tabs={tabs}
+				taskView={session && taskTabs?.length ? (
+					<BackgroundTasksPanel isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} stale={tasksStale} tasks={taskTabs} uiKey={uiKey} />
+				) : undefined}
 			/>
 		</div>
 	);
@@ -1151,7 +1203,8 @@ function PRViewSummaryCard({
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	usePRNoChecksClock([pr]);
 	const noChecks = prHasNoChecks(pr);
-	const detailsFailed = usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
+	// Labels, reviewers and checks on the card come from the PR's details.
+	usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
 	const presentation = prCardPresentation(pr, { noChecks });
 	const canMerge = prCanMerge(pr, { noChecks }) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
@@ -1184,9 +1237,8 @@ function PRViewSummaryCard({
 			</Button>
 		) : undefined,
 	};
-	const activeTabUrl = usePRTabs(sessionUiKey(sessionId, hostId)).active;
-	const [descriptionOpen, setDescriptionOpen] = useState(false);
-	const sectionRef = useRef<HTMLElement>(null);
+	// The title row's action button writes its status lines here, under the card.
+	const [actionMessages, setActionMessages] = useState<HTMLDivElement | null>(null);
 	const cardView = (
 		<InspectorPullRequestCardView
 			compact
@@ -1247,10 +1299,8 @@ function PRViewSummaryCard({
 	);
 	if (layout === "card") return cardView;
 	const state = prStateIcon[pr.state];
-	// A local PR opens in its own tab, where its description, conversation and changes live.
+	// A local PR opens in its own tab, in the centre: description, conversation and changes.
 	const opensTab = !cloudOrgId && !guest && Boolean(pr.url);
-	const tabShowing = activeTabUrl === pr.url;
-	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
 	const titleLabel = (
 		<>
 			{/* The chips above name the repository in full on hover; here its short name leaves room for the title. */}
@@ -1268,70 +1318,35 @@ function PRViewSummaryCard({
 			icon={pr.provider === "github" ? <GitHubIcon className="size-icon-sm shrink-0 text-passive" /> : undefined}
 		/>
 	);
-	// The card leaves the description out: a few lines of a long body told too
-	// little for the room they took. The title opens all of it in a drawer, or,
-	// while the PR's tab is showing, its Summary, where the description already is.
-	// AO reads a description only for a local GitHub PR; AO Cloud and GitLab send
-	// none yet, so there the title keeps its old job rather than open an empty drawer.
-	const describes = Boolean(pr.detailsObservedAt) || (pr.provider === "github" && !cloudOrgId);
-	const titleOpensDrawer = describes && !tabShowing;
+	// One button for everything on this PR, beside its title: the branch's next git step, then the PR's own.
+	const actionButton = !cloudOrgId && !guest && pr.state !== "merged" ? (
+		<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} messages={actionMessages} pr={pr} sessionId={sessionId} />
+	) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
+		<CloudPRGitStepButton git={work.git} messages={actionMessages} />
+	) : null;
+	// A local PR's tab has Open on GitHub, so the row keeps its width for the button;
+	// where the title can't open a tab (AO Cloud, a guest), the logo still links out.
+	const action = <>{actionButton}{opensTab ? null : providerLink}</>;
 	return (
-		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus" ref={sectionRef}>
-			{titleOpensDrawer || opensTab ? (
+		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
+			{/* The title opens the PR's tab, where its description already is. */}
+			{opensTab ? (
 				<InfoRowLabelButton
-					action={(
-						<>
-							{opensTab && titleOpensDrawer ? (
-								<Pressable className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => openTab()}>
-									<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
-									{t("pr.openTab")}
-								</Pressable>
-							) : null}
-							{providerLink}
-						</>
-					)}
-					aria-expanded={titleOpensDrawer ? descriptionOpen : undefined}
-					aria-haspopup={titleOpensDrawer ? "dialog" : undefined}
+					action={action}
 					icon={state.icon}
 					iconClassName={state.className}
-					label={(
-						<>
-							{titleLabel}
-							{titleOpensDrawer ? <span className="sr-only">, {t("pr.description.show")}</span> : null}
-						</>
-					)}
-					onClick={() => titleOpensDrawer ? setDescriptionOpen(true) : openTab()}
+					label={titleLabel}
+					onClick={() => openPRTab(sessionUiKey(sessionId, hostId), pr.url)}
 					title={pr.title}
 				/>
 			) : (
-				<InfoRow action={providerLink} icon={state.icon} iconClassName={state.className} label={titleLabel} title={pr.title} />
+				<InfoRow action={action} icon={state.icon} iconClassName={state.className} label={titleLabel} title={pr.title} />
 			)}
 			{cardView}
-			{describes ? (
-				<PRDescriptionDrawer
-					anchor={sectionRef}
-					cloud={Boolean(cloudOrgId)}
-					detailsFailed={detailsFailed}
-					onOpenChange={setDescriptionOpen}
-					open={descriptionOpen}
-					pr={pr}
-					title={titleLabel}
-				/>
-			) : null}
-
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
 			) : elsewhere}
-			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
-			{!cloudOrgId && !guest && pr.state !== "merged" ? (
-				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
-					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
-				</div>
-			) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
-				<div className={cn("pt-2 pb-2", !work.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
-					<CloudPRGitStepButton git={work.git} />
-				</div>
-			) : null}
+			<div className="empty:hidden pb-2" ref={setActionMessages} />
 		</section>
 	);
 }
@@ -1655,11 +1670,13 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	// same read (and cache entry) the inspector polls for its Files count.
 	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudOrgId = session.cloud?.orgId;
+	const cloudWorkspaceReady = useCloudWorkspaceReady(session);
 	const cloudReview = useQuery({
-		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session.id, "summary"],
-		enabled: cloudReady && cloudOrgId !== undefined && session.runtimeConnected === true && session.kind !== "orchestrator",
+		...cloudWorkspaceReviewSummaryQueryOptions({
+			client: cloudCpClient, baseUrl: cloudBaseUrl, orgId: cloudOrgId ?? "", sessionId: session.id, visible: false,
+			enabled: cloudReady && cloudOrgId !== undefined && cloudWorkspaceReady && session.kind !== "orchestrator",
+		}),
 		placeholderData: (previous) => previous,
-		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session.id),
 	});
 	const commits = session.cloud ? cloudReview.data?.commits : history.data?.commits;
 	const events: SortableTimelineEvent[] = [];
