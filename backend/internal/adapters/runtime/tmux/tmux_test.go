@@ -368,6 +368,13 @@ func TestLongReviewerHandleResolvesToCreateName(t *testing.T) {
 	raw := "review-" + strings.Repeat("a", 60)
 	want := SessionName(raw)
 	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("can't find session: " + raw)}
+	fr.hook = func(_ context.Context, call int) error {
+		if call == 1 {
+			return &exec.ExitError{}
+		}
+		return nil
+	}
 	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
 		t.Fatalf("Destroy raw long reviewer handle: %v", err)
 	}
@@ -379,18 +386,39 @@ func TestLongReviewerHandleResolvesToCreateName(t *testing.T) {
 			t.Fatalf("kill-session args = %v, want %v", call.args, killSessionArgs(want))
 		}
 	}
+	if got, err := handleID(ports.RuntimeHandle{ID: want}); err != nil || got != want {
+		t.Fatalf("stored handle = %q, %v; want %q", got, err, want)
+	}
+	if len(fr.calls) == 0 || !reflect.DeepEqual(fr.calls[0].args, hasSessionArgs(raw)) {
+		t.Fatalf("first call = %v, want exact raw probe", fr.calls)
+	}
+}
+
+func TestLongLegacyReviewerHandleDestroysOriginalSession(t *testing.T) {
+	raw := "review-" + strings.Repeat("a", 60)
+	r := New(Options{Binary: "bundled-tmux-test", LegacyBinary: "system-tmux-test", SocketName: "ao", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("can't find session: " + raw), err: &exec.ExitError{}}, // private socket
+		{},                  // legacy default socket has the raw session
+		{},                  // enforce detach-on-destroy
+		{out: []byte("on")}, // verify detach-on-destroy
+	}}
+	r.runner = fr
+	r.reapSessions = (&recordingReaper{}).reap
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy long legacy reviewer handle: %v", err)
+	}
+	kills := 0
 	for _, call := range fr.calls {
-		for _, arg := range call.args {
-			if arg == raw {
-				t.Fatalf("tmux received raw long reviewer handle: %v", call.args)
+		if len(call.args) >= 3 && call.args[2] == "kill-session" {
+			kills++
+			if call.name != "system-tmux-test" || !reflect.DeepEqual(call.args, append([]string{"-L", "default"}, killSessionArgs(raw)...)) {
+				t.Fatalf("kill-session call = %+v, want raw name on legacy socket", call)
 			}
 		}
 	}
-	for _, id := range []string{raw, want} {
-		got, err := handleID(ports.RuntimeHandle{ID: id})
-		if err != nil || got != want {
-			t.Fatalf("handleID(%q) = %q, %v; want %q", id, got, err, want)
-		}
+	if kills != 1 {
+		t.Fatalf("kill-session calls = %d, want one", kills)
 	}
 }
 
