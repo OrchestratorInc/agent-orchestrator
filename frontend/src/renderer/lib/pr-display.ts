@@ -159,6 +159,8 @@ export function sessionBranchPR(session: WorkspaceSession, prs: SessionPRSummary
 	// remoteBranch names the remote first: "origin/feat/x".
 	const branchName = state.branch || (state.remoteBranch ? state.remoteBranch.slice(state.remoteBranch.indexOf("/") + 1) : undefined);
 	if (branchName) {
+		// Fallback summaries from sessionPRFactToSummary set sourceBranch to session.branch
+		// until provider details load, so if the checkout matches session.branch, it matches here.
 		return open.find((pr) => pr.sourceBranch === branchName);
 	}
 	return state.head ? open.find((pr) => pr.headSha === state.head) : undefined;

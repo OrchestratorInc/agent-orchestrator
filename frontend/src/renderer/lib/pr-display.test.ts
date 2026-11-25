@@ -229,6 +229,36 @@ describe("sessionBranchPR", () => {
 		).toBe(5);
 	});
 
+	it("matches fallback PR summary when fallback sourceBranch equals the observed branch in stacked-branch case", () => {
+		// When provider details have not loaded, sessionPRFactToSummary sets sourceBranch
+		// to session.branch. If the checkout equals session.branch (and has no upstream),
+		// the matcher attaches this fallback PR even if the open PR belongs to another branch.
+		const sess = sessionWith({
+			branch: "ao/main-feature",
+			branchState: { branch: "ao/main-feature", commits: 1, unpushed: 0, behind: 0 },
+			prs: [
+				{
+					url: "https://github.com/acme/repo/pull/12",
+					number: 12,
+					state: "open",
+					ci: "passing",
+					review: "approved",
+					mergeability: "mergeable",
+					reviewComments: false,
+					updatedAt: "2026-06-15T00:00:00Z",
+				},
+			],
+		});
+		const fallbackSummaries = sessionPRDisplaySummaries(sess, []);
+		expect(fallbackSummaries[0]?.sourceBranch).toBe("ao/main-feature");
+		expect(sessionBranchPR(sess, fallbackSummaries)?.number).toBe(12);
+
+		// Once provider details load with the real source branch ("ao/stacked-fix"),
+		// the matcher no longer attaches the PR to the current checkout.
+		const enriched = [summary({ number: 12, sourceBranch: "ao/stacked-fix", headSha: "abc1234" })];
+		expect(sessionBranchPR(sess, enriched)).toBeUndefined();
+	});
+
 	it("falls back to the first open PR before the daemon reports the branch", () => {
 		expect(sessionBranchPR(sessionWith(), [quickNav, faq])?.number).toBe(4);
 	});
