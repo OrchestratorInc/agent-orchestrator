@@ -7,9 +7,11 @@ import { useTranslation } from "react-i18next";
 import { ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, FileCode2, Loader2, MoreVertical, Send } from "@/components/app-icons";
 import { prDetailsLoadQueryKey, usePRDetailsLoad } from "../../hooks/usePRDetailsLoad";
 import { agentLabel } from "../../lib/agent-options";
+import { sessionUiKey } from "../../lib/hosts";
 import { formatTimeCompact } from "../../lib/format-time";
 import { reviewCommentIsOpen, type ReviewComment, type ReviewPRBlock, type ReviewReviewer, type ReviewReviewerStatus } from "../../lib/review-comments";
 import { cn } from "../../lib/utils";
+import { useReviewSentKeys, useReviewSentStore } from "../../stores/review-sent-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { PRAvatar } from "../PRComments";
 import { PRCommentComposer } from "../PRCommentComposer";
@@ -159,7 +161,9 @@ function ReviewPRBlockView({
 	// A row the person opened or folded keeps that; otherwise an open comment not yet
 	// sent to the worker starts open, so its Send to agent is in reach, and the rest fold.
 	const [expandedHere, setExpandedHere] = useState<ReadonlyMap<string, boolean>>(() => new Map());
-	const [sent, setSent] = useState<ReadonlySet<string>>(() => new Set());
+	// Sent by hand, remembered per session so a reopened tab still shows it and Send all skips it.
+	const sentStoreKey = sessionUiKey(sessionId, hostId);
+	const sent = useReviewSentKeys(sentStoreKey);
 	// Comments on their way to the worker, from a row or Send all, so the other cannot send them twice.
 	// A ref, so two clicks before the next render still see each other.
 	const sending = useRef<Set<string>>(new Set());
@@ -197,7 +201,7 @@ function ReviewPRBlockView({
 	const isSent = (comment: ReviewComment) => comment.delivered || sent.has(comment.sentKey);
 	// Only a comment with text can be sent, one at a time or all together.
 	const unsent = openComments.filter((comment) => Boolean(comment.body) && !isSent(comment) && !sending.current.has(comment.sentKey));
-	const markSent = (keys: string[]) => setSent((current) => new Set([...current, ...keys]));
+	const markSent = (keys: string[]) => useReviewSentStore.getState().markSent(sentStoreKey, keys);
 	const hold = (keys: string[], held: boolean) => {
 		for (const key of keys) {
 			if (held) sending.current.add(key);

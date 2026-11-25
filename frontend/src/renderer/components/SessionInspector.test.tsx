@@ -28,6 +28,7 @@ import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { useUiStore } from "../stores/ui-store";
 import { useSessionGitActionStore } from "../stores/session-git-action-store";
+import { resetReviewSentStore } from "../stores/review-sent-store";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import type {
   PRState,
@@ -335,6 +336,7 @@ const reviewState = (n: number, status: string, targetSha = `sha-${n}`) => ({
 });
 
 beforeEach(() => {
+  resetReviewSentStore();
   resetPRFocus();
   resetPRTabs();
   resetPRMergeMethods();
@@ -3959,6 +3961,29 @@ describe("SessionInspector summary reviews", () => {
     const row = await commentRowWith("claude-code found nothing blocking.");
     expect(row).toHaveTextContent("earlier");
     expect(screen.queryByText("codex asked for tests.", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps a review sent by hand marked sent after the tab mounts again", async () => {
+    mockCommonGets([], "reviewer-pane", [{
+      ...reviewState(3, "up_to_date", "abc123"),
+      latestRun: { ...approvedReview, autoInjectReview: false, body: "Please add a regression test.", prUrl: "https://github.com/acme/repo/pull/3" },
+    }]);
+
+    const first = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+    const row = await screen.findByTestId("review-comment");
+    await expandComment(row);
+    await userEvent.click(within(row).getByRole("button", { name: "Send to agent" }));
+    expect(await within(row).findByRole("status", { name: "Sent to agent" })).toBeInTheDocument();
+    first.unmount();
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+    const again = await screen.findByTestId("review-comment");
+    expect(within(again).getByRole("status", { name: "Sent to agent" })).toBeInTheDocument();
+    expect(within(again).queryByRole("button", { name: "Send to agent" })).not.toBeInTheDocument();
+    const sends = () => postMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/send").length;
+    expect(sends()).toBe(1);
   });
 
   it("sends an Orchestrator review to the worker and opens it in the Browser", async () => {
