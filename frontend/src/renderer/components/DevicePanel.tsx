@@ -221,12 +221,27 @@ function shortHomePaths(text: string): string {
 /**
  * The Device tab's own page: a header in the New project panel's type, over
  * whatever this step offers, at the top of the tab like the device list. A
- * `fill` page lets its content take the rest of the tab's height.
+ * `fill` page lets its content take the rest of the tab's height; a `center`
+ * page sits in the middle of the tab.
  */
-function DevicePage({ back, children, description, fill = false, title }: { back?: { label: string; onClick: () => void }; children: ReactNode; description?: ReactNode; fill?: boolean; title: ReactNode }) {
+function DevicePage({
+	back,
+	center = false,
+	children,
+	description,
+	fill = false,
+	title,
+}: {
+	back?: { label: string; onClick: () => void };
+	center?: boolean;
+	children: ReactNode;
+	description?: ReactNode;
+	fill?: boolean;
+	title: ReactNode;
+}) {
 	return (
 		<div className="board-scrollbar flex h-full flex-col overflow-y-auto">
-			<div className={cn("flex w-full flex-col px-4 pt-4", fill ? "flex-1 pb-4" : "max-w-md pb-6")}>
+			<div className={cn("flex w-full flex-col px-4 pt-4", fill ? "flex-1 pb-4" : center ? "m-auto max-w-sm items-center py-6 text-center" : "max-w-md pb-6")}>
 				{back ? (
 					<Button className="-ml-2 mb-3 self-start text-muted-foreground" onClick={back.onClick} size="sm" type="button" variant="quiet">
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
@@ -245,8 +260,8 @@ function DevicePage({ back, children, description, fill = false, title }: { back
 function DeviceIntro({ action, error }: { action: ReactNode; error?: string }) {
 	const { t } = useTranslation();
 	return (
-		<DevicePage description={t("device.introBody")} title={t("device.introTitle")}>
-			<div className="flex flex-col items-start gap-3">
+		<DevicePage center description={t("device.introBody")} title={t("device.introTitle")}>
+			<div className="flex flex-col items-center gap-3">
 				{error ? <p className="text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{error}</p> : null}
 				{action}
 			</div>
