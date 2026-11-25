@@ -140,7 +140,7 @@ describe("useTerminateSession", () => {
 		it("looks the links up, archives, then unpublishes them once the files are deleted", async () => {
 			await archive({ ...published, deleteArtifacts: true });
 			expect(order).toEqual(["inspect", "kill", "unpublish"]);
-			expect(aoBridge.cloudShare.inspect).toHaveBeenCalledWith({ sessionId: "session-1", path: "a.md", projectId: "project-1", artifactId: "art-1", baseUrl: "https://cp.example.com" });
+			expect(aoBridge.cloudShare.inspect).toHaveBeenCalledWith({ sessionId: "session-1", path: "a.md", projectId: "project-1", artifactId: "art-1", baseUrl: "https://cp.example.com" }, { linkOnly: true });
 			expect(aoBridge.cloudShare.unpublish).toHaveBeenCalledWith("https://cp.example.com", "share-1");
 		});
 
