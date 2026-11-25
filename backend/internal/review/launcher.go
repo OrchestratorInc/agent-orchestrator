@@ -349,13 +349,10 @@ func (l *agentLauncher) endpointEnv(spec LaunchSpec) (map[string]string, error) 
 		return nil, nil
 	}
 	// A project pointing the harness at another origin gets none of the saved
-	// endpoint, so its key never travels to a gateway it was not saved for.
-	// A project that names no key of its own for that origin launches the
-	// reviewer on the project's or native credentials, as its sessions do.
+	// endpoint, so its key never travels to a gateway it was not saved for:
+	// its own gateway and key apply instead, and a project gateway with no key
+	// of its own stops the launch, as an unreadable endpoint does.
 	stored, err := harnessendpoint.ForDataDir(l.dataDir).ProjectEnv(string(spec.Harness), spec.ProjectEnv, runtime.GOOS == "windows")
-	if errors.Is(err, harnessendpoint.ErrIncompleteOverride) {
-		stored, err = nil, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("load custom endpoint for %s reviewer: %w", spec.Harness, err)
 	}

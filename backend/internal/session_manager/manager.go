@@ -7403,18 +7403,14 @@ func (m *Manager) chatPreflightEnv(cfg ports.SpawnConfig, projectEnv map[string]
 	return m.runtimeEnvChecked("", cfg.ProjectID, cfg.IssueID, projectEnv, cfg.AgentAccountID, cfg.Harness)
 }
 
-// loadHarnessEndpointEnv returns the saved custom endpoint a launch of harness
-// receives. A project that points the harness at another endpoint origin gets
-// none of it, so the saved key never travels to a gateway it was not saved
-// for; when that project names no key of its own, the override is reported
-// and the launch continues on the project's or native credentials. Any other
-// failure to read the endpoint stops the launch.
+// loadHarnessEndpointEnv resolves the custom endpoint a launch of harness
+// receives with the project's env: the saved endpoint, or the project's own
+// gateway and key when it points the harness at another origin. A project
+// gateway with no key of its own, or an endpoint that cannot be read, stops
+// the launch, so no credential is sent to a gateway it was not meant for. No
+// endpoint at all leaves the usual launch path.
 func (m *Manager) loadHarnessEndpointEnv(harness domain.AgentHarness, projectEnv map[string]string, caseInsensitive bool) (map[string]string, error) {
 	env, err := harnessendpoint.ForDataDir(m.dataDir).ProjectEnv(string(harness), projectEnv, caseInsensitive)
-	if errors.Is(err, harnessendpoint.ErrIncompleteOverride) {
-		m.logger.Warn("custom harness endpoint not applied; launching with the project's or native credentials", "harness", harness, "error", err)
-		return nil, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("load custom endpoint for %s: %w", harness, err)
 	}
