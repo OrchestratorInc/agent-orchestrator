@@ -63,15 +63,10 @@ describe("chat under the clear header", () => {
 });
 
 describe("streaming response layout", () => {
-	it("keeps the live cursor inside the response instead of adding a new block", () => {
-		expect(source).toContain('showCursor ? `${item.text || ""} ▍`');
+	it("draws a streaming reply as its text alone, with no cursor or extra block", () => {
+		expect(source).not.toContain("▍");
+		expect(source).not.toContain("showCursor");
 		expect(source).not.toContain("styles.streamingDot");
-	});
-
-	it("draws the cursor on the turn's newest reply only", () => {
-		expect(source).toContain("streamingCursorMessageId(items)");
-		expect(source).toContain("showCursor={row.items[0].id === cursorMessageId}");
-		expect(source).not.toContain('item.streaming ? `${item.text || ""} ▍`');
 	});
 });
 
@@ -137,6 +132,13 @@ describe("a turn's action row", () => {
 		expect(source).toContain("turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP,");
 		expect(actions).toContain("<View style={styles.turnActions}>");
 		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
+	});
+	// The row's height is fixed, so the time cannot grow past it: uncapped, the
+	// largest text sizes drew its line taller than the row and cut it off. At
+	// the chrome cap (1.3) the footnote's 17pt line is 22pt, inside the 28pt
+	// control the row is built around.
+	it("caps the time's text size where its line still fits the row", () => {
+		expect(actions).toContain("maxFontSizeMultiplier={fontScaleCap.chrome}");
 	});
 	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
 		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
@@ -424,7 +426,9 @@ describe("following the newest message", () => {
 	// text into view just as the keyboard began to close.
 	it("does not scroll to text a tap has focused", () => {
 		expect(source).toContain("scrollsChildToFocus={false}");
-		expect(source).toContain("onEditFocus={revealEdit}");
+		// Through the list's stable forwarders, so the memoized turn keeps its render.
+		expect(source).toContain("onEditFocus={rowHandlers.revealEdit}");
+		expect(source).toContain("rowHandlers = useStableFunctionProps({ onDecide, onResolveInput, onRollback, onFork, startEdit, cancelEdit, submitEdit, revealEdit, toggleWorked })");
 	});
 
 	// With focus scrolling off, a request form's field reveals itself when it

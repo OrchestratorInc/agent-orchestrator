@@ -1,3 +1,4 @@
+import { uiUsage } from "../lib/ui-usage-telemetry";
 import { ArrowLeft, ArrowRight } from "@/components/app-icons";
 import { type RefObject, useEffect, useRef } from "react";
 import { aoBridge } from "../lib/bridge";
@@ -178,6 +179,9 @@ export function SwipeNavigation({
 		const navigate = (offset: number) => {
 			const direction: Direction = offset > 0 ? "back" : "forward";
 			if (Math.abs(offset) < SWIPE_ARM_PX || !canNavigate(direction)) return;
+			// The session this lands on was switched to by a swipe.
+			uiUsage.noteIntent("swipe");
+			uiUsage.featureUsed("swipe_navigation");
 			if (direction === "back") historyState.current.back();
 			else historyState.current.forward();
 		};

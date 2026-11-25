@@ -133,6 +133,7 @@ export async function createFolderRepository(
 
 /** A folder upload the main process refused or that failed, with its reason. */
 export class FolderPushError extends Error {
+	readonly telemetryCode: string = "FOLDER_PUSH_ERROR";
 	constructor(
 		readonly code: Extract<PushFolderResult, { status: "error" }>["code"],
 		message: string,

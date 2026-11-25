@@ -191,6 +191,7 @@ type AppSetting struct {
 	SessionRetentionDays int64
 	AccountHandoff       bool
 	LimitHistory         bool
+	CommitAttribution    bool
 }
 
 type Automation struct {
@@ -577,6 +578,8 @@ type PR struct {
 	ReviewPartial            bool
 	HeadFromFork             bool
 	HeadIsDefaultBranch      bool
+	MergeQueueRequired       bool
+	MergeQueueEntry          string
 }
 
 type PRCheck struct {
@@ -833,10 +836,10 @@ type Session struct {
 	TemporaryBranch                  string
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
-	MovedTo                          string
 	DisplayNameExplicit              bool
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string
+	MovedTo                          string
 	MoveConversationPlaced           int64
 	MoveStarted                      string
 }
@@ -886,6 +889,12 @@ type SessionCleanupFact struct {
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
 	ReportOnly           bool
+}
+
+type SessionCommitAttribution struct {
+	SessionID string
+	CoAuthor  string
+	PRFooter  sql.NullInt64
 }
 
 type SessionFork struct {

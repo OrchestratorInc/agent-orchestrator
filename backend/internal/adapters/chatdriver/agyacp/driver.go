@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -43,6 +44,15 @@ const (
 	modeYolo     = "yolo"
 )
 
+// thinkingLevelOption is the config option agy_acp_server 1.4 moved reasoning
+// levels into. Its model option then lists gemini-3.8-flash where 1.3 and the
+// agy CLI list gemini-3.8-flash-high. `agy acp` 1.5 splits its models the same
+// way but names the option thought_level; the ACP driver then sends the level to
+// the session's thought_level-category option instead.
+const thinkingLevelOption = "thinking_level"
+
+var modelVariantPattern = regexp.MustCompile(`^(.+)-(minimal|low|medium|high|xhigh)$`)
+
 // `agy acp`'s mode ids. It has no mode that runs every tool without asking;
 // that is a launch flag, and AO's approval can change between turns. 1.5.4's
 // `auto` still asks before a command leaves the terminal sandbox, so AO's
@@ -69,6 +79,10 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			ports.ChatCapabilityApprovals: true,
 			ports.ChatCapabilityInterrupt: true,
 			ports.ChatCapabilityResume:    true,
+		},
+		InstallCheck: func(ctx context.Context) error {
+			_, err := resolve.target(ctx)
+			return err
 		},
 		Probe: func(ctx context.Context) error {
 			if _, err := resolve.target(ctx); err != nil {
@@ -109,10 +123,11 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			return acpdriver.Launch{Command: target.path, Args: launchArgs(runtime.GOOS), Env: env}, nil
 		},
 		ValidateInitialize:  validateInitialize,
-		AfterInitialize:     afterInitialize(newAuthBootstrap(agy.GeminiHome)),
+		AfterInitialize:     afterInitialize(newAuthBootstrap(agy.GeminiHome, cliSignedIn(resolve.agyCLI))),
 		SessionMode:         sessionMode,
 		SessionModeForAgent: sessionModeForAgent,
 		SessionOptions:      sessionOptions,
+		SplitModelVariant:   splitModelVariant,
 		SessionPreamble:     sessionPreamble,
 		// Every request Antigravity raises is answered by the user, except under
 		// `agy acp` in AO's auto modes (see permissionPolicy). AO never selects
@@ -120,6 +135,11 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 		// a stricter approval mode.
 		PermissionPolicy: permissionPolicy,
 		SteerPrompt:      &acpdriver.SteerPrompt{Supported: cliSteers},
+		// run_command hands a command to the background once its
+		// WaitMsBeforeAsync passes, and the turn can end while it runs.
+		// Antigravity reports its exit later, then answers it in a cycle of its
+		// own, so the command is a background task, not a failed tool.
+		ToolsOutliveTurn: true,
 	}
 }
 
@@ -216,11 +236,25 @@ func sessionMode(permission ports.PermissionMode) string {
 	}
 }
 
+// sessionOptions selects the chosen model. It is optional because a task's model
+// comes from the agy CLI's list, which is wider than what the ACP server offers:
+// a session on a model it lacks keeps its default, and the chat's own picker
+// lists what the server really has.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if model := strings.TrimSpace(settings.Model); model != "" {
-		return []acpdriver.SessionOption{{ID: "model", Value: model}}
+		return []acpdriver.SessionOption{{ID: "model", Value: model, Optional: true}}
 	}
 	return nil
+}
+
+// splitModelVariant turns gemini-3.8-flash-high into what server 1.4 and `agy
+// acp` 1.5 offer: the gemini-3.8-flash model at thinking level high.
+func splitModelVariant(model string) (string, acpdriver.SessionOption, bool) {
+	match := modelVariantPattern.FindStringSubmatch(model)
+	if match == nil {
+		return "", acpdriver.SessionOption{}, false
+	}
+	return match[1], acpdriver.SessionOption{ID: thinkingLevelOption, Value: match[2], Optional: true}, true
 }
 
 // sessionPreamble delivers AO's standing instructions as a text block ahead of
