@@ -5384,11 +5384,15 @@
 	"chat.connectors.added": "In diesem Chat",
 	"chat.connectors.fromOrchestrator": "Von Orchestrator",
 	"chat.connectors.fromAgent": "Aus den eigenen Einstellungen von {{agent}}",
+	"chat.connectors.signIn": "Bei {{name}} anmelden",
 	"chat.connectors.manage": "Konnektoren verwalten",
 	"chat.connectorProposal.dock": "Konnektor-Anfrage",
 	"chat.connectorProposal.title": "Konnektor hinzufügen?",
 	"chat.connectorProposal.asked": "Der Agent hat in diesem Chat darum gebeten.",
 	"chat.connectorProposal.thisProject": "Dieses Projekt",
+	"chat.connectorProposal.review": "Befehl prüfen",
+	"chat.connectorProposal.arguments": "Argumente (exakt)",
+	"chat.connectorProposal.runs": "Die Genehmigung führt diesen Befehl auf dem Computer aus, auf dem dieser Chat läuft.",
 	"chat.connectorProposal.approve": "Genehmigen",
 	"chat.connectorProposal.decline": "Ablehnen"
 }

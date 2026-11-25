@@ -5364,11 +5364,15 @@
 	"chat.connectors.added": "Bu sohbette",
 	"chat.connectors.fromOrchestrator": "Orchestrator'dan",
 	"chat.connectors.fromAgent": "{{agent}} kendi ayarlarından",
+	"chat.connectors.signIn": "{{name}} için oturum aç",
 	"chat.connectors.manage": "Bağlayıcıları yönet",
 	"chat.connectorProposal.dock": "Bağlayıcı isteği",
 	"chat.connectorProposal.title": "Bağlayıcı eklensin mi?",
 	"chat.connectorProposal.asked": "Aracı bunu bu sohbette istedi.",
 	"chat.connectorProposal.thisProject": "Bu proje",
+	"chat.connectorProposal.review": "Komutu incele",
+	"chat.connectorProposal.arguments": "Argümanlar (tam)",
+	"chat.connectorProposal.runs": "Onay, bu komutu bu sohbeti çalıştıran bilgisayarda çalıştırır.",
 	"chat.connectorProposal.approve": "Onayla",
 	"chat.connectorProposal.decline": "Reddet"
 }

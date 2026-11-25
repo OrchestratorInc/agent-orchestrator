@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -870,6 +871,11 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 	}
 
 	kind, known := approvalMethods[req.Method]
+	var tool *toolApproval
+	if req.Method == codexproto.MethodMcpServerElicitationRequest {
+		tool = parseToolApproval(req.Params)
+		kind, known = domain.ActivityKindApproval, tool != nil
+	}
 	if !known {
 		c.log.Warn("refusing unmodelled app-server request", "method", req.Method)
 		return nil, fmt.Errorf("unsupported request %s", req.Method)
@@ -884,6 +890,9 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 	}
 
 	decisions, summary, detail, turnID := parseApproval(req.Method, req.Params)
+	if tool != nil {
+		decisions, summary, detail, turnID = tool.decisions(), tool.summary(), tool.detail(req.Method), tool.TurnID
+	}
 
 	offered := make(map[string]json.RawMessage, len(decisions))
 	for _, option := range decisions {
@@ -917,6 +926,9 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 
 	select {
 	case decision := <-ch:
+		if tool != nil {
+			return tool.reply(decision), nil
+		}
 		return approvalReply(decision), nil
 
 	case <-time.After(approvalWait):
@@ -1245,6 +1257,85 @@ func decisionLabel(id string) string {
 	default:
 		return id
 	}
+}
+
+// toolApproval is Codex's question before it calls a tool of a tool server:
+// an MCP elicitation marked as a tool-call approval, with no form to fill.
+type toolApproval struct {
+	Mode string `json:"mode"`
+	Meta struct {
+		Kind    string          `json:"codex_approval_kind"`
+		Persist json.RawMessage `json:"persist"`
+	} `json:"_meta"`
+	Message         string          `json:"message"`
+	RequestedSchema json.RawMessage `json:"requestedSchema"`
+	ServerName      string          `json:"serverName"`
+	TurnID          string          `json:"turnId"`
+}
+
+func parseToolApproval(params json.RawMessage) *toolApproval {
+	var p toolApproval
+	if json.Unmarshal(params, &p) != nil || p.Meta.Kind != "mcp_tool_call" || (p.Mode != "" && p.Mode != "form") {
+		return nil
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if len(p.RequestedSchema) > 0 && (json.Unmarshal(p.RequestedSchema, &schema) != nil || len(schema.Properties) > 0) {
+		return nil
+	}
+	return &p
+}
+
+func (t *toolApproval) decisions() []ports.ChatDecisionOption {
+	ids := []string{"accept", "cancel"}
+	var one string
+	var many []string
+	_ = json.Unmarshal(t.Meta.Persist, &one)
+	_ = json.Unmarshal(t.Meta.Persist, &many)
+	if one == "session" || slices.Contains(many, "session") {
+		ids = []string{"accept", "acceptForSession", "cancel"}
+	}
+	out := make([]ports.ChatDecisionOption, 0, len(ids))
+	for _, id := range ids {
+		raw, _ := json.Marshal(id)
+		out = append(out, ports.ChatDecisionOption{ID: id, Label: decisionLabel(id), Kind: codexDecisionKind(id), Raw: raw})
+	}
+	return out
+}
+
+func (t *toolApproval) summary() string {
+	switch {
+	case strings.TrimSpace(t.Message) != "":
+		return strings.TrimSpace(t.Message)
+	case t.ServerName != "":
+		return "Use a tool of " + t.ServerName
+	default:
+		return "Approval required"
+	}
+}
+
+func (t *toolApproval) detail(method string) []byte {
+	detail := map[string]any{"method": method, "subjectKind": string(domain.ActivityKindMCPTool)}
+	if t.ServerName != "" {
+		detail["server"] = t.ServerName
+	}
+	encoded, _ := json.Marshal(detail)
+	return encoded
+}
+
+func (t *toolApproval) reply(decision ports.ChatDecision) any {
+	if decision.ID != "accept" && decision.ID != "acceptForSession" {
+		return map[string]any{"action": "cancel"}
+	}
+	reply := map[string]any{"action": "accept"}
+	if decision.ID == "acceptForSession" {
+		reply["_meta"] = map[string]any{"persist": "session"}
+	}
+	if len(t.RequestedSchema) > 0 && string(t.RequestedSchema) != "null" {
+		reply["content"] = map[string]any{}
+	}
+	return reply
 }
 
 // approvalReply builds the provider response for a decision. A decision carrying

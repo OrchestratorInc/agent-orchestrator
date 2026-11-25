@@ -5688,11 +5688,15 @@
 	"chat.connectors.added": "В этом чате",
 	"chat.connectors.fromOrchestrator": "Из Orchestrator",
 	"chat.connectors.fromAgent": "Из собственных настроек {{agent}}",
+	"chat.connectors.signIn": "Войти в {{name}}",
 	"chat.connectors.manage": "Управление коннекторами",
 	"chat.connectorProposal.dock": "Запрос коннектора",
 	"chat.connectorProposal.title": "Добавить коннектор?",
 	"chat.connectorProposal.asked": "Агент запросил его в этом чате.",
 	"chat.connectorProposal.thisProject": "Этот проект",
+	"chat.connectorProposal.review": "Проверить команду",
+	"chat.connectorProposal.arguments": "Аргументы (точно)",
+	"chat.connectorProposal.runs": "После одобрения эта команда выполнится на компьютере, где работает этот чат.",
 	"chat.connectorProposal.approve": "Одобрить",
 	"chat.connectorProposal.decline": "Отклонить"
 }

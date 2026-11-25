@@ -5384,11 +5384,15 @@
 	"chat.connectors.added": "このチャットで有効",
 	"chat.connectors.fromOrchestrator": "Orchestrator から",
 	"chat.connectors.fromAgent": "{{agent}} 自身の設定から",
+	"chat.connectors.signIn": "{{name}} にサインイン",
 	"chat.connectors.manage": "コネクタを管理",
 	"chat.connectorProposal.dock": "コネクタの追加リクエスト",
 	"chat.connectorProposal.title": "コネクタを追加しますか?",
 	"chat.connectorProposal.asked": "エージェントがこのチャットで要求しました。",
 	"chat.connectorProposal.thisProject": "このプロジェクト",
+	"chat.connectorProposal.review": "コマンドを確認",
+	"chat.connectorProposal.arguments": "引数（そのまま）",
+	"chat.connectorProposal.runs": "承認すると、このチャットを実行しているコンピューターでこのコマンドが実行されます。",
 	"chat.connectorProposal.approve": "承認",
 	"chat.connectorProposal.decline": "拒否"
 }

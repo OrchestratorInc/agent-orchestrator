@@ -5384,11 +5384,15 @@
 	"chat.connectors.added": "이 채팅에 포함",
 	"chat.connectors.fromOrchestrator": "Orchestrator에서",
 	"chat.connectors.fromAgent": "{{agent}} 자체 설정에서",
+	"chat.connectors.signIn": "{{name}}에 로그인",
 	"chat.connectors.manage": "커넥터 관리",
 	"chat.connectorProposal.dock": "커넥터 요청",
 	"chat.connectorProposal.title": "커넥터를 추가할까요?",
 	"chat.connectorProposal.asked": "에이전트가 이 채팅에서 요청했습니다.",
 	"chat.connectorProposal.thisProject": "이 프로젝트",
+	"chat.connectorProposal.review": "명령 검토",
+	"chat.connectorProposal.arguments": "인수(원문)",
+	"chat.connectorProposal.runs": "승인하면 이 채팅을 실행하는 컴퓨터에서 이 명령이 실행됩니다.",
 	"chat.connectorProposal.approve": "승인",
 	"chat.connectorProposal.decline": "거절"
 }

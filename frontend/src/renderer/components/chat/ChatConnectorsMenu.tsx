@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Plug, Settings2 } from "@/components/app-icons";
 import { cn } from "@/lib/utils";
 import { connectorsApi, sessionConnectorsQueryKey, type SessionConnector } from "../../hooks/useConnectors";
+import { ConnectorSignInDialog } from "../settings/ConnectorSignInDialog";
 import { useUiStore } from "../../stores/ui-store";
 import type { McpServer } from "../../types/conversation";
 import { Button } from "../ui/button";
@@ -55,6 +56,7 @@ function RowStateLabel({ state, error }: { state: RowState; error?: string }) {
 export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers }: { sessionId: string; hostId?: string; agentName: string; servers: readonly McpServer[] }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
+	const [signingIn, setSigningIn] = useState<SessionConnector | null>(null);
 	const query = useQuery({
 		queryKey: sessionConnectorsQueryKey(sessionId, hostId),
 		queryFn: () => connectorsApi.forSession(sessionId, hostId),
@@ -79,6 +81,7 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers }: { 
 	const fromAgent = t("chat.connectors.fromAgent", { agent: agentName });
 
 	return (
+		<>
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
 				<Button type="button" variant="ghost" size="sm" className={cn(TRIGGER_CLASS, "px-2")} aria-label={label} title={label} data-chat-connectors>
@@ -104,7 +107,23 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers }: { 
 														: t("chat.connectors.noCalls")}
 											</span>
 										</span>
-										<RowStateLabel state={state} error={report?.error} />
+										{state === "needsSignIn" && connector.auth === "oauth" ? (
+											<Button
+												type="button"
+												variant="secondary"
+												size="xs"
+												className="shrink-0"
+												aria-label={t("chat.connectors.signIn", { name: connector.name })}
+												onClick={() => {
+													setOpen(false);
+													setSigningIn(connector);
+												}}
+											>
+												{t("settings.connectors.signIn")}
+											</Button>
+										) : (
+											<RowStateLabel state={state} error={report?.error} />
+										)}
 									</div>
 								))}
 							</div>
@@ -136,5 +155,16 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers }: { 
 				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
+		{signingIn ? (
+			<ConnectorSignInDialog
+				connector={{ id: signingIn.key, name: signingIn.name, signedIn: false }}
+				hostId={hostId}
+				onClose={() => {
+					setSigningIn(null);
+					void refetch();
+				}}
+			/>
+		) : null}
+		</>
 	);
 }

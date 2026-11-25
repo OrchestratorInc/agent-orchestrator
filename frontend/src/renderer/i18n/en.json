@@ -5364,11 +5364,15 @@
 	"chat.connectors.added": "In this chat",
 	"chat.connectors.fromOrchestrator": "From Orchestrator",
 	"chat.connectors.fromAgent": "From {{agent}}'s own settings",
+	"chat.connectors.signIn": "Sign in to {{name}}",
 	"chat.connectors.manage": "Manage connectors",
 	"chat.connectorProposal.dock": "Connector request",
 	"chat.connectorProposal.title": "Add a connector?",
 	"chat.connectorProposal.asked": "The agent asked for it in this chat.",
 	"chat.connectorProposal.thisProject": "This project",
+	"chat.connectorProposal.review": "Review command",
+	"chat.connectorProposal.arguments": "Arguments (exact)",
+	"chat.connectorProposal.runs": "Approval runs this command on the computer that runs this chat.",
 	"chat.connectorProposal.approve": "Approve",
 	"chat.connectorProposal.decline": "Decline"
 }

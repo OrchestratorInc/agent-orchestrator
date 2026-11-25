@@ -19,7 +19,7 @@ const authKeys = {
 export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { sessionId: string; hostId?: string; asked: boolean; waiting: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const [draft, setDraft] = useState<{ id?: string; values: Record<string, string>; scope?: string }>({ values: {} });
+	const [draft, setDraft] = useState<{ id?: string; values: Record<string, string>; scope?: string; reviewed?: boolean }>({ values: {} });
 	const [signIn, setSignIn] = useState<Connector | null>(null);
 	const query = useQuery({
 		queryKey: sessionProposalsQueryKey(sessionId, hostId),
@@ -30,6 +30,7 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 	const proposal: ConnectorProposal | undefined = query.data?.[0];
 	const values = draft.id === proposal?.id ? draft.values : {};
 	const scope = draft.id === proposal?.id ? draft.scope : undefined;
+	const reviewed = proposal?.transport !== "stdio" || (draft.id === proposal.id && draft.reviewed === true);
 	const settle = () => {
 		setDraft({ values: {} });
 		void queryClient.invalidateQueries({ queryKey: sessionProposalsQueryKey(sessionId, hostId) });
@@ -65,11 +66,31 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 					<p className="font-medium text-foreground">{t("chat.connectorProposal.title")}</p>
 					<p className="whitespace-pre-wrap break-words text-xs leading-snug text-muted-foreground">{proposal.reason || t("chat.connectorProposal.asked")}</p>
 				</div>
-				<div className="flex flex-col gap-0.5">
-					<p className="text-foreground">{proposal.key}</p>
-					<p className="break-all font-mono text-xs text-muted-foreground">{connectorTarget(proposal)}</p>
-				</div>
-				{needed.map((name) => (
+				{proposal.transport === "stdio" ? (
+					<div className="flex flex-col gap-2">
+						<p className="text-foreground">{proposal.key}</p>
+						{reviewed ? (
+							<dl className="flex flex-col gap-2 text-xs">
+								<div className="flex flex-col gap-0.5">
+									<dt className="text-muted-foreground">{t("settings.connectors.dialog.command")}</dt>
+									<dd className="break-all font-mono text-foreground">{proposal.command}</dd>
+								</div>
+								<div className="flex flex-col gap-0.5">
+									<dt className="text-muted-foreground">{t("chat.connectorProposal.arguments")}</dt>
+									<dd className="break-all font-mono text-foreground">{JSON.stringify(proposal.args)}</dd>
+								</div>
+							</dl>
+						) : (
+							<p className="text-xs text-muted-foreground">{t("settings.connectors.dialog.tabCommand")}</p>
+						)}
+					</div>
+				) : (
+					<div className="flex flex-col gap-0.5">
+						<p className="text-foreground">{proposal.key}</p>
+						<p className="break-all font-mono text-xs text-muted-foreground">{connectorTarget(proposal)}</p>
+					</div>
+				)}
+				{(reviewed ? needed : []).map((name) => (
 					<Input
 						key={name}
 						type="password"
@@ -79,7 +100,7 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 						placeholder={t("settings.connectors.dialog.importValue", { name })}
 						value={values[name] ?? ""}
 						disabled={busy}
-						onChange={(event) => setDraft({ id: proposal.id, values: { ...values, [name]: event.target.value }, scope })}
+						onChange={(event) => setDraft({ id: proposal.id, values: { ...values, [name]: event.target.value }, scope, reviewed })}
 					/>
 				))}
 				<div className="flex flex-wrap items-center justify-between gap-2">
@@ -89,7 +110,7 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 							<SettingsOptionMenu<string>
 								aria-label={t("settings.connectors.dialog.projects")}
 								value={scope ?? projectId}
-								onChange={(next) => setDraft({ id: proposal.id, values, scope: next })}
+								onChange={(next) => setDraft({ id: proposal.id, values, scope: next, reviewed })}
 								disabled={busy}
 								triggerVariant="ghost"
 								menuAlign="start"
@@ -104,11 +125,18 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 						<Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => decline.mutate(proposal)}>
 							{t("chat.connectorProposal.decline")}
 						</Button>
-						<Button type="button" variant="accent" size="sm" disabled={busy || needed.some((name) => !values[name])} onClick={() => approve.mutate(proposal)}>
-							{t("chat.connectorProposal.approve")}
-						</Button>
+						{reviewed ? (
+							<Button type="button" variant="accent" size="sm" disabled={busy || needed.some((name) => !values[name])} onClick={() => approve.mutate(proposal)}>
+								{t("chat.connectorProposal.approve")}
+							</Button>
+						) : (
+							<Button type="button" variant="accent" size="sm" disabled={busy} onClick={() => setDraft({ id: proposal.id, values, scope, reviewed: true })}>
+								{t("chat.connectorProposal.review")}
+							</Button>
+						)}
 					</div>
 				</div>
+				{proposal.transport === "stdio" && reviewed ? <p className="text-xs leading-snug text-muted-foreground">{t("chat.connectorProposal.runs")}</p> : null}
 				{error ? <p role="alert" className="text-xs leading-snug text-destructive">{error.message}</p> : null}
 			</div>
 			{signInDialog}

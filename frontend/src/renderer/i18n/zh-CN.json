@@ -5366,11 +5366,15 @@
 	"chat.connectors.added": "此聊天可用",
 	"chat.connectors.fromOrchestrator": "来自 Orchestrator",
 	"chat.connectors.fromAgent": "来自 {{agent}} 自己的设置",
+	"chat.connectors.signIn": "登录 {{name}}",
 	"chat.connectors.manage": "管理连接器",
 	"chat.connectorProposal.dock": "连接器请求",
 	"chat.connectorProposal.title": "添加连接器?",
 	"chat.connectorProposal.asked": "智能体在此聊天中请求添加。",
 	"chat.connectorProposal.thisProject": "此项目",
+	"chat.connectorProposal.review": "检查命令",
+	"chat.connectorProposal.arguments": "参数（原样）",
+	"chat.connectorProposal.runs": "批准后，此命令会在运行此聊天的电脑上运行。",
 	"chat.connectorProposal.approve": "批准",
 	"chat.connectorProposal.decline": "拒绝"
 }

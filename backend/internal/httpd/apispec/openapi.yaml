@@ -25477,6 +25477,13 @@ components:
       type: object
     SessionConnectorResponse:
       properties:
+        auth:
+          description: Sign-in of a server URL connector.
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
         calls:
           description: Tool calls of this session to a server URL connector since
             the daemon started. Calls to a command connector do not pass through the
@@ -25498,7 +25505,6 @@ components:
           - unavailable
           type: string
         transport:
-          description: Empty when the connector was removed after the session started.
           enum:
           - http
           - stdio

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import * as hostClients from "../../lib/host-clients";
+import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import { ChatConnectorsMenu, connectorRowState } from "./ChatConnectorsMenu";
 
@@ -20,7 +21,7 @@ const three = {
 	data: {
 		connectors: [
 			{ key: "linear", name: "Linear", transport: "http", status: "connected", enabled: true, calls: 4, lastTool: "create_issue" },
-			{ key: "sentry", name: "Sentry", transport: "http", status: "needs_signin", enabled: true, calls: 0 },
+			{ key: "sentry", name: "Sentry", transport: "http", auth: "header", status: "needs_signin", enabled: true, calls: 0 },
 			{ key: "files", name: "files", transport: "stdio", status: "connected", enabled: true, calls: 0 },
 		],
 	},
@@ -101,6 +102,29 @@ describe("ChatConnectorsMenu", () => {
 		await user.click(await screen.findByRole("button", { name: "1 connector in this chat" }));
 		expect(screen.queryByText("From Orchestrator")).not.toBeInTheDocument();
 		expect(within(screen.getByRole("list", { name: "From Claude Code's own settings" })).getByRole("listitem")).toHaveTextContent("githubStarting");
+	});
+
+	it("signs in to a connector from the chat, on the machine that runs the chat", async () => {
+		const local = vi.spyOn(apiClient, "POST");
+		const remote = {
+			GET: vi.fn(async () => ({ data: { connectors: [{ key: "sentry", name: "Sentry", transport: "http", auth: "oauth", status: "needs_signin", enabled: true, calls: 0 }] } })),
+			POST: vi.fn(async () => ({ data: { authorizationUrl: "https://sentry.example/authorize", callbackUrl: "http://127.0.0.1:3011/oauth/mcp/callback", connector: {} } })),
+		};
+		vi.spyOn(hostClients, "clientForSessionHost").mockReturnValue(remote as never);
+		vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);
+		const user = userEvent.setup();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatConnectorsMenu sessionId="mer-1" hostId="air" agentName="Codex" servers={[]} />
+			</QueryClientProvider>,
+		);
+		await user.click(await screen.findByRole("button", { name: "1 connector in this chat" }));
+		await user.click(screen.getByRole("button", { name: "Sign in to Sentry" }));
+		expect(await screen.findByRole("heading", { name: "Sign in to Sentry" })).toBeInTheDocument();
+		await vi.waitFor(() => expect(remote.POST).toHaveBeenCalledWith("/api/v1/connectors/{connectorId}/connect", { params: { path: { connectorId: "sentry" } } }));
+		expect(await screen.findByLabelText("Page did not load after you approved? Paste its address.")).toBeInTheDocument();
+		expect(local).not.toHaveBeenCalled();
 	});
 
 	it("does not claim an agent loaded a server it has not reported", () => {

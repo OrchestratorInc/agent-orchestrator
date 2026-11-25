@@ -589,8 +589,8 @@ const aoToolTimeoutSec = 150
 // threadConfig is the config override sent with thread/start and
 // thread/resume. Codex layers it above config.toml for this thread only.
 //
-// AO's own "ao" server (html_preview, html_render) is pre-approved. AO answers
-// no mcpServer/elicitation/request, so a prompt could only fail the call.
+// AO's own "ao" server (html_preview, html_render) is pre-approved, so its
+// tools raise no mcpServer/elicitation/request.
 // Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
 // request under on-request and was refused under never/read-only, and
 // default_tools_approval_mode "approve" removed both.

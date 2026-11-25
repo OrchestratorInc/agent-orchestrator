@@ -8924,6 +8924,11 @@ export interface components {
             unpushed: number;
         };
         SessionConnectorResponse: {
+            /**
+             * @description Sign-in of a server URL connector.
+             * @enum {string}
+             */
+            auth?: "none" | "oauth" | "header";
             /** @description Tool calls of this session to a server URL connector since the daemon started. Calls to a command connector do not pass through the daemon and are not counted. */
             calls: number;
             enabled: boolean;
@@ -8932,10 +8937,7 @@ export interface components {
             name: string;
             /** @enum {string} */
             status: "unchecked" | "connected" | "needs_signin" | "unavailable";
-            /**
-             * @description Empty when the connector was removed after the session started.
-             * @enum {string}
-             */
+            /** @enum {string} */
             transport?: "http" | "stdio";
         };
         SessionHistoryResponse: {

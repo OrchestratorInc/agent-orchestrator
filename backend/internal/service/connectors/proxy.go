@@ -52,6 +52,7 @@ type SessionConnector struct {
 	Key       string
 	Name      string
 	Transport Transport
+	Auth      Auth
 	Status    Status
 	Enabled   bool
 	Calls     int
@@ -152,7 +153,8 @@ func (s *Service) SessionConnectors(_ context.Context, sessionID string) ([]Sess
 		}
 		rec := s.records[i]
 		out = append(out, SessionConnector{
-			Key: key, Name: rec.Name, Transport: rec.Transport, Status: rec.Status, Enabled: rec.Enabled, Calls: use.calls[key], LastTool: use.last[key],
+			Key: key, Name: rec.Name, Transport: rec.Transport, Auth: rec.Auth, Status: rec.Status, Enabled: rec.Enabled,
+			Calls: use.calls[key], LastTool: use.last[key],
 		})
 	}
 	return out, nil

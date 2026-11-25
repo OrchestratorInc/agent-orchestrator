@@ -27,7 +27,7 @@ function openPage(url: string) {
 	void Promise.resolve().then(() => aoBridge.app.openExternal(url)).catch(() => undefined);
 }
 
-export function ConnectorSignInDialog({ connector, hostId, onClose }: { connector: Connector; hostId?: string; onClose: () => void }) {
+export function ConnectorSignInDialog({ connector, hostId, onClose }: { connector: Pick<Connector, "id" | "name" | "signedIn">; hostId?: string; onClose: () => void }) {
 	const { t } = useTranslation();
 	const [address, setAddress] = useState("");
 	const [copied, setCopied] = useState(false);

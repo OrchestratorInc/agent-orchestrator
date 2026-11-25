@@ -3090,7 +3090,8 @@ type ConnectorSignInResponse struct {
 type SessionConnectorResponse struct {
 	Key       string `json:"key"`
 	Name      string `json:"name"`
-	Transport string `json:"transport,omitempty" enum:"http,stdio" description:"Empty when the connector was removed after the session started."`
+	Transport string `json:"transport,omitempty" enum:"http,stdio"`
+	Auth      string `json:"auth,omitempty" enum:"none,oauth,header" description:"Sign-in of a server URL connector."`
 	Status    string `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
 	Enabled   bool   `json:"enabled"`
 	Calls     int    `json:"calls" description:"Tool calls of this session to a server URL connector since the daemon started. Calls to a command connector do not pass through the daemon and are not counted."`

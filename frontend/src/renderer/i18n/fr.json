@@ -5540,11 +5540,15 @@
 	"chat.connectors.added": "Dans ce chat",
 	"chat.connectors.fromOrchestrator": "Depuis Orchestrator",
 	"chat.connectors.fromAgent": "Depuis les réglages propres à {{agent}}",
+	"chat.connectors.signIn": "Se connecter à {{name}}",
 	"chat.connectors.manage": "Gérer les connecteurs",
 	"chat.connectorProposal.dock": "Demande de connecteur",
 	"chat.connectorProposal.title": "Ajouter un connecteur ?",
 	"chat.connectorProposal.asked": "L'agent l'a demandé dans ce chat.",
 	"chat.connectorProposal.thisProject": "Ce projet",
+	"chat.connectorProposal.review": "Vérifier la commande",
+	"chat.connectorProposal.arguments": "Arguments (exacts)",
+	"chat.connectorProposal.runs": "L'approbation exécute cette commande sur l'ordinateur qui exécute ce chat.",
 	"chat.connectorProposal.approve": "Approuver",
 	"chat.connectorProposal.decline": "Refuser"
 }
