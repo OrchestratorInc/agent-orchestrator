@@ -97,7 +97,7 @@ function setup() {
 		planDaemonAutoRestart, daemonExitWasUngraceful, disposeBrowserRuntimeLink: vi.fn(), captureSideChatState: async () => undefined,
 		desktopQuit: { handleBeforeQuit: () => false, startCleanupDeadline: vi.fn() }, chatDraftRisks: [], browserCleanupComplete: true,
 		disposeBrowserStreamLink: vi.fn(), trayLifecycle: { dispose: vi.fn() }, launchTiming: { mark: vi.fn() },
-		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null, shutdownDaemonForDesktopQuit: async () => undefined,
+		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null, quitAttempt: 0, shutdownDaemonForDesktopQuit: async () => undefined,
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {

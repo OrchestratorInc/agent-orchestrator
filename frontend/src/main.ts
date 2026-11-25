@@ -504,6 +504,13 @@ let browserQuitRequested = false;
 let preserveAgentsOnQuit = false;
 let agentQuitCleanupComplete = false;
 let agentQuitCleanupPromise: Promise<void> | null = null;
+// Bumped whenever a pending quit is canceled, so an in-flight quit cleanup can
+// tell it no longer applies (see the before-quit handler).
+let quitAttempt = 0;
+function cancelPendingQuit(): void {
+	quitAttempt += 1;
+	preserveAgentsOnQuit = false;
+}
 let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;
 const desktopQuit = createDesktopQuitController({
@@ -1290,7 +1297,7 @@ async function createWindowInternal(): Promise<void> {
 		}
 		// Doing nothing honors the renderer's request to stay, so a quit's close
 		// did not happen and AO keeps its Dock icon.
-		if (desktopQuit.windowCloseCanceled()) preserveAgentsOnQuit = false;
+		if (desktopQuit.windowCloseCanceled()) cancelPendingQuit();
 	});
 
 	mainWindow.on("close", (event) => {
@@ -1301,7 +1308,7 @@ async function createWindowInternal(): Promise<void> {
 			chatDraftDialog,
 		);
 		if (preventClose) {
-			if (desktopQuit.windowCloseCanceled()) preserveAgentsOnQuit = false;
+			if (desktopQuit.windowCloseCanceled()) cancelPendingQuit();
 			event.preventDefault();
 			return;
 		}
@@ -3103,8 +3110,9 @@ function scheduleDaemonAutoRestart(
 	}, plan.delayMs);
 }
 
-async function shutdownDaemonForDesktopQuit(): Promise<void> {
+async function shutdownDaemonForDesktopQuit(canceled: () => boolean): Promise<void> {
 	const accepted = await requestDesktopShutdown({
+		canceled,
 		keepAlive: keepDaemonAlive(process.env),
 		appRunId,
 		status: daemonStatus,
@@ -5053,7 +5061,7 @@ app.on("before-quit", (event) => {
 			chatDraftQuitConfirmed = true;
 			app.quit();
 		} else {
-			preserveAgentsOnQuit = false;
+			cancelPendingQuit();
 			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
 		}
@@ -5069,15 +5077,23 @@ app.on("before-quit", (event) => {
 			// Fail open: a crashed, hung, or taken-over daemon must never block
 			// quit or an update restart. Dropping the supervisor link and the exit
 			// handler still clean up an app-owned daemon.
-			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
+			const attempt = quitAttempt;
+			const canceled = () => attempt !== quitAttempt;
+			const cleanup: Promise<void> = shutdownDaemonForDesktopQuit(canceled)
 				.catch((error) => {
 					console.error("AO: daemon shutdown on desktop quit failed; quitting anyway", error);
 				})
 				.then(() => {
+					if (agentQuitCleanupPromise === cleanup) agentQuitCleanupPromise = null;
+					// A quit the person declined meanwhile must not finish.
+					if (canceled()) {
+						lifecycleLog("daemon_quit_shutdown_canceled");
+						return;
+					}
 					agentQuitCleanupComplete = true;
-					agentQuitCleanupPromise = null;
 					app.quit();
 				});
+			agentQuitCleanupPromise = cleanup;
 		}
 		return;
 	}
