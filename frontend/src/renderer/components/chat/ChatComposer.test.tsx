@@ -334,6 +334,10 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: textClipboard("line\n".repeat(1000)) });
 		await waitFor(() => expect(stage).toHaveBeenCalled());
 		fireEvent.keyDown(field, { key: "Enter" });
+		const typed = field.querySelector("[data-lexical-text]")?.firstChild;
+		if (!typed) throw new Error("Expected composer text");
+		window.getSelection()?.setBaseAndExtent(typed, 0, typed, 4);
+		fireEvent(document, new Event("selectionchange"));
 		fail(new Error("disk full"));
 		expect(await screen.findByText(/Nothing was attached/)).toBeInTheDocument();
 		await waitFor(() => expect(composerWireText(field)).toBe(`what failed?${"line\n".repeat(1000)}`));

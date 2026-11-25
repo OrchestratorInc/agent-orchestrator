@@ -2486,7 +2486,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const scope = restoredSessionId.current;
 		const landed = attached.then((added) => {
 			if (added.some((attachment) => attachment.name === pasted.name)) return true;
-			if (failedStaging.current.has(pasted) && restoredSessionId.current === scope) editor.current?.insertText(text);
+			if (failedStaging.current.has(pasted) && restoredSessionId.current === scope) editor.current?.appendText(text);
 			return false;
 		});
 		pendingTextPastes.current.add(landed);
