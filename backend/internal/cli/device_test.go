@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -97,8 +99,14 @@ func TestDeviceInstall_SendsAbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capture.path != "/api/v1/sessions/aa-47/device/install" || !strings.Contains(capture.body, `/build/App.app"`) || !strings.HasPrefix(capture.body, `{"path":"/`) {
-		t.Fatalf("request = %s %s", capture.path, capture.body)
+	// The CLI sends the platform's absolute path (C:\... on Windows).
+	want, err := filepath.Abs(filepath.Join("build", "App.app"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct{ Path string }
+	if capture.path != "/api/v1/sessions/aa-47/device/install" || json.Unmarshal([]byte(capture.body), &body) != nil || body.Path != want || !filepath.IsAbs(body.Path) {
+		t.Fatalf("request = %s %s, want path %s", capture.path, capture.body, want)
 	}
 	if !strings.Contains(out, "on iPhone 17 Pro") {
 		t.Fatalf("output = %q", out)
