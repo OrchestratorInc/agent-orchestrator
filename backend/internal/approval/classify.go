@@ -264,6 +264,12 @@ func classifySubmit(submitName string, target Target) Verdict {
 	if target.FormHasPayment {
 		return paymentFormVerdict()
 	}
+	post := strings.EqualFold(target.FormMethod, "post")
+	// Setting a password changes the account whatever the button says: a
+	// "Sign in" label must not exempt it.
+	if post && target.FormHasNewPassword {
+		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: "It submits a form that sets a new password."}
+	}
 	if containsAny(submitName, []string{"search", "filter", "sign in", "log in", "login"}) {
 		return Verdict{}
 	}
@@ -279,16 +285,11 @@ func classifySubmit(submitName string, target Target) Verdict {
 			}
 		}
 	}
-	post := strings.EqualFold(target.FormMethod, "post")
 	// A password field alone is a sign-in, not an account change: only a form
-	// that sets a new password, or whose button says it saves account
+	// that sets a new password (above), or whose button says it saves account
 	// details, changes the account.
-	if post && (target.FormHasNewPassword || containsAny(submitName, accountPhrases)) {
-		reason := "It submits a form that changes account details."
-		if target.FormHasNewPassword {
-			reason = "It submits a form that sets a new password."
-		}
-		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: reason}
+	if post && containsAny(submitName, accountPhrases) {
+		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: "It submits a form that changes account details."}
 	}
 	return Verdict{}
 }
@@ -423,6 +424,75 @@ func IsActivationKey(key string) bool {
 	return last == "space" || last == "spacebar"
 }
 
+// ClassifyDialog judges accepting a page dialog. Accepting a confirm, prompt
+// or leave-page dialog lets the page carry on with what it asked about, so it
+// always asks; the dialog's wording names the category when it reads like one
+// ("Delete account?"). An alert only closes. kind is the dialog type, empty
+// when it could not be read; a prompt's answer is never part of the summary.
+func ClassifyDialog(kind, message string, mode Mode) Verdict {
+	if mode == ModeOff || strings.EqualFold(kind, "alert") {
+		return Verdict{}
+	}
+	verdict := Verdict{NeedsApproval: true, Category: CategoryScript,
+		Reason: "Accepting the page's dialog lets the page carry on with what it asked to confirm."}
+	if name := normalize(message); name != "" {
+		for _, set := range phraseSets {
+			if matchPhrase(name, set.phrases, false) != "" {
+				verdict.Category = set.category
+				verdict.Reason = fmt.Sprintf("Accepting it lets the page carry on, and the dialog reads like %s.", categoryNouns[set.category])
+				break
+			}
+		}
+	}
+	verdict.Summary = "Accept the page's dialog"
+	if kind != "" {
+		verdict.Summary = fmt.Sprintf("Accept the page's %s dialog", strings.ToLower(kind))
+	}
+	if text := strings.TrimSpace(message); text != "" {
+		if len(text) > 120 {
+			text = text[:120] + "…"
+		}
+		verdict.Summary += fmt.Sprintf(" %q", text)
+	}
+	return verdict
+}
+
+// HasLineBreak reports whether typed text contains a line break. Runtimes
+// that type key by key turn it into a real Enter keypress.
+func HasLineBreak(text string) bool {
+	return strings.ContainsAny(text, "\r\n")
+}
+
+// TypedEnter turns typing a line break into target into the Enter press it
+// is. Enter in a single-line field submits its form; describe reports that
+// only for the focused element, so it is derived here from the form facts.
+func TypedEnter(target Target) Target {
+	target.Action, target.Key = "press", "Enter"
+	if !target.IsSubmit && target.FormMethod != "" && isTextField(target) {
+		target.IsSubmit = true
+	}
+	return target
+}
+
+// isTextField is a single-line field, where Enter submits. An unread tag
+// counts when the role says text entry, so missing facts ask, not pass.
+func isTextField(target Target) bool {
+	switch strings.ToLower(target.Tag) {
+	case "input":
+		switch strings.ToLower(target.InputType) {
+		case "checkbox", "radio", "submit", "button", "reset", "image", "file":
+			return false
+		}
+		return true
+	case "":
+		switch target.Role {
+		case "textbox", "searchbox", "combobox":
+			return true
+		}
+	}
+	return false
+}
+
 // keyLabel names a pressed key for a prompt.
 func keyLabel(key string) string {
 	if IsEnterKey(key) {
@@ -477,17 +547,42 @@ func summarize(action string, target Target) string {
 	default:
 		text = fmt.Sprintf("Click %q", label)
 	}
-	if host := Site(target.PageURL); host != "" {
-		text += " on " + strings.TrimPrefix(host, "www.")
+	if host := Host(target.PageURL); host != "" {
+		text += " on " + host
 	}
 	return text
 }
 
-// Site returns the host a page URL belongs to, the key for per-site rules.
+// Site returns the origin a page URL belongs to (scheme, host, and any
+// non-default port), the key for per-site rules: the scope browsers use for
+// permissions, so an allow on http://localhost:4173 does not cover another
+// dev server, and one on https://shop.example does not cover plain http.
 func Site(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
 		return ""
 	}
-	return strings.ToLower(u.Hostname())
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" && port != defaultPort[scheme] {
+		host += ":" + port
+	}
+	return scheme + "://" + host
+}
+
+var defaultPort = map[string]string{"http": "80", "https": "443"}
+
+// Host names a page's host for prompts ("shop.example"); rules key on Site.
+func Host(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
 }

@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { BrowserApprovalsSection } from "./BrowserApprovalsSection";
 
+vi.mock("../../hooks/useWorkspaceQuery", () => ({
+	useWorkspaceQuery: () => ({ data: [{ id: "proj", sessions: [{ id: "ao-7", title: "Checkout flow" }] }] }),
+}));
+
 const policy = {
 	mode: "risky",
 	defaultMode: "risky",
@@ -35,16 +39,25 @@ describe("BrowserApprovalsSection", () => {
 		renderSection();
 		expect(await screen.findByText("mail.example")).toBeInTheDocument();
 		expect(screen.getByText("Message")).toBeInTheDocument();
-		const log = await screen.findByTestId("approval-audit-log");
-		expect(log).toHaveTextContent('Click "Place order" on shop.example');
-		expect(log).toHaveTextContent("shop.example");
-		expect(log).toHaveTextContent("ao-7");
-		expect(log).toHaveTextContent("Denied");
-		expect(log).toHaveTextContent("Payment");
-		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+		const [entry] = await screen.findAllByTestId("approval-audit-entry");
+		expect(entry).toHaveTextContent('Click "Place order" on shop.example');
+		expect(entry).toHaveTextContent("Checkout flow · ao-7");
+		expect(entry).toHaveTextContent("Denied");
+		fireEvent.click(screen.getByRole("button", { name: "Remove mail.example" }));
 		await waitFor(() =>
 			expect(del).toHaveBeenCalledWith("/api/v1/approvals/sites", { params: { query: { site: "mail.example", category: "message" } } }),
 		);
+	});
+
+	it("shows the five latest decisions until Show all", async () => {
+		const many = Array.from({ length: 7 }, (_, index) => ({ ...entries[0], id: `apr_${index}` }));
+		vi.spyOn(apiClient, "GET").mockImplementation((async (path: string) =>
+			path === "/api/v1/approvals/policy" ? { data: policy } : { data: { entries: many } }) as never);
+		renderSection();
+		expect(await screen.findAllByTestId("approval-audit-entry")).toHaveLength(5);
+		fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+		expect(screen.getAllByTestId("approval-audit-entry")).toHaveLength(7);
+		expect(screen.queryByRole("button", { name: "Show all" })).toBeNull();
 	});
 
 	it("shows empty states", async () => {

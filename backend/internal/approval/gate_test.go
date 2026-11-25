@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -298,4 +299,85 @@ func TestGateRefusesWhenTheAuditLogCannotBeWritten(t *testing.T) {
 	if got.err == nil || got.outcome.Allowed() {
 		t.Fatalf("allowed without an audit record: %+v %v", got.outcome, got.err)
 	}
+}
+
+// auditLines checks that every line in the audit file is one whole record.
+func auditLines(t *testing.T, dir string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 0 && raw[len(raw)-1] != '\n' {
+		t.Fatalf("audit ends mid-record: %q", raw)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	for _, line := range lines {
+		var entry AuditEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("audit line is not a whole record: %q", line)
+		}
+	}
+	return len(lines)
+}
+
+func TestAuditRecoversFromAPartialWrite(t *testing.T) {
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	// Storage takes half a record, then fails.
+	g.writeAudit = func(f *os.File, b []byte) (int, error) {
+		n, _ := f.Write(b[:len(b)/2])
+		return n, errors.New("disk full")
+	}
+	req := sampleRequest()
+	if _, err := g.Request(context.Background(), allowedBySite(t, g, req)); err == nil {
+		t.Fatal("an unrecorded outcome was allowed")
+	}
+	// Storage recovers: the next record is whole, and readable.
+	g.writeAudit = nil
+	outcome, err := g.Request(context.Background(), req)
+	if err != nil || outcome.Decision != DecisionSiteAllowed {
+		t.Fatalf("after recovery = %+v, %v", outcome, err)
+	}
+	auditLines(t, dir)
+	entries, _ := g.Audit(10)
+	if len(entries) == 0 || entries[0].Decision != DecisionSiteAllowed {
+		t.Fatalf("allowed outcome missing from the audit: %+v", entries)
+	}
+}
+
+func TestAuditRepairsAnIncompleteTailLeftAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	req := sampleRequest()
+	if _, err := g.Request(context.Background(), allowedBySite(t, g, req)); err != nil {
+		t.Fatal(err)
+	}
+	// A crash mid-append leaves half a record.
+	f, _ := os.OpenFile(filepath.Join(dir, "audit.jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+	_, _ = f.WriteString(`{"id":"apr_half","action":"Cli`)
+	_ = f.Close()
+	reopened, _ := Open(dir)
+	if outcome, err := reopened.Request(context.Background(), req); err != nil || outcome.Decision != DecisionSiteAllowed {
+		t.Fatalf("after restart = %+v, %v", outcome, err)
+	}
+	if n := auditLines(t, dir); n != 3 {
+		t.Fatalf("audit lines = %d, want the allow-site, the first site-allowed and the new one", n)
+	}
+}
+
+// allowedBySite saves an allow-site rule for req so the next request is
+// decided (and audited) without waiting for a person.
+func allowedBySite(t *testing.T, g *Gate, req Request) Request {
+	t.Helper()
+	if len(g.SiteRules()) > 0 {
+		return req
+	}
+	writer := g.writeAudit
+	g.writeAudit = nil
+	out := requestAsync(g, req)
+	_ = g.Decide(waitPending(t, g).ID, DecisionAllowSite)
+	<-out
+	g.writeAudit = writer
+	return req
 }

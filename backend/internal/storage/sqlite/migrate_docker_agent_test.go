@@ -101,9 +101,9 @@ func TestDockerAgentRepairsBurnedHistoryBeforeAppending(t *testing.T) {
 }
 
 // Repairing another missing harness must keep Docker Agent where a fresh
-// database has it: after Stakpak and just before MiniMax Code and Open
-// Interpreter, the newer harnesses. Their Downs run first and remove them
-// wherever they sit, so Docker Agent's Down still finds its
+// database has it: after Stakpak and just before MiniMax Code, Open
+// Interpreter, Tau and Mastra Code, the newer harnesses. Their Downs run first and
+// remove them wherever they sit, so Docker Agent's Down still finds its
 // "'docker-agent', 'fake'))" anchor.
 func TestDockerAgentStaysLastWhenAnotherHarnessIsRepaired(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 20261115071147951)
@@ -117,7 +117,7 @@ func TestDockerAgentStaysLastWhenAnotherHarnessIsRepaired(t *testing.T) {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&repaired); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(repaired, "'stakpak', 'docker-agent', 'minimax-code', 'open-interpreter', 'fake'))") {
+	if !strings.Contains(repaired, "'stakpak', 'docker-agent', 'minimax-code', 'open-interpreter', 'tau', 'mastra-code', 'fake'))") {
 		t.Fatalf("Docker Agent is not in fresh-database order after repair: %s", repaired)
 	}
 }

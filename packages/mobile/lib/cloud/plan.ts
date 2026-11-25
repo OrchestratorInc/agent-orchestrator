@@ -4,7 +4,11 @@ import type { CloudBillingSummary, CloudOffering, CloudPlanLimits } from "./type
 // the desktop's Plans page shows (frontend BillingSection), in the app's own
 // words. Nothing here sells a plan: the phone never links to checkout, prices
 // or upgrades, so it stays a companion to the desktop under the App Store's
-// rules; plans are chosen on the desktop.
+// rules. Plans are chosen on the desktop, and the phone says only that
+// (PLAN_DESKTOP_NOTE), with no link.
+
+/** Where a plan is chosen or fixed, said wherever the plan stops someone. */
+export const PLAN_DESKTOP_NOTE = "Plans are managed in Orchestrator on your desktop.";
 
 /** How full a meter is: the desktop's thresholds, 80% and the limit. */
 export type PlanSeverity = "normal" | "warn" | "critical";
@@ -115,7 +119,7 @@ export function cloudSessionBilled(provider: string | undefined, offering: Pick<
 export function cloudPlanBlock(summary: CloudBillingSummary | undefined, now = Date.now(), billed = true): { reason: "plan" | "window" | "week"; message: string } | undefined {
 	// A session the plan doesn't pay for (free Coder) isn't the plan's to stop.
 	if (!summary || !billed || !plansApply(summary)) return undefined;
-	if (!summary.entitled) return { reason: "plan", message: "Your organization's Free plan doesn't include cloud agents." };
+	if (!summary.entitled) return { reason: "plan", message: `Your organization's Free plan doesn't include cloud agents. ${PLAN_DESKTOP_NOTE}` };
 	const usage = summary.usage;
 	if (!usage) return undefined;
 	if (spent(usage.windowUsedMinutes, usage.windowLimitMinutes, usage.windowResetsAt, now)) {
@@ -125,6 +129,16 @@ export function cloudPlanBlock(summary: CloudBillingSummary | undefined, now = D
 		return { reason: "week", message: withReset(`You've used your plan's ${formatPlanHours(usage.weeklyLimitMinutes)} session hours this week.`, resetOn(usage.weeklyResetsAt, now)) };
 	}
 	return undefined;
+}
+
+/**
+ * Whether `block` leaves nothing to set up for a cloud task: on Free there is
+ * no cloud project to create and no agent to connect (those entries are
+ * hidden), so New task says only the plan. A spent window still lets them be
+ * set up for when it lifts.
+ */
+export function planBlocksCloudSetup(block: ReturnType<typeof cloudPlanBlock>): boolean {
+	return block?.reason === "plan";
 }
 
 /**

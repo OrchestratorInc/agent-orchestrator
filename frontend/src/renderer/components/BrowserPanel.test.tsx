@@ -233,6 +233,21 @@ function PersistentBrowserPanelView({
 	);
 }
 
+/** The panel without a session, as the Settings login browser uses it. */
+function SessionlessBrowserPanelView() {
+	const browserView = useBrowserView({ sessionId: "settings-login", active: true, poppedOut: false });
+	const annotationQueue = useBrowserAnnotationQueue({ sessionId: "settings-login", navUrl: browserView.navState.url });
+	return (
+		<BrowserPanelView
+			active
+			annotationQueue={annotationQueue}
+			browserView={browserView}
+			onTogglePopOut={() => undefined}
+			poppedOut={false}
+		/>
+	);
+}
+
 describe("BrowserPanel", () => {
 	const annotationSubmitListeners = new Set<(payload: BrowserAnnotationSubmitPayload) => void>();
 	const annotationCancelListeners = new Set<(payload: BrowserAnnotationCancelPayload) => void>();
@@ -831,6 +846,18 @@ describe("BrowserPanel", () => {
 		await userEvent.click(screen.getByRole("menuitem", { name: "Device preset" }));
 		expect(screen.getByRole("menuitem", { name: /iPhone SE/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /iPhone SE/ }).parentElement).toHaveClass("board-scrollbar");
+	});
+
+	it("shows the approval mode for a session's browser and leaves it out without a session", async () => {
+		const { unmount } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Approvals/ })).toBeInTheDocument();
+		unmount();
+
+		render(<SessionlessBrowserPanelView />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: "Device preset" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Approvals/ })).not.toBeInTheDocument();
 	});
 
 	it("captures the active page from the controls menu and confirms the clipboard copy", async () => {
@@ -1684,6 +1711,21 @@ describe("BrowserPanel", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Discard all comments" }));
 		expect(hookState.annotationAction).toHaveBeenCalledWith("discard-all");
+	});
+
+	it("renders the empty annotation placeholder text in the annotation context area", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
+		hookState.annotationMode = true;
+		hookState.annotationState = { count: 0, screenshotCount: 0, hasDraft: false };
+
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const annotationToolbar = screen.getByTestId("browser-annotation-toolbar");
+		const hint = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-hint");
+		expect(hint).not.toBeNull();
+		expect(hint).toHaveTextContent("Point at something and say what to change");
+		const context = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-context");
+		expect(context).toContainElement(hint);
 	});
 
 	it("previews the original page while Enter or Space is held on the eye button", async () => {

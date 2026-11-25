@@ -23,7 +23,21 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
+// Usage telemetry names for each inspector view: the desktop's
+// `inspector_<name>` surfaces and `inspector.tab_<name>` controls.
+const INSPECTOR_TELEMETRY_NAMES: Record<InspectorView, string> = {
+	summary: "summary",
+	reviews: "reviews",
+	browser: "browser",
+	device: "device",
+	sideChat: "side_chat",
+	subagents: "subagents",
+	files: "files",
+	artifacts: "artifacts",
+	task: "background_tasks",
+};
+
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -46,6 +60,7 @@ export function SessionInspectorShellView({
 	artifactsView,
 	browserPoppedOut,
 	browserView,
+	deviceView,
 	sideChatView,
 	subagentsView,
 	filesView,
@@ -56,12 +71,14 @@ export function SessionInspectorShellView({
 	reviewsView,
 	summaryView,
 	tabs,
+	taskView,
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
 	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	deviceView?: ReactNode;
 	sideChatView?: ReactNode;
 	subagentsView?: ReactNode;
 	filesView?: ReactNode;
@@ -72,6 +89,8 @@ export function SessionInspectorShellView({
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
+	/** The Background tasks tab: its list, or the task it has open. */
+	taskView?: ReactNode;
 }) {
 
 	if (loadingText) {
@@ -134,6 +153,7 @@ export function SessionInspectorShellView({
 								key={tab.id}
 								type="button"
 								role="tab"
+								data-telemetry-id={`inspector.tab_${INSPECTOR_TELEMETRY_NAMES[tab.id]}`}
 								aria-selected={activeView === tab.id}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
@@ -181,24 +201,27 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
 					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts") && "p-0 overflow-hidden",
+					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
 					activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
 				)}
 				inert={!isVisible}
+				data-telemetry-surface={`inspector_${INSPECTOR_TELEMETRY_NAMES[activeView]}`}
 			>
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
+				{activeView === "device" ? deviceView : null}
 				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "subagents" ? subagentsView : null}
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
+				{activeView === "task" ? taskView : null}
 			</div>
 		</aside>
 	);

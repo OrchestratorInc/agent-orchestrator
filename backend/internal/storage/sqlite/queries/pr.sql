@@ -7,9 +7,9 @@ INSERT INTO pr (
     provider_state, provider_mergeable, provider_merge_state_status, html_url,
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
     metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial,
-    head_from_fork, head_is_default_branch, auto_inject_ci
+    head_from_fork, head_is_default_branch, merge_queue_required, merge_queue_entry, auto_inject_ci
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
@@ -75,7 +75,10 @@ ON CONFLICT (url) DO UPDATE SET
     review_partial = CASE
         WHEN excluded.review_observed_at IS NULL THEN pr.review_partial
         ELSE excluded.review_partial
-    END;
+    END,
+    merge_queue_required = excluded.merge_queue_required,
+    -- A merged PR has left the queue, whatever an older poll read.
+    merge_queue_entry = CASE WHEN pr.pr_state = 'merged' THEN '' ELSE excluded.merge_queue_entry END;
 
 -- name: UpsertLegacyPR :exec
 INSERT INTO pr (
@@ -288,6 +291,22 @@ WITH current_pr AS (
     FROM pr
     WHERE pr.session_id = sqlc.arg(session_id)
 ),
+effective_changes_request AS (
+    -- A later submitted verdict from the same author supersedes a request,
+    -- including when the author is a bot or the later verdict targets a new head.
+    SELECT r.pr_url, r.target_sha
+    FROM pr_reviews r
+    JOIN current_pr ON current_pr.url = r.pr_url
+    WHERE r.state = 'changes_requested'
+      AND NOT EXISTS (
+          SELECT 1 FROM pr_reviews newer
+          WHERE newer.pr_url = r.pr_url
+            AND newer.author = r.author
+            AND newer.state IN ('approved', 'changes_requested')
+            AND (newer.submitted_at > r.submitted_at
+                 OR (newer.submitted_at = r.submitted_at AND newer.review_id > r.review_id))
+      )
+),
 eligible_external_review AS (
     -- Each human reviewer's CURRENT verdict on the PR's current head. Reviews
     -- for an older explicit target_sha are stale and must not drive current
@@ -374,6 +393,35 @@ SELECT
         WHERE external_review.pr_url = pr.url
           AND external_review.state = 'changes_requested'
     ) AS external_changes_requested,
+    -- Clear an aggregate GitHub request only with proof on an older head.
+    -- Bot and unknown-SHA current requests make that proof inconclusive.
+    CAST((pr.provider = 'github' AND pr.head_sha != ''
+      AND (EXISTS (
+          SELECT 1 FROM effective_changes_request old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+      ) OR EXISTS (
+          SELECT 1 FROM review_run old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.verdict = 'changes_requested'
+            AND old_request.github_review_id != ''
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+            AND NOT EXISTS (
+                SELECT 1 FROM review_run newer
+                WHERE newer.pr_url = old_request.pr_url
+                  AND newer.harness = old_request.harness
+                  AND newer.verdict IN ('approved', 'changes_requested')
+                  AND (newer.created_at > old_request.created_at
+                       OR (newer.created_at = old_request.created_at AND newer.id > old_request.id))
+            )
+      ))
+      AND NOT EXISTS (
+          SELECT 1 FROM effective_changes_request current_request
+          WHERE current_request.pr_url = pr.url
+            AND (current_request.target_sha = '' OR current_request.target_sha = pr.head_sha)
+      )) AS INTEGER) AS stale_changes_requested,
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
@@ -431,6 +479,20 @@ current_pr AS (
     SELECT pr.session_id, pr.url, pr.head_sha
     FROM pr
     JOIN wanted_session ON wanted_session.session_id = pr.session_id
+),
+effective_changes_request AS (
+    SELECT r.pr_url, r.target_sha
+    FROM pr_reviews r
+    JOIN current_pr ON current_pr.url = r.pr_url
+    WHERE r.state = 'changes_requested'
+      AND NOT EXISTS (
+          SELECT 1 FROM pr_reviews newer
+          WHERE newer.pr_url = r.pr_url
+            AND newer.author = r.author
+            AND newer.state IN ('approved', 'changes_requested')
+            AND (newer.submitted_at > r.submitted_at
+                 OR (newer.submitted_at = r.submitted_at AND newer.review_id > r.review_id))
+      )
 ),
 eligible_external_review AS (
     -- Each human reviewer's CURRENT verdict on the PR's current head. Reviews
@@ -523,6 +585,34 @@ SELECT
           AND external_review.session_id = pr.session_id
           AND external_review.state = 'changes_requested'
     ) AS external_changes_requested,
+    -- The batch read uses the same positive stale-head proof as the detail read.
+    CAST((pr.provider = 'github' AND pr.head_sha != ''
+      AND (EXISTS (
+          SELECT 1 FROM effective_changes_request old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+      ) OR EXISTS (
+          SELECT 1 FROM review_run old_request
+          WHERE old_request.pr_url = pr.url
+            AND old_request.verdict = 'changes_requested'
+            AND old_request.github_review_id != ''
+            AND old_request.target_sha != ''
+            AND old_request.target_sha != pr.head_sha
+            AND NOT EXISTS (
+                SELECT 1 FROM review_run newer
+                WHERE newer.pr_url = old_request.pr_url
+                  AND newer.harness = old_request.harness
+                  AND newer.verdict IN ('approved', 'changes_requested')
+                  AND (newer.created_at > old_request.created_at
+                       OR (newer.created_at = old_request.created_at AND newer.id > old_request.id))
+            )
+      ))
+      AND NOT EXISTS (
+          SELECT 1 FROM effective_changes_request current_request
+          WHERE current_request.pr_url = pr.url
+            AND (current_request.target_sha = '' OR current_request.target_sha = pr.head_sha)
+      )) AS INTEGER) AS stale_changes_requested,
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
@@ -623,3 +713,11 @@ WHERE pr_key IN (
 )
 AND EXISTS (SELECT 1 FROM pr WHERE pr.url = sqlc.arg(pr_url)
     AND pr.provider <> '' AND pr.provider_id <> '');
+
+-- name: ListPRStateTimes :many
+-- Which sessions own a PR in one state, and when each PR reached it, for the
+-- session list's PR-state filter. Narrow on purpose: the filter runs over the
+-- whole archive on every page, so it must not load the card facts.
+SELECT session_id, state_changed_at, updated_at
+FROM pr
+WHERE pr_state = ?;

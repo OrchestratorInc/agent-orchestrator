@@ -5,6 +5,8 @@ import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
+import { resetOptimisticRenamesForTest } from "../../hooks/optimistic-renames";
+import { useUiStore } from "../../stores/ui-store";
 import { aoBridge } from "../../lib/bridge";
 import type { SideCloseRequest } from "../../../shared/side-close";
 
@@ -34,7 +36,10 @@ vi.mock("../../lib/bridge", () => ({
 	} },
 }));
 
-beforeEach(() => { closeProtocol.status = "closed"; });
+beforeEach(() => {
+	closeProtocol.status = "closed";
+	resetOptimisticRenamesForTest();
+});
 
 describe("side delivery draft ownership", () => {
 	let accept: (value: { error?: object }) => void;
@@ -491,13 +496,19 @@ describe("side panel navigation and recovery", () => {
 	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
 		// The side transcript renders through the main chat's virtualized Timeline.
 		// A viewport taller than every row keeps the whole history mounted, so the
-		// assertions below can read it all.
+		// assertions below can read it all. The content is taller still: a history
+		// that fits the view loads older pages on its own, and this one waits for
+		// the reader's click.
 		const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+		const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
 		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
 		const tall = [
 			vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : clientHeight.call(this);
+			}),
+			vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+				return this.getAttribute("role") === "log" ? 2_000_000 : scrollHeight.call(this);
 			}),
 			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : offsetHeight.call(this);
@@ -589,6 +600,92 @@ describe("side panel navigation and recovery", () => {
 				"First draft with an unsent follow-up",
 			),
 		);
+	});
+
+	describe("renaming a tab", () => {
+		/** Labels the fake daemon stored, read back by the list. */
+		let storedLabels: Record<string, string>;
+		/** While set, list reads wait; each one answers with the labels stored when it began. */
+		let holdLists = false;
+		let heldLists: Array<() => void> = [];
+		const listNow = () => ({ data: { sides: panelSides.map((side) => ({ ...side, label: storedLabels[side.id] ?? side.label })) } });
+		beforeEach(() => {
+			useUiStore.getState().clearGlobalToast();
+			storedLabels = {};
+			holdLists = false;
+			heldLists = [];
+			const normalGet = get.getMockImplementation()!;
+			get.mockImplementation(async (path, options) => {
+				if (path.endsWith("/side-chats")) {
+					const answer = listNow();
+					if (holdLists) return new Promise((resolve) => heldLists.push(() => resolve(answer)));
+					return answer;
+				}
+				return normalGet(path, options);
+			});
+		});
+		const renameFirstTab = async (label: string) => {
+			// A tab takes a rename once its close state has loaded, which can land
+			// after the tab shows; a double-click before then is ignored, so retry.
+			const input = await waitFor(() => {
+				fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
+				return screen.getByRole("textbox", { name: "Rename side chat" });
+			});
+			// Typing and Enter stay synchronous, so the first-frame check below is exact.
+			input.focus();
+			fireEvent.change(input, { target: { value: label } });
+			fireEvent.keyDown(input, { key: "Enter" });
+		};
+
+		it("shows the new label as the editor closes and keeps it through a slow answer and a stale read", async () => {
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation((_path: string, request: { params: { path: { sideId: string } }; body: { label: string } }) => {
+				storedLabels[request.params.path.sideId] = request.body.label;
+				return new Promise((resolve) => (answer = resolve));
+			});
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			await renameFirstTab("Pricing notes");
+			// Same commit as the editor closing: no waiting.
+			expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument();
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+
+			// The 2 s poll reads the list while the rename is in flight. The daemon
+			// has not stored the label yet, so that read has the old one.
+			const stored = storedLabels.side;
+			delete storedLabels.side;
+			holdLists = true;
+			await waitFor(() => expect(heldLists).toHaveLength(1), { timeout: 3_000 });
+			storedLabels.side = stored;
+			// The answer arrives; the read it triggers waits too.
+			await act(async () => answer({}));
+			await waitFor(() => expect(heldLists).toHaveLength(2));
+			// The stale read lands first, then the fresh one.
+			await act(async () => heldLists[0]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "First question" })).not.toBeInTheDocument();
+			await act(async () => heldLists[1]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+		});
+
+		it("rolls a failed rename back to the old label and says so", async () => {
+			// The answer waits until the new label has been checked.
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			await renameFirstTab("Pricing notes");
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			await act(async () => answer({ error: { message: "nope" } }));
+			expect(await screen.findByRole("tab", { name: "First question" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "Pricing notes" })).not.toBeInTheDocument();
+			// Said in a toast too, which shows even after the user moves to another side.
+			expect(useUiStore.getState().globalToasts).toEqual([
+				expect.objectContaining({ title: "Couldn't rename to Pricing notes", tone: "error" }),
+			]);
+		});
 	});
 
 	it("keeps the no-open-side-chat state to one message", async () => {

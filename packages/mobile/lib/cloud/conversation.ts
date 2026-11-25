@@ -209,6 +209,20 @@ export type CloudSnapshotOptions = {
 };
 
 /**
+ * The model a cloud session runs now, for its chat to name with nothing picked
+ * on this phone: `currentModel` (its owner's Chat pick from any device, else
+ * the model it launched with; "" for the agent's own default), as the desktop
+ * reads it (cloudOrchestratorModel). Only a control plane that predates the
+ * field leaves it out, and then the launch model stands in. Undefined is the
+ * agent's default, which the chat names from its worker's list.
+ */
+export function cloudSessionModel(session: Pick<CloudSession, "model" | "currentModel">): string | undefined {
+	const raw = Object.prototype.hasOwnProperty.call(session, "currentModel") ? session.currentModel : session.model;
+	const model = raw?.trim() ?? "";
+	return model && model.toLowerCase() !== "default" ? model : undefined;
+}
+
+/**
  * The conversation a cloud session's events describe.
  *
  * Turns come from the turn events; assistant text is concatenated per
@@ -274,7 +288,8 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			const decisions: DecisionOption[] = Array.isArray(payload.decisions)
 				? payload.decisions.flatMap((value): DecisionOption[] => {
 					const decision = value as Payload | null;
-					return decision && typeof decision.id === "string" && typeof decision.label === "string" ? [{ id: decision.id, label: decision.label }] : [];
+					if (!decision || typeof decision.id !== "string" || typeof decision.label !== "string") return [];
+					return [typeof decision.kind === "string" && decision.kind ? { id: decision.id, label: decision.label, kind: decision.kind } : { id: decision.id, label: decision.label }];
 				})
 				: [];
 			const activity: ConversationActivity = {

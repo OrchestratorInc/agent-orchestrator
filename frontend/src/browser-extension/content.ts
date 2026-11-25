@@ -56,6 +56,52 @@ function focusIdOf(document: Document, mark: boolean): string {
 	return id ?? "";
 }
 
+// A trusted (CDP) key can land after focus moved, since page script runs
+// between any check and Chrome delivering the key. The guard checks the key
+// event's own target, which is fixed when it is dispatched, and cancels the
+// key there if it is not the approved element.
+let pressGuard: { stop: () => void; mismatch: boolean } | undefined;
+// A guard only ever covers the one key it was armed for: it stops listening
+// once that key has landed (or been held back), and on its own after a short
+// time, so a missed disarm can never hold back the page's later keys. A
+// recorded mismatch stays until the executor reads it.
+const PRESS_GUARD_TTL_MS = 2000;
+function armPressGuard(document: Document, expectFocus: string): void {
+	pressGuard?.stop();
+	const view = document.defaultView;
+	if (!view) return;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const guard = {
+		mismatch: false,
+		stop: () => {
+			if (timer) clearTimeout(timer);
+			timer = undefined;
+			view.removeEventListener("keydown", check, true);
+			view.removeEventListener("keypress", check, true);
+			view.removeEventListener("keyup", check, true);
+		},
+	};
+	function check(event: Event) {
+		const target = event.target instanceof view!.Element ? event.target : null;
+		if (!guard.mismatch && target && focusIds.get(target) === expectFocus) {
+			// The key reached the approved element: nothing more to guard.
+			guard.stop();
+			return;
+		}
+		// A key that went astray is cancelled, and so are the rest of its
+		// events (keypress, keyup); the guard ends with its keyup.
+		guard.mismatch = true;
+		event.preventDefault();
+		event.stopImmediatePropagation();
+		if (event.type === "keyup") guard.stop();
+	}
+	view.addEventListener("keydown", check, true);
+	view.addEventListener("keypress", check, true);
+	view.addEventListener("keyup", check, true);
+	timer = setTimeout(guard.stop, PRESS_GUARD_TTL_MS);
+	pressGuard = guard;
+}
+
 export function handleContentRequest(document: Document, registry: RefRegistry, request: ContentRequest): unknown | Promise<unknown> {
 	const element = () => registry.resolve(String(request.ref ?? ""));
 	switch (request.op) {
@@ -98,7 +144,32 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 		case "hover":
 			hoverSynthetic(element());
 			return { hovered: true };
+		case "arm-press":
+			if (request.expectDocument !== documentId(document)) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.",
+				);
+			}
+			armPressGuard(document, String(request.expectFocus ?? ""));
+			return { armed: true };
+		case "disarm-press": {
+			const mismatch = pressGuard?.mismatch ?? false;
+			pressGuard?.stop();
+			pressGuard = undefined;
+			return { mismatch };
+		}
 		case "press":
+			// An approved press must land on the document and focus approved.
+			if (
+				(request.expectDocument !== undefined && request.expectDocument !== documentId(document)) ||
+				(typeof request.expectFocus === "string" && request.expectFocus !== focusIdOf(document, false))
+			) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"Focus moved while the action waited for approval, so Enter would not reach what the user approved. Focus the field again and retry.",
+				);
+			}
 			pressSynthetic(document, String(request.key ?? ""));
 			return { pressed: true };
 		case "scroll":

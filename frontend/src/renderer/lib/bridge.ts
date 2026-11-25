@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { createWebSideCloseBridge } from "./web-side-close";
@@ -5,11 +6,19 @@ import { SIDE_CLOSE_PROTOCOL_VERSION } from "../../shared/side-close";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
+async function desktopIssueArtifactRequired(): Promise<never> {
+	throw new Error("Open the desktop app to add an issue artifact.");
+}
+
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
 		triage: {
 			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+		},
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
 		},
 		dictation: {
 			start: async () => undefined,
@@ -34,6 +43,8 @@ export const aoBridge: AoBridge =
 			checkAncestorRepo: async () => undefined,
 		getRepositoryBranch: async () => undefined,
 		getGitHubLogin: async (_repoPath?: string) => "",
+		findArtifactIssues: desktopIssueArtifactRequired,
+		publishIssueArtifact: desktopIssueArtifactRequired,
 		listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 		refreshGitHubOwners: async () => [],
@@ -79,6 +90,7 @@ export const aoBridge: AoBridge =
 		},
 		theme: {
 			set: async () => undefined,
+			systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
@@ -229,6 +241,8 @@ export const aoBridge: AoBridge =
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
 			getLifetimeSessions: async () => null,
+			takeLaunchStart: async () => null,
+			takeResourceSummary: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -470,6 +484,9 @@ export const aoBridge: AoBridge =
 			remove: async () => undefined,
 			connect: async () => { throw new Error("remote hosts need the desktop app"); },
 			disconnect: async () => undefined,
+			hostUpdate: async () => null,
+			checkHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
+			startHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
 			computerName: async () => { throw new Error("remote hosts need the desktop app"); },
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
@@ -494,6 +511,9 @@ export const aoBridge: AoBridge =
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			onOpenSharedArtifact: () => () => undefined,
+			takePendingSharedArtifact: async () => null,
+			openSharedArtifactWindow: async () => undefined,
 			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,

@@ -31,6 +31,7 @@ const REDRAW_DELAY_MS = 150;
 const MAX_PDF_BYTES = 100 * 1024 * 1024;
 
 class PdfTooLargeError extends Error {
+	readonly code: string = "PDF_TOO_LARGE_ERROR";
 	constructor(readonly size: number) {
 		super("PDF too large to preview");
 	}

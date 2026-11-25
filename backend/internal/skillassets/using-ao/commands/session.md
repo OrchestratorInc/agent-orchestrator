@@ -74,9 +74,11 @@ ao session ls [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `-a, --all` | Include orchestrator sessions | - |
+| `--agent string` | Only sessions running this agent, for example `claude-code` | - |
 | `--include-terminated` | Include terminated sessions | - |
 | `--json` | Output as JSON | - |
 | `-p, --project string` | Filter by project ID | - |
+| `-q, --quiet` | Print only session ids, one per line | - |
 
 **Examples:**
 
@@ -150,8 +152,9 @@ ao session get mer-3 --transcript 1 --before 142 --cap 0
 
 ### ao session history
 
-Print a session's turns, newest first, in full. Use it after taking over a
-session to read what the handoff note left out.
+Print a session's completed turns, newest first, in full. Use it after taking
+over a session to read what the handoff note left out. A turn that is still
+running is not listed; `ao session get <id>` shows whether the session is working.
 
 **Syntax:**
 ```
@@ -247,7 +250,7 @@ ao session rename mer-3 "fix-auth-bug"
 
 ### ao session restore
 
-Restore a terminated session or resume an exited agent.
+Restore a terminated session, resume an exited agent, or retry a session that failed to start.
 
 **Syntax:**
 ```
@@ -290,7 +293,7 @@ ao session exit-agent <id> [flags]
 
 ### ao session resume-agent
 
-Resume an exited agent in its existing Orchestrator-managed session.
+Resume an exited agent in its existing Orchestrator-managed session. It also retries a session that failed to start, with its saved prompt, and waits for that start: it exits 1 with the reason if the start fails again. `ao session get <id>` shows the reason as `start failed`, and `ao session ls` shows `start failed` as the activity (`provisionState: "failed"` with `--json`).
 
 **Syntax:**
 ```
@@ -309,6 +312,74 @@ ao session resume-agent <id> [flags]
 ```bash
 ao session exit-agent mer-3
 ao session resume-agent mer-3
+```
+
+---
+
+### ao session switch
+
+Change a session's agent, model, effort, or permission mode in place. The
+session keeps its worktree, branch, and conversation. Works for Chat and
+Terminal UI sessions on this machine, including one whose agent exited.
+
+Name an agent to move the session to it. The new agent starts from a handoff
+note of the work so far, on `--model` and `--effort` if given and on its
+defaults otherwise. Leave the agent out, or name the one already running, to
+change only `--model`, `--effort`, or `--permission`: a Chat agent takes them
+from its next turn, and a Terminal UI agent restarts on its own conversation.
+The daemon checks a model and effort against the agent's model list before
+anything stops. A model it does not list only warns on agents that take custom
+models (Claude Code, Codex). A running Chat agent only takes a model from its
+own list, and the refusal names them.
+
+A switch that has to stop the agent is refused while it is working or waiting
+on an approval. `--force` stops the current turn, cancels queued messages and
+pending approvals, and switches anyway. Use it when the agent is stuck. On a
+Chat settings change, `--force` stops the current turn so the next one runs on
+the new settings.
+
+`--from <agent>` makes the same change to every session on that agent,
+orchestrators included, except the agent session running the command. It runs
+four at a time and exits 1 if any was not switched or did not get the message. `claude` means `claude-code`. Run `ao agent ls` for
+the agents you can switch to.
+
+**Syntax:**
+```
+ao session switch <id> [agent] [flags]
+ao session switch --from <agent> [agent] [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--effort string` | Reasoning effort | current one, or the new agent's default |
+| `--force` | Stop the current turn, queued messages, and pending approvals, then switch | - |
+| `--from string` | Make the change on every session on this agent instead of one | - |
+| `-m, --message string` | Message to send to the agent after the switch, as `ao send` does | - |
+| `--model string` | Model to run | current one, or the new agent's default |
+| `--permission string` | `default` (the agent's own config), `accept-edits`, `auto`, or `bypass-permissions` | the session's current mode |
+
+**Examples:**
+
+```bash
+# Move mer-3 to Codex
+ao session switch mer-3 codex
+```
+
+```bash
+# Keep the agent, change its model and effort
+ao session switch mer-3 --model opus --effort high
+```
+
+```bash
+# Move to Codex on a chosen model, effort, and permission mode
+ao session switch mer-3 codex --model gpt-6.1-sol --effort low --permission accept-edits
+```
+
+```bash
+# Claude is down: move every Claude session to Codex, even mid-turn
+ao session switch --from claude codex --force -m "Claude is down. Take over."
 ```
 
 ---

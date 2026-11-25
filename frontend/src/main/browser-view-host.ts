@@ -346,7 +346,8 @@ export function shouldHandleAppShortcutInBrowserContext(
 const APPROVAL_DESCRIBE_WORLD_ID = 1013;
 
 // Input actions the approval binding (tab, document, element) is checked for.
-const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press"]);
+// type is bound because a typed line break presses Enter in the field.
+const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press", "type"]);
 
 type ApprovalBinding = { tabId: string; document: number; ref?: string; focus?: string };
 
@@ -4525,6 +4526,18 @@ export function createBrowserViewHost(
               // An approved action may only land on the tab, document, and (for
               // act) element the user approved; checked in the same queued
               // operation that dispatches it.
+              // An approved dialog accept names the tab whose dialog the user
+              // saw; another tab can show the very same text.
+              if (
+                nativeAction === "dialog" &&
+                typeof nativeArgs.dialogTab === "string" &&
+                nativeArgs.dialogTab !== targetEntry.tabId
+              ) {
+                throw browserError(
+                  "BROWSER_TARGET_CHANGED",
+                  "The active tab changed while the action waited for approval, so this dialog is not the one the user approved. Check the dialog and try again.",
+                );
+              }
               if (approvalBinding && APPROVAL_BOUND_ACTIONS.has(nativeAction)) {
                 const ref = typeof nativeArgs.ref === "string" ? nativeArgs.ref.replace(/^@/, "") : undefined;
                 if (
@@ -4715,6 +4728,14 @@ export function createBrowserViewHost(
               "INVALID_ARGUMENT",
               "instruction is required",
             );
+            // An approval whose description matched no element approved none:
+            // a later match would act on something the user never saw.
+            if (approvalBinding && !approvalBinding.ref) {
+              throw browserError(
+                "BROWSER_TARGET_CHANGED",
+                "The user approved this action before Orchestrator could find the element it acts on. Take a new snapshot and try again.",
+              );
+            }
             const postcondition = actionPostcondition(args);
             const verb =
               typeof args.action === "string" && args.action.trim()
@@ -5262,6 +5283,18 @@ export function createBrowserViewHost(
                 },
               },
             });
+            // The facts, image, and binding must all be of one document: if
+            // the tab moved on while they were read, discard them and let the
+            // daemon ask for a fresh read.
+            if (
+              activeEntry(session) !== describeEntry ||
+              describeEntry.documentGeneration !== describeDocument
+            ) {
+              throw browserError(
+                "BROWSER_TARGET_CHANGED",
+                "The page changed while Orchestrator was reading it. Take a new snapshot and try again.",
+              );
+            }
             const boundRef =
               described.resolvedRef ??
               (typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined);

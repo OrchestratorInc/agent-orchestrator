@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,11 @@ type scriptedRuntime struct {
 	describeErr error
 	// describeHang makes describe block until its context ends.
 	describeHang bool
+	// dialogs answer successive dialog status reads (the last one repeats);
+	// operations records each dialog call's operation.
+	dialogs    []map[string]interface{}
+	dialogErr  error
+	operations []string
 }
 
 func (r *scriptedRuntime) Status() browserruntime.Status {
@@ -37,6 +43,23 @@ func (r *scriptedRuntime) Execute(ctx context.Context, _ domain.SessionID, actio
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if action == "dialog" {
+		op, _ := args["operation"].(string)
+		r.operations = append(r.operations, op)
+		if op == "status" {
+			if r.dialogErr != nil {
+				return browserruntime.Result{}, r.dialogErr
+			}
+			var status map[string]interface{}
+			if len(r.dialogs) > 0 {
+				status = r.dialogs[0]
+				if len(r.dialogs) > 1 {
+					r.dialogs = r.dialogs[1:]
+				}
+			}
+			return browserruntime.Result{Value: status}, nil
+		}
+	}
 	r.actions = append(r.actions, action)
 	if action != describeAction {
 		r.lastArgs = args
@@ -116,7 +139,7 @@ func TestRiskyClickWaitsAndDenyBlocksDispatch(t *testing.T) {
 	}
 	pending := <-asked
 	if pending.Action != `Click "Place order" on shop.example` || pending.Category != approval.CategoryPayment ||
-		pending.Site != "shop.example" || pending.Image == "" || pending.Reason == "" || pending.SessionID != "s1" {
+		pending.Site != "https://shop.example" || pending.Image == "" || pending.Reason == "" || pending.SessionID != "s1" {
 		t.Fatalf("prompt = %+v", pending)
 	}
 }
@@ -421,5 +444,239 @@ func TestSpaceOnFocusedControlIsGated(t *testing.T) {
 		if _, _, err := svc.Execute(context.Background(), "s1", token, "press", map[string]interface{}{"key": key}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
 			t.Fatalf("%q: err = %v", key, err)
 		}
+	}
+}
+
+func cardField() map[string]interface{} {
+	return map[string]interface{}{
+		"target": map[string]interface{}{
+			"role": "textbox", "name": "Card", "tag": "input", "inputType": "text",
+			"formMethod": "get", "formHasPayment": true, "submitName": "Place order",
+			"pageUrl": "https://shop.example/checkout", "pageTitle": "Checkout",
+		},
+		"binding": map[string]interface{}{"tabId": "t1", "document": float64(1), "ref": "e1"},
+	}
+}
+
+func TestTypedLineBreakIsGatedLikeEnter(t *testing.T) {
+	// A trailing newline in typed text is a real Enter keypress, which
+	// submits the field's form.
+	for _, tc := range []struct {
+		action string
+		args   map[string]interface{}
+	}{
+		{"type", map[string]interface{}{"ref": "e1", "text": "4111\n"}},
+		{"type", map[string]interface{}{"ref": "@e1", "text": "4111\r"}},
+		{"act", map[string]interface{}{"instruction": "Card", "action": "type", "value": "4111\n"}},
+	} {
+		rt := &scriptedRuntime{describe: cardField()}
+		svc, gate, token := approvalService(t, rt)
+		asked := answer(t, gate, approval.DecisionDeny)
+		_, _, err := svc.Execute(context.Background(), "s1", token, tc.action, tc.args)
+		if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+			t.Fatalf("%s %v: err = %v", tc.action, tc.args, err)
+		}
+		if slices.Contains(rt.received(), tc.action) {
+			t.Fatalf("%s dispatched after deny", tc.action)
+		}
+		if p := <-asked; p.Category != approval.CategoryPayment || p.Action != `Press Enter in "Card" on shop.example` {
+			t.Fatalf("prompt = %+v", p)
+		}
+	}
+}
+
+func TestTypedLineBreakApprovedCarriesTheBinding(t *testing.T) {
+	rt := &scriptedRuntime{describe: cardField()}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "type", map[string]interface{}{"ref": "e1", "text": "4111\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if binding, _ := rt.lastArgs["approvalBinding"].(map[string]interface{}); binding["ref"] != "e1" {
+		t.Fatalf("dispatched args = %v", rt.lastArgs)
+	}
+}
+
+func TestTypedLineBreakInEverySubmitModeAsks(t *testing.T) {
+	plain := cardField()
+	target := plain["target"].(map[string]interface{})
+	delete(target, "formHasPayment")
+	target["name"], target["submitName"] = "Search", "Search"
+	rt := &scriptedRuntime{describe: plain}
+	svc, gate, token := approvalService(t, rt)
+	_ = gate.SetSessionMode("s1", approval.ModeEverySubmit)
+	answer(t, gate, approval.DecisionDeny)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "type", map[string]interface{}{"ref": "e1", "text": "shoes\n"}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTypingWithoutLineBreakSkipsDescribe(t *testing.T) {
+	rt := &scriptedRuntime{describe: cardField()}
+	svc, _, token := approvalService(t, rt)
+	for _, tc := range []struct {
+		action string
+		args   map[string]interface{}
+	}{
+		{"type", map[string]interface{}{"ref": "e1", "text": "4111"}},
+		{"act", map[string]interface{}{"instruction": "Card", "action": "type", "value": "4111"}},
+		{"act", map[string]interface{}{"instruction": "Card", "action": "fill", "value": "4111\n"}},
+	} {
+		if _, _, err := svc.Execute(context.Background(), "s1", token, tc.action, tc.args); err != nil {
+			t.Fatalf("%s: %v", tc.action, err)
+		}
+	}
+	if slices.Contains(rt.received(), describeAction) {
+		t.Fatalf("describe ran: %v", rt.received())
+	}
+}
+
+func TestAllowSiteIsScopedToTheOrigin(t *testing.T) {
+	at := func(pageURL string) map[string]interface{} {
+		d := placeOrder()
+		d["target"].(map[string]interface{})["pageUrl"] = pageURL
+		return d
+	}
+	rt := &scriptedRuntime{describe: at("http://localhost:4173/checkout")}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionAllowSite)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"}); err != nil {
+		t.Fatal(err)
+	}
+	if p := <-asked; p.Site != "http://localhost:4173" {
+		t.Fatalf("site = %q", p.Site)
+	}
+	// Another dev server on the same host, and the same host over another
+	// scheme, are other sites: they ask again.
+	for _, other := range []string{"http://localhost:5173/checkout", "https://localhost:4173/checkout"} {
+		rt.mu.Lock()
+		rt.describe = at(other)
+		rt.mu.Unlock()
+		denied := answer(t, gate, approval.DecisionDeny)
+		if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+			t.Fatalf("%s: err = %v", other, err)
+		}
+		<-denied
+	}
+	// The approved origin itself is remembered.
+	rt.mu.Lock()
+	rt.describe = at("http://localhost:4173/other")
+	rt.mu.Unlock()
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"}); err != nil {
+		t.Fatalf("same origin: %v", err)
+	}
+}
+
+func (r *scriptedRuntime) dialogOps() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.operations)
+}
+
+func confirmDialog(message string) map[string]interface{} {
+	return confirmDialogOn("t1", message)
+}
+
+func confirmDialogOn(tab, message string) map[string]interface{} {
+	return map[string]interface{}{"open": true, "type": "confirm", "message": message, "target": map[string]interface{}{"tabId": tab}}
+}
+
+func TestDialogAcceptAsksAndDenyLeavesTheDialogOpen(t *testing.T) {
+	// A benign Continue opened confirm("Delete account?"): accepting it is
+	// the destructive step.
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{confirmDialog("Delete account?")}}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if slices.Contains(rt.dialogOps(), "accept") {
+		t.Fatalf("accepted after deny: %v", rt.dialogOps())
+	}
+	if p := <-asked; p.Category != approval.CategoryDelete || p.Action != `Accept the page's confirm dialog "Delete account?"` {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestDialogAcceptApprovedRunsAndPromptTextStaysOut(t *testing.T) {
+	prompt := map[string]interface{}{"open": true, "type": "prompt", "message": "Type the repository name to confirm"}
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{prompt}}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept", "text": "secret-repo"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(rt.dialogOps(), "accept") {
+		t.Fatalf("not accepted: %v", rt.dialogOps())
+	}
+	if p := <-asked; strings.Contains(p.Action, "secret-repo") || strings.Contains(p.Reason, "secret-repo") {
+		t.Fatalf("prompt answer in the summary: %+v", p)
+	}
+}
+
+func TestDialogStatusDismissAndAlertNeverAsk(t *testing.T) {
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{{"open": true, "type": "alert", "message": "Saved"}}}
+	svc, gate, token := approvalService(t, rt)
+	for _, op := range []string{"status", "dismiss", "accept"} {
+		if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": op}); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+	}
+	if len(gate.Pending()) != 0 {
+		t.Fatal("asked")
+	}
+}
+
+func TestDialogAcceptAsksWhenTheDialogCannotBeRead(t *testing.T) {
+	rt := &scriptedRuntime{dialogErr: errors.New("page blocked")}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if p := <-asked; p.Action != "Accept the page's dialog" {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestDialogAcceptRefusedWhenTheDialogChangedWhileWaiting(t *testing.T) {
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{confirmDialog("Leave this page?"), confirmDialog("Delete account?")}}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"}); apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+		t.Fatalf("err = %v", err)
+	}
+	if slices.Contains(rt.dialogOps(), "accept") {
+		t.Fatalf("accepted a dialog the user never saw: %v", rt.dialogOps())
+	}
+}
+
+func TestDialogAcceptRefusedWhenTheSameTextIsOnAnotherTab(t *testing.T) {
+	// The active tab changed while the user decided, and the new tab shows
+	// the same "Are you sure?": accepting would answer a dialog the user
+	// never saw.
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{confirmDialogOn("t1", "Are you sure?"), confirmDialogOn("t2", "Are you sure?")}}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"}); apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+		t.Fatalf("err = %v", err)
+	}
+	if slices.Contains(rt.dialogOps(), "accept") {
+		t.Fatalf("accepted another tab's dialog: %v", rt.dialogOps())
+	}
+}
+
+func TestDialogAcceptCarriesTheApprovedTab(t *testing.T) {
+	// The runtime acts on its active tab when the accept arrives: it gets the
+	// approved tab to check against.
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{confirmDialogOn("t1", "Are you sure?")}}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"}); err != nil {
+		t.Fatal(err)
+	}
+	if rt.lastArgs["dialogTab"] != "t1" {
+		t.Fatalf("accept args = %v", rt.lastArgs)
 	}
 }

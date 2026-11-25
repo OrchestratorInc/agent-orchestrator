@@ -9,8 +9,7 @@ const session: WorkspaceSession = {
 	provider: "kimi", mode: "chat", status: "working", updatedAt: "", prs: [],
 };
 
-beforeEach(() => useUiStore.setState({ developerMode: true, sideChats: true }));
-afterEach(() => useUiStore.setState({ developerMode: false, sideChats: false }));
+beforeEach(() => useUiStore.setState({ developerMode: false }));
 
 it.each(["codex", "claude-code", "opencode", "opencode-v2", "droid", "kimi", "kimchi", "pi", "cursor", "omp", "qwen", "unreal-agent", "deepseek-harness", "command-code"] as const)(
 	"allows admitted local Chat sessions for %s without a provider allowlist",
@@ -33,10 +32,10 @@ it.each(restrictions)("keeps local live Chat restrictions: %j", (restriction) =>
 	expect(result.current).toBe(false);
 });
 
-it("requires both developer mode and the side-chat experiment", () => {
-	useUiStore.setState({ sideChats: false });
+it.each([false, true])("is available whether Developer mode is on or not (on: %s)", (developerMode) => {
+	useUiStore.setState({ developerMode });
 	const { result } = renderHook(() => useSideChatsAvailable(session));
-	expect(result.current).toBe(false);
+	expect(result.current).toBe(true);
 });
 
 describe("Side chat tab", () => {

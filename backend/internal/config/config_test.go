@@ -813,3 +813,46 @@ func TestLoadTelemetryRetention(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadTerminateOnPRMerge(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	for _, tc := range []struct {
+		env   string
+		want  *bool
+		fails bool
+	}{
+		{"", nil, false},
+		{"on", boolPtr(true), false},
+		{"true", boolPtr(true), false},
+		{"1", boolPtr(true), false},
+		{"yes", boolPtr(true), false},
+		{"off", boolPtr(false), false},
+		{"false", boolPtr(false), false},
+		{"0", boolPtr(false), false},
+		{"no", boolPtr(false), false},
+		{"invalid", nil, true},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv("AO_TERMINATE_ON_PR_MERGE", tc.env)
+			cfg, err := Load()
+			if tc.fails {
+				if err == nil {
+					t.Fatalf("Load with AO_TERMINATE_ON_PR_MERGE=%q want error, got nil", tc.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load with AO_TERMINATE_ON_PR_MERGE=%q unexpected error: %v", tc.env, err)
+			}
+			if tc.want == nil {
+				if cfg.TerminateOnPRMerge != nil {
+					t.Fatalf("TerminateOnPRMerge = %v, want nil", *cfg.TerminateOnPRMerge)
+				}
+			} else {
+				if cfg.TerminateOnPRMerge == nil || *cfg.TerminateOnPRMerge != *tc.want {
+					t.Fatalf("TerminateOnPRMerge = %v, want %v", cfg.TerminateOnPRMerge, *tc.want)
+				}
+			}
+		})
+	}
+}

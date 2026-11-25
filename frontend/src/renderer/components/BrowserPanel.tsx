@@ -166,7 +166,7 @@ function clampDeviceFrameWidth(width: number): number | undefined {
 }
 
 type BrowserPanelProps = {
-	session: WorkspaceSession;
+	session?: WorkspaceSession;
 	active: boolean;
 	poppedOut: boolean;
 	onTogglePopOut: (next: boolean) => void;
@@ -390,7 +390,7 @@ export function BrowserPanel({
 	poppedOut,
 	onTogglePopOut,
 	topbarHost,
-}: BrowserPanelProps) {
+}: BrowserPanelProps & { session: WorkspaceSession }) {
 	const browserView = useBrowserView({
 		sessionId: session.id,
 		active,
@@ -433,8 +433,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	const browserUnavailable = sessionBrowserUnavailable(session);
-	// Approval mode belongs to this machine's daemon; Cloud sessions keep theirs.
-	const approvalSessionId = session.cloud ? undefined : session.id;
+	// Approval mode belongs to this machine's daemon; Cloud sessions keep theirs,
+	// and a panel without a session (the Settings login browser) has none.
+	const approvalSessionId = session && !session.cloud ? session.id : undefined;
 	const {
 		viewId,
 		navState,
@@ -484,7 +485,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
 	// Not on an agent tab: its page is its viewer's picture of the agent's page.
 	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
-	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url && !onAgentTab);
+	const canAnnotate = Boolean(session && window.ao?.browser && viewId && navState.url && !onAgentTab);
 	// An agent tab's localhost page is the host's: opened here it would be this
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
@@ -890,7 +891,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// A remote preview's address works only in this panel, which trusts its
 	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
-		if (!session.hostId) return url;
+		if (!session?.hostId) return url;
 		// A disconnected host has no other address for it: keep the one shown.
 		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
 	};
@@ -1612,7 +1613,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						</DropdownMenuItem>
 							</>
 						) : controlsView === "approvals" && approvalSessionId ? (
-							<ApprovalModeMenuItems sessionId={approvalSessionId} hostId={session.hostId} onBack={() => setControlsView("root")} />
+							<ApprovalModeMenuItems sessionId={approvalSessionId} hostId={session?.hostId} onBack={() => setControlsView("root")} />
 						) : controlsView === "profiles" ? (
 							<>
 								<DropdownMenuItem
@@ -1684,7 +1685,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 								</DropdownMenuItem>
 								{approvalSessionId ? (
-									<ApprovalModeMenuRow sessionId={approvalSessionId} hostId={session.hostId} onOpen={() => setControlsView("approvals")} />
+									<ApprovalModeMenuRow sessionId={approvalSessionId} hostId={session?.hostId} onOpen={() => setControlsView("approvals")} />
 								) : null}
 								<DropdownMenuItem
 									className="gap-2"

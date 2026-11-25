@@ -65,6 +65,9 @@ func (s *Service) Preflight(ctx context.Context, sessionID domain.SessionID, act
 // reported (tab, document, and act's element), so the runtime refuses it if
 // the page changed while the user was deciding.
 func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) (map[string]interface{}, error) {
+	if action == "dialog" {
+		return s.preflightDialog(ctx, sessionID, rt, args)
+	}
 	if !mayActConsequentially(action, args) {
 		return args, nil
 	}
@@ -81,6 +84,9 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	}
 	described := s.describe(ctx, sessionID, rt, action, args)
 	target, image := described.target, described.image
+	if typesLineBreak(action, args) {
+		target = approval.TypedEnter(target)
+	}
 	verdict := approval.Classify(target, mode)
 	if !verdict.NeedsApproval && (!described.identified || described.partial) {
 		// The element (or its form) could not be read: ask rather than guess.
@@ -125,6 +131,95 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	return bound, nil
 }
 
+// preflightDialog asks before accepting a page dialog: a benign click can
+// open confirm("Delete account?"), and accepting it is the destructive step.
+// The page is blocked while the dialog is open, so the dialog's own type and
+// message describe it. Reading it and dismissing it never ask.
+func (s *Service) preflightDialog(ctx context.Context, sessionID domain.SessionID, rt runtime, args map[string]interface{}) (map[string]interface{}, error) {
+	operation, _ := args["operation"].(string)
+	if !strings.EqualFold(strings.TrimSpace(operation), "accept") {
+		return args, nil
+	}
+	if s.approvals == nil {
+		if s.approvalsErr != nil {
+			return nil, apierr.Unavailable("BROWSER_APPROVAL_UNAVAILABLE",
+				"This action may need the user's approval, and approvals could not load on this machine, so it was not run")
+		}
+		return args, nil
+	}
+	mode := s.approvals.SessionMode(string(sessionID))
+	if mode == approval.ModeOff {
+		return args, nil
+	}
+	// An unread dialog has no type, so it is never taken for an alert: ask.
+	dialog, read := s.readDialog(ctx, sessionID, rt)
+	verdict := approval.ClassifyDialog(dialog.kind, dialog.message, mode)
+	if !verdict.NeedsApproval {
+		return args, nil
+	}
+	outcome, err := s.approvals.Request(ctx, approval.Request{
+		Kind: approval.KindBrowserAction, SessionID: string(sessionID),
+		Action: verdict.Summary, Category: verdict.Category, Reason: verdict.Reason, Timeout: s.approvalTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !outcome.Allowed() {
+		return nil, approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
+	}
+	// The dialog the user approved must be the one still open, on the same
+	// tab: another tab can show the very same "Are you sure?".
+	if now, nowRead := s.readDialog(ctx, sessionID, rt); read && (!nowRead || now != dialog) {
+		return nil, apierr.Conflict("BROWSER_TARGET_CHANGED",
+			"The page's dialog changed while the action waited for approval, so it is not the one the user approved. Check the dialog and try again.", nil)
+	}
+	if !read || dialog.tab == "" {
+		return args, nil
+	}
+	// The runtime answers the dialog on its active tab when the accept
+	// arrives; it refuses if that is no longer the approved tab.
+	bound := make(map[string]interface{}, len(args)+1)
+	for key, value := range args {
+		bound[key] = value
+	}
+	bound["dialogTab"] = dialog.tab
+	return bound, nil
+}
+
+// openDialog is what a runtime reported about a page's open dialog.
+type openDialog struct {
+	kind, message, tab string
+}
+
+// readDialog returns the open dialog's type, message and tab; read is false
+// when the runtime could not say, or no dialog is open.
+func (s *Service) readDialog(ctx context.Context, sessionID domain.SessionID, rt runtime) (openDialog, bool) {
+	limit := s.describeTimeout
+	if limit <= 0 {
+		limit = DefaultDescribeTimeout
+	}
+	readCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	result, err := rt.Execute(readCtx, sessionID, "dialog", map[string]interface{}{"operation": "status"})
+	if err != nil {
+		return openDialog{}, false
+	}
+	status, _ := result.Value.(map[string]interface{})
+	var dialog openDialog
+	if target, ok := status["target"].(map[string]interface{}); ok {
+		dialog.tab, _ = target["tabId"].(string)
+	}
+	if nested, ok := status["dialog"].(map[string]interface{}); ok {
+		status = nested
+	}
+	if open, ok := status["open"].(bool); ok && !open {
+		return openDialog{}, false
+	}
+	dialog.kind, _ = status["type"].(string)
+	dialog.message, _ = status["message"].(string)
+	return dialog, dialog.kind != "" || dialog.message != ""
+}
+
 // unidentifiedSummary says what will happen when the target is unknown.
 func unidentifiedSummary(action string, args map[string]interface{}, pageURL string) string {
 	var text string
@@ -135,6 +230,9 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 	case "act":
 		instruction, _ := args["instruction"].(string)
 		text = fmt.Sprintf("Act: %q", strings.TrimSpace(instruction))
+	case "type":
+		ref, _ := args["ref"].(string)
+		text = fmt.Sprintf("Type a line break into element %s", strings.TrimSpace(ref))
 	default:
 		ref, _ := args["ref"].(string)
 		verb := "Click"
@@ -143,8 +241,8 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 		}
 		text = fmt.Sprintf("%s element %s", verb, strings.TrimSpace(ref))
 	}
-	if host := approval.Site(pageURL); host != "" {
-		text += " on " + strings.TrimPrefix(host, "www.")
+	if host := approval.Host(pageURL); host != "" {
+		text += " on " + host
 	}
 	return text
 }
@@ -152,6 +250,9 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 // mayActConsequentially filters out actions that can never need approval
 // before paying for a describe round trip.
 func mayActConsequentially(action string, args map[string]interface{}) bool {
+	if typesLineBreak(action, args) {
+		return true
+	}
 	if _, ok := approval.GatedActions[action]; !ok {
 		return false
 	}
@@ -169,6 +270,21 @@ func mayActConsequentially(action string, args map[string]interface{}) bool {
 		return false
 	}
 	return true
+}
+
+// typesLineBreak reports a type (or act's type verb) whose text holds a line
+// break: runtimes that type key by key press Enter for it.
+func typesLineBreak(action string, args map[string]interface{}) bool {
+	switch action {
+	case "type":
+		text, _ := args["text"].(string)
+		return approval.HasLineBreak(text)
+	case "act":
+		verb, _ := args["action"].(string)
+		value, _ := args["value"].(string)
+		return strings.EqualFold(strings.TrimSpace(verb), "type") && approval.HasLineBreak(value)
+	}
+	return false
 }
 
 // describedTarget is what a runtime reported about an action's target.

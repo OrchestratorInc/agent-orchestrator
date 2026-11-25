@@ -35,7 +35,7 @@ vi.mock("../../hooks/useWorkspaceQuery", () => ({
 }));
 
 import { useUiStore } from "../../stores/ui-store";
-import { GlobalApprovalCard, SessionApprovalDock } from "./ApprovalHost";
+import { GlobalApprovalCard, SessionApprovalDock, SessionChatApprovalCard } from "./ApprovalHost";
 
 function request(id: string, sessionId: string): PendingApproval {
 	return {
@@ -67,6 +67,28 @@ describe("approval hosts", () => {
 		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined));
 	});
 
+	it("shows a session's request at the end of its chat and leaves once decided", async () => {
+		state.pending = [request("a", "ao-1"), request("b", "ao-2")];
+		const { container, rerender } = renderWith(<SessionChatApprovalCard sessionId="ao-1" />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(a)");
+		expect(screen.getByText(/Payment/)).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined));
+		state.pending = [request("b", "ao-2")];
+		rerender(<QueryClientProvider client={new QueryClient()}><SessionChatApprovalCard sessionId="ao-1" /></QueryClientProvider>);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("keeps Always allow behind Allow's menu, and Escape denies in the chat card", async () => {
+		state.pending = [request("a", "ao-1")];
+		renderWith(<SessionChatApprovalCard sessionId="ao-1" />);
+		expect(screen.queryByText("Always allow on shop.example")).not.toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("button", { name: "Allow once" }), { key: "Enter" });
+		expect(state.decide).not.toHaveBeenCalled();
+		fireEvent.keyDown(screen.getByTestId("approval-prompt"), { key: "Escape" });
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "deny", expect.anything(), undefined));
+	});
+
 	it("renders nothing for a session with no requests", () => {
 		state.pending = [request("b", "ao-2")];
 		const { container } = renderWith(<SessionApprovalDock sessionId="ao-1" />);
@@ -78,8 +100,7 @@ describe("approval hosts", () => {
 		state.routedSessionId = "ao-1";
 		renderWith(<GlobalApprovalCard />);
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(b)");
-		expect(screen.getByText(/Book flights/)).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
+		fireEvent.click(screen.getByRole("button", { name: "Book flights" }));
 		expect(state.navigate).toHaveBeenCalledWith("proj", "ao-2", undefined);
 	});
 
@@ -90,7 +111,7 @@ describe("approval hosts", () => {
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(r)");
 		fireEvent.click(screen.getByRole("button", { name: /Deny/ }));
 		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("r", "deny", expect.anything(), "box-b"));
-		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
+		fireEvent.click(screen.getByRole("button", { name: "ao-9" }));
 		expect(state.navigate).toHaveBeenCalledWith(undefined, "ao-9", "box-b");
 	});
 
@@ -119,6 +140,22 @@ describe("approval hosts", () => {
 		} finally {
 			useUiStore.setState({ settingsModal: null } as never);
 		}
+	});
+
+	it("allows a site for good only when its box is ticked", async () => {
+		state.pending = [request("a", "ao-2")];
+		renderWith(<GlobalApprovalCard />);
+		fireEvent.click(screen.getByRole("checkbox", { name: "Always allow on shop.example" }));
+		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-site", expect.anything(), undefined));
+	});
+
+	it("previews why the action was flagged", () => {
+		state.pending = [request("a", "ao-2")];
+		renderWith(<GlobalApprovalCard />);
+		expect(screen.queryByText("reads like a payment")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+		expect(screen.getByText("reads like a payment")).toBeVisible();
 	});
 
 	it("stays out of the way when the only request belongs to the open session", () => {

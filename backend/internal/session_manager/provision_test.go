@@ -1104,6 +1104,33 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 	}
 }
 
+func TestSpawnTerminateOnPRMergePrecedence(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+		for _, tc := range []struct {
+			name                    string
+			base, role, spawn, want *bool
+		}{
+			{"unset", nil, nil, nil, nil},
+			{"project", boolPtr(true), nil, nil, boolPtr(true)},
+			{"role", boolPtr(false), boolPtr(true), nil, boolPtr(true)},
+			{"spawn", boolPtr(false), boolPtr(true), boolPtr(false), boolPtr(false)},
+		} {
+			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+				cfg := domain.ProjectConfig{
+					AgentConfig:  domain.AgentConfig{TerminateOnPRMerge: tc.base},
+					Worker:       domain.RoleOverride{AgentConfig: domain.AgentConfig{TerminateOnPRMerge: tc.role}},
+					Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{TerminateOnPRMerge: tc.role}},
+				}
+				got := applySpawnAgentConfig(effectiveAgentConfig(domain.HarnessCodex, kind, cfg), domain.AgentConfig{TerminateOnPRMerge: tc.spawn})
+				if (got.TerminateOnPRMerge == nil && tc.want != nil) || (got.TerminateOnPRMerge != nil && tc.want == nil) || (got.TerminateOnPRMerge != nil && *got.TerminateOnPRMerge != *tc.want) {
+					t.Fatalf("got %v want %v", got.TerminateOnPRMerge, tc.want)
+				}
+			})
+		}
+	}
+}
+
 func TestRunPostCreateFailureSaysWhatFailedAndWhereToFixIt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-only step")
@@ -1286,6 +1313,44 @@ func TestRESTRestoreExtendsItsBudgetOnlyWhenItRunsSetup(t *testing.T) {
 			_, _ = m.RestoreWithMode(ctx, "mer-1")
 			if extended != tc.want {
 				t.Fatalf("request budget extended to %s, want %s", extended, tc.want)
+			}
+		})
+	}
+}
+
+func TestNativeHarnessSpawnPermissionDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		harness                      domain.AgentHarness
+		project, role, request, want domain.PermissionMode
+	}{
+		{"native unset", domain.HarnessMastraCode, "", "", "", domain.PermissionModeDefault},
+		{"explicit project auto", domain.HarnessMastraCode, domain.PermissionModeAuto, "", "", domain.PermissionModeAuto},
+		{"explicit project bypass", domain.HarnessMastraCode, domain.PermissionModeBypassPermissions, "", "", domain.PermissionModeBypassPermissions},
+		{"explicit role auto", domain.HarnessMastraCode, "", domain.PermissionModeAuto, "", domain.PermissionModeAuto},
+		{"explicit role bypass", domain.HarnessMastraCode, "", domain.PermissionModeBypassPermissions, "", domain.PermissionModeBypassPermissions},
+		{"explicit request auto", domain.HarnessMastraCode, "", "", domain.PermissionModeAuto, domain.PermissionModeAuto},
+		{"explicit request bypass", domain.HarnessMastraCode, "", "", domain.PermissionModeBypassPermissions, domain.PermissionModeBypassPermissions},
+		{"request native default wins", domain.HarnessMastraCode, domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, domain.PermissionModeDefault, domain.PermissionModeDefault},
+		{"codex unchanged", domain.HarnessCodex, "", "", "", domain.PermissionModeAuto},
+		{"claude unchanged", domain.HarnessClaudeCode, "", "", "", domain.PermissionModeAuto},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := domain.ProjectConfig{
+				AgentConfig: domain.AgentConfig{Permissions: tc.project},
+				Worker:      domain.RoleOverride{AgentConfig: domain.AgentConfig{Permissions: tc.role}},
+			}
+			cfg := ports.SpawnConfig{
+				Harness: tc.harness, Kind: domain.KindWorker,
+				AgentConfig: ports.AgentConfig{Permissions: tc.request},
+			}
+			resolved := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project), cfg.AgentConfig)
+			if resolved.Permissions != tc.want {
+				t.Fatalf("resolved permissions = %q, want %q", resolved.Permissions, tc.want)
+			}
+			record := seedRecord(cfg, project, time.Unix(0, 0))
+			if record.Metadata.Permissions != tc.want {
+				t.Fatalf("persisted permissions = %q, want %q", record.Metadata.Permissions, tc.want)
 			}
 		})
 	}

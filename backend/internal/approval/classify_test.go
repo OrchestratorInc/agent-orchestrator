@@ -242,3 +242,46 @@ func TestActivationKeysActivateFocusedControls(t *testing.T) {
 		t.Fatalf("summary = %q", got.Summary)
 	}
 }
+
+func TestSiteIsTheOrigin(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://shop.example/checkout": "https://shop.example",
+		"https://Shop.Example:443/x":    "https://shop.example",
+		"http://shop.example":           "http://shop.example",
+		"HTTP://shop.example:80/":       "http://shop.example",
+		"http://localhost:4173/pay":     "http://localhost:4173",
+		"http://localhost:5173/pay":     "http://localhost:5173",
+		"https://[::1]:8443/":           "https://[::1]:8443",
+		"about:blank":                   "",
+		"file:///Users/me/page.html":    "",
+		"":                              "",
+	} {
+		if got := Site(raw); got != want {
+			t.Errorf("Site(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	// Prompts still name the host alone.
+	if got := Classify(Target{Action: "click", Role: "button", Name: "Pay now", PageURL: "http://localhost:4173/"}, ModeRisky); got.Summary != `Click "Pay now" on localhost` {
+		t.Fatalf("summary = %q", got.Summary)
+	}
+}
+
+func TestNewPasswordFormAsksEvenBehindASignInLabel(t *testing.T) {
+	setsPassword := Target{Role: "button", Name: "Sign in", IsSubmit: true, FormMethod: "post",
+		FormHasPassword: true, FormHasNewPassword: true, SubmitName: "Sign in", PageURL: "https://app.example/"}
+	click := setsPassword
+	click.Action = "click"
+	enter := setsPassword
+	enter.Action, enter.Key, enter.Role, enter.Name = "press", "Enter", "textbox", "Password"
+	for _, target := range []Target{click, enter} {
+		if got := Classify(target, ModeRisky); !got.NeedsApproval || got.Category != CategoryAccount {
+			t.Errorf("%s: verdict = %+v", target.Action, got)
+		}
+	}
+	// An ordinary sign-in form (a password, no new one) stays quiet.
+	signIn := click
+	signIn.FormHasNewPassword = false
+	if got := Classify(signIn, ModeRisky); got.NeedsApproval {
+		t.Fatalf("plain sign-in asked: %+v", got)
+	}
+}
