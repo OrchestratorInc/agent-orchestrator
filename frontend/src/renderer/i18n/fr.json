@@ -3841,6 +3841,7 @@
 	"artifacts.share.pageFiles.skipped_other": "{{count}} fichiers utilisés par cette page n’ont pas été inclus : la page partagée ne les affichera pas.",
 	"artifacts.share.pageFiles.unsupported": "Les images de cette page n’ont pas été incluses : Orchestrator Cloud ne peut pas encore les partager avec une page.",
 	"artifacts.share.pageFiles.videos": "Les vidéos ne peuvent pas encore être partagées avec une page.",
+	"artifacts.share.pageFiles.hostOutdated": "Certains sont sur une machine qui utilise une ancienne version d'Orchestrator : mettez-la à jour pour les inclure.",
 	"artifacts.share.unpublished": "Le lien de ce fichier a été dépublié. Le publier lui donne un nouveau lien.",
 	"artifacts.share.upgradeTitle": "Passez à une offre supérieure pour partager plus",
 	"artifacts.share.limitReached": "Offre gratuite : jusqu’à {{limit}} liens actifs. Passez à une offre supérieure pour partager plus.",

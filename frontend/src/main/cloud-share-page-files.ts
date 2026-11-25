@@ -43,7 +43,12 @@ export type PageFileSkipReason =
 	 * its origin is opaque and the browser never loads another file's symbol
 	 * into it.
 	 */
-	| "svg_use";
+	| "svg_use"
+	/**
+	 * On a remote host too old to say which file a path resolves to, so it
+	 * cannot be kept to the page's folder. Updating the host includes it.
+	 */
+	| "host_outdated";
 
 export interface PageFile<T = ResolvedShareFile> {
 	/** Where the link serves it, relative to its root. */
@@ -60,7 +65,10 @@ export interface PageFileSkip {
 	/** The reference as the page writes it. */
 	reference: string;
 	reason: PageFileSkipReason;
-	/** For a missing file, where it would be in the session's artifacts. */
+	/**
+	 * For a missing file, or one on an outdated host, its path in the
+	 * session's artifacts: a later change to it offers the page again.
+	 */
 	relativePath?: string;
 }
 
@@ -227,7 +235,7 @@ const RESOLVE_CONCURRENCY = 8;
  * left out. Any other failure, such as a remote host that stopped answering,
  * fails the whole publish.
  */
-const FILE_ERRORS: Record<string, PageFileSkipReason> = { file_missing: "missing", invalid_file: "outside" };
+const FILE_ERRORS: Record<string, PageFileSkipReason> = { file_missing: "missing", invalid_file: "outside", host_unsupported: "host_outdated" };
 
 /**
  * collectPageFiles for files found by resolve, which names each by its path
@@ -271,13 +279,18 @@ export async function findPageFiles<T extends { relativePath: string }>(
 	}
 	const lookups = found.filter((entry): entry is { reference: string; served: string; relative: string } => "relative" in entry);
 	const resolved = new Map<string, T | PageFileSkipReason>();
+	const inFolder = (file: T) => folder === "." || file.relativePath.startsWith(`${folder}/`);
 	let next = 0;
 	let failed = false;
+	// Lookups stop once a link's worth of files resolved: each may be a request to a remote host.
+	let includable = 0;
 	const worker = async () => {
-		while (!failed && next < lookups.length) {
+		while (!failed && includable < MAX_PAGE_FILES && next < lookups.length) {
 			const { relative } = lookups[next++];
 			try {
-				resolved.set(relative, await resolve(relative));
+				const file = await resolve(relative);
+				resolved.set(relative, file);
+				if (inFolder(file)) includable += 1;
 			} catch (error) {
 				const reason = error instanceof CloudShareError ? FILE_ERRORS[error.code] : undefined;
 				if (!reason) {
@@ -298,13 +311,17 @@ export async function findPageFiles<T extends { relativePath: string }>(
 		}
 		const { reference, served, relative } = entry;
 		const file = resolved.get(relative);
-		if (file === undefined) continue;
+		// Not looked up: a link's worth of files had already resolved.
+		if (file === undefined) {
+			skipped.push({ reference, reason: "limit" });
+			continue;
+		}
 		if (typeof file === "string") {
-			skipped.push(file === "missing" ? { reference, reason: "missing", relativePath: relative } : { reference, reason: file });
+			skipped.push(file === "missing" || file === "host_outdated" ? { reference, reason: file, relativePath: relative } : { reference, reason: file });
 			continue;
 		}
 		// A symlink in the page's folder may lead out of it: only what is in it goes.
-		if (folder !== "." && !file.relativePath.startsWith(`${folder}/`)) {
+		if (!inFolder(file)) {
 			skipped.push({ reference, reason: "outside" });
 			continue;
 		}

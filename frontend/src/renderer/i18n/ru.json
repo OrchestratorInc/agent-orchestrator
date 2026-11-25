@@ -3928,6 +3928,7 @@
 	"artifacts.share.pageFiles.skipped_other": "{{count}} файла, которые использует эта страница, не включены, поэтому на общей странице их не будет.",
 	"artifacts.share.pageFiles.unsupported": "Изображения этой страницы не включены: Orchestrator Cloud пока не может делиться ими вместе со страницей.",
 	"artifacts.share.pageFiles.videos": "Видео пока нельзя делиться вместе со страницей.",
+	"artifacts.share.pageFiles.hostOutdated": "Некоторые находятся на компьютере со старой версией Orchestrator: обновите её там, чтобы включить их.",
 	"artifacts.share.unpublished": "Ссылка на этот файл снята с публикации. При публикации у него будет новая ссылка.",
 	"artifacts.share.upgradeTitle": "Перейдите на платный план, чтобы делиться больше",
 	"artifacts.share.limitReached": "Бесплатный план: до {{limit}} активных ссылок. Перейдите на платный план, чтобы делиться больше.",

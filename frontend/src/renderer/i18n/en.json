@@ -3716,6 +3716,7 @@
 	"artifacts.share.pageFiles.skipped_other": "{{count}} files this page uses weren't included, so the shared page won't show them.",
 	"artifacts.share.pageFiles.unsupported": "This page's images weren't included: Orchestrator Cloud can't share them with a page yet.",
 	"artifacts.share.pageFiles.videos": "Videos can't be shared with a page yet.",
+	"artifacts.share.pageFiles.hostOutdated": "Some are on a machine running an older Orchestrator: update it there to include them.",
 	"artifacts.share.unpublished": "This file's link was unpublished. Publishing gives it a new link.",
 	"artifacts.share.upgradeTitle": "Upgrade to publish more",
 	"artifacts.share.limitReached": "Free plan: up to {{limit}} active links. Upgrade to publish more.",

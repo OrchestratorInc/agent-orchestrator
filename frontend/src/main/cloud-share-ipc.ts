@@ -104,6 +104,12 @@ function hostRefusedFile(error: unknown): boolean {
 /** How many of a published host page's files are looked up at once, to tell whether any changed. */
 const HOST_PAGE_FILE_CHECKS = 8;
 
+/** How long telling whether a published host page's files changed may take, all of them together. */
+const HOST_PAGE_FILES_DEADLINE_MS = 10_000;
+
+/** How many of a host page's files download at once. */
+const HOST_PAGE_FILE_DOWNLOADS = 4;
+
 /**
  * Whether any file a published page used changed since: rewritten, gone,
  * resolving to another file, or there now though it was missing. Read from
@@ -153,6 +159,7 @@ function pageFilesOutcome(page: PageFilesTaken, uploaded: PageFilesOutcome | und
 		included: uploaded.included,
 		skipped: page.skipped.length,
 		videos: page.skipped.filter((skip) => skip.reason === "video").length,
+		...(page.skipped.some((skip) => skip.reason === "host_outdated") ? { hostOutdated: page.skipped.filter((skip) => skip.reason === "host_outdated").length } : {}),
 		// Said only when the page had files to include.
 		unsupported: uploaded.unsupported && page.files.length > 0,
 	};
@@ -418,14 +425,13 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// What a file a remote host's page uses is now, as a published page
 	// records it (hostPageFileVersion): "" when the host no longer serves it
 	// there, and undefined when the host could not say, which counts as unchanged.
-	const hostPageFileNow = async (file: CloudHostShareFile, referencedPath: string): Promise<string | undefined> => {
+	const hostPageFileNow = async (file: CloudHostShareFile, referencedPath: string, signal: AbortSignal): Promise<string | undefined> => {
 		try {
-			const info = await inspectHostShareFile(deps.fetchHost, hostFile({ ...file, path: referencedPath }));
+			const info = await inspectHostShareFile(deps.fetchHost, hostFile({ ...file, path: referencedPath }), signal);
 			return info.resolvedPath ? hostPageFileVersion(info.resolvedPath, info.fingerprint) : "";
 		} catch (error) {
-			if (!(error instanceof CloudShareError)) throw error;
-			if (error.code === "file_missing" || error.code === "invalid_file") return "";
-			if (hostRefusedFile(error)) return "";
+			if (error instanceof CloudShareError && (error.code === "file_missing" || error.code === "invalid_file" || error.code === "host_unsupported" || hostRefusedFile(error))) return "";
+			// The host, not the file: a timeout, a lost connection, a lockout, or the check's own deadline.
 			return undefined;
 		}
 	};
@@ -433,28 +439,33 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// Whether any file a published host page used changed since: rewritten,
 	// gone, resolving to another file, or there now though it was missing.
 	// Each is looked up from its headers alone, a few at a time, until one has.
+	// The check has one deadline and stops at the first answer about the host
+	// rather than a file, which then counts as unchanged: the panel waits on it.
 	const hostPageFilesChanged = async (file: CloudHostShareFile, recorded: Record<string, string>): Promise<boolean> => {
 		const entries = Object.entries(recorded);
+		const deadline = AbortSignal.timeout(HOST_PAGE_FILES_DEADLINE_MS);
 		let next = 0;
 		let changed = false;
+		let stopped = false;
 		const worker = async () => {
-			while (!changed && next < entries.length) {
+			while (!changed && !stopped && !deadline.aborted && next < entries.length) {
 				const [referencedPath, version] = entries[next++];
-				const now = await hostPageFileNow(file, referencedPath);
-				if (now !== undefined && now !== version) changed = true;
+				const now = await hostPageFileNow(file, referencedPath, deadline);
+				if (now === undefined) stopped = true;
+				else if (now !== version) changed = true;
 			}
 		};
 		await Promise.all(Array.from({ length: Math.min(HOST_PAGE_FILE_CHECKS, entries.length) }, worker));
 		return changed;
 	};
 
-	const inspectHostFile = async (file: CloudHostShareFile): Promise<CloudShareInspection> => {
+	const inspectHostFile = async (file: CloudHostShareFile, linkOnly = false): Promise<CloudShareInspection> => {
 		const located = hostFile(file);
 		const info = await inspectHostShareFile(deps.fetchHost, located);
 		const key = await hostRecordKey(file, info.relativePath);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
-		const pageFiles = shareId ? await deps.records.publishedPageFiles(key) : undefined;
+		const pageFiles = shareId && !linkOnly ? await deps.records.publishedPageFiles(key) : undefined;
 		return {
 			name: info.name,
 			size: info.size,
@@ -476,7 +487,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const located = hostFile({ ...file, path: relative });
 		try {
 			const info = await inspectHostShareFile(deps.fetchHost, located, signal);
-			if (!info.resolvedPath) throw new CloudShareError("invalid_file", "The machine this file is on does not say where the file resolves.");
+			if (!info.resolvedPath) throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share a page's files.");
 			return { ...located, relativePath: info.resolvedPath, size: info.size };
 		} catch (error) {
 			if (error instanceof CloudShareError && hostRefusedFile(error)) {
@@ -537,35 +548,61 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				// What each file was as it downloaded, and what was missing, so a later change shows.
 				pageFiles = { files: [], skipped: [...found.skipped], referenced: new Map(), fingerprints: {} };
 				for (const skip of found.skipped) if (skip.relativePath) pageFiles.fingerprints[skip.relativePath] = "";
-				for (const used of found.files) {
-					if (controller.signal.aborted) return { status: "cancelled" };
-					const before = copied;
-					try {
-						const copy = await snapshotHostShareFile(deps.fetchHost, used.file, deps.snapshotDir(), {
-							expectedSize: used.file.size,
-							expectedResolvedPath: used.file.relativePath,
-							signal: controller.signal,
-							onProgress: (bytes) => progress(before + bytes, total),
-						});
-						fileSnapshots.push(copy);
-						pageFiles.files.push({ path: used.path, snapshot: copy });
-						pageFiles.referenced.set(used.path, used.referencedPath);
-						pageFiles.fingerprints[used.referencedPath] = hostPageFileVersion(used.file.relativePath, copy.fingerprint);
-					} catch (error) {
-						if (!(error instanceof CloudShareError)) throw error;
-						if (hostRefusedFile(error)) {
-							// One the host refuses to serve now is left out, as it is when it is looked up.
-							pageFiles.skipped.push({ reference: used.path, reason: "outside" });
-						} else if (error.code === "file_missing" || error.code === "source_changed") {
-							// A file gone or rewritten on the host while it downloaded is left out, not the page.
-							pageFiles.skipped.push({ reference: used.path, reason: "missing", relativePath: used.referencedPath });
-							pageFiles.fingerprints[used.referencedPath] = "";
-						} else {
-							throw error;
+				// A few download at once, each a round trip or two to the host;
+				// progress is the bytes of every one so far.
+				const downloaded = new Array<number>(found.files.length).fill(0);
+				const results = new Array<ShareSnapshot | PageFileSkip | undefined>(found.files.length);
+				const base = copied;
+				const report = () => progress(base + downloaded.reduce((sum, bytes) => sum + bytes, 0), total);
+				let next = 0;
+				let failed = false;
+				const worker = async () => {
+					while (!failed && !controller.signal.aborted && next < found.files.length) {
+						const index = next++;
+						const used = found.files[index];
+						try {
+							const copy = await snapshotHostShareFile(deps.fetchHost, used.file, deps.snapshotDir(), {
+								expectedSize: used.file.size,
+								expectedResolvedPath: used.file.relativePath,
+								signal: controller.signal,
+								onProgress: (bytes) => { downloaded[index] = bytes; report(); },
+							});
+							fileSnapshots.push(copy);
+							results[index] = copy;
+						} catch (error) {
+							if (error instanceof CloudShareError && hostRefusedFile(error)) {
+								// One the host refuses to serve now is left out, as it is when it is looked up.
+								results[index] = { reference: used.path, reason: "outside" };
+							} else if (error instanceof CloudShareError && (error.code === "file_missing" || error.code === "source_changed")) {
+								// A file gone or rewritten on the host while it downloaded is left out, not the page.
+								results[index] = { reference: used.path, reason: "missing", relativePath: used.referencedPath };
+							} else {
+								failed = true;
+								throw error;
+							}
 						}
+						downloaded[index] = used.file.size;
 					}
-					copied = before + used.file.size;
-				}
+				};
+				// Every download settles before a failure is thrown, so each copy made is cleaned up.
+				const settled = await Promise.allSettled(Array.from({ length: Math.min(HOST_PAGE_FILE_DOWNLOADS, found.files.length) }, worker));
+				const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+				if (failure) throw failure.reason;
+				if (controller.signal.aborted) return { status: "cancelled" };
+				// In the page's order, as a local page's are.
+				found.files.forEach((used, index) => {
+					const result = results[index];
+					if (!result) return;
+					if ("reason" in result) {
+						pageFiles?.skipped.push(result);
+						if (result.relativePath && pageFiles) pageFiles.fingerprints[result.relativePath] = "";
+						return;
+					}
+					pageFiles?.files.push({ path: used.path, snapshot: result });
+					pageFiles?.referenced.set(used.path, used.referencedPath);
+					if (pageFiles) pageFiles.fingerprints[used.referencedPath] = hostPageFileVersion(used.file.relativePath, result.fingerprint);
+				});
+				copied = base + found.files.reduce((sum, used) => sum + used.file.size, 0);
 			}
 			const folder = path.posix.dirname(located.relativePath);
 			const result = await uploadShare(deps, {
@@ -596,16 +633,19 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// file changed since it was published there, and the fingerprint a publish
 	// names. Read from this computer's record and the file's metadata (a cloud
 	// file's listed SHA-256): the file itself is never read.
-	deps.ipcMain.handle("cloudShare:inspect", async (event, value: unknown): Promise<CloudShareInspection> => {
+	// linkOnly reads the link alone, for a delete that unpublishes it: whether
+	// the page's files changed is not looked up.
+	deps.ipcMain.handle("cloudShare:inspect", async (event, value: unknown, options?: unknown): Promise<CloudShareInspection> => {
 		requireMainFrame(event);
 		const file = shareFileArgument(value);
+		const linkOnly = (options as { linkOnly?: unknown } | undefined)?.linkOnly === true;
 		if (isCloudFile(file)) return inspectCloudFile(file);
-		if (isHostFile(file)) return inspectHostFile(file);
+		if (isHostFile(file)) return inspectHostFile(file, linkOnly);
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
 		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
-		const pageFiles = shareId ? await deps.records.publishedPageFiles(key) : undefined;
+		const pageFiles = shareId && !linkOnly ? await deps.records.publishedPageFiles(key) : undefined;
 		return {
 			name: resolved.name,
 			size: resolved.size,

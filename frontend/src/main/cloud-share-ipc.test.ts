@@ -138,7 +138,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			return new Response("", { status: 404 });
 		}),
 	});
-	const invoke = (channel: string, value?: unknown) => handlers.get(channel)!({ sender }, value);
+	const invoke = (channel: string, value?: unknown, ...rest: unknown[]) => handlers.get(channel)!({ sender }, value, ...rest);
 	const file = { baseUrl: "https://cp.test", sessionId: "sess-1", path: "docs/report.html", projectId: "proj-1" };
 	const cloudFile = { source: "cloud", baseUrl: "https://cp.test", orgId: ORG_ID, sessionId: CLOUD_SESSION_ID, path: "reports/q3 plan.md", projectId: "" };
 	// Publishes as the popover does: with the fingerprint of the inspection it shows.
@@ -882,8 +882,42 @@ describe("cloudShare IPC for a remote host's file", () => {
 			files: true,
 			hostFiles: hostPage(`<img src="a.png">`, { "a.png": { body: "png", sendsResolved: false } }),
 		});
-		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1 } });
+		// Said apart, so the panel can say to update the host.
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1, hostOutdated: 1 } });
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [] });
+	});
+
+	it("offers to republish a host page whose files an outdated host left out, once it is updated", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png", sendsResolved: false } });
+		const { invoke, publish, hostFile } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, hostOutdated: 1 } });
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.not.toHaveProperty("pageFilesChanged");
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS });
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.toMatchObject({ pageFilesChanged: true });
+	});
+
+	it("looks up only the link, not the page's files, for a delete that unpublishes it", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png" } });
+		const { invoke, publish, hostFile, hostRequests } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published" });
+		hostFiles.set("sess-1/docs/a.png", { body: "png2", mtimeNs: MTIME_NS + 1_000_000_000n });
+		hostRequests.length = 0;
+		const inspection = await invoke("cloudShare:inspect", hostFile, { linkOnly: true });
+		expect(inspection).toMatchObject({ shareId: expect.any(String) });
+		expect(inspection).not.toHaveProperty("pageFilesChanged");
+		expect(hostRequests.some((request) => request.includes("a.png"))).toBe(false);
+	});
+
+	it("stops checking a host page's files at the first answer about the host, not a file", async () => {
+		const names = Array.from({ length: 40 }, (_, index) => `${index}.png`);
+		const hostFiles = hostPage(names.map((name) => `<img src="${name}">`).join(""), Object.fromEntries(names.map((name) => [name, { body: "png" }])));
+		const { invoke, publish, hostFile, hostRequests } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 40 } });
+		for (const name of names) hostFiles.get(`sess-1/docs/${name}`)!.status = 502;
+		hostRequests.length = 0;
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.not.toHaveProperty("pageFilesChanged");
+		// Only the lookups already started when the first failed.
+		expect(hostRequests.filter((request) => /\/docs\/\d+\.png/.test(request)).length).toBeLessThanOrEqual(8);
 	});
 
 	it("leaves out a host page's file the host refuses once it is downloaded", async () => {

@@ -3739,6 +3739,7 @@
 	"artifacts.share.pageFiles.skipped_other": "이 페이지가 사용하는 파일 {{count}}개가 포함되지 않아 공유된 페이지에 표시되지 않습니다.",
 	"artifacts.share.pageFiles.unsupported": "이 페이지의 이미지가 포함되지 않았습니다. Orchestrator Cloud는 아직 이미지를 페이지와 함께 공유할 수 없습니다.",
 	"artifacts.share.pageFiles.videos": "동영상은 아직 페이지와 함께 공유할 수 없습니다.",
+	"artifacts.share.pageFiles.hostOutdated": "일부는 이전 버전의 Orchestrator를 실행하는 컴퓨터에 있습니다. 포함하려면 해당 컴퓨터의 Orchestrator를 업데이트하세요.",
 	"artifacts.share.unpublished": "이 파일의 링크는 게시가 취소되었습니다. 게시하면 새 링크가 만들어집니다.",
 	"artifacts.share.upgradeTitle": "업그레이드하여 더 공유하기",
 	"artifacts.share.limitReached": "무료 플랜: 활성 링크는 최대 {{limit}}개입니다. 업그레이드하면 더 공유할 수 있습니다.",

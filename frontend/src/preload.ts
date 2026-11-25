@@ -553,7 +553,9 @@ const api = {
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
-		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
+		// linkOnly reads the link alone, without looking up whether the page's files changed.
+		inspect: (file: CloudShareFile, options?: { linkOnly?: boolean }) =>
+			ipcRenderer.invoke("cloudShare:inspect", file, options) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
 		/** The links this computer published remote hosts' files to; their daemons list none. */
