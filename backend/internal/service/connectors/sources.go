@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -155,6 +156,9 @@ func (s *Service) ImportCandidates(ctx context.Context) ([]ImportCandidate, erro
 		if !ok || seen[id] {
 			continue
 		}
+		if _, err := normalize(in, record{}); err != nil && len(needs) == 0 {
+			continue
+		}
 		seen[id] = true
 		out = append(out, ImportCandidate{
 			ID: id, Agent: server.agent, Source: server.path, Key: in.Key, Transport: in.Transport,
@@ -193,12 +197,21 @@ func (s *Service) Import(ctx context.Context, ids []string, values map[string]ma
 		}
 		rec, err := normalize(in, record{})
 		if err != nil {
+			var failure *apierr.Error
+			if errors.As(err, &failure) {
+				named := *failure
+				named.Message = server.name + ": " + failure.Message
+				return nil, &named
+			}
 			return nil, err
+		}
+		if keys[rec.Key] {
+			continue
 		}
 		s.mu.Lock()
 		taken := s.load() == nil && s.keyTaken(rec.Key, "")
 		s.mu.Unlock()
-		if taken || keys[rec.Key] {
+		if taken {
 			return nil, errKeyExists(rec.Key)
 		}
 		keys[rec.Key] = true

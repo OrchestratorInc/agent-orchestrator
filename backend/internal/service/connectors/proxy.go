@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httputil"
@@ -82,11 +83,16 @@ func (s *Service) ForSession(ctx context.Context, in SessionInput) []ports.ChatM
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if in.SessionID == "" || s.load() != nil {
+	if in.SessionID == "" {
+		return nil
+	}
+	if err := s.load(); err != nil {
+		slog.Default().Warn("session gets no connectors: the connector file cannot be read", "session", in.SessionID, "error", err)
 		return nil
 	}
 	token, err := s.sessionToken(in.SessionID)
 	if err != nil {
+		slog.Default().Warn("session gets no connectors: no session token", "session", in.SessionID, "error", err)
 		return nil
 	}
 	var out []ports.ChatMCPServerConfig

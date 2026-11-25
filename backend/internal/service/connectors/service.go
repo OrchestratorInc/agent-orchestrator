@@ -503,8 +503,8 @@ func safeError(err error, address string) string {
 
 // LoopbackURL reports whether raw names a server on the machine itself.
 func LoopbackURL(raw string) bool {
-	target, err := url.Parse(raw)
-	return err == nil && loopbackHost(target.Hostname())
+	target, err := url.Parse(strings.TrimSpace(raw))
+	return err != nil || loopbackHost(target.Hostname())
 }
 
 func loopbackHost(host string) bool {

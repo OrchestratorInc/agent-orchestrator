@@ -211,12 +211,12 @@ func isPreviewFileRequest(r *http.Request) bool {
 	return len(parts) == 4 && parts[0] != "" && parts[1] == "preview" && (parts[2] == "files" || parts[2] == "artifacts")
 }
 
-// Render documents are always served with an opaque-origin CSP sandbox. Allow
-// iframe and render-check navigations, never render publication or artifact APIs.
 func isConnectorSignInReturn(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.URL.Path == "/oauth/mcp/callback"
 }
 
+// Render documents are always served with an opaque-origin CSP sandbox. Allow
+// iframe and render-check navigations, never render publication or artifact APIs.
 func isRenderDocumentRequest(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false

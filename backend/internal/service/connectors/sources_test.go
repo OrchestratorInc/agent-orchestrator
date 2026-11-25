@@ -183,6 +183,27 @@ func TestImportUsesTheTokenOfABearerVariableWhenTheDaemonHasIt(t *testing.T) {
 	t.Fatal("no sentry candidate")
 }
 
+func TestImportOfTheSameServerFromTwoAgentsAddsItOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeSource(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {"docs": {"type": "http", "url": "https://docs.example.com/mcp"}}}`)
+	writeSource(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.docs]\nurl = \"https://docs.example.com/mcp\"\n")
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	candidates, err := svc.ImportCandidates(ctx)
+	if err != nil || len(candidates) != 2 || candidates[0].Key != "docs" || candidates[1].Key != "docs" {
+		t.Fatalf("candidates = %+v, %v", candidates, err)
+	}
+	added, err := svc.Import(ctx, []string{candidates[0].ID, candidates[1].ID}, nil)
+	if err != nil || len(added) != 1 || added[0].Key != "docs" {
+		t.Fatalf("import of both = %+v, %v", added, err)
+	}
+	if _, err := svc.Import(ctx, []string{candidates[1].ID}, nil); err == nil {
+		t.Fatal("a server whose connector exists was imported again")
+	}
+}
+
 func TestImportAsksForAVariableInAnAddressOrACommandAndAddsAllOrNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -209,12 +230,12 @@ func TestImportAsksForAVariableInAnAddressOrACommandAndAddsAllOrNothing(t *testi
 	if got := byKey["hosted"]; !slices.Equal(got.NeedsValue, []string{"TENANT"}) {
 		t.Fatalf("hosted = %+v", got)
 	}
-	long := byKey[strings.Repeat("n", 32)]
-	if long.ID == "" {
-		t.Fatalf("no candidate for the long name: %+v", candidates)
+	if long := byKey[strings.Repeat("n", 32)]; long.ID != "" {
+		t.Fatalf("a server that can never be added is offered: %+v", long)
 	}
-	if _, err := svc.Import(ctx, []string{byKey["plain"].ID, long.ID}, nil); err == nil {
-		t.Fatal("an import with a server that cannot be added succeeded")
+	_, err = svc.Import(ctx, []string{byKey["plain"].ID, byKey["hosted"].ID}, map[string]map[string]string{byKey["hosted"].ID: {"TENANT": "not a host"}})
+	if err == nil || !strings.HasPrefix(err.Error(), "hosted: ") {
+		t.Fatalf("an import with a server that cannot be added = %v, want an error that names the server", err)
 	}
 	if all, _ := svc.List(ctx); len(all) != 0 {
 		t.Fatalf("a failed import added %+v", all)

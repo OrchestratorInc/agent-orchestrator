@@ -28,7 +28,7 @@ export function connectorTarget(connector: Pick<Connector, "transport" | "url" |
 }
 
 export function needsSignIn(connector: Pick<Connector, "auth" | "signedIn" | "status" | "transport">): boolean {
-	return connector.transport === "http" && connector.auth === "oauth" && (connector.status === "needs_signin" || (!connector.signedIn && connector.status !== "connected"));
+	return connector.transport === "http" && connector.auth === "oauth" && (connector.status === "needs_signin" || (!connector.signedIn && connector.status === "unchecked"));
 }
 
 export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {

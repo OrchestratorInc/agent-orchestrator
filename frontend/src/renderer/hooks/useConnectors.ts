@@ -148,5 +148,5 @@ export function joinCommandLine(words: readonly string[]): string {
 }
 
 export function connectorKeyFrom(name: string): string {
-	return name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").replace(/_{2,}/g, "_").slice(0, 32);
+	return name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/_{2,}/g, "_").replace(/^[-_]+|-+$/g, "").slice(0, 32);
 }

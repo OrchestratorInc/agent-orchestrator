@@ -258,6 +258,8 @@ describe("connector helpers", () => {
 	it("derives a key and reads environment lines", () => {
 		expect(connectorKeyFrom("  My Server (EU) ")).toBe("my-server-eu");
 		expect(connectorKeyFrom("a".repeat(40))).toHaveLength(32);
+		expect(connectorKeyFrom("_internal")).toBe("internal");
+		expect(connectorKeyFrom("--_x_")).toBe("x_");
 		expect(parseEnvLines("A=1\n\nB = x=y")).toEqual({ A: "1", B: " x=y" });
 		expect(parseEnvLines("=1")).toBeNull();
 	});
@@ -269,5 +271,6 @@ describe("connector helpers", () => {
 		expect(needsSignIn({ ...base, auth: "none", signedIn: false, status: "connected" })).toBe(false);
 		expect(needsSignIn({ ...base, auth: "header", signedIn: false, status: "needs_signin" })).toBe(false);
 		expect(needsSignIn({ ...base, signedIn: true, status: "needs_signin" })).toBe(true);
+		expect(needsSignIn({ ...base, signedIn: false, status: "unavailable" })).toBe(false);
 	});
 });

@@ -212,7 +212,7 @@ export function ConnectorDialog({ connector, preset, onClose, onSaved }: {
 									</Field>
 								)}
 								<Field id={`${ids}-key`} label={t("settings.connectors.dialog.name")} hint={t("settings.connectors.dialog.nameHint")}>
-									<Input id={`${ids}-key`} className="font-mono text-xs" maxLength={32} value={shownKey} disabled={Boolean(connector)} onChange={(event) => { setKey(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").replace(/_{2,}/g, "_").slice(0, 32)); setKeyEdited(true); }} />
+									<Input id={`${ids}-key`} className="font-mono text-xs" maxLength={32} value={shownKey} disabled={Boolean(connector)} onChange={(event) => { setKey(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").replace(/_{2,}/g, "_").replace(/^[-_]+/, "").slice(0, 32)); setKeyEdited(true); }} />
 								</Field>
 								{mode === "url" ? (
 									<>
