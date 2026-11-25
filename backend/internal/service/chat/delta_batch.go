@@ -208,7 +208,7 @@ func (c *Controller) projectDeltas(ctx context.Context, run []ports.ChatEvent) (
 				}
 			}
 			merged.Delta = text.String()
-			return c.apply(txCtx, merged)
+			return c.apply(txCtx, merged, false) // deltas never settle a turn
 		})
 		if err != nil || projected {
 			return projected, err

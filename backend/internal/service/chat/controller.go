@@ -84,6 +84,7 @@ type Store interface {
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, usageLimitResetsAt time.Time, now time.Time) error
+	EnqueueWorkerTurnFailure(ctx context.Context, conversationID, providerTurnID string, at time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
@@ -247,6 +248,7 @@ type Controller struct {
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	prChanged              func(domain.SessionID)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	turnFailureWake        func()
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -3475,11 +3477,34 @@ func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Ti
 // projectEvent archives one normalized provider event and applies its durable
 // projection in the same SQLite transaction.
 func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (bool, bool, error) {
-	projected, err := c.archive(ctx, event, func(txCtx context.Context) error { return c.apply(txCtx, event) })
+	// The failure outbox row is written inside the projection transaction, so
+	// whether this completion ends the primary turn is read before it commits.
+	primaryFailure := false
+	if event.Kind == ports.ChatEventTurnCompleted && c.reviewID == "" && failureNeedsOrchestrator(event) &&
+		(event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID()) {
+		c.mu.Lock()
+		primaryFailure = c.pendingTurnID != "" && c.pendingTurnID == event.ProviderTurnID
+		c.mu.Unlock()
+	}
+	projected, err := c.archive(ctx, event, func(txCtx context.Context) error { return c.apply(txCtx, event, primaryFailure) })
 	if err != nil || !projected {
 		return projected, false, err
 	}
 	return true, c.applyCommittedTurnLifecycle(event), nil
+}
+
+// failureNeedsOrchestrator reports a failed turn that stops the worker until
+// someone steps in. Usage-limit refusals have their own recovery and
+// auto-resume, and a prompt the watchdog failed for silence releases the queue,
+// so neither asks the orchestrator to retry or re-delegate work.
+func failureNeedsOrchestrator(event ports.ChatEvent) bool {
+	if settledTurnState(event) != domain.TurnStateFailed || errors.Is(event.Err, ports.ErrChatPromptStalled) {
+		return false
+	}
+	if !event.UsageLimitResetsAt.IsZero() {
+		return false
+	}
+	return event.Err == nil || domain.ParseConversationUsageLimit(event.Err.Error(), nil) == nil
 }
 
 // archive records event in the provider archive and runs project in the same
@@ -3594,7 +3619,7 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 	}
 }
 
-func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
+func (c *Controller) apply(ctx context.Context, event ports.ChatEvent, primaryFailure bool) error {
 	now := c.now()
 	if event.ProviderTurnID != "" {
 		c.turnlessPlanItemID = ""
@@ -3668,6 +3693,11 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			// Best effort: a turn that ends without its artifact list still ended.
 			if err := c.recordTurnArtifacts(ctx, event.ProviderTurnID); err != nil {
 				c.log.Warn("turn artifacts not recorded", "session", c.sessionID, "providerTurn", event.ProviderTurnID, "error", err)
+			}
+		}
+		if primaryFailure {
+			if err := c.store.EnqueueWorkerTurnFailure(ctx, c.conversation.ID, event.ProviderTurnID, now); err != nil {
+				return err
 			}
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
@@ -4063,8 +4093,14 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		if reauthRequired {
 			activityState = domain.ActivityWaitingInput
 			activityEvent = "chat.account.reauth"
+		} else if failureNeedsOrchestrator(event) {
+			activityState = domain.ActivityWaitingInput
+			activityEvent = "chat.turn.failed"
 		}
 		c.reportActivity(ctx, activityState, activityEvent, now)
+		if failureNeedsOrchestrator(event) && c.reviewID == "" && c.turnFailureWake != nil {
+			c.turnFailureWake()
+		}
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861). A
 		// prompt the host's watchdog failed for silence is not an outage: the

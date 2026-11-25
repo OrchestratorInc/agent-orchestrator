@@ -92,6 +92,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/terminaltitle"
+	turnfailuresvc "github.com/aoagents/agent-orchestrator/backend/internal/service/turnfailure"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
@@ -879,10 +880,14 @@ func Run(buildVersion string) (retErr error) {
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
+	failureCoordinator := turnfailuresvc.New(store, turnFailureDelivery{sessions: reportSessions}, log)
+	chatSvc.SetTurnFailureWake(failureCoordinator.Wake)
+	failureDeliveryDone := failureCoordinator.Start(ctx)
 	defer func() {
 		unsubscribeReportActivity()
 		stop()
 		<-reportDeliveryDone
+		<-failureDeliveryDone
 	}()
 	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
 
@@ -1820,6 +1825,20 @@ func (s sessionConversationService) StopTurn(ctx context.Context, id domain.Sess
 		case errors.Is(err, sessionmanager.ErrOperationInProgress):
 			return apierr.Conflict("SESSION_OPERATION_IN_PROGRESS", "Another operation is already running on this session", nil)
 		}
+	}
+	return err
+}
+
+// turnFailureDelivery tells the failure coordinator which send errors leave
+// acceptance uncertain, so it pins the recipient only then.
+type turnFailureDelivery struct {
+	sessions reportSemanticSession
+}
+
+func (d turnFailureDelivery) SendSemantic(ctx context.Context, id domain.SessionID, message, idempotencyKey string) error {
+	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	if errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) {
+		return fmt.Errorf("%w: %w", turnfailuresvc.ErrUnacknowledgedDelivery, err)
 	}
 	return err
 }
