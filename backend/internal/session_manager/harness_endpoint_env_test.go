@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,6 +139,9 @@ func TestRuntimeEnvKeepsCaseVariantProjectEndpointKey(t *testing.T) {
 	if len(values) != 1 || values[0] != projectURL {
 		t.Fatalf("base URL entries = %q, want only the project value", values)
 	}
+	if env["ANTHROPIC_BASE_URL"] != "https://project.example.com" {
+		t.Fatal("the project value must be restored under the canonical environment key")
+	}
 }
 
 // setupTokenAccount is a session bound to a real Claude setup-token account:
@@ -259,4 +263,94 @@ func TestRuntimeEnvAppliesCodexEndpoint(t *testing.T) {
 	if _, ok := env["ANTHROPIC_BASE_URL"]; ok {
 		t.Fatalf("claude endpoint variables leaked into codex: %v", env)
 	}
+}
+
+func TestRuntimeEnvCanonicalizesCodexEndpointOverridesOnWindows(t *testing.T) {
+	previous := envKeysCaseInsensitive
+	envKeysCaseInsensitive = true
+	t.Cleanup(func() { envKeysCaseInsensitive = previous })
+
+	dir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dir).Save("codex", harnessendpoint.Input{BaseURL: "https://stored.example.com", APIKey: "sk-stored"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	project := map[string]string{
+		strings.ToLower(harnessendpoint.CodexBaseURLEnv): "https://project.example.com",
+		strings.ToLower(harnessendpoint.CodexAPIKeyEnv):  "sk-project",
+	}
+	env, err := manager.runtimeEnvForHarness("session", "project", "", project, domain.HarnessCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env[harnessendpoint.CodexBaseURLEnv] != "https://project.example.com" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-project" {
+		t.Fatal("Codex must receive the project endpoint under canonical keys")
+	}
+	for key := range project {
+		if _, exists := env[key]; exists {
+			t.Fatalf("case-variant endpoint key %q is still present", key)
+		}
+	}
+}
+
+func TestRuntimeEnvStopsLaunchOnBrokenEndpointBeforeResolvingAccount(t *testing.T) {
+	dir := t.TempDir()
+	accounts := &preflightEnvAccounts{}
+	manager := &Manager{
+		dataDir:       dir,
+		executable:    func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentAccounts: accounts,
+	}
+	path := writeBrokenCodexEndpoint(t, dir)
+	if env, _, err := manager.launchRuntimeEnvForHarness("session", "project", "", nil, domain.HarnessCodex); err == nil || env != nil {
+		t.Fatalf("broken endpoint must stop terminal launch, got a usable env=%t, err=%v", env != nil, err)
+	}
+	if env, err := manager.chatPreflightEnv(ports.SpawnConfig{Harness: domain.HarnessCodex}, nil); err == nil || env != nil {
+		t.Fatalf("broken endpoint must stop Chat admission, got a usable env=%t, err=%v", env != nil, err)
+	}
+	if len(accounts.ids) != 0 {
+		t.Fatalf("account lookup ran for %q after the endpoint read failed", accounts.ids)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if env, _, err := manager.launchRuntimeEnvForHarness("session", "project", "", nil, domain.HarnessCodex); err != nil || env == nil {
+		t.Fatalf("missing endpoint must allow native launch, got env=%t, err=%v", env != nil, err)
+	}
+}
+
+func TestDefaultChatSpawnRejectsBrokenEndpointBeforeCreatingSession(t *testing.T) {
+	launcher := &recordingLauncher{}
+	manager, store, runtime := newChatManager(launcher)
+	manager.defaults = fixedSessionModeDefaults(domain.SessionModeChat)
+	manager.dataDir = t.TempDir()
+	writeBrokenCodexEndpoint(t, manager.dataDir)
+
+	_, _, _, err := manager.Spawn(t.Context(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+	})
+	if err == nil || !strings.Contains(err.Error(), "load custom endpoint") {
+		t.Fatalf("expected the endpoint error from Spawn, got %v", err)
+	}
+	if len(store.sessions) != 0 || len(launcher.preflighted) != 0 || len(launcher.started) != 0 || runtime.created != 0 {
+		t.Fatal("broken endpoint should stop before Chat admission, state creation, and TUI fallback")
+	}
+}
+
+func writeBrokenCodexEndpoint(t *testing.T, dataDir string) string {
+	t.Helper()
+	path := filepath.Join(dataDir, "harness-endpoints", "codex", "endpoint.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

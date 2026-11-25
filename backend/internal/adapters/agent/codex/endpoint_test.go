@@ -2,6 +2,8 @@ package codex
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -74,7 +76,7 @@ func TestLaunchAndRestoreCommandsCarryEndpointFromEnv(t *testing.T) {
 	}
 }
 
-// Reviewer launches pass no env; the endpoint comes from the store.
+// A caller without a prepared launch environment reads the endpoint store.
 func TestLaunchCommandReadsEndpointFromStoreWithoutEnv(t *testing.T) {
 	dataDir := t.TempDir()
 	if _, err := harnessendpoint.ForDataDir(dataDir).Save("codex", harnessendpoint.Input{BaseURL: "https://gateway.example.com/v1", APIKey: "sk-stored"}, time.Now()); err != nil {
@@ -91,5 +93,36 @@ func TestLaunchCommandReadsEndpointFromStoreWithoutEnv(t *testing.T) {
 	}
 	if !slices.Contains(cmd, "model_providers.ao_endpoint.base_url='https://gateway.example.com/v1'") {
 		t.Fatalf("launch command lacks the stored endpoint: %v", cmd)
+	}
+}
+
+func TestLaunchAndRestoreRejectUnreadableEndpointWithoutPreparedEnv(t *testing.T) {
+	dataDir := t.TempDir()
+	path := filepath.Join(dataDir, "harness-endpoints", "codex", "endpoint.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plugin := &Plugin{resolvedBinary: "codex"}
+	workspace := canonicalTempDir(t)
+	launch := ports.LaunchConfig{SessionID: "session-1", WorkspacePath: workspace, DataDir: dataDir}
+	if cmd, err := plugin.GetLaunchCommand(t.Context(), launch); err == nil || cmd != nil {
+		t.Fatalf("launch should refuse an unreadable endpoint, got argv=%v, err=%v", cmd, err)
+	}
+	restore := ports.RestoreConfig{
+		DataDir: dataDir,
+		Session: ports.SessionRef{
+			ID: "session-1", WorkspacePath: workspace,
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "thread-123"},
+		},
+	}
+	if cmd, ok, err := plugin.GetRestoreCommand(t.Context(), restore); err == nil || cmd != nil || ok {
+		t.Fatalf("restore should refuse an unreadable endpoint, got argv=%v, ok=%t, err=%v", cmd, ok, err)
+	}
+	launch.Env = map[string]string{}
+	if cmd, err := plugin.GetLaunchCommand(t.Context(), launch); err != nil || len(cmd) == 0 {
+		t.Fatalf("a prepared empty endpoint snapshot must allow launch, got argv=%v, err=%v", cmd, err)
 	}
 }

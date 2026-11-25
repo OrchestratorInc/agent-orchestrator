@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -35,23 +36,16 @@ func EndpointArgs(env map[string]string) []string {
 	return args
 }
 
-// appendEndpointFlags adds the overrides for the custom endpoint a launch
-// sees, if any.
-func appendEndpointFlags(args *[]string, env map[string]string, dataDir string) {
-	*args = append(*args, EndpointArgs(endpointEnv(env, dataDir))...)
-}
-
-// endpointEnv returns the variables a launch's endpoint overrides come from.
-// The session manager passes the launch env, which already carries the
-// endpoint (or a project's deliberate override of it); callers that pass no
-// env, such as reviewer launches, fall back to the store under dataDir.
-func endpointEnv(env map[string]string, dataDir string) map[string]string {
-	if env != nil {
-		return env
+// appendEndpointFlags uses a prepared launch environment when supplied. A
+// caller without one must load the saved endpoint before constructing argv.
+func appendEndpointFlags(args *[]string, env map[string]string, dataDir string) error {
+	if env == nil {
+		stored, err := harnessendpoint.ForDataDir(dataDir).Env(string(domain.HarnessCodex))
+		if err != nil {
+			return fmt.Errorf("load custom endpoint for codex: %w", err)
+		}
+		env = stored
 	}
-	stored, err := harnessendpoint.ForDataDir(dataDir).Env(string(domain.HarnessCodex))
-	if err != nil {
-		return nil
-	}
-	return stored
+	*args = append(*args, EndpointArgs(env)...)
+	return nil
 }

@@ -137,8 +137,8 @@ type ReviewInvocation struct {
 	// EndpointEnv is the custom-endpoint environment the reviewer process
 	// receives: AO's stored endpoint with any project values applied. A
 	// harness that takes its endpoint from launch flags builds them from this,
-	// so its flags and its process environment name one endpoint. Nil when no
-	// endpoint applies.
+	// so its flags and its process environment name one endpoint. A supported
+	// harness without an endpoint gets a non-nil, empty snapshot.
 	EndpointEnv map[string]string
 	// RunFilePath is the daemon run-file reviewer-local AO CLI calls must use to
 	// find this daemon. Some harnesses filter shell command environments, so

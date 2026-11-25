@@ -225,7 +225,7 @@ func (s *Store) Load(agentID string) (Config, bool, error) {
 		return Config{}, false, fmt.Errorf("parse %s endpoint: %w", agentID, err)
 	}
 	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" {
-		return Config{}, false, nil
+		return Config{}, false, fmt.Errorf("parse %s endpoint: base URL and API key are required", agentID)
 	}
 	return cfg, true, nil
 }
@@ -359,7 +359,7 @@ func (s *Store) Env(agentID string) (map[string]string, error) {
 		return nil, err
 	}
 	if !secureEndpoint(cfg.BaseURL) {
-		return nil, fmt.Errorf("%s endpoint %q would send its key in cleartext", agentID, cfg.BaseURL)
+		return nil, fmt.Errorf("%s endpoint would send its key in cleartext", agentID)
 	}
 	style := cfg.AuthStyle
 	if _, ok := spec.KeyEnv[style]; !ok {

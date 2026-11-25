@@ -2,11 +2,14 @@ package review
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // A Claude reviewer under a custom endpoint must not carry a subscription
@@ -52,7 +55,10 @@ func TestLauncherEndpointEnvAppliesProjectValues(t *testing.T) {
 		harnessendpoint.CodexAPIKeyEnv:  "sk-project",
 		"UNRELATED":                     "x",
 	}
-	env := l.endpointEnv(spec)
+	env, err := l.endpointEnv(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if env[harnessendpoint.CodexBaseURLEnv] != "https://project.example.com" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-project" {
 		t.Fatalf("project endpoint values not applied: %v", env)
 	}
@@ -65,27 +71,93 @@ func TestLauncherEndpointEnvAppliesProjectValues(t *testing.T) {
 		t.Fatalf("only endpoint variables belong in the endpoint env: %v", env)
 	}
 
-	inv := l.invocation(spec)
-	if inv.EndpointEnv[harnessendpoint.CodexBaseURLEnv] != "https://project.example.com" {
-		t.Fatalf("invocation EndpointEnv = %v", inv.EndpointEnv)
-	}
-
 	// A project URL on the saved origin keeps the saved key and model.
 	spec.ProjectEnv = map[string]string{harnessendpoint.CodexBaseURLEnv: "https://stored.example.com/v2"}
-	env = l.endpointEnv(spec)
+	if env, err = l.endpointEnv(spec); err != nil {
+		t.Fatal(err)
+	}
 	if env[harnessendpoint.CodexBaseURLEnv] != "https://stored.example.com/v2" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-stored" || env[harnessendpoint.CodexModelEnv] != "stored-model" {
 		t.Fatalf("same-origin project URL must keep the saved key and model: %v", env)
 	}
 
-	// A project URL on another origin with no key gets no saved key.
+	// A project URL on another origin with no key gets no saved key and
+	// still launches.
 	spec.ProjectEnv = map[string]string{harnessendpoint.CodexBaseURLEnv: "https://project.example.com"}
-	if env := l.endpointEnv(spec); env[harnessendpoint.CodexAPIKeyEnv] == "sk-stored" {
-		t.Fatalf("saved key followed a URL-only project override: %v", env)
+	if env, err = l.endpointEnv(spec); err != nil || env[harnessendpoint.CodexAPIKeyEnv] == "sk-stored" {
+		t.Fatalf("URL-only project override: env=%v err=%v", env, err)
 	}
 
 	empty := &agentLauncher{dataDir: t.TempDir()}
-	if env := empty.endpointEnv(launchSpec()); env != nil {
-		t.Fatalf("no stored or project endpoint: env = %v, want nil", env)
+	if env, err := empty.endpointEnv(launchSpec()); err != nil || env == nil || len(env) != 0 {
+		t.Fatalf("no stored or project endpoint: env = %v, err = %v, want a resolved empty env", env, err)
+	}
+}
+
+type endpointChangingRuntime struct {
+	fakeRuntime
+	store *harnessendpoint.Store
+}
+
+func (r *endpointChangingRuntime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error {
+	if _, err := r.store.Save("codex", harnessendpoint.Input{BaseURL: "https://new.example.com", APIKey: "sk-new"}, time.Now()); err != nil {
+		return err
+	}
+	return r.fakeRuntime.Destroy(ctx, handle)
+}
+
+func TestReviewerUsesOneEndpointSnapshotForCommandAndProcess(t *testing.T) {
+	for _, name := range []string{"configured", "absent"} {
+		t.Run(name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			store := harnessendpoint.ForDataDir(dataDir)
+			wantURL, wantKey := "", ""
+			if name == "configured" {
+				wantURL, wantKey = "https://old.example.com", "sk-old"
+				if _, err := store.Save("codex", harnessendpoint.Input{BaseURL: wantURL, APIKey: wantKey}, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reviewer := &fakeReviewer{}
+			rt := &endpointChangingRuntime{store: store}
+			launcher := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, rt, dataDir)
+			spec := launchSpec()
+			spec.Harness = domain.ReviewerCodex
+			if _, err := launcher.Spawn(t.Context(), spec); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := reviewer.gotInv.EndpointEnv
+			if snapshot == nil || snapshot[harnessendpoint.CodexBaseURLEnv] != wantURL || snapshot[harnessendpoint.CodexAPIKeyEnv] != wantKey {
+				t.Fatal("reviewer command must receive the resolved endpoint snapshot")
+			}
+			env := rt.createCfg.Env
+			if env[harnessendpoint.CodexBaseURLEnv] != wantURL || env[harnessendpoint.CodexAPIKeyEnv] != wantKey {
+				t.Fatal("reviewer process must use the same endpoint as command construction")
+			}
+		})
+	}
+}
+
+func TestReviewerRejectsBrokenEndpointBeforeStartingOrReplacingProcess(t *testing.T) {
+	dataDir := t.TempDir()
+	path := filepath.Join(dataDir, "harness-endpoints", "codex", "endpoint.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRuntime{}
+	launcher := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, rt, dataDir)
+	spec := launchSpec()
+	spec.Harness = domain.ReviewerCodex
+	if _, err := launcher.Spawn(t.Context(), spec); err == nil {
+		t.Fatal("spawn accepted an unreadable endpoint")
+	}
+	if _, err := launcher.RestoreTerminal(t.Context(), spec); err == nil {
+		t.Fatal("restore accepted an unreadable endpoint")
+	}
+	if rt.created || rt.destroyed != "" {
+		t.Fatal("an endpoint error must be returned before touching the runtime")
 	}
 }
 

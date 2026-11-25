@@ -181,6 +181,23 @@ func TestEnvRefusesStoredCleartextRemoteURL(t *testing.T) {
 	}
 }
 
+func TestEnvRejectsIncompleteSavedEndpoint(t *testing.T) {
+	store := NewStore(t.TempDir())
+	path, err := store.path("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"baseUrl":"https://gateway.example.com"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if env, err := store.Env("codex"); err == nil || env != nil {
+		t.Fatalf("incomplete endpoint must fail instead of allowing a native launch, got env=%t, err=%v", env != nil, err)
+	}
+}
+
 func TestSaveReplacesCorruptConfigOnlyWithNewKey(t *testing.T) {
 	store := NewStore(t.TempDir())
 	path, err := store.path("claude-code")
