@@ -4977,6 +4977,14 @@ describe("ChatWorkspace timeline", () => {
 		random.mockRestore();
 	});
 
+	it("hangs the welcome heading and sample prompts from the composer so they never move it", () => {
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
+		const composerBox = screen.getByLabelText("Message the agent").closest("[data-tour='composer']");
+		expect(composerBox).not.toBeNull();
+		expect(composerBox).toContainElement(screen.getByRole("heading", { name: "What do you want to work on?" }));
+		expect(composerBox).toContainElement(screen.getByRole("list", { name: "Sample requests" }));
+	});
+
 	it("docks the composer once the conversation has content", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
 		expect(
