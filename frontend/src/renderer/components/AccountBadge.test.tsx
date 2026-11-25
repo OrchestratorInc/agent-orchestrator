@@ -26,16 +26,17 @@ describe("AccountBadge", () => {
 		render(<AccountBadge provider="claude" name="Work" />);
 		const letters = screen.getByText("WO");
 		expect(letters.className).not.toContain("--account-color");
-		expect(letters).toHaveClass("bg-muted", "text-foreground");
+		expect(letters).toHaveClass("bg-foreground/15", "text-foreground");
 	});
 
-	it("draws one bordered segment with the 14px logo, a divider, then the letters", () => {
+	it("draws the 14px logo, then the letters in their own square, with no outer frame", () => {
 		const { container } = render(<AccountBadge provider="claude" name="Work" />);
-		const segment = container.firstElementChild as HTMLElement;
-		expect(segment).toHaveClass("border", "rounded-[4px]");
-		const [logoCell, lettersCell] = Array.from(segment.children) as HTMLElement[];
-		expect(logoCell.firstElementChild).toHaveClass("size-3.5");
-		expect(lettersCell).toHaveClass("border-l");
-		expect(lettersCell).toHaveTextContent("WO");
+		const badge = container.firstElementChild as HTMLElement;
+		expect(badge).not.toHaveClass("border");
+		const [logo, letters] = Array.from(badge.children) as HTMLElement[];
+		expect(logo).toHaveClass("size-3.5");
+		expect(letters).toHaveClass("rounded-[4px]");
+		expect(letters).not.toHaveClass("border-l");
+		expect(letters).toHaveTextContent("WO");
 	});
 });
