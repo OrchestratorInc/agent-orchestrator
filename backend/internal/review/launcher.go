@@ -685,8 +685,9 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 			}
 		}
 		// A reviewer of a harness the user pointed at a custom endpoint uses
-		// that endpoint too, as the harness's sessions do.
-		if endpointEnv, err := harnessendpoint.ForDataDir(l.dataDir).Env(string(spec.Harness)); err == nil {
+		// that endpoint too, as the harness's sessions do, and likewise gets
+		// none of it when the project points the harness at another origin.
+		if endpointEnv, err := harnessendpoint.ForDataDir(l.dataDir).ProjectEnv(string(spec.Harness), spec.ProjectEnv, false); err == nil {
 			for key, value := range endpointEnv {
 				if _, set := spec.ProjectEnv[key]; !set {
 					env[key] = value

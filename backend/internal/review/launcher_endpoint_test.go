@@ -35,3 +35,24 @@ func TestLauncherSpawnClearsCompetingClaudeCredentialsForCustomEndpoint(t *testi
 		}
 	}
 }
+
+// A project that sets only its own gateway URL gets a reviewer without the
+// saved endpoint's key: the key is never sent to a different origin.
+func TestLauncherSpawnKeepsEndpointKeyOffAProjectGateway(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dataDir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRuntime{}
+	l := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, rt, dataDir)
+	spec := launchSpec()
+	spec.ProjectEnv = map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net"}
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	for key, value := range rt.createCfg.Env {
+		if value == "sk-endpoint" {
+			t.Fatalf("saved endpoint key reached the project's gateway via %s", key)
+		}
+	}
+}

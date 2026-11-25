@@ -250,3 +250,38 @@ func TestDeleteAndStatus(t *testing.T) {
 		t.Fatal("codex must report unsupported until it has a spec")
 	}
 }
+
+func TestProjectEnvKeepsKeyWithItsOrigin(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://gateway.example.com/v1", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		project map[string]string
+		insens  bool
+		applied bool
+		wantErr bool
+	}{
+		"no project env":            {project: nil, applied: true},
+		"unrelated project keys":    {project: map[string]string{"ANTHROPIC_MODEL": "m"}, applied: true},
+		"same origin other path":    {project: map[string]string{"ANTHROPIC_BASE_URL": "https://GATEWAY.example.com:443/v2"}, applied: true},
+		"other origin, url only":    {project: map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net"}, wantErr: true},
+		"other port, url only":      {project: map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com:8443"}, wantErr: true},
+		"blanked url, no key":       {project: map[string]string{"ANTHROPIC_BASE_URL": ""}, wantErr: true},
+		"other origin, project key": {project: map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net", "ANTHROPIC_API_KEY": "sk-project"}},
+		"other origin, windows key": {project: map[string]string{"anthropic_base_url": "https://other.example.net", "Anthropic_Auth_Token": "sk-project"}, insens: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env, err := store.ProjectEnv("claude-code", tc.project, tc.insens)
+			if tc.wantErr != errors.Is(err, ErrIncompleteOverride) {
+				t.Fatalf("err = %v, want incomplete override %v", err, tc.wantErr)
+			}
+			if got := env["ANTHROPIC_AUTH_TOKEN"] == "sk-endpoint"; got != tc.applied {
+				t.Fatalf("saved endpoint applied = %v, want %v (env %v)", got, tc.applied, env)
+			}
+		})
+	}
+	if env, err := store.ProjectEnv("goose", map[string]string{"ANTHROPIC_BASE_URL": "https://x.example"}, false); env != nil || err != nil {
+		t.Fatalf("unsupported harness: %v %v", env, err)
+	}
+}

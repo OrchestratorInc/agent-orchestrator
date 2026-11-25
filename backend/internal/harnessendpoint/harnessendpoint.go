@@ -340,6 +340,80 @@ func (s *Store) Env(agentID string) (map[string]string, error) {
 	return env, nil
 }
 
+// ErrIncompleteOverride reports a project that points a harness at a different
+// endpoint than the one the user saved, without the credential that endpoint
+// needs. The saved key is not sent there in its place.
+var ErrIncompleteOverride = errors.New("project overrides the custom endpoint's base URL without an API key")
+
+// ProjectEnv is Env for a launch that also carries projectEnv. A base URL and
+// its key stay paired: when the project sets the base URL to another origin
+// (or blanks it), the saved endpoint is not applied at all, so its key never
+// reaches a gateway it was not saved for. The project's own key then applies,
+// and a project that set none gets ErrIncompleteOverride. A project URL on the
+// saved endpoint's origin keeps the saved key. Callers still let every project
+// value win key by key. caseInsensitive matches project keys the way Windows
+// environments do.
+func (s *Store) ProjectEnv(agentID string, projectEnv map[string]string, caseInsensitive bool) (map[string]string, error) {
+	env, err := s.Env(agentID)
+	if err != nil || len(env) == 0 {
+		return env, err
+	}
+	spec := specs[agentID]
+	lookup := func(name string) (string, bool) {
+		for key, value := range projectEnv {
+			if key == name || caseInsensitive && strings.EqualFold(key, name) {
+				return value, true
+			}
+		}
+		return "", false
+	}
+	projectURL, set := lookup(spec.BaseURLEnv)
+	if !set || sameOrigin(projectURL, env[spec.BaseURLEnv]) {
+		return env, nil
+	}
+	for _, name := range spec.KeyEnv {
+		if value, ok := lookup(name); ok && strings.TrimSpace(value) != "" {
+			return nil, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: set %s for %s or remove %s from the project", ErrIncompleteOverride, keyEnvNames(spec), agentID, spec.BaseURLEnv)
+}
+
+// sameOrigin reports whether two base URLs reach the same scheme, host and
+// port, where a key saved for one is safe to send to the other.
+func sameOrigin(a, b string) bool {
+	left, errA := url.Parse(strings.TrimSpace(a))
+	right, errB := url.Parse(strings.TrimSpace(b))
+	if errA != nil || errB != nil || left.Host == "" || right.Host == "" {
+		return false
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Hostname(), right.Hostname()) &&
+		effectivePort(left) == effectivePort(right)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+func keyEnvNames(spec Spec) string {
+	names := make([]string, 0, len(spec.KeyEnv))
+	for _, name := range spec.KeyEnv {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, " or ")
+}
+
 func normalize(spec Spec, in Input) (Config, error) {
 	baseURL := strings.TrimSpace(in.BaseURL)
 	apiKey := strings.TrimSpace(in.APIKey)

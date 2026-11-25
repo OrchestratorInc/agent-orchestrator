@@ -186,3 +186,46 @@ func TestRuntimeEnvClearsSetupTokenForCustomEndpoint(t *testing.T) {
 		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN = %q (set=%v), want the setup token cleared", value, ok)
 	}
 }
+
+// A project that points Claude at its own gateway must not receive the saved
+// endpoint's key there: a URL alone gets no saved key, a project key is used
+// when the project sets one, and a URL on the saved origin keeps the saved key.
+func TestRuntimeEnvKeepsEndpointKeyPairedWithItsURL(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	launch := func(projectEnv map[string]string) map[string]string {
+		t.Helper()
+		env, err := manager.runtimeEnvChecked("session", "project", "", projectEnv, "", "claude-code")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return env
+	}
+
+	urlOnly := launch(map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net"})
+	if urlOnly["ANTHROPIC_BASE_URL"] != "https://other.example.net" {
+		t.Fatalf("project URL not kept: %v", urlOnly["ANTHROPIC_BASE_URL"])
+	}
+	for key, value := range urlOnly {
+		if value == "sk-endpoint" {
+			t.Fatalf("saved endpoint key sent to the project's gateway in %s", key)
+		}
+	}
+
+	withKey := launch(map[string]string{"ANTHROPIC_BASE_URL": "https://other.example.net", "ANTHROPIC_API_KEY": "sk-project"})
+	if withKey["ANTHROPIC_API_KEY"] != "sk-project" || withKey["ANTHROPIC_AUTH_TOKEN"] == "sk-endpoint" {
+		t.Fatalf("project gateway must use the project's key only: api=%q token=%q", withKey["ANTHROPIC_API_KEY"], withKey["ANTHROPIC_AUTH_TOKEN"])
+	}
+
+	sameOrigin := launch(map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com/v2"})
+	if sameOrigin["ANTHROPIC_BASE_URL"] != "https://gateway.example.com/v2" || sameOrigin["ANTHROPIC_AUTH_TOKEN"] != "sk-endpoint" {
+		t.Fatalf("same-origin override must keep the saved key: %v %v", sameOrigin["ANTHROPIC_BASE_URL"], sameOrigin["ANTHROPIC_AUTH_TOKEN"] == "sk-endpoint")
+	}
+}
