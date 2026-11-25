@@ -503,6 +503,9 @@ export const NEXT_TAB_SHORTCUT_CHANNEL = "app:next-tab";
 // so adding a command never needs a new preload method. `index` is the zero-based
 // digit for indexed commands (jump-to-session).
 export const APP_SHORTCUT_CHANNEL = "app:shortcut";
+// Main reports each app shortcut chord it claims, by id, for usage counts only.
+// Menu bar items run the same actions without it, so it means a key press.
+export const APP_SHORTCUT_PRESSED_CHANNEL = "app:shortcut-pressed";
 export type AppShortcutEvent = { id: AppShortcutId; index?: number };
 
 // New session: ⌘N on macOS, Ctrl+Shift+N on Windows/Linux. Plain Ctrl+N is a

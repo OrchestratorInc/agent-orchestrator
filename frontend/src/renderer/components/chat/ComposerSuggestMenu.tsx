@@ -17,7 +17,7 @@ import { CornerDownLeft, Loader2 } from "@/components/app-icons";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
-import { composerFileIcon } from "./composerFileIcon";
+import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
 
 export function ComposerSuggestMenu({
@@ -84,7 +84,6 @@ export function ComposerSuggestMenu({
 					{items.map((item, index) => {
 						const active = index === highlighted;
 						const badge = displayBadge(item.badge);
-						const Icon = kind === "file" ? composerFileIcon(item.value) : undefined;
 						return (
 							<li key={item.value} data-index={index}>
 								<Pressable
@@ -100,9 +99,7 @@ export function ComposerSuggestMenu({
 											: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
 									)}
 								>
-									{Icon ? (
-										<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-									) : null}
+									{kind === "file" ? <WorkspaceEntryIcon kind="file" name={item.label} /> : null}
 									{/* Name first, then its description or folder on the same line,
 									    so a row stays one line tall. In the `/` menu the name is
 									    what the eye scans for, so it reads bright and its

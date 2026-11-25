@@ -29,13 +29,15 @@ const INSPECTOR_TELEMETRY_NAMES: Record<InspectorView, string> = {
 	summary: "summary",
 	reviews: "reviews",
 	browser: "browser",
+	device: "device",
 	sideChat: "side_chat",
 	subagents: "subagents",
 	files: "files",
 	artifacts: "artifacts",
+	task: "background_tasks",
 };
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -58,6 +60,7 @@ export function SessionInspectorShellView({
 	artifactsView,
 	browserPoppedOut,
 	browserView,
+	deviceView,
 	sideChatView,
 	subagentsView,
 	filesView,
@@ -68,12 +71,14 @@ export function SessionInspectorShellView({
 	reviewsView,
 	summaryView,
 	tabs,
+	taskView,
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
 	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	deviceView?: ReactNode;
 	sideChatView?: ReactNode;
 	subagentsView?: ReactNode;
 	filesView?: ReactNode;
@@ -84,6 +89,8 @@ export function SessionInspectorShellView({
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
+	/** The Background tasks tab: its list, or the task it has open. */
+	taskView?: ReactNode;
 }) {
 
 	if (loadingText) {
@@ -194,10 +201,10 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
 					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts") && "p-0 overflow-hidden",
+					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -209,10 +216,12 @@ export function SessionInspectorShellView({
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
+				{activeView === "device" ? deviceView : null}
 				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "subagents" ? subagentsView : null}
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
+				{activeView === "task" ? taskView : null}
 			</div>
 		</aside>
 	);
@@ -221,12 +230,15 @@ export function SessionInspectorShellView({
 export function InspectorSection({
 	children,
 	defaultOpen = true,
+	meta,
 	surface = true,
 	title,
 }: {
 	children: ReactNode;
 	/** Off for reference detail the reader opens on demand (a Setup log). */
 	defaultOpen?: boolean;
+	/** A short fact beside the title, such as a count. */
+	meta?: ReactNode;
 	surface?: boolean;
 	title: string;
 }) {
@@ -240,13 +252,14 @@ export function InspectorSection({
 				<button
 					aria-controls={contentId}
 					aria-expanded={open}
-					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full items-center rounded-lg p-1.5 text-left text-muted-foreground")}
+					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full select-none items-center rounded-lg p-1.5 text-left text-muted-foreground")}
 					onClick={() => setOpen((current) => !current)}
 					type="button"
 				>
 					<NavRowHighlight />
 					<span className="relative z-[1] flex w-full min-w-0 items-center justify-between gap-2 text-sm">
 						<span className="min-w-0 flex-1">{title}</span>
+						{meta ? <span className="shrink-0 pr-1.5 text-xs text-passive">{meta}</span> : null}
 						<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" direction={open ? "down" : "right"} />
 					</span>
 				</button>
@@ -1320,8 +1333,12 @@ export function commentTextLines(body: string): string[] {
 			// Fences and rules go before any marker is stripped, while they still look like
 			// themselves: a suggestion block previews as its code, not as "suggestion".
 			if (/^(?:```|~~~)/.test(raw) || /^(?:[-*_=]\s*){3,}$/.test(raw)) return "";
+			// A GitHub alert's "> [!NOTE]" marker is its type, not its text.
+			if (/^(?:>\s*)?\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/i.test(raw)) return "";
 			return raw
-				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|>\s*)/, "")
+				// A quoted line can carry its own heading or list marker ("> ## Reviews paused").
+				.replace(/^(?:>\s*)+/, "")
+				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?)/, "")
 				// Emphasis is stripped outside inline code only; `_` must sit at a word edge, so snake_case stays.
 				.split(/(`[^`\n]*`)/)
 				.map((part, index) => index % 2 === 1 ? part.slice(1, -1) : part
