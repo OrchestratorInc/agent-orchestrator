@@ -269,9 +269,24 @@ var identityEnv = []string{
 	"GIT_COMMITTER_NAME=AO", "GIT_COMMITTER_EMAIL=ao@localhost",
 }
 
+// processEnv is this process's environment without the inherited variables
+// that would send a command's objects to another object store than the
+// repository's own, leaving refs that point at objects it lacks.
+func processEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_OBJECT_DIRECTORY=") || strings.HasPrefix(kv, "GIT_ALTERNATE_OBJECT_DIRECTORIES=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 func run(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := aoprocess.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(processEnv(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {

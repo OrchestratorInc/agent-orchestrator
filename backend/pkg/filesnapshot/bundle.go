@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/gitbundle"
@@ -24,6 +25,15 @@ func BundleChain(ctx context.Context, gitDir, ref, parentRef, out string) ([]str
 	if !strings.HasPrefix(ref, snapshotsPrefix) {
 		return nil, fmt.Errorf("snapshot ref %q is outside %s", ref, snapshotsPrefix)
 	}
+	// git runs from a folder of its own, so every path is made absolute
+	// against the caller's folder first.
+	gitDir, err := filepath.Abs(gitDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve git directory: %w", err)
+	}
+	if out, err = filepath.Abs(out); err != nil {
+		return nil, fmt.Errorf("resolve bundle path: %w", err)
+	}
 	args := []string{"bundle", "create", "--quiet", out, ref}
 	if parentRef != "" {
 		if !strings.HasPrefix(parentRef, snapshotsPrefix) {
@@ -42,7 +52,14 @@ func BundleChain(ctx context.Context, gitDir, ref, parentRef, out string) ([]str
 // first bundle whose required commits the store lacks, with ErrChainBroken,
 // having fetched nothing from that bundle.
 func FetchChain(ctx context.Context, gitDir string, bundles []string) error {
+	gitDir, err := filepath.Abs(gitDir)
+	if err != nil {
+		return fmt.Errorf("resolve git directory: %w", err)
+	}
 	for _, bundle := range bundles {
+		if bundle, err = filepath.Abs(bundle); err != nil {
+			return fmt.Errorf("resolve bundle path: %w", err)
+		}
 		prerequisites, err := gitbundle.Prerequisites(bundle)
 		if err != nil {
 			return fmt.Errorf("read snapshot bundle: %w", err)

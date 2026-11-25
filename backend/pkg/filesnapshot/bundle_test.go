@@ -3,6 +3,7 @@ package filesnapshot
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -114,5 +115,69 @@ func TestBundleChainOnlyHandlesSnapshotRefs(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "b.bundle")
 	if _, err := BundleChain(context.Background(), filepath.Join(repo, ".git"), "refs/heads/main", "", out); err == nil {
 		t.Fatal("BundleChain of a branch succeeded")
+	}
+}
+
+// Paths relative to the caller's folder name the same files they would
+// anywhere else, though git runs from a folder of its own.
+func TestBundleChainResolvesRelativePaths(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	write(t, repo, "notes.txt", "relative\n")
+	ref := Ref("s1", "turn-2")
+	if err := Capture(ctx, repo, ref); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.Symlink(filepath.Join(repo, ".git"), filepath.Join(work, "src.git")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BundleChain(ctx, "src.git", ref, "", "base.bundle"); err != nil {
+		t.Fatalf("BundleChain with relative paths: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "base.bundle")); err != nil {
+		t.Fatalf("the bundle isn't in the caller's folder: %v", err)
+	}
+	if out, err := exec.Command("git", "init", "-q", "--bare", "dst.git").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := FetchChain(ctx, "dst.git", []string{"base.bundle"}); err != nil {
+		t.Fatalf("FetchChain with relative paths: %v", err)
+	}
+	if got := showIn(t, filepath.Join(work, "dst.git"), ref+":notes.txt"); got != "relative" {
+		t.Fatalf("notes.txt = %q", got)
+	}
+}
+
+// An object directory inherited from the process's environment must not
+// take the fetched objects somewhere other than the store.
+func TestFetchChainIgnoresAnInheritedObjectDirectory(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	write(t, repo, "notes.txt", "kept\n")
+	ref := Ref("s1", "turn-2")
+	if err := Capture(ctx, repo, ref); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "base.bundle")
+	if _, err := BundleChain(ctx, filepath.Join(repo, ".git"), ref, "", out); err != nil {
+		t.Fatal(err)
+	}
+	store := bareStore(t)
+	elsewhere := t.TempDir()
+	t.Setenv("GIT_OBJECT_DIRECTORY", elsewhere)
+	t.Setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", elsewhere)
+	if err := FetchChain(ctx, store, []string{out}); err != nil {
+		t.Fatalf("FetchChain: %v", err)
+	}
+	if err := os.Unsetenv("GIT_OBJECT_DIRECTORY"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Unsetenv("GIT_ALTERNATE_OBJECT_DIRECTORIES"); err != nil {
+		t.Fatal(err)
+	}
+	if got := showIn(t, store, ref+":notes.txt"); got != "kept" {
+		t.Fatalf("notes.txt = %q; the objects went elsewhere", got)
 	}
 }

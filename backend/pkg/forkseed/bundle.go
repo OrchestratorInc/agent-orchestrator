@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/gitbundle"
@@ -23,6 +24,12 @@ func Bundle(ctx context.Context, workspace, ref, out string) ([]string, error) {
 	if !strings.HasPrefix(ref, RefPrefix) {
 		return nil, fmt.Errorf("forkseed: ref %q is outside %s", ref, RefPrefix)
 	}
+	// git runs in workspace, so a relative path is made absolute against the
+	// caller's folder first, for git and for reading the header alike.
+	out, err := filepath.Abs(out)
+	if err != nil {
+		return nil, fmt.Errorf("forkseed: resolve bundle path: %w", err)
+	}
 	if _, err := run(ctx, workspace, nil, "bundle", "create", "--quiet", out, ref, "--not", "--remotes"); err != nil {
 		return nil, fmt.Errorf("forkseed: create bundle: %w", err)
 	}
@@ -36,6 +43,10 @@ func Bundle(ctx context.Context, workspace, ref, out string) ([]string, error) {
 func Unbundle(ctx context.Context, worktree, bundle, ref string) error {
 	if !strings.HasPrefix(ref, RefPrefix) {
 		return fmt.Errorf("forkseed: ref %q is outside %s", ref, RefPrefix)
+	}
+	bundle, err := filepath.Abs(bundle)
+	if err != nil {
+		return fmt.Errorf("forkseed: resolve bundle path: %w", err)
 	}
 	prerequisites, err := gitbundle.Prerequisites(bundle)
 	if err != nil {
