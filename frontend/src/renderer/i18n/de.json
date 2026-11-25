@@ -5418,6 +5418,7 @@
 	"chat.connectorRestart.restart": "Neu starten und fortfahren",
 	"chat.connectorRestart.restarting": "Wird neu gestartet…",
 	"chat.connectorRestart.later": "Später",
+	"chat.connectorRestart.notSent": "Die Nachricht wurde nach dem Neustart nicht gesendet",
 	"chat.connectorProposal.approve": "Genehmigen",
 	"chat.connectorProposal.decline": "Ablehnen"
 }

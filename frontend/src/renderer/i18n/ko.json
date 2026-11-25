@@ -5418,6 +5418,7 @@
 	"chat.connectorRestart.restart": "다시 시작하고 계속",
 	"chat.connectorRestart.restarting": "다시 시작하는 중…",
 	"chat.connectorRestart.later": "나중에",
+	"chat.connectorRestart.notSent": "다시 시작한 후 메시지를 보내지 못했습니다",
 	"chat.connectorProposal.approve": "승인",
 	"chat.connectorProposal.decline": "거절"
 }

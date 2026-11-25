@@ -249,7 +249,10 @@ func (s *Service) handlerConfig(rec *record, pending *signIn, pageReady chan<- s
 			s.mu.Lock()
 			s.signIns[page.Query().Get("state")] = pending
 			s.mu.Unlock()
-			pageReady <- args.URL
+			select {
+			case pageReady <- args.URL:
+			default:
+			}
 			select {
 			case result := <-pending.result:
 				return result, nil

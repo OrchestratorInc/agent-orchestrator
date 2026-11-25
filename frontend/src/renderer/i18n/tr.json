@@ -5398,6 +5398,7 @@
 	"chat.connectorRestart.restart": "Yeniden başlat ve devam et",
 	"chat.connectorRestart.restarting": "Yeniden başlatılıyor…",
 	"chat.connectorRestart.later": "Sonra",
+	"chat.connectorRestart.notSent": "Yeniden başlatmadan sonra mesaj gönderilmedi",
 	"chat.connectorProposal.approve": "Onayla",
 	"chat.connectorProposal.decline": "Reddet"
 }

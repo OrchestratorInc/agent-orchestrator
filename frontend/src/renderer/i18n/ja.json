@@ -5418,6 +5418,7 @@
 	"chat.connectorRestart.restart": "再起動して続行",
 	"chat.connectorRestart.restarting": "再起動中…",
 	"chat.connectorRestart.later": "後で",
+	"chat.connectorRestart.notSent": "再起動後にメッセージを送信できませんでした",
 	"chat.connectorProposal.approve": "承認",
 	"chat.connectorProposal.decline": "拒否"
 }

@@ -5398,6 +5398,7 @@
 	"chat.connectorRestart.restart": "Restart and continue",
 	"chat.connectorRestart.restarting": "Restarting…",
 	"chat.connectorRestart.later": "Later",
+	"chat.connectorRestart.notSent": "The message was not sent after the restart",
 	"chat.connectorProposal.approve": "Approve",
 	"chat.connectorProposal.decline": "Decline"
 }

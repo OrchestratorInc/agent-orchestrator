@@ -5574,6 +5574,7 @@
 	"chat.connectorRestart.restart": "Reiniciar y continuar",
 	"chat.connectorRestart.restarting": "Reiniciando…",
 	"chat.connectorRestart.later": "Más tarde",
+	"chat.connectorRestart.notSent": "El mensaje no se envió después del reinicio",
 	"chat.connectorProposal.approve": "Aprobar",
 	"chat.connectorProposal.decline": "Rechazar"
 }

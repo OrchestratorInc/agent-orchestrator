@@ -5400,6 +5400,7 @@
 	"chat.connectorRestart.restart": "重启并继续",
 	"chat.connectorRestart.restarting": "正在重启…",
 	"chat.connectorRestart.later": "稍后",
+	"chat.connectorRestart.notSent": "重启后消息未发送",
 	"chat.connectorProposal.approve": "批准",
 	"chat.connectorProposal.decline": "拒绝"
 }

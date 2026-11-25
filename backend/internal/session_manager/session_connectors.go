@@ -46,14 +46,17 @@ func (m *Manager) sessionMCPServers(ctx context.Context, harness domain.AgentHar
 }
 
 func (m *Manager) connectorServers(ctx context.Context, harness domain.AgentHarness, projectID domain.ProjectID, workspace string, env map[string]string) []ports.ChatMCPServerConfig {
+	connectors := m.sessionConnectors(ctx, SessionConnectorsInput{
+		SessionID: env[EnvSessionID], ProjectID: projectID, Harness: harness, Workspace: workspace, Env: env,
+	})
+	if len(connectors) == 0 {
+		return nil
+	}
 	executable, err := m.executable()
 	if err != nil || !filepath.IsAbs(executable) {
 		m.logger.Warn("session gets no connectors: the ao executable is not available")
 		return nil
 	}
-	connectors := m.sessionConnectors(ctx, SessionConnectorsInput{
-		SessionID: env[EnvSessionID], ProjectID: projectID, Harness: harness, Workspace: workspace, Env: env,
-	})
 	servers := make([]ports.ChatMCPServerConfig, 0, len(connectors))
 	command, args := mcpServerCommand(executable)
 	for _, connector := range connectors {

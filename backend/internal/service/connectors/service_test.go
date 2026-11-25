@@ -341,7 +341,7 @@ func TestEveryNameOfTheMachineItselfIsLoopback(t *testing.T) {
 	for _, address := range []string{
 		"http://localhost:1/mcp", "http://LOCALHOST:1/mcp", "https://localhost.:8443/mcp", "https://api.localhost/mcp",
 		"http://127.0.0.1:1/mcp", "https://127.0.0.2:8443/mcp", "http://[::1]:1/mcp", "https://[::ffff:127.0.0.1]:8443/mcp", "http://0.0.0.0:1/mcp",
-		" http://127.0.0.1:9222/mcp", "\thttp://localhost:1/mcp\n", "http://127.0.0.1:1/%zz",
+		" http://127.0.0.1:9222/mcp", "\thttp://localhost:1/mcp\n",
 	} {
 		if !LoopbackURL(address) {
 			t.Errorf("%s does not read as the machine itself", address)

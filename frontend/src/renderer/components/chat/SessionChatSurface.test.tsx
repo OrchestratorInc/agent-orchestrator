@@ -416,7 +416,7 @@ describe("SessionChatSurface connector restart", () => {
 		await act(async () => { await sideMocks.connectorRestart?.restart(); });
 		expect(conversationCommandState.restartAgent).toHaveBeenCalledTimes(1);
 		expect(sideMocks.connectorRestart?.ready).toBeUndefined();
-		expect(useUiStore.getState().globalToast).toMatchObject({ title: "Message not sent after the restart", tone: "error" });
+		expect(useUiStore.getState().globalToast).toMatchObject({ title: "The message was not sent after the restart", tone: "error" });
 	});
 
 	it("sends nothing when the restart fails", async () => {

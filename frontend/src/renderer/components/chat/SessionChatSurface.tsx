@@ -333,7 +333,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		offerConnectorRestart();
 		if (!connector) return;
 		await Promise.resolve(commands.send(`The ${connector.key} connector is ready. Continue.`))
-			.catch((error) => useUiStore.getState().showGlobalToast("Message not sent after the restart", apiErrorMessage(error), "error"));
+			.catch((error) => useUiStore.getState().showGlobalToast(t("chat.connectorRestart.notSent"), apiErrorMessage(error), "error"));
 	});
 	const connectorRestart = useMemo(
 		() => ({ ready: readyConnectorLoaded ? undefined : readyConnector?.name, busy: agentBusy, offer: offerConnectorRestart, restart: restartForConnector }),

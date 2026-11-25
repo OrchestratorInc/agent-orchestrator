@@ -5722,6 +5722,7 @@
 	"chat.connectorRestart.restart": "Перезапустить и продолжить",
 	"chat.connectorRestart.restarting": "Перезапуск…",
 	"chat.connectorRestart.later": "Позже",
+	"chat.connectorRestart.notSent": "Сообщение не отправлено после перезапуска",
 	"chat.connectorProposal.approve": "Одобрить",
 	"chat.connectorProposal.decline": "Отклонить"
 }
