@@ -70,7 +70,7 @@ func TestLaunchCommandIsolatesDataHome(t *testing.T) {
 	parent := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", parent)
 	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
-	argv, err := command(context.Background(), "/bin/opencode", ports.LaunchConfig{SessionID: "s1"}, "")
+	argv, err := New().command(context.Background(), "/bin/opencode", ports.LaunchConfig{SessionID: "s1"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
