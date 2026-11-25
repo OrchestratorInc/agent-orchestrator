@@ -151,6 +151,7 @@ vi.mock("../session/serialPoll", () => ({ startSerialPoll: () => () => {} }));
 vi.mock("../session/startupPoll", () => ({ STARTUP_POLL_MS: 1_000 }));
 vi.mock("../session/useStartupSession", () => ({ useStartupSession: (_config: unknown, session: unknown) => session }));
 vi.mock("../session/useSessionPreview", () => ({ useSessionPreview: () => false }));
+vi.mock("../useSessionDevice", () => ({ useSessionDevice: () => null }));
 vi.mock("../toolbarIcon", () => ({ toolbarIcon: (name: string) => name }));
 vi.mock("./useChatViewLease", () => ({ useChatViewLease: () => {} }));
 vi.mock("../pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
