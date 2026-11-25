@@ -1247,13 +1247,14 @@ func (a envAugmentingAgent) AugmentRuntimeEnv(env map[string]string, dataDir str
 	env[a.key] = filepath.Join(dataDir, a.value)
 }
 
-func blockedDataDir(t *testing.T) string {
+func dataDirWithBlockedPrompts(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "data")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prompts")
 	if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	return dir
 }
 
 func requireNoPromptDir(t *testing.T, dataDir string, id domain.SessionID) {
@@ -6791,7 +6792,7 @@ func TestSpawnWorker_WritesSystemPromptFile(t *testing.T) {
 func TestSpawnWorker_FallsBackToInlineWhenPromptFileUnavailable(t *testing.T) {
 	st := newFakeStore()
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := dataDirWithBlockedPrompts(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -6819,7 +6820,7 @@ func TestSpawnWorker_FallsBackToInlineWhenPromptFileUnavailable(t *testing.T) {
 func TestSpawnWorker_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 	st := newFakeStore()
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := dataDirWithBlockedPrompts(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -6847,7 +6848,7 @@ func TestSpawnWorker_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 func TestSpawnWorker_PromptFileFailureBlocksCommandCode(t *testing.T) {
 	st := newFakeStore()
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := dataDirWithBlockedPrompts(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -7400,7 +7401,7 @@ func TestRestore_FallsBackToInlineWhenPromptFileUnavailable(t *testing.T) {
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
 	}
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := dataDirWithBlockedPrompts(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -7432,7 +7433,7 @@ func TestRestore_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", Prompt: "do it"},
 	}
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := dataDirWithBlockedPrompts(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
