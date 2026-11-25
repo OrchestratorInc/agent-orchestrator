@@ -17,27 +17,28 @@ import (
 // alone cannot tell when it goes through a symlink.
 const ResolvedPathHeader = "X-AO-Artifact-Path"
 
-// ResolvedPath returns the slash-separated path beneath rootPath that the
-// already opened file at clean (as OpenWorkspaceFile cleaned it) resolves to
-// once every symlink is followed, with each segment URL-escaped. It is false
-// when the path does not resolve inside rootPath, or no longer resolves to
-// the opened file: a symlink repointed after the open must not name a file
-// other than the one whose bytes are served.
-func ResolvedPath(rootPath, clean string, opened fs.FileInfo) (string, bool) {
-	realRoot, err := filepath.EvalSymlinks(rootPath)
+// ResolvedPath returns the slash-separated path beneath rootPath of the open
+// file f, read from f's own handle, with each segment URL-escaped: the file
+// whose bytes f reads, whatever symlinks its path went through or were
+// repointed since. It is false when that is not beneath rootPath or the
+// platform cannot read an open file's path.
+func ResolvedPath(rootPath string, f *os.File) (string, bool) {
+	// The root's path is read the same way, so the two compare as one form.
+	root, err := os.Open(rootPath)
 	if err != nil {
 		return "", false
 	}
-	target, err := filepath.EvalSymlinks(filepath.Join(realRoot, filepath.FromSlash(clean)))
-	if err != nil {
+	defer func() { _ = root.Close() }()
+	realRoot, ok := openedPath(root)
+	if !ok {
+		return "", false
+	}
+	target, ok := openedPath(f)
+	if !ok {
 		return "", false
 	}
 	rel, err := filepath.Rel(realRoot, target)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", false
-	}
-	// The target is still the file that was opened: the header names its bytes.
-	if info, err := os.Stat(target); err != nil || !os.SameFile(info, opened) {
 		return "", false
 	}
 	segments := strings.Split(filepath.ToSlash(rel), "/")

@@ -1153,9 +1153,8 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 
 // serveArtifactPreviewFile serves an artifact file as serveRootedPreviewFile
 // does, naming in previewutil.ResolvedPathHeader the path the opened file
-// resolves to once symlinks are followed, for a shared page's files. It is
-// resolved after the open and checked to be that same file, so it always
-// names the bytes served; when it cannot be, the header is left out.
+// is at, read from the open handle itself, for a shared page's files: it
+// always names the bytes served. When it cannot be read, the header is left out.
 func serveArtifactPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
 	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
 	if err != nil {
@@ -1163,7 +1162,7 @@ func serveArtifactPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, 
 		return
 	}
 	defer func() { _ = file.Close() }()
-	if resolved, ok := previewutil.ResolvedPath(rootPath, clean, info); ok {
+	if resolved, ok := previewutil.ResolvedPath(rootPath, file); ok {
 		w.Header().Set(previewutil.ResolvedPathHeader, resolved)
 	}
 	serveOpenedPreviewFile(w, r, file, info, clean)
