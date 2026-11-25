@@ -191,7 +191,6 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 	/** Signed in to Cloud, so a shared session's link can be opened. */
 	cloudReady?: boolean;
-	developerMode?: boolean;
 };
 
 // Sessions sit above Projects, as in the sidebar. The palette places
@@ -393,10 +392,10 @@ function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string {
 	return workspace.kind === CLOUD_PROJECT_KIND ? `${workspace.name} · ${t("shell.cloudProjectBadge")}` : workspace.name;
 }
 
-/** 0 when the sidebar flags a session red (it needs you), 1 for a review turn, -1 otherwise. */
+/** 0 when the sidebar flags a session's question or red alert (it needs you), 1 for a review turn, -1 otherwise. */
 function attentionMarkerRank(session: WorkspaceSession): number {
 	const marker = getSessionRowMarker(session);
-	return marker === "attention" ? 0 : marker === "review" ? 1 : -1;
+	return marker === "input" || marker === "attention" ? 0 : marker === "review" ? 1 : -1;
 }
 
 /** When the person last worked in a session, as the sidebar's age shows it. */
@@ -837,15 +836,13 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		searchOnly: true,
 		action: { kind: "open-session-import" },
 	});
-	if (ctx.developerMode) {
-		items.push({
-			id: "global-usage",
-			group: "global",
-			title: t("usage.title"),
-			keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
-			action: { kind: "navigate", target: { to: "/usage" } },
-		});
-	}
+	items.push({
+		id: "global-usage",
+		group: "global",
+		title: t("usage.title"),
+		keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
+		action: { kind: "navigate", target: { to: "/usage" } },
+	});
 	items.push({
 		id: "global-settings",
 		group: "global",

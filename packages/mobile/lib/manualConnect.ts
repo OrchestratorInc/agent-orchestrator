@@ -23,6 +23,7 @@ export type PersistManualHostEditDeps = {
 /** Account sync rewrites this machine's route and credential from the AO
  * Cloud directory, so a hand edit would silently revert within one sync. */
 export class AccountManagedHostError extends Error {
+	readonly code: string = "ACCOUNT_MANAGED_HOST_ERROR";
 	constructor() {
 		super("This machine's address and password come from your account. Scan a new code with Reconnect to connect another way.");
 		this.name = "AccountManagedHostError";
@@ -31,6 +32,7 @@ export class AccountManagedHostError extends Error {
 
 /** A typed address answered, but it was not the paired machine being edited. */
 export class DifferentMachineError extends Error {
+	readonly code: string = "DIFFERENT_MACHINE_ERROR";
 	constructor() {
 		super("That address belongs to another machine. This pairing was not changed.");
 		this.name = "DifferentMachineError";

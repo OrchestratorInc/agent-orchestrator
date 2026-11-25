@@ -2,6 +2,7 @@ import { act, render } from "@testing-library/react";
 import { useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeNavigation } from "./SwipeNavigation";
+import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { useUiStore } from "../stores/ui-store";
 import { useCanGoForward } from "./TitlebarNav";
 import { claimSwipe } from "../lib/swipe-ownership";
@@ -409,6 +410,27 @@ describe("SwipeNavigation", () => {
 			swipe(pane, drag(-20, 10), 0);
 			fingers("up");
 			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["a finished code block", "```ts\nconst a = 1;\n```\n\nmore", "pre code"],
+			["a code block still being written", "Here:\n\n```ts\nconst a = 1;", "pre code"],
+			["a table", "| a | b |\n|---|---|\n| 1 | 2 |\n\nmore", "td"],
+			["a display formula", "$$\nx^2\n$$\n\nmore", '[data-math="display"]'],
+		] as const)("ignores an edge swipe that starts over %s while streaming", (_name, text, selector) => {
+			useUiStore.setState({ renderMath: true });
+			try {
+				const { container, getByTestId } = render(<Harness><ChatMarkdown streaming text={text} /></Harness>);
+				const target = container.querySelector(selector);
+				expect(target).not.toBeNull();
+				fingers("down");
+				swipe(target!, drag(-20, 4), 0);
+				swipe(getByTestId("pane"), drag(-20, 10), 0);
+				fingers("up");
+				expect(history.back).not.toHaveBeenCalled();
+			} finally {
+				useUiStore.setState({ renderMath: false });
+			}
 		});
 
 		it("stops once a handler inside the pane claims the swipe", () => {

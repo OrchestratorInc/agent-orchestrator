@@ -145,18 +145,21 @@ Once one PR merges, prefer rebasing the remaining PR onto current `main`; the no
 - Multiple dev instances share `~/.ao/dev/electron` by default, and Chromium's
   singleton lock lives in the profile, so a second checkout's `npm run dev`
   loses `requestSingleInstanceLock()` and exits immediately with code 0. To run
-  two worktrees at once, give each its own profile, run file, and data dir:
+  two worktrees at once, give each its own daemon port, profile, run file, and
+  data dir:
 
   ```bash
-  env -u AO_PORT \
+  AO_PORT=<free-port> \
     AO_DEV_ELECTRON_DIR="$HOME/.ao/dev/<name>/electron" \
     AO_RUN_FILE="$HOME/.ao/dev/<name>/running.json" \
     AO_DATA_DIR="$HOME/.ao/dev/<name>/data" \
     npm run dev
   ```
 
-  Without all three the instances still collide, on the profile lock, the run
-  file, or the daemon's SQLite data.
+  Without all four the instances still collide, on the profile lock, the run
+  file, the daemon's SQLite data, or the daemon port: with `AO_PORT` unset
+  every dev instance uses 3002, and the one that starts second shuts down the
+  first one's daemon to take the port.
 - After merging `main`, `npm run dev` re-syncs `node_modules` with `package-lock.json` on its own before building. If the window still shows a Vite `Failed to resolve import` overlay for a package the merge added, stop the app, run `npm ci` in `frontend/`, and relaunch.
 - An inherited `AO_DATA_DIR` changes dev mode from isolated data to real data. Always choose and report the mode instead of inheriting it accidentally.
 - Repeated `/healthz/` 404 entries from external probes can be noisy; readiness is determined by Electron's daemon status and successful API traffic, not by log volume.

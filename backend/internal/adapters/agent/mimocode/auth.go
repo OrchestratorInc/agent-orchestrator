@@ -2,6 +2,7 @@ package mimocode
 
 import (
 	"context"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -11,11 +12,24 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-var authProbeTimeout = 20 * time.Second
+// authProbeTimeout outlasts one recovery of a large SQLite write-ahead log, which
+// took 28 seconds for 900 MB. A shorter limit kills MiMo mid-recovery, so every
+// later probe starts it again and none finishes.
+var authProbeTimeout = 40 * time.Second
 var authVerificationTimeout = 20 * time.Second
 
+// disableClaudeImportEnv stops a MiMo command from copying all Claude Code
+// history into its own database at startup. Every command but --version does
+// that, so a status probe could otherwise run for minutes.
+const disableClaudeImportEnv = "MIMOCODE_DISABLE_CLAUDE_IMPORT"
+
 var runAuthProbe = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
-	return aoprocess.CommandContext(ctx, binary, args...).CombinedOutput()
+	cmd := aoprocess.CommandContext(ctx, binary, args...)
+	// `mimo` is a Node wrapper that waits on the real binary. Killing only the
+	// wrapper would leave that binary running with our stdout pipe open.
+	aoprocess.ConfigureTreeCancellation(cmd)
+	cmd.Env = append(os.Environ(), disableClaudeImportEnv+"=1")
+	return cmd.CombinedOutput()
 }
 
 // AuthStatus reports whether MiMo Code has credentials or its built-in free model.
