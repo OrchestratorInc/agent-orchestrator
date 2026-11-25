@@ -153,6 +153,20 @@ const DEFINITIVE_SEND_REJECTIONS = new Set<string>(SEND_REJECTION_CODES);
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
+const PASTED_TEXT_ATTACHMENT_CHARS = 5000;
+
+function isPlainPasteShortcut(event: KeyboardEvent<HTMLDivElement>): boolean {
+	const key = event.key.toLowerCase();
+	const isV = /^[a-z]$/.test(key) ? key === "v" : event.code === "KeyV";
+	return isV && event.shiftKey && (event.metaKey || event.ctrlKey);
+}
+
+function pastedTextFileName(taken: string[]): string {
+	for (let index = 1; ; index++) {
+		const name = index === 1 ? "pasted-text.txt" : `pasted-text-${index}.txt`;
+		if (!taken.includes(name)) return name;
+	}
+}
 
 /**
  * The band hung on the chat box slides up out from behind it as it comes and
@@ -654,6 +668,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * the user's own text.
 	 */
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
+	const plainPasteShortcut = useRef(false);
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -2326,6 +2341,7 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+		plainPasteShortcut.current = isPlainPasteShortcut(event);
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
 		const typing = !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete");
@@ -2441,14 +2457,19 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
+		const asText = plainPasteShortcut.current;
+		plainPasteShortcut.current = false;
+		if (!canAttach || draftMutationPending || submitInFlight.current) return;
 		const clipboard = event.clipboardData;
 		const files = Array.from(clipboard?.files ?? []);
-		if (files.length === 0) return;
+		const text = typeof clipboard?.getData === "function" ? clipboard.getData("text/plain") : "";
+		const taken = [...visibleRetainedAttachments, ...fileAttachments.attachments, ...pendingAttachments, ...files].map((file) => file.name);
+		const textAsFile = !asText && !holdAttachments && text.length >= PASTED_TEXT_ATTACHMENT_CHARS && taken.length < MAX_ATTACHMENTS;
+		if (textAsFile) files.push(new globalThis.File([text], pastedTextFileName(taken), { type: "text/plain" }));
+		else if (files.length === 0 || fileAttachments.preparing) return;
 		// The paste is only claimed when there is no text alongside the image: a copy
 		// carrying both should still paste its text.
-		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
-		if (!hasText) event.preventDefault();
+		if (text === "" || textAsFile) event.preventDefault();
 		uiUsage.attachmentAdded("paste");
 		attachFiles(files);
 	}

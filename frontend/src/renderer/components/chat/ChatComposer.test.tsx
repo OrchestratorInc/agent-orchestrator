@@ -96,6 +96,15 @@ function clipboardData(files: File[]) {
 	};
 }
 
+function textClipboard(text: string) {
+	return {
+		files: [],
+		items: [],
+		getData: (type: string) => (type === "text/plain" ? text : ""),
+		setData: () => undefined,
+	};
+}
+
 const png = (name = "shot.png") =>
 	new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" });
 const textFile = (name = "notes.txt") => new File(["hello"], name, { type: "text/plain" });
@@ -302,6 +311,60 @@ describe("send keys", () => {
 		expect(await screen.findByRole("button", { name: "Remove clip.mov" })).toBeInTheDocument();
 		expect(stage).toHaveBeenCalledWith([{ mimeType: "video/quicktime", data: "", file: huge, name: "clip.mov" }], expect.anything());
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+	it("attaches a long text paste as a text file instead of putting it in the box", async () => {
+		const stage = vi.fn()
+			.mockResolvedValueOnce([".ao/attachments/attachment-a.txt"])
+			.mockResolvedValueOnce([".ao/attachments/attachment-b.txt"]);
+		const { field } = renderComposer({ draftSessionId: "composer-long-paste", onStageAttachments: stage });
+		const log = "line\n".repeat(1000);
+		fireEvent.paste(field, { clipboardData: textClipboard(log) });
+		fireEvent.paste(field, { clipboardData: textClipboard(log) });
+		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove pasted-text-2.txt" })).toBeInTheDocument();
+		expect(stage).toHaveBeenCalledWith([expect.objectContaining({ mimeType: "text/plain", name: "pasted-text.txt" })], expect.anything());
+		expect(composerWireText(field)).toBe("");
+	});
+	it("attaches a long text that comes with an image as a file beside the image", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.txt"]);
+		const { field } = renderComposer({ draftSessionId: "composer-sheet-paste", onStageAttachments: stage });
+		const rows = "a\tb\tc\n".repeat(1000);
+		fireEvent.paste(field, { clipboardData: { ...textClipboard(rows), files: [png()] } });
+		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
+		expect(stage).toHaveBeenCalledWith([
+			expect.objectContaining({ mimeType: "image/png", name: "shot.png" }),
+			expect.objectContaining({ mimeType: "text/plain", name: "pasted-text.txt" }),
+		], expect.anything());
+		expect(composerWireText(field)).toBe("");
+	});
+	it("leaves a shorter text paste, or one pasted as plain text, to the box", async () => {
+		const stage = vi.fn();
+		const { field } = renderComposer({ draftSessionId: "composer-inline-paste", onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: textClipboard("a".repeat(4999)) });
+		await waitFor(() => expect(composerWireText(field)).toBe("a".repeat(4999)));
+		fireEvent.keyDown(field, { key: "◊", code: "KeyV", metaKey: true, altKey: true, shiftKey: true });
+		fireEvent.paste(field, { clipboardData: textClipboard("b".repeat(5000)) });
+		await waitFor(() => expect(composerWireText(field)).toBe("a".repeat(4999) + "b".repeat(5000)));
+		fireEvent.keyDown(field, { key: "V", code: "KeyV", ctrlKey: true, shiftKey: true });
+		fireEvent.paste(field, { clipboardData: textClipboard("c".repeat(5000)) });
+		await waitFor(() => expect(composerWireText(field)).toBe("a".repeat(4999) + "b".repeat(5000) + "c".repeat(5000)));
+		expect(stage).not.toHaveBeenCalled();
+	});
+	it("keeps a long pasted brief in a new task's box", async () => {
+		const { field } = renderComposer({ draftSessionId: "composer-held-paste", holdAttachments: true });
+		fireEvent.paste(field, { clipboardData: textClipboard("e".repeat(5000)) });
+		await waitFor(() => expect(composerWireText(field)).toBe("e".repeat(5000)));
+		expect(screen.queryByRole("button", { name: "Remove pasted-text.txt" })).not.toBeInTheDocument();
+	});
+	it("puts a long text paste in the box when no attachment slot is left", async () => {
+		const names = Array.from({ length: 8 }, (_, index) => `f${index}.txt`);
+		const stage = vi.fn().mockResolvedValue(names.map((name) => `.ao/attachments/${name}`));
+		const { field } = renderComposer({ draftSessionId: "composer-full-paste", onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: clipboardData(names.map((name) => textFile(name))) });
+		expect(await screen.findByRole("button", { name: "Remove f7.txt" })).toBeInTheDocument();
+		fireEvent.paste(field, { clipboardData: textClipboard("d".repeat(5000)) });
+		await waitFor(() => expect(composerWireText(field)).toBe("d".repeat(5000)));
+		expect(stage).toHaveBeenCalledTimes(1);
 	});
 	it("clears the notice about a refused file once the user types on", async () => {
 		const { field } = renderComposer({ draftSessionId: "composer-notice-clears", onStageAttachments: vi.fn() });
