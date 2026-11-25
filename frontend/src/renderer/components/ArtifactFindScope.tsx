@@ -7,6 +7,7 @@ import { artifactFindOwner, claimArtifactFind, nativeArtifactFindFocused, regist
 import { createArtifactFindEngine, foldExceptions, readArtifactFindResult, type ArtifactFindAdapter, type ArtifactFindMessage, type ArtifactFindResult } from "../lib/artifact-find";
 import { currentShortcutBindings, useKeybindingsStore } from "../stores/keybindings-store";
 import { isEmptyFindQuery } from "../lib/chat-find";
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 
 type RegisterAdapter = (root: HTMLElement, adapter: ArtifactFindAdapter) => () => void;
 const AdapterContext = createContext<RegisterAdapter | undefined>(undefined);
@@ -157,14 +158,14 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 						if (event.source !== frame!.contentWindow) return;
 						if (event.data?.jsonrpc === "2.0" && event.data.params?.generation === token) {
 							if (event.data.method === "ao/find-started") { window.clearTimeout(timeout); return; }
-							if (event.data.method === "ao/find-error") { reject(new Error("frame")); return; }
+							if (event.data.method === "ao/find-error") { reject(new AoError("ARTIFACT_FIND_FRAME_FAILED", "The artifact frame could not complete the search")); return; }
 						}
 						const data = readArtifactFindResult(event.data, token);
 						if (!data) return;
 						window.clearTimeout(timeout);
 						resolve({ total: data.total, active: data.active, paint: (selected, reveal) => { if (!stop.signal.aborted && token === generation.current) send(selected, reveal); }, clear: () => frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find-cancel", params: { generation: token } } satisfies ArtifactFindMessage, "*") });
 					};
-					const timeout = window.setTimeout(() => reject(new Error("frame")), 5000);
+					const timeout = window.setTimeout(() => reject(new AoError("ARTIFACT_FIND_FRAME_TIMEOUT", "The artifact frame did not acknowledge the search")), 5000);
 					dispose = () => { window.clearTimeout(timeout); window.removeEventListener("message", onResult); frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find-cancel", params: { generation: token } } satisfies ArtifactFindMessage, "*"); reject(new DOMException("Cancelled", "AbortError")); };
 					window.addEventListener("message", onResult); send(index, requestedScroll.current);
 				});
