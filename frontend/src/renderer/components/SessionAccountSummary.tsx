@@ -1,6 +1,7 @@
 import { LoaderCircle } from "@/components/app-icons";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AccountBadge } from "./AccountBadge";
 import { agentAccountChoiceOption, agentAccountProviderFor, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { cloudAgentAccountName, CLOUD_ACCOUNT_SWITCH_HARNESSES, useCloudAgentAccountActions, useCloudAgentAccounts, useCloudSessionAgentAccount } from "../hooks/useCloudAgentAccounts";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
@@ -126,7 +127,12 @@ function LocalSessionAccountSummary({ session, hostId }: { session: WorkspaceSes
 					: <Select value={choice.value ?? ""} disabled={choice.disabled} onValueChange={choice.onPick}>
 						<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 						<SelectContent align="end">
-							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>{option.label}</SelectItem>)}
+							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>
+								<span className="flex min-w-0 items-center gap-2">
+									<AccountBadge provider={session.provider} accountProvider={agentAccountProviderFor(session.provider) ?? undefined} name={option.name} email={option.email} color={option.color} />
+									<span className="truncate">{option.label}</span>
+								</span>
+							</SelectItem>)}
 						</SelectContent>
 					</Select>}
 			</div>
