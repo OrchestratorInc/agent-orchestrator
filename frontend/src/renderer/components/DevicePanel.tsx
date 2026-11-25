@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Ban, ChevronLeft, CircleAlert, Ellipsis, GalleryHorizontal, House, LoaderCircle, Square } from "@/components/app-icons";
+import { Ban, ChevronLeft, CircleAlert, Ellipsis, GalleryHorizontal, House, LoaderCircle, Smartphone, Square } from "@/components/app-icons";
 import { AndroidIcon, AppleIcon } from "./icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import type { components } from "../../api/schema";
@@ -230,6 +230,7 @@ function DevicePage({
 	children,
 	description,
 	fill = false,
+	icon,
 	title,
 }: {
 	back?: { label: string; onClick: () => void };
@@ -237,6 +238,7 @@ function DevicePage({
 	children: ReactNode;
 	description?: ReactNode;
 	fill?: boolean;
+	icon?: ReactNode;
 	title: ReactNode;
 }) {
 	return (
@@ -248,6 +250,7 @@ function DevicePage({
 						{back.label}
 					</Button>
 				) : null}
+				{icon ? <span aria-hidden="true" className="mb-4 flex text-muted-foreground">{icon}</span> : null}
 				<h3 className="settings-dialog-title">{title}</h3>
 				{description ? <p className="mt-1 text-[13px] leading-5 text-pretty text-muted-foreground">{description}</p> : null}
 				<div className={cn("mt-5", fill && "flex flex-1 flex-col")}>{children}</div>
@@ -260,7 +263,7 @@ function DevicePage({
 function DeviceIntro({ action, error }: { action: ReactNode; error?: string }) {
 	const { t } = useTranslation();
 	return (
-		<DevicePage center description={t("device.introBody")} title={t("device.introTitle")}>
+		<DevicePage center description={t("device.introBody")} icon={<Smartphone className="size-8" />} title={t("device.introTitle")}>
 			<div className="flex flex-col items-center gap-3">
 				{error ? <p className="text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{error}</p> : null}
 				{action}
