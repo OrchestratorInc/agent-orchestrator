@@ -20,12 +20,12 @@ export type DaemonExitReason = (typeof DAEMON_EXIT_REASONS)[number];
 // The daemon's exit code for "another AO process holds the data dir" (cli.exitDataDirLocked).
 const EXIT_DATA_DIR_LOCKED = 75;
 
-// Checked in order against the last lines of output; the first match wins.
+// Checked in order against the last line of output; the first match wins.
 const LAST_LINE_REASONS: readonly [RegExp, DaemonExitReason][] = [
 	[/daemon already running/i, "already_running"],
 	[/data dir is in use by another/i, "data_dir_locked"],
 	[/no space left on device|disk full|not enough space on the disk/i, "disk_full"],
-	[/address already in use|only one usage of each socket address|bind: /i, "port_in_use"],
+	[/address already in use|only one usage of each socket address/i, "port_in_use"],
 	[/open store:|database disk image is malformed|database is locked|sqlite/i, "store_open_failed"],
 	[/inspect run-file/i, "run_file_unreadable"],
 	[/daemon working directory/i, "working_dir_failed"],
@@ -37,11 +37,11 @@ export function daemonExitReason(output: string | undefined, exitCode: number | 
 	if (exitCode === EXIT_DATA_DIR_LOCKED) return "data_dir_locked";
 	const text = output ?? "";
 	if (/(?:^|\n)(?:panic: |fatal error: )/.test(text)) return "panic";
-	// Only the last few lines: earlier lines are routine logs, and a warning
-	// that mentions a path or permission is not why the process stopped.
-	const lastLines = text.trimEnd().split(/\r?\n/).slice(-3).join("\n");
+	// Only the last line: earlier lines are routine logs, and a warning that
+	// mentions a path or permission is not why the process stopped.
+	const lastLine = text.trimEnd().split(/\r?\n/).at(-1) ?? "";
 	for (const [pattern, reason] of LAST_LINE_REASONS) {
-		if (pattern.test(lastLines)) return reason;
+		if (pattern.test(lastLine)) return reason;
 	}
 	return "unknown";
 }

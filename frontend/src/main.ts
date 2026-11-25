@@ -104,6 +104,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, bundledDaemonMissingMessage, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { daemonExitReason } from "./shared/daemon-exit-reason";
 import { waitForFile } from "./main/wait-for-file";
+import { childStdioDrained } from "./main/child-stdio-drained";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
@@ -1833,6 +1834,9 @@ let stagedBundledTmuxBinary: string | null = null;
 // How long a launch waits for a bundled daemon executable that is not on disk
 // yet before reporting it missing.
 const BUNDLED_DAEMON_WAIT_MS = 10_000;
+// How long an exit waits for the daemon's pipes to deliver its last lines,
+// which name the fatal error, before it is classified.
+const DAEMON_EXIT_DRAIN_MS = 250;
 
 async function ensureBundledTmuxStaged(): Promise<void> {
 	const source = bundledTmuxBinaryPath(app.isPackaged, process.resourcesPath, process.platform);
@@ -2603,7 +2607,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// An installer still copying files, or an antivirus scan holding the fresh
 	// executable, can hide the bundled binary for a few seconds after launch.
 	if (launch.source === "bundled" && !(await waitForFile(launch.command, { timeoutMs: BUNDLED_DAEMON_WAIT_MS }))) {
-		if (autoRestartIntent && startCancelled()) return daemonStatus;
+		// The wait is long enough for a stop or a newer start to land; never
+		// overwrite their status.
+		if (startCancelled()) return daemonStatus;
 		setDaemonStatus({
 			state: "error",
 			message: bundledDaemonMissingMessage(launch.command, process.platform),
@@ -2622,7 +2628,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		});
 		return daemonStatus;
 	}
-	if (autoRestartIntent && startCancelled()) return daemonStatus;
+	if (startCancelled()) return daemonStatus;
 
 	daemonOutput = "";
 	setDaemonStatus({ state: "starting" });
@@ -2889,6 +2895,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			quitting: browserQuitRequested,
 		});
 		if (daemonProcess !== child) return;
+		// The daemon's last stderr line names its fatal error, and Node can
+		// report the exit before the pipes deliver it.
+		const drained = childStdioDrained(child, DAEMON_EXIT_DRAIN_MS);
+		if (drained) void drained.then(() => handleDaemonExit(code, signal));
+		else handleDaemonExit(code, signal);
+	});
+
+	function handleDaemonExit(code: number | null, signal: NodeJS.Signals | null): void {
+		if (daemonProcess !== child) return;
 		daemonProcess = null;
 		// An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
 		// daemon-telemetry reports any status carrying a `code` as
@@ -2970,7 +2985,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 				});
 			}
 		});
-	});
+	}
 
 	return daemonStatus;
 }

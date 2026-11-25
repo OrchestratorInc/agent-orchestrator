@@ -11,6 +11,7 @@ describe("daemonExitReason", () => {
 		expect(daemonExitReason(`${logs}listen tcp 127.0.0.1:3001: bind: address already in use`, 1)).toBe("port_in_use");
 		expect(daemonExitReason(`${logs}write /Users/me/.ao/ao.db-wal: no space left on device`, 1)).toBe("disk_full");
 		expect(daemonExitReason(`${logs}open /Users/me/.ao/token: operation not permitted`, 1)).toBe("permission_denied");
+		expect(daemonExitReason(`${logs}listen tcp 127.0.0.1:80: bind: permission denied`, 1)).toBe("permission_denied");
 	});
 
 	it("knows the data-dir lock by its exit code or its message", () => {
@@ -26,6 +27,10 @@ describe("daemonExitReason", () => {
 	it("ignores an earlier warning that is not why it stopped", () => {
 		const output = 'WARN permission denied reading /Users/me/.config/gh\n{"level":"INFO","msg":"serving"}\n{"level":"INFO","msg":"shutting down"}\n{"level":"INFO","msg":"stopped"}\nsomething unexpected happened';
 		expect(daemonExitReason(output, 1)).toBe("unknown");
+	});
+
+	it("reads only the last line, not a warning just before it", () => {
+		expect(daemonExitReason("WARN permission denied reading configuration\nsomething unexpected happened", 1)).toBe("unknown");
 	});
 
 	it("is unknown with no output", () => {
