@@ -380,6 +380,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
@@ -1400,6 +1402,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {

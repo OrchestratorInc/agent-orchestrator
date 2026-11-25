@@ -190,6 +190,8 @@ function setupBridge() {
 			return () => profileListeners.delete(listener);
 		}),
 		onProfileManage: vi.fn(() => () => undefined),
+		onProfileSwitchConfirm: vi.fn(() => () => undefined),
+		onProfileSwitchFailed: vi.fn(() => () => undefined),
 		onAnnotationSubmit: vi.fn(() => () => undefined),
 		onAnnotationCancel: vi.fn(() => () => undefined),
 		onAnnotationState: vi.fn((listener: AnnotationStateListener) => {

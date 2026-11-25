@@ -12,11 +12,6 @@ type Handler = (event: { sender: object }, ...args: unknown[]) => unknown;
 const labels = {
 	temporary: "Temporary",
 	manage: "Manage profiles",
-	switchTitle: "Switch profile?",
-	switchMessage: "Pages reload.",
-	switchDetail: "Unsaved state may be lost.",
-	cancel: "No",
-	confirm: "Yes",
 };
 
 const tempDirectories: string[] = [];
@@ -25,16 +20,15 @@ afterEach(async () => {
 	await Promise.all(tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function setup(confirmSwitch = vi.fn(async () => true)) {
+async function setup() {
 	const stateDir = await mkdtemp(path.join(os.tmpdir(), "ao-browser-profile-ipc-"));
 	tempDirectories.push(stateDir);
 	const store = new BrowserProfileStore({ stateDir });
 	await store.load();
 	const shell = { send: vi.fn() };
-	const renderer = { getZoomFactor: vi.fn(() => 1) };
+	const renderer = { getZoomFactor: vi.fn(() => 1), send: vi.fn(), isDestroyed: vi.fn(() => false) };
 	const handlers = new Map<string, Handler>();
 	const menuPopup = vi.fn();
-	const reportSwitchFailure = vi.fn();
 	let menuItems: BrowserProfileMenuItem[] = [];
 	let state: BrowserProfileViewState = { viewId: "1:worker-1", profileId: null, temporary: true };
 	let switchInfo = { hasNavigated: false, agentActive: false };
@@ -73,11 +67,9 @@ async function setup(confirmSwitch = vi.fn(async () => true)) {
 			menuItems = items;
 			return { popup: menuPopup };
 		},
-		confirmSwitch,
-		reportSwitchFailure,
 	});
 	const invoke = (channel: string, sender: object, ...args: unknown[]) => handlers.get(channel)!({ sender }, ...args);
-	return { host, importer, invoke, ipc, menuItems: () => menuItems, menuPopup, renderer, reportSwitchFailure, shell, state: () => state, store };
+	return { host, importer, invoke, ipc, menuItems: () => menuItems, menuPopup, renderer, shell, state: () => state, store };
 }
 
 describe("browser profile IPC", () => {
@@ -136,30 +128,80 @@ describe("browser profile IPC", () => {
 		await invoke("browser:profile:select", renderer, {
 			viewId: "1:worker-1",
 			profileId: profile.id,
-			labels,
 		});
 
 		expect(host.switchProfile).toHaveBeenCalledWith("1:worker-1", profile.id);
+		expect(renderer.send).not.toHaveBeenCalled();
 	});
 
 	it("reports a failed switch instead of silently leaving the worker temporary", async () => {
-		const { invoke, renderer, store, host, reportSwitchFailure, state } = await setup();
+		const { invoke, renderer, store, host, state } = await setup();
 		const profile = await store.createProfile("Work");
 		host.switchProfile.mockRejectedValueOnce(new Error("Profile storage is unavailable."));
 
 		await invoke("browser:profile:select", renderer, {
 			viewId: "1:worker-1",
 			profileId: profile.id,
-			labels,
 		});
 
 		expect(state()).toMatchObject({ profileId: null, temporary: true });
-		expect(reportSwitchFailure).toHaveBeenCalledWith("Profile storage is unavailable.", labels);
+		// The shell shows the failure in the app; there is no native error dialog.
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchFailed", {
+			viewId: "1:worker-1",
+			message: "Profile storage is unavailable.",
+		});
+	});
+
+	it("asks the shell to confirm a switch on a loaded page and switches only once confirmed", async () => {
+		const { invoke, renderer, store, host, state } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: false });
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id });
+		expect(host.switchProfile).not.toHaveBeenCalled();
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchConfirm", {
+			viewId: "1:worker-1",
+			profileId: profile.id,
+		});
+
+		// Only a literal `true` counts as the user's confirmation.
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id, confirmed: "yes" });
+		expect(host.switchProfile).not.toHaveBeenCalled();
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id, confirmed: true });
+		expect(host.switchProfile).toHaveBeenCalledWith("1:worker-1", profile.id);
+		expect(state()).toMatchObject({ profileId: profile.id, temporary: false });
+	});
+
+	it("refuses a confirmed switch once an agent is using the browser, and says why", async () => {
+		const { invoke, renderer, store, host } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: true });
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id, confirmed: true });
+
+		expect(host.switchProfile).not.toHaveBeenCalled();
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchFailed", {
+			viewId: "1:worker-1",
+			message: "An agent is using this browser.",
+			reason: "agent-active",
+		});
+	});
+
+	it("stays quiet for an unconfirmed selection while an agent is using the browser", async () => {
+		const { invoke, renderer, store, host } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: true });
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id });
+
+		// The menus already show switching as disabled; nothing was confirmed.
+		expect(host.switchProfile).not.toHaveBeenCalled();
+		expect(renderer.send).not.toHaveBeenCalled();
 	});
 
 	it("requires confirmation for a loaded page and refuses switching during agent activity", async () => {
-		const confirmSwitch = vi.fn(async () => false);
-		const { invoke, renderer, store, host, menuItems: getMenuItems } = await setup(confirmSwitch);
+		const { invoke, renderer, store, host, menuItems: getMenuItems } = await setup();
 		const profile = await store.createProfile("Work");
 		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: false });
 		await invoke("browser:profile:menu", renderer, {
@@ -169,7 +211,10 @@ describe("browser profile IPC", () => {
 		});
 		await getMenuItems().find((item) => item.label === profile.name)!.click?.();
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(confirmSwitch).toHaveBeenCalledWith(labels);
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchConfirm", {
+			viewId: "1:worker-1",
+			profileId: profile.id,
+		});
 		expect(host.switchProfile).not.toHaveBeenCalled();
 
 		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: false, agentActive: true });
@@ -181,6 +226,24 @@ describe("browser profile IPC", () => {
 		expect(getMenuItems().slice(0, 2).every((item) => item.enabled === false)).toBe(true);
 		await getMenuItems().find((item) => item.label === profile.name)!.click?.();
 		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(host.switchProfile).not.toHaveBeenCalled();
+	});
+
+	it("drops a switch prompt for a renderer that has gone away", async () => {
+		const { invoke, renderer, store, host, menuItems: getMenuItems } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: false });
+		await invoke("browser:profile:menu", renderer, {
+			viewId: "1:worker-1",
+			bounds: { x: 1, y: 1, width: 40, height: 20 },
+			labels,
+		});
+		renderer.isDestroyed.mockReturnValue(true);
+
+		await getMenuItems().find((item) => item.label === profile.name)!.click?.();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		expect(renderer.send).not.toHaveBeenCalled();
 		expect(host.switchProfile).not.toHaveBeenCalled();
 	});
 

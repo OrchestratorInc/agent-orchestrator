@@ -34,11 +34,6 @@ export function BrowserProfileButton({
 				labels: {
 					temporary: t("browser.profile.temporary"),
 					manage: t("browser.profile.manage"),
-					switchTitle: t("browser.profile.switchTitle"),
-					switchMessage: t("browser.profile.switchMessage"),
-					switchDetail: t("browser.profile.switchDetail"),
-					cancel: t("common.no"),
-					confirm: t("common.yes"),
 				},
 			})
 			.catch(() => undefined);
