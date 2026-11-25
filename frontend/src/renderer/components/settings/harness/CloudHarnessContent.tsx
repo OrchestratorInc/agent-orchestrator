@@ -115,7 +115,7 @@ function CloudHarnessPages({ connections, focusAgentId, onDetailChange, orgId, s
 				label={<HarnessStateText tone={selectedConnected ? "ok" : "off"}>{selectedConnected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</HarnessStateText>}
 				description={selectedVersion ? versionLabel(selectedVersion) : t("settings.harness.apiVersionNotReported")}
 			>
-				<Button type="button" data-harness-primary-action="" size="default" variant={selectedConnected ? "secondary" : "default"} className="min-w-20" onClick={() => setLoginAgent(agentId)}>
+				<Button type="button" data-harness-primary-action="" size="default" variant={selectedConnected ? "secondary" : undefined} className="min-w-20" onClick={() => setLoginAgent(agentId)}>
 					{selectedConnected ? t("settings.harness.refreshLogin") : t("settings.harness.login")}
 				</Button>
 			</HarnessDetailRow>}
