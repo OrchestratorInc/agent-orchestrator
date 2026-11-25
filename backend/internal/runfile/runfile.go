@@ -98,12 +98,18 @@ func Read(path string) (*Info, error) {
 }
 
 // Remove deletes running.json. A missing file is not an error — graceful
-// shutdown should be idempotent.
+// shutdown should be idempotent. On Windows a delete fails while another
+// process has the file open for reading, which the CLI's stop poll does every
+// 100 ms, so a failed delete is retried briefly before it is reported.
 func Remove(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove run-file: %w", err)
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		if err = os.Remove(path); err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return nil
+	return fmt.Errorf("remove run-file: %w", err)
 }
 
 // RemoveIfOwned deletes running.json only if it still belongs to ownerPID. This
