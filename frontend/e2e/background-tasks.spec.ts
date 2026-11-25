@@ -110,12 +110,13 @@ async function setQueue(page: Page, open: boolean) {
 	await expect(toggle).toHaveAttribute("aria-expanded", String(open));
 }
 
-test("the board shows background work as plain text @T0", async ({ page }) => {
+test("the board does not show background work on cards @T0", async ({ page }) => {
 	await openWorker(page, { tasks: [{ id: "shell-1", kind: "shell", description: "Start the settings dev server", state: "running", startedAt: ago(3) }] });
 	await page.goto(`/#/projects/${projectId}`);
 	await expect(page.getByTestId("board")).toBeVisible({ timeout: 15_000 });
-	await expect(page.getByText("1 shell still running")).toBeVisible();
-	await expect(page.getByRole("button", { name: /shell still running/ })).toHaveCount(0);
+	const card = page.locator(`[data-testid="board-session-card"][data-session-id="${sessionId}"]`);
+	await expect(card).toBeVisible();
+	await expect(card.getByText(/shell still running/)).toHaveCount(0);
 });
 
 test("one task rides the composer with a stop, beside a queue it never covers @T0", async ({ page }, testInfo) => {
