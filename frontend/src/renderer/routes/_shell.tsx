@@ -374,11 +374,15 @@ function ShellLayout() {
 	const settingsPage = useSettingsPage();
 	// One string, so a session switch (same kind of route) does not re-render the shell
 	// while the router loads; useMatchRoute would on every location and status change.
-	// Read from the rendered matches, the ones the Outlet and useParams show, so the
-	// shell's frame changes in the same commit as the page inside it. The resolved
-	// location lands a commit later, which painted a session's tabs for a frame in
-	// the bare, no-top-bar frame of the page it came from.
-	const routeKind = useRouterState({ select: (state) => shellRouteKind(state.matches.at(-1)?.pathname ?? state.location.pathname) });
+	const newDesktopUi = useUiStore(newDesktopUiEnabled);
+	// Interface v2 reads the rendered matches, the ones the Outlet and useParams
+	// show, so the shell's frame changes in the same commit as the page inside it.
+	// The resolved location lands a commit later, which painted a session's tabs
+	// for a frame in the bare, no-top-bar frame of the page it came from.
+	const routeKind = useRouterState({
+		select: (state) =>
+			shellRouteKind(newDesktopUi ? (state.matches.at(-1)?.pathname ?? state.location.pathname) : (state.resolvedLocation ?? state.location).pathname),
+	});
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
@@ -1377,7 +1381,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
 	}, [windowTranslucent]);
-	const newDesktopUi = useUiStore(newDesktopUiEnabled);
 	useEffect(() => {
 		applyNewDesktopUi(newDesktopUi);
 	}, [newDesktopUi]);

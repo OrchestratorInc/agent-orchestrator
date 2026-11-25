@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockIsMac = vi.hoisted(() => vi.fn(() => false));
 const mockIsLinux = vi.hoisted(() => vi.fn(() => false));
 const mockIsFullScreen = vi.hoisted(() => vi.fn(() => false));
-const uiState = vi.hoisted(() => ({ isSidebarOpen: true, newDesktopUi: false }));
+const uiState = vi.hoisted(() => ({ isSidebarOpen: true, developerMode: false, newDesktopUi: false }));
 vi.mock("../lib/platform", () => ({
 	isMacPlatform: mockIsMac,
 	isLinuxPlatform: mockIsLinux,
@@ -14,7 +14,7 @@ vi.mock("../hooks/useWindowFullScreen", () => ({ useWindowFullScreen: mockIsFull
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button">Notifications</button> }));
 vi.mock("../stores/ui-store", () => ({
 	sidebarOccupiesLayout: (state: { isSidebarOpen: boolean }) => state.isSidebarOpen,
-	useUiStore: (sel: (s: { isSidebarOpen: boolean; newDesktopUi: boolean }) => unknown) => sel(uiState),
+	useUiStore: (sel: (s: { isSidebarOpen: boolean; developerMode: boolean; newDesktopUi: boolean }) => unknown) => sel(uiState),
 }));
 
 const { CenterPanelShell } = await import("./CenterPanelShell");
@@ -25,6 +25,7 @@ describe("CenterPanelShell platform classes", () => {
 		mockIsLinux.mockReturnValue(false);
 		mockIsFullScreen.mockReturnValue(false);
 		uiState.isSidebarOpen = true;
+		uiState.developerMode = false;
 		uiState.newDesktopUi = false;
 	});
 
@@ -90,9 +91,18 @@ describe("CenterPanelShell platform classes", () => {
 
 	it("keeps the floating frame on a bare panel under Interface v2, so the sidebar toggle only slides its top", () => {
 		mockIsMac.mockReturnValue(true);
+		uiState.developerMode = true;
 		uiState.newDesktopUi = true;
 		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(true);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(true);
+	});
+
+	it("ignores a saved Interface v2 switch while Developer mode is off", () => {
+		mockIsMac.mockReturnValue(true);
+		uiState.newDesktopUi = true;
+		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(false);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(true);
 	});
 

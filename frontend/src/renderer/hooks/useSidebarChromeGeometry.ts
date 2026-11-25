@@ -51,9 +51,14 @@ export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLD
 		// update comes from ResizeObserver entry sizes, which carry no forced layout.
 		let width = gap.getBoundingClientRect().width;
 		let expandedWidth = container.getBoundingClientRect().width;
-		// The rail's width is a registered <length>, so this reads as pixels.
-		const railWidth = rail ? Number.parseFloat(getComputedStyle(gap).getPropertyValue("--sidebar-width-rail")) || 0 : 0;
-		const railProgress = () => (expandedWidth > railWidth ? Math.max(0, Math.min(1, (expandedWidth - width) / (expandedWidth - railWidth))) : 1);
+		// The rail's width is a registered <length>, so this reads as pixels. Turning
+		// Interface v2 on at runtime can run this before the shell sets the root
+		// attribute that defines it, so keep reading until it is there.
+		let railWidth = 0;
+		const railProgress = () => {
+			if (!railWidth) railWidth = Number.parseFloat(getComputedStyle(gap).getPropertyValue("--sidebar-width-rail")) || 0;
+			return expandedWidth > railWidth ? Math.max(0, Math.min(1, (expandedWidth - width) / (expandedWidth - railWidth))) : 1;
+		};
 		const publish = () =>
 			setSidebarChromeGeometry(rail ? { width, progress: 0, rail: railProgress() } : { width, progress: collapseProgress(width, expandedWidth) });
 		publish();
@@ -87,16 +92,25 @@ export function useSidebarChromeClearanceRef<T extends HTMLElement>(enabled = tr
 			cleanup.current?.();
 			cleanup.current = null;
 			if (!element || !enabled) return;
+			let railSet = false;
 			const apply = (geometry: SidebarChromeGeometry | null) => {
 				if (geometry) {
 					element.style.setProperty(WIDTH_VAR, `${geometry.width}px`);
 					element.style.setProperty(PROGRESS_VAR, String(geometry.progress));
-					if (geometry.rail === undefined) element.style.removeProperty(RAIL_VAR);
-					else element.style.setProperty(RAIL_VAR, String(geometry.rail));
+					// Only a rail sidebar (Interface v2) publishes this; otherwise it is
+					// never touched, so the per-frame writes stay as they were.
+					if (geometry.rail !== undefined) {
+						element.style.setProperty(RAIL_VAR, String(geometry.rail));
+						railSet = true;
+					} else if (railSet) {
+						element.style.removeProperty(RAIL_VAR);
+						railSet = false;
+					}
 				} else {
 					element.style.removeProperty(WIDTH_VAR);
 					element.style.removeProperty(PROGRESS_VAR);
-					element.style.removeProperty(RAIL_VAR);
+					if (railSet) element.style.removeProperty(RAIL_VAR);
+					railSet = false;
 				}
 			};
 			apply(current);

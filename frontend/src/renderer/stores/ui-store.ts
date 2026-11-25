@@ -295,7 +295,7 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
-	/** The new desktop UI (shell, surfaces, motion). Only takes effect in Developer mode. Default on. */
+	/** Interface v2 (shell, surfaces, motion). Only takes effect in Developer mode. Default off. */
 	newDesktopUi: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
 	prView: boolean;

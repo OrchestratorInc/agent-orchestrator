@@ -19,10 +19,16 @@ export function readStoredNewDesktopUi(): boolean {
 	return storage.getItem(developerModeStorageKey) === "true" && storage.getItem(newDesktopUiStorageKey) === "true";
 }
 
+/** What the main process last heard. It starts with Interface v2 off. */
+let reportedToMain = false;
+
 export function applyNewDesktopUi(enabled: boolean): void {
 	if (typeof document === "undefined") return;
 	if (enabled) document.documentElement.dataset.newDesktopUi = "true";
 	else delete document.documentElement.dataset.newDesktopUi;
-	// The native window buttons move with the wider edge spacing (macOS).
+	// The native window buttons move with the wider edge spacing (macOS). Only a
+	// change is reported, so with Interface v2 off nothing reaches main at all.
+	if (enabled === reportedToMain) return;
+	reportedToMain = enabled;
 	void aoBridge.theme?.setInterfaceV2?.(enabled)?.catch(() => undefined);
 }

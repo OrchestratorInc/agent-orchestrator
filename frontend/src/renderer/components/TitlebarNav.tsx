@@ -70,21 +70,27 @@ export function TitlebarNav({
   // or default width narrower than the label grows to fit it. Fullscreen and
   // zoom move the label with the traffic-light reserve, and the window's own
   // resize fires before that lands, so nudge again once the label has moved.
-  // The label stays mounted while the sidebar is shut, so after its first
-  // showing only fullscreen and zoom can move it. A synthetic resize on every
-  // sidebar toggle woke every resize listener in the app at the toggle's start.
+  const newDesktopUi = useUiStore(newDesktopUiEnabled);
+  useEffect(() => {
+    if (newDesktopUi) return;
+    if (showBrand) window.dispatchEvent(new Event("resize"));
+  }, [newDesktopUi, showBrand, isFullScreen, zoomFactor]);
+  // Interface v2: the label stays mounted while the sidebar is shut, so after
+  // its first showing only fullscreen and zoom can move it. A synthetic resize
+  // on every sidebar toggle woke every resize listener in the app at the
+  // toggle's start.
   const brandNudged = useRef(false);
   useEffect(() => {
-    if (!showBrand || brandNudged.current) return;
+    if (!newDesktopUi || !showBrand || brandNudged.current) return;
     brandNudged.current = true;
     window.dispatchEvent(new Event("resize"));
-  }, [showBrand]);
+  }, [newDesktopUi, showBrand]);
   const chromeKey = `${isFullScreen}:${zoomFactor}`;
   const lastChromeKey = useRef(chromeKey);
   useEffect(() => {
     if (lastChromeKey.current === chromeKey) return;
     lastChromeKey.current = chromeKey;
-    if (showBrand) window.dispatchEvent(new Event("resize"));
+    if (newDesktopUi && showBrand) window.dispatchEvent(new Event("resize"));
     // showBrand is read, not a trigger: a sidebar toggle must not nudge.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chromeKey]);
@@ -108,7 +114,6 @@ export function TitlebarNav({
   // collapsed, the arrows take its place.
   const arrowsVisible = !showBrand;
   const prefersReducedMotion = useReducedMotion();
-  const newDesktopUi = useUiStore(newDesktopUiEnabled);
   const transition = prefersReducedMotion ? { duration: 0 } : shellPanelTransition(newDesktopUi);
 
   // The brand sits in this fixed row, not inside the sidebar, so it does not
@@ -128,8 +133,9 @@ export function TitlebarNav({
       const available = sidebar.offsetWidth - brand.getBoundingClientRect().left - 12;
       setBrandMaxWidth(Math.max(24, Math.floor(available)));
     };
-    // The observer reports once on attach, so the first fit needs no forced
-    // layout inside the toggle's task.
+    // Interface v2 lets the observer's report on attach do the first fit, so
+    // there is no forced layout inside the toggle's task.
+    if (!newDesktopUi) fit();
     const observer = new ResizeObserver(fit);
     observer.observe(sidebar);
     window.addEventListener("resize", fit);
@@ -137,7 +143,7 @@ export function TitlebarNav({
       observer.disconnect();
       window.removeEventListener("resize", fit);
     };
-  }, [showBrand]);
+  }, [showBrand, newDesktopUi]);
 
   return (
     <div

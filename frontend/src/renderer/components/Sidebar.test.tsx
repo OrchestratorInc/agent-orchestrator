@@ -565,6 +565,7 @@ beforeEach(() => {
 	cloudSessionState.signOut.mockReset().mockResolvedValue(undefined);
 	useUiStore.setState({
 		developerMode: false,
+		newDesktopUi: false,
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
@@ -1697,11 +1698,18 @@ describe("Sidebar", () => {
 			"opacity-100",
 			"focus-visible-in-session-row:opacity-0",
 		);
-		// A project's rows sit in its tree: the rail fills the indent and the pill
-		// starts after the arm, with the indent still pressable.
-		expect(openSession).toHaveClass("pl-0.5", "before:w-(--tree-indent)");
-		expect(openSession.closest("li")).toHaveClass("sidebar-tree-item");
-		expect(openSession.closest(".sidebar-tree")).not.toHaveAttribute("data-tree-more");
+		// Without Interface v2 a project's rows keep their plain indent.
+		expect(openSession).toHaveClass("pl-1.5");
+		expect(openSession.closest("li")).toHaveClass("pl-0.5");
+		expect(openSession.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2 they sit in its tree: the rail fills the indent and the
+		// pill starts after the arm, with the indent still pressable.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
+		const treeSession = screen.getByLabelText("Open fix login");
+		expect(treeSession).toHaveClass("pl-0.5", "before:w-(--tree-indent)");
+		expect(treeSession.closest("li")).toHaveClass("sidebar-tree-item");
+		expect(treeSession.closest(".sidebar-tree")).not.toHaveAttribute("data-tree-more");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 	});
 
 	it("keeps session status and actions stable when an action receives keyboard focus", async () => {
@@ -3027,12 +3035,15 @@ describe("Sidebar", () => {
 		const list = screen.getByTestId("session-list-proj-1");
 		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
 		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
-		// Show more is the tree's last leaf, so the rail's elbow ends on it.
-		const showMore = screen.getByRole("button", { name: "Show 3 more agents" });
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+		expect(list.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2, Show more is the tree's last leaf, so the rail's elbow ends on it.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
 		expect(list.closest(".sidebar-tree")).toHaveAttribute("data-tree-more", "");
-		expect(showMore.closest(".sidebar-tree-item")).toHaveAttribute("data-tree-more", "");
+		expect(screen.getByRole("button", { name: "Show 3 more agents" }).closest(".sidebar-tree-item")).toHaveAttribute("data-tree-more", "");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 
-		await user.click(showMore);
+		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
 
 		expect(screen.getByText("Agent 7")).toBeInTheDocument();
 		expect(screen.getByText("Agent 9")).toBeInTheDocument();

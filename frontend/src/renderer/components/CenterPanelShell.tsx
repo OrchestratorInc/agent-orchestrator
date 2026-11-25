@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "../lib/utils";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
+import { newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { PageTopbarSurface } from "./PageTopbar";
@@ -33,7 +34,7 @@ export function CenterPanelShell({
 	topbar?: boolean;
 }) {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
-	const newDesktopUi = useUiStore((state) => state.newDesktopUi);
+	const newDesktopUi = useUiStore(newDesktopUiEnabled);
 	const isFullScreen = useWindowFullScreen();
 	const isMac = isMacPlatform();
 	const isLinux = isLinuxPlatform();
@@ -57,7 +58,7 @@ export function CenterPanelShell({
 	// the frame's top edge snaps for one frame instead of sliding: only a sidebar
 	// toggle slides it. Derived in render so the class lands in the same commit.
 	const [settledTopbar, setSettledTopbar] = useState(topbar);
-	const edgeSnap = settledTopbar !== topbar;
+	const edgeSnap = newDesktopUi && settledTopbar !== topbar;
 	useEffect(() => {
 		if (!edgeSnap) return;
 		const frame = requestAnimationFrame(() => setSettledTopbar(topbar));

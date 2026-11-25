@@ -645,7 +645,7 @@ function CommitAttributionRow() {
 	);
 }
 
-/** Developer Mode preview, on by default: the new desktop UI. Off is the current UI. */
+/** Developer Mode preview, off by default: Interface v2. Off is the current UI. */
 function NewDesktopUiRow() {
 	const { t } = useTranslation();
 	const newDesktopUi = useUiStore((state) => state.newDesktopUi);

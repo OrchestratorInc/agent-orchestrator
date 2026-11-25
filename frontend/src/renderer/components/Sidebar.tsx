@@ -152,6 +152,7 @@ import { AwakeMenuItem, awakeNeedsAttention, useFooterStayAwake } from "./AwakeC
 import { FOOTER_RAIL_BUTTON_CLASS, SidebarUpdateRail, SidebarUpdateRow } from "./SidebarUpdate";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
+import { newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
@@ -767,7 +768,8 @@ export const Sidebar = memo(function Sidebar({
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
 	// Interface v2 collapses to a rail of the nav buttons; the lists fade away.
-	const newDesktopUi = useUiStore((s) => s.newDesktopUi);
+	// Interface v2 needs Developer mode too; the saved switch alone is not enough.
+	const newDesktopUi = useUiStore(newDesktopUiEnabled);
 	const collapsible = newDesktopUi ? "rail" : SIDEBAR_COLLAPSIBLE;
 	// List behavior (force-open sections, lifted Show more caps) belongs to the
 	// icon rail only; toggling an offcanvas sidebar must not change any list.
@@ -1612,6 +1614,8 @@ const ProjectItem = memo(function ProjectItem({
 	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
 	const projectActive = dashboardActive || orchestratorActive || (activeProjectMatches && isProjectProvisioning);
 	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(projectKey));
+	// The session tree rail is part of Interface v2; off, the list keeps its indent.
+	const tree = useUiStore(newDesktopUiEnabled);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const projectIsDragging = isDragged;
@@ -2250,38 +2254,40 @@ const ProjectItem = memo(function ProjectItem({
 						</div>
 						{/* end outer relative */}
 					</div>
-					{/* project-sidebar__sessions: a tree under the project parent. A muted
-					    spine drops from the project icon and branches into each row (see
-					    .sidebar-tree in styles.css). The list opens, closes and gains its
-					    first session at full height in one frame, so the projects below
-					    never slide. */}
+					{/* project-sidebar__sessions: indented under the project parent. Under
+					    Interface v2 it is a tree: a muted spine drops from the project icon
+					    and branches into each row (see .sidebar-tree in styles.css). The
+					    list opens, closes and gains its first session at full height in one
+					    frame, so the projects below never slide. */}
 					{expanded && sessions.length > 0 && (
 						<div
 							ref={projectSessionsRef}
-							className="sidebar-tree sidebar-expanded-chrome overflow-hidden"
-							data-tree-more={hiddenSessionCount > 0 ? "" : undefined}
+							className={cn(tree && "sidebar-tree", "sidebar-expanded-chrome overflow-hidden")}
+							data-tree-more={tree && hiddenSessionCount > 0 ? "" : undefined}
 						>
 							<SessionReorderList
 								dndId={sessionDndId(projectKey)}
 								testId={`session-list-${projectKey}`}
 								className={cn(
-									"mx-0 ml-0 translate-x-0 gap-px border-l-0 px-0 pt-1",
+									"mx-0 translate-x-0 gap-px border-l-0 px-0 pt-1",
+									tree ? "ml-0" : "ml-3.5",
 									hiddenSessionCount > 0 ? "pb-px" : "pb-1",
 								)}
 								sessions={listedSessions}
 								sessionIds={listedSessionIds}
 								activeSessionId={selection.activeSessionId}
 								plain={projectDragInProgress}
-								tree
+								tree={tree}
 								onReorder={commitSessionOrder}
 								onKilled={handleSessionKilled}
 								onOpen={openSession}
 							/>
 							{hiddenSessionCount > 0 ? (
-								// The tree's last leaf: its label starts on the status-dot column.
-								<div className="sidebar-tree-item" data-tree-more="">
+								// Its label starts on the status-dot column; in the tree it is the
+								// last leaf, so the rail's elbow ends on it.
+								<div className={tree ? "sidebar-tree-item" : "pl-4"} data-tree-more={tree ? "" : undefined}>
 									<ShowMoreRow
-										className={cn("px-2", TREE_ROW_HIT_CLASS)}
+										className={tree ? cn("px-2", TREE_ROW_HIT_CLASS) : "px-3"}
 										expanded={showAllSessions}
 										label={
 											showAllSessions

@@ -3049,9 +3049,7 @@ function ChatHeader({
 	// Match CenterPane: when the sidebar is off-canvas, the fixed TitlebarNav
 	// cluster sits over the session tab strip. Terminal already reserves that
 	// space; chat must too or the back/forward buttons land on the tab label.
-	// Linux-only, and selected as such: on other platforms the chat must not
-	// re-render whenever the sidebar toggles.
-	const linuxSidebarClosed = useUiStore((state) => isLinux && !sidebarOccupiesLayout(state));
+	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
@@ -3061,7 +3059,7 @@ function ChatHeader({
 			actions={headerActions}
 			clearanceClassName={cn(
 				isMac && "session-topbar-titlebar-clearance-mac",
-				linuxSidebarClosed && "session-topbar-titlebar-clearance-linux",
+				!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 			)}
 			clearanceRef={clearanceRef}
 			tabsTrailing={tabStripAction}
