@@ -105,6 +105,7 @@ import {
 	clearRejectedChatComposerDelivery,
 	clearUncertainChatComposerDelivery,
 	discardUnsentChatComposerDelivery,
+	draftStagedPaths,
 	finishChatComposerMutation,
 	getChatComposerMutation,
 	isChatComposerMutationCurrent,
@@ -303,6 +304,7 @@ export const ChatComposer = memo(function ChatComposer({
 	filePathsTruncated,
 	onFileQuery,
 	onStageAttachments,
+	onUpdateAttachmentLeases,
 	cloudAttachments,
 	nativeImages,
 	onSteer,
@@ -438,6 +440,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * offered at all.
 	 */
 	onStageAttachments?: (attachments: FileAttachmentPayload[], signal?: AbortSignal) => Promise<string[]>;
+	/**
+	 * Releases staged paths this draft gave up and renews the ones it still
+	 * holds, answering which renewed paths are already gone. Removing a chip or
+	 * letting a discarded unsent message lapse releases its files; restoring a
+	 * draft renews them. The daemon never deletes a file a sent message names.
+	 */
+	onUpdateAttachmentLeases?: (release: string[], renew?: string[]) => Promise<string[]>;
 	/**
 	 * Staged files are uploaded to AO Cloud, which takes files up to maxBytes
 	 * each. Each file uploads on its own and shows its own failure, removing one
@@ -833,6 +842,39 @@ export const ChatComposer = memo(function ChatComposer({
 		prepareEach: Boolean(cloudAttachments),
 	});
 	const { pendingAttachments } = fileAttachments;
+	const fileAttachmentsRef = useRef(fileAttachments);
+	fileAttachmentsRef.current = fileAttachments;
+	const draftScopeRef = useRef(draftScope);
+	draftScopeRef.current = draftScope;
+	// Give up staged files this draft no longer holds. A path the saved draft
+	// still names elsewhere (a send in flight, an unsent message, a queued edit)
+	// stays leased. Best effort: an unreleased lease expires on its own.
+	const releaseStagedPaths = useCallback((paths: (string | undefined)[]) => {
+		if (!onUpdateAttachmentLeases) return;
+		const scope = draftScopeRef.current;
+		const held = scope ? draftStagedPaths(readChatSessionDraft(scope), { composer: false }) : new Set<string>();
+		const release = [...new Set(paths)].filter((path): path is string =>
+			Boolean(path) && !isCloudAttachmentReference(path!) && !held.has(path!));
+		if (release.length > 0) void onUpdateAttachmentLeases(release).catch(() => undefined);
+	}, [onUpdateAttachmentLeases]);
+	// A restored draft renews its files so they outlive the lease expiry, and
+	// drops any chip whose file is already gone rather than sending a dead path.
+	useEffect(() => {
+		const scope = draftScopeRef.current;
+		if (!scope || !onUpdateAttachmentLeases) return;
+		const renew = [...draftStagedPaths(readChatSessionDraft(scope), { composer: true })]
+			.filter((path) => !isCloudAttachmentReference(path));
+		if (renew.length === 0) return;
+		let current = true;
+		void onUpdateAttachmentLeases([], renew).then((missing) => {
+			if (!current || missing.length === 0) return;
+			const gone = new Set(missing);
+			for (const attachment of fileAttachmentsRef.current.getAttachments()) {
+				if (attachment.stagedPath && gone.has(attachment.stagedPath)) fileAttachmentsRef.current.remove(attachment.id);
+			}
+		}, () => undefined);
+		return () => { current = false; };
+	}, [draftScopeKey, onUpdateAttachmentLeases]);
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
@@ -1509,9 +1551,15 @@ export const ChatComposer = memo(function ChatComposer({
 	};
 	useEffect(() => {
 		if (!discardedUnsent) return;
-		const timer = window.setTimeout(() => setDiscardedUnsent(undefined), UNSENT_UNDO_MS);
+		const timer = window.setTimeout(() => {
+			// Undo can no longer bring it back, so its files are given up, except
+			// any the composer still shows.
+			const shown = new Set(fileAttachmentsRef.current.getAttachments().flatMap((attachment) => attachment.stagedPath ?? []));
+			releaseStagedPaths((discardedUnsent.draft?.attachments ?? []).map((attachment) => attachment.path).filter((path) => !shown.has(path)));
+			setDiscardedUnsent(undefined);
+		}, UNSENT_UNDO_MS);
 		return () => window.clearTimeout(timer);
-	}, [discardedUnsent]);
+	}, [discardedUnsent, releaseStagedPaths]);
 
 	const approvalActive = Boolean(approval);
 	const previousApprovalActive = useRef(approvalActive);
@@ -2725,7 +2773,10 @@ export const ChatComposer = memo(function ChatComposer({
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
-											} else fileAttachments.remove(file.id);
+											} else {
+												fileAttachments.remove(file.id);
+												releaseStagedPaths([path]);
+											}
 											editor.current?.focus();
 										}}
 									/>

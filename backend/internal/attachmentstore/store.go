@@ -491,6 +491,82 @@ func (s *Store) Open(ctx context.Context, id domain.SessionID, name string) (*os
 	return openRegularFile(ctx, sessionRoot, name, noLimit)
 }
 
+// Remove deletes one attachment's canonical copy and its projection in
+// workspacePath (empty when the session has no worktree). It holds the
+// projection lock, so a concurrent MaterializeWorkspace cannot re-project the
+// file after it is gone. A copy that is already absent is not an error, which
+// makes a retried reclaim idempotent. Callers decide which names may be
+// removed; this only deletes them.
+func (s *Store) Remove(ctx context.Context, id domain.SessionID, workspacePath, name string) error {
+	lock := s.projectionLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateSessionID(id); err != nil {
+		return err
+	}
+	if err := validateName(name); err != nil {
+		return err
+	}
+	if s.dataDir != "" {
+		sessionRoot, err := s.openCanonicalSession(ctx, id, false)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			return fmt.Errorf("open canonical attachment directory: %w", err)
+		default:
+			removeErr := sessionRoot.Remove(name)
+			_ = sessionRoot.Close()
+			if removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+				return fmt.Errorf("remove canonical attachment: %w", removeErr)
+			}
+		}
+	}
+	if strings.TrimSpace(workspacePath) == "" {
+		return nil
+	}
+	workspaceRoot, err := os.OpenRoot(workspacePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open workspace root: %w", err)
+	}
+	defer func() { _ = workspaceRoot.Close() }()
+	aoRoot, err := openChildDir(ctx, workspaceRoot, ".ao", false, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open workspace .ao directory: %w", err)
+	}
+	defer func() { _ = aoRoot.Close() }()
+	projection, err := openChildDir(ctx, aoRoot, "attachments", false, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open workspace attachments: %w", err)
+	}
+	defer func() { _ = projection.Close() }()
+	if err := projection.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove workspace attachment: %w", err)
+	}
+	return nil
+}
+
+// Exists reports whether a canonical attachment is stored for id.
+func (s *Store) Exists(ctx context.Context, id domain.SessionID, name string) bool {
+	file, _, err := s.Open(ctx, id, name)
+	if err != nil {
+		return false
+	}
+	_ = file.Close()
+	return true
+}
+
 // RemoveSession removes canonical files only when the owning session row was
 // itself permanently deleted. Kill and cleanup intentionally do not call it.
 func (s *Store) RemoveSession(ctx context.Context, id domain.SessionID) error {

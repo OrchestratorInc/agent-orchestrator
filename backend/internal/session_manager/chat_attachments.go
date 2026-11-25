@@ -30,6 +30,19 @@ func (m *Manager) StageAttachments(
 	id domain.SessionID,
 	attachments []ports.SpawnAttachment,
 ) ([]string, error) {
+	return m.stageAttachments(ctx, id, attachments, false)
+}
+
+// stageAttachments writes attachments and, for a draft, leases each file to
+// it right after the file is written: the caller cannot name a path before
+// this returns, so no message can reference a draft file before its lease
+// exists. A file staged without a lease is never reclaimed before its session.
+func (m *Manager) stageAttachments(
+	ctx context.Context,
+	id domain.SessionID,
+	attachments []ports.SpawnAttachment,
+	draft bool,
+) ([]string, error) {
 	if len(attachments) == 0 {
 		return nil, nil
 	}
@@ -84,6 +97,15 @@ func (m *Manager) StageAttachments(
 		}
 		if name == "" {
 			return nil, fmt.Errorf("write attachment %d: could not allocate a unique name", i+1)
+		}
+		if draft {
+			if leases, ok := m.chatAttachmentLeases(); ok {
+				if err := leases.LeaseChatAttachment(ctx, id, name, m.clock()); err != nil {
+					// Unleased, the file would outlive the draft that dropped it.
+					_ = m.attachments.Remove(ctx, id, rec.Metadata.WorkspacePath, name)
+					return nil, fmt.Errorf("lease attachment %d: %w", i+1, err)
+				}
+			}
 		}
 		refs = append(refs, attachmentsDir+"/"+name)
 	}

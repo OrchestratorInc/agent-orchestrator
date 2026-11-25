@@ -1812,6 +1812,18 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 		content = append(content, domain.SideContent{
 			Type: item.Type, MIMEType: item.MIMEType, Data: item.Data, URI: item.URI, Name: item.Name, Text: item.Text})
 	}
+	// Side transcripts are not stored in conversation tables, so the lease
+	// triggers never see them. Commit before the question is reserved: a
+	// failure after this keeps a file that was never sent, never the reverse.
+	if leases, ok := s.store.(chatAttachmentLeaseCommitter); ok {
+		texts := []string{text}
+		for _, item := range content {
+			texts = append(texts, item.URI, item.Name, item.Text)
+		}
+		if err := leases.CommitChatAttachmentLeases(ctx, session, texts); err != nil {
+			return domain.SideTurn{}, fmt.Errorf("commit side question attachments: %w", err)
+		}
+	}
 	question := domain.SideTurn{
 		ID: s.newID(), SideID: sideID, ClientMessageID: msg.ClientMessageID, Text: text, Content: content,
 		References: references, CreatedAt: s.now()}
@@ -1844,6 +1856,12 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 	return turn, nil
 }
 
+// chatAttachmentLeaseCommitter commits draft-staged files named by a message
+// accepted outside the conversation tables.
+type chatAttachmentLeaseCommitter interface {
+	CommitChatAttachmentLeases(ctx context.Context, id domain.SessionID, texts []string) error
+}
+
 // EditQueuedSideQuestion replaces the text of a queued side question.
 func (s *Service) EditQueuedSideQuestion(ctx context.Context, session domain.SessionID, sideID, turnID, text string) error {
 	if s.sides == nil {
@@ -1854,6 +1872,11 @@ func (s *Service) EditQueuedSideQuestion(ctx context.Context, session domain.Ses
 	}
 	if strings.TrimSpace(text) == "" {
 		return ErrSideQuestionInvalid
+	}
+	if leases, ok := s.store.(chatAttachmentLeaseCommitter); ok {
+		if err := leases.CommitChatAttachmentLeases(ctx, session, []string{text}); err != nil {
+			return fmt.Errorf("commit side question attachments: %w", err)
+		}
 	}
 	if err := s.sides.store.EditQueuedSideTurn(ctx, sideID, turnID, text); err != nil {
 		return err

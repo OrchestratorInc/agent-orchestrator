@@ -8958,6 +8958,57 @@ paths:
       summary: Write images into a running session's worktree and return their paths
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/attachments/leases:
+    post:
+      operationId: updateSessionAttachmentLeases
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionAttachmentLeasesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateSessionAttachmentLeasesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Release or renew files staged for an unsent chat draft
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/auto-inject-ci:
     patch:
       operationId: setSessionAutoInjectCI
@@ -28860,6 +28911,8 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        draft:
+          type: boolean
       required:
       - attachments
       type: object
@@ -29639,6 +29692,26 @@ components:
       required:
       - displayName
       - config
+      type: object
+    UpdateSessionAttachmentLeasesRequest:
+      properties:
+        release:
+          items:
+            type: string
+          type: array
+        renew:
+          items:
+            type: string
+          type: array
+      type: object
+    UpdateSessionAttachmentLeasesResponse:
+      properties:
+        missing:
+          items:
+            type: string
+          type: array
+      required:
+      - missing
       type: object
     UpdateSessionInterfaceRequest:
       properties:

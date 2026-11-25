@@ -395,6 +395,9 @@ export function useIndependentSideChats(
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
 	_onHide?: () => void,
 	canCreate = true,
+	// Releases a removed draft file's lease and renews the files a side draft
+	// still holds; see useAttachmentLeases. Absent, staged files are only kept.
+	updateAttachmentLeases?: (release: string[], renew?: string[]) => Promise<string[]>,
 ) {
 	const { t } = useTranslation();
 	const translateDraft = useChatDraftTranslation();
@@ -492,6 +495,13 @@ export function useIndependentSideChats(
 	const [inputAnswers, setInputAnswers] = useState<Record<string, Record<string, Record<string, string>>>>({});
 	const activeIdRef = useRef(activeId);
 	activeIdRef.current = activeId;
+	// The open side's draft files are renewed whenever they change, so a draft
+	// kept open does not lose them to lease expiry.
+	const activeDraftPaths = (activeId ? drafts[activeId]?.attachments ?? [] : []).map((file) => file.path).join("\n");
+	useEffect(() => {
+		if (!updateAttachmentLeases || !activeDraftPaths) return;
+		void updateAttachmentLeases([], activeDraftPaths.split("\n")).catch(() => undefined);
+	}, [activeDraftPaths, updateAttachmentLeases]);
 	const activationRevision = useRef({ id: activeId, revision: 0 });
 	if (activationRevision.current.id !== activeId) {
 		activationRevision.current = { id: activeId, revision: activationRevision.current.revision + 1 };
@@ -2212,6 +2222,7 @@ export function useIndependentSideChats(
 										...current,
 										[activeId]: (current[activeId] ?? []).filter((item) => item.path !== path),
 									}));
+									if (path) void updateAttachmentLeases?.([path]).catch(() => undefined);
 								}
 							}}
 							files={[]}
