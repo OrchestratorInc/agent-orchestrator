@@ -1,15 +1,20 @@
 # Product telemetry
 
 Orchestrator.inc collects limited product-usage and reliability data to learn which parts of
-the app are useful and whether releases are working as expected. If you sign in
-to AO Cloud, Orchestrator.inc sends the email address of that account to PostHog
-as a person property at sign-in and subsequent signed-in launches, along with
-your AO Cloud user ID and GitHub username.
-Without an AO Cloud sign-in, no email address is sent. Some events include a
-GitHub project owner or an authenticated username, so they can identify an
-account. Desktop and daemon events include a random installation identifier
-to group activity even when the event uses an account ID as `distinct_id`.
-Telemetry is not wholly anonymous.
+the app are useful and whether releases are working as expected. Telemetry is
+anonymous by default: events go out under a random installation identifier,
+PostHog creates no person profile for any event, IP-based location (GeoIP) is
+turned off, and no email address is ever sent. Your GitHub username, the GitHub
+owner of your repositories and your AO Cloud user ID are sent only if you turn
+on **Include my account identity** (off by default). Project, session and
+organization identifiers are sent only as hashes keyed with a private
+per-installation secret.
+
+You can see every event this machine sent, with every property exactly as
+sent, with `ao telemetry log` (see "Seeing exactly what was sent" below), and
+turn telemetry off in Settings > General > Privacy, with `ao telemetry off`,
+or with `DO_NOT_TRACK=1`. The desktop app's first-run screen and the first
+interactive `ao` command each show a short notice saying this.
 
 Share usage analytics and Share error events are on by default in production
 desktop releases for fresh installs and existing users, unless a user turned
@@ -92,7 +97,8 @@ The mobile app uses the existing ao-mobile Sentry project in non-development
 builds when mobile telemetry is active. Its JavaScript error sender starts after the
 saved phone analytics preference is restored. It follows the paired desktop's
 analytics opt-out, which remains sticky while the phone is unpaired or waiting
-for a replacement desktop. Development builds and
+for a replacement desktop, and the phone's own Share usage analytics switch,
+which works without pairing. Development builds and
 `EXPO_PUBLIC_AO_TELEMETRY_DISABLED=1` do not initialize it. An explicit empty
 `EXPO_PUBLIC_SENTRY_DSN` disables it; otherwise the app uses its bundled
 mobile DSN. Reportable React render failures, uncaught JavaScript failures,
@@ -177,16 +183,12 @@ Orchestrator.inc sends structured events in a few broad categories:
   starting a task or agent session
 - Feature outcomes, such as whether creating a project, starting an agent,
   creating an automation, connecting the mobile app, or installing an update succeeded
-- The GitHub organization or account that owns a project's configured remote,
-  recorded on project-add events. Only the owner segment is sent, never the
-  repository name, path, or URL. For a personal repository this owner is the
-  user's own GitHub username, so this particular value is not anonymous. We use
-  it to understand which organizations and developers get the most value from
-  Orchestrator.inc, so we can prioritize improvements and reach out for feedback
-- The GitHub username of the account signed in to Orchestrator.inc's GitHub integration, sent
-  on session-start events so we can see which developers are most active and reach
-  out for feedback. It is part of product telemetry with no separate control. See
-  "Sharing your GitHub handle" below for exactly what is sent and when
+- Only with **Include my account identity** on: the GitHub organization or
+  account that owns a project's configured remote (`github_org`, on
+  project-add events; only the owner segment, never the repository name, path,
+  or URL, and for a personal repository this is your own username), your
+  authenticated GitHub username (`github_actor`), and your AO Cloud user ID
+  (`ao_cloud_user_id`). See "Including your account identity" below
 - Reliability data, such as an error type and context, a crash message and
   stack trace after path redaction, an HTTP status, or an agent waiting for
   input
@@ -223,15 +225,8 @@ Orchestrator.inc sends structured events in a few broad categories:
   container marker files. A development container has `is_ci: false` and
   `is_container: true`; CI inside a container has both true. Only the booleans
   are sent, never the variables themselves
-- If you are signed in to AO Cloud: your AO Cloud user ID on every
-  desktop and daemon event, and a PostHog person profile holding your email
-  address, AO Cloud user ID, and GitHub username. The email is set at sign-in
-  and subsequent signed-in launches from the AO Cloud account itself. It is
-  never read from git config and is not attached to individual events. See
-  "Signing in to AO Cloud" below
-- Your GitHub username, when Orchestrator.inc can resolve the account signed in
-  to its GitHub integration, on every desktop and daemon event (previously only
-  session-start events)
+- Whether you are signed in to AO Cloud (`is_signed_in`, a boolean). Signing
+  in does not identify you to PostHog; see "Signing in to AO Cloud" below
 - Desktop onboarding progress: each step viewed, completed, skipped or left,
   installs and sign-ins started there and how they ended, how long onboarding
   took, and whether the first chat message followed. See "Desktop onboarding
@@ -271,8 +266,8 @@ Orchestrator.inc sends structured events in a few broad categories:
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events
-  while its desktop identity is known,
-  and one-way hashes of project or session identifiers when an event needs them
+  while its desktop identity is known, and keyed hashes of project, session or
+  AO Cloud organization identifiers when an event needs them
 - Coarse mobile-app usage, such as pairing, reconnecting, completing onboarding,
   opening a notification, or using a core action. Phone events also carry the
   running OTA update as `update_id` (a UUID, or `embedded` for the bundle in the
@@ -287,33 +282,32 @@ Orchestrator.inc sends structured events in a few broad categories:
   connected.
   The phone also reports which of its screens are used and how long its
   launches take (see "Mobile app screens and launches" below)
-- Coarse geographic location (country, and where available region and city),
-  derived by PostHog from the connection's IP address when it receives each
-  event. Orchestrator.inc does not resolve or send precise coordinates, and does not store
-  your IP address itself. PostHog may associate this geography with other
-  events from the same installation, including a session-start event that
-  carries a GitHub handle. Orchestrator.inc uses the geography for aggregate analysis, and
-  there is no separate opt-out. Turning telemetry off (see below) stops it
-  along with everything else
 
 Orchestrator.inc uses [PostHog](https://posthog.com/privacy) to process remote product
-telemetry. PostHog receives standard connection and device metadata, including
-the connection's IP address, device type, and operating system, and Orchestrator.inc leaves
-PostHog's IP-based location derivation enabled so this coarse geography is
-available for aggregate analysis.
+telemetry. PostHog receives the connection's IP address as part of any network
+request, but every desktop, daemon and phone event sets `$geoip_disable: true`,
+so PostHog does not derive a location from it, and `$process_person_profile:
+false`, so PostHog keeps no person profile. Orchestrator.inc does not send or
+store your IP address. Feature-flag requests from the desktop app (see below)
+also reach PostHog from your IP address.
 
 The installation identifier lets PostHog group activity from one Orchestrator.inc
-installation over time. Hashed project and session identifiers can likewise
-group events for the same project or session without sending those identifiers
-in plain text. These identifiers are distinct from the explicit GitHub account
-attribution on session-start events, but events that share an installation
-identifier can still be associated with that attribution in PostHog.
+installation over time. Hashed project, session and organization identifiers
+can likewise group events for the same project, session or organization within
+one installation, without sending those identifiers in plain text.
 
-Daemon `project_id_hash` uses the random install ID as a salt before hashing
-the local project ID. This keeps the session spawn grouping stable within one
-installation while preventing a short, guessable project slug from yielding
-the same hash across installations. Usage summary events retain their separate
-random `project_telemetry_id`.
+`project_id_hash`, `session_id_hash` (desktop and daemon) and
+`cloud_org_id_hash` (desktop) are HMAC-SHA256 of the identifier, keyed with a
+random 256-bit secret created once per installation in
+`~/.ao/data/telemetry_hash_salt` (or under `AO_DATA_DIR`). The secret is never
+sent anywhere. A project ID is usually a lowercased folder name and a session
+ID embeds it, so an unkeyed hash, or one keyed with the `install_id` that rides
+every event, could be reversed by hashing a list of likely repository names;
+the private key prevents that. The desktop and daemon use the same key, so one
+project hashes the same on both. If the key cannot be read, the hash is
+omitted rather than sent unkeyed. Hashes therefore cannot be matched across
+installations. Usage summary events keep their separate random
+`project_telemetry_id` and `session_telemetry_id`.
 
 Desktop and daemon events carry `days_since_install` when the persisted install
 ID file has a valid timestamp. The daemon reads it at export time; the desktop
@@ -1174,9 +1168,9 @@ tools (the GitHub CLI and coding agents), then a guided tour of the real app
 The onboarding properties below are only the closed values listed here,
 counts, buckets and durations: never a path, repository name or URL, project
 or session name, username, email, chat text or error message. Like every
-renderer event, these events also carry the shared context and identity
-properties documented later in this file, including `github_actor` when the
-GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
+renderer event, these events also carry the shared context properties
+documented later in this file; `github_actor` and `ao_cloud_user_id` appear
+only with Include my account identity on.
 
 ### Steps
 
@@ -1384,19 +1378,18 @@ Product telemetry is designed not to include:
 - Shell command arguments, command history, or environment variables
 - Repository names, project names, branch names, or plain-text file paths
 - API keys, access tokens, passwords, or other credentials
-- Names, or email addresses other than the one on your signed-in AO Cloud
-  account (invitee emails are never sent)
+- Names or email addresses, including the one on your AO Cloud account
+  (invitee emails are never sent either)
 - Screen recordings, session replays, screenshots, pointer coordinates, or
   the text of anything you click or hover
 
-The explicit account fields are the GitHub owner segment, your authenticated
-GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
-email address. Both are described under "What Orchestrator.inc sends". The
-owner segment is limited to the owning organization or account and never
-includes the repository, path, or URL. Orchestrator.inc does not intentionally send other
-account identity fields, but PostHog can associate related events when they
-share an installation identifier with a session-start event that carries your
-GitHub handle.
+The only account fields are the GitHub owner segment (`github_org`), your
+authenticated GitHub username (`github_actor`) and your AO Cloud user ID
+(`ao_cloud_user_id`), and all three are sent only with Include my account
+identity on. The owner segment is limited to the owning organization or account
+and never includes the repository, path, or URL. With the option on, PostHog
+can associate other events that share an installation identifier with those
+fields; with it off, events carry no account identifier.
 
 The optional website waitlist is separate from product telemetry. If you submit
 an email address, company role, and social profile there, they are used to manage
@@ -1413,17 +1406,17 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   identifier as `paired_install_id`
   only after its authenticated identity request succeeds. Pairing changes clear
   the old value until the new desktop responds. These properties allow events
-  from the same installation to be associated across accounts and with the
-  GitHub handle sent on a session-start event.
+  from the same installation to be associated with each other.
   On upgrade from a build that used the desktop account as the phone's PostHog
   identity, the phone resets that SDK identity once before sending new events.
   Its stored phone installation identifier is retained.
-  While signed in, the daemon reports under the AO Cloud user ID. On sign-out
-  or account switch, its anonymous `distinct_id` changes to avoid attributing
-  new anonymous events to the previous person.
-- Project and session identifiers included in telemetry are one-way hashed.
-  Daemon project hashes are salted by the random install ID. Hashing hides
-  the plain text while allowing related events on that install to be grouped.
+  The `distinct_id` is always this anonymous install-scoped identifier, never
+  the AO Cloud user ID, signed in or not. On sign-out or account switch the
+  daemon still rotates it, so activity before and after is not joined.
+- Project, session and organization identifiers included in telemetry are
+  HMAC-SHA256 hashes keyed with the private `telemetry_hash_salt` described
+  above. Hashing hides the plain text while allowing related events on that
+  install to be grouped.
 - Absolute local paths and local application URLs detected in desktop events
   are replaced with redaction markers before the events are sent.
 - Daemon events sent to PostHog and mobile events accept a fixed set of
@@ -1486,14 +1479,14 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   during a session stops flag requests until it is turned back on. Flag
   requests carry no page address or referrer: the desktop does not let the
   PostHog SDK store the first page it saw.
-- Person profiles are off for anonymous events. A profile is created when a
-  GitHub username is first resolved (one update that sets the username and
-  clears build details older versions stored on the profile) and when you sign
-  in to AO Cloud (your email, AO Cloud user ID, and GitHub username). After an
-  AO Cloud sign-in, desktop and daemon events are linked to that profile. A
-  paired phone retains its own identity and reports the Cloud ID as an event
-  property. Project-add events still carry the GitHub owner segment
-  described above, so this is not an anonymity guarantee.
+- PostHog person profiles are off for every event on every surface
+  (`$process_person_profile: false`; the desktop and phone SDKs run with
+  `person_profiles: "never"`). Orchestrator.inc never calls PostHog `identify` or
+  `alias`, and sets no person properties. Earlier builds did; profiles they
+  created are not changed by this release, and you can ask us to delete them
+  (see "Questions or corrections").
+- GeoIP is off for every event (`$geoip_disable: true`; the phone SDK also
+  runs with `disableGeoip`).
 
 Separately from remote telemetry, the daemon can keep a local copy of
 operational events in Orchestrator.inc's SQLite database. While local telemetry is active, Orchestrator.inc
@@ -1504,7 +1497,9 @@ Expired records are deleted in 5,000-row batches with pauses between batches.
 After each hourly sweep, incremental vacuum reclaims free database pages in
 256-page batches with pauses, stopping when fewer than 256 remain or SQLite
 cannot make further progress. This data stays under `~/.ao` on your
-machine; this setting does not change remote telemetry retention.
+machine; this setting does not change remote telemetry retention. The same
+table and retention window hold the record of exported events that
+`ao telemetry log` shows.
 
 The upgrade that enables incremental vacuum performs a one-time full database
 rewrite. Large databases can take longer to upgrade and require temporary free
@@ -1512,45 +1507,18 @@ disk space for the rewrite.
 
 ## Signing in to AO Cloud
 
-When you sign in to AO Cloud, the desktop app hands the AO Cloud user ID to the
-daemon, which records it (`telemetry_bound_user`), and then calls PostHog
-`identify` with your AO Cloud user ID as the identity and sets three person
-properties:
-`email`, `ao_cloud_user_id`, and `github_login`. The initial anonymous
-`distinct_id` is merged into that identity on first sign-in. While you stay
-signed in, desktop, daemon and CLI events all use the AO Cloud user ID as
-`distinct_id`: the desktop starts each launch identified when its stored
-sign-in matches the account the daemon recorded, and the daemon keeps the
-recorded account across restarts, including a daemon the CLI started. Signing
-out moves the desktop and the daemon to a new anonymous identifier, so later
-signed-out activity is not attributed to the account; signing in again
-returns to the AO Cloud user ID. `install_id` stays the same throughout. A paired phone keeps its own
-identity and carries the Cloud user ID only as an event property. Account fields
-on events are the user ID and, once resolved, the
-GitHub username (as `ao_cloud_user_id` and `github_actor`). The installation
-properties described above are also event fields. The email is a person
-property only. It comes from the AO Cloud
-account you signed in with and is never read from git config. The daemon and the
-mobile app never receive your email; they receive only the user ID. Signing out
-stops attributing new desktop events to you. Only the production WorkOS sign-in
-is identified.
-
-A release build returns from the sign-in page through
-`https://orchestrator.inc/app/auth/return/` on the Orchestrator.inc website.
-If you accepted analytics on that website, the page passes your website
-PostHog `distinct_id` to the desktop app along with the sign-in result. The
-desktop app uses it only when Share usage analytics is on: right after it
-identifies you, it calls PostHog `alias` once, which links your website visits
-to your AO Cloud person, and sends one `ao.renderer.cloud_web_visitor_link_requested`
-event carrying that website ID as `website_distinct_id`. The event records
-that the link was requested: PostHog can still refuse the merge, for example
-when that website ID already belongs to an identified person. This can link your
-website visit to your AO Cloud account. The website ID plays no part in signing
-in, is not written to disk, settings, or logs, and is not sent again on later
-launches, token refreshes, or a repeated return link. If you did not accept
-website analytics, or desktop analytics are off, nothing is linked. Builds that
-sign in against another WorkOS environment, and development builds, return
-through other pages that never add a website ID.
+Signing in to AO Cloud does not identify you to PostHog. The desktop app hands
+the AO Cloud user ID to the daemon over loopback, which records it
+(`telemetry_bound_user`) so that a later sign-out or account switch rotates
+the anonymous identifier and activity on either side is not joined. Events
+carry `is_signed_in: true`, and keep the anonymous `distinct_id`. The AO Cloud
+user ID is added as the `ao_cloud_user_id` event property only with Include my
+account identity on. Your email address is never sent to PostHog, by the
+desktop, the daemon or the phone; the daemon and the phone never receive it.
+The website visitor ID that the
+`https://orchestrator.inc/app/auth/return/` page may pass back after sign-in is
+not used: the desktop app no longer links website visits to anything, and the
+`ao.renderer.cloud_web_visitor_link_requested` event is no longer sent.
 
 AO Cloud itself reports a few server-side events for signed-in users, currently
 `invite.sent` (organization role and a hash of the organization ID, never the
@@ -1560,35 +1528,93 @@ server-side events are off unless the AO Cloud operator configures PostHog and
 are not controlled by the desktop opt-out below, which cannot reach the hosted
 service. Contact us to have an account's data removed.
 
-## Sharing your GitHub handle
+## Including your account identity
 
-Orchestrator.inc resolves the GitHub account signed in to its GitHub integration (at
-daemon start, and again in the desktop app shortly after launch) and includes
-that username on desktop and daemon events as `github_actor`, and on the PostHog
-person as `github_actor` and `github_login`. It is sent both as the event property
-`github_actor` and as a PostHog person property on Orchestrator.inc's shared installation
-person, which lets us group product activity by GitHub username and reach out to
-active users for feedback. Other events from the same installation can be
-associated with that person in PostHog.
+**Settings > General > Privacy > Include my account identity** is off by
+default. While it is off, no event from the desktop, the daemon or a paired
+phone carries `github_actor`, `github_org` or `ao_cloud_user_id`: the daemon
+drops them at export, withholds the GitHub login and Cloud user ID from the
+paired phone's identity response, and the desktop renderer does not register
+them. Turning it on adds:
 
-Orchestrator.inc only sends the handle when the signed-in account is a personal (human)
-account; it never sends an organization or a bot token, and if no GitHub token is
-available it sends nothing. The handle is part of product telemetry and has no
-separate switch: turning telemetry off (see below) stops it. Anything already
-stored in PostHog from earlier events is not deleted retroactively.
+- `github_actor`: the username of the GitHub account signed in to
+  Orchestrator.inc's GitHub integration, only when that account is a personal
+  (human) account; never an organization or a bot token
+- `github_org`: on project-add events, the owner segment of the project's
+  GitHub remote
+- `ao_cloud_user_id`: your AO Cloud user ID, while signed in
+
+These are event properties only; no person profile is created. The option is
+a marker file, `telemetry_share_identity`, next to the installation
+identifier, read by the desktop, the daemon and (through the daemon) a paired
+phone. Turning it off applies to the next event; anything already stored in
+PostHog is not deleted.
+
+To know whether you have finished GitHub sign-in during onboarding, the daemon
+still resolves the authenticated GitHub account at start while telemetry is on,
+and tells the desktop only whether a login exists. It does not run that lookup
+at all while Share usage analytics is off.
+
+## Seeing exactly what was sent
+
+`ao telemetry log` lists the events this machine sent, newest first, with the
+event name, which part of the app sent it (`daemon` for the daemon and CLI,
+`desktop` for the desktop app), the `distinct_id`, and every property exactly as
+sent. Use `--since 24h`, `--event <name>`, `--limit <n>` (1-1000, default 50) or
+`--json`. Daemon and CLI events are recorded once PostHog accepted them;
+desktop events are recorded as they are handed to PostHog, so an event that
+then fails to send can still appear. Phone events are not included.
+
+The record lives in the daemon's local telemetry table under `~/.ao`, is kept
+for `AO_TELEMETRY_RETENTION` (30 days by default), and never leaves your
+machine. It needs local event capture (`AO_TELEMETRY_EVENTS`, on in the
+desktop app). `ao telemetry status` shows which switches are on, and
+`ao telemetry` commands are never themselves reported.
 
 ## Turn desktop and daemon telemetry off
 
-The simplest way is **Settings > General > Privacy > Share usage analytics**.
-Turning it off stops PostHog analytics in the desktop interface, the daemon, and
-any paired phone, and resets the PostHog identity in the desktop app so no
-identity (user ID, email, GitHub username) stays in the client. It takes effect
-immediately and is remembered across restarts (it is a marker file,
-`telemetry_opt_out`, next to the installation identifier). A paired phone picks
-it up the next time it connects and keeps it until a paired desktop that has
-analytics on tells it otherwise. Turning it back on resumes sending; the desktop
-interface uses a fresh anonymous identifier until the next restart. Data already
-sent to PostHog is not deleted.
+There are three ways, each covering different things:
+
+| Control | PostHog analytics | Sentry error reports |
+| --- | --- | --- |
+| Settings > General > Privacy > Share usage analytics, or `ao telemetry off` | Off on desktop, daemon and paired phone | Not affected |
+| Settings > General > Privacy > Share error events | Not affected | Off on desktop and daemon |
+| `DO_NOT_TRACK=1` in the environment | Off | Off |
+
+**Share usage analytics** (or `ao telemetry off` / `ao telemetry on`) stops
+PostHog analytics in the desktop interface, the daemon, and any paired phone,
+and resets the PostHog SDK in the desktop app. It takes effect immediately,
+including a change made from a terminal while the app is open, and is
+remembered across restarts (it is a marker file, `telemetry_opt_out`, next to
+the installation identifier). While it is off the daemon does not look up your
+GitHub account for telemetry. A paired phone picks it up the next time it
+connects and keeps it until a paired desktop that has analytics on tells it
+otherwise. Turning it back on resumes sending. Data already sent to PostHog is
+not deleted.
+
+The phone also has its own **Settings > Privacy > Share usage analytics**
+switch. It works on a phone that was never paired, turns off the phone's
+PostHog and Sentry at once, and no desktop can turn it back on.
+
+**`DO_NOT_TRACK`** ([consoledonottrack.com](https://consoledonottrack.com)) set
+to `1`, `true`, `yes` or `on` turns off both PostHog and Sentry, and wins over
+every `AO_TELEMETRY_*` and Sentry DSN variable:
+
+- the desktop renderer starts no PostHog client, and Share error events shows
+  as disabled by the environment
+- Electron main starts no Sentry client
+- the desktop starts its daemon with `DO_NOT_TRACK=1`, `AO_TELEMETRY_REMOTE=off`
+  and no Sentry DSN, and the daemon itself applies the same rule to its own
+  environment, so a daemon you start from a terminal is covered too
+- the CLI sends no `ao.cli.invoked` or usage-error reports to the daemon,
+  even when that daemon was started without `DO_NOT_TRACK`
+- local event capture is unaffected, since it never leaves the machine
+
+It must be in the environment the desktop app is launched from. On macOS an app
+opened from the Finder or Dock does not see shell startup files; use
+`launchctl setenv DO_NOT_TRACK 1` and restart Orchestrator.inc, or launch it
+from a terminal where the variable is set. The mobile app reads no environment
+at run time; use its in-app switch.
 
 The **Share error events** control on the same page covers error diagnostics
 only: the daemon's Sentry capture of reportable 5xx errors, registered fault
@@ -1636,10 +1662,31 @@ are user setup states and never create Sentry issues.
 The daemon tags these error events with the same `install_id` and sets Sentry
 `user.id` to that identifier when available. If it cannot be read, consented
 error reporting continues without either identity field. These fields do not
-include email or local paths. The environment-variable controls below also
-govern the desktop/daemon product-telemetry paths, for example in managed
-environments. Set all three variables in the environment used to launch
-Orchestrator.inc:
+include email or local paths.
+
+### Environment variables
+
+Set these in the environment the desktop app is launched from (see the
+`DO_NOT_TRACK` note above about the Finder and Dock). The desktop forwards the
+daemon ones to the daemon it starts; a daemon started without the desktop app
+reads them from its own environment.
+
+| Variable | Read by | Effect |
+| --- | --- | --- |
+| `DO_NOT_TRACK` | Desktop (renderer, Electron main), daemon, CLI | `1`/`true`/`yes`/`on` turns off PostHog and Sentry everywhere, overriding everything below |
+| `AO_TELEMETRY_RENDERER` | Desktop | `off` stops events sent directly by the desktop interface; `on` enables them in a development build. Packaged builds default to on |
+| `AO_TELEMETRY_EVENTS` | Daemon | `off` disables daemon event capture, including the local copy and the `ao telemetry log` record. The desktop starts its daemon with `on`; a daemon started on its own defaults to off |
+| `AO_TELEMETRY_REMOTE` | Daemon | `off` or `posthog`. The desktop starts its daemon with `posthog` in packaged builds and `off` in development; a daemon started on its own defaults to off |
+| `AO_TELEMETRY_POSTHOG_KEY`, `AO_TELEMETRY_POSTHOG_HOST` | Daemon | PostHog project key and host for daemon export |
+| `AO_TELEMETRY_DISABLED_EVENTS` | Desktop, daemon | Comma-separated event names that are never sent (kill switch) |
+| `AO_TELEMETRY_APP_VERSION` | Daemon, Electron main | Version stamped on daemon events and Sentry releases |
+| `AO_TELEMETRY_RETENTION` | Daemon | Local event retention, a Go duration or whole days (default 30 days, minimum 1 day) |
+| `AO_TELEMETRY_METRICS` | Daemon | Local metric capture `on`/`off` (default off); never exported |
+| `AO_SENTRY_DSN`, `AO_ELECTRON_SENTRY_DSN` | Daemon, Electron main | Sentry DSN overrides; empty disables. Ignored under `DO_NOT_TRACK` |
+| `EXPO_PUBLIC_AO_TELEMETRY_DISABLED`, `EXPO_PUBLIC_AO_TELEMETRY_DISABLED_EVENTS` | Mobile build | Build-time switches for a mobile build, not runtime controls |
+
+For example, to turn off desktop and daemon product telemetry while keeping
+error reports:
 
 ```bash
 export AO_TELEMETRY_RENDERER=off
@@ -1647,22 +1694,7 @@ export AO_TELEMETRY_EVENTS=off
 export AO_TELEMETRY_REMOTE=off
 ```
 
-Then restart Orchestrator.inc. `AO_TELEMETRY_RENDERER=off` disables events sent directly by
-the desktop interface. `AO_TELEMETRY_EVENTS=off` disables daemon event capture,
-including its local copy. `AO_TELEMETRY_REMOTE=off` explicitly disables daemon
-export to PostHog.
-
-The values must reach the desktop app process itself. For example, variables in
-a shell startup file may not be inherited when you launch Orchestrator.inc from the macOS
-Finder or Dock.
-
-If you run the daemon without the desktop app, event capture and remote export
-are already off unless you enable them.
-
-These environment variables do not control the mobile app; the in-app switch
-above does, through a paired desktop. A phone that was never paired to a desktop
-has no in-app opt-out. Turning
-desktop or daemon product telemetry off does not
+Turning desktop or daemon product telemetry off does not
 delete events already sent to PostHog, remove the local installation identifier,
 or delete existing local product-telemetry records. Automatic deletion of those
 local records older than the configured retention window (30 days by default)

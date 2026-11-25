@@ -401,7 +401,9 @@ const telemetryIdentity = new TelemetryIdentityController(
 	},
 );
 // `ao telemetry off|on` writes the same marker from a terminal; apply it live.
-telemetryIdentity.watchMarkers();
+// Watched for the life of the process; the handle stops it.
+const stopTelemetryMarkerWatch = telemetryIdentity.watchMarkers();
+app.once("will-quit", stopTelemetryMarkerWatch);
 const trustedShellWebContents = new Map<number, WebContents>();
 // Launch start per shell page for ao.launches.timed, handed out once so a reload
 // does not report a launch. The first shell window is a cold launch; later

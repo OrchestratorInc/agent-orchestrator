@@ -12,7 +12,7 @@ type ShareIdentityState = {
 };
 
 /**
- * "Include my GitHub username" (Settings > Privacy), off by default. Main owns
+ * "Include my account identity" (Settings > Privacy), off by default. Main owns
  * the marker the daemon reads; the renderer applies a change when main
  * broadcasts it (see main.tsx), so this store only reads and requests.
  */

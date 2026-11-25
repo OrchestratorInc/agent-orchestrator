@@ -575,8 +575,9 @@ function AnalyticsRow() {
 }
 
 /**
- * Opt-in GitHub username on analytics events (github_actor, github_org). Off by
- * default, and moot while usage analytics is off, so the switch is disabled then.
+ * Opt-in account identity on analytics events (github_actor, github_org,
+ * ao_cloud_user_id). Off by default, and moot while usage analytics is off, so
+ * the switch is disabled then.
  */
 function ShareIdentityRow() {
 	const { t } = useTranslation();

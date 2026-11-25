@@ -6,7 +6,7 @@ import path from "node:path";
 /** Same file the daemon's telemetry Identity reads (adapters/telemetry/identity.go). */
 export const TELEMETRY_OPT_OUT_FILE = "telemetry_opt_out";
 /**
- * Present only while "Include my GitHub username" is on (off by default). The
+ * Present only while "Include my account identity" is on (off by default). The
  * daemon reads it before attaching github_actor or github_org to any export
  * (adapters/telemetry.ShareIdentityFile).
  */
@@ -31,10 +31,10 @@ async function daemonSequence(response: Response): Promise<number | null> {
 const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * Desktop side of the PostHog identity: the opt-out switch (a marker file the
- * daemon also reads) and the loopback hand-off of the signed-in AO Cloud user ID
- * to the daemon. The email never goes through here; it is set by the renderer at
- * identify time and the daemon never sees it.
+ * Desktop side of the PostHog identity: the opt-out and account-identity
+ * switches (marker files the daemon also reads) and the loopback hand-off of the
+ * signed-in AO Cloud user ID to the daemon. The email never goes through here and
+ * is never sent to PostHog.
  */
 export class TelemetryIdentityController {
 	private cloudUserId: string | null = null;
@@ -100,11 +100,11 @@ export class TelemetryIdentityController {
 
 	/**
 	 * Records the signed-in user (null on sign-out) and pushes it to the daemon.
-	 * Resolves true only when the daemon acknowledged exactly this state: the
-	 * renderer identifies with PostHog only then, because identify() links the
-	 * install ID to the account for good and the daemon must already have recorded
-	 * that binding, or a later sign-out could not retire the ID. Unreachable
-	 * daemon, an error response or a superseding call all resolve false.
+	 * Resolves true only when the daemon acknowledged exactly this state; the
+	 * renderer notes the user only then. The daemon's record of the binding lets a
+	 * sign-out or account switch rotate the anonymous install-scoped ID. Nothing
+	 * is identified to PostHog. Unreachable daemon, an error response or a
+	 * superseding call all resolve false.
 	 */
 	async setCloudUser(userId: string | null): Promise<boolean | "unsupported"> {
 		if (userId !== null && !CLOUD_USER_ID_PATTERN.test(userId)) throw new Error("invalid cloud user id");
