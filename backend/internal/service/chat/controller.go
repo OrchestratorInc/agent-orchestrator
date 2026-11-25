@@ -4325,10 +4325,11 @@ func (c *Controller) applyThreadState(
 	update ports.ChatThreadState,
 	now time.Time,
 ) error {
-	c.mu.Lock()
 	// A conversation outlives its provider thread. What another agent or an
-	// earlier thread reported is not merged into this thread's state.
+	// earlier thread reported is not merged into this thread's state. Read before
+	// taking c.mu: a driver may guard its handle with its own lock.
 	thread := c.providerConversationID()
+	c.mu.Lock()
 	if !c.threadState.AppliesTo(c.harness, thread) {
 		c.threadState = domain.ConversationThreadState{}
 	}
