@@ -28286,6 +28286,7 @@ components:
       properties:
         color:
           enum:
+          - ""
           - red
           - orange
           - amber
