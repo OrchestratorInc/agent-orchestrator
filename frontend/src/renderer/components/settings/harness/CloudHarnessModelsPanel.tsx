@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Search } from "@/components/app-icons";
+import { ChevronLeft, ChevronRight, LoaderCircle, Search } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudCatalogAsAgentCatalog, useCloudModelCatalog } from "../../../hooks/useCloudModelCatalog";
@@ -49,7 +49,8 @@ export function CloudHarnessModelsPanel({ agentId, orgId, connected, onOpenAccou
 				placeholder={t("settings.models.searchPlaceholder")} value={modelSearch} onChange={(event) => { setModelSearch(event.target.value); setPage(0); }} />
 		</label> : null}
 		{gap ? <p role="alert" className="text-xs text-error">{t("settings.harness.models.loadFailed")}</p> : null}
-		{loading || gap ? null
+		{loading ? <p role="status" className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />{t("settings.models.loading")}</p>
+			: gap ? null
 			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>

@@ -313,10 +313,12 @@ describe("Cloud harness tab", () => {
 
 	it("opens a harness on a page with only Account and Models, its models read from Cloud", async () => {
 		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
-		listUserAgentModels.mockResolvedValueOnce({ source: "worker", models: [
+		let answer: (value: unknown) => void = () => {};
+		listUserAgentModels.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+		const catalog = { source: "worker", models: [
 			{ id: "gpt-5.5", displayName: "GPT-5.5", default: true, efforts: ["low", "high"] },
 			{ id: "gpt-5.5-mini", displayName: "GPT-5.5 mini", default: false },
-		] });
+		] };
 		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
@@ -325,7 +327,11 @@ describe("Cloud harness tab", () => {
 		expect(within(page).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Account", "Models"]);
 		expect(within(page).getByText("Connected")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		// Until Cloud answers, the tab says it is loading.
+		expect(await within(page).findByRole("status")).toHaveTextContent("Loading models…");
+		answer(catalog);
 		const list = await within(page).findByRole("list", { name: "Available models" });
+		expect(within(page).queryByText("Loading models…")).toBeNull();
 		expect(within(list).getAllByRole("listitem")).toHaveLength(2);
 		expect(within(list).getByText("Default")).toBeInTheDocument();
 		expect(within(list).getByText("Effort: low · high")).toBeInTheDocument();
