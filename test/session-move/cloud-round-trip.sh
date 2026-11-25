@@ -14,8 +14,26 @@
 # there.
 #
 # Usage: AO_CONTROL_PLANE=<ao-control-plane checkout> test/session-move/cloud-round-trip.sh
-# Needs go, git, python3, curl, Docker with Compose and buildx, the agent CLI.
-# Builds ao-move-control-plane:local and ao-move-worker:local when missing.
+# Needs go, git, python3, curl, openssl, Docker with Compose and buildx, the
+# agent CLI. Builds ao-move-control-plane:local and ao-move-worker:local when
+# missing.
+#
+# SYNTHETIC_TRANSCRIPT=1 (claude-code only) runs no model and needs no
+# credentials or Claude Code install: a stand-in `claude` on PATH writes a
+# realistic transcript (Claude Code's JSON Lines records, the --session-id AO
+# gave it, and a sidecar folder with one subagent transcript), runs the hooks
+# AO wrote into the worktree as Claude Code would, and otherwise waits. Its
+# conversations live in $W/claude. Everything else runs as without it.
+#
+# WORKDIR is the folder the run's work folder ($W) is made in; it defaults to
+# $AO_DATA_DIR, then ~/.ao. Compose bind-mounts folders under $W, so the
+# Docker engine must see WORKDIR at the same path.
+#
+# Inside a container (/.dockerenv, or IN_CONTAINER=1), the daemon, git server
+# client and agent all run in that container, which talks to the engine
+# through its Docker socket. The script then joins the compose network and
+# reaches the control plane and git server by service name. RUNNER_CONTAINER
+# names the container when its hostname is not its id.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -30,7 +48,13 @@ SESSION_LABEL=${AO_SESSION_ID:-cloud-round-trip}
 
 # Compose binds data directories from here, so it must be inside $HOME, which
 # Docker Desktop and colima share with their VM.
-state_root="${AO_DATA_DIR:-$HOME/.ao}"
+state_root="${WORKDIR:-${AO_DATA_DIR:-$HOME/.ao}}"
+SYNTHETIC=${SYNTHETIC_TRANSCRIPT:-}
+[[ -z "$SYNTHETIC" || "$HARNESS" == claude-code ]] || { echo "FAIL: SYNTHETIC_TRANSCRIPT supports HARNESS=claude-code only" >&2; exit 1; }
+IN_CONTAINER=${IN_CONTAINER:-}
+[[ -n "$IN_CONTAINER" || ! -f /.dockerenv ]] || IN_CONTAINER=1
+RUNNER=${RUNNER_CONTAINER:-$(hostname)}
+compose_net=""
 mkdir -p "$state_root"
 W=$(mktemp -d "$state_root/cloud-move.XXXXXX")
 project_name="ao-move-$$"
@@ -53,6 +77,8 @@ cleanup() {
 	wait 2>/dev/null || true
 	pkill -f "$W/" 2>/dev/null || true
 	ao_docker_remove_workers "$project_name" >/dev/null 2>&1 || true
+	# Compose cannot remove a network this container is still attached to.
+	[[ -z "$compose_net" ]] || docker network disconnect --force "$compose_net" "$RUNNER" >/dev/null 2>&1 || true
 	compose down --volumes --remove-orphans >/dev/null 2>&1 || true
 	ao_docker_remove_workspaces "$project_name" >/dev/null 2>&1 || true
 	if [[ "${KEEP:-}" == "1" ]]; then echo "kept $W"; else rm -rf "$W"; fi
@@ -62,6 +88,116 @@ trap cleanup EXIT
 
 export GIT_CONFIG_GLOBAL="$W/gitconfig" GIT_CONFIG_NOSYSTEM=1
 printf '[user]\n\tname = Move Test\n\temail = move@example.com\n[init]\n\tdefaultBranch = main\n' > "$GIT_CONFIG_GLOBAL"
+
+# write_synthetic_claude writes the stand-in Claude Code for SYNTHETIC_TRANSCRIPT.
+write_synthetic_claude() {
+	mkdir -p "$(dirname "$1")"
+	cat > "$1" <<'PY'
+#!/usr/bin/env python3
+"""Stands in for Claude Code: no model, no network.
+
+A fresh launch (--session-id ID) writes ID's transcript as Claude Code keeps
+it, under $CLAUDE_CONFIG_DIR/projects/<cwd with non [a-zA-Z0-9-] as ->/, with
+a sidecar folder holding one subagent transcript, then runs the SessionStart,
+UserPromptSubmit and Stop hooks AO configured. --resume ID runs SessionStart
+for the transcript AO placed. Either way it then waits to be stopped.
+"""
+import datetime, json, os, re, signal, subprocess, sys, time, uuid
+
+args = sys.argv[1:]
+if args[:1] in (["--version"], ["-v"]):
+    print("2.1.300 (Claude Code)")
+    sys.exit(0)
+if args[:2] == ["auth", "status"]:
+    print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty", "email": "synthetic@example.com"}))
+    sys.exit(0)
+if args and not args[0].startswith("-"):
+    sys.exit(0)  # mcp, config, update and other subcommands: nothing to do
+
+
+def opt(name):
+    if name in args and args.index(name) + 1 < len(args):
+        return args[args.index(name) + 1]
+    return None
+
+
+resume = opt("--resume")
+session_id = resume or opt("--session-id") or str(uuid.uuid4())
+cwd = os.path.realpath(os.getcwd())
+config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+project = os.path.join(config, "projects", re.sub(r"[^a-zA-Z0-9-]", "-", cwd))
+transcript = os.path.join(project, session_id + ".jsonl")
+try:
+    branch = subprocess.run(["git", "-C", cwd, "symbolic-ref", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+except OSError:
+    branch = ""
+prompt = args[args.index("--") + 1] if "--" in args and args.index("--") + 1 < len(args) else "Hello"
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def record(kind, message, parent, **extra):
+    r = {"parentUuid": parent, "isSidechain": False, "userType": "external", "cwd": cwd, "sessionId": session_id,
+         "version": "2.1.300", "gitBranch": branch, "type": kind, "message": message, "uuid": str(uuid.uuid4()), "timestamp": now()}
+    r.update(extra)
+    return r
+
+
+if not resume:
+    os.makedirs(project, exist_ok=True)
+    user = record("user", {"role": "user", "content": prompt}, None)
+    answer = record("assistant", {
+        "id": "msg_synthetic_" + session_id[:8], "type": "message", "role": "assistant", "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "OK"}], "stop_reason": "end_turn", "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 1},
+    }, user["uuid"], requestId="req_synthetic_" + session_id[:8])
+    with open(transcript, "a") as f:
+        for r in (user, answer):
+            f.write(json.dumps(r) + "\n")
+    agent = "a" + session_id.replace("-", "")[:16]
+    sub = os.path.join(project, session_id, "subagents", "agent-" + agent + ".jsonl")
+    os.makedirs(os.path.dirname(sub), exist_ok=True)
+    with open(sub, "w") as f:
+        f.write(json.dumps(record("user", {"role": "user", "content": "List the files in " + cwd}, None, isSidechain=True, agentId=agent)) + "\n")
+
+
+def hook_groups(event):
+    sources = [os.path.join(cwd, ".claude", "settings.local.json")]
+    inline = opt("--settings")
+    groups = []
+    for source in sources + ([inline] if inline else []):
+        try:
+            settings = json.loads(source) if source.lstrip().startswith("{") else json.load(open(source))
+        except (OSError, ValueError):
+            continue
+        groups += settings.get("hooks", {}).get(event, [])
+    return groups
+
+
+def hook(event, **payload):
+    body = json.dumps(dict({"session_id": session_id, "transcript_path": transcript, "cwd": cwd, "hook_event_name": event}, **payload))
+    for group in hook_groups(event):
+        for h in group.get("hooks", []):
+            if h.get("type", "command") == "command" and h.get("command"):
+                try:
+                    subprocess.run(h["command"], shell=True, input=body, text=True, cwd=cwd, timeout=h.get("timeout", 30))
+                except subprocess.TimeoutExpired:
+                    pass
+
+
+hook("SessionStart", source="resume" if resume else "startup")
+if not resume:
+    hook("UserPromptSubmit", prompt=prompt)
+    hook("Stop", stop_hook_active=False, last_assistant_message="OK")
+for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    signal.signal(sig, lambda *_: sys.exit(0))
+while True:
+    time.sleep(3600)
+PY
+	chmod +x "$1"
+}
 
 step "images"
 if ! docker image inspect "$CP_IMAGE" >/dev/null 2>&1; then
@@ -144,13 +280,23 @@ YAML
 # On first boot Postgres runs its init on a unix socket and passes its health
 # check before it accepts TCP, so migrate waits for TCP.
 compose up -d --no-build --quiet-pull postgres minio minio-init gitserver
+# The published ports are on the engine's loopback, which a container cannot
+# reach: in one, join the compose network and use the services' names.
+if [[ -n "$IN_CONTAINER" ]]; then
+	compose_net=$(docker network ls --filter "label=com.docker.compose.project=$project_name" --format '{{.Name}}' | head -1)
+	[[ -n "$compose_net" ]] || fail "no compose network for $project_name"
+	docker network connect "$compose_net" "$RUNNER" || fail "could not attach container $RUNNER to $compose_net (set RUNNER_CONTAINER)"
+	CP_BASE="http://control-plane:8080" GIT_BASE="http://gitserver:8080"
+else
+	CP_BASE="http://127.0.0.1:$AO_CLOUD_PORT" GIT_BASE="http://127.0.0.1:$GIT_PORT"
+fi
 for _ in $(seq 1 120); do compose exec -T postgres pg_isready -h 127.0.0.1 -U ao_cloud_owner -d ao_cloud >/dev/null 2>&1 && break; sleep 1; done
 compose up -d --no-build --quiet-pull migrate control-plane
-for _ in $(seq 1 90); do curl -fsS "http://127.0.0.1:$AO_CLOUD_PORT/readyz" >/dev/null 2>&1 && break; sleep 1; done
-curl -fsS "http://127.0.0.1:$AO_CLOUD_PORT/readyz" >/dev/null || fail "AO Cloud did not become ready"
-for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:$GIT_PORT/acme/app.git/info/refs?service=git-upload-pack" >/dev/null 2>&1 && break; sleep 1; done
+for _ in $(seq 1 90); do curl -fsS "$CP_BASE/readyz" >/dev/null 2>&1 && break; sleep 1; done
+curl -fsS "$CP_BASE/readyz" >/dev/null || fail "AO Cloud did not become ready"
+for _ in $(seq 1 30); do curl -fsS "$GIT_BASE/acme/app.git/info/refs?service=git-upload-pack" >/dev/null 2>&1 && break; sleep 1; done
 
-GIT_URL="http://127.0.0.1:$GIT_PORT/acme/app.git"
+GIT_URL="$GIT_BASE/acme/app.git"
 ORIGIN_URL=https://github.com/acme/app
 step "seed $ORIGIN_URL and clone it for the local daemon"
 git init -q "$W/seed"
@@ -162,7 +308,7 @@ git clone -q "$GIT_URL" "$W/local/app"
 git -C "$W/local/app" remote set-url origin "$ORIGIN_URL"
 
 cloud() { # METHOD PATH [JSON] [IDEMPOTENCY-KEY]
-	local args=(-sS -X "$1" "http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1$2" -H "Authorization: Bearer ${TOKEN:-}")
+	local args=(-sS -X "$1" "$CP_BASE/api/cloud/v1$2" -H "Authorization: Bearer ${TOKEN:-}")
 	[[ -n "${3:-}" ]] && args+=(-H 'Content-Type: application/json' --data-binary "$3")
 	[[ -n "${4:-}" ]] && args+=(-H "Idempotency-Key: $4")
 	curl "${args[@]}"
@@ -184,6 +330,12 @@ mkdir -p "$W/daemon"
 # Run from inside a Claude Code session, the agent would inherit that session's
 # variables, run as its child and save no transcript of its own.
 while read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(CLAUDECODE|CLAUDE_)')
+if [[ -n "$SYNTHETIC" ]]; then
+	write_synthetic_claude "$W/fakebin/claude"
+	export PATH="$W/fakebin:$PATH" CLAUDE_CONFIG_DIR="$W/claude"
+	# No credential, so the launch check reads the stand-in's "logged in" and sends nothing.
+	unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+fi
 # OpenCode 2's data home is a sibling of XDG_DATA_HOME's: keep it in $W.
 export XDG_DATA_HOME="$W/xdg"
 AO_DATA_DIR="$W/daemon" AO_RUN_FILE="$W/daemon/running.json" AO_PORT=$PORT AO_CLOUD_OFFERING=off \
@@ -277,7 +429,7 @@ opencode_cloud() { cloud_exec 'opencode session export "$1" --standalone 2>/dev/
 # check_opencode DOC DIR NOT: the session runs in DIR and names neither NOT nor a placeholder.
 check_opencode() {
 	python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["info"]["location"]["directory"]==sys.argv[2], d["info"]["location"]' "$1" "$2" || return 1
-	[[ "$1" != *"/ao-moved/"* && "$1" != *"\"$3"* ]]
+	[[ "$1" != *"/ao-moved/cwd"* && "$1" != *"/ao-moved/claude-project"* && "$1" != *"\"$3"* ]]
 }
 
 # check_cloud_conversation checks Cloud placed conversation $1 for its agent,
@@ -301,7 +453,8 @@ check_cloud_conversation() {
 		sleep 1
 	done
 	[[ -n "$file" ]] || fail "Cloud did not place conversation $1"
-	cloud_exec 'grep -q "/ao-moved/" "$1"' "$file" && fail "placeholders left in Cloud's $file"
+	# /ao-moved/home stands for the user's home folder; AO Cloud leaves it as it is.
+	cloud_exec 'grep -qE "/ao-moved/(cwd|claude-project)" "$1"' "$file" && fail "placeholders left in Cloud's $file"
 	cloud_exec 'grep -qF "$2" "$1"' "$file" "$2" && fail "Cloud's $file still names this machine's $2"
 	cloud_exec 'grep -qF "\"cwd\":\"$2\"" "$1"' "$file" "$CLOUD_REPO" || fail "Cloud's $file does not run in $CLOUD_REPO"
 	if [[ "$HARNESS" == claude-code ]]; then
@@ -393,12 +546,12 @@ local_to_cloud() {
 	[[ -s "$W/sidecar.gz" || "$HARNESS" != claude-code ]] || fail "this machine's move/transcript carried no sidecar folder"
 	import=$(python3 -c 'import uuid; print(uuid.uuid4())')
 	code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
-		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=$CLOUD_HARNESS&agentSessionId=$aid" \
+		"$CP_BASE/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=$CLOUD_HARNESS&agentSessionId=$aid" \
 		-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/transcript.gz")
 	[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "transcript upload answered $code"; }
 	if [[ -s "$W/sidecar.gz" ]]; then
 		code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
-			"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import/sidecar" \
+			"$CP_BASE/api/cloud/v1/orgs/$ORG/transcript-imports/$import/sidecar" \
 			-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/sidecar.gz")
 		[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "sidecar upload answered $code"; }
 	fi
@@ -496,11 +649,11 @@ wt=$(worktree_for)
 git -C "$wt" log --reverse --format=%s main..HEAD > "$W/log"
 cat > "$W/want.log" <<'LOG'
 local work, hop 1
-WIP: uncommitted changes from MacBook
+WIP: uncommitted changes from a local session
 Cloud work, hop 2
 WIP: uncommitted changes from AO Cloud
 local work, hop 3
-WIP: uncommitted changes from MacBook
+WIP: uncommitted changes from a local session
 Cloud work, hop 4
 WIP: uncommitted changes from AO Cloud
 LOG
