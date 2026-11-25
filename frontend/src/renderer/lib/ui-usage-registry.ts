@@ -1,5 +1,6 @@
 import { APP_SHORTCUTS, type AppShortcutId } from "../../shared/shortcuts";
 import { isUiSurface, UI_SURFACES, type UiSurface } from "./ui-surfaces";
+import { COMPOSER_ERROR_CODES } from "./composer-send-failure";
 
 // Closed vocabularies for UI usage telemetry, imported by the call sites and by
 // the sanitizer so the two cannot drift. Only these ids, counts and durations
@@ -166,8 +167,8 @@ export type ErrorKind = (typeof ERROR_KINDS)[number];
 
 /**
  * The only error codes `ao.ui.error_shown` may carry: the daemon's failure
- * codes and a chat turn's known provider failures, upper-cased. Anything else
- * is dropped, however it is spelled.
+ * codes, a chat turn's known provider failures, and why a composer send
+ * failed, upper-cased. Anything else is dropped, however it is spelled.
  */
 export const ERROR_CODES = [
 	"NOT_CONFIGURED",
@@ -194,6 +195,8 @@ export const ERROR_CODES = [
 	"AGENT_NOT_INSTALLED",
 	"AGENT_EXITED",
 	"CONTENT_REFUSED",
+	// Why a composer send failed: its own reasons, then the API's send refusals.
+	...COMPOSER_ERROR_CODES,
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 

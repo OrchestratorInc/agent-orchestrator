@@ -43,7 +43,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { cloudModelLabel } from "../../lib/agent-model-choices";
 import { ComposerErrorNotice, switchEffort, type AgentSwitchProps, type PendingAgentSwitch } from "./AgentSwitchPicker";
-import { AGENT_SWITCH_FAILED } from "./ChatComposer";
+import { AGENT_SWITCH_FAILED } from "../../lib/composer-send-failure";
 import { useCloudAgentSwitch, type AgentSwitchTransition } from "../../hooks/useCloudAgentSwitch";
 import { apiErrorMessage } from "../../lib/api-client";
 import { apiErrorException } from "../../lib/api-error-exception";

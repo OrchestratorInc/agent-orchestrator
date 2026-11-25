@@ -1,7 +1,6 @@
 import { encodeButton as encodeButtonFrame, encodeTouch as encodeTouchFrame, type DeviceButton, type DevicePlatform, type TouchPhase } from "../../shared/devices/device-input";
 import { AoError } from "../../shared/telemetry/ao-error";
 import { authHeaders, httpBase, type ServerConfig } from "./config";
-import { AoError } from "../../shared/telemetry/ao-error";
 
 // Input frames for the device hub's stream sockets: the same encoder as the
 // desktop Device tab (packages/shared), handed to React Native's WebSocket as
