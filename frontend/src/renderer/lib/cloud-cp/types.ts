@@ -1833,6 +1833,17 @@ export interface CloudCpGitHubUserInstallation {
 	unavailableReason?: string;
 }
 
+/**
+ * The user's GitHub authorization for opening pull requests on the upstreams
+ * of their forks (AO's OAuth App, scope public_repo). An older control plane,
+ * or one without the OAuth App, omits it.
+ */
+export interface CloudCpGitHubUpstreamAuthorization {
+	connected: boolean;
+	login?: string;
+	scopes?: string;
+}
+
 /** GET /github/user */
 export interface CloudCpGitHubUserConnection {
 	connected: boolean;
@@ -1840,6 +1851,13 @@ export interface CloudCpGitHubUserConnection {
 	avatarUrl?: string;
 	installations: CloudCpGitHubUserInstallation[];
 	lastSyncedAt?: string;
+	upstream?: CloudCpGitHubUpstreamAuthorization;
+}
+
+/** POST /github/upstream/authorize: open authorizeUrl in the browser. */
+export interface CloudCpGitHubAuthorizationStart {
+	authorizeUrl: string;
+	expiresAt: string;
 }
 
 /** One repository an installation grants access to (GET /orgs/{orgId}/github/repositories). */

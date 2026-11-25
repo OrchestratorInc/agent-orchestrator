@@ -852,6 +852,69 @@ paths:
                 type: string
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/github/upstream:
+    delete:
+      operationId: disconnectGitHubUpstream
+      tags: [GitHub]
+      description: >-
+        Forgets the authenticated user's GitHub authorization for upstream pull
+        requests (AO's OAuth App) and revokes it on GitHub. GitHub stays
+        connected otherwise. Succeeds when nothing is connected.
+      responses:
+        "204":
+          description: The authorization for upstream pull requests was revoked.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/github/upstream/authorize:
+    post:
+      operationId: startGitHubUpstreamAuthorization
+      tags: [GitHub]
+      description: >-
+        Starts the authenticated user's authorization of AO's OAuth App, which
+        lets AO open a pull request on the repository a session's fork came
+        from (its upstream) as them, where AO's GitHub App is usually not
+        installed. Open authorizeUrl in the browser. The user must have
+        connected GitHub first (409 github_not_connected); a control plane
+        without the OAuth App answers 404 github_upstream_unavailable.
+      responses:
+        "201":
+          description: A short-lived authorization attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubUserAuthorizationStart"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/github/upstream/callback:
+    get:
+      operationId: completeGitHubUpstreamAuthorization
+      tags: [GitHub]
+      security: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: GitHub authorization completion page.
+          content:
+            text/html:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/agents:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -7457,6 +7520,25 @@ components:
         lastSyncedAt:
           type: string
           format: date-time
+        upstream:
+          $ref: "#/components/schemas/GitHubUpstreamAuthorization"
+    GitHubUpstreamAuthorization:
+      type: object
+      additionalProperties: false
+      required: [connected]
+      description: >-
+        The user's GitHub authorization for opening pull requests on the
+        upstreams of their forks (AO's OAuth App, scope public_repo). Omitted
+        by a control plane that cannot connect it.
+      properties:
+        connected:
+          type: boolean
+        login:
+          type: string
+          description: The GitHub account that granted it.
+        scopes:
+          type: string
+          description: The scopes GitHub granted, comma-separated.
     GitHubUserAuthorizationStart:
       type: object
       additionalProperties: false

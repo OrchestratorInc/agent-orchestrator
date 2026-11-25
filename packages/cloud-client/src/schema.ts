@@ -451,6 +451,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/github/upstream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Forgets the authenticated user's GitHub authorization for upstream pull requests (AO's OAuth App) and revokes it on GitHub. GitHub stays connected otherwise. Succeeds when nothing is connected. */
+        delete: operations["disconnectGitHubUpstream"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/github/upstream/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts the authenticated user's authorization of AO's OAuth App, which lets AO open a pull request on the repository a session's fork came from (its upstream) as them, where AO's GitHub App is usually not installed. Open authorizeUrl in the browser. The user must have connected GitHub first (409 github_not_connected); a control plane without the OAuth App answers 404 github_upstream_unavailable. */
+        post: operations["startGitHubUpstreamAuthorization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/github/upstream/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["completeGitHubUpstreamAuthorization"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/agents": {
         parameters: {
             query?: never;
@@ -4064,6 +4114,15 @@ export interface components {
             installations: components["schemas"]["GitHubUserInstallation"][];
             /** Format: date-time */
             lastSyncedAt?: string;
+            upstream?: components["schemas"]["GitHubUpstreamAuthorization"];
+        };
+        /** @description The user's GitHub authorization for opening pull requests on the upstreams of their forks (AO's OAuth App, scope public_repo). Omitted by a control plane that cannot connect it. */
+        GitHubUpstreamAuthorization: {
+            connected: boolean;
+            /** @description The GitHub account that granted it. */
+            login?: string;
+            /** @description The scopes GitHub granted, comma-separated. */
+            scopes?: string;
         };
         GitHubUserAuthorizationStart: {
             /** Format: uri */
@@ -7157,6 +7216,71 @@ export interface operations {
             query: {
                 state: string;
                 code: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description GitHub authorization completion page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    disconnectGitHubUpstream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The authorization for upstream pull requests was revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startGitHubUpstreamAuthorization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A short-lived authorization attempt. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubUserAuthorizationStart"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeGitHubUpstreamAuthorization: {
+        parameters: {
+            query: {
+                state: string;
+                code?: string;
+                error?: string;
             };
             header?: never;
             path?: never;

@@ -335,6 +335,34 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[3]?.[1]?.method).toBe("DELETE");
   });
 
+  it("connects and disconnects GitHub for upstream pull requests", async () => {
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          authorizeUrl: "https://github.com/login/oauth/authorize?scope=public_repo",
+          expiresAt: "2026-11-25T12:10:00Z",
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.startGitHubUpstreamAuthorization()).resolves.toEqual({
+      authorizeUrl: "https://github.com/login/oauth/authorize?scope=public_repo",
+      expiresAt: "2026-11-25T12:10:00Z",
+    });
+    await expect(client.disconnectGitHubUpstream()).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls.map((call) => [call[0], call[1]?.method])).toEqual([
+      ["https://cloud.example.com/api/cloud/v1/github/upstream/authorize", "POST"],
+      ["https://cloud.example.com/api/cloud/v1/github/upstream", "DELETE"],
+    ]);
+  });
+
   it("scopes and encodes organization and session URLs", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
