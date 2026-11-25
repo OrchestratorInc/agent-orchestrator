@@ -54,10 +54,17 @@ function RowStateLabel({ state, error }: { state: RowState; error?: string }) {
 	);
 }
 
-export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, onSignedIn }: { sessionId: string; hostId?: string; agentName: string; servers: readonly McpServer[]; onSignedIn?: (connector: ReadyConnector) => void }) {
+export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, ownSignIn, onSignedIn }: {
+	sessionId: string;
+	hostId?: string;
+	agentName: string;
+	servers: readonly McpServer[];
+	ownSignIn?: boolean;
+	onSignedIn?: (connector: ReadyConnector) => void;
+}) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
-	const [signingIn, setSigningIn] = useState<SessionConnector | null>(null);
+	const [signingIn, setSigningIn] = useState<{ key: string; name: string; own?: boolean } | null>(null);
 	const query = useQuery({
 		queryKey: sessionConnectorsQueryKey(sessionId, hostId),
 		queryFn: () => connectorsApi.forSession(sessionId, hostId),
@@ -69,7 +76,8 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, onSi
 	useEffect(() => {
 		if (serverCount > 0) void refetch({ cancelRefetch: false });
 	}, [serverCount, refetch]);
-	const connectors = query.data ?? [];
+	if (!query.data) return null;
+	const connectors = query.data;
 	const keys = new Set(connectors.map((connector) => connector.key));
 	const own = servers.filter((server) => !keys.has(server.name) && !ORCHESTRATOR_SERVERS.has(server.name) && server.status !== "disabled");
 	const total = connectors.length + own.length;
@@ -138,7 +146,23 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, onSi
 								{own.map((server) => (
 									<div key={server.name} role="listitem" className="flex items-start justify-between gap-3 px-2 py-1.5">
 										<span className="min-w-0 truncate text-foreground">{server.name}</span>
-										<RowStateLabel state={connectorRowState({ enabled: true, status: server.status === "needs-auth" ? "needs_signin" : "connected" }, server)} error={server.error} />
+										{ownSignIn && server.status === "needs-auth" ? (
+											<Button
+												type="button"
+												variant="secondary"
+												size="xs"
+												className="shrink-0"
+												aria-label={t("chat.connectors.signIn", { name: server.name })}
+												onClick={() => {
+													setOpen(false);
+													setSigningIn({ key: server.name, name: server.name, own: true });
+												}}
+											>
+												{t("settings.connectors.signIn")}
+											</Button>
+										) : (
+											<RowStateLabel state={connectorRowState({ enabled: true, status: server.status === "needs-auth" ? "needs_signin" : "connected" }, server)} error={server.error} />
+										)}
 									</div>
 								))}
 							</div>
@@ -160,10 +184,11 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, onSi
 			<ConnectorSignInDialog
 				connector={{ id: signingIn.key, name: signingIn.name, signedIn: false }}
 				hostId={hostId}
+				own={signingIn.own ? { sessionId, ready: reported.get(signingIn.key)?.status === "ready" } : undefined}
 				onClose={(signedIn) => {
 					setSigningIn(null);
 					void refetch();
-					if (signedIn && reported.get(signingIn.key)?.status !== "ready") onSignedIn?.({ key: signingIn.key, name: signingIn.name });
+					if (signedIn && !signingIn.own && reported.get(signingIn.key)?.status !== "ready") onSignedIn?.({ key: signingIn.key, name: signingIn.name });
 				}}
 			/>
 		) : null}

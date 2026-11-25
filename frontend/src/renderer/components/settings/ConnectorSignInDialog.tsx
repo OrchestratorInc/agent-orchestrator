@@ -27,7 +27,12 @@ function openPage(url: string) {
 	void Promise.resolve().then(() => aoBridge.app.openExternal(url)).catch(() => undefined);
 }
 
-export function ConnectorSignInDialog({ connector, hostId, onClose }: { connector: Pick<Connector, "id" | "name" | "signedIn">; hostId?: string; onClose: (signedIn: boolean) => void }) {
+export function ConnectorSignInDialog({ connector, hostId, own, onClose }: {
+	connector: Pick<Connector, "id" | "name" | "signedIn">;
+	hostId?: string;
+	own?: { sessionId: string; ready: boolean };
+	onClose: (signedIn: boolean) => void;
+}) {
 	const { t } = useTranslation();
 	const [address, setAddress] = useState("");
 	const [copied, setCopied] = useState(false);
@@ -36,7 +41,8 @@ export function ConnectorSignInDialog({ connector, hostId, onClose }: { connecto
 	const liveKey = [...connectorsQueryKey, connector.id];
 
 	const start = useMutation({
-		mutationFn: () => connectorsApi.startSignIn(connector.id, hostId),
+		mutationFn: (): Promise<{ authorizationUrl?: string; callbackUrl?: string }> =>
+			own ? connectorsApi.startOwnSignIn(own.sessionId, connector.id, hostId) : connectorsApi.startSignIn(connector.id, hostId),
 		onMutate: () => {
 			void queryClient.resetQueries({ queryKey: liveKey });
 		},
@@ -44,7 +50,10 @@ export function ConnectorSignInDialog({ connector, hostId, onClose }: { connecto
 			if (result.authorizationUrl) openPage(result.authorizationUrl);
 		},
 	});
-	const finish = useMutation({ mutationFn: () => connectorsApi.finishSignIn(connector.id, address.trim(), hostId) });
+	const finish = useMutation({
+		mutationFn: (): Promise<unknown> =>
+			own ? connectorsApi.finishOwnSignIn(own.sessionId, connector.id, address.trim(), hostId) : connectorsApi.finishSignIn(connector.id, address.trim(), hostId),
+	});
 	const startSignIn = start.mutate;
 	useEffect(() => {
 		if (started.current) return;
@@ -56,11 +65,11 @@ export function ConnectorSignInDialog({ connector, hostId, onClose }: { connecto
 	const live = useQuery({
 		queryKey: liveKey,
 		queryFn: () => connectorsApi.get(connector.id, hostId),
-		enabled: Boolean(page) && !finish.isSuccess,
+		enabled: !own && Boolean(page) && !finish.isSuccess,
 		refetchInterval: (query) => (query.state.data?.signedIn || refusal(query.state.data) ? false : 2000),
 	});
 	const refused = refusal(live.data);
-	const done = finish.isSuccess || (start.isSuccess && (!page || Boolean(live.data?.signedIn)));
+	const done = finish.isSuccess || Boolean(own?.ready) || (start.isSuccess && (!page || Boolean(live.data?.signedIn)));
 	const error = start.error ?? finish.error;
 
 	return (

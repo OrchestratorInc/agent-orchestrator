@@ -4436,6 +4436,23 @@ type ReloadConversationMCPServersResponse struct {
 	Servers []ConversationMCPServerPayload `json:"servers"`
 }
 
+// ConversationMCPSignInRequest names the agent's own tool server to sign in to.
+type ConversationMCPSignInRequest struct {
+	Server string `json:"server" maxLength:"128"`
+}
+
+// ConversationMCPSignInResponse is the page to open and the address that page returns to.
+type ConversationMCPSignInResponse struct {
+	AuthorizationURL string `json:"authorizationUrl"`
+	CallbackURL      string `json:"callbackUrl,omitempty"`
+}
+
+// FinishConversationMCPSignInRequest carries the address of the page the browser opened after approval.
+type FinishConversationMCPSignInRequest struct {
+	Server      string `json:"server" maxLength:"128"`
+	CallbackURL string `json:"callbackUrl" maxLength:"4096"`
+}
+
 // ConversationUsagePayload is the conversation's token position.
 //
 // Current state on the snapshot rather than timeline entries: the provider reports

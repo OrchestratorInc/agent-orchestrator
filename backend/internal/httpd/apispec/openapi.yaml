@@ -9966,6 +9966,116 @@ paths:
       summary: Restart the tool servers a chat session can reach
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/mcp/sign-in:
+    post:
+      operationId: signInSessionConversationMcpServer
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationMCPSignInRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationMCPSignInResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start the agent's own sign-in for one of its tool servers
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/conversation/mcp/sign-in/finish:
+    post:
+      operationId: finishSessionConversationMcpSignIn
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinishConversationMCPSignInRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Finish that sign-in from the address of the page the browser opened
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation/messages:
     post:
       operationId: sendSessionConversationMessage
@@ -21363,6 +21473,23 @@ components:
       - name
       - status
       type: object
+    ConversationMCPSignInRequest:
+      properties:
+        server:
+          maxLength: 128
+          type: string
+      required:
+      - server
+      type: object
+    ConversationMCPSignInResponse:
+      properties:
+        authorizationUrl:
+          type: string
+        callbackUrl:
+          type: string
+      required:
+      - authorizationUrl
+      type: object
     ConversationMessageResponse:
       properties:
         authoredByUser:
@@ -22561,6 +22688,18 @@ components:
           maxLength: 16384
           type: string
       required:
+      - callbackUrl
+      type: object
+    FinishConversationMCPSignInRequest:
+      properties:
+        callbackUrl:
+          maxLength: 4096
+          type: string
+        server:
+          maxLength: 128
+          type: string
+      required:
+      - server
       - callbackUrl
       type: object
     GetPRStackResponse:

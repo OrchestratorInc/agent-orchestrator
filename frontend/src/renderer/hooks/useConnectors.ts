@@ -46,6 +46,15 @@ export const connectorsApi = {
 	test: (connectorId: string) => one(apiClient.POST("/api/v1/connectors/{connectorId}/test", { params: { path: { connectorId } } })),
 	signOut: (connectorId: string) =>
 		one(apiClient.POST("/api/v1/connectors/{connectorId}/disconnect", { params: { path: { connectorId } } })),
+	async startOwnSignIn(sessionId: string, server: string, hostId?: string): Promise<components["schemas"]["ConversationMCPSignInResponse"]> {
+		const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/conversation/mcp/sign-in", { params: { path: { sessionId } }, body: { server } });
+		if (error || !data) throw apiErrorException(error);
+		return data;
+	},
+	async finishOwnSignIn(sessionId: string, server: string, callbackUrl: string, hostId?: string): Promise<void> {
+		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/conversation/mcp/sign-in/finish", { params: { path: { sessionId } }, body: { server, callbackUrl } });
+		if (error) throw apiErrorException(error);
+	},
 	finishSignIn: (connectorId: string, callbackUrl: string, hostId?: string) =>
 		one(clientForSessionHost(hostId).POST("/api/v1/connectors/{connectorId}/connect/finish", { params: { path: { connectorId } }, body: { callbackUrl } })),
 	async remove(connectorId: string): Promise<void> {

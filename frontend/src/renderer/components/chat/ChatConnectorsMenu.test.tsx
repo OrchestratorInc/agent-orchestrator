@@ -55,6 +55,18 @@ describe("ChatConnectorsMenu", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
+	it("shows nothing before it knows which servers are Orchestrator's connectors", async () => {
+		let answer: (value: unknown) => void = () => undefined;
+		vi.spyOn(apiClient, "GET").mockReturnValue(new Promise((resolve) => { answer = resolve; }) as never);
+		const { container } = renderMenu([{ name: "sentry", status: "needs-auth" }, { name: "github", status: "ready" }]);
+		expect(container).toBeEmptyDOMElement();
+		answer({ data: { connectors: [three.data.connectors[1]] } });
+		const chip = await screen.findByRole("button", { name: "2 connectors in this chat" });
+		await userEvent.setup().click(chip);
+		expect(within(screen.getByRole("list", { name: "From Orchestrator" })).getByRole("listitem")).toHaveTextContent("Sentry");
+		expect(within(screen.getByRole("list", { name: "From Claude Code's own settings" })).getByRole("listitem")).toHaveTextContent("githubLoaded");
+	});
+
 	it("lists each connector with its calls and its state, and opens Settings", async () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue(three as never);
 		const user = userEvent.setup();
@@ -130,6 +142,65 @@ describe("ChatConnectorsMenu", () => {
 		await user.click(await screen.findByRole("button", { name: "Done" }));
 		expect(signedIn).toHaveBeenCalledWith({ key: "sentry", name: "Sentry" });
 		expect(local).not.toHaveBeenCalled();
+	});
+
+	it("signs in to one of Codex's own servers through the agent, and reads the result from what the agent reports", async () => {
+		const post = vi.fn(async (path: string) => (path.endsWith("/finish")
+			? { data: undefined }
+			: { data: { authorizationUrl: "https://tracker.example/authorize", callbackUrl: "http://127.0.0.1:52136/callback" } }));
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { connectors: [] } } as never);
+		vi.spyOn(apiClient, "POST").mockImplementation(post as never);
+		const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);
+		const user = userEvent.setup();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const signedIn = vi.fn();
+		const menu = (status: string, ownSignIn: boolean) => (
+			<QueryClientProvider client={client}>
+				<ChatConnectorsMenu sessionId="mer-1" agentName="Codex" servers={[{ name: "tracker", status }, { name: "notes", status: "failed" }]} ownSignIn={ownSignIn} onSignedIn={signedIn} />
+			</QueryClientProvider>
+		);
+		const view = render(menu("needs-auth", false));
+		await user.click(await screen.findByRole("button", { name: "2 connectors in this chat" }));
+		expect(screen.queryByRole("button", { name: "Sign in to tracker" })).not.toBeInTheDocument();
+		expect(within(screen.getByRole("list", { name: "From Codex's own settings" })).getAllByRole("listitem").map((row) => row.textContent)).toEqual(["trackerNeeds sign-in", "notesFailed"]);
+		await user.keyboard("{Escape}");
+		view.rerender(menu("needs-auth", true));
+		await user.click(screen.getByRole("button", { name: "2 connectors in this chat" }));
+		expect(screen.queryByRole("button", { name: "Sign in to notes" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Sign in to tracker" }));
+		expect(await screen.findByRole("heading", { name: "Sign in to tracker" })).toBeInTheDocument();
+		await vi.waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation/mcp/sign-in", { params: { path: { sessionId: "mer-1" } }, body: { server: "tracker" } }));
+		await vi.waitFor(() => expect(open).toHaveBeenCalledWith("https://tracker.example/authorize"));
+		const address = await screen.findByLabelText("Page did not load after you approved? Paste its address.");
+		expect(address).toHaveAttribute("placeholder", "http://127.0.0.1:52136/callback");
+		expect(screen.queryByText("Signed in.")).not.toBeInTheDocument();
+		view.rerender(menu("ready", true));
+		expect(await screen.findByText("Signed in.")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Done" }));
+		expect(signedIn).not.toHaveBeenCalled();
+	});
+
+	it("finishes a sign-in to one of Codex's own servers from a pasted address", async () => {
+		const post = vi.fn(async (path: string) => (path.endsWith("/finish") ? { data: undefined } : { data: { authorizationUrl: "https://tracker.example/authorize" } }));
+		const remote = { GET: vi.fn(async () => ({ data: { connectors: [] } })), POST: post };
+		vi.spyOn(hostClients, "clientForSessionHost").mockReturnValue(remote as never);
+		vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);
+		const user = userEvent.setup();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatConnectorsMenu sessionId="mer-1" hostId="air" agentName="Codex" servers={[{ name: "tracker", status: "needs-auth" }]} ownSignIn />
+			</QueryClientProvider>,
+		);
+		await user.click(await screen.findByRole("button", { name: "1 connector in this chat" }));
+		await user.click(screen.getByRole("button", { name: "Sign in to tracker" }));
+		await user.type(await screen.findByLabelText("Page did not load after you approved? Paste its address."), "http://127.0.0.1:52136/callback?code=c1");
+		await user.click(screen.getByRole("button", { name: "Finish" }));
+		await vi.waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation/mcp/sign-in/finish", {
+			params: { path: { sessionId: "mer-1" } },
+			body: { server: "tracker", callbackUrl: "http://127.0.0.1:52136/callback?code=c1" },
+		}));
+		expect(await screen.findByText("Signed in.")).toBeInTheDocument();
 	});
 
 	it("does not claim an agent loaded a server it has not reported", () => {

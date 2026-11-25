@@ -197,6 +197,14 @@ func (f *fakeChatService) ReloadMCPServers(
 	return nil, nil
 }
 
+func (f *fakeChatService) SignInMCPServer(context.Context, domain.SessionID, string) (chatsvc.MCPSignIn, error) {
+	return chatsvc.MCPSignIn{}, nil
+}
+
+func (f *fakeChatService) FinishMCPSignIn(context.Context, domain.SessionID, string, string) error {
+	return nil
+}
+
 func (f *fakeChatService) SwitchProviderReport(context.Context, domain.SessionID, domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error) {
 	return domain.ProviderSwitchResult{}, nil
 }

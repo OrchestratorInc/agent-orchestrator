@@ -92,6 +92,8 @@ type conversation struct {
 	// activeTurn is the most recent provider turn id, used when a caller asks to
 	// interrupt without naming one.
 	activeTurn string
+	// reloadAfterTurn holds a tool-server reload that a sign-in asked for while a turn ran.
+	reloadAfterTurn bool
 
 	// contextTokens is the conversation's latest position in the model's context,
 	// and contextWindow the size of that context. Both come from the provider's
@@ -196,6 +198,7 @@ func (c *conversation) pump() {
 		// batch has to be able to read it.
 		c.trackContext(n)
 		c.observeBackgroundNotification(n)
+		c.observeMCPSignIn(n)
 		now := time.Now()
 		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
@@ -273,7 +276,14 @@ func (c *conversation) pump() {
 				if c.activeTurn == ev.ProviderTurnID {
 					c.activeTurn = ""
 				}
+				reload := c.reloadAfterTurn && c.activeTurn == ""
+				if reload {
+					c.reloadAfterTurn = false
+				}
 				c.mu.Unlock()
+				if reload {
+					go c.reloadSignedInServers()
+				}
 			}
 			if ev.Kind == ports.ChatEventCompacted {
 				settled, ok := c.settleCompaction(ev)
@@ -987,6 +997,49 @@ func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 	c.log.Warn("refusing dynamic tool call: AO declares no client-side tools",
 		"tool", p.Tool, "callId", p.CallID)
 	return fmt.Errorf("client declares no tools; %q is not available", p.Tool)
+}
+
+// mcpNeedsSignIn is the status of a tool server that waits for the user's sign-in.
+const mcpNeedsSignIn = "needs-auth"
+
+// mcpSignInWait is how long Codex keeps its sign-in listener open.
+const mcpSignInWait = 10 * time.Minute
+
+// SignInMCPServer starts Codex's own sign-in for one of its tool servers and returns the page to open.
+func (c *conversation) SignInMCPServer(ctx context.Context, name string) (string, error) {
+	threadID := c.threadID
+	wait := int64(mcpSignInWait / time.Second)
+	var resp codexproto.McpServerOauthLoginResponse
+	params := codexproto.McpServerOauthLoginParams{Name: name, ThreadID: &threadID, TimeoutSecs: &wait}
+	if err := c.conn.request(ctx, codexproto.MethodMcpServerOauthLogin, params, &resp); err != nil {
+		return "", fmt.Errorf("%s: %w", codexproto.MethodMcpServerOauthLogin, err)
+	}
+	return resp.AuthorizationURL, nil
+}
+
+func (c *conversation) observeMCPSignIn(n notification) {
+	if n.Method != codexproto.MethodMcpServerOauthLoginCompleted {
+		return
+	}
+	var p codexproto.McpServerOauthLoginCompletedNotification
+	if err := json.Unmarshal(n.Params, &p); err != nil || !p.Success {
+		return
+	}
+	c.mu.Lock()
+	busy := c.activeTurn != ""
+	c.reloadAfterTurn = busy
+	c.mu.Unlock()
+	if !busy {
+		go c.reloadSignedInServers()
+	}
+}
+
+func (c *conversation) reloadSignedInServers() {
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	if err := c.conn.request(ctx, codexproto.MethodConfigMcpServerReload, map[string]any{}, nil); err != nil {
+		c.log.Warn("tool servers did not reload after a sign-in", "error", err)
+	}
 }
 
 // ReloadMCPServers restarts the provider's tool servers and reports their state.

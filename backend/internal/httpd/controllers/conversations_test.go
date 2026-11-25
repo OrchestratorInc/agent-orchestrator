@@ -62,6 +62,9 @@ type fakeConversationService struct {
 	setConfigValue    ports.ChatConfigOptionValue
 	mcpServers        []domain.ConversationMCPServer
 	reloadErr         error
+	signIn            chatsvc.MCPSignIn
+	signInErr         error
+	signInCalls       []string
 	sent              ports.ChatUserMessage
 	approvalRequestID string
 	approvalDecision  ports.ChatDecision
@@ -257,6 +260,16 @@ func (f *fakeConversationService) ReloadMCPServers(
 	domain.SessionID,
 ) ([]domain.ConversationMCPServer, error) {
 	return f.mcpServers, f.reloadErr
+}
+
+func (f *fakeConversationService) SignInMCPServer(_ context.Context, _ domain.SessionID, name string) (chatsvc.MCPSignIn, error) {
+	f.signInCalls = append(f.signInCalls, "start "+name)
+	return f.signIn, f.signInErr
+}
+
+func (f *fakeConversationService) FinishMCPSignIn(_ context.Context, _ domain.SessionID, name, address string) error {
+	f.signInCalls = append(f.signInCalls, "finish "+name+" "+address)
+	return f.signInErr
 }
 
 func (f *fakeConversationService) SwitchProviderReport(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error) {

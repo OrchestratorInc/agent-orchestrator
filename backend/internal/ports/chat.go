@@ -233,6 +233,8 @@ const (
 	// without restarting the conversation. Named so a client can gate the control
 	// rather than offering it and reading the refusal.
 	ChatCapabilityMCPReload ChatCapability = "mcp_reload"
+	// ChatCapabilityMCPSignIn means the provider can sign in to one of its own tool servers.
+	ChatCapabilityMCPSignIn ChatCapability = "mcp_sign_in"
 	// ChatCapabilityImages means the provider accepts native image content in a
 	// prompt. AO may still stage a worktree copy for durable/local context, but it
 	// must not reduce an image to a path when this capability is available.
@@ -854,6 +856,11 @@ type (
 	// the conversation, and the only alternative is throwing the session away.
 	ChatMCPReloader interface {
 		ReloadMCPServers(ctx context.Context) (ChatMCPReloadResult, error)
+	}
+	// ChatMCPSigner starts the provider's own sign-in for one of its tool servers
+	// and returns the page the user opens.
+	ChatMCPSigner interface {
+		SignInMCPServer(ctx context.Context, name string) (string, error)
 	}
 )
 
