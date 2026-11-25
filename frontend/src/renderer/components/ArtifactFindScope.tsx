@@ -172,7 +172,8 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 			const contents = Array.from(element!.querySelectorAll<HTMLElement>("[data-artifact-find-content]")).filter((node) => visible(node) && !node.closest(".hidden") && !node.parentElement?.closest("[data-artifact-find-content]"));
 			const warning = contents.find((node) => node.dataset.artifactFindUnavailable)?.dataset.artifactFindUnavailable as "partial" | "unavailable" | undefined;
 			const ranges: Awaited<ReturnType<typeof engine.search>> = [];
-			for (const node of contents) ranges.push(...await engine.search(node, query, stop.signal));
+			// Append one by one: spreading a large result into push() overflows the stack.
+			for (const node of contents) for (const match of await engine.search(node, query, stop.signal)) ranges.push(match);
 			const retained = changed ? -1 : engine.retained(ranges, activeRange.current);
 			return { total: ranges.length, active: retained >= 0 ? retained : undefined, warning: warning ?? (contents.length ? undefined : "unavailable"), paint: (selected, reveal) => {
 				if (stop.signal.aborted || token !== generation.current) return;

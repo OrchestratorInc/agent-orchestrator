@@ -115,6 +115,34 @@ describe("artifact text search", () => {
 		nested.attachShadow({ mode: "open" }).innerHTML = "<slot></slot>"; host.append(nested);
 		expect(await engine.search(document.body, "nested")).toHaveLength(1);
 	});
+	it("keeps text the walk skipped outside a match's highlight", async () => {
+		document.body.innerHTML = '<x-card><span slot="a">first </span><span>unassigned</span><span slot="a">second</span></x-card>';
+		document.querySelector("x-card")!.attachShadow({ mode: "open" }).innerHTML = '<p><slot name="a"></slot></p>';
+		const matches = await createArtifactFindEngine().search(document.body, "first second");
+		expect(matches).toHaveLength(1);
+		expect(matches[0].map((part) => part.toString())).toEqual(["first ", "second"]);
+		document.body.innerHTML = '<p><b>adjacent </b><i>words</i></p>';
+		expect((await createArtifactFindEngine().search(document.body, "adjacent words"))[0].map((part) => part.toString())).toEqual(["adjacent words"]);
+	});
+	it("starts again when text changes during a yield instead of shifting offsets", async () => {
+		document.body.innerHTML = '<p>needle</p><p><span>a</span>needle</p>';
+		const span = document.querySelector("span")!.firstChild as Text;
+		// Yield after every step, so the edit lands between the two paragraphs' mapping.
+		let clock = 0; vi.spyOn(performance, "now").mockImplementation(() => clock += 10);
+		const pending = createArtifactFindEngine().search(document.body, "needle");
+		span.data = "abcdef";
+		const matches = await pending;
+		expect(matches.map((match) => match.map((part) => part.toString()).join(""))).toEqual(["needle", "needle"]);
+	});
+	it("refreshes once per interval while content keeps changing", async () => {
+		vi.useFakeTimers();
+		document.body.innerHTML = '<p id="clock">0</p>';
+		const changed = vi.fn(), dispose = createArtifactFindEngine().observe(document.body, changed);
+		let tick = 0; const timer = setInterval(() => { document.getElementById("clock")!.textContent = String(++tick); }, 50);
+		await vi.advanceTimersByTimeAsync(500);
+		expect(changed.mock.calls.length).toBeGreaterThanOrEqual(3);
+		clearInterval(timer); dispose(); vi.useRealTimers();
+	});
 	it("observes nested and late shadow roots and stops all discovery on teardown", async () => {
 		vi.useFakeTimers();
 		document.body.innerHTML = '<x-card></x-card>';

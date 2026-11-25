@@ -54,7 +54,7 @@ export function usePdfArtifactFind(pdf: PDFDocumentProxy | undefined, root: RefO
 									page.dispatchEvent(new Event("artifact-find-reveal"));
 								}
 							}
-							ranges.push(...matches);
+							for (const match of matches) ranges.push(match);
 						}
 						engine.paint(ranges, activeRange ? ranges.indexOf(activeRange) : -1, document);
 						if (activeRange && pendingReveal === active) { engine.reveal(activeRange); pendingReveal = undefined; }

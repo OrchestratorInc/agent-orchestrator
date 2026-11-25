@@ -71,8 +71,8 @@ export function createArtifactSearchEngine(exceptions) {
       if (++count % 128 === 0) yield;
       if (node.nodeType === 3) {
         if (!node.data) continue;
-        if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [] }; found.push(current); }
-        current.text += node.data; current.nodes.push(node); continue;
+        if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [], texts: [] }; found.push(current); }
+        current.text += node.data; current.nodes.push(node); current.texts.push(node.data); continue;
       }
       if (node.nodeType !== 1 && node.nodeType !== 11) continue;
       if (node.nodeType === 1) {
@@ -83,8 +83,8 @@ export function createArtifactSearchEngine(exceptions) {
         if (!flowingText && node.matches("p,h1,h2,h3,h4,h5,h6,td,th,li,pre,[data-content],[data-line],text,.pdf-text-layer")) boundary = node;
         else if (!flowingText && (style.display === "block" || style.display === "flex" || style.display === "grid")) boundary = node;
         if (node.tagName === "BR") {
-          if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [] }; found.push(current); }
-          current.text += "\n"; current.nodes.push(node.ownerDocument.createTextNode("\n")); continue;
+          if (!current || current.element !== boundary) { current = { element: boundary, text: "", nodes: [], texts: [] }; found.push(current); }
+          current.text += "\n"; current.nodes.push(node.ownerDocument.createTextNode("\n")); current.texts.push("\n"); continue;
         }
         // Closed details expose their summary, not the concealed body.
         if (node.tagName === "DETAILS" && !node.open) { var summary = node.querySelector("summary"); if (summary) stack.push([summary, summary]); current = undefined; continue; }
@@ -93,6 +93,16 @@ export function createArtifactSearchEngine(exceptions) {
       for (var i = nodes.length - 1; i >= 0; i--) stack.push([nodes[i], boundary]);
     }
     return found.filter(function (block) { return block.text.trim(); });
+  }
+  // One range may only grow over the gap between two nodes when that gap holds
+  // no text: content the walk skipped (an unassigned slot child, hidden or
+  // excluded text) stays outside the highlight as a separate part.
+  function adjacent(previous, node) {
+    if (previous.endContainer === node) return true;
+    if (previous.endContainer.getRootNode() !== node.getRootNode() || !(previous.endContainer.compareDocumentPosition(node) & 4)) return false;
+    var gap = node.ownerDocument.createRange();
+    gap.setStart(previous.endContainer, previous.endOffset); gap.setEnd(node, 0);
+    return gap.toString() === "";
   }
   // Both lists are ordered: advance the node cursor once, rather than
   // rescanning the block for every hit. One logical hit may cross DOM roots.
@@ -109,8 +119,7 @@ export function createArtifactSearchEngine(exceptions) {
         if (node.parentNode && length) {
           var start = Math.max(0, hit.start - position), end = Math.min(length, hit.end - position), previous = parts.at(-1);
           if (end > start) {
-            if (previous && previous.endContainer.getRootNode() === node.getRootNode() &&
-                (previous.endContainer === node || previous.endContainer.compareDocumentPosition(node) & 4)) previous.setEnd(node, end);
+            if (previous && adjacent(previous, node)) previous.setEnd(node, end);
             else { var part = node.ownerDocument.createRange(); part.setStart(node, start); part.setEnd(node, end); parts.push(part); }
           }
         }
@@ -121,14 +130,30 @@ export function createArtifactSearchEngine(exceptions) {
     }
     return matches;
   }
+  // Offsets come from the text read when the block was collected. Text edited
+  // during a yield would shift them onto other characters, so such a search
+  // starts again; after the last attempt the edited blocks are left out and
+  // the document observer refreshes the result.
+  function edited(block) {
+    for (var i = 0; i < block.nodes.length; i++) if (block.nodes[i].data !== block.texts[i]) return true;
+    return false;
+  }
   function* searchSteps(root, query) {
-    var matches = [], blocks = yield* blockSteps(root);
-    for (var block of blocks) {
-      var hits = yield* occurrenceSteps(block.text, query);
-      var mapped = yield* mapHits(block.nodes, hits);
-      for (var match of mapped) { matches.push(match); yield; }
+    for (var attempt = 0; ; attempt++) {
+      var found = [], stale = false, last = attempt >= 2, blocks = yield* blockSteps(root);
+      for (var block of blocks) {
+        var hits = yield* occurrenceSteps(block.text, query);
+        var mapped = yield* mapHits(block.nodes, hits);
+        if (edited(block)) { stale = true; if (last) continue; break; }
+        found.push({ block: block, matches: mapped });
+        for (var i = 0; i < mapped.length; i++) yield;
+      }
+      var current = found.filter(function (entry) { return !edited(entry.block); });
+      if (!last && (stale || current.length !== found.length)) continue;
+      var matches = [];
+      for (var entry of current) for (var match of entry.matches) matches.push(match);
+      return matches;
     }
-    return matches;
   }
   function parts(match) { return Array.isArray(match) ? match : match ? [match] : []; }
   function first(match) { return parts(match)[0]; }
@@ -203,10 +228,11 @@ export function createArtifactSearchEngine(exceptions) {
       if (element?.closest("[role='search'], style[data-artifact-find-style]")) return true;
       return change.type === "childList" && [...change.addedNodes, ...change.removedNodes].every(function (node) { return node.nodeType === 1 && node.matches("style[data-artifact-find-style]"); });
     }
+    // Keep the first pending refresh: content that changes faster than the
+    // interval still refreshes once per interval instead of never.
     function schedule() {
-      if (stopped) return;
-      clearTimeout(timer);
-      timer = setTimeout(function () { if (!stopped) changed(); }, 100);
+      if (stopped || timer !== undefined) return;
+      timer = setTimeout(function () { timer = undefined; if (!stopped) changed(); }, 100);
     }
     function* discover() {
       var stack = [root], seen = new Set(), live = new Set([root]), added = false, count = 0;

@@ -68,8 +68,30 @@ func TestPageViewport(t *testing.T) {
 	}
 }
 
+// The find engine is an ES module for the renderer but runs here as part of a
+// classic script: any module syntax left after dropping its one export would
+// be a syntax error that stops the whole bootstrap on every rendered page.
+func TestInjectedFindEngineIsAClassicScript(t *testing.T) {
+	if n := strings.Count(artifactFindJS, "export function createArtifactSearchEngine("); n != 1 {
+		t.Fatalf("artifact_find.js declares createArtifactSearchEngine with export %d times, want 1", n)
+	}
+	module := regexp.MustCompile(`(?m)^\s*(export|import)\b|\bimport\s*\(|\bimport\.meta\b`)
+	if loc := module.FindStringIndex(bootstrapScript); loc != nil {
+		t.Fatalf("injected bootstrap keeps module syntax %q", bootstrapScript[loc[0]:loc[1]])
+	}
+	if !strings.Contains(bootstrapScript, "function createArtifactSearchEngine(") {
+		t.Fatal("injected bootstrap lost the find engine")
+	}
+	if !strings.HasPrefix(bootstrapScript, "(function () {") || !strings.HasSuffix(bootstrapScript, "})();") {
+		t.Fatal("find engine would be a global of every rendered page")
+	}
+	if !strings.Contains(inject(""), "<script>"+bootstrapScript+"</script>") {
+		t.Fatal("inject does not serve the combined bootstrap")
+	}
+}
+
 func TestBootstrapCannotCloseItsOwnElements(t *testing.T) {
-	if strings.Contains(strings.ToLower(bootstrapJS), "</script") {
+	if strings.Contains(strings.ToLower(bootstrapScript), "</script") {
 		t.Fatal("bootstrap script would end its own <script> element")
 	}
 	if strings.Contains(strings.ToLower(defaultThemeCSS+baseCSS), "</style") {
