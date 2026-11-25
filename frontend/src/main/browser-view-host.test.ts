@@ -438,6 +438,20 @@ describe("browser live stream", () => {
 	});
 
 	const liveSink = () => ({ frame: vi.fn(), state: vi.fn(), error: vi.fn() });
+
+	it("tells the phone it takes quality commands, and applies them to the running capture", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ capabilities: { quality: true } }));
+		await host.handleRemoteQuality("sess-1", { quality: 50, maxFps: 15 });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Page.startScreencast", expect.objectContaining({ quality: 50 }));
+		// A frame written report for a stream that is not live is ignored.
+		expect(() => host.handleFrameWritten("sess-unknown", { sequence: 1 })).not.toThrow();
+		expect(() => host.handleFrameWritten("sess-1", { sequence: 1 })).not.toThrow();
+		await host.stopAllLiveStreams();
+	});
+
 	const panelRect = { x: 300, y: 40, width: 480, height: 520 };
 	const hiddenRect = { x: 0, y: 0, width: 0, height: 0 };
 

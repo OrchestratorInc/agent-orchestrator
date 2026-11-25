@@ -4,8 +4,9 @@ import { Image, StyleSheet, Text, View, type LayoutChangeEvent } from "react-nat
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { addNetworkStateListener, getNetworkStateAsync } from "expo-network";
 import { scheduleOnRN } from "react-native-worklets";
-import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveState } from "../browserLive";
+import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveFrame, type BrowserLiveState } from "../browserLive";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { machineState, rejectedMachineLine } from "../hostRoute";
 import { useApp } from "../store";
@@ -20,6 +21,8 @@ import { bottomToolbarHeight, browserMenu, browserToolbar, hasBottomToolbar, typ
 import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, type FrameSize, type FrameZoom } from "./frameZoom";
 import { LoadingBar } from "./LoadingBar";
 import { OpenURLPrompt } from "./OpenURLPrompt";
+import { FrameQueue } from "./frameQueue";
+import { adjustStreamQuality, initialStreamQuality, streamLink, type StreamLink } from "./streamQuality";
 import { StreamStats } from "./StreamStats";
 
 type BrowserStatus = "connecting" | "open" | "error";
@@ -29,8 +32,19 @@ type NavigateAction = "back" | "forward" | "reload" | "stop";
 const DRAG_SLOP = 7;
 /** A held finger still clicks when it lifts, as it always has here. */
 const TAP_MAX_MS = 10_000;
-/** Debug builds measure the stream (StreamStats). */
-const MEASURE_STREAM = typeof __DEV__ !== "undefined" && __DEV__;
+/**
+ * Debug builds measure the stream (StreamStats HUD and log), and so does a
+ * release build made for measuring with EXPO_PUBLIC_AO_STREAM_STATS=1 at build
+ * time (Expo inlines it). Store builds measure only what quality needs.
+ */
+const MEASURE_STREAM = (typeof __DEV__ !== "undefined" && __DEV__) || process.env.EXPO_PUBLIC_AO_STREAM_STATS === "1";
+/** The Hermes JS heap in KB, for the debug log's 10-minute heap check; null off Hermes. */
+function hermesHeapKB(): number | null {
+	const stats = (globalThis as { HermesInternal?: { getInstrumentedStats?: () => { js_heapSize?: number } } }).HermesInternal?.getInstrumentedStats?.();
+	return typeof stats?.js_heapSize === "number" ? Math.round(stats.js_heapSize / 1024) : null;
+}
+/** How often the stream's quality follows the bandwidth it uses. */
+const QUALITY_INTERVAL_MS = 2_000;
 /** The mark a tap leaves on the frame: about a fingertip. */
 const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
@@ -93,14 +107,12 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const frameWidth = useRef(1);
 	frameWidth.current = frameSize.width;
 	const blank = page !== null && !page.url;
-	// Debug builds measure the stream (StreamStats): a HUD line, and a log line
-	// every 5 s for recording baselines. Release builds measure nothing.
-	const stats = useRef<StreamStats | null>(MEASURE_STREAM ? new StreamStats() : null);
+	// The stream is measured (StreamStats) to pick its quality. Debug builds
+	// also show a HUD line and log a line every 5 s for recording baselines.
+	const stats = useRef<StreamStats | null>(new StreamStats());
 	// When each recent frame source arrived, until its image loads: a newer
 	// frame can replace one before it shows.
 	const arrivedAt = useRef(new Map<string, number>());
-	// The source last handed to the Image: a repeat of it is the same request.
-	const lastSource = useRef<string | undefined>(undefined);
 	const [statsLine, setStatsLine] = useState("");
 	useEffect(() => {
 		if (!MEASURE_STREAM) return;
@@ -108,10 +120,13 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		const timer = setInterval(() => {
 			const now = performance.now();
 			setStatsLine(stats.current?.line(now) ?? "");
-			if (++ticks % 5 === 0) console.log(`[stream-stats] ${JSON.stringify(stats.current?.snapshot(now))}`);
+			if (++ticks % 5 === 0) console.log(`[stream-stats] ${JSON.stringify({ ...stats.current?.snapshot(now), heapKB: hermesHeapKB() })}`);
 		}, 1_000);
 		return () => clearInterval(timer);
 	}, []);
+	// This stream's frames: one decoding in the Image, the newest waiting.
+	const frames = useRef<FrameQueue<BrowserLiveFrame & { arrived: number }> | null>(null);
+	const shownURI = useRef<string | undefined>(undefined);
 	const frameShown = useCallback((uri: string) => {
 		const at = arrivedAt.current.get(uri);
 		if (at === undefined) return;
@@ -123,6 +138,14 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		const now = performance.now();
 		stats.current?.shown(now, now - at);
 	}, []);
+	// The Image finished with its source, loaded or not: the next frame may go.
+	const frameDone = useCallback((uri: string) => {
+		// A late load of an image that is no longer shown (the last stream's,
+		// after a reconnect) must not release this stream's queue.
+		if (uri !== shownURI.current) return;
+		frameShown(uri);
+		frames.current?.decoded();
+	}, [frameShown]);
 
 	// The last frame is kept only for the session that drew it.
 	const frameSession = useRef(sessionID);
@@ -154,6 +177,35 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		// The last stream's image stays up, but its load is not this stream's frame.
 		arrivedAt.current.clear();
 		stats.current?.connecting(performance.now());
+		// Only frames that reach the screen are encoded; one that arrives while
+		// another decodes replaces the one waiting (Review focus 4).
+		const queue = new FrameQueue<BrowserLiveFrame & { arrived: number }>((frame) => {
+			if (disposed) return;
+			try {
+				setFrameSize({ width: frame.width, height: frame.height });
+				const uri = browserJPEGDataURI(frame.jpeg);
+				if (stats.current) {
+					// The same source again, still loading, is one image request: it
+					// keeps the time it first arrived (its bytes still count on
+					// arrival). After another source it is a new request: timed afresh.
+					if (uri !== shownURI.current || !arrivedAt.current.has(uri)) {
+						arrivedAt.current.delete(uri);
+						arrivedAt.current.set(uri, frame.arrived);
+					}
+					// Bounded: sources that never load are forgotten.
+					if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
+				}
+				// The same source again loads nothing: it is already done.
+				if (uri === shownURI.current) queueMicrotask(() => queue.decoded());
+				shownURI.current = uri;
+				setFrameURI(uri);
+				setFrameIsLive(true);
+			} catch {
+				setStatus("error");
+				setError("This mobile build couldn't display the browser frame.");
+			}
+		});
+		frames.current = queue;
 		setStatus("connecting");
 		setError(undefined);
 		const live = new BrowserLiveClient(config, sessionID, {
@@ -178,27 +230,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				if (disposed) return;
 				const arrived = performance.now();
 				stats.current?.received(arrived, frame.jpeg.byteLength);
-				try {
-					setFrameSize({ width: frame.width, height: frame.height });
-					const uri = browserJPEGDataURI(frame.jpeg);
-					if (stats.current) {
-						// The same source again, still loading, is one image request: it
-						// keeps the time it first arrived (its bytes still count above).
-						// After another source it is a new request: timed afresh, last.
-						if (uri !== lastSource.current || !arrivedAt.current.has(uri)) {
-							arrivedAt.current.delete(uri);
-							arrivedAt.current.set(uri, arrived);
-						}
-						// Bounded: sources that never load are forgotten.
-						if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
-					}
-					lastSource.current = uri;
-					setFrameURI(uri);
-					setFrameIsLive(true);
-				} catch {
-					setStatus("error");
-					setError("This mobile build couldn't display the browser frame.");
-				}
+				queue.push({ ...frame, arrived });
 			},
 		});
 		client.current = live;
@@ -206,10 +238,39 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 
 		return () => {
 			disposed = true;
+			if (frames.current === queue) frames.current = null;
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
 	}, [attempt, away, config, onDisabled, rejection, sessionID, showNotice]);
+
+	// The network the phone is on, for the stream's quality.
+	const [link, setLink] = useState<StreamLink>("unknown");
+	useEffect(() => {
+		let active = true;
+		void getNetworkStateAsync().then((state) => { if (active) setLink(streamLink(state.type)); }, () => undefined);
+		const subscription = addNetworkStateListener((state) => setLink(streamLink(state.type)));
+		return () => {
+			active = false;
+			subscription.remove();
+		};
+	}, []);
+	// Ask the desktop for a quality that fits the link, then follow the
+	// bandwidth the stream actually uses (only desktops that take it).
+	const takesQuality = status === "open" && page?.capabilities?.quality === true;
+	useEffect(() => {
+		if (!takesQuality) return;
+		let current = initialStreamQuality(link);
+		client.current?.send({ type: "quality", payload: current });
+		const timer = setInterval(() => {
+			const kbps = stats.current?.snapshot(performance.now()).kbps ?? 0;
+			const next = adjustStreamQuality(current, kbps, link);
+			if (next === current) return;
+			current = next;
+			client.current?.send({ type: "quality", payload: current });
+		}, QUALITY_INTERVAL_MS);
+		return () => clearInterval(timer);
+	}, [link, takesQuality, attempt]);
 
 	// The bar is titled with the desktop's page while one is showing.
 	const pageTitle = status === "open" && page?.url ? page.title.trim() || undefined : undefined;
@@ -389,7 +450,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					onLayout={onViewportLayout}
 				>
 					<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
-						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} onLoad={stats.current ? () => frameShown(frameURI) : undefined} /></View> : null}
+						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} onLoad={() => frameDone(frameURI)} onError={() => frameDone(frameURI)} /></View> : null}
 					</Animated.View>
 					<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
 				</View>

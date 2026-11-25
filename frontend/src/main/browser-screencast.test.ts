@@ -141,4 +141,157 @@ describe("BrowserScreencast", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
+
+	describe("pacing to the phone", () => {
+		// A screencast whose frames carry distinct JPEGs (unchanged frames are not sent).
+		const setup = () => {
+			let listener: ((event: unknown, method: string, params: Record<string, unknown>) => void) | undefined;
+			const sendCommand = vi.fn(async (_method: string, _params?: Record<string, unknown>) => undefined);
+			const emit = vi.fn();
+			const cast = new BrowserScreencast({ on: (_e: "message", next: typeof listener) => { listener = next; }, off: vi.fn(), sendCommand }, emit, vi.fn());
+			let n = 0;
+			const frame = (sessionId: number) => listener?.({}, "Page.screencastFrame", { sessionId, data: jpeg(640 + ++n, 360).toString("base64") });
+			const acks = () => sendCommand.mock.calls.filter(([method]) => method === "Page.screencastFrameAck").map(([, params]) => params?.sessionId);
+			return { cast, frame, acks, emit, sendCommand };
+		};
+
+		it("acks a frame only once the daemon has written it to the phone", async () => {
+			vi.useFakeTimers();
+			try {
+				const { cast, frame, acks } = setup();
+				await cast.start();
+				// The daemon has reported before: backpressure is on.
+				cast.frameWritten(0n);
+				frame(1);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([]);
+				cast.frameWritten(1n);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([1]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("never stalls: a frame the daemon never reports is acked after a second", async () => {
+			vi.useFakeTimers();
+			try {
+				const { cast, frame, acks } = setup();
+				await cast.start();
+				cast.frameWritten(0n);
+				frame(1);
+				await vi.advanceTimersByTimeAsync(999);
+				expect(acks()).toEqual([]);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(acks()).toEqual([1]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("acks at once until the daemon first reports, so an older daemon is not slowed", async () => {
+			const { cast, frame, acks } = setup();
+			await cast.start();
+			frame(1);
+			await vi.waitFor(() => expect(acks()).toEqual([1]));
+			await cast.stop();
+		});
+
+		it("restarts capture at the quality the phone asks for, within bounds", async () => {
+			const { cast, sendCommand } = setup();
+			await cast.start();
+			await cast.setQuality({ quality: 50, maxFps: 15 });
+			expect(sendCommand).toHaveBeenLastCalledWith("Page.startScreencast", expect.objectContaining({ quality: 50 }));
+			await cast.setQuality({ quality: 5, maxFps: 15 });
+			expect(sendCommand).toHaveBeenLastCalledWith("Page.startScreencast", expect.objectContaining({ quality: 40 }));
+			await cast.stop();
+		});
+
+		it("holds each ack to the frame rate the phone asked for", async () => {
+			vi.useFakeTimers();
+			try {
+				const { cast, frame, acks } = setup();
+				await cast.start();
+				await cast.setQuality({ quality: 60, maxFps: 10 });
+				frame(1);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([]);
+				await vi.advanceTimersByTimeAsync(100);
+				expect(acks()).toEqual([1]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("spaces acks to the frame cap even with two frames in flight", async () => {
+			vi.useFakeTimers();
+			try {
+				const { cast, frame, acks } = setup();
+				await cast.start();
+				await cast.setQuality({ quality: 60, maxFps: 10 });
+				// Chromium keeps two screencast frames in flight.
+				frame(1);
+				frame(2);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([]);
+				await vi.advanceTimersByTimeAsync(100);
+				expect(acks()).toEqual([1]);
+				await vi.advanceTimersByTimeAsync(99);
+				expect(acks()).toEqual([1]);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(acks()).toEqual([1, 2]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("acks frames in flight in order, each once the phone has it", async () => {
+			vi.useFakeTimers();
+			try {
+				const { cast, frame, acks } = setup();
+				await cast.start();
+				cast.frameWritten(0n);
+				frame(1);
+				frame(2);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([]);
+				cast.frameWritten(1n);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([1]);
+				cast.frameWritten(2n);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([1, 2]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("acks an unchanged frame at once: nothing goes to the phone", async () => {
+			vi.useFakeTimers();
+			try {
+				let listener: ((event: unknown, method: string, params: Record<string, unknown>) => void) | undefined;
+				const sendCommand = vi.fn(async (_method: string, _params?: Record<string, unknown>) => undefined);
+				const cast = new BrowserScreencast({ on: (_e: "message", next: typeof listener) => { listener = next; }, off: vi.fn(), sendCommand }, vi.fn(), vi.fn());
+				await cast.start();
+				cast.frameWritten(0n);
+				const same = jpeg().toString("base64");
+				listener?.({}, "Page.screencastFrame", { sessionId: 1, data: same });
+				cast.frameWritten(1n);
+				await vi.advanceTimersByTimeAsync(0);
+				listener?.({}, "Page.screencastFrame", { sessionId: 2, data: same });
+				await vi.advanceTimersByTimeAsync(0);
+				const acked = sendCommand.mock.calls.filter(([method]) => method === "Page.screencastFrameAck").map(([, params]) => params?.sessionId);
+				expect(acked).toEqual([1, 2]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	});
 });
+

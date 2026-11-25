@@ -14,12 +14,17 @@ export type BrowserLiveState = {
 	tabs: Array<{ id: string; title: string; url: string; active: boolean }>;
 	width: number;
 	height: number;
+	/** What the desktop takes beyond input, navigation and tabs; absent from older desktops. */
+	capabilities?: { quality?: boolean };
 };
 
 export type BrowserLiveCommand =
 	| { type: "input"; payload: Record<string, unknown> }
 	| { type: "navigate"; payload: { action: "open" | "back" | "forward" | "reload" | "stop"; url?: string } }
-	| { type: "tab"; payload: { action: "new" | "select" | "close"; tabId?: string; url?: string } };
+	| { type: "tab"; payload: { action: "new" | "select" | "close"; tabId?: string; url?: string } }
+	// Sent only to a desktop whose state lists capabilities.quality: an older
+	// daemon closes the stream on a command it does not know.
+	| { type: "quality"; payload: { quality: number; maxFps: number } };
 
 /**
  * Host errors that refuse one command and leave the stream healthy: the page

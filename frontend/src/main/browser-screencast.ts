@@ -7,6 +7,18 @@ type DebuggerLike = {
 	sendCommand(method: string, params?: Record<string, unknown>): Promise<unknown>;
 };
 
+/** How the phone wants the stream: JPEG quality and a frame-rate cap. */
+export type BrowserStreamQuality = { quality: number; maxFps: number };
+
+const DEFAULT_QUALITY = 70;
+// A frame the daemon never reports written is acked anyway after this long:
+// the stream slows down under backpressure, it never stops.
+const ACK_TIMEOUT_MS = 1_000;
+
+function clamp(value: unknown, min: number, max: number, fallback: number): number {
+	return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
+}
+
 export class BrowserScreencast {
 	private sequence = 0n;
 	private stopped = false;
@@ -16,6 +28,17 @@ export class BrowserScreencast {
 	private fallbackDelay = 500;
 	private lastJPEG?: Buffer;
 	private inputGeneration = 0;
+	private quality = DEFAULT_QUALITY;
+	private minFrameMs = 0;
+	// Set once the daemon first reports a frame written to the phone: from then
+	// on each frame's ack waits for it (an older daemon never reports).
+	private backpressure = false;
+	private lastWritten = 0n;
+	// Frames Chromium waits on (it keeps two in flight), acked in order: each
+	// once the phone has it and the frame cap allows, or after ACK_TIMEOUT_MS.
+	private pendingAcks: { sessionId: number; sequence: bigint; emittedAt: number }[] = [];
+	private lastAckAt = 0;
+	private ackTimer?: ReturnType<typeof setTimeout>;
 	private readonly listener: (event: unknown, method: string, params: Record<string, unknown>) => void;
 
 	constructor(
@@ -35,13 +58,7 @@ export class BrowserScreencast {
 		this.debug.on("message", this.listener);
 		try {
 			await this.debug.sendCommand("Page.enable");
-			await this.debug.sendCommand("Page.startScreencast", {
-				format: "jpeg",
-				quality: 70,
-				maxWidth: 1280,
-				maxHeight: 720,
-				everyNthFrame: 1,
-			});
+			await this.startCapture();
 			if (!this.stopped) {
 				this.lastFrameAt = Date.now();
 				this.fallbackTimer = setInterval(() => void this.captureHiddenFrame(), 500);
@@ -53,9 +70,45 @@ export class BrowserScreencast {
 		}
 	}
 
+	private startCapture(): Promise<unknown> {
+		return this.debug.sendCommand("Page.startScreencast", {
+			format: "jpeg",
+			quality: this.quality,
+			maxWidth: 1280,
+			maxHeight: 720,
+			everyNthFrame: 1,
+		});
+	}
+
+	/** The phone's quality and frame-rate cap, kept within bounds; capture restarts at the new quality. */
+	async setQuality(next: Partial<BrowserStreamQuality>): Promise<void> {
+		const quality = clamp(next.quality, 40, 80, this.quality);
+		const maxFps = clamp(next.maxFps, 5, 30, 30);
+		this.minFrameMs = Math.round(1_000 / maxFps);
+		if (quality === this.quality || this.stopped) {
+			this.quality = quality;
+			return;
+		}
+		this.quality = quality;
+		// Frames Chromium waits on would be lost with the old capture.
+		this.releaseAllAcks();
+		await this.debug.sendCommand("Page.stopScreencast").catch(() => undefined);
+		if (!this.stopped) await this.startCapture();
+	}
+
+	/** The daemon wrote frame `sequence` to the phone. */
+	frameWritten(sequence: bigint): void {
+		this.backpressure = true;
+		if (sequence > this.lastWritten) this.lastWritten = sequence;
+		this.pumpAcks();
+	}
+
 	async stop(): Promise<void> {
 		if (this.stopped) return;
 		this.stopped = true;
+		if (this.ackTimer) clearTimeout(this.ackTimer);
+		this.ackTimer = undefined;
+		this.pendingAcks = [];
 		if (this.fallbackTimer) clearInterval(this.fallbackTimer);
 		this.fallbackTimer = undefined;
 		this.removeListener();
@@ -97,7 +150,7 @@ export class BrowserScreencast {
 			const x = metrics?.cssVisualViewport?.pageX ?? 0;
 			const y = metrics?.cssVisualViewport?.pageY ?? 0;
 			const result = await this.debug.sendCommand("Page.captureScreenshot", {
-				format: "jpeg", quality: 70, fromSurface: true,
+				format: "jpeg", quality: this.quality, fromSurface: true,
 				captureBeyondViewport: true,
 				clip: { x, y, width, height, scale },
 			}) as { data?: string };
@@ -139,18 +192,54 @@ export class BrowserScreencast {
 	private async consume(params: Record<string, unknown>): Promise<void> {
 		const sessionId = typeof params.sessionId === "number" ? params.sessionId : undefined;
 		if (sessionId === undefined) return;
+		let sent = false;
 		try {
 			// Only a changed frame resets backoff. Screenshot-triggered repaints
 			// can arrive after the screenshot promise settles with identical data.
-			this.emitJPEG(typeof params.data === "string" ? params.data : "");
+			sent = this.emitJPEG(typeof params.data === "string" ? params.data : "");
 		} catch (error) {
 			this.fail("BROWSER_CAPTURE_INVALID_FRAME", error instanceof Error ? error.message : "Browser frame was invalid");
-		} finally {
-			try {
-				await this.debug.sendCommand("Page.screencastFrameAck", { sessionId });
-			} catch {
-				// A detached target will be handled by the owning browser lifecycle.
+		}
+		// Nothing went to the phone: nothing to wait for.
+		if (!sent || (!this.backpressure && this.minFrameMs === 0)) return this.ack(sessionId);
+		this.pendingAcks.push({ sessionId, sequence: this.sequence, emittedAt: Date.now() });
+		this.pumpAcks();
+	}
+
+	// Acks every frame in flight that may go now, in order, then waits for the
+	// next one's turn: the frame cap, the phone having it, or the timeout.
+	private pumpAcks(): void {
+		if (this.ackTimer) clearTimeout(this.ackTimer);
+		this.ackTimer = undefined;
+		while (this.pendingAcks.length && !this.stopped) {
+			const head = this.pendingAcks[0]!;
+			const now = Date.now();
+			const timeoutAt = head.emittedAt + ACK_TIMEOUT_MS;
+			const capAt = Math.max(head.emittedAt, this.lastAckAt) + this.minFrameMs;
+			const waitingForPhone = this.backpressure && this.lastWritten < head.sequence;
+			if (now < timeoutAt && (waitingForPhone || now < capAt)) {
+				const at = waitingForPhone ? timeoutAt : Math.min(capAt, timeoutAt);
+				this.ackTimer = setTimeout(() => this.pumpAcks(), at - now);
+				this.ackTimer.unref?.();
+				return;
 			}
+			this.pendingAcks.shift();
+			this.lastAckAt = now;
+			void this.ack(head.sessionId);
+		}
+	}
+
+	private releaseAllAcks(): void {
+		if (this.ackTimer) clearTimeout(this.ackTimer);
+		this.ackTimer = undefined;
+		for (const pending of this.pendingAcks.splice(0)) void this.ack(pending.sessionId);
+	}
+
+	private async ack(sessionId: number): Promise<void> {
+		try {
+			await this.debug.sendCommand("Page.screencastFrameAck", { sessionId });
+		} catch {
+			// A detached target will be handled by the owning browser lifecycle.
 		}
 	}
 }

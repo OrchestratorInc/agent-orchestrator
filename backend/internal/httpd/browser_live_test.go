@@ -283,7 +283,7 @@ func TestBrowserWriterSendsControlsBeforePendingFrame(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		_ = hub.writeBrowserEvents(ctx, conn, controls, frames)
+		_ = hub.writeBrowserEvents(ctx, conn, controls, frames, nil)
 	}))
 	defer server.Close()
 	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
@@ -313,5 +313,99 @@ func TestBrowserWriterSendsControlsBeforePendingFrame(t *testing.T) {
 	kind, _, err := conn.Read(ctx)
 	if err != nil || kind != websocket.MessageBinary {
 		t.Fatalf("frame kind=%v err=%v", kind, err)
+	}
+}
+
+func TestBrowserWriterReportsEachFrameItWrote(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	controls := make(chan browserstream.Event)
+	frames := make(chan browserstream.Event, 1)
+	frames <- browserstream.Event{Frame: &browserstream.Frame{Sequence: 7, Width: 10, Height: 10, Captured: time.Now(), JPEG: []byte{1}}}
+	written := make(chan uint64, 1)
+	hub := NewBrowserLiveHub(nil, nil, nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		_ = hub.writeBrowserEvents(ctx, conn, controls, frames, func(sequence uint64) { written <- sequence })
+	}))
+	defer server.Close()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cancel(); _ = conn.CloseNow() }()
+	if kind, _, err := conn.Read(ctx); err != nil || kind != websocket.MessageBinary {
+		t.Fatalf("frame kind=%v err=%v", kind, err)
+	}
+	select {
+	case sequence := <-written:
+		if sequence != 7 {
+			t.Fatalf("written sequence = %d, want 7", sequence)
+		}
+	case <-ctx.Done():
+		t.Fatal("the writer never reported the frame it wrote")
+	}
+}
+
+type browserLiveSendRecorder struct {
+	mu    sync.Mutex
+	sends []string
+}
+
+func (b *browserLiveSendRecorder) Subscribe(context.Context, string) (*browserstream.Subscription, error) {
+	return nil, browserstream.ErrUnavailable
+}
+
+func (b *browserLiveSendRecorder) Send(_ context.Context, sessionID, typ string, payload any) error {
+	raw, _ := json.Marshal(payload)
+	b.mu.Lock()
+	b.sends = append(b.sends, sessionID+" "+typ+" "+string(raw))
+	b.mu.Unlock()
+	return nil
+}
+
+func TestBrowserCommandsForwardQualityAndStillRefuseUnknownTypes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	broker := &browserLiveSendRecorder{}
+	hub := NewBrowserLiveHub(broker, nil, nil, nil)
+	done := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		done <- hub.readBrowserCommands(ctx, conn, "s1")
+	}))
+	defer server.Close()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"quality","payload":{"quality":50,"maxFps":15}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"evil","payload":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The server closes with a policy violation; reading completes the handshake.
+	if _, _, err := conn.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("close = %v, want policy violation", err)
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("an unknown command type did not end the stream")
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if len(broker.sends) != 1 || broker.sends[0] != `s1 quality {"quality":50,"maxFps":15}` {
+		t.Fatalf("sends = %q", broker.sends)
 	}
 }

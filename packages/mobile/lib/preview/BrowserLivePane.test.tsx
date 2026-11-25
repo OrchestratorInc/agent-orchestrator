@@ -19,6 +19,11 @@ const fixtures = vi.hoisted(() => ({
 	errorStatus: null as number | null,
 	platform: { OS: "android" },
 	clients: [] as Array<{ handlers: Handlers; sent: unknown[]; closed: boolean }>,
+	networkType: "WIFI",
+}));
+vi.mock("expo-network", () => ({
+	getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true, type: fixtures.networkType }),
+	addNetworkStateListener: () => ({ remove: () => undefined }),
 }));
 
 vi.mock("react-native", async () => {
@@ -184,6 +189,7 @@ beforeEach(() => {
 	fixtures.error = null;
 	fixtures.errorStatus = null;
 	fixtures.clients.length = 0;
+	fixtures.networkType = "WIFI";
 	onTitle.mockClear();
 });
 
@@ -484,6 +490,100 @@ describe("live browser gestures", () => {
 	});
 });
 
+describe("live browser quality", () => {
+	const qualities = () => sent().filter((command) => (command as { type: string }).type === "quality").map((command) => (command as { payload: unknown }).payload);
+
+	it("never sends quality to a desktop that does not say it takes it", async () => {
+		await render();
+		await open();
+		await act(async () => { await Promise.resolve(); });
+		expect(qualities()).toEqual([]);
+	});
+
+	it("asks a desktop that takes it for cellular's quality and frame rate", async () => {
+		fixtures.networkType = "CELLULAR";
+		await render();
+		await act(async () => { await Promise.resolve(); });
+		await open({ ...page, capabilities: { quality: true } });
+		expect(qualities()).toEqual([{ quality: 50, maxFps: 15 }]);
+	});
+
+	it("steps the quality down when the stream uses more than the link's budget", async () => {
+		vi.useFakeTimers();
+		try {
+			fixtures.networkType = "CELLULAR";
+			await render();
+			await act(async () => { await Promise.resolve(); });
+			await open({ ...page, capabilities: { quality: true } });
+			// 400 KB in the last second: over cellular's budget.
+			await act(async () => {
+				vi.advanceTimersByTime(1_500);
+				for (let i = 0; i < 4; i++) client().handlers.onFrame({ sequence: BigInt(i + 1), capturedAtMs: 1n, width: 1280, height: 800, jpeg: new Uint8Array(102_400).fill(i).buffer });
+				vi.advanceTimersByTime(500);
+			});
+			expect(qualities().at(-1)).toEqual({ quality: 40, maxFps: 15 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("live browser frames", () => {
+	const jpeg = (marker: number) => Uint8Array.from([0xff, 0xd8, 0xff, marker]).buffer;
+	const source = () => nodes("Image")[0]?.props.source.uri as string | undefined;
+	const encoded = (marker: number) => `data:image/jpeg;base64,${btoa(String.fromCharCode(0xff, 0xd8, 0xff, marker))}`;
+
+	it("shows only the newest frame once the one decoding is done, dropping those between", async () => {
+		await render();
+		await open();
+		await showFrame();
+		const first = source();
+		await act(async () => {
+			client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) });
+			client().handlers.onFrame({ sequence: 3n, capturedAtMs: 3n, width: 1280, height: 800, jpeg: jpeg(3) });
+		});
+		// Still decoding the first: nothing replaces it yet.
+		expect(source()).toBe(first);
+		await act(async () => { nodes("Image")[0].props.onLoad(); });
+		expect(source()).toBe(encoded(3));
+		await act(async () => { nodes("Image")[0].props.onLoad(); });
+		await act(async () => { client().handlers.onFrame({ sequence: 4n, capturedAtMs: 4n, width: 1280, height: 800, jpeg: jpeg(4) }); });
+		// Idle again: the next frame shows at once.
+		expect(source()).toBe(encoded(4));
+	});
+
+	it("keeps the new stream's frame waiting when the last stream's image loads late", async () => {
+		await render();
+		await open();
+		await showFrame();
+		// The last stream's image, still loading when the stream fails.
+		const lateLoad = nodes("Image")[0].props.onLoad as () => void;
+		await act(async () => client().handlers.onStatus("error", "The browser stream ended."));
+		const alert = screen.root.find((node) => node.props.accessibilityRole === "alert");
+		await act(async () => alert.findByType("Button" as never).props.onPress());
+		await open();
+		await act(async () => {
+			client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) });
+			client().handlers.onFrame({ sequence: 3n, capturedAtMs: 3n, width: 1280, height: 800, jpeg: jpeg(3) });
+		});
+		expect(source()).toBe(encoded(2));
+		// The old image's load must not release the new stream's queue.
+		await act(async () => { lateLoad(); });
+		expect(source()).toBe(encoded(2));
+		await act(async () => { nodes("Image")[0].props.onLoad(); });
+		expect(source()).toBe(encoded(3));
+	});
+
+	it("moves on when a frame fails to decode", async () => {
+		await render();
+		await open();
+		await showFrame();
+		await act(async () => { client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) }); });
+		await act(async () => { nodes("Image")[0].props.onError(); });
+		expect(source()).toBe(encoded(2));
+	});
+});
+
 describe("stream stats HUD", () => {
 	it("is absent from release builds", async () => {
 		vi.useFakeTimers();
@@ -495,6 +595,24 @@ describe("stream stats HUD", () => {
 			expect(nodes("Text")).toHaveLength(0);
 		} finally {
 			vi.useRealTimers();
+		}
+	});
+
+	it("measures a release build made for measuring (EXPO_PUBLIC_AO_STREAM_STATS=1)", async () => {
+		vi.stubEnv("EXPO_PUBLIC_AO_STREAM_STATS", "1");
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: MeasuredPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<MeasuredPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			await showFrame();
+			await act(async () => { nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/^first \d+ms · /);
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllEnvs();
 		}
 	});
 
@@ -527,13 +645,19 @@ describe("stream stats HUD", () => {
 			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
 			await open();
 			const frame = (marker: number) => client().handlers.onFrame({ sequence: 1n, capturedAtMs: 1n, width: 1280, height: 800, jpeg: Uint8Array.from([0xff, 0xd8, 0xff, marker]).buffer });
-			// A, then B, then A again, each committed before any loads: three requests.
+			// A shows and loads (10 ms), then B (30 ms), then A again: A's second
+			// showing is a new request, timed from its own arrival (20 ms), not from
+			// A's first (80 ms). Medians: 20 if right, 30 if wrong.
 			await act(async () => { frame(1); });
-			await act(async () => { vi.advanceTimersByTime(20); frame(2); });
-			await act(async () => { vi.advanceTimersByTime(20); frame(1); });
+			await act(async () => { vi.advanceTimersByTime(10); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(10); frame(2); });
+			await act(async () => { vi.advanceTimersByTime(30); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(10); frame(1); });
 			await act(async () => { vi.advanceTimersByTime(20); nodes("Image")[0].props.onLoad(); });
 			await act(async () => { vi.advanceTimersByTime(1_000); });
 			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/ · decode 20ms · /);
+			// (With the queue, a B and an A arriving while A still decodes never reach
+			// the Image: the one request is the first A's, timed from its arrival.)
 		} finally {
 			vi.useRealTimers();
 		}
