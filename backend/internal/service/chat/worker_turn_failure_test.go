@@ -108,7 +108,7 @@ func TestFailedPrimaryWorkerTurnEnqueuesOnceAndHoldsQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	delivery := &recordingFailureDelivery{}
-	delivery.err = fmt.Errorf("%w: semantic acceptance reply lost", turnfailuresvc.ErrUnacknowledgedDelivery)
+	delivery.err = errors.New("semantic acceptance reply lost")
 	if err := turnfailuresvc.New(h.st, delivery, nil).RunDue(ctx); err == nil || delivery.calls != 1 {
 		t.Fatalf("expected uncertain semantic acknowledgement after one send: err=%v delivery=%+v", err, delivery)
 	}

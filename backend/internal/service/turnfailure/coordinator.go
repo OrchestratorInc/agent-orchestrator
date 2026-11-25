@@ -20,9 +20,10 @@ const (
 	maxNameBytes = 80
 )
 
-// ErrUnacknowledgedDelivery marks a send that may have reached the orchestrator
-// even though AO did not see it accepted. Its recipient stays pinned.
-var ErrUnacknowledgedDelivery = errors.New("prompt submission was not observed")
+// ErrRefusedDelivery marks a send the orchestrator refused before anything was
+// written to it, so it cannot have been accepted. Any other send error may
+// follow a write the orchestrator accepted, and keeps its recipient pinned.
+var ErrRefusedDelivery = errors.New("delivery refused before sending")
 
 // Store is the durable failed-turn and session lookup surface.
 type Store interface {
@@ -147,9 +148,9 @@ func (c *Coordinator) RunDue(ctx context.Context) error {
 	if sendErr == nil {
 		return c.store.AcknowledgeWorkerTurnFailure(ctx, failure.TurnID, c.now().UTC())
 	}
-	// Only a pin this attempt made is known never to have carried an accepted
-	// send. An older pin may follow an uncertain send, so it stays.
-	if pinnedHere && !errors.Is(sendErr, ErrUnacknowledgedDelivery) {
+	// Only a refusal proves nothing was accepted, and only for this attempt: an
+	// older pin may follow an earlier send whose outcome is unknown, so it stays.
+	if pinnedHere && errors.Is(sendErr, ErrRefusedDelivery) {
 		if _, err := c.store.ReleaseWorkerTurnFailureTarget(ctx, failure.TurnID, target); err != nil {
 			return err
 		}

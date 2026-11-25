@@ -94,7 +94,7 @@ func TestCoordinatorRetriesWithStableKeyAndAcknowledgesOnce(t *testing.T) {
 		TurnID: "turn-1", SessionID: "worker-1", ProjectID: "project-1", DisplayName: "Worker",
 		ErrorMessage: "JSON-RPC -32603: internal error; token=secret; 504 Gateway Timeout",
 	}}
-	d := &fakeDelivery{err: fmt.Errorf("%w: lost reply", ErrUnacknowledgedDelivery)}
+	d := &fakeDelivery{err: errors.New("acceptance reply lost")}
 	c := New(s, d, nil)
 	c.now = func() time.Time { return now }
 	if err := c.RunDue(ctx); err != nil {
@@ -152,7 +152,7 @@ func TestCoordinatorRefusedSendDoesNotPinRecipient(t *testing.T) {
 		row:      domain.WorkerTurnFailure{TurnID: "turn-refused", ProjectID: "p"},
 		sessions: []domain.SessionRecord{{ID: "first", Kind: domain.KindOrchestrator, CreatedAt: now}},
 	}
-	d := &fakeDelivery{err: errors.New("composer busy")}
+	d := &fakeDelivery{err: fmt.Errorf("%w: composer busy", ErrRefusedDelivery)}
 	c := New(s, d, nil)
 	c.now = func() time.Time { return now }
 	if err := c.RunDue(ctx); err == nil {
@@ -267,6 +267,35 @@ func TestCoordinatorPinsRecipientBeforeSending(t *testing.T) {
 	}
 }
 
+// An error that is not a refusal may follow a prompt the orchestrator already
+// took (here, a wait cancelled after the write), so even this attempt's pin
+// stays and the retry cannot reach a newer orchestrator.
+func TestCoordinatorKeepsNewPinWhenSendErrorIsNotARefusal(t *testing.T) {
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	s := &fakeStore{
+		row:      domain.WorkerTurnFailure{TurnID: "turn-cancel", ProjectID: "p"},
+		sessions: []domain.SessionRecord{{ID: "first", Kind: domain.KindOrchestrator, CreatedAt: now}},
+	}
+	d := &fakeDelivery{err: context.Canceled}
+	c := New(s, d, nil)
+	c.now = func() time.Time { return now }
+	if err := c.RunDue(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunDue error = %v, want the cancellation", err)
+	}
+	if s.row.TargetSessionID != "first" {
+		t.Fatalf("pin after a possibly accepted send = %q, want first", s.row.TargetSessionID)
+	}
+	s.sessions = append(s.sessions, domain.SessionRecord{ID: "newer", Kind: domain.KindOrchestrator, CreatedAt: now.Add(time.Hour)})
+	d.err = nil
+	now = s.next
+	if err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !s.accepted || d.id != "first" {
+		t.Fatalf("accepted=%v retry went to %s", s.accepted, d.id)
+	}
+}
+
 // Only a pin this attempt made is dropped on a refusal. An older pin may
 // follow an uncertain send, so a later refusal must not move the notice.
 func TestCoordinatorKeepsEarlierPinAfterRefusal(t *testing.T) {
@@ -278,7 +307,7 @@ func TestCoordinatorKeepsEarlierPinAfterRefusal(t *testing.T) {
 			{ID: "newer", Kind: domain.KindOrchestrator, CreatedAt: now.Add(time.Hour)},
 		},
 	}
-	d := &fakeDelivery{err: errors.New("composer busy")}
+	d := &fakeDelivery{err: fmt.Errorf("%w: composer busy", ErrRefusedDelivery)}
 	c := New(s, d, nil)
 	c.now = func() time.Time { return now }
 	if err := c.RunDue(context.Background()); err == nil {
