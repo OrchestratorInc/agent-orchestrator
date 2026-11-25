@@ -291,6 +291,24 @@ describe("buildReviewBlocks", () => {
 		expect(block.reviewers[0]).toMatchObject({ orchestrator: true, harness: "codex" });
 	});
 
+	it("does not offer to ask a bot to review again", () => {
+		const block = blockFor({
+			provider: summary({
+				review: {
+					decision: "changes_requested",
+					hasUnresolvedHumanComments: false,
+					unresolvedBy: [],
+					reviews: [
+						{ reviewerId: "coderabbitai[bot]", isBot: true, verdict: "changes_requested", submittedAt: "2026-06-15T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-7`, body: "Nitpicks.", autoInjectReview: false },
+						{ reviewerId: "maya", verdict: "changes_requested", submittedAt: "2026-06-16T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-8`, body: "Please fix.", autoInjectReview: false },
+					],
+				},
+			}),
+		});
+		expect(block.reviewers.map((reviewer) => [reviewer.id, reviewer.canRerequest])).toEqual([["maya", true], ["coderabbitai[bot]", false]]);
+		expect(block.comments.map((comment) => [comment.author, comment.rerequestReviewerId])).toEqual([["maya", "maya"], ["coderabbitai[bot]", undefined]]);
+	});
+
 	it("titles a PR from its review state, then the provider, then its number", () => {
 		expect(blockFor({ states: [state({ title: "From state" })], provider: summary() }).title).toBe("From state");
 		expect(blockFor({ provider: summary({ title: "From provider" }) }).title).toBe("From provider");

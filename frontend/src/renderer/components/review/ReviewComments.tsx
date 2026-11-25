@@ -23,8 +23,11 @@ import { Pressable } from "../ui/pressable";
 export type ReviewCommentActions = {
 	/** Sends one comment to the worker agent. */
 	onSend?: (comment: ReviewComment, block: ReviewPRBlock) => Promise<void>;
-	/** Sends every open comment on a PR to the worker agent in one message. */
-	onSendAll?: (block: ReviewPRBlock, comments: ReviewComment[]) => Promise<void>;
+	/**
+	 * Sends every open comment on a PR to the worker agent. `onSent` is called for
+	 * each comment once it is delivered, so a failure partway keeps the ones that landed.
+	 */
+	onSendAll?: (block: ReviewPRBlock, comments: ReviewComment[], onSent: (comment: ReviewComment) => void) => Promise<void>;
 	/** Resolves an inline thread on the provider. */
 	onResolve?: (comment: ReviewComment, block: ReviewPRBlock) => Promise<void>;
 	/** Posts a reply on the provider: in the thread, or quoting a review or comment. */
@@ -234,7 +237,7 @@ function ReviewPRBlockView({
 		setSendingAll(true);
 		setSendAllError(false);
 		try {
-			await actions.onSendAll(block, batch);
+			await actions.onSendAll(block, batch, (comment) => markSent([comment.sentKey]));
 			markSent(keys);
 		} catch {
 			setSendAllError(true);

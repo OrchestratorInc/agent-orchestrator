@@ -2472,11 +2472,17 @@ function MergedReviewsSection({
 			await sendOne(comment, block);
 			onWorkerMessageSent?.();
 		},
-		onSendAll: async (block, comments) => {
+		onSendAll: async (block, comments, onSent) => {
 			if (session.cloud) {
-				for (const comment of comments) await sendOne(comment, block);
+				// One delivery per comment: each is marked as it lands, so a failure partway
+				// leaves only the rest to send again.
+				for (const comment of comments) {
+					await sendOne(comment, block);
+					onSent(comment);
+				}
 			} else {
 				await sendMessageToWorker(reviewCommentsWorkerMessage(block, comments), t("inspector.sendToWorkerAgentError"));
+				for (const comment of comments) onSent(comment);
 			}
 			onWorkerMessageSent?.();
 		},

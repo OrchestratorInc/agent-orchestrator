@@ -326,7 +326,8 @@ function buildComments(pr: SessionPRSummary | undefined, aoRuns: ReviewRunFacts[
 			earlier,
 			replies: [],
 			delivered: review.autoInjectReview,
-			rerequestReviewerId: review.verdict !== "approved" && pr.url ? review.reviewerId : undefined,
+			// GitHub cannot be asked to request a review from an app (a bot), so it is not offered.
+			rerequestReviewerId: review.verdict !== "approved" && pr.url && !review.isBot ? review.reviewerId : undefined,
 			groupAt: time(review.submittedAt),
 			group: id ? `review:${id}` : `reviewer:${reviewer}`,
 		});
@@ -501,7 +502,7 @@ function buildReviewers(pr: SessionPRSummary | undefined, aoState: PRReviewState
 			orchestrator: false,
 			isBot: Boolean(review.isBot),
 			status,
-			canRerequest: Boolean(pr.url) && status !== "approved",
+			canRerequest: Boolean(pr.url) && status !== "approved" && !review.isBot,
 		});
 	}
 	for (const requested of pr.requestedReviewers ?? []) {
