@@ -47,18 +47,12 @@ function findCloudSession(
 	return undefined;
 }
 
-const restoresInFlight = new Map<string, Promise<RestoreSessionResult>>();
-
-export function restoreInFlight(sessionId: string, hostId?: string): Promise<RestoreSessionResult> | undefined {
-	return restoresInFlight.get(`${hostId ?? "local"}:${sessionId}`);
-}
-
 export function useRestoreSession(): (sessionId: string, hostId?: string) => Promise<RestoreSessionResult> {
 	const queryClient = useQueryClient();
 	const { t } = useTranslation();
 
-	const restoreSession = useCallback(
-		async (sessionId: string, hostId?: string): Promise<RestoreSessionResult> => {
+	return useCallback(
+		async (sessionId: string, hostId?: string) => {
 			const cloudSession = hostId ? undefined : findCloudSession(queryClient, sessionId);
 			const role = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
 				?.flatMap((workspace) => workspace.sessions)
@@ -137,12 +131,4 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 		},
 		[queryClient, t],
 	);
-
-	return useCallback((sessionId: string, hostId?: string) => {
-		const key = `${hostId ?? "local"}:${sessionId}`;
-		if (restoresInFlight.has(key)) return restoreSession(sessionId, hostId);
-		const restore = restoreSession(sessionId, hostId).finally(() => restoresInFlight.delete(key));
-		restoresInFlight.set(key, restore);
-		return restore;
-	}, [restoreSession]);
 }

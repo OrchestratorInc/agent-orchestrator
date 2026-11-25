@@ -196,7 +196,6 @@ type HeldSubmit = {
 	own: boolean;
 	/** The message in the unsent strip when this was held, if any. */
 	unsentId?: string;
-	files?: string;
 };
 
 /**
@@ -698,7 +697,8 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
-	const takesNextFiles = optimisticSend && restoring;
+	const sentFiles = Boolean(holdAttachments || durableDelivery?.draft?.attachments.length);
+	const takesNextFiles = optimisticSend && restoring && !sentFiles;
 	const chatReferences = draftScope
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
@@ -724,11 +724,6 @@ export const ChatComposer = memo(function ChatComposer({
 			})) ?? [],
 		[persistedDraft, draftSeed?.stagedAttachments, draftScope, parkUnsentSends],
 	);
-	const unsentAttachments = useCallback(
-		<T extends { id: string }>(attachments: readonly T[], delivery = draftScope && readChatSessionDraft(draftScope).composer.delivery): T[] =>
-			attachments.filter((attachment) => !delivery?.draft?.attachments.some((sent) => sent.id === attachment.id)),
-		[draftScope],
-	);
 	const persistAttachments = useCallback(
 		(attachments: FileAttachment[]) => {
 			const descriptors = attachments.flatMap((attachment) => attachment.stagedPath
@@ -738,7 +733,9 @@ export const ChatComposer = memo(function ChatComposer({
 				onQueuedAttachmentsChange?.(descriptors);
 				return;
 			}
-			const result = writeChatAttachments(draftScope, unsentAttachments(descriptors));
+			const sentAttachments = readChatSessionDraft(draftScope).composer.delivery?.draft?.attachments;
+			const result = writeChatAttachments(draftScope, descriptors.filter((attachment) =>
+				!sentAttachments?.some((sent) => sent.id === attachment.id)));
 			if (result.ok) composerRevision.current = result.draft.composer.revision;
 			setAttachmentDraftPersistenceError(
 				result.ok
@@ -746,7 +743,7 @@ export const ChatComposer = memo(function ChatComposer({
 					: "chat.draft.saveFailed",
 			);
 		},
-		[draftScope, onQueuedAttachmentsChange, unsentAttachments],
+		[draftScope, onQueuedAttachmentsChange],
 	);
 	const prepareAttachments = useCallback(
 		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
@@ -815,7 +812,6 @@ export const ChatComposer = memo(function ChatComposer({
 		onAttachmentsChange: persistAttachments,
 		maxAttachmentBytes: cloudAttachments?.maxBytes,
 		prepareEach: Boolean(cloudAttachments),
-		unsentAttachments,
 	});
 	const { pendingAttachments } = fileAttachments;
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
@@ -934,14 +930,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
 	const stripConcealed = steerInFlight && sendConcealed;
-	const nextFiles = (delivery?: ChatComposerDelivery) =>
-		unsentAttachments(fileAttachments.getAttachments(), delivery).filter((attachment) => attachment.stagedPath);
-	const nextDraftHasFiles = (delivery?: ChatComposerDelivery) =>
-		fileAttachments.hasPendingReads() || nextFiles(delivery).length > 0;
-	const nextFilesKey = () => [...nextFiles(), ...pendingAttachments].map((file) => file.id).sort().join();
-	const stripAttachments = (stripConcealed ? [] : optimisticSend || nextDraftHasChanged
-		? nextFiles(durableDelivery)
-		: [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const stripAttachments = (stripConcealed || (sentFiles && (optimisticSend || nextDraftHasChanged)) ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		// A cloud file's reference is no daemon path: it previews from its bytes
@@ -1255,11 +1244,9 @@ export const ChatComposer = memo(function ChatComposer({
 				);
 				return false;
 			}
-			const cleared = clearAcceptedDraft(delivery.revision, mutationToken);
-			fileAttachments.dropSent(delivery.draft?.attachments);
-			return cleared;
+			return clearAcceptedDraft(delivery.revision, mutationToken);
 		},
-		[clearAcceptedDraft, draftScope, fileAttachments],
+		[clearAcceptedDraft, draftScope],
 	);
 
 	const abandonUncertainSteer = useCallback(() => {
@@ -1419,7 +1406,6 @@ export const ChatComposer = memo(function ChatComposer({
 		setUnsent(result.draft.unsent);
 		setDeliveryUncertain(false);
 		setDeliveryRecoveryNotice(null);
-		fileAttachments.dropSent(durableDelivery.draft?.attachments);
 		if (unsavedText.current) return;
 		composerRevision.current = result.draft.composer.revision;
 		if (textRef.current !== result.draft.composer.text) {
@@ -1443,7 +1429,6 @@ export const ChatComposer = memo(function ChatComposer({
 		discardedUnsent,
 		draftScope,
 		durableDelivery,
-		fileAttachments.dropSent,
 		fileAttachments.reconcilePersistedAttachments,
 		parkUnsentSends,
 		retryingUnsent,
@@ -1779,11 +1764,11 @@ export const ChatComposer = memo(function ChatComposer({
 			if (
 				!savingQueuedEdit &&
 				editorClears.current !== editorClearsAtSubmit.current &&
-				(textRef.current.trim() || nextDraftHasFiles())
+				(textRef.current.trim() || fileAttachments.hasPendingReads())
 			) {
 				// A repeat Enter re-holds the same draft; count it only once.
 				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;
-				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId(), files: nextFilesKey() };
+				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId() };
 				if (!alreadyHeld) countSend();
 			}
 			return submitInFlight.current;
@@ -2221,7 +2206,7 @@ export const ChatComposer = memo(function ChatComposer({
 			// references, a taken slot) keeps the restore and notice below.
 			// An open undo window still holds the slot for the discarded message.
 			const parks = parkUnsentSends && !refused && !discardedUnsentRef.current && fitsUnsentSlot(delivery, draftScope);
-			if (delivery.kind === "send" && !parks && !textRef.current && !nextDraftHasFiles(delivery)) {
+			if (delivery.kind === "send" && !parks && !textRef.current) {
 				textRef.current = delivery.draft?.text ?? currentText;
 				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
@@ -2289,7 +2274,6 @@ export const ChatComposer = memo(function ChatComposer({
 		setHeldSubmit(null);
 		// Only the message the user entered; an edit made since waits for its own Enter.
 		if (textRef.current !== heldSubmit.text) return;
-		if (heldSubmit.files !== undefined && heldSubmit.files !== nextFilesKey()) return;
 		// A send that got no answer since this was held is parked in the unsent strip,
 		// whichever surface made it. Sending now would put this message ahead of it.
 		const parked = parkedUnsentId();
@@ -2459,7 +2443,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	function acceptsFiles(): boolean {
-		return canAttach && !attachBlocked && !(submitInFlight.current && !takesNextFiles);
+		return canAttach && !attachBlocked && (takesNextFiles || !submitInFlight.current);
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
@@ -2523,8 +2507,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, []);
 
 	const attachmentError =
-		(sendError?.code === "SESSION_RESTORE_FAILED" && !draftPersistenceError ? sendError.message : null) ??
-		fileAttachments.error ??
+		(sendError?.code === "SESSION_RESTORE_FAILED" ? null : fileAttachments.error) ??
 		draftPersistenceError ??
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
 		(attachmentsRefusal && fileAttachments.attachments.length > 0 && !durableDelivery ? attachmentsRefusal : null) ??
@@ -2695,7 +2678,7 @@ export const ChatComposer = memo(function ChatComposer({
 												if (event.button === 0) event.preventDefault();
 											}}
 											onClick={() => {
-											if (submitInFlight.current && !takesNextFiles) return;
+											if (submitInFlight.current) return;
 											if (path) {
 											editor.current?.removeImage(path);
 											removeImageFromSavedDraft(path);
@@ -2707,7 +2690,7 @@ export const ChatComposer = memo(function ChatComposer({
 											} else fileAttachments.remove(file.id);
 											editor.current?.focus();
 											}}
-											disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked}
+											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 											aria-label={`Remove ${file.name}`}
 										>
 											<X aria-hidden="true" className="size-3" />
@@ -2848,7 +2831,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={Boolean(disabled) || (submitting && !takesNextFiles)}
+									disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 									onChange={(event) => {
 										if (!disabled && acceptsFiles()) {
 											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
@@ -2871,7 +2854,7 @@ export const ChatComposer = memo(function ChatComposer({
 										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
-											disabled={Boolean(disabled) || (submitting && !takesNextFiles)}
+											disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 											aria-label="Add"
 											title="Add files or change mode"
 											className={cn("size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", GHOST_PILL_CLASS)}

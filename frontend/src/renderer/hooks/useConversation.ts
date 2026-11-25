@@ -35,7 +35,7 @@ import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-up
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
-import { restoreInFlight, type RestoreSessionResult, useRestoreSession } from "./useRestoreSession";
+import { useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
@@ -970,14 +970,6 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 /** Restoring an archived session before its message failed, so the message never left. ChatComposer treats this code as a definitive refusal. */
 const SESSION_RESTORE_FAILED = "SESSION_RESTORE_FAILED";
 
-function assertRestored(restored: RestoreSessionResult): void {
-	// Restored meanwhile from another window or device: it is live, as asked.
-	const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
-	if (restored.status !== "success" && !alreadyLive) {
-		throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
-	}
-}
-
 /**
  * Commands against a conversation. Each refetches the snapshot on success.
  * `turnActive` and `activeTurnId` come from the caller's snapshot: reading the
@@ -1253,7 +1245,12 @@ export function useConversationCommands(
 			// The daemon refuses to resume a terminated session. Only a restore, which
 			// also brings its worktree back, can start it again.
 			if (terminated) {
-				assertRestored(await restoreSession(sessionId as string, hostId));
+				const restored = await restoreSession(sessionId as string, hostId);
+				// Restored meanwhile from another window or device: it is live, as asked.
+				const alreadyLive = restored.status === "error" && restored.code === "SESSION_NOT_RESTORABLE";
+				if (restored.status !== "success" && !alreadyLive) {
+					throw Object.assign(new Error(restored.message), { code: SESSION_RESTORE_FAILED });
+				}
 				// Stay pending until the chat reads the live agent: its cached snapshot
 				// still says stopped, which would flash as a crash. A send that restored
 				// the session waits on this too, so it reaches the live agent.
@@ -2421,12 +2418,15 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  * paths in the message it sends, which is how an image reaches an agent whose
  * conversation carries text: the same thing spawn does for the opening brief.
  */
-export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
+export function useStageAttachments(sessionId: string | undefined, hostId?: string, archived = false) {
+	const queryClient = useQueryClient();
 	return useCallback(
 		async (attachments: OutgoingAttachment[], signal?: AbortSignal): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
-			const restored = await restoreInFlight(sessionId, hostId);
-			if (restored) assertRestored(restored);
+			if (archived) {
+				const restores = queryClient.getMutationCache().findAll({ mutationKey: ["resume-agent", hostId ?? "local", sessionId], status: "pending" });
+				await Promise.all(restores.map((restore) => restore.continue()));
+			}
 			// A file too large to inline is streamed from disk to this session's
 			// daemon first, and the request names the upload.
 			const wire = await toWireAttachments(attachments, hostId, signal);
@@ -2434,12 +2434,11 @@ export function useStageAttachments(sessionId: string | undefined, hostId?: stri
 				params: { path: { sessionId } },
 				// The daemon names staged files itself; only the bytes go.
 				body: { attachments: wire },
-				signal,
 			});
 			if (error) throw error;
 			return data?.paths ?? [];
 		},
-		[hostId, sessionId],
+		[archived, hostId, queryClient, sessionId],
 	);
 }
 

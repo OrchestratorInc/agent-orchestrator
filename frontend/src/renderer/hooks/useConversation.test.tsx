@@ -33,7 +33,6 @@ import {
 	useStageAttachments,
 	toSnapshot,
 } from "./useConversation";
-import { useRestoreSession } from "./useRestoreSession";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
@@ -1720,7 +1719,7 @@ describe("controller recovery", () => {
 				? restored.promise
 				: Promise.resolve({ data: path === ATTACHMENTS ? { paths: [".ao/attachments/a.png"] } : { turnId: "turn-1", state: "running" }, error: undefined }));
 			const queryClient = archivedClient();
-			const { result } = renderHook(() => ({ commands: useConversationCommands("ao-1", undefined, true), stage: useStageAttachments("ao-1") }), {
+			const { result } = renderHook(() => ({ commands: useConversationCommands("ao-1", undefined, true), stage: useStageAttachments("ao-1", undefined, true) }), {
 				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
 			});
 
@@ -1741,40 +1740,12 @@ describe("controller recovery", () => {
 			expect(paths().indexOf(RESTORE)).toBeLessThan(paths().indexOf(ATTACHMENTS));
 		});
 
-		it("stages a file only once a restore started outside the chat is done", async () => {
-			const ATTACHMENTS = "/api/v1/sessions/{sessionId}/attachments";
-			const restored = deferred<{ data: object; error: undefined }>();
-			postMock.mockImplementation((path: string) => path !== RESTORE
-				? Promise.resolve({ data: { paths: [".ao/attachments/a.png"] }, error: undefined })
-				: paths().filter((posted) => posted === RESTORE).length === 1
-					? restored.promise
-					: Promise.resolve({ data: undefined, error: { code: "OPERATION_IN_PROGRESS", message: "Another operation is in progress" } }));
-			const queryClient = archivedClient();
-			const { result } = renderHook(() => ({ restore: useRestoreSession(), stage: useStageAttachments("ao-1") }), {
-				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
-			});
-
-			const restoring = result.current.restore("ao-1");
-			const refused = await result.current.restore("ao-1");
-			expect(refused).toMatchObject({ status: "error" });
-			const staging = result.current.stage([{ mimeType: "image/png", data: "iVBORw0KGgo=" }]);
-			await act(async () => {});
-			expect(paths()).toEqual([RESTORE, RESTORE]);
-
-			await act(async () => {
-				restored.resolve({ data: {}, error: undefined });
-				await restoring;
-			});
-			await expect(staging).resolves.toEqual([".ao/attachments/a.png"]);
-			expect(paths()).toEqual([RESTORE, RESTORE, ATTACHMENTS]);
-		});
-
 		it("stages nothing when the restore fails", async () => {
 			apiErrorMessageMock.mockImplementation((error: { message?: string }, fallback: string) => error?.message ?? fallback);
 			const restored = deferred<{ data: undefined; error: object; response: { status: number } }>();
 			postMock.mockImplementation((path: string) => path === RESTORE ? restored.promise : Promise.reject(new Error(`unexpected ${path}`)));
 			const queryClient = archivedClient();
-			const { result } = renderHook(() => ({ commands: useConversationCommands("ao-1", undefined, true), stage: useStageAttachments("ao-1") }), {
+			const { result } = renderHook(() => ({ commands: useConversationCommands("ao-1", undefined, true), stage: useStageAttachments("ao-1", undefined, true) }), {
 				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
 			});
 
