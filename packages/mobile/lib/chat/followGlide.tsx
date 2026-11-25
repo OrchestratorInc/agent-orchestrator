@@ -110,6 +110,10 @@ export function useFollowGlide(keyboardMoving: SharedValue<boolean>, onKeyboardT
 	}, SCROLL_EVENTS as unknown as string[]) as unknown as { workletEventHandler?: { registerForEvents(tag: number): void; unregisterFromEvents(tag: number): void } };
 	useEffect(() => scrollRef.observe((tag) => {
 		const handler = watch.workletEventHandler;
+		// Reanimated's own scroll-offset hook registers the same way; should an
+		// upgrade move it, the glide loses track of the list and starts from stale
+		// offsets, so say so in development rather than fail quietly.
+		if (__DEV__ && !handler) console.warn("useFollowGlide: Reanimated no longer exposes workletEventHandler; follow glides cannot track the list's own scrolls.");
 		if (!tag || !handler) return;
 		handler.registerForEvents(tag as number);
 		return () => handler.unregisterFromEvents(tag as number);
