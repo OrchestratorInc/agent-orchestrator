@@ -5773,6 +5773,8 @@
 	"move.openInCloud": "Открыть в Orchestrator Cloud",
 	"moveHere.finishEarlier": "Предыдущая попытка переноса, возможно, уже запустила эту сессию на этом компьютере. Перенос завершит её.",
 	"moveHere.finishOtherAccount": "Перенос на этот компьютер не завершён для другой учётной записи Orchestrator Cloud. Войдите в неё, чтобы удалить облачную копию.",
+	"moveHere.exportRunning": "Orchestrator Cloud всё ещё останавливает агента и отправляет {{branch}}. Это может занять несколько минут.",
+	"moveHere.exportMayBePushed": "Возможно, {{branch}} уже отправлена в GitHub с незакоммиченной работой сессии в виде WIP-коммита. На этот компьютер ничего не перенесено. Повторите попытку, чтобы завершить перенос; он использует этот коммит повторно.",
 	"backgroundTasks.title": "Фоновые задачи",
 	"backgroundTasks.runningCount_one": "{{count}} выполняется",
 	"backgroundTasks.runningCount_few": "{{count}} выполняются",

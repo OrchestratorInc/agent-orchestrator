@@ -5643,6 +5643,8 @@
 	"move.openInCloud": "Abrir en Orchestrator Cloud",
 	"moveHere.finishEarlier": "Es posible que un intento anterior ya haya iniciado esta sesión en este ordenador. Moverla completa ese intento.",
 	"moveHere.finishOtherAccount": "Hay un traslado a este ordenador sin terminar para otra cuenta de Orchestrator Cloud. Inicia sesión en esa cuenta para eliminar su copia en la nube.",
+	"moveHere.exportRunning": "Orchestrator Cloud todavía está deteniendo el agente y enviando {{branch}}. Esto puede tardar unos minutos.",
+	"moveHere.exportMayBePushed": "Es posible que {{branch}} ya se haya enviado a GitHub, con el trabajo sin confirmar de la sesión como un commit WIP. No se movió nada a este ordenador. Vuelve a intentarlo para terminar el traslado; reutiliza ese commit.",
 	"backgroundTasks.title": "Tareas en segundo plano",
 	"backgroundTasks.runningCount_one": "{{count}} en ejecución",
 	"backgroundTasks.runningCount_many": "{{count}} en ejecución",

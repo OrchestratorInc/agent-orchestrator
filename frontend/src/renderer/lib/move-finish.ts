@@ -240,7 +240,10 @@ export const useUnsettledMoveStore = create<UnsettledMoveStore>((set, get) => ({
  */
 export interface UnsettledMoveHere {
 	moveId: string;
-	projectId: string;
+	/** The project the import ran in; set once it may have started a session here. */
+	projectId?: string;
+	/** An export Orchestrator Cloud is still running for this move (a 202), which Try again waits on. */
+	exportMoveId?: string;
 }
 
 const UNSETTLED_HERE_KEY = "ao.move.here";

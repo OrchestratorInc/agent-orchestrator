@@ -21,7 +21,7 @@ const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	cloud: {
 		features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true, connections: [] as unknown[],
-		previewSessionMove: vi.fn(), exportSessionMove: vi.fn(), restartSessionAgent: vi.fn(), deleteSession: vi.fn(), createProject: vi.fn(),
+		previewSessionMove: vi.fn(), exportSessionMove: vi.fn(), getSessionMoveExport: vi.fn(), restartSessionAgent: vi.fn(), deleteSession: vi.fn(), createProject: vi.fn(),
 	},
 }));
 
@@ -86,7 +86,7 @@ beforeEach(() => {
 	navigate.mockReset();
 	cloud.createSession.mockReset();
 	cloud.createProject.mockReset();
-	for (const fn of [cloud.previewSessionMove, cloud.exportSessionMove, cloud.restartSessionAgent, cloud.deleteSession]) fn.mockReset();
+	for (const fn of [cloud.previewSessionMove, cloud.exportSessionMove, cloud.getSessionMoveExport, cloud.restartSessionAgent, cloud.deleteSession]) fn.mockReset();
 	daemon.agents = [];
 	daemon.localProjects = [];
 	daemon.postCalls = [];
@@ -591,6 +591,39 @@ describe("moving a Cloud session to this computer", () => {
 		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
 		expect(cloud.exportSessionMove).toHaveBeenCalledTimes(2);
 		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/sessions/move/import")).toHaveLength(1);
+	});
+
+	it("says Orchestrator Cloud is still exporting, and keeps the export's id for Try again", async () => {
+		cloud.exportSessionMove.mockResolvedValue({ status: "running", moveId: "exp-1", branchMayBePushed: true });
+		cloud.getSessionMoveExport.mockReturnValue(new Promise(() => {}));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("Orchestrator Cloud is still stopping the agent and pushing feat/login. This can take a few minutes.")).toBeTruthy();
+		expect(Object.values(useUnsettledMoveHereStore.getState().moves)).toEqual([expect.objectContaining({ exportMoveId: "exp-1" })]);
+	});
+
+	it("names the branch Orchestrator Cloud may have pushed when its export timed out", async () => {
+		cloud.exportSessionMove.mockRejectedValue(new CloudCpError("AO Cloud started this move but did not finish it in time.", {
+			status: 504, code: "MOVE_EXPORT_TIMED_OUT", details: { moveId: "exp-1", branchMayBePushed: true },
+		}));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText(/^feat\/login may already be pushed to GitHub, with the session's uncommitted work as a WIP commit\. Nothing moved to this computer\./)).toBeTruthy();
+		expect(cloud.restartSessionAgent).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+	});
+
+	it("waits on the export an earlier attempt left running, under its moveId", async () => {
+		useUnsettledMoveHereStore.getState().set("org-1:cloud-1", { moveId: "m-earlier", exportMoveId: "exp-1" });
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(cloud.exportSessionMove).toHaveBeenCalledWith("org-1", "cloud-1", { moveId: "exp-1" });
+		expect(daemon.postCalls.find((call) => call.path === "/api/v1/sessions/move/import")?.body).toMatchObject({ moveId: "m-earlier" });
+		expect(useUnsettledMoveHereStore.getState().moves).toEqual({});
 	});
 
 	it("keeps the Cloud session when its export leaves out the conversation the preview listed", async () => {

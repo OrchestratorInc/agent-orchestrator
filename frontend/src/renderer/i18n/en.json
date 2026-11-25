@@ -5455,6 +5455,8 @@
 	"move.openInCloud": "Open in Orchestrator Cloud",
 	"moveHere.finishEarlier": "An earlier move may already have started this session on this computer. Moving finishes that move.",
 	"moveHere.finishOtherAccount": "A move to this computer is unfinished for another Orchestrator Cloud account. Sign in to that account to delete its Cloud copy.",
+	"moveHere.exportRunning": "Orchestrator Cloud is still stopping the agent and pushing {{branch}}. This can take a few minutes.",
+	"moveHere.exportMayBePushed": "{{branch}} may already be pushed to GitHub, with the session's uncommitted work as a WIP commit. Nothing moved to this computer. Try again to finish the move; it reuses that commit.",
 	"backgroundTasks.title": "Background tasks",
 	"backgroundTasks.runningCount_one": "{{count}} running",
 	"backgroundTasks.runningCount_other": "{{count}} running",

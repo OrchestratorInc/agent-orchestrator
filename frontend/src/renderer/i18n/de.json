@@ -5475,6 +5475,8 @@
 	"move.openInCloud": "In der Orchestrator Cloud öffnen",
 	"moveHere.finishEarlier": "Ein früherer Verschiebeversuch hat diese Sitzung möglicherweise bereits auf diesem Computer gestartet. Verschieben schließt diesen Vorgang ab.",
 	"moveHere.finishOtherAccount": "Ein Verschieben auf diesen Computer ist für ein anderes Orchestrator-Cloud-Konto nicht abgeschlossen. Melde dich bei diesem Konto an, um seine Cloud-Kopie zu löschen.",
+	"moveHere.exportRunning": "Die Orchestrator Cloud stoppt noch den Agenten und pusht {{branch}}. Das kann einige Minuten dauern.",
+	"moveHere.exportMayBePushed": "{{branch}} wurde möglicherweise bereits zu GitHub gepusht, mit der nicht committeten Arbeit der Sitzung als WIP-Commit. Nichts wurde auf diesen Computer verschoben. Versuche es erneut, um das Verschieben abzuschließen; dabei wird dieser Commit wiederverwendet.",
 	"backgroundTasks.title": "Hintergrundaufgaben",
 	"backgroundTasks.runningCount_one": "{{count}} läuft",
 	"backgroundTasks.runningCount_other": "{{count}} laufen",

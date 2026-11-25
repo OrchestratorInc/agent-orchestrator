@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
-import { cloudReasoningEffort, MoveError, moveSession, moveSessionHere, TRANSCRIPT_NOT_CAPTURED, type MoveDeps, type MoveHereDeps } from "./move-session";
+import { cloudReasoningEffort, MOVE_EXPORT_BUDGET_MS, MOVE_EXPORT_TIMED_OUT, MoveError, moveSession, moveSessionHere, TRANSCRIPT_NOT_CAPTURED, type MoveDeps, type MoveHereDeps } from "./move-session";
 
 type Reply = { data?: unknown; error?: unknown };
 
@@ -420,11 +420,12 @@ describe("moveSessionHere", () => {
 	};
 	const settings = { autoReview: true, terminateOnPrMerge: false, autoInjectReview: true, autoInjectCI: false };
 	const input = { orgId: "org-1", cloudSessionId: "cloud-1", projectId: "proj-1", moveId: "m-1", settings };
-	const cloudFake = (over: Partial<Record<"exportSessionMove" | "restartSessionAgent" | "deleteSession", () => Promise<unknown>>> = {}) => ({
+	const cloudFake = (over: Partial<Record<"exportSessionMove" | "getSessionMoveExport" | "restartSessionAgent" | "deleteSession", () => Promise<unknown>>> = {}) => ({
 		exportSessionMove: vi.fn(over.exportSessionMove ?? (async () => cloudExport)),
+		getSessionMoveExport: vi.fn(over.getSessionMoveExport ?? (async () => cloudExport)),
 		restartSessionAgent: vi.fn(over.restartSessionAgent ?? (async () => ({ requested: true }))),
 		deleteSession: vi.fn(over.deleteSession ?? (async () => ({ session: { id: "cloud-1", desiredState: "deleted" } }))),
-	}) as unknown as MoveHereDeps["cloud"] & Record<"exportSessionMove" | "restartSessionAgent" | "deleteSession", ReturnType<typeof vi.fn>>;
+	}) as unknown as MoveHereDeps["cloud"] & Record<"exportSessionMove" | "getSessionMoveExport" | "restartSessionAgent" | "deleteSession", ReturnType<typeof vi.fn>>;
 	const daemon = (reply: Reply, calls: string[] = []) => fakeDaemon({ "/api/v1/sessions/move/import": reply }, calls) as unknown as MoveHereDeps["daemon"];
 
 	it("pushes in Cloud, starts the session here with the conversation, then deletes the Cloud session", async () => {
@@ -495,6 +496,74 @@ describe("moveSessionHere", () => {
 		expect(result).toEqual({ projectId: "proj-1", sessionId: "local-9", conversation: "transcript", warnings: [warning], keptInCloud: true });
 		expect(steps).toEqual(["stop", "import"]);
 		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	describe("an export Orchestrator Cloud is still running (202)", () => {
+		const running = (retryAfterMs?: number) => ({ status: "running", moveId: "exp-1", branchMayBePushed: true, ...(retryAfterMs ? { retryAfterMs } : {}) });
+
+		it("is asked for again, honoring Retry-After within 3 to 5 s, until it answers with the move", async () => {
+			const cp = cloudFake({ exportSessionMove: async () => running(10_000) });
+			cp.getSessionMoveExport.mockResolvedValueOnce(running()).mockResolvedValueOnce(running(3_500)).mockResolvedValueOnce(cloudExport);
+			const delays: number[] = [];
+			const moves: (string | undefined)[] = [];
+			const onExportRunning = vi.fn();
+			const result = await moveSessionHere({ ...input, branch: "feat/login" }, {
+				daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp, onExportRunning,
+				onExportMove: (id) => moves.push(id), wait: async (ms) => { delays.push(ms); },
+			});
+			expect(result).toMatchObject({ sessionId: "local-9" });
+			expect(delays).toEqual([5_000, 4_000, 3_500]);
+			expect(cp.getSessionMoveExport).toHaveBeenCalledWith("org-1", "cloud-1", "exp-1");
+			expect(onExportRunning).toHaveBeenCalledTimes(3);
+			// Done: a later Try again exports afresh.
+			expect(moves).toEqual(["exp-1", "exp-1", "exp-1", undefined]);
+			expect(cp.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1");
+		});
+
+		it("names the branch that may be pushed when it times out, and restarts the Cloud agent", async () => {
+			const timedOut = (branchMayBePushed: boolean) => new CloudCpError("AO Cloud started this move but did not finish it in time.", {
+				status: 504, code: MOVE_EXPORT_TIMED_OUT, details: { moveId: "exp-1", branchMayBePushed },
+			});
+			const cp = cloudFake({ exportSessionMove: async () => running(), getSessionMoveExport: async () => { throw timedOut(true); } });
+			const moves: (string | undefined)[] = [];
+			const calls: string[] = [];
+			const error = await moveSessionHere({ ...input, branch: "feat/login" }, {
+				daemon: daemon(ok(), calls), cloud: cp, onExportMove: (id) => moves.push(id), wait: async () => {},
+			}).catch((e: unknown) => e);
+			expect(error).toMatchObject({ step: "export", code: MOVE_EXPORT_TIMED_OUT, mayBePushed: "feat/login", rolledBack: true });
+			expect(cp.restartSessionAgent).toHaveBeenCalledWith("org-1", "cloud-1");
+			// That export can no longer finish, so Try again starts another.
+			expect(moves.at(-1)).toBeUndefined();
+			expect(calls).toEqual([]);
+			const notPushed = cloudFake({ exportSessionMove: async () => { throw timedOut(false); } });
+			await expect(moveSessionHere({ ...input, branch: "feat/login" }, { daemon: daemon(ok()), cloud: notPushed }))
+				.rejects.toMatchObject({ code: MOVE_EXPORT_TIMED_OUT, mayBePushed: undefined });
+		});
+
+		it("is adopted on Try again under its moveId, without a second export", async () => {
+			const cp = cloudFake();
+			const result = await moveSessionHere({ ...input, exportMoveId: "exp-1" }, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });
+			expect(result).toMatchObject({ sessionId: "local-9" });
+			expect(cp.exportSessionMove).toHaveBeenCalledTimes(1);
+			expect(cp.exportSessionMove).toHaveBeenCalledWith("org-1", "cloud-1", { moveId: "exp-1" });
+		});
+
+		it("keeps the Cloud agent stopped and its moveId when an answer is lost, or the lease runs out", async () => {
+			const lost = cloudFake({ exportSessionMove: async () => running(), getSessionMoveExport: async () => { throw new CloudCpError("fetch failed", { status: 0 }); } });
+			const moves: (string | undefined)[] = [];
+			await expect(moveSessionHere(input, { daemon: daemon(ok()), cloud: lost, onExportMove: (id) => moves.push(id), wait: async () => {} }))
+				.rejects.toMatchObject({ step: "export", rolledBack: false, followUp: "settle" });
+			expect(lost.restartSessionAgent).not.toHaveBeenCalled();
+			expect(moves.at(-1)).toBe("exp-1");
+
+			let clock = 0;
+			const slow = cloudFake({ exportSessionMove: async () => running(), getSessionMoveExport: async () => running() });
+			await expect(moveSessionHere(input, {
+				daemon: daemon(ok()), cloud: slow, now: () => clock, wait: async (ms) => { clock += ms * 30; },
+			})).rejects.toMatchObject({ step: "export", followUp: "settle" });
+			expect(clock).toBeGreaterThanOrEqual(MOVE_EXPORT_BUDGET_MS);
+			expect(slow.restartSessionAgent).not.toHaveBeenCalled();
+		});
 	});
 
 	it("keeps the Cloud session when its export leaves out the conversation its preview listed", async () => {

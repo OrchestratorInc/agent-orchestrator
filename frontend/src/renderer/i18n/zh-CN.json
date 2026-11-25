@@ -5457,6 +5457,8 @@
 	"move.openInCloud": "在 Orchestrator Cloud 中打开",
 	"moveHere.finishEarlier": "之前的一次移动可能已经在这台电脑上启动了此会话。移动将完成那次移动。",
 	"moveHere.finishOtherAccount": "另一个 Orchestrator Cloud 账户有一次移动到这台电脑的操作尚未完成。请登录该账户以删除其 Cloud 副本。",
+	"moveHere.exportRunning": "Orchestrator Cloud 仍在停止智能体并推送 {{branch}}。这可能需要几分钟。",
+	"moveHere.exportMayBePushed": "{{branch}} 可能已推送到 GitHub，会话中未提交的工作作为一个 WIP 提交包含在内。没有任何内容移动到这台电脑。请重试以完成移动；它会复用那个提交。",
 	"backgroundTasks.title": "后台任务",
 	"backgroundTasks.runningCount_one": "{{count}} 个运行中",
 	"backgroundTasks.runningCount_other": "{{count}} 个运行中",

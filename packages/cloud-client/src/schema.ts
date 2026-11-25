@@ -1089,6 +1089,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export/{moveId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                moveId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Waits up to about 50 s on an export move/export started and answers as it does: the move once done (a late answer is adopted, no second export runs), 202 while its worker is still on it, 504 MOVE_EXPORT_TIMED_OUT once it can no longer finish. */
+        get: operations["getSessionMoveExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}": {
         parameters: {
             query?: never;
@@ -3095,6 +3116,58 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A finished move export: the pushed branch, in the shape an AO daemon's move/import takes. */
+        SessionMoveExport: {
+            /**
+             * Format: uuid
+             * @description The export this answers, as GET .../move/export/{moveId} names it.
+             */
+            moveId?: string;
+            manifest: {
+                /** Format: uuid */
+                sourceSessionId: string;
+                sourceLabel: string;
+                /** @description Lower-case github.com/<owner>/<name>. */
+                repoKey: string;
+                branch: string;
+                /** @description The pushed commit. */
+                tip: string;
+                /** @description The tip is the commit of the uncommitted work. */
+                wip: boolean;
+                harness: string;
+                model?: string;
+                displayName?: string;
+                /**
+                 * @description The session's approval mode, which the moved session keeps. Absent when the session has none of its own.
+                 * @enum {string}
+                 */
+                permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            };
+            handoffNote: string;
+            /** @description The agent's conversation, checkpointed after the push, for the daemon to resume: a Claude Code, Codex, OpenCode or Cursor conversation, as that agent stores it (for OpenCode, its session export document). Absent for another agent or when none was captured. */
+            transcript?: {
+                agentSessionId: string;
+                /** @description The folder the conversation was in: for Claude Code the sandbox's Claude project folder. */
+                projectDir: string;
+                /** Format: byte */
+                transcriptGzip: string;
+                /**
+                 * Format: byte
+                 * @description The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
+                 */
+                sidecarGzip?: string;
+            };
+        };
+        /** @description An export AO Cloud's worker is still on. Ask again with its moveId (GET .../move/export/{moveId}, or POST .../move/export?moveId=) for its result; do not start another move. */
+        SessionMoveExportRunning: {
+            /** Format: uuid */
+            moveId: string;
+            /** @enum {string} */
+            status: "running";
+            /** @description The session's agent is stopped and its branch may already be pushed. */
+            branchMayBePushed?: boolean;
+            message?: string;
+        };
         RemoteHost: {
             hostId: string;
             label: string;
@@ -8591,7 +8664,10 @@ export interface operations {
     };
     exportSessionMove: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description An export already started (from a 202): wait on it and answer with its result instead of starting another. */
+                moveId?: string;
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -8607,42 +8683,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        manifest: {
-                            /** Format: uuid */
-                            sourceSessionId: string;
-                            sourceLabel: string;
-                            /** @description Lower-case github.com/<owner>/<name>. */
-                            repoKey: string;
-                            branch: string;
-                            /** @description The pushed commit. */
-                            tip: string;
-                            /** @description The tip is the commit of the uncommitted work. */
-                            wip: boolean;
-                            harness: string;
-                            model?: string;
-                            displayName?: string;
-                            /**
-                             * @description The session's approval mode, which the moved session keeps. Absent when the session has none of its own.
-                             * @enum {string}
-                             */
-                            permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
-                        };
-                        handoffNote: string;
-                        /** @description The agent's conversation, checkpointed after the push, for the daemon to resume: a Claude Code, Codex, OpenCode or Cursor conversation, as that agent stores it (for OpenCode, its session export document). Absent for another agent or when none was captured. */
-                        transcript?: {
-                            agentSessionId: string;
-                            /** @description The folder the conversation was in: for Claude Code the sandbox's Claude project folder. */
-                            projectDir: string;
-                            /** Format: byte */
-                            transcriptGzip: string;
-                            /**
-                             * Format: byte
-                             * @description The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
-                             */
-                            sidecarGzip?: string;
-                        };
-                    };
+                    "application/json": components["schemas"]["SessionMoveExport"];
+                };
+            };
+            /** @description The export is still running after about 50 s. Its request lives for five minutes; ask again with its moveId (Location) after Retry-After. */
+            202: {
+                headers: {
+                    /** @description The GET route that answers for this export. */
+                    Location?: string;
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionMoveExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                moveId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pushed branch, in the shape an AO daemon's move/import takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExport"];
+                };
+            };
+            /** @description The export is still running after about 50 s. Its request lives for five minutes; ask again with its moveId (Location) after Retry-After. */
+            202: {
+                headers: {
+                    /** @description The GET route that answers for this export. */
+                    Location?: string;
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

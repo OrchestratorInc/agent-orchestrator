@@ -1514,6 +1514,8 @@ export interface CloudCpMovePreviewResponse {
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/move/export: the pushed branch, in the shape an AO daemon's move/import takes. */
 export interface CloudCpMoveExportResponse {
+	/** The export this answers. */
+	moveId?: string;
 	manifest: {
 		sourceSessionId: string;
 		sourceLabel: string;
@@ -1531,6 +1533,19 @@ export interface CloudCpMoveExportResponse {
 	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */
 	transcript?: { agentSessionId: string; projectDir: string; transcriptGzip: string; sidecarGzip?: string };
 }
+
+/** A move export AO Cloud's worker is still on (202): ask again with moveId after retryAfterMs. */
+export interface CloudCpMoveExportRunning {
+	status: "running";
+	moveId: string;
+	/** The agent is stopped and the branch may already be pushed. */
+	branchMayBePushed?: boolean;
+	message?: string;
+	retryAfterMs?: number;
+}
+
+/** What move/export, or its GET, answers: the move, or the export still running. */
+export type CloudCpMoveExportResult = CloudCpMoveExportResponse | CloudCpMoveExportRunning;
 
 /** DELETE /orgs/{orgId}/sessions/{sessionId} responds 202: teardown is reconciler-owned. */
 export interface CloudCpSessionDeletedResponse {

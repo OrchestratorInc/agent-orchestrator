@@ -1,5 +1,5 @@
 import { apiErrorCode, apiErrorDetails, apiErrorMessage } from "./api-client";
-import { CloudCpError, type CloudCpClient, type CloudCpCreateProjectRequest } from "./cloud-cp";
+import { CloudCpError, type CloudCpClient, type CloudCpCreateProjectRequest, type CloudCpMoveExportResponse, type CloudCpMoveExportResult, type CloudCpMoveExportRunning } from "./cloud-cp";
 import type { clientForSessionHost } from "./host-clients";
 import { repoKey } from "./repo-key";
 
@@ -54,9 +54,26 @@ export class MoveError extends Error {
 		readonly rolledBack: boolean,
 		readonly pushed?: MovePushed,
 		readonly followUp?: MoveFollowUp,
+		/** The branch Orchestrator Cloud may already have pushed when its export did not finish. */
+		readonly mayBePushed?: string,
 	) {
 		super(message);
 	}
+}
+
+/** How long a move export may run in Orchestrator Cloud: its request's lease. */
+export const MOVE_EXPORT_BUDGET_MS = 5 * 60_000;
+
+/** Cloud's export can no longer finish; details.branchMayBePushed says whether a worker took it. */
+export const MOVE_EXPORT_TIMED_OUT = "MOVE_EXPORT_TIMED_OUT";
+
+function exportRunning(answer: CloudCpMoveExportResult): answer is CloudCpMoveExportRunning {
+	return "status" in answer && answer.status === "running";
+}
+
+/** How long to wait before asking for a running export again: Cloud's Retry-After, within 3 to 5 s. */
+export function exportPollDelay(retryAfterMs: number | undefined): number {
+	return Math.min(5_000, Math.max(3_000, retryAfterMs ?? 4_000));
 }
 
 /** The message of a move whose call to this computer's Orchestrator got no answer. */
@@ -350,7 +367,18 @@ async function carryTranscript(deps: MoveDeps, path: { params: { path: { session
 
 export interface MoveHereDeps {
 	daemon: DaemonClient;
-	cloud: Pick<CloudCpClient, "exportSessionMove" | "restartSessionAgent" | "deleteSession">;
+	cloud: Pick<CloudCpClient, "exportSessionMove" | "getSessionMoveExport" | "restartSessionAgent" | "deleteSession">;
+	/**
+	 * Called with the export's moveId while Orchestrator Cloud is still on it,
+	 * and with undefined once it is done or can no longer finish: Try again
+	 * waits on a running export instead of starting another.
+	 */
+	onExportMove?: (moveId: string | undefined) => void;
+	/** Called while Orchestrator Cloud is still on the export, with how long it has run. */
+	onExportRunning?: (elapsedMs: number) => void;
+	/** Waits between asks for a running export; tests make it instant. */
+	wait?: (ms: number) => Promise<void>;
+	now?: () => number;
 	onStep?: (step: MoveStep) => void;
 	/** Called with the project a clone made, so Try again moves into it instead of cloning again. */
 	onCloned?: (projectId: string) => void;
@@ -402,6 +430,10 @@ export async function moveSessionHere(
 		settings: MoveHereSettings;
 		/** Cloud's preview listed a conversation: the move must bring it, or keep the Cloud session. */
 		expectTranscript?: boolean;
+		/** An export Cloud is still running for this move (a 202): Try again waits on it. */
+		exportMoveId?: string;
+		/** The session's branch, as Cloud's preview named it, for what a failed export may have pushed. */
+		branch?: string;
 	},
 	deps: MoveHereDeps,
 ): Promise<MoveHereResult> {
@@ -421,15 +453,57 @@ export async function moveSessionHere(
 	const restart = () => deps.cloud.restartSessionAgent(orgId, cloudSessionId).then(() => true, () => false);
 
 	// One Cloud call stops the agent and pushes; a failure is shown on the push.
+	// Cloud answers within about 50 s, with the move or with the export still
+	// running (its moveId), which is asked again until done, within its lease.
 	deps.onStep?.("stop");
-	let exported: Awaited<ReturnType<MoveHereDeps["cloud"]["exportSessionMove"]>>;
+	const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	const now = deps.now ?? Date.now;
+	const started = now();
+	let exportMoveId = input.exportMoveId;
+	let exported: CloudCpMoveExportResponse;
 	try {
-		exported = await deps.cloud.exportSessionMove(orgId, cloudSessionId);
+		let answer = await deps.cloud.exportSessionMove(orgId, cloudSessionId, exportMoveId ? { moveId: exportMoveId } : undefined);
+		while (exportRunning(answer)) {
+			exportMoveId = answer.moveId;
+			deps.onExportMove?.(exportMoveId);
+			if (now() - started >= MOVE_EXPORT_BUDGET_MS) {
+				throw new MoveError(
+					"Orchestrator Cloud is still moving the session. Its agent stays stopped; Try again waits on that move.",
+					"export", undefined, false, undefined, "settle", input.branch,
+				);
+			}
+			deps.onExportRunning?.(now() - started);
+			await wait(exportPollDelay(answer.retryAfterMs));
+			answer = await deps.cloud.getSessionMoveExport(orgId, cloudSessionId, exportMoveId);
+		}
+		exported = answer;
 	} catch (error) {
 		deps.onStep?.("export");
+		if (error instanceof MoveError) throw error;
+		if (error instanceof CloudCpError && error.code === MOVE_EXPORT_TIMED_OUT) {
+			// That export can no longer finish: Try again starts another, which
+			// reuses a WIP commit it pushed.
+			deps.onExportMove?.(undefined);
+			const mayBePushed = error.details?.branchMayBePushed === true;
+			throw new MoveError(
+				mayBePushed ? "Orchestrator Cloud did not finish this move in time." : "The move did not start in time: nothing was stopped, committed or pushed.",
+				"export", MOVE_EXPORT_TIMED_OUT, await restart(), undefined, undefined, mayBePushed ? input.branch || "the session's branch" : undefined,
+			);
+		}
+		// An export known to be running is not refused by a lost answer: the
+		// agent stays stopped, and Try again waits on it.
+		if (exportMoveId && !cloudRefused(error)) {
+			throw new MoveError(
+				"Orchestrator Cloud did not answer while it moved the session. Its agent stays stopped; Try again waits on that move.",
+				"export", errorCode(error), false, undefined, "settle", input.branch,
+			);
+		}
+		deps.onExportMove?.(undefined);
 		const reason = error instanceof CloudCpError && error.status !== 0 ? error : "Could not reach Orchestrator Cloud.";
 		throw new MoveError(apiErrorMessage(reason, "Could not push the session"), "export", errorCode(error), await restart());
 	}
+	// A later Try again exports afresh: the agent may have run again by then.
+	deps.onExportMove?.(undefined);
 
 	deps.onStep?.("import");
 	const m = exported.manifest;

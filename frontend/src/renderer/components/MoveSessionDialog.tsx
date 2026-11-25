@@ -492,10 +492,15 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	// A move whose import here may have started a session is kept past this
 	// dialog, and past a quit, so reopening it finishes that move.
 	const hereKey = unsettledMoveHereKey(orgId, session.id);
-	const savedHere = useRef(useUnsettledMoveHereStore.getState().moves[hereKey]).current;
+	const storedHere = useRef(useUnsettledMoveHereStore.getState().moves[hereKey]).current;
+	// An import that may have started a session here; an export alone only lends its id.
+	const savedHere = storedHere?.projectId ? storedHere : undefined;
+	// An export Orchestrator Cloud is still running for this move: Try again waits on it.
+	const exportMove = useRef<string | undefined>(storedHere?.exportMoveId);
+	const [exportRunning, setExportRunning] = useState(false);
 	// One move per dialog: Try again reuses its id, so this computer returns
 	// the session it already started instead of starting a second one.
-	const moveId = useRef(savedHere?.moveId ?? crypto.randomUUID()).current;
+	const moveId = useRef(storedHere?.moveId ?? crypto.randomUUID()).current;
 	// A project the move cloned, or the one an earlier attempt imported into;
 	// Try again moves into it instead of cloning or choosing again.
 	const cloned = useRef<string | undefined>(savedHere?.projectId);
@@ -566,6 +571,13 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 		if (!projectId && step === undefined) setSteps(["clone", ...STEPS]);
 		setError(undefined);
 		setResult(undefined);
+		setExportRunning(false);
+		// Keeps what a relaunch needs to finish this move: its id, a running
+		// export and the project an import ran in.
+		const keep = (change: { projectId?: string; exportMoveId?: string }) => {
+			const next = { ...useUnsettledMoveHereStore.getState().moves[hereKey], moveId, ...change };
+			useUnsettledMoveHereStore.getState().set(hereKey, next.projectId || next.exportMoveId ? next : undefined);
+		};
 		try {
 			const moved = await moveSessionHere(
 				{
@@ -574,6 +586,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					...(projectId ? { projectId } : { clone: { remoteUrl: repositoryUrl, destinationParent: cloneParent, repoKey: repo } }),
 					moveId,
 					expectTranscript: Boolean(preview.data?.transcript),
+					...(exportMove.current ? { exportMoveId: exportMove.current } : {}),
+					...(branch ? { branch } : {}),
 					settings: {
 						autoReview: session.autoReviewEnabled ?? false,
 						terminateOnPrMerge: session.terminateOnPrMerge ?? false,
@@ -588,9 +602,13 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					onCloned: (id) => {
 						cloned.current = id;
 					},
-					onImport: (projectId) => {
-						useUnsettledMoveHereStore.getState().set(hereKey, { moveId, projectId });
+					onImport: (projectId) => keep({ projectId }),
+					onExportMove: (id) => {
+						exportMove.current = id;
+						keep({ exportMoveId: id });
+						if (!id) setExportRunning(false);
 					},
+					onExportRunning: () => setExportRunning(true),
 				},
 			);
 			useUnsettledMoveHereStore.getState().set(hereKey, undefined);
@@ -605,9 +623,11 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 			const body = [t("moveHere.doneBody", { title: session.title, project: target?.name ?? repoName.split("/").at(-1) }), ...(moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
 			showGlobalToast(t("moveHere.done"), body.join(" "), { tone: "success" });
 		} catch (failure) {
-			// Kept only while the import here may have started a session.
-			const unsettled = failure instanceof MoveError && failure.step === "import" && failure.followUp !== undefined;
+			// Kept only while the import here may have started a session, or
+			// Orchestrator Cloud may still be running the export.
+			const unsettled = failure instanceof MoveError && (failure.step === "import" || failure.step === "export") && failure.followUp !== undefined;
 			if (!unsettled) useUnsettledMoveHereStore.getState().set(hereKey, undefined);
+			setExportRunning(false);
 			setError(failure instanceof Error ? failure : new AoError("SESSION_MOVE_FAILED", String(failure)));
 		} finally {
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(LOCAL_HOST) });
@@ -726,9 +746,15 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 										: t(`moveHere.step.${candidate as Exclude<MoveStep, "clone" | "export" | "project">}`)}
 						/>
 					)}
+					{exportRunning && moving ? (
+						<p role="status" className="text-sm text-settings-muted">{t("moveHere.exportRunning", { branch })}</p>
+					) : null}
 					{error ? (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
 							<p>{error.message}</p>
+							{error instanceof MoveError && error.mayBePushed ? (
+								<p className="text-settings-label">{t("moveHere.exportMayBePushed", { branch: error.mayBePushed })}</p>
+							) : null}
 							{error instanceof MoveError && error.pushed ? (
 								<p className="text-settings-muted">
 									{error.pushed.wip

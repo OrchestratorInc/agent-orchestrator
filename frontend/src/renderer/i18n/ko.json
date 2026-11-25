@@ -5475,6 +5475,8 @@
 	"move.openInCloud": "Orchestrator Cloud에서 열기",
 	"moveHere.finishEarlier": "이전 이동에서 이미 이 세션을 이 컴퓨터에서 시작했을 수 있습니다. 이동하면 그 이동을 마칩니다.",
 	"moveHere.finishOtherAccount": "다른 Orchestrator Cloud 계정에서 이 컴퓨터로의 이동이 끝나지 않았습니다. 해당 계정에 로그인하여 Cloud 사본을 삭제하세요.",
+	"moveHere.exportRunning": "Orchestrator Cloud가 아직 에이전트를 중지하고 {{branch}}을(를) 푸시하는 중입니다. 몇 분 정도 걸릴 수 있습니다.",
+	"moveHere.exportMayBePushed": "{{branch}}이(가) 세션의 커밋되지 않은 작업을 WIP 커밋으로 담아 이미 GitHub에 푸시되었을 수 있습니다. 이 컴퓨터로는 아무것도 이동하지 않았습니다. 이동을 마치려면 다시 시도하세요. 그 커밋을 다시 사용합니다.",
 	"backgroundTasks.title": "백그라운드 작업",
 	"backgroundTasks.runningCount_one": "{{count}}개 실행 중",
 	"backgroundTasks.runningCount_other": "{{count}}개 실행 중",
