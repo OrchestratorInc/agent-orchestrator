@@ -3973,6 +3973,7 @@ type ConversationTurnResponse struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool                            `json:"hasEventPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
 	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
