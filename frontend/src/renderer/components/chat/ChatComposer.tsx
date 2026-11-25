@@ -2449,10 +2449,12 @@ export const ChatComposer = memo(function ChatComposer({
 			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
-		void fileAttachments.addFiles(files).then((added) => {
-			if (!reservation) return;
-			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
-				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		return fileAttachments.addFiles(files).then((added) => {
+			if (reservation) {
+				editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+					attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			}
+			return added;
 		});
 	}
 
@@ -2470,12 +2472,12 @@ export const ChatComposer = memo(function ChatComposer({
 		// A copy carrying both an image and text still pastes its text, unless that
 		// text becomes a file.
 		if (text === "" || textAsFile) event.preventDefault();
-		if (historyBrowse.current) {
+		uiUsage.attachmentAdded("paste");
+		void attachFiles(files).then((added) => {
+			if (added.length === 0 || !historyBrowse.current) return;
 			historyBrowse.current = null;
 			persistComposerText(textRef.current);
-		}
-		uiUsage.attachmentAdded("paste");
-		attachFiles(files);
+		});
 	}
 
 	function acceptsDroppedFiles(): boolean {
@@ -2485,7 +2487,7 @@ export const ChatComposer = memo(function ChatComposer({
 	function acceptDroppedFiles(files: File[]): boolean {
 		if (!acceptsDroppedFiles() || files.length === 0) return false;
 		uiUsage.attachmentAdded("drop");
-		attachFiles(files);
+		void attachFiles(files);
 		return true;
 	}
 
@@ -2822,7 +2824,7 @@ export const ChatComposer = memo(function ChatComposer({
 									onChange={(event) => {
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
 											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
-											attachFiles(Array.from(event.target.files ?? []));
+											void attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";

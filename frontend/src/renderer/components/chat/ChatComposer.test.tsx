@@ -1532,6 +1532,22 @@ describe("sent message recall", () => {
 		expect(composerWireText(field)).toBe("latest question");
 	});
 
+	it("keeps the saved draft when a file pasted onto a recalled message is refused", async () => {
+		const names = Array.from({ length: 8 }, (_, index) => `f${index}.txt`);
+		const stage = vi.fn().mockResolvedValue(names.map((name) => `.ao/attachments/${name}`));
+		const { field } = renderComposer({ sentMessages: SENT, draftSessionId: "composer-recall-refused", onStageAttachments: stage });
+		await typeInComposer(field, "my draft");
+		fireEvent.paste(field, { clipboardData: clipboardData(names.map((name) => textFile(name))) });
+		expect(await screen.findByRole("button", { name: "Remove f7.txt" })).toBeInTheDocument();
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(true);
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile("ninth.txt")]) });
+		expect(await screen.findByText("You can attach up to 8 files.")).toBeInTheDocument();
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("my draft");
+	});
+
 	it("leaves the arrows to a text selection, even one starting at the very start", async () => {
 		const { field } = renderComposer({ sentMessages: SENT });
 		await typeInComposer(field, "my draft");
