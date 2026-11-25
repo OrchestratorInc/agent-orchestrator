@@ -9,20 +9,14 @@ const fixtures = vi.hoisted(() => ({
 	offline: new Set(["offline"]),
 	configForHost: (hostId: string) => (fixtures.offline.has(hostId) ? null : { host: `${hostId}.test`, httpPort: "3011", muxPort: "3011", secure: false, password: "pw" }),
 	getArchivedPRSessions: vi.fn(),
-	// One-row pages read only for a list's total, kept apart so the full reads'
-	// call counts stay the reads'. They count nothing unless a test says so.
-	countArchivedPRs: vi.fn(),
 }));
 
-vi.mock("./api", () => ({
-	getArchivedPRSessions: (config: unknown, options: { limit?: number }, init: unknown) =>
-		(options?.limit === 1 ? fixtures.countArchivedPRs : fixtures.getArchivedPRSessions)(config, options, init),
-}));
+vi.mock("./api", () => ({ getArchivedPRSessions: fixtures.getArchivedPRSessions }));
 vi.mock("./store", () => ({ useApp: () => ({ configForHost: fixtures.configForHost }) }));
 vi.mock("./connectionError", () => ({ userFacingError: (_cause: unknown, fallback: string) => fallback }));
 
 import {
-	archivedPRRow, countedStream, firstPageUnchanged, mergeArchivedRows, readAllPRStatePages, readIsConsistent, unloadedArchivedSessions, useArchivedPRs,
+	archivedPRRow, firstPageUnchanged, mergeArchivedRows, readAllPRStatePages, readIsConsistent, unloadedArchivedSessions, useArchivedPRs,
 	withArchivedPRSessions, type ArchivedPRSource,
 } from "./archivedPRs";
 
@@ -32,11 +26,6 @@ const session = (id: string, prs: DashboardPR[] = [pr(Number(id.replace(/\D/g, "
 const hosted = (id: string, hostId = "mac"): HostedSession => ({ ...session(id), hostId, hostName: hostId });
 const page = (ids: string[], nextCursor: string | null, total = 0, version: string | null = "v1"): PRStatePage =>
 	({ sessions: ids.map((id) => session(id)), nextCursor, total, version });
-
-beforeEach(() => {
-	fixtures.countArchivedPRs.mockReset();
-	fixtures.countArchivedPRs.mockResolvedValue(null);
-});
 
 describe("readAllPRStatePages", () => {
 	it("follows the cursor to the end and keeps a session that moved between pages once", async () => {
@@ -553,150 +542,5 @@ describe("useArchivedPRs reconnect edge cases", () => {
 		// Settled and healthy: nothing more is fetched.
 		await render(["merged"]);
 		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
-	});
-});
-
-describe("countedStream", () => {
-	const stream = (rows: number, total: number, countedAt: number | null) => ({
-		rows: Array.from({ length: rows }, (_, i) => hosted(`s${i}`)), total, loading: countedAt === null, supported: true,
-		error: null, complete: countedAt !== null, version: null, countedAt,
-	});
-
-	it("counts from the stream without a probe, and from the probe without a stream", () => {
-		const held = stream(2, 5, 1);
-		expect(countedStream(held, undefined)).toBe(held);
-		expect(countedStream(undefined, { total: 7, at: 1 })).toEqual({ rows: [], total: 7, supported: true });
-	});
-
-	it("keeps the probed total while a read has not landed a page", () => {
-		expect(countedStream(stream(0, 0, null), { total: 7, at: 1 })).toMatchObject({ total: 7 });
-	});
-
-	it("takes the newer answer, keeping the stream's rows either way", () => {
-		expect(countedStream(stream(3, 3, 1), { total: 4, at: 2 })).toMatchObject({ total: 4, rows: { length: 3 } });
-		expect(countedStream(stream(3, 3, 2), { total: 9, at: 1 })).toMatchObject({ total: 3 });
-	});
-});
-
-// The bug this guards: the Merged and All counts read only live workers until
-// their filter was first opened, then jumped (Merged 19 became Merged 153).
-describe("useArchivedPRs counts before a filter opens", () => {
-	let renderer: ReactTestRenderer | null = null;
-	let latest: HookResult;
-
-	function Probe(props: HookProps) {
-		latest = useArchivedPRs(props.sources, { states: props.states, refreshToken: props.refreshToken });
-		return null;
-	}
-
-	async function render(props: HookProps) {
-		await act(async () => {
-			if (renderer) renderer.update(<Probe {...props} />);
-			else renderer = create(<Probe {...props} />);
-		});
-		await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
-	}
-
-	const mac: ArchivedPRSource = { hostId: "mac", hostName: "Mac", archived: 12 };
-	const totals = (merged: number, closed: number) => async (_config: unknown, options: { prState: ArchivedPRState }) =>
-		({ sessions: [], nextCursor: null, total: options.prState === "merged" ? merged : closed, version: "v1" });
-	const counted = () => fixtures.countArchivedPRs.mock.calls.map((call) => call[1] as { prState: string; projectId?: string; limit: number });
-
-	beforeEach(() => {
-		fixtures.getArchivedPRSessions.mockReset();
-		fixtures.offline = new Set(["offline"]);
-	});
-	afterEach(() => {
-		act(() => renderer?.unmount());
-		renderer = null;
-		fixtures.offline = new Set(["offline"]);
-	});
-
-	it("counts every state on mount with one row each, reading no list", async () => {
-		fixtures.countArchivedPRs.mockImplementation(async (_config: unknown, options: { prState: ArchivedPRState; projectId?: string }) =>
-			({ sessions: [], nextCursor: null, version: "v1", total: (options.projectId ? 5 : 134) + (options.prState === "closed" ? -130 : 0) }));
-		const work: ArchivedPRSource = { hostId: "work", hostName: "Work", projectId: "p1", archived: 3 };
-		const offline: ArchivedPRSource = { hostId: "offline", hostName: "Off", archived: 3 };
-		await render({ sources: [mac, work, offline], states: [], refreshToken: 0 });
-		expect(counted()).toEqual([
-			{ prState: "merged", projectId: undefined, limit: 1 },
-			{ prState: "merged", projectId: "p1", limit: 1 },
-			{ prState: "closed", projectId: undefined, limit: 1 },
-			{ prState: "closed", projectId: "p1", limit: 1 },
-		]);
-		expect(fixtures.getArchivedPRSessions).not.toHaveBeenCalled();
-		expect(latest.unloaded).toEqual({ merged: 139, closed: 4 });
-		expect(latest.sessions).toEqual([]);
-		expect(latest.loading).toEqual({ merged: false, closed: false });
-
-		await render({ sources: [mac, work, offline], states: [], refreshToken: 0 });
-		expect(fixtures.countArchivedPRs).toHaveBeenCalledTimes(4);
-	});
-
-	it("keeps the counted total while Merged's first page loads, then counts from the read", async () => {
-		fixtures.countArchivedPRs.mockImplementation(totals(3, 1));
-		await render({ sources: [mac], states: [], refreshToken: 0 });
-		expect(latest.unloaded).toEqual({ merged: 3, closed: 1 });
-
-		let release!: (value: PRStatePage) => void;
-		fixtures.getArchivedPRSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
-		fixtures.getArchivedPRSessions.mockResolvedValueOnce(page(["s2", "s3", "s4"], null, 4));
-		await render({ sources: [mac], states: ["merged"], refreshToken: 0 });
-		// Merged is read now, closed was counted already: nothing is counted again.
-		expect(fixtures.countArchivedPRs).toHaveBeenCalledTimes(2);
-		expect(latest.loading.merged).toBe(true);
-		expect(latest.unloaded).toEqual({ merged: 3, closed: 1 });
-
-		await act(async () => { release(page(["s1"], "c1", 4)); });
-		await render({ sources: [mac], states: ["merged"], refreshToken: 0 });
-		expect(latest.sessions.map((s) => s.id)).toEqual(["s1", "s2", "s3", "s4"]);
-		expect(latest.unloaded).toEqual({ merged: 0, closed: 1 });
-	});
-
-	it("counts again when the archive moves or on refresh, only the states not being read", async () => {
-		fixtures.countArchivedPRs.mockImplementation(totals(3, 1));
-		fixtures.getArchivedPRSessions.mockResolvedValue(page(["s1", "s2", "s3"], null, 3));
-		await render({ sources: [mac], states: ["merged"], refreshToken: 0 });
-		expect(counted().map((options) => options.prState)).toEqual(["closed"]);
-		expect(latest.unloaded).toEqual({ merged: 0, closed: 1 });
-
-		// Back on Open, the read and the count still answer for this archive.
-		await render({ sources: [mac], states: [], refreshToken: 0 });
-		expect(fixtures.countArchivedPRs).toHaveBeenCalledTimes(1);
-
-		// A session ended with a merged PR: the count moves, the rows read stay.
-		fixtures.countArchivedPRs.mockImplementation(totals(4, 1));
-		await render({ sources: [{ ...mac, archived: 13 }], states: [], refreshToken: 0 });
-		expect(counted().slice(1).map((options) => options.prState)).toEqual(["merged", "closed"]);
-		expect(latest.sessions).toHaveLength(3);
-		expect(latest.unloaded).toEqual({ merged: 1, closed: 1 });
-
-		await render({ sources: [{ ...mac, archived: 13 }], states: [], refreshToken: 1 });
-		expect(fixtures.countArchivedPRs).toHaveBeenCalledTimes(5);
-		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
-	});
-
-	it("tries a failed count again once its machine is back, and drops a machine that leaves", async () => {
-		let failMerged = true;
-		fixtures.countArchivedPRs.mockImplementation(async (config: unknown, options: { prState: ArchivedPRState }) => {
-			if (failMerged && options.prState === "merged") throw new Error("down");
-			return totals(2, 1)(config, options);
-		});
-		await render({ sources: [mac], states: [], refreshToken: 0 });
-		expect(latest.unloaded).toEqual({ merged: 0, closed: 1 });
-		// A count is not a list: its failure raises no error of its own.
-		expect(latest.error).toBeNull();
-
-		failMerged = false;
-		fixtures.offline = new Set(["mac"]);
-		await render({ sources: [{ ...mac }], states: [], refreshToken: 0 });
-		expect(fixtures.countArchivedPRs).toHaveBeenCalledTimes(2);
-		fixtures.offline = new Set();
-		await render({ sources: [{ ...mac }], states: [], refreshToken: 0 });
-		expect(counted().slice(2).map((options) => options.prState)).toEqual(["merged"]);
-		expect(latest.unloaded).toEqual({ merged: 2, closed: 1 });
-
-		await render({ sources: [], states: [], refreshToken: 0 });
-		expect(latest.unloaded).toEqual({ merged: 0, closed: 0 });
 	});
 });
