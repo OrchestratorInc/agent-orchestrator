@@ -368,6 +368,8 @@ export class PerformanceAccumulator {
 		// The web-vitals INP method: skip one of the longest per 50 interactions.
 		const p98 = longest.length ? longest[Math.min(longest.length - 1, Math.floor(summary.interactions / 50))]!.ms : 0;
 		const topCause = topName(summary.causes);
+		const topInvoker = topName(summary.invokers);
+		const topBundle = topName(summary.bundles);
 		const resources = await this.readResources().catch(() => null);
 		const openSessions = this.countOpenSessions();
 		const properties: Record<string, unknown> = {
@@ -388,8 +390,9 @@ export class PerformanceAccumulator {
 			long_frame_max_ms: Math.round(summary.longFrameMaxMs),
 			long_frame_no_script_count: summary.longFrameNoScript,
 			long_frame_top_cause: topCause,
-			long_frame_top_invoker: topName(summary.invokers),
-			long_frame_top_bundle: topName(summary.bundles),
+			// Left out, not undefined, when no long frame named one.
+			...(topInvoker ? { long_frame_top_invoker: topInvoker } : {}),
+			...(topBundle ? { long_frame_top_bundle: topBundle } : {}),
 			chat_open_count: summary.chatOpenSeen,
 			chat_open_p75_ms: percentile(summary.chatOpenMs, 0.75),
 			open_sessions_bucket: openSessions === undefined ? undefined : openSessionsBucket(openSessions),
