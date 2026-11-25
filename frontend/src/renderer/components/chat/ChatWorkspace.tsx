@@ -4558,7 +4558,7 @@ export function Timeline({
 		// is still up, and its spawn once it has answered and the row is gone. Dropped here,
 		// before they can leave an empty group behind.
 		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
-		const answered = indexWorkerUpdates(snapshot.items).latest;
+		const answered = (workerUpdateIndex ?? indexWorkerUpdates(snapshot.items)).latest;
 		const repeats = (item: ConversationItem) => {
 			const started = spawnedBy(item);
 			if (started) return answered.has(started);
