@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
+import { createContext, type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
@@ -201,6 +201,13 @@ export function SessionInspectorShellView({
 	);
 }
 
+/**
+ * Where a section's content can put a control beside the section's title,
+ * such as a filter for what the section lists. Content reaches it through a
+ * portal, so the control's state stays with the content it governs.
+ */
+export const InspectorSectionActionSlot = createContext<HTMLElement | null>(null);
+
 export function InspectorSection({
 	children,
 	defaultOpen = true,
@@ -215,11 +222,12 @@ export function InspectorSection({
 }) {
 	const contentId = useId();
 	const [open, setOpen] = useState(defaultOpen);
+	const [actionSlot, setActionSlot] = useState<HTMLElement | null>(null);
 	const reduceMotion = useReducedMotion();
 	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
 		<section className="group/inspector-section flex flex-col" data-testid="inspector-section">
-			<div className="px-1.5 py-0.5">
+			<div className="relative px-1.5 py-0.5">
 				<button
 					aria-controls={contentId}
 					aria-expanded={open}
@@ -233,6 +241,8 @@ export function InspectorSection({
 						<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" direction={open ? "down" : "right"} />
 					</span>
 				</button>
+				{/* Beside the toggle, not in it: a button cannot hold another. */}
+				<span className="absolute top-1/2 right-7 z-[2] flex -translate-y-1/2 items-center empty:hidden" ref={setActionSlot} />
 			</div>
 			<AnimatePresence initial={false}>
 				{open ? (
@@ -244,7 +254,9 @@ export function InspectorSection({
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
 						<div className="min-w-0 px-3 pt-0.5 pb-3.5 group-last/inspector-section:pb-0" id={contentId}>
-							{surface ? <div className="overflow-hidden bg-settings-row py-1">{children}</div> : children}
+							<InspectorSectionActionSlot.Provider value={actionSlot}>
+								{surface ? <div className="overflow-hidden bg-settings-row py-1">{children}</div> : children}
+							</InspectorSectionActionSlot.Provider>
 						</div>
 					</motion.div>
 				) : null}

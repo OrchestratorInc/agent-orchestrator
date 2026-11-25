@@ -3,6 +3,9 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 /** What one row on the activity rail says happened. */
 export type RailKind =
 	| "created"
+	| "asked"
+	| "approval"
+	| "question"
 	| "commits"
 	| "opened"
 	| "draft"
@@ -30,14 +33,55 @@ export type RailEvent = {
 	/** Every thread in the row is resolved. */
 	resolved?: boolean;
 	/** A commits row's commits, newest first. */
-	commits?: { sha: string; subject: string }[];
+	commits?: { sha: string; subject: string; at?: string }[];
 	pr?: { number: number; url: string };
+	/** An asked row: who sent the request, and how the agent's turn on it went. */
+	sender?: RailSender;
+	turn?: RailTurn;
+	/** An approval or a question nobody has answered yet. */
+	waiting?: boolean;
+	/** The turn an asked row stands for, or the turn an approval or a question was asked in. */
+	turnId?: string;
+	/** An asked row's answered approvals and questions, folded into it, newest first. */
+	answered?: RailAnswered[];
+	/** A row standing for several requests in a row: each of them, newest first. */
+	requests?: RailRequest[];
 };
 
-/** What a row is about, as the rail's filter groups it. */
-export type RailGroup = "talk" | "commits" | "pr" | "session";
+/** An approval or a question the agent asked during a request, already answered. */
+export type RailAnswered = { key: string; at: string; kind: "approval" | "question"; summary?: string };
 
-export const RAIL_GROUPS: readonly RailGroup[] = ["talk", "commits", "pr", "session"];
+/** One of the requests a folded row stands for. */
+export type RailRequest = { key: string; at: string; text: string; turn: RailTurn };
+
+/** Who started a turn: the person, Orchestrator itself (a failing check, a review), or an automation. */
+export type RailSender = "you" | "orchestrator" | "automation";
+
+/** How a turn went: its state, how long the agent worked, and how many files it changed when the agent reports that. */
+export type RailTurn = {
+	state: "queued" | "running" | "completed" | "stopped" | "failed" | "cancelled";
+	ms?: number;
+	files?: number;
+	/** The files changed, so a folded row counts a file two turns touched once. */
+	paths?: readonly string[];
+	error?: string;
+	/** On a folded row: how many of its earlier requests failed. */
+	failures?: number;
+};
+
+/** One request to the agent and the turn it started. */
+export type RailTurnInput = { id: string; at: string; sender: RailSender; text: string; turn: RailTurn };
+
+/** The agent stopping to ask: for an approval, or a question. */
+export type RailAskInput = { id: string; at: string; kind: "approval" | "question"; summary: string; waiting: boolean; turnId?: string };
+
+/** What the agent was asked and did in the session, as far as the app knows it. */
+export type RailWork = { turns: RailTurnInput[]; asks: RailAskInput[] };
+
+/** What a row is about, as the rail's filter groups it. */
+export type RailGroup = "turns" | "asks" | "talk" | "commits" | "pr" | "session";
+
+export const RAIL_GROUPS: readonly RailGroup[] = ["turns", "asks", "talk", "commits", "pr", "session"];
 
 export function railGroup(kind: RailKind): RailGroup {
 	switch (kind) {
@@ -45,6 +89,11 @@ export function railGroup(kind: RailKind): RailGroup {
 			return "commits";
 		case "created":
 			return "session";
+		case "asked":
+			return "turns";
+		case "approval":
+		case "question":
+			return "asks";
 		case "opened":
 		case "draft":
 		case "merged":
@@ -69,7 +118,7 @@ export function filterRail(events: RailEvent[], filter: RailFilter): RailEvent[]
 
 /** How many rows each group has, before any filter. */
 export function railGroupCounts(events: RailEvent[]): Record<RailGroup, number> {
-	const counts: Record<RailGroup, number> = { talk: 0, commits: 0, pr: 0, session: 0 };
+	const counts: Record<RailGroup, number> = { turns: 0, asks: 0, talk: 0, commits: 0, pr: 0, session: 0 };
 	for (const event of events) counts[railGroup(event.kind)] += 1;
 	return counts;
 }
@@ -82,13 +131,17 @@ type RailInput = {
 	branch?: string;
 	commits: RailCommit[];
 	prs: SessionPRSummary[];
+	work?: RailWork;
 };
 
 // Commits beyond these are older than anyone scrolls the sidebar for.
 const RAIL_COMMIT_LIMIT = 50;
+// The same for turns; the chat has the whole history.
+const RAIL_TURN_LIMIT = 50;
 
 /**
- * The session's activity, newest first: its creation, commits, the PRs'
+ * The session's activity, newest first: its creation, what the agent was
+ * asked and how each turn went, where it stopped to ask, commits, the PRs'
  * opening and closing, and what people said on them (comments, review notes
  * and replies, approvals and change requests). A person's commits or review
  * notes on one day fold into one row.
@@ -98,11 +151,26 @@ const RAIL_COMMIT_LIMIT = 50;
  * otherwise the reply already stands for it. Threads carry no time they were
  * resolved, so "resolved" is a note on the thread's row, not an event.
  */
-export function buildActivityRail({ createdAt, branch, commits, prs }: RailInput, dayOf: (iso: string) => string = localDay): RailEvent[] {
+export function buildActivityRail(input: RailInput, dayOf: (iso: string) => string = localDay, now = Date.now()): RailEvent[] {
+	return foldRail(railEvents(input), dayOf, now);
+}
+
+/**
+ * Every event on its own, newest first, before anything folds: what the
+ * filter counts and filters. The rail folds what is left after filtering, so a
+ * commit whose request is hidden shows again as a commit.
+ */
+export function railEvents({ createdAt, branch, commits, prs, work }: RailInput): RailEvent[] {
 	const events: RailEvent[] = [];
 	if (createdAt) events.push({ key: "created", kind: "created", at: createdAt, count: 1, detail: branch || undefined });
+	for (const turn of (work?.turns ?? []).slice(-RAIL_TURN_LIMIT)) {
+		events.push({ key: `turn:${turn.id}`, kind: "asked", at: turn.at, count: 1, detail: requestExcerpt(turn.text) || undefined, sender: turn.sender, turn: turn.turn, turnId: turn.id });
+	}
+	for (const ask of work?.asks ?? []) {
+		events.push({ key: `ask:${ask.id}`, kind: ask.kind, at: ask.at, count: 1, detail: ask.summary || undefined, waiting: ask.waiting, turnId: ask.turnId });
+	}
 	for (const commit of commits.slice(0, RAIL_COMMIT_LIMIT)) {
-		events.push({ key: `commit:${commit.sha}`, kind: "commits", at: commit.timestamp, author: commit.author || undefined, count: 1, detail: `${commit.sha.slice(0, 7)} ${commit.subject}`, commits: [{ sha: commit.sha, subject: commit.subject }] });
+		events.push({ key: `commit:${commit.sha}`, kind: "commits", at: commit.timestamp, author: commit.author || undefined, count: 1, detail: `${commit.sha.slice(0, 7)} ${commit.subject}`, commits: [{ sha: commit.sha, subject: commit.subject, at: commit.timestamp }] });
 	}
 	for (const pr of prs) {
 		const ref = { number: pr.number, url: pr.url };
@@ -137,7 +205,115 @@ export function buildActivityRail({ createdAt, branch, commits, prs }: RailInput
 		}
 	}
 	events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-	return foldRepeats(events, dayOf);
+	return events;
+}
+
+/** How the rail folds: the agent's work into its requests, then a person's commits or review notes on one day. */
+export function foldRail(events: RailEvent[], dayOf: (iso: string) => string = localDay, now = Date.now()): RailEvent[] {
+	return foldRepeats(foldWork(events, now), dayOf);
+}
+
+// Requests from you this close together, with nothing else between them, read as one sitting.
+export const REQUEST_BURST_GAP_MS = 30 * 60_000;
+// A turn's commit can land a little after the agent reports the turn done.
+const COMMIT_GRACE_MS = 2 * 60_000;
+
+const requestEnd = (event: RailEvent, now: number) => {
+	const start = Date.parse(event.at);
+	if (event.turn?.state === "running" || event.turn?.state === "queued") return now;
+	return start + (event.turn?.ms ?? 0);
+};
+
+/**
+ * Folds the agent's side of the session so a busy one stays short:
+ *
+ * - an approval or a question that was answered becomes part of the
+ *   request it was asked in; one still waiting keeps its own row;
+ * - a commit made while the agent worked on a request becomes part of it;
+ * - requests from you in one sitting (each within 30 minutes of the last
+ *   turn ending, with no other row between them) become one row that shows
+ *   the newest and opens to list them all.
+ *
+ * Requests Orchestrator or an automation sent, what people said, and PR
+ * events never fold, and they end a sitting.
+ */
+function foldWork(events: RailEvent[], now: number): RailEvent[] {
+	if (!events.some((event) => event.kind === "asked")) return events;
+	const chronological = [...events].reverse().map((event) => ({ ...event }));
+	const turns = new Map<string, RailEvent>();
+	for (const event of chronological) if (event.kind === "asked" && event.turnId) turns.set(event.turnId, event);
+	const requests = chronological.filter((event) => event.kind === "asked");
+	const kept: RailEvent[] = [];
+	for (const event of chronological) {
+		if ((event.kind === "approval" || event.kind === "question") && !event.waiting && event.turnId) {
+			const turn = turns.get(event.turnId);
+			if (turn) {
+				turn.answered = [{ key: event.key, at: event.at, kind: event.kind, summary: event.detail }, ...(turn.answered ?? [])];
+				continue;
+			}
+		}
+		if (event.kind === "commits") {
+			const at = Date.parse(event.at);
+			let turn: RailEvent | undefined;
+			for (const request of requests) if (Date.parse(request.at) <= at && at <= requestEnd(request, now) + COMMIT_GRACE_MS) turn = request;
+			if (turn) {
+				turn.commits = [...(event.commits ?? []), ...(turn.commits ?? [])];
+				continue;
+			}
+		}
+		kept.push(event);
+	}
+	const out: RailEvent[] = [];
+	for (const event of kept) {
+		const last = out[out.length - 1];
+		const mine = event.kind === "asked" && event.sender === "you";
+		const burst = mine && last?.kind === "asked" && last.sender === "you" && Date.parse(event.at) - requestEnd(last, now) <= REQUEST_BURST_GAP_MS;
+		if (!burst) {
+			out.push(event);
+			continue;
+		}
+		out[out.length - 1] = mergeRequests(last, event);
+	}
+	return out.reverse();
+}
+
+const asRequest = (event: RailEvent): RailRequest => ({ key: event.key, at: event.at, text: event.detail ?? "", turn: event.turn ?? { state: "completed" } });
+
+// The older row keeps its key, so a row that is open stays open as requests join it.
+function mergeRequests(older: RailEvent, newer: RailEvent): RailEvent {
+	const members = [asRequest(newer), ...(older.requests ?? [asRequest(older)])];
+	const known = members.filter((member) => member.turn.paths);
+	const paths = known.length ? [...new Set(known.flatMap((member) => member.turn.paths ?? []))] : undefined;
+	const durations = members.map((member) => member.turn.ms).filter((ms): ms is number => ms !== undefined);
+	const failures = members.slice(1).filter((member) => member.turn.state === "failed").length;
+	return {
+		...older,
+		at: newer.at,
+		detail: newer.detail,
+		count: members.length,
+		requests: members,
+		// The newest request's turn sets the state; the earlier ones add their time and files.
+		turn: { ...newer.turn!, ms: durations.length ? durations.reduce((sum, ms) => sum + ms, 0) : undefined, paths, files: paths?.length, failures: failures || undefined },
+		answered: older.answered || newer.answered ? [...(newer.answered ?? []), ...(older.answered ?? [])] : undefined,
+		commits: older.commits || newer.commits ? [...(newer.commits ?? []), ...(older.commits ?? [])] : undefined,
+	};
+}
+
+/** One line in an open request row: one of its requests, or a commit made while the agent worked. */
+export type RailWorkItem = { key: string; kind: "request" | "commit"; text: string; failed?: boolean };
+
+/**
+ * What an open request row lists: each request folded into it, newest
+ * first, then the commits made while the agent worked. Approvals and
+ * questions stay counts on the row.
+ */
+export function railWorkItems(event: RailEvent): RailWorkItem[] {
+	if (event.kind !== "asked") return [];
+	const requests = (event.requests?.length ?? 0) > 1 ? event.requests! : [];
+	return [
+		...requests.map((request): RailWorkItem => ({ key: request.key, kind: "request", text: request.text, failed: request.turn.state === "failed" || undefined })),
+		...(event.commits ?? []).map((commit): RailWorkItem => ({ key: `commit:${commit.sha}`, kind: "commit", text: commit.subject })),
+	];
 }
 
 // A person's commits, or review notes, in a row on one day: one line that says how many.
@@ -179,6 +355,11 @@ export function commentExcerpt(body: string): string {
 		.replace(/<[^>]+>/g, "")
 		.replace(/[*_`#]+/g, "")
 		.trim();
+}
+
+/** A request's first line, as it was written: "#42" and a path keep their marks. */
+export function requestExcerpt(text: string): string {
+	return text.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
 }
 
 export function localDay(iso: string): string {

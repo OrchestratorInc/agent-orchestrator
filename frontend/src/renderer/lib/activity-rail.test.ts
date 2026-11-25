@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { buildActivityRail, commentExcerpt, filterRail, NO_RAIL_FILTER, railFilterActive, railGroup, railGroupCounts, type RailEvent } from "./activity-rail";
+import { buildActivityRail, commentExcerpt, filterRail, foldRail, railEvents, railWorkItems, NO_RAIL_FILTER, railFilterActive, railGroup, railGroupCounts, type RailEvent, type RailTurnInput, type RailWork } from "./activity-rail";
 import { noPRDetails } from "./pr-display";
 
 const pr = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
@@ -63,7 +63,7 @@ describe("buildActivityRail", () => {
 		expect(events.map((event) => [event.author, event.count])).toEqual([["ada", 2], ["grace", 1], ["ada", 1]]);
 		// The folded row reads its newest commit and keeps each one, newest first.
 		expect(events[0]!.detail).toBe("c3 subject c3");
-		expect(events[0]!.commits).toEqual([{ sha: "c3", subject: "subject c3" }, { sha: "c2", subject: "subject c2" }]);
+		expect(events[0]!.commits).toEqual([{ sha: "c3", subject: "subject c3", at: "2026-10-21T11:00:00Z" }, { sha: "c2", subject: "subject c2", at: "2026-10-21T10:00:00Z" }]);
 	});
 
 	it("keeps only the newest 50 commits", () => {
@@ -122,6 +122,122 @@ describe("buildActivityRail", () => {
 	});
 });
 
+describe("the agent's side of the rail", () => {
+	const turnInput = (id: string, at: string, text = "Fix the chart") => ({ id, at, sender: "you" as const, text, turn: { state: "completed" as const, ms: 480_000, files: 2 } });
+
+	it("puts each request, with how its turn went, among the commits and PR events by time", () => {
+		const events = buildActivityRail({
+			createdAt: "2026-10-20T08:00:00Z",
+			commits: [commit("aaaaaaa1", "2026-10-20T09:30:00Z")],
+			prs: [pr({ createdAt: "2026-10-20T10:00:00Z" })],
+			work: { turns: [turnInput("t1", "2026-10-20T09:00:00Z", "\nFix #7 in ./web\nand the legend")], asks: [{ id: "a1", at: "2026-10-20T09:03:00Z", kind: "approval", summary: "Run npm test", waiting: true }] },
+		}, utcDay);
+		expect(events.map((event) => event.kind)).toEqual(["opened", "commits", "approval", "asked", "created"]);
+		const asked = events[3]!;
+		expect(asked).toMatchObject({ key: "turn:t1", sender: "you", detail: "Fix #7 in ./web", turn: { state: "completed", ms: 480_000, files: 2 } });
+		expect(events[2]).toMatchObject({ key: "ask:a1", detail: "Run npm test", waiting: true });
+	});
+
+	it("keeps only the newest 50 requests", () => {
+		const turns = Array.from({ length: 60 }, (_, index) => ({ ...turnInput(`t${index}`, `2026-10-${String(index % 28 + 1).padStart(2, "0")}T09:00:00Z`) }));
+		const asked = railEvents({ commits: [], prs: [], work: { turns, asks: [] } }).filter((event) => event.kind === "asked");
+		expect(asked).toHaveLength(50);
+		expect(asked.map((event) => event.key)).not.toContain("turn:t9");
+		expect(asked.map((event) => event.key)).toContain("turn:t10");
+	});
+
+	it("is the same rail as before when the app has no history for the session", () => {
+		const input = { createdAt: "2026-10-20T08:00:00Z", commits: [commit("aaaaaaa1", "2026-10-20T09:00:00Z")], prs: [pr({ createdAt: "2026-10-20T10:00:00Z" })] };
+		expect(buildActivityRail({ ...input, work: undefined }, utcDay)).toEqual(buildActivityRail(input, utcDay));
+	});
+});
+
+describe("folding the agent's side", () => {
+	const base = (id: string, at: string): RailTurnInput => ({ id, at, sender: "you", text: `request ${id}`, turn: { state: "completed", ms: 5 * 60_000, files: 1, paths: [`${id}.ts`] } });
+	const mine = (id: string, at: string, over: Partial<RailTurnInput> = {}): RailTurnInput => ({ ...base(id, at), ...over });
+	const build = (work: RailWork, extra: { commits?: ReturnType<typeof commit>[]; prs?: SessionPRSummary[] } = {}, now = Date.parse("2026-10-21T00:00:00Z")) =>
+		buildActivityRail({ commits: extra.commits ?? [], prs: extra.prs ?? [], work }, utcDay, now);
+
+	it("folds an answered approval or question into the request it was asked in, and keeps one still waiting", () => {
+		const events = build({
+			turns: [mine("t1", "2026-10-20T09:00:00Z")],
+			asks: [
+				{ id: "a1", at: "2026-10-20T09:01:00Z", kind: "approval", summary: "Run npm test", waiting: false, turnId: "t1" },
+				{ id: "a2", at: "2026-10-20T09:02:00Z", kind: "question", summary: "Which branch?", waiting: false, turnId: "t1" },
+				{ id: "a3", at: "2026-10-20T09:03:00Z", kind: "approval", summary: "Run git push", waiting: true, turnId: "t1" },
+			],
+		});
+		expect(events.map((event) => event.key)).toEqual(["ask:a3", "turn:t1"]);
+		expect(events[1]?.answered).toEqual([
+			{ key: "ask:a2", at: "2026-10-20T09:02:00Z", kind: "question", summary: "Which branch?" },
+			{ key: "ask:a1", at: "2026-10-20T09:01:00Z", kind: "approval", summary: "Run npm test" },
+		]);
+	});
+
+	it("folds a commit made while the agent worked into its request, and leaves one made later", () => {
+		const events = build({ turns: [mine("t1", "2026-10-20T09:00:00Z")], asks: [] }, { commits: [commit("aaaaaaa1", "2026-10-20T09:06:00Z"), commit("bbbbbbb2", "2026-10-20T12:00:00Z")] });
+		expect(events.map((event) => event.key)).toEqual(["commit:bbbbbbb2", "turn:t1"]);
+		expect(events[1]?.commits?.map((entry) => entry.sha)).toEqual(["aaaaaaa1"]);
+	});
+
+	it("counts a commit during a turn still running as part of it", () => {
+		const running = mine("t1", "2026-10-20T09:00:00Z", { turn: { state: "running" } as never });
+		const events = build({ turns: [running], asks: [] }, { commits: [commit("aaaaaaa1", "2026-10-20T11:00:00Z")] }, Date.parse("2026-10-20T11:30:00Z"));
+		expect(events.map((event) => event.key)).toEqual(["turn:t1"]);
+	});
+
+	it("folds your requests in one sitting into one row that shows the newest", () => {
+		const events = build({
+			turns: [
+				mine("t1", "2026-10-20T09:00:00Z"),
+				mine("t2", "2026-10-20T09:20:00Z", { turn: { state: "failed", ms: 60_000, error: "Usage limit reached" } }),
+				mine("t3", "2026-10-20T09:40:00Z", { turn: { state: "completed", ms: 4 * 60_000, files: 2, paths: ["t1.ts", "t3.ts"] } }),
+			],
+			asks: [],
+		});
+		expect(events).toHaveLength(1);
+		const row = events[0]!;
+		expect(row).toMatchObject({ key: "turn:t1", at: "2026-10-20T09:40:00Z", detail: "request t3", count: 3 });
+		expect(row.requests?.map((request) => request.key)).toEqual(["turn:t3", "turn:t2", "turn:t1"]);
+		// Time adds up, a file two turns touched counts once, and the earlier failure is counted.
+		expect(row.turn).toMatchObject({ state: "completed", ms: 10 * 60_000, files: 2, failures: 1 });
+	});
+
+	it("ends a sitting after a long gap, at someone's comment, or at a request Orchestrator sent", () => {
+		const gap = build({ turns: [mine("t1", "2026-10-20T09:00:00Z"), mine("t2", "2026-10-20T09:40:00Z")], asks: [] });
+		expect(gap.map((event) => event.key)).toEqual(["turn:t2", "turn:t1"]);
+		const comment = build({ turns: [mine("t1", "2026-10-20T09:00:00Z"), mine("t2", "2026-10-20T09:10:00Z")], asks: [] }, {
+			prs: [pr({ conversation: [{ id: "c1", author: "grace", isBot: false, body: "Hm", createdAt: "2026-10-20T09:08:00Z" }] })],
+		});
+		expect(comment.map((event) => event.key)).toEqual(["turn:t2", "comment:c1", "turn:t1"]);
+		const sent = build({ turns: [mine("t1", "2026-10-20T09:00:00Z"), { ...mine("t2", "2026-10-20T09:06:00Z"), sender: "orchestrator" }, mine("t3", "2026-10-20T09:12:00Z")], asks: [] });
+		expect(sent.map((event) => event.key)).toEqual(["turn:t3", "turn:t2", "turn:t1"]);
+	});
+
+	it("lists an open row's requests, newest first, then its commits", () => {
+		const [row] = build({
+			turns: [
+				mine("t1", "2026-10-20T09:00:00Z", { turn: { state: "failed", ms: 60_000 } }),
+				mine("t2", "2026-10-20T09:10:00Z", { turn: { state: "completed", ms: 5 * 60_000 } }),
+			],
+			asks: [{ id: "a1", at: "2026-10-20T09:12:00Z", kind: "question", summary: "Which flag wins?", waiting: false, turnId: "t2" }],
+		}, { commits: [commit("aaaaaaa1", "2026-10-20T09:14:00Z")] });
+		expect(railWorkItems(row!)).toEqual([
+			{ key: "turn:t2", kind: "request", text: "request t2", failed: undefined },
+			{ key: "turn:t1", kind: "request", text: "request t1", failed: true },
+			{ key: "commit:aaaaaaa1", kind: "commit", text: "subject aaaaaaa1" },
+		]);
+		// A single request with nothing folded into it has nothing to open; its answered question is a count.
+		expect(railWorkItems(build({ turns: [mine("t9", "2026-10-21T09:00:00Z")], asks: [] })[0]!)).toEqual([]);
+	});
+
+	it("folds after filtering, so a commit whose request is hidden shows again", () => {
+		const flat = railEvents({ commits: [commit("aaaaaaa1", "2026-10-20T09:06:00Z")], prs: [], work: { turns: [mine("t1", "2026-10-20T09:00:00Z")], asks: [] } });
+		expect(foldRail(flat, utcDay).map((event) => event.key)).toEqual(["turn:t1"]);
+		expect(foldRail(filterRail(flat, { hidden: ["turns"], hideBots: false }), utcDay).map((event) => event.key)).toEqual(["commit:aaaaaaa1"]);
+	});
+});
+
 describe("commentExcerpt", () => {
 	it("reads the first line someone wrote", () => {
 		expect(commentExcerpt("<!-- bot marker -->\n\n> earlier text\n@grace I've **fixed** `it`\nmore")).toBe("I've fixed it");
@@ -139,10 +255,13 @@ describe("rail filter", () => {
 		expect((["opened", "draft", "merged", "closed"] as const).map(railGroup)).toEqual(Array(4).fill("pr"));
 		expect(railGroup("commits")).toBe("commits");
 		expect(railGroup("created")).toBe("session");
+		expect(railGroup("asked")).toBe("turns");
+		expect((["approval", "question"] as const).map(railGroup)).toEqual(["asks", "asks"]);
 	});
 
 	it("counts rows per group before any filter", () => {
-		expect(railGroupCounts(events)).toEqual({ talk: 4, commits: 1, pr: 2, session: 1 });
+		expect(railGroupCounts(events)).toEqual({ turns: 0, asks: 0, talk: 4, commits: 1, pr: 2, session: 1 });
+		expect(railGroupCounts([row("asked"), row("approval"), row("question")])).toEqual({ turns: 1, asks: 2, talk: 0, commits: 0, pr: 0, session: 0 });
 	});
 
 	it("returns the same rows when nothing is hidden", () => {

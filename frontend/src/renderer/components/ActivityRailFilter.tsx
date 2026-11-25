@@ -6,6 +6,8 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const groupLabelKey = {
+	turns: "inspector.rail.filterGroup.turns",
+	asks: "inspector.rail.filterGroup.asks",
 	talk: "inspector.rail.filterGroup.talk",
 	commits: "inspector.rail.filterGroup.commits",
 	pr: "inspector.rail.filterGroup.pr",

@@ -1067,7 +1067,7 @@ describe("SessionInspector PR section", () => {
     expect(within(comments.getByTestId("pr-comments-resolved")).getByRole("button", { name: "Resolved · 1" })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("keeps comments out of the summary: the card shows the description's opening, and the PR's tab holds the comments", async () => {
+  it("keeps the description and comments off the card: the title opens the description in a drawer, Open tab opens the tab", async () => {
     function OpenTabs() {
       const tabs = usePRTabs(sessionUiKey("sess-1"));
       return <output data-testid="pr-tabs">{`${tabs.active ?? ""}|${tabs.request?.section ?? ""}`}</output>;
@@ -1081,15 +1081,42 @@ describe("SessionInspector PR section", () => {
       (client) => seedPRSummaries(client, [summary]),
     );
     const card = within(await screen.findByTestId("pr-card"));
-    expect(card.getByText("Adds the search box.")).toBeInTheDocument();
+    // A few lines of a long body told reviewers too little for the room they took.
+    expect(card.queryByText("Adds the search box.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pr-description")).not.toBeInTheDocument();
 
     // No comments section in the sidebar: it would push the artifacts down, and the PR's tab has them all.
     expect(screen.queryByText("Comments (4)")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-comments")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-comment-composer")).not.toBeInTheDocument();
 
-    await userEvent.click(card.getByRole("button", { name: /^PR #7/ }));
+    const title = card.getByRole("button", { name: /^PR #7.*Show description$/ });
+    expect(title).toHaveAttribute("aria-haspopup", "dialog");
+    await userEvent.click(title);
+    const drawer = await screen.findByRole("dialog", { name: /^PR #7/ });
+    expect(within(drawer).getByText("Adds the search box.")).toBeInTheDocument();
+    expect(title).toHaveAttribute("aria-expanded", "true");
+    // The drawer is not the tab.
+    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(/^\|$/);
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(title).toHaveFocus();
+
+    await userEvent.click(card.getByRole("button", { name: "Open tab" }));
     expect(screen.getByTestId("pr-tabs")).toHaveTextContent(`${summary.url}|summary`);
+    // With the tab showing, the description is already on screen: the title goes to its Summary.
+    expect(card.getByRole("button", { name: /^PR #7/ })).not.toHaveAttribute("aria-haspopup");
+    expect(card.queryByRole("button", { name: "Open tab" })).not.toBeInTheDocument();
+  });
+
+  it("closes the description drawer with its close button", async () => {
+    const summary = { ...conversationPR(), description: "Adds the search box." };
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path));
+    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: summary.url })])} />, undefined, (client) => seedPRSummaries(client, [summary]));
+    await userEvent.click(within(await screen.findByTestId("pr-card")).getByRole("button", { name: /^PR #7/ }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("shows a PR's description and comments in its tab; checks and labels stay on the card", async () => {
@@ -2681,6 +2708,46 @@ describe("SessionInspector Activity section", () => {
         .getByText("Idle")
         .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
       expect(within(activityRow).getByText(label)).toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ["ci_failed", "CI Failed"],
+    ["changes_requested", "Changes Requested"],
+    ["commented", "Commented"],
+  ] as const)(
+    "leaves %s to the PR card in the PR view, so the rail's status is only the agent's",
+    (status, label) => {
+      useUiStore.setState({ developerMode: true, prView: true });
+      renderWithQuery(
+        <SessionInspector
+          session={session([], {
+            status,
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          })}
+        />,
+      );
+
+      const rail = within(activitySection().getByTestId("activity-rail"));
+      expect(rail.getByText("Idle")).toBeInTheDocument();
+      expect(rail.queryByText(label)).not.toBeInTheDocument();
+      // Quiet: the words are plain; only the dot beside them carries the state's colour.
+      expect(rail.getByText("Idle").getAttribute("style")).toBeNull();
+      expect(rail.getByTestId("rail-status-dot").getAttribute("style")).toContain("background");
+    },
+  );
+
+  it.each(["waiting_input", "blocked", "exited"] as const)(
+    "keeps red off the PR view's status dot when the session is %s",
+    (state) => {
+      useUiStore.setState({ developerMode: true, prView: true });
+      renderWithQuery(
+        <SessionInspector session={session([], { activity: { state, lastActivityAt: "2026-06-15T10:00:00Z" } })} />,
+      );
+
+      const dot = within(activitySection().getByTestId("activity-rail")).getByTestId("rail-status-dot");
+      expect(dot?.getAttribute("style")).toBeNull();
+      expect(dot?.className).toMatch(/bg-foreground|bg-status-idle/);
     },
   );
 
