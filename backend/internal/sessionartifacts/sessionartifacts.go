@@ -368,7 +368,10 @@ func FromWorkingDir(dir, workingDir, reference string) string {
 	if native == "" || filepath.IsAbs(native) || filepath.VolumeName(native) != "" || strings.HasPrefix(filepath.ToSlash(native), "/") {
 		return reference
 	}
-	if _, ok := RelPath(dir, workingDir); !ok {
+	// The shell's folder can itself be a link into dir, so resolve it whole for
+	// this check. The joined path keeps workingDir: Registrable still checks the
+	// file it names.
+	if _, ok := RelPath(dir, resolveExisting(workingDir)); !ok {
 		return reference
 	}
 	joined := filepath.Join(workingDir, native)

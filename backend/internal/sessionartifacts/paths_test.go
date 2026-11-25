@@ -125,6 +125,21 @@ func TestFromWorkingDir(t *testing.T) {
 		})
 	}
 
+	// A shell in a folder that is a link to a subfolder of dir reads the
+	// subfolder's file, not a same-named one at dir's top.
+	writeArtifact(t, dir, "index.html")
+	shortcut := filepath.Join(t.TempDir(), "shortcut")
+	if err := os.Symlink(screens, shortcut); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	linked, err := Registrable(dir, FromWorkingDir(dir, shortcut, "index.html"))
+	if err != nil || linked.Path != "screens/index.html" {
+		t.Fatalf("from a linked working folder = %q, %v; want screens/index.html", linked.Path, err)
+	}
+	if got := FromWorkingDir(dir, shortcut, "brand.html"); got != "brand.html" {
+		t.Fatalf("a file missing from the linked folder = %q, want the reference unchanged", got)
+	}
+
 	// The ao-105 case: run in a subfolder with paths relative to it.
 	got, err := Registrable(dir, FromWorkingDir(dir, screens, "index.html"))
 	if err != nil || got.Path != "screens/index.html" {
