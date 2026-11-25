@@ -16,7 +16,7 @@ import { ChatImage } from "./ChatImage";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -139,7 +139,7 @@ import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { useComposerTokenRenderer } from "./sentComposerTokens";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
@@ -1929,13 +1929,13 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 				aria-label={descriptor?.ariaLabel ?? label}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
 			>
-				<Bot aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
-				<span className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground">{label}</span>
+				<Bot aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
+				<span className="activity-row-label min-w-0 truncate text-control font-normal text-muted-foreground">{label}</span>
 				{descriptor?.state === "failed" ? (
 					<span className="text-xs text-destructive">{t("chat.action.status.failed")}</span>
 				) : null}
 				{descriptor?.state === "cancelled" ? (
-					<span className="text-xs text-muted-foreground/70">{t("chat.action.status.cancelled")}</span>
+					<span className="activity-row-target shrink-0 text-xs text-muted-foreground/70">{t("chat.action.status.cancelled")}</span>
 				) : null}
 				{descriptor?.state === "running" ? (
 					<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60" />
@@ -1959,12 +1959,14 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-							{lines.map((line, index) => <span key={index}>{line}</span>)}
-							{href && descriptor?.linkLabelKey ? (
-								<SessionLabelLink href={href}>{t(descriptor.linkLabelKey)}</SessionLabelLink>
-							) : null}
-						</div>
+						<ActivityStepBody>
+							<div className="flex flex-col items-start gap-1 pb-1.5 text-xs text-muted-foreground">
+								{lines.map((line, index) => <span key={index}>{line}</span>)}
+								{href && descriptor?.linkLabelKey ? (
+									<SessionLabelLink href={href}>{t(descriptor.linkLabelKey)}</SessionLabelLink>
+								) : null}
+							</div>
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -2303,9 +2305,9 @@ function GenericActivityBody({ activity, commandTitled = false }: {
 				</pre>
 			) : null}
 			{!isFileChange && (detail?.reason || detail?.text) ? (
-				<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
-					{detail.reason ?? detail.text}
-				</p>
+				<div className="px-1" style={{ "--chat-readable-font-size": "var(--text-caption)" } as CSSProperties}>
+					<ChatMarkdown text={detail.reason ?? detail.text ?? ""} muted className="text-caption leading-relaxed" />
+				</div>
 			) : null}
 			{!isFileChange && detail?.terminalInput ? (
 				<TerminalInput
@@ -3811,9 +3813,10 @@ export function SteerMessage({
 			{longReport && expanded ? (
 				<ChatMarkdown text={body} muted />
 			) : body ? (
-				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					<SessionLinkedText text={preview} />
-				</p>
+				// Markdown like the reply, so a link, path or code reads as its chip before it is opened.
+				<div className={cn(longReport && "line-clamp-3")}>
+					<ChatMarkdown text={preview} muted className="whitespace-pre-wrap text-sm leading-relaxed" />
+				</div>
 			) : null}
 				{annotationSummary ? <div className={cn(body && "mt-2")}>{annotationSummary}</div> : null}
 				<StagedAttachmentItems
@@ -3987,9 +3990,8 @@ export function ApprovalCard({
 			}}
 		>
 			<div className="flex flex-col">
-				<p className="whitespace-pre-wrap text-sm leading-[1.4] text-foreground/90">
-					{detail?.reason ?? approvalPrompt(subjectKind)}
-				</p>
+				{/* Markdown like the reply, so its code, paths and links read as their chips. */}
+				<ChatMarkdown text={detail?.reason ?? approvalPrompt(subjectKind)} className="text-sm leading-[1.4] text-foreground/90" />
 
 				<pre className="mt-2 scrollbar-none max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/45 px-2.5 py-1.5 font-mono text-xs leading-[1.45] text-muted-foreground">
 					{detail?.rawCommand ?? command}
@@ -4171,12 +4173,19 @@ function ResolvedApprovalRow({
 	const decisionKind = activity.decisions?.find((option) => option.id === decision)?.kind;
 	const outcome = resolvedApprovalOutcome(activity.status, decision, detail?.resolvedBy, decisionKind);
 
+	const Mark = outcome.success ? ShieldCheck : ShieldX;
+	// A step row like a command's: its mark, what was decided, the command, and
+	// copy beside the command on hover.
 	return (
-		<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border/80 bg-surface/45 px-2.5 py-1.5 text-xs text-muted-foreground">
-			<strong className="shrink-0 font-medium text-foreground">{outcome.label}</strong>
-			<span className="min-w-0 truncate text-right font-mono">
-				{command}
-			</span>
+		<div className="group/cmdrow flex min-w-0 items-center">
+			<div className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "w-auto min-w-0 flex-initial cursor-default")}>
+				<Mark aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
+				<span className="flex min-w-0 items-baseline gap-2">
+					<span className="activity-row-label shrink-0 text-control text-muted-foreground">{outcome.label}</span>
+					<span className="activity-row-target min-w-0 truncate font-mono text-xs text-muted-foreground">{command}</span>
+				</span>
+			</div>
+			<CommandCopyReveal text={command} scope="row" />
 		</div>
 	);
 }
