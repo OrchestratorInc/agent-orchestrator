@@ -2827,9 +2827,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// One visit to this session: steps made before it came on screen are
 	// history; steps made after are news, even when they land in the visit's
 	// first read. Reset on every session switch, before any read is checked.
-	const computerUseVisitRef = useRef<{ sessionId: string; enteredAt: number; seen: string | null } | null>(null);
+	// lastAt is the newest step's time this visit has read, so a run's next
+	// step is not taken for a run start once the window drops the step before it.
+	const computerUseVisitRef = useRef<{ sessionId: string; enteredAt: number; seen: string | null; lastAt: number | null } | null>(
+		null,
+	);
 	useEffect(() => {
-		computerUseVisitRef.current = { sessionId: uiSessionId, enteredAt: Date.now(), seen: null };
+		computerUseVisitRef.current = { sessionId: uiSessionId, enteredAt: Date.now(), seen: null, lastAt: null };
 	}, [uiSessionId]);
 	useEffect(() => {
 		if (!hasInspector || !computerUseTimeline.isSuccess) return;
@@ -2839,6 +2843,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		visit.seen = latestComputerUseStep;
 		const entries = computerUseTimeline.data ?? [];
 		const latest = entries.at(-1);
+		const previousAt = visit.lastAt;
+		visit.lastAt = latest ? Date.parse(latest.at) : previousAt;
 		if (!latest || Date.parse(latest.at) < visit.enteredAt || terminated) return;
 		// The steps that are news: after the last one seen, made on this visit.
 		const seenIndex = previousSeen === null ? -1 : entries.findIndex((entry) => entry.id === previousSeen);
@@ -2846,10 +2852,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			.map((entry, index) => ({ entry, index }))
 			.filter(({ entry, index }) => index > seenIndex && Date.parse(entry.at) >= visit.enteredAt);
 		// A run starts with a step that has no step before it, or only one
-		// longer ago than the gap.
+		// longer ago than the gap. The window's first step falls back to the
+		// newest step an earlier read showed.
 		const runStarted = fresh.some(({ entry, index }) => {
-			const before = entries[index - 1];
-			return !before || Date.parse(entry.at) - Date.parse(before.at) >= COMPUTER_USE_RUN_GAP_MS;
+			const beforeAt = index > 0 ? Date.parse(entries[index - 1].at) : previousAt;
+			return beforeAt === null || Date.parse(entry.at) - beforeAt >= COMPUTER_USE_RUN_GAP_MS;
 		});
 		if (runStarted) {
 			setComputerUseUnseen(uiSessionId, false);

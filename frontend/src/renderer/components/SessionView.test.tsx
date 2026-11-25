@@ -6313,6 +6313,26 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("does not take a run's next step for a new run once the window drops the step before it", () => {
+		computerUseTimelineState.steps = undefined;
+		const view = render(<SessionView sessionId="sess-1" />);
+		try {
+			computerUseTimelineState.steps = [stepNow("1")];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("computerUse");
+
+			act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
+			// Later calls of the same run push step 1 out of the window.
+			computerUseTimelineState.steps = [stepNow("2")];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("summary");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
 	it("treats steps made while the session was off screen as history", () => {
 		computerUseTimelineState.steps = undefined;
 		const view = render(<SessionView sessionId="sess-1" />);
