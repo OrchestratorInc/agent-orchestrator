@@ -126,11 +126,21 @@ func (s *Service) UpdateIdentity(ctx context.Context, id string, name, color *st
 	if color != nil && *color != "" && !domain.ValidAgentAccountColor(*color) {
 		return AccountView{}, ports.ErrAgentAccountColorInvalid
 	}
+	if err := s.writeIdentity(ctx, id, name, color); err != nil {
+		return AccountView{}, err
+	}
+	return s.view(ctx, id)
+}
+
+// writeIdentity reads the account and writes its merged name and color under
+// identityMu, so two partial updates never write back a field the other just
+// changed. The slower view refresh runs after the lock is released.
+func (s *Service) writeIdentity(ctx context.Context, id string, name, color *string) error {
 	s.identityMu.Lock()
 	defer s.identityMu.Unlock()
 	account, err := s.find(ctx, id)
 	if err != nil {
-		return AccountView{}, err
+		return err
 	}
 	newName, newColor := account.Name, account.Color
 	if name != nil {
@@ -139,10 +149,7 @@ func (s *Service) UpdateIdentity(ctx context.Context, id string, name, color *st
 	if color != nil {
 		newColor = *color
 	}
-	if err := s.store.UpdateAgentAccountIdentity(ctx, id, newName, newColor); err != nil {
-		return AccountView{}, err
-	}
-	return s.view(ctx, id)
+	return s.store.UpdateAgentAccountIdentity(ctx, id, newName, newColor)
 }
 
 // ReplaceAPIKey saves key in place of an API key account's key, once the
