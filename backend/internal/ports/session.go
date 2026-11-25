@@ -125,6 +125,10 @@ type SpawnFork struct {
 	// KeepSeedRef marks a SeedRef the fork borrowed, such as a turn's saved
 	// rollback snapshot. It is applied but never deleted.
 	KeepSeedRef bool
+	// SeedDir, for a source in a plain folder with no git repository, is a
+	// copy of its files to move into the new workspace. StartPoint and
+	// SeedRef are then empty.
+	SeedDir string
 	// SourceTitle names the original in the fork's standing instructions.
 	SourceTitle string
 	// ArtifactsAsOf, when set, copies the original's artifacts as they were

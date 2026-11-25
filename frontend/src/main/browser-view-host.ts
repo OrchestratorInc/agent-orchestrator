@@ -41,6 +41,7 @@ import {
   type BrowserProfileUsage,
 } from "../shared/browser-profiles";
 import { attachAppShortcuts } from "./app-shortcuts";
+import { APP_SHORTCUT_PRESSED_CHANNEL } from "../shared/shortcuts";
 import type {
   AppShortcutId,
   KeybindingOverrides,
@@ -1497,6 +1498,10 @@ export function createBrowserViewHost(
           devtoolsAction(session, "toggle"),
         ).catch(() => undefined);
       },
+      undefined,
+      undefined,
+      undefined,
+      (id) => shellWebContents.send(APP_SHORTCUT_PRESSED_CHANNEL, id),
     );
     view.webContents.on("focus", () => {
       if (!isCurrentEntry()) return;

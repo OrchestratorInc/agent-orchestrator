@@ -632,6 +632,32 @@ func TestLauncherSpawnReturnsStableHandle(t *testing.T) {
 	}
 }
 
+func TestLauncherDottedWorkerHandleSurvivesSpawnAndRestore(t *testing.T) {
+	spec := launchSpec()
+	spec.WorkerID = "memron.ai-2"
+	spec.ProjectID = "memron.ai"
+	for _, restoring := range []bool{false, true} {
+		rt := &fakeRuntime{}
+		l := newTestLauncher(t, &fakeReviewer{}, rt)
+		var (
+			launch LaunchResult
+			err    error
+		)
+		if restoring {
+			launch, err = l.RestoreTerminal(context.Background(), spec)
+		} else {
+			launch, err = l.Spawn(context.Background(), spec)
+		}
+		if err != nil {
+			t.Fatalf("restoring=%v: %v", restoring, err)
+		}
+		const want = "review-memron.ai-2"
+		if launch.HandleID != want || string(rt.createCfg.SessionID) != want || rt.destroyed != want {
+			t.Fatalf("restoring=%v: handle=%q created=%q destroyed=%q, want %q", restoring, launch.HandleID, rt.createCfg.SessionID, rt.destroyed, want)
+		}
+	}
+}
+
 func TestLauncherUsesReviewerNeutralWorkingDirectory(t *testing.T) {
 	reviewer := &fakeReviewer{workingDirectory: "/ao/reviewer-runtime/review-mer-1/workspace"}
 	rt := &fakeRuntime{}

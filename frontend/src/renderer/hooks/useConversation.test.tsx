@@ -1061,6 +1061,7 @@ describe("useConversation snapshot mapping", () => {
 						retryOfTurnId: "turn-source",
 						hasRetryAttempt: true,
 						hasHumanPrompt: true,
+						hasEventPrompt: true,
 					},
 				],
 			},
@@ -1074,6 +1075,7 @@ describe("useConversation snapshot mapping", () => {
 			retryOfTurnId: "turn-source",
 			hasRetryAttempt: true,
 			hasHumanPrompt: true,
+			hasEventPrompt: true,
 		});
 	});
 

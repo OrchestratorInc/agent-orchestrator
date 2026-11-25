@@ -7437,6 +7437,7 @@ export interface components {
             errorMessage?: string;
             /** @enum {string} */
             failureCode?: "provider_key_missing" | "auth_required";
+            hasEventPrompt?: boolean;
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
@@ -8568,6 +8569,8 @@ export interface components {
         RegisterArtifactsRequest: {
             /** @description Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it. */
             paths: string[];
+            /** @description The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there. */
+            workingDir?: string;
         };
         RegisterArtifactsResponse: {
             /** @description How many of the session's files are not registered. */
