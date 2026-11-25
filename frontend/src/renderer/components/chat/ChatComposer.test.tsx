@@ -1532,33 +1532,17 @@ describe("sent message recall", () => {
 		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
 	});
 
-	it("makes a recalled message the draft once a long paste is attached to it", async () => {
-		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.txt"]);
+	it("pastes a long text into a recalled message, which then becomes the draft", async () => {
+		const stage = vi.fn();
 		const { field } = renderComposer({ sentMessages: SENT, draftSessionId: "composer-recall-paste", onStageAttachments: stage });
 		await typeInComposer(field, "my draft");
 		await placeLexicalCaret(field, 0);
 		expect(press(field, "ArrowUp")).toBe(true);
-		fireEvent.paste(field, { clipboardData: textClipboard("log\n".repeat(2000)) });
-		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
+		fireEvent.paste(field, { clipboardData: textClipboard("x".repeat(5000)) });
+		await waitFor(() => expect(composerWireText(field)).toBe("x".repeat(5000) + "latest question"));
+		expect(stage).not.toHaveBeenCalled();
 		await placeLexicalCaret(field, 0);
 		expect(press(field, "ArrowDown")).toBe(false);
-		expect(composerWireText(field)).toBe("latest question");
-	});
-
-	it("keeps the saved draft when a file pasted onto a recalled message is refused", async () => {
-		const names = Array.from({ length: 8 }, (_, index) => `f${index}.txt`);
-		const stage = vi.fn().mockResolvedValue(names.map((name) => `.ao/attachments/${name}`));
-		const { field } = renderComposer({ sentMessages: SENT, draftSessionId: "composer-recall-refused", onStageAttachments: stage });
-		await typeInComposer(field, "my draft");
-		fireEvent.paste(field, { clipboardData: clipboardData(names.map((name) => textFile(name))) });
-		expect(await screen.findByRole("button", { name: "Remove f7.txt" })).toBeInTheDocument();
-		await placeLexicalCaret(field, 0);
-		expect(press(field, "ArrowUp")).toBe(true);
-		fireEvent.paste(field, { clipboardData: clipboardData([textFile("ninth.txt")]) });
-		expect(await screen.findByText("You can attach up to 8 files.")).toBeInTheDocument();
-		await placeLexicalCaret(field, 0);
-		expect(press(field, "ArrowDown")).toBe(true);
-		expect(composerWireText(field)).toBe("my draft");
 	});
 
 	it("leaves the arrows to a text selection, even one starting at the very start", async () => {
