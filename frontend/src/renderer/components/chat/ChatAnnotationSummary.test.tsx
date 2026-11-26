@@ -6,6 +6,34 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 
 describe("ChatAnnotationSummary", () => {
+	it("pages through the composer card's annotations one at a time, removing the one shown", async () => {
+		const user = userEvent.setup();
+		const first = { id: "one", text: "celebratory feel." };
+		const second = { id: "two", text: "nice touches", comment: "hi" };
+		function Harness() {
+			const [items, setItems] = useState([first, second]);
+			return <ChatAnnotationSummary appearance="card" annotations={items} onRemove={(gone) => setItems((list) => list.filter((item) => item.id !== gone.id))} onRemoveAll={() => setItems([])} />;
+		}
+		render(<Harness />);
+		const trigger = screen.getByRole("button", { name: "2 annotations" });
+		expect(trigger).toHaveTextContent("“celebratory feel.”");
+		await user.click(trigger);
+		expect(screen.getByText("Selected text")).toBeVisible();
+		expect(screen.getByText("1 of 2")).toBeVisible();
+		expect(screen.getByRole("button", { name: "Previous annotation" })).toBeDisabled();
+		expect(screen.queryByText("hi")).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Next annotation" }));
+		expect(screen.getByText("2 of 2")).toBeVisible();
+		expect(screen.getByRole("button", { name: "nice touches" })).toHaveTextContent("“nice touches”");
+		expect(screen.getByText("hi")).toBeVisible();
+		await user.keyboard("{ArrowLeft}");
+		expect(screen.getByText("1 of 2")).toBeVisible();
+		await user.click(screen.getByRole("button", { name: "Remove annotation 1" }));
+		expect(screen.getByRole("button", { name: "nice touches" })).toBeVisible();
+		expect(screen.queryByText(/of 2/)).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Close" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "1 annotation" })).toHaveAttribute("aria-expanded", "false"));
+	});
 	it("navigates from the preview body and keeps a standalone keyboard-accessible header", async () => {
 		const user = userEvent.setup();
 		const onSelect = vi.fn();
