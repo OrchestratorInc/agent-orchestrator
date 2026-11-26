@@ -1,73 +1,46 @@
 package agentaccount
 
 import (
-	"os"
-	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-const connectorsTestToken = "sk-ant-oat01-connectors-test-token"
+// The shape `claude mcp list` prints (Claude Code 2.1.331): a health-check
+// banner, then one "<name>: <target> - <status>" line per server.
+func TestParseClaudeMCPListKeepsClaudeAIConnectors(t *testing.T) {
+	out := []byte(`Checking MCP server health...
 
-// A setup token account signed in again with `claude auth login` keeps its
-// token file. The token must not shadow that login: only the login can load
-// the user's claude.ai connectors (#9101).
-func TestClaudeLaunchEnvPrefersFolderLoginOverSetupToken(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		hasLogin  bool
-		wantToken bool
-	}{
-		{"setup token only", false, true},
-		{"setup token and a claude.ai login", true, false},
-	} {
-		// A token the daemon itself holds stays blanked either way.
-		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-daemon")
-		t.Run(tc.name, func(t *testing.T) {
-			previous := claudeHasSubscriptionLogin
-			claudeHasSubscriptionLogin = func(string) bool { return tc.hasLogin }
-			t.Cleanup(func() { claudeHasSubscriptionLogin = previous })
-
-			home := t.TempDir()
-			if err := (&Claude{}).SaveSetupToken(home, connectorsTestToken); err != nil {
-				t.Fatal(err)
-			}
-			env := (&Claude{}).LaunchEnv(home)
-			value := env["CLAUDE_CODE_OAUTH_TOKEN"]
-			if tc.wantToken && value != connectorsTestToken {
-				t.Fatal("setup token not used")
-			}
-			if !tc.wantToken && value != "" {
-				t.Fatal("setup token shadows the folder's claude.ai login")
-			}
-		})
+claude.ai Gmail: https://gmail.mcp.claude.com/mcp - ✔ Connected
+claude.ai Google Calendar: https://gcal.mcp.claude.com/mcp - ✔ Connected
+claude.ai AI Producer by OpusClip: https://mcp.opus.pro/mcp - ! Needs authentication
+claude.ai Broken - Thing: https://broken.example/mcp - ✗ Failed to connect
+desktop-commander: npx -y @wonderwhy-er/desktop-commander - ✔ Connected
+magic: https://magic.example/mcp (HTTP) - ✗ Failed to connect
+claude.ai Odd: https://odd.example/mcp - ? Something new
+`)
+	got := parseClaudeMCPList(out)
+	want := []domain.AgentConnector{
+		{Name: "Gmail", Status: domain.AgentConnectorConnected},
+		{Name: "Google Calendar", Status: domain.AgentConnectorConnected},
+		{Name: "AI Producer by OpusClip", Status: domain.AgentConnectorNeedsAuth},
+		{Name: "Broken - Thing", Status: domain.AgentConnectorFailed},
+		{Name: "Odd", Status: domain.AgentConnectorUnknown},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("connectors = %+v\nwant         %+v", got, want)
 	}
 }
 
-// The real check reads the account folder's own stored login, not the
-// computer's.
-func TestClaudeHasSubscriptionLoginReadsTheAccountFolder(t *testing.T) {
-	// No keychain helper: the check falls through to .credentials.json.
-	t.Setenv("PATH", "")
-	device := t.TempDir()
-	t.Setenv("HOME", device)
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(device, ".claude"))
-	writeLogin := func(dir string) {
-		t.Helper()
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
+func TestParseClaudeMCPListWithoutConnectors(t *testing.T) {
+	for _, out := range []string{
+		"",
+		"No MCP servers configured. Use `claude mcp add` to add a server.\n",
+		"Checking MCP server health...\n\nmagic: https://magic.example/mcp (HTTP) - ✔ Connected\n",
+	} {
+		if got := parseClaudeMCPList([]byte(out)); len(got) != 0 {
+			t.Fatalf("parse(%q) = %+v, want none", out, got)
 		}
-		if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-login"}}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeLogin(filepath.Join(device, ".claude"))
-
-	home := t.TempDir()
-	if claudeHasSubscriptionLogin(home) {
-		t.Fatal("the computer's own login counted for an account folder")
-	}
-	writeLogin(home)
-	if !claudeHasSubscriptionLogin(home) {
-		t.Fatal("the account folder's login was not found")
 	}
 }

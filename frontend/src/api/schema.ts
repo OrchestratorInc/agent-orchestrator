@@ -380,6 +380,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/accounts/{accountId}/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the connectors an account's sessions load, such as its claude.ai connectors */
+        get: operations["listAgentAccountConnectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/accounts/{accountId}/default": {
         parameters: {
             query?: never;
@@ -5910,6 +5927,23 @@ export interface components {
             lifetimeTokens?: null | number;
             longestTurnSeconds?: null | number;
             peakDailyTokens?: null | number;
+        };
+        AgentAccountConnector: {
+            name: string;
+            /** @enum {string} */
+            status: "connected" | "needs_auth" | "failed" | "unknown";
+        };
+        AgentAccountConnectorsResponse: {
+            accountId: string;
+            /** Format: date-time */
+            checkedAt?: null | string;
+            connectors: components["schemas"]["AgentAccountConnector"][];
+            error?: string;
+            /**
+             * @description Why the account cannot load connectors: a setup token or API key carries no claude.ai account, or the provider has none.
+             * @enum {string}
+             */
+            unavailable?: "setup_token" | "api_key" | "unsupported";
         };
         AgentAccountExtraUsage: {
             currency?: string;
@@ -12306,6 +12340,59 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listAgentAccountConnectors: {
+        parameters: {
+            query?: {
+                /** @description Read the list again instead of reusing one younger than ten minutes. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Agent account identifier; device-claude and device-codex are this computer's own logins. */
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountConnectorsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

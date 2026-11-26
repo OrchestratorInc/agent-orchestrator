@@ -50,6 +50,20 @@ export async function fetchAgentAccounts(refresh = false, hostId?: HostId) {
 	return unwrap(await client(hostId).GET("/api/v1/agents/accounts", { params: { query: refresh ? { refresh: true } : {} } }))?.accounts ?? [];
 }
 
+export type AgentAccountConnectors = components["schemas"]["AgentAccountConnectorsResponse"];
+export type AgentAccountConnector = components["schemas"]["AgentAccountConnector"];
+
+export const agentAccountConnectorsQueryKey = (accountId: string, hostId?: HostId) => [...agentAccountsQueryKeyFor(hostId), "connectors", accountId];
+
+/** The connectors an account's sessions load (Claude: its claude.ai
+ * connectors). The daemon reuses a reading for ten minutes; `refresh` reads
+ * the list again, which runs the CLI's health check and takes seconds. */
+export async function fetchAgentAccountConnectors(accountId: string, refresh = false, hostId?: HostId): Promise<AgentAccountConnectors> {
+	return unwrap(await client(hostId).GET("/api/v1/agents/accounts/{accountId}/connectors", {
+		params: { path: { accountId }, query: refresh ? { refresh: true } : {} },
+	}));
+}
+
 /** Every account with its limits. The daemon reuses a reading for five minutes. */
 export function useAgentAccounts(enabled = true, hostId?: HostId) {
 	return useQuery({ queryKey: agentAccountsQueryKeyFor(hostId), queryFn: () => fetchAgentAccounts(false, hostId), refetchInterval: 60_000, enabled });

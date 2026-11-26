@@ -195,6 +195,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersAgentAccountUsageRow":                      "AgentAccountUsageRow",
 	"ControllersAgentAccountUsageDay":                      "AgentAccountUsageDay",
 	"ControllersAgentAccountUsageByModel":                  "AgentAccountUsageByModel",
+	"ControllersAgentAccountConnectorsQuery":               "AgentAccountConnectorsQuery",
+	"ControllersAgentAccountConnectorsResponse":            "AgentAccountConnectorsResponse",
+	"ControllersAgentAccountConnector":                     "AgentAccountConnector",
 	"ControllersSessionAgentAccountsResponse":              "SessionAgentAccountsResponse",
 	"ControllersSwitchSessionAgentAccountRequest":          "SwitchSessionAgentAccountRequest",
 	"DomainAgentAccountLimits":                             "AgentAccountLimits",
@@ -2898,6 +2901,12 @@ func agentOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/default", id: "setDefaultAgentAccount", tag: "agents",
 			summary: "Make an account the default for new sessions of its provider", pathParams: []any{controllers.AgentAccountIDParam{}},
 			resps: []respUnit{{http.StatusOK, controllers.AgentAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/accounts/{accountId}/connectors", id: "listAgentAccountConnectors", tag: "agents",
+			summary:    "List the connectors an account's sessions load, such as its claude.ai connectors",
+			pathParams: []any{controllers.AgentAccountIDParam{}, controllers.AgentAccountConnectorsQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.AgentAccountConnectorsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/reset-credit", id: "consumeAgentAccountResetCredit", tag: "agents",
