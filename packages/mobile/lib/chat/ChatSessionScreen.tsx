@@ -45,6 +45,7 @@ import { McpServerNotice } from "./McpServerNotice";
 import { ProviderSwitchLine } from "./ProviderSwitchMarker";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
+import { conversationProjectLabel } from "./conversationHeaderModel";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationMenuGroups, type CloudConversationMenuAction, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
 import { shouldAutoResume } from "./autoResume";
@@ -369,9 +370,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// had that precedence inverted, so renaming from the board changed the row but
 	// left this header on the agent's auto-generated conversation title.
 	const title = sessionName || conversation.snapshot?.title || session.id;
-	const projectName = "projectName" in session
-		? session.projectName
-		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
+	const projectName = conversationProjectLabel(session, projects);
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
 	const headerState = conversation.snapshot?.controller.state;
 	// The PR ready for review, as a chip over the composer that opens it.
@@ -435,7 +434,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				const heading = (
 					<ConversationTitle
 						title={title}
-						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
+						subtitle={projectName}
 						harness={headerHarness}
 						state={headerState}
 					/>
