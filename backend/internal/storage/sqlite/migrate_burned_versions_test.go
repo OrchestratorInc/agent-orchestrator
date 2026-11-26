@@ -293,6 +293,7 @@ var shippedMigrations = map[int64]string{
 	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
+	20261125054218673: "20261125054218673_task_preparation_skipped_children.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -316,7 +317,10 @@ func burnedVersion(v int64) bool {
 		v == 216 || v == 20261114174124485 ||
 		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
 		// numbers before its migration moved above main's latest version.
-		v == 207 || v == 20261023182047274 || v == 20261114174310512
+		v == 207 || v == 20261023182047274 || v == 20261114174310512 ||
+		// 20261124032142084 was the task-preparation skipped-children draft
+		// number before its migration moved above main's latest version.
+		v == 20261124032142084
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

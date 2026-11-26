@@ -1611,3 +1611,26 @@ func unmarshalImportSource(raw string) *domain.SessionImportSource {
 	}
 	return &source
 }
+
+// RecordTaskPreparationSkippedChild records an intentional omission only while
+// the speculative workspace still owns the hidden session.
+func (s *Store) RecordTaskPreparationSkippedChild(ctx context.Context, id domain.SessionID, name, path string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.RecordTaskPreparationSkippedChild(ctx, gen.RecordTaskPreparationSkippedChildParams{
+		SessionID: id, RepoName: name, WorktreePath: path,
+	})
+}
+
+// ListTaskPreparationSkippedChildren returns the managed paths omitted during preparation.
+func (s *Store) ListTaskPreparationSkippedChildren(ctx context.Context, id domain.SessionID) (map[string]string, error) {
+	rows, err := s.qr.ListTaskPreparationSkippedChildren(ctx, string(id))
+	if err != nil {
+		return nil, err
+	}
+	children := make(map[string]string, len(rows))
+	for _, row := range rows {
+		children[row.RepoName] = row.WorktreePath
+	}
+	return children, nil
+}

@@ -128,8 +128,10 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		return s.gitWorkspaceManifest(ctx, rec.ID, rec.Metadata.WorkspacePath, "", nil, resolve, false)
 	}
 
-	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
-	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
+	listing, err := workspaceProjectListingPrefixes(rec.Metadata.WorkspacePath, rows)
+	if err != nil {
+		return WorkspaceManifest{}, err
+	}
 	defaultBranch := defaultBranchForProject(project, true)
 	var files, uncommitted []WorkspaceFileSummary
 	var uncommittedErr error
@@ -139,13 +141,13 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		if strings.TrimSpace(row.WorktreePath) == "" {
 			continue
 		}
-		prefix, ok := prefixes[row.RepoName]
+		prefix, ok := listing.available[row.RepoName]
 		if !ok {
 			continue
 		}
 		exclude := []string(nil)
 		if prefix == "" {
-			exclude = childPrefixes
+			exclude = listing.children
 		}
 		baseRef := row.BaseRef
 		if strings.TrimSpace(baseRef) == "" {
@@ -182,6 +184,10 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 	}
 	// listWorkspaceProjectFiles computes the same section, so the manifest and
 	// /files keep one workspaceVersion.
+	if listing.partial {
+		manifest.Degraded = true
+		manifest.DegradedCode = workspaceChildRepoUnavailable
+	}
 	if uncommittedErr != nil {
 		if errors.Is(uncommittedErr, ports.ErrWorkspaceRepoUnavailable) {
 			return WorkspaceManifest{}, uncommittedErr

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func listedPaths(t *testing.T, svc *Service, id domain.SessionID) ([]string, map[string]WorkspaceFileSummary, bool) {
@@ -221,5 +223,121 @@ func TestListWorkspaceFilePathsScratch(t *testing.T) {
 	}
 	if len(search.Results) != 1 || search.Results[0].Path != "nested/b.txt" || search.Results[0].FileFingerprint == "" {
 		t.Fatalf("scratch search = %#v", search.Results)
+	}
+}
+
+func TestWorkspaceProjectListingsWithMovedChild(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	owner := newWorkspaceRepo(t)
+	missing := filepath.Join(root, "moved")
+	runGit(t, owner, "worktree", "add", "--detach", missing, "HEAD")
+	if err := os.Rename(owner, filepath.Join(t.TempDir(), "relocated")); err != nil {
+		t.Fatal(err)
+	}
+	child := workspaceChildRepo(t, root, "healthy", "package healthy\n")
+	writeWorkspaceFile(t, child, "change.txt", "untracked\n")
+	st := newFakeStore()
+	st.projects["ws"] = domain.ProjectRecord{ID: "ws", Kind: domain.ProjectKindWorkspace}
+	st.sessions["ws-1"] = domain.SessionRecord{ID: "ws-1", ProjectID: "ws", Metadata: domain.SessionMetadata{WorkspacePath: root}}
+	st.worktrees["ws-1"] = []domain.SessionWorktreeRecord{
+		{RepoName: domain.RootWorkspaceRepoName, WorktreePath: root},
+		{RepoName: "moved", WorktreePath: missing},
+		{RepoName: "healthy", WorktreePath: child},
+	}
+	svc := &Service{store: st}
+	ctx := context.Background()
+	wantPaths := []string{".gitignore", "README.md", "healthy/change.txt", "healthy/service.go", "src/app.go"}
+	t.Run("files", func(t *testing.T) {
+		files, err := svc.ListWorkspaceFiles(ctx, "ws-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paths []string
+		for _, file := range files.Files {
+			paths = append(paths, file.Path)
+		}
+		if !slices.Equal(paths, wantPaths) {
+			t.Fatalf("files = %v, want %v", paths, wantPaths)
+		}
+		if !files.Degraded || files.DegradedCode != "WORKSPACE_CHILD_REPO_UNAVAILABLE" || len(files.Sections.Uncommitted) != 1 || files.Sections.Uncommitted[0].Path != "healthy/change.txt" {
+			t.Fatalf("unexpected partial files: %+v", files)
+		}
+	})
+	t.Run("manifest", func(t *testing.T) {
+		manifest, err := svc.GetWorkspaceManifest(ctx, "ws-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !manifest.Degraded || manifest.DegradedCode != "WORKSPACE_CHILD_REPO_UNAVAILABLE" || len(manifest.Sections.Uncommitted) != 1 || manifest.Sections.Uncommitted[0].Path != "healthy/change.txt" {
+			t.Fatalf("unexpected partial manifest: %+v", manifest)
+		}
+	})
+	t.Run("paths", func(t *testing.T) {
+		paths, err := svc.ListWorkspaceFilePaths(ctx, "ws-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(paths.Paths, wantPaths) {
+			t.Fatalf("unexpected paths: %v", paths.Paths)
+		}
+	})
+	t.Run("tree", func(t *testing.T) {
+		tree, err := svc.ListWorkspaceTree(ctx, "ws-1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := map[string]WorkspaceTreeEntry{}
+		for _, entry := range tree.Entries {
+			entries[entry.Path] = entry
+		}
+		if _, stale := entries["moved"]; stale || entries["healthy"].Type != WorkspaceTreeDir || entries["README.md"].Type != WorkspaceTreeFile {
+			t.Fatalf("unexpected root tree: %+v", entries)
+		}
+		if _, err := svc.ListWorkspaceTree(ctx, "ws-1", "moved"); !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+			t.Fatalf("direct child read = %v, want missing repository", err)
+		}
+	})
+	t.Run("unexpected child error", func(t *testing.T) {
+		writeWorkspaceFile(t, child, ".git/index", "broken index")
+		_, err := (&Service{store: st}).ListWorkspaceFiles(ctx, "ws-1")
+		if err == nil || errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+			t.Fatalf("invalid index reported as missing or healthy: %v", err)
+		}
+	})
+	t.Run("all children unavailable", func(t *testing.T) {
+		st.worktrees["ws-1"] = []domain.SessionWorktreeRecord{{RepoName: "moved", WorktreePath: missing}}
+		_, err := svc.ListWorkspaceFiles(ctx, "ws-1")
+		if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+			t.Fatalf("got %v, want missing repository", err)
+		}
+	})
+	t.Run("unavailable primary", func(t *testing.T) {
+		if err := os.Rename(filepath.Join(root, ".git"), filepath.Join(t.TempDir(), "metadata")); err != nil {
+			t.Fatal(err)
+		}
+		st.worktrees["ws-1"] = []domain.SessionWorktreeRecord{
+			{RepoName: domain.RootWorkspaceRepoName, WorktreePath: root},
+			{RepoName: "healthy", WorktreePath: child},
+		}
+		_, err := svc.ListWorkspaceFiles(ctx, "ws-1")
+		if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+			t.Fatalf("got %v, want missing repository", err)
+		}
+	})
+}
+
+func TestWorkspaceRepoUnavailablePreservesUnreadableGitFile(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, ".git")
+	if err := os.WriteFile(marker, []byte("gitdir: metadata\n"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(marker); err == nil {
+		t.Skip("permissions do not prevent this process from reading the Git file")
+	} else if !os.IsPermission(err) {
+		t.Fatal(err)
+	}
+	if workspaceRepoUnavailable(root) {
+		t.Fatal("unreadable .git file classified as missing")
 	}
 }

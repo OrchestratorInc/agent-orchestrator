@@ -89,21 +89,23 @@ func (s *Service) workspacePathSources(ctx context.Context, id domain.SessionID)
 		}
 		return rec, []workspacePathSource{{root: rec.Metadata.WorkspacePath, resolve: resolve}}, false, nil
 	}
-	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
-	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
+	listing, err := workspaceProjectListingPrefixes(rec.Metadata.WorkspacePath, rows)
+	if err != nil {
+		return domain.SessionRecord{}, nil, false, err
+	}
 	defaultBranch := defaultBranchForProject(project, true)
 	sources := make([]workspacePathSource, 0, len(rows))
 	for _, row := range rows {
 		if strings.TrimSpace(row.WorktreePath) == "" {
 			continue
 		}
-		prefix, ok := prefixes[row.RepoName]
+		prefix, ok := listing.available[row.RepoName]
 		if !ok {
 			continue
 		}
 		source := workspacePathSource{root: row.WorktreePath, prefix: prefix}
 		if prefix == "" {
-			source.exclude = childPrefixes
+			source.exclude = listing.children
 		}
 		baseRef := row.BaseRef
 		if strings.TrimSpace(baseRef) == "" {

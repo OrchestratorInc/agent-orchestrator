@@ -244,6 +244,81 @@ func TestWorkspaceIntegrationCancelledPreparedAddPreservesUnregisteredPartialDir
 	}
 }
 
+func TestWorkspaceIntegrationWorkspaceProjectSkipsMovedChild(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	root := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	healthy, child := filepath.Join(root, "healthy"), filepath.Join(root, "child")
+	origin := filepath.Join(tmp, "root", "origin.git")
+	run(t, git, "clone", "--separate-git-dir", filepath.Join(tmp, "healthy.git"), origin, healthy)
+	run(t, git, "clone", origin, child)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.WorkspaceProjectConfig{
+		ProjectID: "proj", SessionID: "first", Kind: domain.KindWorker, Branch: "ao/first",
+		RootRepoPath: root, BaseBranch: "main",
+		Repos: []ports.WorkspaceProjectRepoConfig{
+			{Name: "child", RelativePath: "child", RepoPath: child, BaseBranch: "main"},
+			{Name: "healthy", RelativePath: "healthy", RepoPath: healthy, BaseBranch: "main"},
+		},
+	}
+	first, err := ws.CreateWorkspaceProject(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirty := filepath.Join(first.Worktrees[1].Path, "uncommitted.txt")
+	if err := os.WriteFile(dirty, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(child, filepath.Join(root, "relocated")); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+		cfg.Kind, cfg.SessionID, cfg.Branch = kind, domain.SessionID(kind), "ao/"+string(kind)
+		second, err := ws.CreateWorkspaceProject(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(second.Worktrees) != 2 || second.Worktrees[1].RepoName != "healthy" {
+			t.Fatalf("expected root and healthy child, got %+v", second.Worktrees)
+		}
+		if got := gitOutput(t, git, second.Worktrees[1].Path, "rev-parse", "--abbrev-ref", "HEAD"); got != cfg.Branch {
+			t.Fatalf("healthy child branch = %q, want %q", got, cfg.Branch)
+		}
+	}
+	if got, err := os.ReadFile(dirty); err != nil || string(got) != "keep me" {
+		t.Fatalf("existing child edit = %q, %v", got, err)
+	}
+}
+
+func TestWorkspaceIntegrationWorkspaceProjectRejectsIncompleteChildRepo(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	root := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	child := filepath.Join(root, "child")
+	if err := os.MkdirAll(filepath.Join(child, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.WorkspaceProjectConfig{
+		ProjectID: "proj", SessionID: "worker", Kind: domain.KindWorker, Branch: "ao/worker",
+		RootRepoPath: root, BaseBranch: "main",
+		Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RelativePath: "child", RepoPath: child, BaseBranch: "main"}},
+	}
+	_, err = ws.CreateWorkspaceProject(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "child repo") {
+		t.Errorf("expected an error identifying the incomplete child repo, got %v", err)
+	}
+	if branches := gitOutput(t, git, root, "branch", "--list", cfg.Branch); branches != "" {
+		t.Fatalf("created a session branch in the root despite the invalid child repo: %s", branches)
+	}
+}
+
 func TestWorkspaceIntegrationWorkspaceProjectUsesResolvedNonOriginSeed(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()

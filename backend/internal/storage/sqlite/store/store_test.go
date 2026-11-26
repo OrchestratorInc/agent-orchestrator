@@ -2885,3 +2885,37 @@ func TestFillProjectRoleAgentsSkipsArchivedAndMissingProjects(t *testing.T) {
 		t.Fatalf("missing fill: row=%+v changed=%v err=%v", row, changed, err)
 	}
 }
+
+func TestSkippedChildOnlyBelongsToHiddenPreparation(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.IsTaskPreparation = true
+	rec.ProvisionState = domain.SessionProvisionProvisioning
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := func() {
+		t.Helper()
+		if err := s.RecordTaskPreparationSkippedChild(ctx, created.ID, "api", "/managed/api"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(want string) {
+		t.Helper()
+		got, err := s.ListTaskPreparationSkippedChildren(ctx, created.ID)
+		if err != nil || got["api"] != want {
+			t.Fatalf("skipped children = %v, %v", got, err)
+		}
+	}
+	record()
+	check("/managed/api")
+	if ok, err := s.PromoteTaskPreparation(ctx, created.ID, sampleRecord("mer")); err != nil || !ok {
+		t.Fatalf("promote = %v, %v", ok, err)
+	}
+	check("")
+	record()
+	check("")
+}

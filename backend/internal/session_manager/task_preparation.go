@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -95,8 +96,19 @@ func (m *Manager) createTaskPreparation(ctx context.Context, prep *taskPreparati
 	}, prep.record.ID, prep.record.Metadata.Branch, baseRefs)
 	// Persist any partial worktree before rollback: a cancellation can arrive
 	// after git has created a path/branch but before Create returned success.
+	// Skipped children are recorded even when a later store write failed, so a
+	// preparation whose rollback also fails is not rejected at startup cleanup
+	// for a child it omitted on purpose.
 	recordCtx, recordCancel := spawnRollbackContext(ctx)
 	defer recordCancel()
+	if workspaceProject != nil {
+		for name, path := range workspaceProject.SkippedChildren {
+			if recordErr := m.store.RecordTaskPreparationSkippedChild(recordCtx, prep.record.ID, name, path); recordErr != nil {
+				err = errors.Join(err, recordErr)
+				break
+			}
+		}
+	}
 	if ws.BaseSHA != "" {
 		// Promotion replaces this hidden row's session-facing diff metadata.
 		_, recordErr := m.store.SetTaskPreparationBase(recordCtx, prep.record.ID, ws.BaseSHA, ws.BaseRef)
@@ -326,12 +338,17 @@ func (m *Manager) cleanupTaskPreparationRecord(ctx context.Context, rec domain.S
 	if err != nil {
 		return err
 	}
+	var skipped map[string]string
 	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
+		skipped, err = m.store.ListTaskPreparationSkippedChildren(ctx, rec.ID)
+		if err != nil {
+			return err
+		}
 		// Git may have completed an add before its session_worktrees upsert.
 		// A missing child row makes the parent appear clean when that nested
 		// child is ignored by the parent repo. Preserve the entire preparation
 		// until every possible nested worktree has a durable cleanup handle.
-		if err := m.requireCompletePreparedWorkspaceProject(ctx, project, rows); err != nil {
+		if err := m.requireCompletePreparedWorkspaceProject(ctx, project, rows, skipped); err != nil {
 			return err
 		}
 	}
@@ -340,7 +357,13 @@ func (m *Manager) cleanupTaskPreparationRecord(ctx context.Context, rec domain.S
 		if err != nil {
 			return err
 		}
-		workspaceProject := &ports.WorkspaceProjectInfo{Worktrees: infos}
+		workspaceProject := &ports.WorkspaceProjectInfo{Root: ws, Worktrees: infos, SkippedChildren: skipped}
+		for _, info := range infos {
+			if info.RepoName == domain.RootWorkspaceRepoName {
+				workspaceProject.Root.Path = info.Path
+				break
+			}
+		}
 		if err := m.destroyPreparedWorkspace(ctx, ws, workspaceProject); err != nil {
 			return err
 		}
@@ -361,7 +384,7 @@ func (m *Manager) cleanupTaskPreparationRecord(ctx context.Context, rec domain.S
 	return err
 }
 
-func (m *Manager) requireCompletePreparedWorkspaceProject(ctx context.Context, project domain.ProjectRecord, rows []domain.SessionWorktreeRecord) error {
+func (m *Manager) requireCompletePreparedWorkspaceProject(ctx context.Context, project domain.ProjectRecord, rows []domain.SessionWorktreeRecord, skipped map[string]string) error {
 	paths := make(map[string]string, len(rows))
 	for _, row := range rows {
 		paths[row.RepoName] = row.WorktreePath
@@ -380,6 +403,9 @@ func (m *Manager) requireCompletePreparedWorkspaceProject(ctx context.Context, p
 		}
 		path := paths[child.Name]
 		if path == "" {
+			if omitted, ok := skipped[child.Name]; ok && omitted == filepath.Join(rootPath, filepath.FromSlash(child.RelativePath)) {
+				continue
+			}
 			return fmt.Errorf("prepared workspace project %q has no durable worktree row for child %q; preserving parent", project.ID, child.Name)
 		}
 		if filepath.Clean(path) != filepath.Join(rootPath, filepath.FromSlash(child.RelativePath)) {
@@ -392,6 +418,20 @@ func (m *Manager) requireCompletePreparedWorkspaceProject(ctx context.Context, p
 func (m *Manager) destroyPreparedWorkspace(ctx context.Context, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo) error {
 	if project == nil {
 		return m.workspace.Destroy(ctx, ws)
+	}
+	// A skipped repository has no worktree owner. Preserve anything that
+	// subsequently appeared there, even if the root ignores that directory.
+	for name, path := range project.SkippedChildren {
+		rel, err := filepath.Rel(project.Root.Path, path)
+		if err != nil || !filepath.IsLocal(rel) || rel == "." || !filepath.IsAbs(project.Root.Path) {
+			return fmt.Errorf("invalid skipped worktree path for %q: %q", name, path)
+		}
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("skipped worktree path for %q is occupied: %s", name, path)
+		}
 	}
 	for i := len(project.Worktrees) - 1; i >= 0; i-- {
 		row := project.Worktrees[i]

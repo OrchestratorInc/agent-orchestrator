@@ -475,13 +475,11 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		outputPath: rootPath,
 		baseBranch: cfg.BaseBranch,
 	})
+	var skipped map[string]string
 	for _, child := range cfg.Repos {
 		repoPath, err := physicalAbs(child.RepoPath)
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q path: %w", child.Name, err)
-		}
-		if err := w.enableWorktreeConfig(ctx, repoPath); err != nil {
-			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q: %w", child.Name, err)
 		}
 		rel, err := cleanRelativePath(child.RelativePath)
 		if err != nil {
@@ -490,6 +488,26 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		outPath, err := w.validateManagedPath(filepath.Join(rootPath, filepath.FromSlash(rel)))
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q path: %w", child.Name, err)
+		}
+		// A registered child can be moved or removed between sessions. Check
+		// its own metadata so Git cannot discover the parent repo in its place.
+		gitDir := filepath.Join(repoPath, ".git")
+		if _, err := os.Lstat(gitDir); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				if skipped == nil {
+					skipped = make(map[string]string)
+				}
+				skipped[child.Name] = outPath
+				w.logf("gitworktree: skipping unavailable child repo %q at %q", child.Name, repoPath)
+				continue
+			}
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: inspect child repo %q: %w", child.Name, err)
+		}
+		if _, err := w.run(ctx, w.binary, "rev-parse", "--resolve-git-dir", gitDir); err != nil {
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: inspect child repo %q: %w", child.Name, err)
+		}
+		if err := w.enableWorktreeConfig(ctx, repoPath); err != nil {
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q: %w", child.Name, err)
 		}
 		repos = append(repos, workspaceProjectRepo{
 			name:         child.Name,
@@ -572,7 +590,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	}
 	created := make([]workspaceProjectRepo, 0, len(repos))
 	touched := make([]ports.WorkspaceRepoInfo, 0, len(repos))
-	out := ports.WorkspaceProjectInfo{Worktrees: make([]ports.WorkspaceRepoInfo, 0, len(repos))}
+	out := ports.WorkspaceProjectInfo{SkippedChildren: skipped, Worktrees: make([]ports.WorkspaceRepoInfo, 0, len(repos))}
 	fail := func(cause error) (ports.WorkspaceProjectInfo, error) {
 		if cfg.FreshBranch {
 			return w.rollbackWorkspaceProjectPreparation(ctx, out, touched, cause)

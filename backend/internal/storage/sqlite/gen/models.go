@@ -1019,6 +1019,12 @@ type ShellTerminal struct {
 	AgentConversationID       string
 }
 
+type TaskPreparationSkippedChild struct {
+	SessionID    string
+	RepoName     string
+	WorktreePath string
+}
+
 type TelemetryEvent struct {
 	ID          string
 	OccurredAt  time.Time

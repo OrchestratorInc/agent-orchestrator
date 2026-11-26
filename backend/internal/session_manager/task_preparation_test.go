@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1046,5 +1047,84 @@ func TestFailedPreparationFallbackReportsTheStepThatEndedTheSpawn(t *testing.T) 
 	}
 	if _, ok := facts.StepMs["worktree_ms"]; !ok {
 		t.Fatalf("steps = %v, want the worktree step timed", facts.StepMs)
+	}
+}
+
+func TestInterruptedPreparationWithSkippedChild(t *testing.T) {
+	for _, occupied := range []bool{false, true} {
+		t.Run(fmt.Sprintf("occupied=%t", occupied), func(t *testing.T) {
+			m, st, _, root := newGitTaskPreparationManager(t)
+			if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("/api\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			runManagerGit(t, root, "add", ".gitignore")
+			runManagerGit(t, root, "commit", "-m", "ignore child repository")
+			project := st.projects["mer"]
+			project.Kind = domain.ProjectKindWorkspace
+			st.projects["mer"] = project
+			st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "api", RelativePath: "api", GitStatus: domain.GitStatusReady}}
+			token, err := m.PrepareTaskWorkspace(context.Background(), project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prep := m.taskPreparations[token]
+			if prep.err != nil {
+				t.Fatal(prep.err)
+			}
+			prep.timer.Stop()
+			delete(m.taskPreparations, token)
+			rec := st.sessions[domain.SessionID(token)]
+			target := filepath.Join(rec.Metadata.WorkspacePath, "api")
+			if occupied {
+				if err := os.WriteFile(target, []byte("keep"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := m.CleanupInterruptedTaskPreparations(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := st.sessions[rec.ID]; exists != occupied {
+				t.Fatalf("hidden preparation retained = %v, want %v", exists, occupied)
+			}
+			if occupied {
+				if data, err := os.ReadFile(target); err != nil || string(data) != "keep" {
+					t.Fatalf("unexpected child = %q, %v", data, err)
+				}
+			} else {
+				assertManagerBranchAbsent(t, root, rec.Metadata.Branch)
+				if _, err := os.Stat(rec.Metadata.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("root path after cleanup: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// A store write that fails after the workspace project exists must still leave
+// its skipped children on record, so a preparation whose rollback also fails is
+// not rejected by startup cleanup for a child it skipped on purpose.
+func TestFailedPreparationRecordsSkippedChildBeforeRollback(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("/api\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runManagerGit(t, root, "add", ".gitignore")
+	runManagerGit(t, root, "commit", "-m", "ignore child repository")
+	project := st.projects["mer"]
+	project.Kind = domain.ProjectKindWorkspace
+	st.projects["mer"] = project
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "api", RelativePath: "api", GitStatus: domain.GitStatusReady}}
+	st.upsertWTErr = errors.New("worktree row write failed")
+	token, err := m.PrepareTaskWorkspace(context.Background(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep := m.taskPreparations[token]
+	if prep.err == nil {
+		t.Fatal("preparation succeeded, want the worktree row write to fail it")
+	}
+	skipped := st.skippedChildren[domain.SessionID(token)]
+	if _, ok := skipped["api"]; !ok {
+		t.Fatalf("skipped children = %v, want api recorded before rollback", skipped)
 	}
 }

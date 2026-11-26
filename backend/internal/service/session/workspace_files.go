@@ -1065,8 +1065,10 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		return result, nil
 	}
 
-	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
-	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
+	listing, err := workspaceProjectListingPrefixes(rec.Metadata.WorkspacePath, rows)
+	if err != nil {
+		return WorkspaceFiles{}, err
+	}
 	defaultBranch := defaultBranchForProject(project, true)
 	var files, uncommitted []WorkspaceFileSummary
 	var uncommittedErr error
@@ -1076,13 +1078,13 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		if strings.TrimSpace(row.WorktreePath) == "" {
 			continue
 		}
-		prefix, ok := prefixes[row.RepoName]
+		prefix, ok := listing.available[row.RepoName]
 		if !ok {
 			continue
 		}
 		exclude := []string(nil)
 		if prefix == "" {
-			exclude = childPrefixes
+			exclude = listing.children
 		}
 		baseRef := row.BaseRef
 		if strings.TrimSpace(baseRef) == "" {
@@ -1115,6 +1117,10 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		CompareMode:    compare.Mode,
 		Files:          files,
 		Truncated:      truncated,
+	}
+	if listing.partial {
+		result.Degraded = true
+		result.DegradedCode = workspaceChildRepoUnavailable
 	}
 	if uncommittedErr != nil {
 		if errors.Is(uncommittedErr, ports.ErrWorkspaceRepoUnavailable) {
@@ -1387,6 +1393,36 @@ func workspaceCommitFileDetail(ctx context.Context, id domain.SessionID, root, p
 	}
 	detail.Diff, detail.DiffTruncated = truncateUTF8(out, maxWorkspaceDiffBytes)
 	return detail, nil
+}
+
+const workspaceChildRepoUnavailable = "WORKSPACE_CHILD_REPO_UNAVAILABLE"
+
+type workspaceListingPrefixes struct {
+	available map[string]string
+	children  []string
+	partial   bool
+}
+
+// Keep all registered child prefixes excluded from the parent, even when a
+// linked worktree can no longer reach its owning repository.
+func workspaceProjectListingPrefixes(root string, rows []domain.SessionWorktreeRecord) (workspaceListingPrefixes, error) {
+	prefixes := workspaceProjectPrefixes(root, rows)
+	listing := workspaceListingPrefixes{available: prefixes, children: nonEmptyWorkspacePrefixes(prefixes)}
+	for _, row := range rows {
+		prefix, ok := prefixes[row.RepoName]
+		if !ok || !workspaceRepoUnavailable(row.WorktreePath) {
+			continue
+		}
+		if prefix == "" {
+			return workspaceListingPrefixes{}, ports.ErrWorkspaceRepoUnavailable
+		}
+		delete(prefixes, row.RepoName)
+		listing.partial = true
+	}
+	if listing.partial && len(prefixes) == 0 {
+		return workspaceListingPrefixes{}, ports.ErrWorkspaceRepoUnavailable
+	}
+	return listing, nil
 }
 
 func workspaceProjectPrefixes(root string, rows []domain.SessionWorktreeRecord) map[string]string {
@@ -2931,37 +2967,44 @@ func noteWorkspaceGitReadOK(root, operation string) {
 // error keeps its existing semantics.
 func workspaceRepoUnavailable(root string) bool {
 	gitPath := filepath.Join(root, ".git")
-	if data, err := os.ReadFile(gitPath); err == nil {
-		gitdir, ok := parseGitDirFile(string(data))
-		if !ok {
-			return false
-		}
-		if !filepath.IsAbs(gitdir) {
-			gitdir = filepath.Join(root, gitdir)
-		}
-		info, err := os.Stat(gitdir)
-		if err != nil || !info.IsDir() {
-			return os.IsNotExist(err)
-		}
-		// A linked worktree's per-worktree gitdir can survive after the common
-		// repository disappears. Git follows commondir and fails every read.
-		// Resolve it relative to gitdir, including on Windows drive paths.
-		commonFile, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
-		if err != nil {
-			return false
-		}
-		commonDir := strings.TrimSpace(string(commonFile))
-		if commonDir == "" {
-			return false
-		}
-		if !filepath.IsAbs(commonDir) {
-			commonDir = filepath.Join(gitdir, commonDir)
-		}
-		_, err = os.Stat(commonDir)
+	info, err := os.Stat(gitPath)
+	if err != nil {
 		return os.IsNotExist(err)
 	}
-	info, err := os.Stat(gitPath)
-	return os.IsNotExist(err) || err == nil && !info.IsDir()
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	gitdir, ok := parseGitDirFile(string(data))
+	if !ok {
+		return false
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(root, gitdir)
+	}
+	info, err = os.Stat(gitdir)
+	if err != nil || !info.IsDir() {
+		return os.IsNotExist(err)
+	}
+	// A linked worktree's per-worktree gitdir can survive after the common
+	// repository disappears. Git follows commondir and fails every read.
+	// Resolve it relative to gitdir, including on Windows drive paths.
+	commonFile, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return false
+	}
+	commonDir := strings.TrimSpace(string(commonFile))
+	if commonDir == "" {
+		return false
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(gitdir, commonDir)
+	}
+	_, err = os.Stat(commonDir)
+	return os.IsNotExist(err)
 }
 
 // parseGitDirFile extracts the path from a git worktree `.git` file's
