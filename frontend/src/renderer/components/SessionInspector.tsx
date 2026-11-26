@@ -1228,8 +1228,6 @@ function PRViewSummaryCard({
 			</Button>
 		) : undefined,
 	};
-	// The title row's action button writes its status lines here, under the card.
-	const [actionMessages, setActionMessages] = useState<HTMLDivElement | null>(null);
 	const cardView = (
 		<InspectorPullRequestCardView
 			compact
@@ -1309,15 +1307,9 @@ function PRViewSummaryCard({
 			icon={pr.provider === "github" ? <GitHubIcon className="size-icon-sm shrink-0 text-passive" /> : undefined}
 		/>
 	);
-	// One button for everything on this PR, beside its title: the branch's next git step, then the PR's own.
-	const actionButton = !cloudOrgId && !guest && pr.state !== "merged" ? (
-		<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} messages={actionMessages} pr={pr} sessionId={sessionId} />
-	) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
-		<CloudPRGitStepButton git={work.git} messages={actionMessages} />
-	) : null;
-	// A local PR's tab has Open on GitHub, so the row keeps its width for the button;
+	// A local PR's tab has Open on GitHub, so its title takes the row's full width;
 	// where the title can't open a tab (AO Cloud, a guest), the logo still links out.
-	const action = <>{actionButton}{opensTab ? null : providerLink}</>;
+	const action = opensTab ? undefined : providerLink;
 	return (
 		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
 			{/* The title opens the PR's tab, where its description already is. */}
@@ -1337,7 +1329,16 @@ function PRViewSummaryCard({
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
 			) : elsewhere}
-			<div className="empty:hidden pb-2" ref={setActionMessages} />
+			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
+			{!cloudOrgId && !guest && pr.state !== "merged" ? (
+				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
+					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
+				</div>
+			) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
+				<div className={cn("pt-2 pb-2", !work.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
+					<CloudPRGitStepButton git={work.git} />
+				</div>
+			) : null}
 		</section>
 	);
 }

@@ -2,7 +2,6 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpFromLine, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, ListEnd, ListX, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 import { useState } from "react";
-import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey, usePRStack } from "../hooks/usePRStack";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -56,31 +55,26 @@ const gitIcon: Record<SessionGitActionKind, LucideIcon> = {
  * so the step stands alone rather than sharing PRActionButton, whose merge,
  * close and stack actions go to the local daemon.
  */
-export function CloudPRGitStepButton({ git, messages }: {
-	git: BranchGitStep;
-	/** Where its error goes when the button sits in the card's title row; see PRActionButton. */
-	messages?: HTMLElement | null;
-}) {
+export function CloudPRGitStepButton({ git }: { git: BranchGitStep }) {
 	const primary = git.primary;
 	if (!git.pending && !primary) return null;
 	const Icon = git.pending ? Loader2 : gitIcon[primary!.kind];
 	const label = git.pending ?? primary!.label;
-	const error = git.error ? <p className="m-0 text-xs leading-normal text-error" role="status">{git.error}</p> : null;
 	return (
-		<div className={cn("flex min-w-0 flex-col gap-1", messages === undefined ? "items-stretch" : "mr-1.5 ml-2 max-w-[45%] shrink-0 items-end")} data-testid="pr-git-step">
+		<div className="flex min-w-0 flex-col items-stretch gap-1" data-testid="pr-git-step">
 			<Button
 				aria-busy={git.pending ? "true" : undefined}
 				className="min-w-0 gap-1 px-2 text-xs"
 				disabled={Boolean(git.pending)}
 				onClick={() => primary && git.run(primary.kind)}
-				size={messages === undefined ? "sm" : "xs"}
+				size="sm"
 				type="button"
 				variant="secondary"
 			>
 				<Icon aria-hidden="true" className={cn("size-icon-sm", git.pending && "animate-spin")} />
 				<span className="truncate">{label}</span>
 			</Button>
-			{messages === undefined ? error : messages && error ? createPortal(error, messages) : null}
+			{git.error ? <p className="m-0 text-xs leading-normal text-error" role="status">{git.error}</p> : null}
 		</div>
 	);
 }
@@ -152,15 +146,9 @@ function usePRStateChange(pr: SessionPRSummary, sessionId: string, hostId?: stri
  * branch steps, the merge method and Close. Merge stays visible while the PR
  * isn't ready, greyed out with the reason.
  */
-export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId }: {
+export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	/** Readiness allows merging, fenced to the head commit the card shows. */
 	canMerge: boolean;
-	/**
-	 * Where the button's status lines go. The button sits in the card's title
-	 * row, so its errors and queue notes render under the card instead, in
-	 * this element; without one they follow the button.
-	 */
-	messages?: HTMLElement | null;
 	/** The branch's git step, when this is the PR the branch updates. */
 	git?: BranchGitStep;
 	hostId?: string;
@@ -254,8 +242,6 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 	const mergeNotice = mergeStack.data?.status === "enqueued" ? t("pr.stack.queued") : mergeStack.data?.status === "pending" ? t("pr.stack.pending") : null;
 	const methodLabel = t(`pr.merge.method.${method}`);
 	const mergeLabel = severalLayers ? t("pr.stack.mergeThrough", { layers: severalLayers.length, number: pr.number }) : viaQueue ? t("pr.queue.add") : methodLabel;
-	// In the card's title row the stack's label shortens; the full one stays its name and tooltip.
-	const mergeButtonLabel = severalLayers && messages !== undefined ? t("pr.stack.mergeShort", { layers: severalLayers.length }) : mergeLabel;
 	const mergeAria = severalLayers ? mergeLabel : viaQueue ? t("pr.queue.addFor", { number: pr.number }) : t("pr.merge.methodFor", { method: methodLabel, number: pr.number });
 	const queuedLabel = queued ? (queued.position > 0 ? t("pr.queue.queuedAt", { position: queued.position }) : t("pr.queue.queued")) : "";
 	const choose = (next: string) => {
@@ -281,24 +267,16 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 			: queued
 				// Already in the queue: the button says where, and the menu takes it out.
 				? { label: queuedLabel, aria: t("pr.queue.queuedFor", { number: pr.number, status: queuedLabel }), icon: ListEnd, run: () => {}, disabled: true, tone: "secondary" as const }
-				: { label: merging ? t(viaQueue && !severalLayers ? "pr.queue.adding" : "pr.merge.merging") : mergeButtonLabel, aria: mergeAria, icon: viaQueue && !severalLayers ? ListEnd : GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
+				: { label: merging ? t(viaQueue && !severalLayers ? "pr.queue.adding" : "pr.merge.merging") : mergeLabel, aria: mergeAria, icon: viaQueue && !severalLayers ? ListEnd : GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
 	const primary = gitPrimary ?? { ...prPrimary, spinning: false };
 	const gitMenu = updateYields && git?.primary ? [git.primary, ...git.menu] : (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
 	// Ready for review, when branch work holds the button on a draft.
 	const stateSteps = pr.state === "draft" && gitPrimary ? [{ key: "ready" as const, label: t("pr.state.action.ready"), icon: GitPullRequest }] : [];
 	const errorText = [merge.error, dequeue.error, change.error, confirmStack ? null : mergeStack.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
 
-	const statusLines = (errorText || (mergeNotice && !queued) || (queued && !gitPrimary)) ? (
-		<div className="flex min-w-0 flex-col gap-1" data-testid="pr-action-status">
-			{errorText ? <p className="m-0 text-xs leading-normal text-error" role="status">{errorText}</p> : null}
-			{mergeNotice && !queued ? <p className="m-0 text-xs leading-normal text-muted-foreground" role="status">{mergeNotice}</p> : null}
-			{queued && !gitPrimary ? <p className="m-0 text-xs leading-normal text-muted-foreground" data-testid="pr-queue-status" role="status">{prMergeQueueDetail(queued)}</p> : null}
-		</div>
-	) : null;
-
 	return (
-		<div className={cn("flex min-w-0 flex-col gap-1", messages === undefined ? "items-stretch" : "mr-1.5 ml-2 max-w-[45%] shrink-0 items-end")} data-testid="pr-action-button">
-			<div className={cn("flex min-w-0 items-stretch", messages === undefined && "w-full")}>
+		<div className="flex min-w-0 flex-col items-stretch gap-1" data-testid="pr-action-button">
+			<div className="flex w-full items-stretch">
 				<Button
 					aria-label={primary.aria}
 					className={cn(
@@ -311,8 +289,8 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 					disabled={primary.disabled}
 					key={gitPrimary ? "git" : "pr"}
 					onClick={primary.run}
-					size={messages === undefined ? "sm" : "xs"}
-					title={!gitPrimary && pr.state === "open" && blocker ? blocker : !gitPrimary && primary.label === mergeButtonLabel && mergeButtonLabel !== mergeLabel ? mergeLabel : undefined}
+					size="sm"
+					title={!gitPrimary && pr.state === "open" && blocker ? blocker : undefined}
 					type="button"
 					variant={primary.tone === "go" ? "primary" : "secondary"}
 				>
@@ -325,11 +303,11 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 							aria-label={t("pr.actions.menu", { number: pr.number })}
 							className={cn(
 								"rounded-l-none border-l px-1",
-								messages === undefined ? "w-control-md px-0" : "w-control-sm px-0",
+								"w-control-md px-0",
 								primary.tone === "go" ? "[--button-color:var(--color-success)] border-l-on-foreground/25 text-on-foreground" : "border-border",
 							)}
 							disabled={busy || Boolean(git?.pending)}
-							size={messages === undefined ? "sm" : "xs"}
+							size="sm"
 							type="button"
 							variant={primary.tone === "go" ? "primary" : "secondary"}
 						>
@@ -395,7 +373,9 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>
-			{messages === undefined ? statusLines : messages && statusLines ? createPortal(statusLines, messages) : null}
+			{errorText ? <p className="m-0 text-xs leading-normal text-error" role="status">{errorText}</p> : null}
+			{mergeNotice && !queued ? <p className="m-0 text-xs leading-normal text-muted-foreground" role="status">{mergeNotice}</p> : null}
+			{queued && !gitPrimary ? <p className="m-0 text-xs leading-normal text-muted-foreground" data-testid="pr-queue-status" role="status">{prMergeQueueDetail(queued)}</p> : null}
 			<ConfirmDialog
 				busy={change.isPending}
 				confirmLabel={t("pr.actions.close")}
