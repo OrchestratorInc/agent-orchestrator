@@ -2,7 +2,7 @@ import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { AgentLogo } from "../AgentLogo";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { fontScaleCap, radius, space, type } from "../tokens";
+import { fontScaleCap, space, type } from "../tokens";
 
 /**
  * What the bar leaves the title between its back button and actions menu: two
@@ -11,8 +11,9 @@ import { fontScaleCap, radius, space, type } from "../tokens";
  */
 const BAR_CHROME = 180;
 const MAX_TITLE_WIDTH = 260;
+const DOT = 7;
 
-/** The agent's state in a word, so the header never says it by colour alone. */
+/** The agent's state in a word: the dot shows it, screen readers hear this. */
 export function conversationStateLabel(state: string): string {
 	switch (state) {
 		case "busy": return "Working";
@@ -39,7 +40,7 @@ export function ConversationTitle({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// Sized to the window, not fixed: a set width wider than the space between
-	// the bar's buttons ran the state label under the actions menu.
+	// the bar's buttons ran the title under the actions menu.
 	const { width: windowWidth } = useWindowDimensions();
 	const maxWidth = Math.min(MAX_TITLE_WIDTH, windowWidth - BAR_CHROME);
 	const stateColor = state === "busy" ? t.orange : state === "ready" ? t.green : state === "stopped" ? t.red : t.amber;
@@ -56,15 +57,12 @@ export function ConversationTitle({
 			<View style={styles.copy}>
 				{/* Capped: past them the title grew out of the bar into the status bar. */}
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.title} style={styles.title}>{title}</Text>
-				<View style={styles.subtitleRow}>
-					<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.subtitle}>{subtitle}</Text>
-					{stateLabel ? (
-						<View style={styles.state}>
-							<View style={[styles.dot, { backgroundColor: stateColor }]} />
-							<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.stateLabel}>{stateLabel}</Text>
-						</View>
-					) : null}
-				</View>
+				{subtitle || stateLabel ? (
+					<View style={styles.subtitleRow}>
+						{stateLabel ? <View style={[styles.dot, { backgroundColor: stateColor }]} /> : null}
+						{subtitle ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.subtitle}>{subtitle}</Text> : null}
+					</View>
+				) : null}
 			</View>
 		</View>
 	);
@@ -76,8 +74,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	title: { fontFamily: "DMSans_600SemiBold", maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 	subtitleRow: { maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xs },
 	subtitle: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	// The word stays whole; the project and harness give way to it.
-	state: { flexShrink: 0, flexDirection: "row", alignItems: "center", gap: space.xxs },
-	dot: { width: 7, height: 7, borderRadius: radius.pill },
-	stateLabel: { fontFamily: "DMSans_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+	// A squircle, not a circle: a softened square with the continuous corner curve.
+	dot: { flexShrink: 0, width: DOT, height: DOT, borderRadius: DOT * 0.32, borderCurve: "continuous" },
 });

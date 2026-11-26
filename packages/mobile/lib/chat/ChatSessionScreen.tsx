@@ -435,7 +435,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				const heading = (
 					<ConversationTitle
 						title={title}
-						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
+						subtitle={projectName ?? ""}
 						harness={headerHarness}
 						state={headerState}
 					/>

@@ -32,26 +32,21 @@ const textsOf = (element: Element): string[] => element.type === Text
 
 describe("ConversationTitle", () => {
 	it("shows the active harness logo beside the worker title", () => {
-		const element = ConversationTitle({
-			title: "Say hi",
-			subtitle: "meetyou · claude-code",
-			harness: "claude-code",
-			state: "ready",
-		}) as unknown as Element;
+		const element = ConversationTitle({ title: "Say hi", subtitle: "meetyou", harness: "claude-code", state: "ready" }) as unknown as Element;
 
 		const children = childrenOf(element);
 		expect(children[0].type).toBe(AgentLogo);
 		expect(children[0].props).toMatchObject({ harness: "claude-code", size: 22 });
 	});
 
-	// The dot's colour alone was the only sign of the agent's state.
-	it("names the agent's state in words, on screen and to screen readers", () => {
-		const element = ConversationTitle({ title: "Say hi", subtitle: "meetyou · claude-code", state: "busy" }) as unknown as Element;
-		expect(textsOf(element)).toEqual(["Say hi", "meetyou · claude-code", "Working"]);
+	// The bar shows the state as a dot only; the word is for screen readers.
+	it("shows the state as a dot, and names it only to screen readers", () => {
+		const element = ConversationTitle({ title: "Say hi", subtitle: "meetyou", state: "busy" }) as unknown as Element;
+		expect(textsOf(element)).toEqual(["Say hi", "meetyou"]);
 		expect(element.props).toMatchObject({
 			accessible: true,
 			accessibilityRole: "header",
-			accessibilityLabel: "Say hi, meetyou · claude-code, Working",
+			accessibilityLabel: "Say hi, meetyou, Working",
 		});
 	});
 
