@@ -253,9 +253,15 @@ function itemKey(item: ConversationItem): string {
 }
 
 /** Whether an older page still belongs behind the live one; a branch switch while it loaded makes it stale. */
-export function olderPageFits(pages: ConversationPage[], older: ConversationPage): boolean {
+export function olderPageFits(pages: ConversationPage[], older: ConversationPage, before?: number): boolean {
 	const live = pages[0];
-	return Boolean(live) && (!live.activeBranchId || !older.activeBranchId || live.activeBranchId === older.activeBranchId);
+	if (!live) return false;
+	if (live.activeBranchId && older.activeBranchId && live.activeBranchId !== older.activeBranchId) return false;
+	// The page was asked for from a cursor. If a refresh moved the oldest
+	// loaded page while it was in flight (a gap dropped the history), the page
+	// no longer joins what is loaded: adding it would hand its cursor on and
+	// skip the rows between.
+	return before === undefined || pages[pages.length - 1].oldestSequence === before;
 }
 
 /** Merge historical pages behind the current live page without duplicating revisions. */

@@ -305,11 +305,12 @@ export function useMobileConversation(
 	const loadOlder = useCallback(async () => {
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
 		setLoadingOlder(true);
+		const before = snapshot.oldestSequence;
 		try {
 			const older = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId, snapshot.oldestSequence)
-				: await getConversationPage(cfg, sessionId, snapshot.oldestSequence);
-			if (mounted.current) setPages((old) => olderPageFits(old, older) ? [...old, older] : old);
+				? await getReviewerConversationPage(cfg, options.reviewId, before)
+				: await getConversationPage(cfg, sessionId, before);
+			if (mounted.current) setPages((old) => olderPageFits(old, older, before) ? [...old, older] : old);
 		} catch (cause) {
 			if (mounted.current) setActionError(conversationActionError(cause));
 		} finally {

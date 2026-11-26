@@ -152,6 +152,14 @@ describe("live page and branch changes", () => {
 		expect(mergeConversationPages(pages)?.items.map((item) => item.id)).toEqual(["second", "third"]);
 	});
 
+	it("refuses an older page asked for from a cursor a gap refresh has since moved", () => {
+		const live = page({ oldestSequence: 3, hasMoreBefore: true, items: [message("third", 3), message("fourth", 4)] });
+		const afterGap = withLivePage([live], page({ oldestSequence: 7, hasMoreBefore: true, items: [message("seventh", 7), message("eighth", 8)] }));
+		const stale = page({ oldestSequence: 1, hasMoreBefore: false, items: [message("first", 1), message("second", 2)] });
+		expect(olderPageFits(afterGap, stale, 3)).toBe(false);
+		expect(olderPageFits([live], stale, 3)).toBe(true);
+	});
+
 	it("refuses an older page that loaded for a branch no longer active", () => {
 		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "root" }))).toBe(false);
 		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "child" }))).toBe(true);
