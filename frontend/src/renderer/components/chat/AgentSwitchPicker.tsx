@@ -1,13 +1,13 @@
 /**
- * One menu for who answers next: saved setups, Agent/Model/Effort rows, then toggles.
+ * One menu for who answers next: Agent/Model/Effort rows, then toggles.
  * The running agent's settings apply at once; another agent is only held as pending
  * until the next message (or Switch, in a terminal), so browsing never restarts anything.
  */
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, Settings2, Star, TriangleAlert, Zap } from "@/components/app-icons";
-import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Brain, ChevronRight, Loader2, Settings2, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
+import { Fragment, memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
@@ -16,9 +16,9 @@ import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useSettings } from "../../hooks/useSettings";
 import { agentModelDisplayLabel, mergeSameNamedModels, offeredCatalogModels, recordedModelName, splitClaudeModels } from "../../lib/agent-model-choices";
 import { agentLabel } from "../../lib/agent-options";
-import { CHAT_SWITCH_TARGETS, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
+import { chatSwitchTargets, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
 import { clientForSessionHost } from "../../lib/host-clients";
-import { toggleModelFavorite, useModelFavorites, type ModelFavorite } from "../../lib/model-favorites";
+import { rememberLastModel, useLastModels } from "../../lib/last-models";
 import {
 	collapseModelVariants,
 	groupModelsByVendor,
@@ -67,7 +67,7 @@ export interface PendingAgentSwitch {
 	thinking?: boolean;
 	/** Run Claude Code with Ultracode: set at launch in a terminal, asked per message in chat. */
 	ultracode?: boolean;
-	/** Terminal only: where Claude Code compacts on its own, "200k" or "1m". */
+	/** Sent with the switch: Claude Code's compaction window, "200k", "500k" or "1m", or "off" for OpenCode's. */
 	autoCompactWindow?: TurnSettings["autoCompactWindow"];
 	/** The permission mode picked for the agent. Unset starts it in the chat's, or its strictest. */
 	approvalMode?: ApprovalMode;
@@ -78,9 +78,17 @@ export function switchEffort(pending: PendingAgentSwitch): string | undefined {
 	return pending.effort ?? (listsModelVariants(pending.harness) ? undefined : pending.shownEffort);
 }
 
-/** Claude Code only compacts early on its larger-window models. */
-export function compactsEarly(harness: string | undefined, model = ""): boolean {
-	return harness === "claude-code" && !/haiku|opus-4-5/.test(model);
+/** How an agent's own compaction is set: Claude Code's window, or simply on or off. */
+export type AutoCompactKind = "window" | "toggle";
+
+/**
+ * How AO can set an agent's own compaction, if it can: Claude Code's window on its larger-window
+ * models, and OpenCode's on or off in a chat (a terminal's OpenCode reads only its own config).
+ */
+export function autoCompactKind(harness: string | undefined, model = "", terminal = false): AutoCompactKind | undefined {
+	if (harness === "claude-code") return /haiku|opus-4-5/.test(model) ? undefined : "window";
+	if (!terminal && (harness === "opencode" || harness === "opencode-v2")) return "toggle";
+	return undefined;
 }
 
 /** What the chat surface passes down to turn the model control into this one. */
@@ -100,9 +108,9 @@ export interface AgentSwitchProps {
 	onPendingChange: (next: PendingAgentSwitch | undefined) => void;
 	/** Switching is refused while the agent is working. */
 	disabled?: boolean;
-	/** Claude Code's Ultracode: Extra High effort plus its workflows, asked for by a keyword in each message. */
+	/** Claude Code's Ultracode: its own workflows at any effort level, asked for by a keyword in each message. */
 	ultracode?: { on: boolean; onChange: (on: boolean) => void };
-	/** When Claude Code compacts on its own. Applies the next time it starts. */
+	/** When the running agent compacts on its own. Applies the next time it starts. */
 	autoCompact?: AutoCompactControl;
 	/**
 	 * The agents to offer in place of the chat switch targets, for choosing one before a session exists.
@@ -131,7 +139,7 @@ export interface PickerModel {
 	hint?: string;
 	/** The id to select for this row, where it differs from the row's own id. */
 	sendId?: string;
-	/** Other ids the agent lists this same model under, whose favourites are this row's. */
+	/** Other ids the agent lists this same model under; a model remembered under one is this row. */
 	aliases?: string[];
 	/** Why the row cannot be picked now (the installed agent CLI is too old); shown under its name. */
 	unavailableReason?: string;
@@ -145,8 +153,6 @@ export interface PickerSource {
 	sendId?: string;
 	modelLabel: string;
 	onPickModel?: (id: string) => void;
-	/** Selects a model together with its settings in one step, for a favourite. */
-	onPickSetup?: (setup: ModelFavorite) => void;
 	efforts: Array<{ value: string; label: string }>;
 	effort?: string;
 	onPickEffort?: (value: string) => void;
@@ -156,6 +162,12 @@ export interface PickerSource {
 	/** Undefined when the model has no thinking choice. */
 	thinking?: boolean;
 	onToggleThinking?: (next: boolean) => void;
+	/**
+	 * Claude Code's Ultracode: a mode beside the effort level, not one of its levels, and it works at any
+	 * of them. Undefined where it is not offered.
+	 */
+	ultracode?: boolean;
+	onToggleUltracode?: (next: boolean) => void;
 }
 
 const TRIGGER_CLASS = cn(
@@ -164,7 +176,7 @@ const TRIGGER_CLASS = cn(
 );
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
 // Model rows shown before the list scrolls, so a long catalog never stretches the menu.
-const VISIBLE_MODEL_ROWS = 4;
+const VISIBLE_MODEL_ROWS = 7;
 const DIVIDER = "mt-1 border-t border-border pt-1";
 // Shared with the review controls' reviewer picker, which is laid out like this menu.
 export { TRIGGER_CLASS as CHAT_PICKER_TRIGGER_CLASS, SUB_CLASS as CHAT_PICKER_SUB_CLASS, DIVIDER as CHAT_PICKER_DIVIDER };
@@ -188,10 +200,6 @@ function variantSource(
 		models: families.map((entry) => ({ id: entry.id, label: entry.label, group: entry.group, sendId: entry.defaultVariant.id })),
 		modelId: family?.id,
 		sendId: variant?.id,
-		onPickSetup: onPick && ((setup) => {
-			const found = findModelVariant(families, setup.model);
-			if (found) onPick(found.variant, found.family.label);
-		}),
 		modelLabel: family?.label ?? fallbackLabel,
 		onPickModel: onPick && ((id) => {
 			const next = families.find((entry) => entry.id === id);
@@ -218,6 +226,7 @@ export function AgentModelPicker({
 	title,
 	mark,
 	extras,
+	autoCompact,
 	terminal = false,
 	pendingFooter,
 	onCloseAutoFocus,
@@ -242,6 +251,8 @@ export function AgentModelPicker({
 	mark?: ReactNode;
 	/** The current agent's other settings, as menu rows under its effort. Given the picker's pick, called when one is changed. */
 	extras?: (markPick: () => void) => ReactNode;
+	/** The running agent's auto-compact setting, shown beside Fast mode; without one it shows disabled. */
+	autoCompact?: AutoCompactControl & { title: string };
 	onCloseAutoFocus?: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
@@ -255,13 +266,16 @@ export function AgentModelPicker({
 	// The agents to offer before a session exists, in place of the chat switch targets.
 	const choices = agentSwitch.agents;
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
+	const { settings: hostSettings } = useSettings(hostId);
+	// A Chat session can switch to any agent the host has a Chat driver for.
+	const chatTargets = useMemo(() => chatSwitchTargets(hostSettings?.chatHarnesses), [hostSettings?.chatHarnesses]);
 	// An agent can be ready in a terminal and still miss the adapter its chat
 	// needs (Pi's pi-acp). The daemon checks that without starting anything.
 	const chatUnavailable = useQuery({
-		queryKey: ["chat-unavailable-agents", hostId ?? ""],
+		queryKey: ["chat-unavailable-agents", hostId ?? "", chatTargets.join(",")],
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/chat/unavailable", {
-				params: { query: { agents: CHAT_SWITCH_TARGETS.join(",") } },
+				params: { query: { agents: chatTargets.join(",") } },
 			});
 			if (error) throw error;
 			return new Set(data.agents.map((entry) => entry.agent));
@@ -276,7 +290,7 @@ export function AgentModelPicker({
 	const railAgents = useMemo<RailAgent[]>(() => {
 		const listed: RailAgent[] = choices
 			? choices.map((agent) => (agent.id === currentHarness ? { id: agent.id, label: agent.label } : agent))
-			: (terminal ? TERMINAL_SWITCH_TARGETS : CHAT_SWITCH_TARGETS).map((id) => {
+			: (terminal ? TERMINAL_SWITCH_TARGETS : chatTargets).map((id) => {
 				const agent = readiness?.find((candidate) => candidate.id === id);
 				const label = agentLabel(id) !== id ? agentLabel(id) : agent?.label ?? id;
 				if (id === currentHarness) return { id: id as string, label };
@@ -290,7 +304,7 @@ export function AgentModelPicker({
 		return ordered.some((agent) => agent.id === currentHarness)
 			? ordered
 			: [{ id: currentHarness, label: agentLabel(currentHarness) }, ...ordered];
-	}, [chatUnavailable, choices, currentHarness, readiness, t, terminal]);
+	}, [chatTargets, chatUnavailable, choices, currentHarness, readiness, t, terminal]);
 	// Only agents that can be used are on the rail: one that is not installed, not signed in or has
 	// no chat here is left out rather than dimmed. The running agent and a pending one stay, so the
 	// rail never loses its selection: a pending agent that stops being usable (its readiness arrives
@@ -303,14 +317,13 @@ export function AgentModelPicker({
 	const [open, setOpen] = useState(false);
 	// The composer's model menu; a terminal's agent menu is not counted as one.
 	const markModelPick = useTelemetrySurface("model_picker", open && !terminal, { choice: true });
-	const favorites = useModelFavorites();
+	const lastModels = useLastModels();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
 	// Cursor's command-line ids fold settings into the model; a running Cursor chat reports its own, kept as is.
 	const live = listsModelVariants(currentHarness) && current.efforts.length === 0 && current.thinking === undefined
 		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
 		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) }
 		: nameSharedModels(current);
-	const { settings: hostSettings } = useSettings(hostId);
 	// The agent's list is shared by every session, so it names the saved model at once.
 	// No saved model means the agent's own default, which Claude Code leaves unset.
 	const savedCatalog = useQuery({ ...catalogOptions(currentHarness), enabled: Boolean(loadingModels) }).data;
@@ -324,8 +337,12 @@ export function AgentModelPicker({
 			t,
 		)
 		: undefined;
+	// Ultracode stays live: it only adds a word to the chat's next message and never touches the agent.
 	const currentSource: PickerSource = disabled || starting
-		? { ...(starting ?? live), onPickModel: undefined, onPickSetup: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
+		? {
+			...(starting ?? live), onPickModel: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined,
+			ultracode: live.ultracode, onToggleUltracode: live.onToggleUltracode,
+		}
 		: live;
 	// The other agents' model lists load once the menu is open, so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);
@@ -365,14 +382,16 @@ export function AgentModelPicker({
 	const shownModel = pending
 		? pending.modelLabel ?? (source.modelId ? source.modelLabel : pendingDefaultModel) ?? agentLabel(pending.harness)
 		: savedLabel ?? currentSource.modelLabel;
-	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort ?? (pending ? source.effort : undefined);
+	const pendingEffort = pending?.effort ?? pending?.shownEffort ?? (pending ? source.effort : undefined);
 	const shownEffort = pending
 		? pendingEffort ? source.efforts.find((effort) => effort.value === pendingEffort)?.label ?? formatEffortLabel(pendingEffort, t) : undefined
 		: currentSource.efforts.find((effort) => effort.value === currentSource.effort)?.label;
-	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
+	const ultraEffort = isUltraEffort(pending ? pendingEffort : currentSource.effort);
+	const shownUltracode = pending ? Boolean(pending.ultracode && source.ultracode !== undefined) : Boolean(currentSource.ultracode);
+	const shownUltra = ultraEffort || shownUltracode;
 	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
 	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
-	// A row is named by its row id, a favourite by its row and the variant it sends; either names the current model.
+	// A row is named by its id or the variant it sends; either names the current model.
 	// A terminal's agent menu is not the composer's model picker, so its picks are not counted.
 	const countModelPick = (harness: string, ids: Array<string | undefined>) => {
 		markModelPick();
@@ -381,23 +400,11 @@ export function AgentModelPicker({
 	};
 	const pickModel = (harness: string, id: string) => {
 		countModelPick(harness, [id]);
+		// Remembered in every chat, so this agent's list starts with it next time.
+		rememberLastModel(harness, id);
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
 		currentSource.onPickModel?.(id);
-	};
-	const pickSetup = (favorite: ModelFavorite) => {
-		countModelPick(favorite.harness, [favorite.row, favorite.model]);
-		if (favorite.harness === currentHarness) {
-			keepCurrent();
-			if (currentSource.onPickSetup) currentSource.onPickSetup(favorite);
-			else currentSource.onPickModel?.(favorite.model);
-		} else {
-			onPendingChange({
-				harness: favorite.harness, model: favorite.model, modelLabel: favorite.label, shownEffort: favorite.effort, fast: favorite.fast,
-				// A variant id already carries its effort, thinking and speed.
-				...(listsModelVariants(favorite.harness) ? { thinking: favorite.thinking } : { effort: favorite.effort, fastMode: favorite.fast }),
-			});
-		}
 	};
 	// A terminal's running agent cannot be given another model from here.
 	const oneShot = (harness: string) => terminal && TERMINAL_ONE_SHOT_TARGETS.has(harness);
@@ -406,20 +413,8 @@ export function AgentModelPicker({
 	const pickable = (harness: string) => (harness === currentHarness
 		? !terminal && Boolean(currentSource.onPickModel)
 		: !agentSwitch.disabled && !oneShot(harness) && usable(harness));
-	// A favourite whose model the agent no longer lists cannot be sent. Until
-	// the agent's list loads, it is taken as offered.
-	const offered = (favorite: ModelFavorite) => {
-		const models = (favorite.harness === currentHarness ? currentSource.models : otherSource(favorite.harness).models).filter((model) => model.id);
-		const names = (model: (typeof models)[number]) => [model.id, ...(model.aliases ?? [])];
-		// The id a favourite sends decides: a row it was folded into may be runnable while it is not.
-		if (models.some((model) => model.unavailableReason && (model.sendId ?? model.id) === favorite.model)) return false;
-		return models.length === 0 || models.some((model) => !model.unavailableReason && (names(model).includes(favorite.row) || names(model).includes(favorite.model)));
-	};
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
-	// The list shows the chosen agent's favourites and models only; agents are picked on the rail.
-	const setups = settable ? favorites.filter((entry) => entry.harness === shownHarness) : [];
-	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	// Search reaches every agent on the rail, the chosen one first.
 	const searchRows = (open ? [...agents].sort((a, b) => Number(b.id === shownHarness) - Number(a.id === shownHarness)) : []).flatMap((agent) => {
 		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
@@ -432,8 +427,20 @@ export function AgentModelPicker({
 	// A match its agent cannot take now, or the agent cannot run, is listed dimmed and passed over by Enter.
 	const searchPickable = (row: { harness: string; model: PickerModel }) => pickable(row.harness) && !row.model.unavailableReason;
 	const shownModels = shownHarness === "claude-code" ? claudeOrder(mergeSameNamedModels(source.models, source.modelId)) : source.models;
+	// The list starts with the shown agent's model: the chat's own, the one picked for a switch, or
+	// else the one last picked for that agent in any chat. It is fixed for each agent while the menu
+	// stays open, so picking another model does not move the rows under the pointer.
+	const leadNow = (pending ? (pending.model ? source.modelId : undefined) : source.modelId) || lastModels[shownHarness];
+	const leads = useRef(new Map<string, string | undefined>());
+	if (!open) leads.current.clear();
+	else if (!leads.current.has(shownHarness)) leads.current.set(shownHarness, leadNow);
+	const leadId = leads.current.get(shownHarness);
+	const leadRow = leadId
+		? shownModels.find((model) => model.id && (model.id === leadId || model.sendId === leadId || Boolean(model.aliases?.includes(leadId))))
+		: undefined;
 	const browseRows = open && settable
-		? shownModels.map((model) => ({ id: `${shownHarness} ${model.id}`, label: model.label, harness: shownHarness, model }))
+		? (leadRow ? [leadRow, ...shownModels.filter((model) => model !== leadRow)] : shownModels)
+			.map((model) => ({ id: `${shownHarness} ${model.id}`, label: model.label, harness: shownHarness, model }))
 		: [];
 	// Rows are memoized, so a keystroke only renders the ones that appear or change.
 	const pickRef = useRef<(event: Event, harness: string, id: string) => void>(() => {});
@@ -450,20 +457,21 @@ export function AgentModelPicker({
 		if (oneShot(id)) return t("agentSwitch.terminalOneShot", { agent: agentLabel(id) });
 		return agentSwitch.disabled ? t("agentSwitch.busy") : undefined;
 	};
-	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
+	const pendingCompactKind = autoCompactKind(pending?.harness, pending?.model, terminal);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
-	const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
+	// The account row is off for now: the settings gear covers which account a session uses. Kept to bring back.
+	// const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
 	// A setting changed in the menu is a choice too, so closing after it is not an abandon.
 	// It is not a model change.
 	const withPick = (toggle: ((next: boolean) => void) | undefined) => toggle && ((next: boolean) => {
 		markModelPick();
 		toggle(next);
 	});
-	const pickAccount = (id: string) => {
-		markModelPick();
-		agentSwitch.account?.onPick(id);
-	};
+	// const pickAccount = (id: string) => {
+	// 	markModelPick();
+	// 	agentSwitch.account?.onPick(id);
+	// };
 
 	// The chosen agent's settings, under its models and kept in view while they scroll.
 	const settingsRows = [
@@ -473,10 +481,12 @@ export function AgentModelPicker({
 				{t("agentSwitch.loadingSettings")}
 			</OptionMenuItem>
 		) : null,
-		settable && !waiting && source.efforts.length > 0 ? (
+		// Ultracode lives in the effort's side menu, so it opens for Ultracode alone when there are no levels
+		// to pick (a starting agent's), and Ultracode stays reachable.
+		settable && !waiting && (source.efforts.length > 0 || source.ultracode !== undefined) ? (
 			<OptionMenuSub key="effort" closeOnSelect>
 				<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
-				<OptionMenuSubContent align="start" alignOffset={0} className={SUB_CLASS}>
+				<OptionMenuSubContent align="end" sideOffset={10} className={SUB_CLASS}>
 					{source.efforts.map((choice) => (
 						<OptionMenuItem
 							key={choice.value}
@@ -493,40 +503,78 @@ export function AgentModelPicker({
 							<span className={isUltraEffort(choice.value) ? "ultra-text" : undefined}>{choice.label}</span>
 						</OptionMenuItem>
 					))}
+					{/* Claude Code's Ultracode works at any level, so it is a switch under them, not one of them. */}
+					{source.ultracode !== undefined ? (
+						<>
+							{source.efforts.length > 0 ? <div role="separator" className="-mx-(--space-1) my-1 border-t border-border" /> : null}
+							<ToggleRow
+								label={t("agentSwitch.ultracode")}
+								title={t("agentSwitch.ultracodeHint")}
+								checked={source.ultracode}
+								onChange={withPick(source.onToggleUltracode)}
+							/>
+						</>
+					) : null}
 				</OptionMenuSubContent>
 			</OptionMenuSub>
 		) : settable && !waiting && !modelsProblem ? (
-			// The same row, disabled, so the menu does not change shape between models.
+			// The same row, disabled, so the menu does not change shape between models. An agent
+			// that names its levels only once it runs (OpenCode) shows this until then.
 			<OptionMenuSub key="effort" closeOnSelect>
 				<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
 			</OptionMenuSub>
 		) : null,
 		// One account has nothing to switch to, so the row is only for two or more.
-		showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
+		// showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
 	].filter(Boolean);
+	// The pending agent's auto-compact, else the running one's; a pending switch hides the running agent's extras.
+	const shownCompact: (AutoCompactControl & { title?: string }) | undefined = pending
+		? pendingCompactKind
+			? {
+				kind: pendingCompactKind,
+				value: pending.autoCompactWindow,
+				onChange: (value: TurnSettings["autoCompactWindow"]) => onPendingChange({ ...pending, autoCompactWindow: value }),
+				title: t(pendingCompactKind === "toggle" ? "agentSwitch.autoCompactHintToggle" : "agentSwitch.autoCompactHint", { agent: agentLabel(pending.harness) }),
+			}
+			: undefined
+		: autoCompact;
+	// Changing it is a choice too, so closing after it is not an abandon.
+	const compact = shownCompact && {
+		...shownCompact,
+		onChange: (value: TurnSettings["autoCompactWindow"]) => {
+			markModelPick();
+			shownCompact.onChange(value);
+		},
+	};
+	// Fast mode and auto-compact share one row. Fast mode shows only where the model offers it; auto-compact is always there, shown off and disabled where the agent lacks it.
+	const showToggles = settable && !waiting && (!modelsProblem || source.fast !== undefined || source.thinking !== undefined);
+	const notOffered = t("agentSwitch.notOffered");
 	const settingsGroups = [
-		settingsRows.length > 0 ? settingsRows : null,
-		settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
+		// As much room under the effort row as over it, so its hover shade sits evenly between the lines.
+		settingsRows.length > 0 ? <div className="pb-1">{settingsRows}</div> : null,
+		showToggles ? (
 			<>
-				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={withPick(source.onToggleFast)} />
+				<div className="flex items-center gap-1">
+					{source.fast !== undefined ? (
+						<IconToggle
+							icon={Zap}
+							label={t("agentSwitch.fastMode")}
+							checked={source.fast}
+							onChange={withPick(source.onToggleFast)}
+							hint={t("agentSwitch.fastModeHint")}
+						/>
+					) : null}
+					<AutoCompactChoices {...(compact ?? { onChange: () => {}, disabled: true, unavailable: true, title: notOffered })} className="ml-auto" />
+				</div>
 				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
 		) : null,
 		extras && !pending ? extras(markModelPick) : null,
-		offersAutoCompact ? (
-			<AutoCompactRow
-				value={pending?.autoCompactWindow}
-				onChange={(value) => {
-					if (!pending) return;
-					markModelPick();
-					onPendingChange({ ...pending, autoCompactWindow: value });
-				}}
-				title={t("agentSwitch.autoCompactHint")}
-			/>
-		) : null,
 	].filter(Boolean);
 	const settingsFooter = settingsGroups.length > 0
-		? settingsGroups.map((group, index) => <div key={index} className={DIVIDER}>{group}</div>)
+		// Each group's line runs through the menu's padding to both edges.
+		// Each line sits right under what is above it, with no gap over it.
+		? settingsGroups.map((group, index) => <div key={index} className="-mx-(--space-1) border-t border-border px-(--space-1) pt-1">{group}</div>)
 		: undefined;
 
 	return (
@@ -558,7 +606,9 @@ export function AgentModelPicker({
 					<>
 						{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
 						{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
-						{shownEffort ? <span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
+						{shownEffort ? <span className={cn("shrink-0", ultraEffort ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
+						{/* Ultracode is named after the effort it runs at, in the ultra colours. */}
+						{shownUltracode ? <span className="shrink-0 ultra-text">{t("agentSwitch.ultracode")}</span> : null}
 						{mark}
 					</>
 				)}
@@ -584,9 +634,7 @@ export function AgentModelPicker({
 					selectedId={source.modelId === undefined ? undefined : `${shownHarness} ${source.modelId}`}
 					searchable
 					searchPlaceholder={t("agentSwitch.search")}
-					rows={VISIBLE_MODEL_ROWS + setups.length}
-					// A search lists matches only; the favourites above the list are hidden.
-					searchHidesRows={setups.length}
+					rows={VISIBLE_MODEL_ROWS}
 					className="max-h-none"
 					header={(
 						<AgentRail
@@ -606,7 +654,13 @@ export function AgentModelPicker({
 						// changes the agent; picking a match picks its agent with it.
 						<Fragment key={row.id}>
 							{row.harness !== matches[index - 1]?.harness ? (
-								<OptionMenuLabel className="flex items-center gap-1.5 text-muted-foreground">
+								// The agent heads its matches: tight over them, and set apart from the agent before by
+								// space and a hairline, so each group reads as one block.
+								<OptionMenuLabel className={cn(
+									"flex items-center gap-1.5 pt-2 pb-0.5 font-medium tracking-normal text-muted-foreground",
+									// The hairline runs through the menu's padding to both edges; the label's own padding is kept.
+									index > 0 && "-mx-(--space-1) mt-1.5 border-t border-border/60 px-[calc(var(--space-1)+0.5rem)] pt-2.5",
+								)}>
 									<ProviderMark provider={row.harness} className="size-3" />
 									{agentLabel(row.harness)}
 								</OptionMenuLabel>
@@ -622,31 +676,17 @@ export function AgentModelPicker({
 						</Fragment>
 					)) : (
 						<>
-							{setups.map((favorite) => (
-								<OptionMenuItem
-									key={`${favorite.harness}:${favorite.row}`}
-									active={favorite.model === chosenModel}
-									radio
-									disabled={!pickable(favorite.harness) || !offered(favorite)}
-									onSelect={(event) => { stayOpen(event); pickSetup(favorite); }}
-									className="group/model text-xs text-foreground"
-								>
-									<span className="min-w-0 truncate">{favorite.label}</span>
-									{favorite.fast ? <Zap aria-label={t("agentSwitch.fastMode")} className="ml-1.5 size-3 shrink-0 fill-current" /> : null}
-									{favorite.thinking ? <Brain aria-label={t("agentSwitch.thinking")} className="ml-1.5 size-3 shrink-0" /> : null}
-									{favorite.effortLabel ? <span className="ml-1.5 shrink-0 text-muted-foreground">{favorite.effortLabel}</span> : null}
-									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} />
-								</OptionMenuItem>
-							))}
 							{matches.length > 0 ? (
-								<div className={setups.length > 0 ? DIVIDER : undefined}>
-									{matches.map((row, index) => {
+								<div>
+									{matches.map((row, index, listed) => {
 										const model = row.model;
 										const active = model.id === source.modelId;
-										const starredAs = model.id ? favorites.find((entry) => entry.harness === shownHarness && (entry.row === model.id || model.aliases?.includes(entry.row))) : undefined;
+										// The model listed first sits above the group headings; the rest keep theirs.
+										const previous = listed[index - 1];
+										const heading = model.group && model !== leadRow && (previous?.model === leadRow || model.group !== previous?.model.group);
 										return (
 											<Fragment key={row.id}>
-												{model.group && model.group !== matches[index - 1]?.model.group ? (
+												{heading ? (
 													<OptionMenuLabel>{model.group}</OptionMenuLabel>
 												) : null}
 												<OptionMenuItem
@@ -658,7 +698,7 @@ export function AgentModelPicker({
 														event.preventDefault();
 														if (!active) pickModel(shownHarness, model.id);
 													}}
-													className="group/model text-xs text-foreground"
+													className="text-xs text-foreground"
 												>
 													{model.unavailableReason ? (
 														<span className="min-w-0">
@@ -667,8 +707,6 @@ export function AgentModelPicker({
 														</span>
 													) : <span className="min-w-0 truncate">{model.label}</span>}
 													{model.hint ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{model.hint === "default" ? t("agentSwitch.defaultModel") : model.hint}</span> : null}
-													{/* Unstarring removes the favourite as it was saved, under whichever id. */}
-													{model.id ? <FavoriteStar starred={Boolean(starredAs)} onToggle={() => toggleModelFavorite(starredAs ?? favoriteFor(shownHarness, model, active ? source : undefined))} /> : null}
 												</OptionMenuItem>
 											</Fragment>
 										);
@@ -703,7 +741,8 @@ interface RailAgent {
 }
 
 const RAIL_ITEM_CLASS = cn(
-	"flex size-7 shrink-0 items-center justify-center rounded-md",
+	// A larger mark in a snug pill: the logo carries the row, not the highlight around it.
+	"flex size-6.5 shrink-0 items-center justify-center rounded-md",
 	GHOST_PILL_CLASS,
 	// The chosen agent keeps the pressed pill: a quiet fill, no border.
 	"aria-checked:before:inset-0 aria-checked:before:opacity-100 aria-checked:before:bg-interactive-active",
@@ -801,7 +840,7 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 										}}
 										className={cn(RAIL_ITEM_CLASS, (agent.unavailable || blocked !== undefined) && "opacity-40")}
 									>
-										<ProviderMark provider={agent.id} className="size-4" />
+										<ProviderMark provider={agent.id} className="size-5" />
 									</Pressable>
 								</TooltipTrigger>
 								<TooltipContent side="bottom" sideOffset={4} hideArrow>{name}</TooltipContent>
@@ -822,44 +861,91 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 	);
 }
 
-function AccountRows({ account }: { account: AccountChoice }) {
-	const { t } = useTranslation();
-	const chosen = account.options.find((option) => option.id === account.value);
-	return (
-		<OptionMenuSub closeOnSelect>
-			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
-			<OptionMenuSubContent scrollable className={SUB_CLASS}>
-				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
-					{account.options.map((option) => (
-						<OptionMenuItem
-							key={option.id}
-							active={option.id === account.value}
-							radio
-							disabled={option.disabled}
-							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
-							className="text-xs text-foreground"
-						>
-							<span className="min-w-0 truncate">{option.label}</span>
-						</OptionMenuItem>
-					))}
-				</div>
-			</OptionMenuSubContent>
-		</OptionMenuSub>
-	);
-}
-
 /** An on/off setting the agent has, as a menu row. The row owns the switch, so a click or Enter fires once. */
-export function ToggleRow({ label, checked, onChange, className }: { label: string; checked?: boolean; onChange?: (next: boolean) => void; className?: string }) {
+// The account row, off for now: the settings gear covers which account a session uses. Kept to bring back.
+// function AccountRows({ account }: { account: AccountChoice }) {
+// 	const { t } = useTranslation();
+// 	const chosen = account.options.find((option) => option.id === account.value);
+// 	return (
+// 		<OptionMenuSub closeOnSelect>
+// 			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
+// 			<OptionMenuSubContent scrollable className={SUB_CLASS}>
+// 				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+// 					{account.options.map((option) => (
+// 						<OptionMenuItem
+// 							key={option.id}
+// 							active={option.id === account.value}
+// 							radio
+// 							disabled={option.disabled}
+// 							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
+// 							className="text-xs text-foreground"
+// 						>
+// 							<span className="min-w-0 truncate">{option.label}</span>
+// 						</OptionMenuItem>
+// 					))}
+// 				</div>
+// 			</OptionMenuSubContent>
+// 		</OptionMenuSub>
+// 	);
+// }
+
+export function ToggleRow({ label, checked, onChange, title, className }: { label: string; checked?: boolean; onChange?: (next: boolean) => void; title?: string; className?: string }) {
 	if (checked === undefined) return null;
 	return (
 		<OptionMenuItem
 			disabled={!onChange}
+			title={title}
 			onSelect={(event) => { event.preventDefault(); onChange?.(!checked); }}
 			className={cn("justify-between gap-4 text-xs text-foreground", className)}
 		>
 			<span>{label}</span>
 			<Switch aria-label={label} checked={checked} tabIndex={-1} />
 		</OptionMenuItem>
+	);
+}
+
+/**
+ * A mode as an icon button (Fast mode's lightning): filled and lit when on, an
+ * outline when off. It is still a menu row, so the arrow keys reach it and Enter toggles it without
+ * closing the menu. The icon alone does not say what the mode is, so hovering names it and says what
+ * it does, and a screen reader reads the same hint as the row's description.
+ */
+function IconToggle({ icon: Icon, label, hint, checked, onChange }: {
+	icon: AppIcon;
+	label: string;
+	/** What the mode does, under its name in the tooltip. */
+	hint: string;
+	checked: boolean;
+	onChange?: (next: boolean) => void;
+}) {
+	const hintId = useId();
+	return (
+		<TooltipProvider delayDuration={300}>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<OptionMenuItem
+						role="menuitemcheckbox"
+						aria-checked={checked}
+						aria-label={label}
+						aria-describedby={hintId}
+						disabled={!onChange}
+						onSelect={(event) => { event.preventDefault(); onChange?.(!checked); }}
+						className={cn(
+							"size-7 shrink-0 justify-center p-0 data-disabled:opacity-50",
+							checked ? "text-foreground before:bg-interactive-active" : "text-muted-foreground",
+						)}
+					>
+						<Icon aria-hidden="true" className={cn("size-3.5", checked && "fill-current")} />
+						{/* The tooltip is only there on hover, so the hint a screen reader reads is kept in the row. */}
+						<span id={hintId} className="sr-only">{hint}</span>
+					</OptionMenuItem>
+				</TooltipTrigger>
+				<TooltipContent side="top" sideOffset={4} hideArrow className="max-w-60">
+					<span className="block font-medium text-foreground">{label}</span>
+					<span className="block text-muted-foreground">{hint}</span>
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
 	);
 }
 
@@ -928,9 +1014,15 @@ function otherAgentSource(
 	const offersFast = Boolean(effortSource?.supportsFast);
 	const fastOn = offersFast && Boolean(pending?.fastMode);
 	const levels = (effortSource?.efforts ?? []).filter((value) => value && value.toLowerCase() !== "default");
-	// Ultracode runs at Extra High, so it is only for models that have that level.
-	const offersUltracode = harness === "claude-code" && levels.includes("xhigh");
-	const keep = { harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort, fastMode: fastOn || undefined, autoCompactWindow: pending?.autoCompactWindow };
+	// Ultracode works at any effort level, so every Claude Code model offers it.
+	const offersUltracode = harness === "claude-code";
+	const ultracodeOn = offersUltracode && Boolean(pending?.ultracode);
+	const keep = {
+		harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort,
+		fastMode: fastOn || undefined, ultracode: ultracodeOn || undefined, autoCompactWindow: pending?.autoCompactWindow,
+		// The permission mode picked for the switch stays through every other pick.
+		approvalMode: pending?.approvalMode,
+	};
 	return {
 		// The plain row is only for an agent that lists no models.
 		models: listed.length > 0 ? listed : [{ id: "", label: t("agentSwitch.defaultModel") }],
@@ -947,14 +1039,13 @@ function otherAgentSource(
 				fastMode: Boolean(next?.supportsFast && pending?.fastMode) || undefined,
 			});
 		},
-		efforts: [
-			...levels.map((value) => ({ value, label: formatEffortLabel(value, t) })),
-			...(offersUltracode ? [{ value: "ultracode", label: "Ultracode" }] : []),
-		],
-		effort: offersUltracode && pending?.ultracode ? "ultracode" : pending?.effort ?? defaultEffort,
-		onPickEffort: (effort) => onPick(effort === "ultracode" ? { ...keep, effort: "xhigh", ultracode: true } : { ...keep, effort }),
+		efforts: levels.map((value) => ({ value, label: formatEffortLabel(value, t) })),
+		effort: pending?.effort ?? defaultEffort,
+		onPickEffort: (effort) => onPick({ ...keep, effort }),
 		fast: offersFast ? fastOn : undefined,
-		onToggleFast: (fast) => onPick({ ...keep, effort: pending?.effort, ultracode: pending?.ultracode, fastMode: fast || undefined }),
+		onToggleFast: (fast) => onPick({ ...keep, effort: pending?.effort, fastMode: fast || undefined }),
+		ultracode: offersUltracode ? ultracodeOn : undefined,
+		onToggleUltracode: (on) => onPick({ ...keep, effort: pending?.effort, ultracode: on || undefined }),
 	};
 }
 
@@ -985,7 +1076,8 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 			radio
 			disabled={disabled}
 			onSelect={(event) => onPick(event, row.harness, row.model.id)}
-			className="text-xs text-foreground"
+			// Indented to start under its agent's name, past the agent's mark, so it reads as that agent's.
+			className="pl-[26px] text-xs text-foreground"
 		>
 			<span className="min-w-0 truncate" title={row.model.unavailableReason}>{row.model.label}</span>
 			{/* Drawn as the group's heading; read with the row, so a match names its agent. */}
@@ -994,46 +1086,7 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 	);
 });
 
-/** What starring a row saves: the chosen row with the settings it has now, any other row as the model on its own. */
-function favoriteFor(harness: string, model: PickerModel, chosen: PickerSource | undefined): ModelFavorite {
-	const plain = { harness, row: model.id, model: model.sendId ?? model.id, label: model.label };
-	// Ultracode is asked for per message or at launch; it is not a level to restore.
-	if (!chosen || isUltraEffort(chosen.effort) && harness === "claude-code") return plain;
-	return {
-		...plain,
-		model: chosen.sendId ?? model.id,
-		effort: chosen.effort,
-		effortLabel: chosen.efforts.find((entry) => entry.value === chosen.effort)?.label,
-		fast: chosen.fast || undefined,
-		thinking: chosen.thinking || undefined,
-	};
-}
-
-/** The star at the end of a model row. It shows on hover, and stays once starred. */
-function FavoriteStar({ starred, onToggle, className }: { starred: boolean; onToggle: () => void; className?: string }) {
-	const { t } = useTranslation();
-	return (
-		<span
-			role="button"
-			tabIndex={-1}
-			aria-label={starred ? t("agentSwitch.removeFavourite") : t("agentSwitch.addFavourite")}
-			title={starred ? t("agentSwitch.removeFavourite") : t("agentSwitch.addFavourite")}
-			// Starring must not also pick the model.
-			onPointerDown={(event) => event.stopPropagation()}
-			onPointerUp={(event) => event.stopPropagation()}
-			onClick={(event) => { event.preventDefault(); event.stopPropagation(); onToggle(); }}
-			className={cn(
-				"ml-auto flex size-5 shrink-0 items-center justify-center rounded hover:bg-interactive-active",
-				starred ? "text-warning" : "text-muted-foreground opacity-0 group-hover/model:opacity-100 group-data-highlighted/model:opacity-100",
-				className,
-			)}
-		>
-			<Star aria-hidden="true" className={cn("size-3.5", starred ? "fill-current" : undefined)} />
-		</span>
-	);
-}
-
-/** The top level some agents have past Max: Codex's "ultra", Claude Code's "ultracode". */
+/** The top level some agents have past Max, such as Codex's and Hermes' "ultra". */
 function isUltraEffort(value: string | undefined): boolean {
 	return Boolean(value?.toLowerCase().startsWith("ultra"));
 }
@@ -1067,38 +1120,56 @@ export function ComposerErrorNotice(
 }
 
 export interface AutoCompactControl {
-	/** Unset leaves it to Claude Code. */
+	/** Claude Code's window (the default), or OpenCode's on or off. */
+	kind?: AutoCompactKind;
+	/** Unset leaves it to the agent. */
 	value?: TurnSettings["autoCompactWindow"];
 	/** The agent is working or already restarting. */
 	disabled?: boolean;
+	/** The agent has not started yet, so it starts with this and nothing restarts. */
+	beforeStart?: boolean;
 	onChange: (value: TurnSettings["autoCompactWindow"]) => void;
 }
 
-const AUTO_COMPACT_CHOICES = [{ value: undefined, label: "Auto" }, { value: "200k", label: "200k" }, { value: "1m", label: "1M" }] as const;
+const AUTO_COMPACT_CHOICES: Record<AutoCompactKind, ReadonlyArray<{ value: TurnSettings["autoCompactWindow"]; label: string }>> = {
+	window: [{ value: undefined, label: "Auto" }, { value: "200k", label: "200k" }, { value: "500k", label: "500k" }, { value: "1m", label: "1M" }],
+	toggle: [{ value: undefined, label: "Auto" }, { value: "off", label: "Off" }],
+};
 
-/** A menu row: where Claude Code compacts on its own. */
-export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompactControl & { title: string }) {
+/**
+ * The agent's choices (Auto, 200k, 500k and 1M for Claude Code; Auto and Off for OpenCode) as one segmented
+ * control beside Fast mode, named for screen readers and its tooltip without a visible label, so the row fits. An agent AO cannot set it for shows
+ * only Auto, disabled. A value the agent has no choice for (another agent's window) reads as Auto.
+ */
+function AutoCompactChoices({ kind = "window", value, disabled, unavailable, onChange, title, className }: AutoCompactControl & { unavailable?: boolean; title?: string; className?: string }) {
 	const { t } = useTranslation();
+	const choices = unavailable ? AUTO_COMPACT_CHOICES[kind].slice(0, 1) : AUTO_COMPACT_CHOICES[kind];
+	const current = choices.some((choice) => choice.value === value) ? value : undefined;
 	return (
-		<div className="flex h-9 items-center gap-2 px-3 text-xs" title={title}>
-			<span className="text-muted-foreground">{t("agentSwitch.autoCompact")}</span>
-			<span role="radiogroup" aria-label={t("agentSwitch.autoCompact")} className="ml-auto flex rounded-md bg-interactive-active p-0.5">
-				{AUTO_COMPACT_CHOICES.map((choice) => (
+		<span
+			role="radiogroup"
+			aria-label={t("agentSwitch.autoCompact")}
+			aria-disabled={unavailable || undefined}
+			title={title}
+			className={cn("flex shrink-0 text-xs", className)}
+		>
+			<span className={cn("flex rounded-md bg-interactive-active p-0.5", unavailable && "opacity-50")}>
+				{choices.map((choice) => (
 					<Pressable
 						key={choice.label}
 						role="radio"
-						aria-checked={value === choice.value}
-						disabled={disabled || value === choice.value}
+						aria-checked={current === choice.value}
+						disabled={disabled || current === choice.value}
 						onClick={() => onChange(choice.value)}
 						className={cn(
 							"rounded px-2 py-0.5 disabled:cursor-default",
-							value === choice.value ? "bg-settings-menu text-foreground" : "text-muted-foreground hover:text-foreground",
+							current === choice.value ? "bg-settings-menu text-foreground" : "text-muted-foreground hover:text-foreground",
 						)}
 					>
-						{choice.value ? choice.label : t("agentSwitch.autoCompactAuto")}
+						{choice.value === undefined ? t("agentSwitch.autoCompactAuto") : choice.value === "off" ? t("agentSwitch.autoCompactOff") : choice.label}
 					</Pressable>
 				))}
 			</span>
-		</div>
+		</span>
 	);
 }

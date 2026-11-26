@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -612,6 +613,47 @@ func TestProviderSwitchBackToClaudeOnAutoClearsTheSavedCompactionWindow(t *testi
 	}
 	if conversation, err := h.st.ConversationForSession(ctx, testSession); err != nil || conversation.Settings.AutoCompactWindow != "" {
 		t.Fatalf("saved window = %q, %v; want Auto", conversation.Settings.AutoCompactWindow, err)
+	}
+}
+
+func TestProviderSwitchToOpenCodeWithAutoCompactOffTurnsItsCompactionOff(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessOpenCodeV2, IdempotencyKey: "to-opencode-off", AutoCompactWindow: domain.AutoCompactOff,
+	}); err != nil {
+		t.Fatalf("switch to OpenCode: %v", err)
+	}
+	var config struct {
+		Compaction struct {
+			Auto *bool `json:"auto"`
+		} `json:"compaction"`
+	}
+	if err := json.Unmarshal([]byte(lastStart(driver).Env["OPENCODE_CONFIG_CONTENT"]), &config); err != nil {
+		t.Fatalf("OpenCode config: %v", err)
+	}
+	if config.Compaction.Auto == nil || *config.Compaction.Auto {
+		t.Fatalf("OpenCode compaction.auto = %v, want false", config.Compaction.Auto)
+	}
+	if conversation, err := h.st.ConversationForSession(ctx, testSession); err != nil || conversation.Settings.AutoCompactWindow != domain.AutoCompactOff {
+		t.Fatalf("saved auto-compact = %q, %v; want off", conversation.Settings.AutoCompactWindow, err)
+	}
+}
+
+func TestProviderSwitchBackToOpenCodeOnAutoTurnsItsCompactionBackOn(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	for _, req := range []domain.ProviderSwitchRequest{
+		{TargetHarness: domain.HarnessOpenCodeV2, IdempotencyKey: "to-opencode-off", AutoCompactWindow: domain.AutoCompactOff},
+		{TargetHarness: domain.HarnessCodex, IdempotencyKey: "to-codex"},
+		{TargetHarness: domain.HarnessOpenCodeV2, IdempotencyKey: "back-on-auto"},
+	} {
+		if err := h.svc.SwitchProvider(ctx, testSession, req); err != nil {
+			t.Fatalf("switch to %s: %v", req.TargetHarness, err)
+		}
+	}
+	if got := lastStart(driver).Env["OPENCODE_CONFIG_CONTENT"]; strings.Contains(got, "compaction") {
+		t.Fatalf("OpenCode config after switching back on Auto = %s, want no compaction setting", got)
 	}
 }
 

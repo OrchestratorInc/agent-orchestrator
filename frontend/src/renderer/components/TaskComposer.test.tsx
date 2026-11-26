@@ -4367,6 +4367,20 @@ describe("useTaskLaunch agent choices", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
 			.toEqual(["agy: Not installed", "claude-code"]));
 	});
+
+	it("offers any agent the host has a Chat driver for, not installed, dimmed for setup", async () => {
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "agy"] } }
+			: { data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("agy", "Antigravity", { installation: "not_installed" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["agy: Not installed", "claude-code"]));
+	});
 });
 
 describe("useTaskLaunch Cloud start on send", () => {
@@ -4995,6 +5009,60 @@ describe("Chat launch permission capability boundary", () => {
 		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "auto" }));
 		await act(async () => { await task.launch("back on auto"); });
 		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "auto" }) }));
+	});
+});
+
+describe("Chat launch starting settings", () => {
+	it.each(["proj-1", "__standalone__"])("starts a Claude Code chat with the Fast mode and auto-compaction picked in %s", async (projectId) => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "codex"], agent: "claude-code" } };
+			if (path.includes("/models")) {
+				return { data: { agent: "claude-code", selectionMode: "catalog", allowCustom: true, models: [
+					{ id: "opus", label: "Opus", isDefault: true, supportsFast: true },
+					{ id: "sonnet", label: "Sonnet" },
+				] } };
+			}
+			return { data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "claude-code" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "standalone-1" }, workerId: "proj-1-1" } });
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { task = useTaskLaunch({ projectId }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(task.canSubmit).toBe(true));
+		act(() => task.switchAgent("claude-code"));
+		await waitFor(() => expect(task.chatModels.find((model) => model.id === "opus")?.supportsFast).toBe(true));
+		expect(task.autoCompact).toEqual(expect.objectContaining({ value: undefined, beforeStart: true }));
+		const path = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+
+		// Nothing picked sends nothing: the agent's own defaults apply.
+		await act(async () => { await task.launch("defaults"); });
+		const plain = h.post.mock.calls.filter(([route]) => route === path).at(-1)?.[1];
+		expect(plain?.body).not.toHaveProperty("fastMode");
+		expect(plain?.body).not.toHaveProperty("autoCompactWindow");
+
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, fastMode: true }));
+		act(() => task.autoCompact?.onChange("1m"));
+		expect(task.turnSettings.fastMode).toBe(true);
+		expect(task.autoCompact?.value).toBe("1m");
+		const replay = task.launchSnapshot();
+		expect(replay).toEqual(expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }));
+		await act(async () => { await task.launch("picked"); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }) }));
+
+		// A model without Fast mode drops it; a retry repeats what was sent.
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "sonnet", fastMode: undefined }));
+		expect(task.turnSettings.fastMode).toBeUndefined();
+		await act(async () => { await task.launch("retry", { replay }); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }) }));
+
+		// Another agent starts with its own defaults.
+		act(() => task.switchAgent("codex"));
+		await waitFor(() => expect(task.agent.value).toBe("codex"));
+		expect(task.autoCompact).toBeUndefined();
+		await act(async () => { await task.launch("codex"); });
+		const codex = h.post.mock.calls.filter(([route]) => route === path).at(-1)?.[1];
+		expect(codex?.body).not.toHaveProperty("fastMode");
+		expect(codex?.body).not.toHaveProperty("autoCompactWindow");
 	});
 });
 

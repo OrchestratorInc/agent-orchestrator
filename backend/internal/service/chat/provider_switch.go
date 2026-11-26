@@ -32,7 +32,7 @@ type providerSwitchActivityDetail struct {
 	SourceModel  string `json:"sourceModel,omitempty"`
 	TargetModel  string `json:"targetModel,omitempty"`
 	TargetEffort string `json:"targetEffort,omitempty"`
-	// TargetAutoCompactWindow is the Claude Code compaction window the target started with.
+	// TargetAutoCompactWindow is the auto-compaction the target started with: Claude Code's window, or OpenCode's "off".
 	TargetAutoCompactWindow string `json:"targetAutoCompactWindow,omitempty"`
 	BranchID                string `json:"branchId"`
 	// PermissionMode is the mode the target started in. ChatPermissionMode is the
@@ -394,7 +394,7 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 		ConversationID: conversation.ID, SourceBranchID: activeBranch.ID,
 		SourceSequence: conversation.LatestSequence, Bootstrap: handoffNote,
 	}
-	if request.TargetHarness == domain.HarnessClaudeCode {
+	if request.TargetHarness == domain.HarnessClaudeCode || domain.CanTurnOffAutoCompact(request.TargetHarness) {
 		targetCfg.ProviderSwitch.AutoCompactWindow = request.AutoCompactWindow
 	}
 	targetCfg.Model, targetCfg.Effort = request.Model, request.Effort
