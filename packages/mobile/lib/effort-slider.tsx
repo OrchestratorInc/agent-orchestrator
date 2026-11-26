@@ -66,7 +66,7 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 		blobX.value = reduceMotion ? x : withTiming(x, { duration: duration.base, easing: Easing.out(Easing.cubic) });
 	};
 	// Settled on the chosen level whenever no finger holds it.
-	useEffect(() => { if (!dragging.current) blobX.value = stopX(index); }, [index, width]); // eslint-disable-line react-hooks/exhaustive-deps
+	useEffect(() => { if (!dragging.current) blobX.value = stopX(index); }, [index, width, count]); // eslint-disable-line react-hooks/exhaustive-deps
 	const blobStyle = useAnimatedStyle(() => ({ transform: [{ translateX: blobX.value - BLOB / 2 }] }));
 	const fillStyle = useAnimatedStyle(() => ({ width: blobX.value + BLOB / 2 + INSET }));
 
@@ -143,13 +143,17 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		stack: { gap: space.xs, alignItems: "center" },
+		// Each level's preferred room is capped at what the composer leaves:
+		// the track's stops are spaced from its measured width, so a narrow
+		// screen packs them closer rather than spilling the card off it.
+		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
 		card: {
+			maxWidth: "100%",
 			padding: space.xs,
 			// Concentric with the track's ends, an even pad in from the card's.
 			...overlayCardStyle(t, TRACK / 2 + space.xs),
 		},
-		track: { height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
+		track: { maxWidth: "100%", height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
 		fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK / 2, backgroundColor: t.accentBorder },
 		dot: { position: "absolute", width: DOT * 2, height: DOT * 2, borderRadius: DOT },
 		blob: {

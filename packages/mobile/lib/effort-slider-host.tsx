@@ -43,6 +43,11 @@ type HostProps = {
  */
 export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices, busy, onChoose, onRelease, onClose }: HostProps) {
 	const { open } = useEffortSliderOpen(choices, busy, onClose, slider);
+	// The switch belongs to the composer and outlives this host: a request
+	// card replaces the composer's pill, and the host with it. Close the
+	// switch on the way out, so dismissing the card brings back the pill
+	// with the slider shut rather than reopening it with no tap.
+	useEffect(() => () => slider.setOpen(false), [slider]);
 	// The composer reports its height to the switch as it lays out, so a
 	// change re-renders this and not the composer.
 	const bottom = useSyncExternalStore(slider.subscribe, slider.bottom);

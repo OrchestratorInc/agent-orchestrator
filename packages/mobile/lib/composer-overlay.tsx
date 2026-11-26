@@ -126,7 +126,8 @@ const makeStyles = (t: Theme) =>
 			// and the card sat on the composer's edge.
 			alignItems: "center",
 		},
-		stack: { gap: space.xs, alignItems: "center" },
+		// No wider than the composer, so a card inside can be capped to it.
+		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
 		heading: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xxs },
 		title: { ...type.footnote, color: t.textSecondary },
 		value: { ...type.footnote, fontFamily: type.headline.fontFamily, color: t.textPrimary, flexShrink: 1 },

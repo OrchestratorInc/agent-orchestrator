@@ -102,4 +102,16 @@ describe("effort slider host", () => {
 		expect(gauge().props.open).toBe(false);
 		expect(overlay()).toBeUndefined();
 	});
+
+	// A request card takes the composer's place, host and all; dismissing it
+	// must not bring the slider back with no tap.
+	it("closes the composer's switch when the host goes away", () => {
+		const slider = createEffortSliderSwitch();
+		slider.setBottom(120);
+		const { gauge } = render(slider);
+		act(() => gauge().props.onPress());
+		expect(slider.isOpen()).toBe(true);
+		act(() => renderer!.update(<></>));
+		expect(slider.isOpen()).toBe(false);
+	});
 });

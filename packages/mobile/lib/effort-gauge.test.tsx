@@ -55,4 +55,33 @@ describe("effort gauge", () => {
 		await act(async () => button().props.onPress());
 		expect(onPress).toHaveBeenCalledTimes(2);
 	});
+
+	// React Native fires onPressIn again when a held finger slides off and back on.
+	it("toggles once when the same finger slides off and back on", async () => {
+		const onPress = vi.fn();
+		await act(async () => { renderer = create(<EffortGaugeButton choices={levels("high")} open={false} onPress={onPress} disabled={false} testID="gauge" />); });
+		const button = () => hosts(renderer!.root, "Pressable")[0];
+		await act(async () => button().props.onPressIn());
+		await act(async () => button().props.onPressIn());
+		expect(onPress).toHaveBeenCalledOnce();
+	});
+
+	// A finger let go outside the gauge gets no onPress to clear the touch.
+	it("still toggles on a screen reader's activation after a touch released outside", async () => {
+		vi.useFakeTimers();
+		try {
+			const onPress = vi.fn();
+			await act(async () => { renderer = create(<EffortGaugeButton choices={levels("high")} open={false} onPress={onPress} disabled={false} testID="gauge" />); });
+			const button = () => hosts(renderer!.root, "Pressable")[0];
+			await act(async () => button().props.onPressIn());
+			await act(async () => { button().props.onTouchEnd(); vi.runAllTimers(); });
+			await act(async () => button().props.onPress());
+			expect(onPress).toHaveBeenCalledTimes(2);
+			// And the next touch toggles again.
+			await act(async () => button().props.onPressIn());
+			expect(onPress).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
