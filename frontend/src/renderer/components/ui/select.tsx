@@ -3,6 +3,7 @@ import { ChevronDownIcon, ChevronUpIcon } from "@/components/app-icons";
 import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { OPTION_MENU_LABEL, OPTION_MENU_ROW, OPTION_MENU_SURFACE } from "./option-menu";
 
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
 	return <SelectPrimitive.Root data-slot="select" {...props} />;
@@ -42,33 +43,45 @@ function SelectTrigger({
 	);
 }
 
+/**
+ * The list opens as the app's option menu: the same panel, rows and label as
+ * OptionMenu, sized to its entries and anchored under the trigger. Radix Select
+ * stays underneath for form values, `required`, typeahead and the
+ * combobox/option roles.
+ */
 function SelectContent({
 	className,
 	children,
-	position = "item-aligned",
-	align = "center",
-	showScrollButtons = true,
+	position = "popper",
+	side = "bottom",
+	align = "start",
+	sideOffset = 6,
+	showScrollButtons = false,
 	...props
 }: React.ComponentProps<typeof SelectPrimitive.Content> & { showScrollButtons?: boolean }) {
 	return (
 		<SelectPrimitive.Portal>
 			<SelectPrimitive.Content
 				data-slot="select-content"
+				data-browser-native-overlay="true"
 				className={cn(
-					"relative z-overlay max-h-(--radix-select-content-available-height) min-w-[8rem] origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) outline-none",
+					"z-overlay",
+					OPTION_MENU_SURFACE,
+					// The viewport scrolls, so the panel itself must not.
+					"overflow-hidden! p-0! max-h-[min(var(--size-select-menu-max),var(--radix-select-content-available-height))]!",
+					"origin-(--radix-select-content-transform-origin)",
 					"data-[state=open]:animate-popover-in data-[state=closed]:animate-popover-out",
-					position === "popper" &&
-						"data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
 					className,
 				)}
 				position={position}
+				side={side}
 				align={align}
+				sideOffset={sideOffset}
+				collisionPadding={16}
 				{...props}
 			>
 				{showScrollButtons ? <SelectScrollUpButton /> : null}
-				<SelectPrimitive.Viewport
-					className={cn("p-1", position === "popper" && "w-full min-w-(--radix-select-trigger-width) scroll-my-1")}
-				>
+				<SelectPrimitive.Viewport className="model-menu-scroll flex flex-col gap-px p-1">
 					{children}
 				</SelectPrimitive.Viewport>
 				{showScrollButtons ? <SelectScrollDownButton /> : null}
@@ -78,13 +91,7 @@ function SelectContent({
 }
 
 function SelectLabel({ className, ...props }: React.ComponentProps<typeof SelectPrimitive.Label>) {
-	return (
-		<SelectPrimitive.Label
-			data-slot="select-label"
-			className={cn("px-2 py-1.5 text-xs text-muted-foreground", className)}
-			{...props}
-		/>
-	);
+	return <SelectPrimitive.Label data-slot="select-label" className={cn(OPTION_MENU_LABEL, className)} {...props} />;
 }
 
 function SelectItem({ className, children, ...props }: React.ComponentProps<typeof SelectPrimitive.Item>) {
@@ -92,8 +99,8 @@ function SelectItem({ className, children, ...props }: React.ComponentProps<type
 		<SelectPrimitive.Item
 			data-slot="select-item"
 			className={cn(
-				"relative flex w-full cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground outline-none transition-colors",
-				"focus:bg-interactive-hover focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+				OPTION_MENU_ROW,
+				"select-none data-[state=checked]:text-foreground data-[state=checked]:before:bg-interactive-active data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
 				"[&_svg]:pointer-events-none [&_svg]:shrink-0",
 				className,
 			)}
