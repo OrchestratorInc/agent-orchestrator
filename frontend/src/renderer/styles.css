@@ -8114,9 +8114,10 @@ html[data-new-desktop-ui] [role="menu"] {
 
 /* The row under the pointer or keyboard, and an open submenu's row, take a
  * clear fill: the theme's hover tint was too faint on the menu surface.
- * Option menus paint theirs on the row's rounded ::before (their row boxes
- * stay square for the dividers), so the box itself stays clear there. */
-html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled], .settings-menu-surface *) {
+ * Option-menu rows paint theirs on a rounded ::before (their row boxes stay
+ * square for the dividers), so the box itself stays clear there; settings
+ * rows (.settings-menu-item) have no ::before and keep the box fill. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled], .settings-menu-surface :not(.settings-menu-item)) {
 	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
 }
 
@@ -8164,8 +8165,9 @@ html[data-new-desktop-ui] .menu-search-input {
 
 /* Option-menu rows draw their highlight on ::before, so the row box itself
  * stays square: a row that opens a group draws the divider as its top edge,
- * which a rounded box would curl at both ends. */
-html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]) {
+ * which a rounded box would curl at both ends. Settings rows paint the box
+ * itself, so they keep the row corner. */
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):not(.settings-menu-item) {
 	border-radius: 0;
 }
 
