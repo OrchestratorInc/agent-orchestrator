@@ -106,32 +106,6 @@ type ProbeTarget struct {
 	SavedStyle AuthStyle
 }
 
-// ProbeTarget validates in for agentID and returns the base URL and key a save
-// would store: the key from in, or the saved one when in leaves it empty. ok
-// is false when there is no key to probe with.
-func (s *Store) ProbeTarget(agentID string, in Input) (ProbeTarget, bool, error) {
-	spec, supported := specs[agentID]
-	if !supported {
-		return ProbeTarget{}, false, ErrUnsupported
-	}
-	cfg, err := normalize(spec, in)
-	if err != nil {
-		return ProbeTarget{}, false, err
-	}
-	if cfg.APIKey != "" {
-		return ProbeTarget{BaseURL: cfg.BaseURL, Key: cfg.APIKey}, true, nil
-	}
-	existing, saved, loadErr := s.Load(agentID)
-	if loadErr != nil || !saved {
-		return ProbeTarget{}, false, nil
-	}
-	target := ProbeTarget{BaseURL: cfg.BaseURL, Key: existing.APIKey}
-	if strings.TrimRight(existing.BaseURL, "/") == cfg.BaseURL {
-		target.SavedStyle = existing.AuthStyle
-	}
-	return target, true, nil
-}
-
 // AgentIDs lists every harness with a custom endpoint spec, sorted.
 func AgentIDs() []string {
 	ids := make([]string, 0, len(specs))
@@ -276,6 +250,34 @@ func (s *Store) Status(agentID string) (Status, bool, error) {
 		}
 	}
 	return status, true, nil
+}
+
+// ProbeTarget validates in for agentID and returns the base URL and key a save
+// would store: the key from in, or the saved one when in leaves it empty. ok
+// is false when there is no key to probe with.
+func (s *Store) ProbeTarget(agentID string, in Input) (ProbeTarget, bool, error) {
+	spec, supported := specs[agentID]
+	if !supported {
+		return ProbeTarget{}, false, ErrUnsupported
+	}
+	cfg, err := normalize(spec, in)
+	if err != nil {
+		return ProbeTarget{}, false, err
+	}
+	if cfg.APIKey != "" {
+		return ProbeTarget{BaseURL: cfg.BaseURL, Key: cfg.APIKey}, true, nil
+	}
+	// Load reports nothing saved when the saved file is unreadable too: there
+	// is no key to probe with, and Save itself reports the missing key.
+	existing, saved, _ := s.Load(agentID)
+	if !saved {
+		return ProbeTarget{}, false, nil
+	}
+	target := ProbeTarget{BaseURL: cfg.BaseURL, Key: existing.APIKey}
+	if strings.TrimRight(existing.BaseURL, "/") == cfg.BaseURL {
+		target.SavedStyle = existing.AuthStyle
+	}
+	return target, true, nil
 }
 
 // pathLocks serializes writes to one endpoint file. Callers build a new Store
