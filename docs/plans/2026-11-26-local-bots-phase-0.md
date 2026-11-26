@@ -80,8 +80,6 @@ Files rather than DB rows, because they are:
 - readable by any harness;
 - portable: moving a bot later means copying one folder.
 
-All three competitors with persistent bots (Orca, Capy, Kiro Crew) converged on this.
-
 ```text
 $AO_DATA_DIR/bots/<bot-id>/
   SOUL.md          # who the bot is: purpose, rules, boundaries. Owner-written.
@@ -136,17 +134,17 @@ $AO_DATA_DIR/bots/<bot-id>/
 
 ### 4. Bot sessions hibernate between turns and are recycled
 
-- **Hibernate.** Idle hibernation currently skips orchestrators (`service/chat/hibernate.go`). Bots take the opposite choice: they hibernate after `IdleBeforeHibernate`, and they wake when a message, schedule, crew report, or answered ask arrives. This mirrors "machine sleeps between turns" in Capy, keeps prompt cache warm for 10 minutes, and costs nothing while idle.
+- **Hibernate.** Idle hibernation currently skips orchestrators (`service/chat/hibernate.go`). Bots take the opposite choice: they hibernate after `IdleBeforeHibernate`, and they wake when a message, schedule, crew report, or answered ask arrives. It keeps prompt cache warm for 10 minutes, and costs nothing while idle.
 - **Prompt directory across hibernate and wake.** Hibernation does not terminate the session, so `prompts/<session-id>/` stays on disk while the bot sleeps. On wake, the bot service regenerates `system.md` from the current SOUL, MEMORY, open asks, and crew summary before relaunching. A woken bot therefore never runs on a stale or purged prompt. The directory is deleted when the session ends: on recycle, archive, or purge, through `cleanupSystemPromptDir`.
-- **Recycle.** When a bot session hits a context threshold (provider-reported context use above about 60%, or 7 days old), the bot service ends it after its turn settles. It then starts a fresh `KindBot` session bound to the same bot conversation. The new session's prompt carries SOUL, MEMORY, and a handoff note from the existing `chat.Service.HandoffNote`. Recycling is a normal event in the bot's timeline, not an error. Devin exposes the same idea as "Recycle".
+- **Recycle.** When a bot session hits a context threshold (provider-reported context use above about 60%, or 7 days old), the bot service ends it after its turn settles. It then starts a fresh `KindBot` session bound to the same bot conversation. The new session's prompt carries SOUL, MEMORY, and a handoff note from the existing `chat.Service.HandoffNote`. Recycling is a normal event in the bot's timeline, not an error.
 
 ### 5. Crew attribution is durable, and limits are enforced by the daemon
 
 - **Durable attribution.** Add a nullable `sessions.bot_id`. Today `ParentSessionID` (`ports/session.go`) only lives for the duration of a spawn, and reports route per project. When `ao spawn` runs inside a bot session, `AO_SESSION_ID` resolves to a `KindBot` parent, and the daemon stamps the child with `bot_id`. Callers never supply `bot_id` themselves.
 - **Permissions inheritance.** Extend `inheritedSpawnPermissions` to treat `KindBot` parents like orchestrators.
 - **Report routing.** In `service/report/coordinator.go`, a worker with `bot_id` sends its reports to the bot conversation, waking the bot if needed, instead of `newestOrchestrator`. Workers without `bot_id` keep today's routing.
-- **Worker cap (hard).** Each bot has `max_active_workers`, default 3. Spawning past the cap fails in the daemon with `BOT_WORKER_LIMIT`, and the bot is told to queue the work or ask. This is enforcement, not a prompt rule. It answers Orca's admission that "None of these settings is a guarantee."
-- **Default permissions.** The bot session defaults to `PermissionModeDefault` (ask for approval), not bypass. Crew inherit it unless the owner raises it. Orca defaults to Full access; we deliberately do not.
+- **Worker cap (hard).** Each bot has `max_active_workers`, default 3. Spawning past the cap fails in the daemon with `BOT_WORKER_LIMIT`, and the bot is told to queue the work or ask. This is enforcement, not a prompt rule.
+- **Default permissions.** The bot session defaults to `PermissionModeDefault` (ask for approval), not bypass. Crew inherit it unless the owner raises it.
 - **Bots cannot create bots.** There is no agent-facing create route. A bot may propose one as an ask, and only the owner can confirm it.
 
 ### 6. Schedules are automations that target a bot
@@ -155,7 +153,7 @@ Automations already provide RRULE/cron canonicalization, catch-up limits, spawn 
 
 - Add a nullable `automations.bot_id`. When it is set, a due run delivers the automation prompt as a new turn in the bot conversation, waking or recycling the bot, instead of spawning a session.
 - Run states map directly: `spawning` covers waking, `running` covers the turn in progress, and `completed`/`failed` cover the turn outcome.
-- A bot can create, edit, and pause its own schedules with `ao automation` scoped by `AO_SESSION_ID`. New bot-created schedules start disabled, and enabling one is an ask. This matches Orca, where template schedules start turned off.
+- A bot can create, edit, and pause its own schedules with `ao automation` scoped by `AO_SESSION_ID`. New bot-created schedules start disabled, and enabling one is an ask.
 - The three bundled templates (`daily_pr_review_v1`, `daily_issue_triage_v1`, `weekly_release_notes_v1`) become the first bot templates.
 
 ## Data model
@@ -276,7 +274,7 @@ The turn runs in a fresh bot session with these instructions:
 
 Each tidy is a reviewable diff in the Memory tab, auto-accepted, with one-click undo from `.history/`.
 
-**Known gap.** Orca runs its tidy with no tools at all. AO is harness-neutral and cannot guarantee a tool-less turn on every harness. Phase 0 enforces the parts the daemon controls:
+**Known gap.** Ideally a tidy turn has no tools at all. AO is harness-neutral and cannot guarantee a tool-less turn on every harness. Phase 0 enforces the parts the daemon controls:
 
 - a tidy session refuses spawns and every agent-facing write route except `bot memory replace`, gated by a tidy flag on the session;
 - it runs with permission mode `default`.
@@ -397,5 +395,5 @@ Ten PRs of about two weeks' total work, each with tests for the boundary it chan
 2. **Tool-less tidy.** Is "daemon refuses everything but `memory replace` during tidy" enough, or should tidy run through a direct provider call with no harness? The second option is harness-specific and may belong in Phase 2.
 3. **Project scope.** Phase 0 gives each bot one project, and workspace projects cover multi-repo. Is a cross-project bot (for example "triage everything") needed before Phase 1?
 4. **Recycle thresholds.** Is 60% context use or 7 days right? Tune from dogfood telemetry.
-5. **Relationship to the project orchestrator.** Should the orchestrator be able to message bots in its project (Capy lets Captains message each other), or stay separate in Phase 0? The default is separate.
+5. **Relationship to the project orchestrator.** Should the orchestrator be able to message bots in its project, or stay separate in Phase 0? The default is separate.
 6. **Provider exposure of memory.** Is the owner's harness and model choice enough, or do bots need a per-bot switch or pre-injection redaction? A related question: should AO prefer file-based system-prompt injection over inline command-line arguments for bot sessions, so memory never appears in the process list?
