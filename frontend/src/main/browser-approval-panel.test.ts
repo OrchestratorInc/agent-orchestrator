@@ -26,7 +26,7 @@ const checkoutFacts = {
 describe("describePanelApprovalTarget", () => {
 	it("resolves a ref through the snapshot and reads the matching control's DOM facts", async () => {
 		const page = fakePage(checkoutFacts);
-		const out = await describePanelApprovalTarget({ action: "click", ref: "@e4", snapshot: async () => ({ refs }), page });
+		const out = await describePanelApprovalTarget({ action: "click", ref: "@e4", image: true, snapshot: async () => ({ refs }), page });
 		expect(out.target).toMatchObject({
 			role: "button", name: "Place order", isSubmit: true, formHasPayment: true,
 			pageUrl: "https://shop.example/checkout", pageTitle: "Checkout",
@@ -34,6 +34,24 @@ describe("describePanelApprovalTarget", () => {
 		expect(page.evaluate.mock.calls[0][0]).toContain('"mode":"match","role":"button","name":"Place order"');
 		expect(page.capture).toHaveBeenCalledWith({ x: 240, y: 210, width: 440, height: 212 });
 		expect(out.image).toBe("iVBORw0KGgo=");
+	});
+
+	it("reads the facts without capturing the page unless an image is asked for", async () => {
+		// Most actions are benign: the daemon asks for the image only once it
+		// knows the user will be asked.
+		const page = fakePage(checkoutFacts);
+		const out = await describePanelApprovalTarget({ action: "click", ref: "@e4", snapshot: async () => ({ refs }), page });
+		expect(out.target).toMatchObject({ name: "Place order", formHasPayment: true });
+		expect(page.capture).not.toHaveBeenCalled();
+		expect(out.image).toBeUndefined();
+	});
+
+	it("describes a drag's drop target, which decides what the drag does", async () => {
+		const page = fakePage(checkoutFacts);
+		// The daemon asks about the drop target (the drag's targetRef) as ref.
+		const out = await describePanelApprovalTarget({ action: "drag", ref: "@e4", snapshot: async () => ({ refs }), page });
+		expect(out.target).toMatchObject({ role: "button", name: "Place order", pageUrl: "https://shop.example/checkout" });
+		expect(page.evaluate.mock.calls[0][0]).toContain('"mode":"match","role":"button","name":"Place order"');
 	});
 
 	it("resolves act instructions with the same matcher act uses", async () => {

@@ -12,8 +12,12 @@
  * required, which matters for something glanced at rather than studied.
  */
 
+import { useCallback, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
+import { Button } from "../ui/button";
+import { HoverCard, HoverCardContent, HoverCardTrigger, useHoverCardDismiss } from "../ui/hover-card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ConversationUsage } from "../../types/conversation";
 
@@ -50,14 +54,26 @@ const RING: Record<Severity, string> = {
 
 /* -------------------------------------------------------------------------- */
 
+/** Compacting from the meter: the action, and why it cannot run right now, if it cannot. */
+type CompactControl = {
+	onCompact: () => void | Promise<unknown>;
+	blockedReason?: string;
+};
+
 export function ContextMeter({
 	usage,
 	compactsAt,
+	onCompact,
+	compactBlockedReason,
 	className,
 }: {
 	usage?: ConversationUsage;
 	/** The size at which the agent compacts on its own, such as Claude Code's "200k". */
 	compactsAt?: string;
+	/** Compacts the conversation now. Set, the readout opens a card with a button for it. */
+	onCompact?: () => void | Promise<unknown>;
+	/** Why compacting cannot run right now (a turn is running, one is already compacting). */
+	compactBlockedReason?: string;
 	className?: string;
 }) {
 	if (usage === undefined || (usage.contextUsed <= 0 && usage.contextWindow <= 0)) return null;
@@ -68,17 +84,19 @@ export function ContextMeter({
 		// throws rather than degrading.
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
-				<ContextReadout usage={usage} compactsAt={compactsAt} />
+				<ContextReadout
+					usage={usage}
+					compactsAt={compactsAt}
+					compact={onCompact ? { onCompact, blockedReason: compactBlockedReason } : undefined}
+				/>
 			</div>
 		</TooltipProvider>
 	);
 }
 
-function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compactsAt?: string }) {
+function ContextReadout({ usage, compactsAt, compact }: { usage: ConversationUsage; compactsAt?: string; compact?: CompactControl }) {
 	const compactsLine = compactsAt ? <p>Compacts on its own at {compactsAt.toUpperCase()}</p> : null;
 	const { contextUsed, contextWindow } = usage;
-	// A border separates the tooltip without the layered shadow's hover halos.
-	const tooltipSurface = "border border-(--color-border-overlay) shadow-none";
 
 	// Failed turns can report 0 used with a valid model limit. That draws as an
 	// empty 0% ring until the next turn reports a real reading. Without a window
@@ -86,8 +104,9 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 	if (contextWindow <= 0) {
 		const compactUsed = formatTokenCount(contextUsed).replace(/ tok$/, "");
 		return (
-			<Tooltip>
-				<TooltipTrigger asChild>
+			<ReadoutCard
+				compact={compact}
+				trigger={
 					<span
 						role="img"
 						aria-label={`Context ${contextUsed.toLocaleString()} / unknown`}
@@ -100,13 +119,12 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 						</svg>
 						<span aria-hidden="true" className="absolute text-micro">?</span>
 					</span>
-				</TooltipTrigger>
-				<TooltipContent className={tooltipSurface}>
-					<p className="font-medium">Context {compactUsed} / unknown</p>
-					<p>The provider has not reported a context window. Conversation fullness is unknown.</p>
-					{compactsLine}
-				</TooltipContent>
-			</Tooltip>
+				}
+			>
+				<p className="font-medium">Context {compactUsed} / unknown</p>
+				<p>The provider has not reported a context window. Conversation fullness is unknown.</p>
+				{compactsLine}
+			</ReadoutCard>
 		);
 	}
 
@@ -119,8 +137,9 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 	const compactUsage = `${formatTokenCount(contextUsed).replace(/ tok$/, "")} / ${formatTokenCount(contextWindow).replace(/ tok$/, "")}`;
 
 	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
+		<ReadoutCard
+			compact={compact}
+			trigger={
 				<div
 					className={cn("inline-flex size-7 shrink-0 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", RING[severity])}
 					data-context-meter=""
@@ -148,19 +167,158 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 						/>
 					</svg>
 				</div>
-			</TooltipTrigger>
-			<TooltipContent className={tooltipSurface}>
-				<p className="font-medium">Context window</p>
-				<p className="tabular-nums">{compactUsage} tokens ({percent}%)</p>
-				{compactsLine}
-				{severity !== "normal" ? (
-					<p className="mt-1">
-						{severity === "critical"
-							? "The next turn may not fit. Compacting or starting a new conversation will reclaim room."
-							: "Room is running low. A long task may not fit."}
-					</p>
-				) : null}
-			</TooltipContent>
-		</Tooltip>
+			}
+		>
+			<p className="font-medium">Context window</p>
+			<p className="tabular-nums">{compactUsage} tokens ({percent}%)</p>
+			{compactsLine}
+			{severity !== "normal" ? (
+				<p className="mt-1">
+					{severity === "critical"
+						? "The next turn may not fit. Compacting or starting a new conversation will reclaim room."
+						: "Room is running low. A long task may not fit."}
+				</p>
+			) : null}
+		</ReadoutCard>
+	);
+}
+
+/**
+ * The details on hover. A tooltip when there is nothing to do; a card when the conversation can be
+ * compacted from here, since a tooltip cannot hold a button. The card opens on hover or focus, as
+ * the tooltip does, and stays open while the pointer is on it.
+ */
+function ReadoutCard({ trigger, compact, children }: { trigger: ReactElement; compact?: CompactControl; children: ReactNode }) {
+	// Controlled, so a key on the meter can open it without waiting out the hover delay.
+	const [open, setOpen] = useState(false);
+	if (!compact) {
+		return (
+			<Tooltip>
+				<TooltipTrigger asChild>{trigger}</TooltipTrigger>
+				<TooltipContent className={READOUT_SURFACE}>{children}</TooltipContent>
+			</Tooltip>
+		);
+	}
+	return (
+		<HoverCard openDelay={150} open={open} onOpenChange={setOpen}>
+			<CompactCard trigger={trigger} compact={compact} onShow={() => setOpen(true)}>
+				{children}
+			</CompactCard>
+		</HoverCard>
+	);
+}
+
+// A border separates it without the layered shadow's hover halos.
+const READOUT_SURFACE = "border border-(--color-border-overlay) shadow-none";
+const ENTER_CARD_KEYS = new Set(["Enter", " ", "ArrowDown"]);
+
+/**
+ * Radix keeps a hover card's content out of the tab order, so the keyboard reaches the compact
+ * button from the meter: Enter, Space or Down moves focus onto it, and Escape or Tab closes the
+ * card back to the meter.
+ */
+function CompactCard({ trigger, compact, onShow, children }: { trigger: ReactElement; compact: CompactControl; onShow: () => void; children: ReactNode }) {
+	const close = useHoverCardDismiss();
+	const triggerRef = useRef<HTMLElement | null>(null);
+	const contentRef = useRef<HTMLDivElement>(null);
+	const buttonRef = useRef<HTMLButtonElement | null>(null);
+	// Set when a key asks for the button before the card shows: the button takes focus as it mounts.
+	const focusOnMount = useRef(false);
+	// Whether the keyboard brought focus into the card, so it goes back to the meter when the card closes.
+	const enteredByKey = useRef(false);
+	const setTrigger = useCallback((node: HTMLElement | null) => {
+		triggerRef.current = node;
+	}, []);
+	const setButton = useCallback((node: HTMLButtonElement | null) => {
+		buttonRef.current = node;
+		if (!node || !focusOnMount.current) return;
+		focusOnMount.current = false;
+		node.focus();
+	}, []);
+	const leave = () => {
+		close();
+		if (enteredByKey.current) triggerRef.current?.focus();
+		enteredByKey.current = false;
+	};
+	return (
+		<>
+			<HoverCardTrigger
+				asChild
+				ref={setTrigger}
+				onKeyDown={(event) => {
+					if (!ENTER_CARD_KEYS.has(event.key)) return;
+					event.preventDefault();
+					enteredByKey.current = true;
+					if (buttonRef.current) return buttonRef.current.focus();
+					focusOnMount.current = true;
+					onShow();
+				}}
+				// Focus moving onto the card's button leaves the card open.
+				onBlur={(event) => {
+					if (event.relatedTarget instanceof Node && contentRef.current?.contains(event.relatedTarget)) event.preventDefault();
+				}}
+			>
+				{trigger}
+			</HoverCardTrigger>
+			<HoverCardContent
+				ref={contentRef}
+				side="top"
+				align="center"
+				animation="enter"
+				className={cn("w-fit max-w-72 rounded-md px-3 py-1.5 text-xs", READOUT_SURFACE)}
+				onEscapeKeyDown={(event) => {
+					event.preventDefault();
+					leave();
+				}}
+				onKeyDown={(event) => {
+					if (event.key !== "Tab") return;
+					event.preventDefault();
+					leave();
+				}}
+			>
+				{children}
+				<CompactButton {...compact} buttonRef={setButton} onCompacted={leave} />
+			</HoverCardContent>
+		</>
+	);
+}
+
+function CompactButton({
+	onCompact,
+	blockedReason,
+	buttonRef,
+	onCompacted,
+}: CompactControl & { buttonRef: (node: HTMLButtonElement | null) => void; onCompacted: () => void }) {
+	const { t } = useTranslation();
+	const [pending, setPending] = useState(false);
+	const [failed, setFailed] = useState(false);
+	return (
+		<div className="mt-2 flex flex-col items-start gap-1">
+			<Button
+				ref={buttonRef}
+				size="xs"
+				variant="secondary"
+				disabled={Boolean(blockedReason) || pending}
+				onClick={async () => {
+					setPending(true);
+					setFailed(false);
+					try {
+						await onCompact();
+						onCompacted();
+					} catch {
+						setFailed(true);
+					} finally {
+						setPending(false);
+					}
+				}}
+			>
+				{pending ? t("contextMeter.compacting") : t("contextMeter.compactNow")}
+			</Button>
+			{blockedReason ? (
+				<p className="text-muted-foreground">{blockedReason}</p>
+			) : failed ? (
+				<p role="alert" className="text-destructive">{t("contextMeter.compactFailed")}</p>
+			) : null}
+		</div>
 	);
 }

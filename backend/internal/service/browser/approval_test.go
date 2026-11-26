@@ -30,6 +30,10 @@ type scriptedRuntime struct {
 	dialogs    []map[string]interface{}
 	dialogErr  error
 	operations []string
+	// describeArgs is what the last describe was asked about; describeCalls
+	// records each describe's args.
+	describeArgs  map[string]interface{}
+	describeCalls []map[string]interface{}
 }
 
 func (r *scriptedRuntime) Status() browserruntime.Status {
@@ -65,6 +69,8 @@ func (r *scriptedRuntime) Execute(ctx context.Context, _ domain.SessionID, actio
 		r.lastArgs = args
 	}
 	if action == describeAction {
+		r.describeArgs = args
+		r.describeCalls = append(r.describeCalls, args)
 		if r.describeErr != nil {
 			return browserruntime.Result{}, r.describeErr
 		}
@@ -134,7 +140,8 @@ func TestRiskyClickWaitsAndDenyBlocksDispatch(t *testing.T) {
 	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
 		t.Fatalf("err = %v", err)
 	}
-	if got := rt.received(); !slices.Equal(got, []string{describeAction}) {
+	// Facts first, then the element's picture once the user will be asked.
+	if got := rt.received(); !slices.Equal(got, []string{describeAction, describeAction}) {
 		t.Fatalf("runtime received %v; the click must not be dispatched", got)
 	}
 	pending := <-asked
@@ -151,7 +158,7 @@ func TestRiskyClickAllowedDispatches(t *testing.T) {
 	if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := rt.received(); !slices.Equal(got, []string{describeAction, "click"}) {
+	if got := rt.received(); !slices.Equal(got, []string{describeAction, describeAction, "click"}) {
 		t.Fatalf("runtime received %v", got)
 	}
 }
@@ -235,7 +242,7 @@ func TestChromeModeIsGated(t *testing.T) {
 	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
 		t.Fatalf("err = %v", err)
 	}
-	if got := chrome.received(); !slices.Equal(got, []string{describeAction}) {
+	if got := chrome.received(); !slices.Equal(got, []string{describeAction, describeAction}) {
 		t.Fatalf("chrome received %v", got)
 	}
 	if len(panel.received()) != 0 {
@@ -678,5 +685,89 @@ func TestDialogAcceptCarriesTheApprovedTab(t *testing.T) {
 	}
 	if rt.lastArgs["dialogTab"] != "t1" {
 		t.Fatalf("accept args = %v", rt.lastArgs)
+	}
+}
+
+func dropTarget(name string) map[string]interface{} {
+	return map[string]interface{}{
+		"target":  map[string]interface{}{"role": "button", "name": name, "tag": "button", "pageUrl": "https://mail.example/", "pageTitle": "Mail"},
+		"binding": map[string]interface{}{"tabId": "t1", "document": float64(1), "ref": "e2"},
+	}
+}
+
+func TestDragIsJudgedByItsDropTarget(t *testing.T) {
+	// Dropping a message onto "Delete forever" deletes it.
+	rt := &scriptedRuntime{describe: dropTarget("Delete forever")}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "drag", map[string]interface{}{"ref": "e1", "targetRef": "e2"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if slices.Contains(rt.received(), "drag") {
+		t.Fatal("dragged after deny")
+	}
+	if rt.describeArgs["ref"] != "e2" {
+		t.Fatalf("described %v, not the drop target", rt.describeArgs)
+	}
+	if p := <-asked; p.Category != approval.CategoryDelete || p.Action != `Drag e1 onto "Delete forever" on mail.example` {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestDragOntoAnOrdinaryZoneDoesNotAsk(t *testing.T) {
+	rt := &scriptedRuntime{describe: dropTarget("Done")}
+	svc, gate, token := approvalService(t, rt)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "drag", map[string]interface{}{"ref": "e1", "targetRef": "e2"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gate.Pending()) != 0 || !slices.Contains(rt.received(), "drag") {
+		t.Fatalf("pending=%d received=%v", len(gate.Pending()), rt.received())
+	}
+}
+
+func TestDragOntoAnUnreadableTargetAsks(t *testing.T) {
+	rt := &scriptedRuntime{describeErr: errors.New("no such ref")}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "drag", map[string]interface{}{"ref": "e1", "targetRef": "e2"}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if p := <-asked; p.Category != approval.CategoryScript || p.Action != "Drag e1 onto element e2" {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func (r *scriptedRuntime) describes() []map[string]interface{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.describeCalls)
+}
+
+func TestDescribeCapturesOnlyWhenTheUserWillBeAsked(t *testing.T) {
+	// A benign click: one describe, no image asked for.
+	benign := placeOrder()
+	benign["target"].(map[string]interface{})["name"] = "Docs"
+	delete(benign["target"].(map[string]interface{}), "isSubmit")
+	delete(benign, "image")
+	rt := &scriptedRuntime{describe: benign}
+	svc, _, token := approvalService(t, rt)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := rt.describes(); len(calls) != 1 || calls[0]["image"] == true {
+		t.Fatalf("benign describes = %v", calls)
+	}
+	// A risky click: the image is asked for once the verdict needs approval.
+	risky := &scriptedRuntime{describe: placeOrder()}
+	svc2, gate2, token2 := approvalService(t, risky)
+	asked := answer(t, gate2, approval.DecisionDeny)
+	_, _, _ = svc2.Execute(context.Background(), "s1", token2, "click", map[string]interface{}{"ref": "e4"})
+	calls := risky.describes()
+	if len(calls) != 2 || calls[0]["image"] == true || calls[1]["image"] != true {
+		t.Fatalf("risky describes = %v", calls)
+	}
+	if p := <-asked; p.Image != "iVBORw0KGgo=" {
+		t.Fatalf("prompt image = %q", p.Image)
 	}
 }

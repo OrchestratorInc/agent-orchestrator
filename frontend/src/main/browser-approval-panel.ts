@@ -27,6 +27,8 @@ export type PanelApprovalInput = {
 	ref?: string;
 	instruction?: string;
 	nth?: number;
+	/** Capture the element too. The daemon asks only once it will prompt. */
+	image?: boolean;
 	snapshot: () => Promise<{ refs: unknown }>;
 	page: PanelApprovalPage;
 };
@@ -101,7 +103,7 @@ export async function describePanelApprovalTarget(input: PanelApprovalInput): Pr
 		...page,
 		...(input.instruction ? { instruction: input.instruction } : {}),
 	};
-	const crop = approvalCropRect(facts?.rect, viewport);
+	const crop = input.image ? approvalCropRect(facts?.rect, viewport) : undefined;
 	let image: string | undefined;
 	if (crop) {
 		try {

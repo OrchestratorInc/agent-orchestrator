@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -82,12 +83,24 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	if mode == approval.ModeOff {
 		return args, nil
 	}
-	described := s.describe(ctx, sessionID, rt, action, args)
+	described := s.describe(ctx, sessionID, rt, action, args, false)
 	target, image := described.target, described.image
 	if typesLineBreak(action, args) {
 		target = approval.TypedEnter(target)
 	}
-	verdict := approval.Classify(target, mode)
+	judged := target
+	if action == "drag" {
+		// The drop lands on the target as a click would.
+		judged.Action = "click"
+	}
+	verdict := approval.Classify(judged, mode)
+	if action == "drag" && verdict.NeedsApproval {
+		source, _ := args["ref"].(string)
+		verdict.Summary = fmt.Sprintf("Drag %s onto %q", strings.TrimSpace(source), target.Name)
+		if host := approval.Host(target.PageURL); host != "" {
+			verdict.Summary += " on " + host
+		}
+	}
 	if !verdict.NeedsApproval && (!described.identified || described.partial) {
 		// The element (or its form) could not be read: ask rather than guess.
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
@@ -96,6 +109,14 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	}
 	if !verdict.NeedsApproval {
 		return args, nil
+	}
+	// The element's picture is read only now that the user will be asked:
+	// capturing can bring a tab forward and wait for a frame. It is shown
+	// only if it is of the same target the facts were read from.
+	if described.binding != nil {
+		if pictured := s.describe(ctx, sessionID, rt, action, args, true); reflect.DeepEqual(pictured.binding, described.binding) {
+			image = pictured.image
+		}
 	}
 	element := strings.TrimSpace(strings.TrimSpace(target.Role) + " " + quoted(target.Name))
 	outcome, err := s.approvals.Request(ctx, approval.Request{
@@ -233,6 +254,10 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 	case "type":
 		ref, _ := args["ref"].(string)
 		text = fmt.Sprintf("Type a line break into element %s", strings.TrimSpace(ref))
+	case "drag":
+		source, _ := args["ref"].(string)
+		target, _ := args["targetRef"].(string)
+		text = fmt.Sprintf("Drag %s onto element %s", strings.TrimSpace(source), strings.TrimSpace(target))
 	default:
 		ref, _ := args["ref"].(string)
 		verb := "Click"
@@ -250,7 +275,8 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 // mayActConsequentially filters out actions that can never need approval
 // before paying for a describe round trip.
 func mayActConsequentially(action string, args map[string]interface{}) bool {
-	if typesLineBreak(action, args) {
+	if typesLineBreak(action, args) || action == "drag" {
+		// A drag is judged by where it drops ("Delete forever", "Trash").
 		return true
 	}
 	if _, ok := approval.GatedActions[action]; !ok {
@@ -305,13 +331,21 @@ type describedTarget struct {
 // describe asks the runtime about the target. When it cannot answer (an older
 // Chrome extension, a closed tab), the action's own arguments are all there
 // is, and the result is marked unidentified so preflight asks.
-func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) describedTarget {
+// withImage asks the runtime to capture the element too.
+func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}, withImage bool) describedTarget {
 	fallback := approval.Target{Action: action}
 	describeArgs := map[string]interface{}{"action": action}
 	for _, key := range []string{"ref", "instruction", "nth", "key"} {
 		if value, ok := args[key]; ok {
 			describeArgs[key] = value
 		}
+	}
+	if action == "drag" {
+		// What a drag does is decided where it drops: describe the target.
+		describeArgs["ref"] = args["targetRef"]
+	}
+	if withImage {
+		describeArgs["image"] = true
 	}
 	fallback.Instruction, _ = args["instruction"].(string)
 	fallback.Key, _ = args["key"].(string)

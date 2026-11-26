@@ -532,6 +532,9 @@ const api = {
 		// the translucent shell blurs the desktop behind it.
 		setWindowTranslucent: (enabled: boolean) =>
 			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
+		// macOS only: Interface v2 moves the native window buttons with its wider
+		// edge spacing.
+		setInterfaceV2: (enabled: boolean) => ipcRenderer.invoke("theme:set-interface-v2", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,

@@ -427,6 +427,31 @@ func (s *Service) roleCandidateLaunchable(ctx context.Context, agent domain.Agen
 	return true, nil
 }
 
+// refuseUnsupportedStartSettings refuses a starting Fast mode or auto-compaction
+// the launching agent cannot take, rather than dropping it, so the caller is
+// not left believing it took effect. The agent is the spawn's own or else the
+// project's role agent, as the manager resolves it. A spawn that asks for a
+// terminal ignores both settings, so it is not checked.
+func refuseUnsupportedStartSettings(cfg ports.SpawnConfig, project domain.ProjectRecord) error {
+	if cfg.RequestedMode == domain.SessionModeTUI {
+		return nil
+	}
+	harness := cfg.Harness
+	if harness == "" {
+		harness = roleHarness(project, cfg.Kind)
+	}
+	if harness == "" {
+		return nil
+	}
+	if problem := domain.AutoCompactWindowProblem(harness, cfg.AutoCompactWindow); problem != "" {
+		return apierr.Invalid("AUTO_COMPACT_WINDOW_UNSUPPORTED", problem, nil)
+	}
+	if cfg.FastMode && !domain.CanUseFastMode(harness) {
+		return apierr.Invalid("FAST_MODE_UNSUPPORTED", fmt.Sprintf("%s has no Fast mode", harness), nil)
+	}
+	return nil
+}
+
 // roleHarness is the agent the project names for sessions of kind.
 func roleHarness(project domain.ProjectRecord, kind domain.SessionKind) domain.AgentHarness {
 	if kind == domain.KindOrchestrator {
@@ -601,6 +626,9 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if cfg.Harness == "" {
 			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
 		}
+	}
+	if err := refuseUnsupportedStartSettings(cfg, project); err != nil {
+		return domain.Session{}, 0, 0, err
 	}
 	if s.agentReadiness != nil && cfg.Harness != "" {
 		readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(cfg.Harness), domain.AgentReadinessPurposeLaunch)
@@ -2203,6 +2231,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):
 		return apierr.Invalid("UNSUPPORTED_MODEL", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrSpawnPermissionExceedsPolicy):
+		return apierr.Invalid("SPAWN_PERMISSION_EXCEEDS_POLICY", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTerminalUnsupported):
 		return apierr.Invalid("TERMINAL_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
@@ -2286,6 +2316,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspacePathOccupied):
 		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspaceNotARepo):
+		return projectNotARepoError(err)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -2302,6 +2334,19 @@ func mapSessionError(err error) error {
 	default:
 		return err
 	}
+}
+
+// projectNotARepoError turns git's raw "not a git repository" exit 128 for a
+// registered project folder (for example a project or workspace root whose .git
+// was deleted) into an actionable error that names the folder and how to
+// recover. The text is shared with asynchronous chat start failures.
+func projectNotARepoError(err error) error {
+	message, path, fix, _ := sessionmanager.ProjectNotARepoGuidance(err)
+	details := map[string]any{"suggestedFix": fix}
+	if path != "" {
+		details["path"] = path
+	}
+	return apierr.Invalid("PROJECT_NOT_A_REPO", message, details)
 }
 
 // toSpawnAPIError maps spawn failures to structured API errors so telemetry and

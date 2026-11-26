@@ -381,3 +381,32 @@ func allowedBySite(t *testing.T, g *Gate, req Request) Request {
 	g.writeAudit = writer
 	return req
 }
+
+func TestScriptCategoryCannotBeAllowedForASite(t *testing.T) {
+	// "script" is the catch-all (eval, unknown commands, unreadable
+	// targets): a site rule for it would let any later script run unasked.
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	req := sampleRequest()
+	req.Category = CategoryScript
+	out := requestAsync(g, req)
+	id := waitPending(t, g).ID
+	if err := g.Decide(id, DecisionAllowSite); !errors.Is(err, ErrSiteRuleNotAllowed) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(g.SiteRules()) != 0 {
+		t.Fatalf("saved a script rule: %+v", g.SiteRules())
+	}
+	// Still pending: the user can allow once or deny.
+	if err := g.Decide(id, DecisionAllowOnce); err != nil {
+		t.Fatal(err)
+	}
+	<-out
+	// A script rule saved by an earlier build is ignored.
+	_ = os.WriteFile(filepath.Join(dir, "policy.json"), []byte(`{"sites":[{"site":"shop.example","category":"script"}]}`), 0o600)
+	reopened, _ := Open(dir)
+	req.Timeout = 20 * time.Millisecond
+	if outcome, _ := reopened.Request(context.Background(), req); outcome.Decision != DecisionTimeout {
+		t.Fatalf("old script rule honoured: %+v", outcome)
+	}
+}

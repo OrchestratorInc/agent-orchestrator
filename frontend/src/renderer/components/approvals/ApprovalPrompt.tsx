@@ -146,7 +146,9 @@ export function ApprovalPrompt({
 							Esc
 						</kbd>
 					</Button>
-					{request.site ? (
+					{/* "script" is the catch-all (eval, unknown commands, unreadable
+					    targets): the daemon refuses a site rule for it. */}
+					{request.site && request.category !== "script" ? (
 						<Button type="button" variant="ghost" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-site")}>
 							{t("approvals.allowSite", { site: request.site })}
 						</Button>
