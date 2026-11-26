@@ -1,24 +1,18 @@
-import { useEffect } from "react";
-import { PixelRatio, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
-import Animated, {
-	cancelAnimation,
-	Easing,
-	useAnimatedStyle,
-	useSharedValue,
-	withRepeat,
-	withTiming,
-	type SharedValue,
-} from "react-native-reanimated";
+import { memo, useContext, useEffect } from "react";
+import { Animated, PixelRatio, StyleSheet, View } from "react-native";
 
 import { useReducedMotion } from "../useReducedMotion";
+import { LatticeActiveContext } from "./latticeActivity";
 import {
+	LATTICE_COMET,
+	LATTICE_EDGE_OPACITY,
 	LATTICE_INNER_OPACITY,
-	LATTICE_LAP_MS,
 	LATTICE_SIDE,
 	LATTICE_STILL_OPACITY,
 	LATTICE_TRAIL,
+	createLatticeClock,
 	latticeCellOrigin,
-	latticeTrailOpacity,
+	latticeCometPath,
 } from "./latticeTrail";
 
 // The desktop's 2.5px dots on a 1px gap, snapped to whole device pixels so the
@@ -28,45 +22,69 @@ const GAP = PixelRatio.roundToNearestPixel(1);
 const SIZE = DOT * LATTICE_SIDE + GAP * (LATTICE_SIDE - 1);
 /** Each dot's place, fixed up front so no density can reflow the lattice (see latticeCellOrigin). */
 const ORIGINS = Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) => latticeCellOrigin(cell, DOT, GAP));
+const EDGE = new Set<number>(LATTICE_TRAIL);
 
 /**
- * The live turn's working mark, matching the desktop's: a 4×4 lattice of small
+ * Each comet dot's path, and the opacity that, drawn over an edge dot at rest,
+ * shows the comet's level.
+ */
+const COMET = LATTICE_COMET.map((level, behind) => ({
+	...latticeCometPath(behind, DOT, GAP),
+	opacity: (level - LATTICE_EDGE_OPACITY) / (1 - LATTICE_EDGE_OPACITY),
+}));
+
+/**
+ * The step every lattice's comet stands on. Made native at once, so a step is
+ * one value sent to the platform, which moves every comet dot on screen
+ * without JavaScript or a React render.
+ */
+const step = new Animated.Value(0);
+Animated.timing(step, { toValue: 0, duration: 0, useNativeDriver: true }).start();
+const holdClock = createLatticeClock((next) => step.setValue(next));
+
+/** Each comet dot's place at each step. */
+const COMET_STYLES = COMET.map(({ inputRange, left, top, opacity }) => ({
+	opacity,
+	transform: [
+		{ translateX: step.interpolate({ inputRange, outputRange: left }) },
+		{ translateY: step.interpolate({ inputRange, outputRange: top }) },
+	],
+}));
+/** Where the comet rests while its lattice holds still (off screen). */
+const COMET_RESTING = COMET.map(({ left, top, opacity }) => ({ opacity, transform: [{ translateX: left[0]! }, { translateY: top[0]! }] }));
+
+/**
+ * The live turn's working mark, after the desktop's: a 4×4 lattice of small
  * dots with a short bright trail running clockwise round the outer twelve while
  * the inner four rest (timing in latticeTrail.ts).
  *
- * One shared lap drives every dot on the UI thread, each reading it a twelfth of
- * a lap behind the last, so the trail moves from the first frame and keeps
- * moving while the JS thread is busy streaming the reply. Decorative: the label
- * beside it says what is happening. Under Reduce Motion the lattice holds still.
+ * The sixteen dots hold still; the trail is three more dots, a comet stepping
+ * one edge dot on every twelfth of a lap. One clock steps every lattice on
+ * screen at once, ten times a second, through a value the native animation
+ * driver applies: a step is one value sent to the platform, and between steps
+ * nothing runs on any thread. A desktop-faithful trail, twelve dots each fading
+ * every frame, held a board of working rows' UI thread three times as busy as
+ * the spinner the lattice replaced. Decorative: the label beside it says what
+ * is happening. Under Reduce Motion, and off screen, the lattice holds still.
  */
-export function LatticeLoader({ color }: { color: string }) {
+export const LatticeLoader = memo(function LatticeLoader({ color }: { color: string }) {
 	const reduceMotion = useReducedMotion();
-	const lap = useSharedValue(0);
-	useEffect(() => {
-		if (reduceMotion) return;
-		lap.value = 0;
-		lap.value = withRepeat(withTiming(1, { duration: LATTICE_LAP_MS, easing: Easing.linear }), -1);
-		return () => cancelAnimation(lap);
-	}, [lap, reduceMotion]);
+	// Off screen (a board row scrolled out of view) the comet rests.
+	const moving = useContext(LatticeActiveContext) && !reduceMotion;
+	useEffect(() => (moving ? holdClock() : undefined), [moving]);
+	const fill = { backgroundColor: color };
+	const comet = moving ? COMET_STYLES : COMET_RESTING;
 	return (
 		<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.lattice} testID="lattice-loader">
-			{Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) => {
-				const step = LATTICE_TRAIL.indexOf(cell as (typeof LATTICE_TRAIL)[number]);
-				const dot = [styles.dot, ORIGINS[cell], { backgroundColor: color }];
-				if (step < 0) return <View key={cell} style={[dot, { opacity: LATTICE_INNER_OPACITY }]} />;
-				if (reduceMotion) return <View key={cell} style={[dot, { opacity: LATTICE_STILL_OPACITY }]} />;
-				return <TrailDot key={cell} lap={lap} offset={step / LATTICE_TRAIL.length} style={dot} />;
-			})}
+			{ORIGINS.map((origin, cell) => (
+				<View key={cell} style={[styles.dot, origin, fill, { opacity: !EDGE.has(cell) ? LATTICE_INNER_OPACITY : reduceMotion ? LATTICE_STILL_OPACITY : LATTICE_EDGE_OPACITY }]} />
+			))}
+			{reduceMotion ? null : comet.map((style, behind) => <Animated.View key={`comet-${behind}`} style={[styles.dot, fill, style]} />)}
 		</View>
 	);
-}
-
-function TrailDot({ lap, offset, style }: { lap: SharedValue<number>; offset: number; style: StyleProp<ViewStyle> }) {
-	const trail = useAnimatedStyle(() => ({ opacity: latticeTrailOpacity(lap.value - offset) }));
-	return <Animated.View style={[style, trail]} />;
-}
+});
 
 const styles = StyleSheet.create({
 	lattice: { width: SIZE, height: SIZE },
-	dot: { position: "absolute", width: DOT, height: DOT, borderRadius: DOT / 2 },
+	dot: { position: "absolute", left: 0, top: 0, width: DOT, height: DOT, borderRadius: DOT / 2 },
 });
