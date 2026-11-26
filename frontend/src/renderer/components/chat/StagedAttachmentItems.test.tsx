@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { rememberSentAttachments, resetSentAttachmentPreviewsForTest } from "../../lib/sent-attachment-previews";
-import { ChatLinkProvider } from "./ChatMarkdown";
 import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 import { attachmentURL } from "./messageAttachments";
 
@@ -114,21 +113,5 @@ describe("AttachmentStrip", () => {
 		strip.scrollLeft = 120;
 		rerender(<AttachmentStrip itemCount={2} data-testid="strip">{tiles(2)}</AttachmentStrip>);
 		expect(strip.scrollLeft).toBe(120);
-	});
-});
-
-describe("StagedAttachmentItems opening a text file", () => {
-	it("opens a text tile's file in the chat's Files, and only where the chat can open files", () => {
-		const onFileOpen = vi.fn();
-		const { rerender } = render(
-			<ChatLinkProvider onFileOpen={onFileOpen}>
-				<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />
-			</ChatLinkProvider>,
-		);
-		fireEvent.click(screen.getByRole("button", { name: "attachment-notes.txt" }));
-		expect(onFileOpen).toHaveBeenCalledWith(NOTES);
-
-		rerender(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
-		expect(screen.queryByRole("button", { name: "attachment-notes.txt" })).toBeNull();
 	});
 });

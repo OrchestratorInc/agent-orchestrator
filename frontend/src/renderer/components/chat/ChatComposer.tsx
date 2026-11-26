@@ -161,9 +161,11 @@ function isPlainPasteShortcut(event: KeyboardEvent<HTMLDivElement>): boolean {
 	return isV && event.shiftKey && (event.metaKey || event.ctrlKey);
 }
 
-function pastedTextFileName(taken: string[]): string {
+function pastedTextFileName(text: string, taken: string[]): string {
+	const firstLine = text.split("\n").find((line) => line.trim()) ?? "";
+	const base = firstLine.replace(/[\\/\p{Cc}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60).trim() || "pasted-text";
 	for (let index = 1; ; index++) {
-		const name = index === 1 ? "pasted-text.txt" : `pasted-text-${index}.txt`;
+		const name = index === 1 ? `${base}.txt` : `${base} ${index}.txt`;
 		if (!taken.includes(name)) return name;
 	}
 }
@@ -2471,7 +2473,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const text = typeof clipboard?.getData === "function" ? clipboard.getData("text/plain") : "";
 		const taken = [...visibleRetainedAttachments, ...fileAttachments.attachments, ...pendingAttachments, ...files].map((file) => file.name);
 		const textAsFile = !asText && !holdAttachments && !historyBrowse.current && text.length >= PASTED_TEXT_ATTACHMENT_CHARS && taken.length < MAX_ATTACHMENTS;
-		if (textAsFile) files.push(new globalThis.File([text], pastedTextFileName(taken), { type: "text/plain" }));
+		if (textAsFile) files.push(new globalThis.File([text], pastedTextFileName(text, taken), { type: "text/plain" }));
 		else if (files.length === 0) return;
 		// A copy carrying both an image and text still pastes its text, unless that
 		// text becomes a file.

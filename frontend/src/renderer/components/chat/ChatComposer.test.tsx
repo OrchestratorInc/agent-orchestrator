@@ -317,14 +317,24 @@ describe("send keys", () => {
 			.mockResolvedValueOnce([".ao/attachments/attachment-a.txt"])
 			.mockResolvedValueOnce([".ao/attachments/attachment-b.txt"]);
 		const { field } = renderComposer({ draftSessionId: "composer-long-paste", onStageAttachments: stage });
-		const log = "line\n".repeat(1000);
+		const log = `\n   \n[12:01]  build\tstarted/ok\n${"line\n".repeat(1000)}`;
 		fireEvent.paste(field, { clipboardData: textClipboard(log) });
-		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
-		expect(stage).toHaveBeenCalledWith([expect.objectContaining({ mimeType: "text/plain", name: "pasted-text.txt" })], expect.anything());
+		expect(await screen.findByRole("button", { name: "Remove [12:01] build started ok.txt" })).toBeInTheDocument();
+		expect(stage).toHaveBeenCalledWith([expect.objectContaining({ mimeType: "text/plain", name: "[12:01] build started ok.txt" })], expect.anything());
 		expect(composerWireText(field)).toBe("");
 
 		fireEvent.paste(field, { clipboardData: textClipboard(log) });
-		expect(await screen.findByRole("button", { name: "Remove pasted-text-2.txt" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove [12:01] build started ok 2.txt" })).toBeInTheDocument();
+	});
+	it("names a long paste with no words in it pasted-text.txt, and caps a long first line", async () => {
+		const stage = vi.fn()
+			.mockResolvedValueOnce([".ao/attachments/attachment-a.txt"])
+			.mockResolvedValueOnce([".ao/attachments/attachment-b.txt"]);
+		const { field } = renderComposer({ draftSessionId: "composer-paste-names", onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: textClipboard(" \n".repeat(3000)) });
+		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
+		fireEvent.paste(field, { clipboardData: textClipboard("x".repeat(5000)) });
+		expect(await screen.findByRole("button", { name: `Remove ${"x".repeat(60)}.txt` })).toBeInTheDocument();
 	});
 	it("holds a send made while a long paste stages, and puts the text in the box when that paste fails", async () => {
 		let fail: (error: Error) => void = () => undefined;
@@ -349,7 +359,7 @@ describe("send keys", () => {
 		const { field, onSend } = renderComposer({ draftSessionId: "composer-paste-cancel", onStageAttachments: stage });
 		await typeInComposer(field, "go");
 		fireEvent.paste(field, { clipboardData: textClipboard("line\n".repeat(1000)) });
-		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching pasted-text.txt" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching line.txt" }));
 		fireEvent.keyDown(field, { key: "Enter" });
 		finish([".ao/attachments/attachment-late.txt"]);
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("go", undefined, expect.any(String)));
@@ -359,14 +369,14 @@ describe("send keys", () => {
 		const stages: Array<(paths: string[]) => void> = [];
 		const stage = vi.fn(() => new Promise<string[]>((resolve) => { stages.push(resolve); }));
 		const { field } = renderComposer({ draftSessionId: "composer-paste-reuse", onStageAttachments: stage });
-		fireEvent.paste(field, { clipboardData: textClipboard("a".repeat(5000)) });
-		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching pasted-text.txt" }));
-		fireEvent.paste(field, { clipboardData: textClipboard("b".repeat(5000)) });
-		expect(await screen.findByRole("status", { name: "Attaching pasted-text.txt" })).toBeInTheDocument();
+		fireEvent.paste(field, { clipboardData: textClipboard(`log\n${"a".repeat(5000)}`) });
+		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching log.txt" }));
+		fireEvent.paste(field, { clipboardData: textClipboard(`log\n${"b".repeat(5000)}`) });
+		expect(await screen.findByRole("status", { name: "Attaching log.txt" })).toBeInTheDocument();
 		stages[0]!([".ao/attachments/attachment-a.txt"]);
 		await waitFor(() => expect(stage).toHaveBeenCalledTimes(2));
 		stages[1]!([".ao/attachments/attachment-b.txt"]);
-		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove log.txt" })).toBeInTheDocument();
 		expect(composerWireText(field)).toBe("");
 	});
 	it("leaves a cancelled long paste out of the box when the image beside it fails", async () => {
@@ -374,7 +384,7 @@ describe("send keys", () => {
 		const stage = vi.fn(() => new Promise<string[]>((_, reject) => { fail = reject; }));
 		const { field } = renderComposer({ draftSessionId: "composer-sheet-cancel", onStageAttachments: stage });
 		fireEvent.paste(field, { clipboardData: { ...textClipboard("a\tb\n".repeat(2000)), files: [png()] } });
-		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching pasted-text.txt" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching a b.txt" }));
 		fail(new Error("disk full"));
 		expect(await screen.findByText(/Nothing was attached/)).toBeInTheDocument();
 		expect(composerWireText(field)).toBe("");
@@ -392,10 +402,10 @@ describe("send keys", () => {
 		const { field } = renderComposer({ draftSessionId: "composer-sheet-paste", onStageAttachments: stage });
 		const rows = "a\tb\tc\n".repeat(1000);
 		fireEvent.paste(field, { clipboardData: { ...textClipboard(rows), files: [png()] } });
-		expect(await screen.findByRole("button", { name: "Remove pasted-text.txt" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove a b c.txt" })).toBeInTheDocument();
 		expect(stage).toHaveBeenCalledWith([
 			expect.objectContaining({ mimeType: "image/png", name: "shot.png" }),
-			expect.objectContaining({ mimeType: "text/plain", name: "pasted-text.txt" }),
+			expect.objectContaining({ mimeType: "text/plain", name: "a b c.txt" }),
 		], expect.anything());
 		expect(composerWireText(field)).toBe("");
 	});
@@ -416,7 +426,7 @@ describe("send keys", () => {
 		const { field } = renderComposer({ draftSessionId: "composer-held-paste", holdAttachments: true });
 		fireEvent.paste(field, { clipboardData: textClipboard("e".repeat(5000)) });
 		await waitFor(() => expect(composerWireText(field)).toBe("e".repeat(5000)));
-		expect(screen.queryByRole("button", { name: "Remove pasted-text.txt" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
 	});
 	it("puts a long text paste in the box when no attachment slot is left", async () => {
 		const names = Array.from({ length: 8 }, (_, index) => `f${index}.txt`);

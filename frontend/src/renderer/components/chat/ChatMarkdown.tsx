@@ -750,10 +750,6 @@ export function useChatBrowserOpen() {
 	return useContext(OpenChatLink).open;
 }
 
-export function useChatFileOpen() {
-	return useContext(OpenChatLink).openFile;
-}
-
 /** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
 export function useChatLinkWorkspaces(): WorkspaceSummary[] {
 	const { workspaces, demand } = useContext(ChatLinkWorkspaces);
