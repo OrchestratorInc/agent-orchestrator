@@ -219,4 +219,27 @@ describe("effort slider", () => {
 		await act(async () => track().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
 		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["max"]);
 	});
+
+	// Kept mounted across model changes; a model with fewer levels, or none,
+	// must not read past them before the slider catches up.
+	it("survives the choices shrinking under a kept level, and re-places the blob", async () => {
+		const { label, blobCentre } = await render("max");
+		expect(label()).toBe("Max");
+		const two = [{ value: "low", label: "Low", selected: false }, { value: "high", label: "High", selected: true }];
+		await act(async () => renderer!.update(<EffortSlider choices={two} onChoose={() => {}} />));
+		expect(label()).toBe("High");
+		// Two stops on the 240 track: 20 and 220.
+		expect(blobCentre()).toBe(220);
+		await act(async () => renderer!.update(<EffortSlider choices={[]} onChoose={() => {}} />));
+		expect(label()).toBe("Default");
+	});
+
+	it("re-places the blob when the level count changes under the same index", async () => {
+		const { blobCentre } = await render("medium");
+		// Index 1 of five on the 240 track sits at 70.
+		expect(blobCentre()).toBe(70);
+		const three = [{ value: "low", label: "Low", selected: false }, { value: "medium", label: "Medium", selected: true }, { value: "high", label: "High", selected: false }];
+		await act(async () => renderer!.update(<EffortSlider choices={three} onChoose={() => {}} />));
+		expect(blobCentre()).toBe(120);
+	});
 });

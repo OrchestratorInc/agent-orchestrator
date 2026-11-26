@@ -97,5 +97,9 @@ export function useEffortSlider(choices: readonly EffortChoice[], onChoose: (val
 		tick();
 		onChoose(choices[next].value);
 	};
-	return { index, label: index >= 0 ? choices[index].label : "Default", pick };
+	// The level kept from before the choices changed can point past them (a
+	// model with fewer levels, or none) until the effect above catches up; the
+	// slider stays mounted across model changes, so fall back to the chosen one.
+	const current = index < choices.length ? index : chosen;
+	return { index: current, label: current >= 0 ? choices[current].label : "Default", pick };
 }
