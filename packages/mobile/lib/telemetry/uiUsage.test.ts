@@ -77,7 +77,7 @@ describe("usage summary", () => {
 		t.advance(60_000);
 		t.tracker.setRoute("session");
 		t.tracker.setVariant("session", "session_chat");
-		t.tracker.sessionOpened();
+		t.tracker.sessionOpened("host|s1");
 		t.advance(120_000);
 		t.tracker.setForeground(false);
 		expect(t.of(UI_EVENTS.summary)).toEqual([]);
@@ -149,32 +149,69 @@ describe("usage summary", () => {
 });
 
 describe("session opens", () => {
-	it("credits where the session was opened from", () => {
-		const t = setup();
-		t.tracker.setRoute("projects");
-		t.tracker.setRoute("session");
-		t.tracker.sessionOpened();
-		t.tracker.setRoute("notifications");
-		t.tracker.openedBy("notification");
-		t.tracker.setRoute("session");
-		t.tracker.sessionOpened();
+	function summaryAfter(t: ReturnType<typeof setup>) {
 		t.advance(UI_WINDOW_MS);
 		t.tracker.setForeground(false);
-		expect(t.of(UI_EVENTS.summary)[0].props).toMatchObject({
-			session_open_count: 2,
-			session_open_from_project_count: 1,
+		return t.of(UI_EVENTS.summary)[0].props;
+	}
+
+	// The app always starts on the board, so that is where these start too.
+	it("credits the screen the session was opened from", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("projects");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|s1");
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|s2");
+		expect(summaryAfter(t)).toMatchObject({ session_open_count: 2, session_open_from_project_count: 1, session_open_from_board_count: 1 });
+	});
+
+	it("credits a push, a link or the launch's restore when it marked the opening", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		for (const [source, key] of [["notification", "h|a"], ["deep_link", "h|b"], ["restore", "h|c"]] as const) {
+			t.tracker.openedBy(source);
+			t.tracker.setRoute("session");
+			t.tracker.sessionOpened(key);
+			t.tracker.setRoute("board");
+		}
+		expect(summaryAfter(t)).toMatchObject({
+			session_open_count: 3,
 			session_open_from_notification_count: 1,
+			session_open_from_deep_link_count: 1,
+			session_open_from_restore_count: 1,
 		});
 	});
 
-	it("names the launch's first screen restore and counts a remount once", () => {
+	// A session restored at launch opens from the board the app started on; it
+	// is a restore only when RouteRestorer says so, never by default.
+	it("does not guess a restore", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|s1");
+		const props = summaryAfter(t);
+		expect(props).toMatchObject({ session_open_from_board_count: 1 });
+		expect(props).not.toHaveProperty("session_open_from_restore_count");
+	});
+
+	it("names other when no screen came first", () => {
 		const t = setup();
 		t.tracker.setRoute("session");
-		t.tracker.sessionOpened();
-		t.tracker.sessionOpened();
-		t.advance(UI_WINDOW_MS);
-		t.tracker.setForeground(false);
-		expect(t.of(UI_EVENTS.summary)[0].props).toMatchObject({ session_open_count: 1, session_open_from_restore_count: 1 });
+		t.tracker.sessionOpened("h|s1");
+		expect(summaryAfter(t)).toMatchObject({ session_open_from_other_count: 1 });
+	});
+
+	it("counts a remount or mode switch once, and a different session again", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|s1");
+		t.tracker.sessionOpened("h|s1");
+		t.tracker.sessionOpened("h|s2");
+		expect(summaryAfter(t)).toMatchObject({ session_open_count: 2, session_open_from_board_count: 1, session_open_from_session_count: 1 });
 	});
 
 	it("does not credit a push that opened nothing", () => {
@@ -183,10 +220,8 @@ describe("session opens", () => {
 		t.tracker.openedBy("deep_link");
 		t.advance(10_000);
 		t.tracker.setRoute("session");
-		t.tracker.sessionOpened();
-		t.advance(UI_WINDOW_MS);
-		t.tracker.setForeground(false);
-		expect(t.of(UI_EVENTS.summary)[0].props).toMatchObject({ session_open_from_board_count: 1 });
+		t.tracker.sessionOpened("h|s1");
+		expect(summaryAfter(t)).toMatchObject({ session_open_from_board_count: 1 });
 	});
 });
 
@@ -207,6 +242,18 @@ describe("errors shown", () => {
 		t.advance(UI_WINDOW_MS);
 		t.tracker.setForeground(false);
 		expect(t.of(UI_EVENTS.summary)[0].props.error_shown_count).toBe(4);
+	});
+});
+
+describe("error retries", () => {
+	it("sends a dropped error again on its next showing", () => {
+		let accept = false;
+		const t = setup({ accept: () => accept });
+		t.tracker.setRoute("board");
+		t.tracker.errorShown("screen", "unreachable");
+		accept = true;
+		t.tracker.errorShown("screen", "unreachable");
+		expect(t.of(UI_EVENTS.errorShown)).toHaveLength(1);
 	});
 });
 

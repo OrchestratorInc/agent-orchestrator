@@ -28,7 +28,9 @@ describe("launchProperties", () => {
 	// What an Expo Release build reports: React Native copies the runtime's start.
 	it("does not call a copied runtime start the app's", () => {
 		const props = launchProperties({ kind: "cold", outcome: "usable", marks: { startTime: 1_200, initializeRuntimeStart: 1_200, executeJavaScriptBundleEntryPointStart: 1_260 }, visibleAt: 1_444 });
-		expect(props).toMatchObject({ clock_origin: "runtime", to_js_start_ms: 60, to_visible_ms: 244 });
+		expect(props).toMatchObject({ clock_origin: "runtime", to_visible_ms: 244 });
+		// Measured from the runtime's own start, the JS step says nothing.
+		expect(props).not.toHaveProperty("to_js_start_ms");
 	});
 
 	it("falls back to the runtime's start when the app's is not recorded", () => {
@@ -39,6 +41,12 @@ describe("launchProperties", () => {
 	it("leaves out the usable time when the launch never showed live data", () => {
 		const props = launchProperties({ kind: "first", outcome: "timeout", marks, visibleAt: 2_100, usableAt: 3_000, landingSurface: "onboarding" });
 		expect(props).toMatchObject({ outcome: "timeout", to_visible_ms: 1_100, landing_surface: "onboarding" });
+		expect(props).not.toHaveProperty("to_usable_ms");
+	});
+
+	it("keeps the first frame for a phone with nowhere to load from", () => {
+		const props = launchProperties({ kind: "first", outcome: "no_machine", marks, visibleAt: 2_100, landingSurface: "onboarding" });
+		expect(props).toMatchObject({ outcome: "no_machine", to_visible_ms: 1_100, landing_surface: "onboarding" });
 		expect(props).not.toHaveProperty("to_usable_ms");
 	});
 

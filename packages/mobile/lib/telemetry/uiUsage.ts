@@ -18,11 +18,14 @@ export const SESSION_OPEN_SOURCES = [
 	"notification",
 	"notifications_inbox",
 	"deep_link",
-	// The first screen of a launch: the app reopened where it was.
+	// The launch reopened the session the app was left on (RouteRestorer).
 	"restore",
+	// Opened from another session, such as a worker from its orchestrator.
+	"session",
 	"other",
 ] as const;
 export type SessionOpenSource = (typeof SESSION_OPEN_SOURCES)[number];
+export type OpenedBySource = "notification" | "deep_link" | "restore";
 
 export const ERROR_PRESENTATIONS = ["toast", "screen", "sheet"] as const;
 export type ErrorPresentation = (typeof ERROR_PRESENTATIONS)[number];
@@ -46,7 +49,7 @@ export const UI_WINDOW_MS = 15 * 60_000;
 export const VIEW_DWELL_MS = 1_000;
 /** The same error shown again within this long is counted but not sent again. */
 export const ERROR_REPEAT_MS = 5 * 60_000;
-/** A push or link opens the session it names within this long. */
+/** A push, link or relaunch opens the session it names within this long. */
 export const OPENED_BY_MS = 5_000;
 export const UI_MEASUREMENT_SCHEMA_VERSION = 1;
 
@@ -95,10 +98,14 @@ export type UiUsageTracker = {
 	/** A route's screen naming which form it took (chat or terminal), or null on unmount. */
 	setVariant(base: Surface, variant: Surface | null): void;
 	setForeground(active: boolean): void;
-	/** A session screen mounted. */
-	sessionOpened(): void;
-	/** A push or a link is about to open a screen. */
-	openedBy(source: "notification" | "deep_link"): void;
+	/**
+	 * A session screen is showing `key` (its host and id, kept on the phone).
+	 * Counted once per session, so a remount or a mode switch is not a new
+	 * opening but going straight to another session is.
+	 */
+	sessionOpened(key: string): void;
+	/** A push, a link or the launch's restore is about to open a session. */
+	openedBy(source: OpenedBySource): void;
 	errorShown(presentation: ErrorPresentation, kind: ErrorKind): void;
 	/** Restores what an earlier run saved; sends it first if its window is over. */
 	restore(saved: PersistedUiUsage | null): void;
@@ -191,7 +198,8 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 	let foreground = true;
 	let activeSince = start;
 	let lastOutsideSession: Surface | null = null;
-	let sessionCounted = false;
+	// The session counted since the app last left the session screens.
+	let countedSession: string | null = null;
 	let pendingSource: { source: SessionOpenSource; at: number } | null = null;
 	const lastErrorAt = new Map<string, number>();
 	let lastSaveAt = start;
@@ -252,7 +260,7 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			window.surfaces[next] = entry;
 			if (!isSessionSurface(next)) {
 				lastOutsideSession = next;
-				sessionCounted = false;
+				countedSession = null;
 			}
 		}
 		if (now - lastSaveAt >= 60_000) save(now);
@@ -304,13 +312,17 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 				window.surfaces[shown] = entry;
 			}
 		},
-		sessionOpened() {
-			if (!enabled || sessionCounted) return;
-			sessionCounted = true;
+		sessionOpened(key) {
+			if (!enabled || key === countedSession) return;
+			const fromSession = countedSession !== null;
+			countedSession = key;
 			const now = deps.now();
+			// Only what marked itself (a push, a link, the launch's restore) or the
+			// screen the session was opened from names the source; nothing is guessed.
 			const source: SessionOpenSource = pendingSource && now - pendingSource.at <= OPENED_BY_MS
 				? pendingSource.source
-				: lastOutsideSession === null ? "restore" : SOURCE_BY_SURFACE[lastOutsideSession] ?? "other";
+				: fromSession ? "session"
+					: lastOutsideSession ? SOURCE_BY_SURFACE[lastOutsideSession] ?? "other" : "other";
 			pendingSource = null;
 			window.sessionOpens[source] = (window.sessionOpens[source] ?? 0) + 1;
 		},
@@ -325,8 +337,8 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			const key = `${presentation}|${kind}|${surface}`;
 			const last = lastErrorAt.get(key);
 			if (last !== undefined && now - last < ERROR_REPEAT_MS) return;
-			lastErrorAt.set(key, now);
-			deps.capture(UI_EVENTS.errorShown, { presentation, error_kind: kind, surface });
+			// Held back only once sent, as with screen views: a dropped send is retried.
+			if (deps.capture(UI_EVENTS.errorShown, { presentation, error_kind: kind, surface })) lastErrorAt.set(key, now);
 		},
 		restore(saved) {
 			if (!enabled || !saved || !isWindow(saved.window)) return;

@@ -62,8 +62,8 @@ describe("useErrorShown", () => {
 });
 
 describe("useSessionSurface", () => {
-	function Probe({ form }: { form: "chat" | "tui" | null }) {
-		useSessionSurface(form);
+	function Probe({ form, id = "s1" }: { form: "chat" | "tui" | null; id?: string }) {
+		useSessionSurface(form, `h|${id}`);
 		return null;
 	}
 
@@ -74,9 +74,31 @@ describe("useSessionSurface", () => {
 		expect(tracker.setVariant).toHaveBeenLastCalledWith("session", "session_chat");
 		act(() => renderer!.update(<Probe form="tui" />));
 		expect(tracker.setVariant).toHaveBeenLastCalledWith("session", "session_tui");
-		expect(tracker.sessionOpened).toHaveBeenCalledTimes(1);
+		expect(tracker.sessionOpened.mock.calls).toEqual([["h|s1"]]);
+		// The same route showing another session is a new opening.
+		act(() => renderer!.update(<Probe form="tui" id="s2" />));
+		expect(tracker.sessionOpened.mock.calls).toEqual([["h|s1"], ["h|s2"]]);
 		act(() => renderer!.unmount());
 		renderer = undefined;
 		expect(tracker.setVariant).toHaveBeenLastCalledWith("session", null);
+	});
+});
+
+describe("reportOpenedBy", () => {
+	// expo-router reads the launch link before telemetry starts.
+	it("hands a source that arrived before the tracker to it when it registers", async () => {
+		const { reportOpenedBy } = await import("./uiUsageRegistry");
+		setUiUsageTracker(null);
+		reportOpenedBy("deep_link", () => 1_000);
+		setUiUsageTracker(tracker as unknown as UiUsageTracker, () => 2_000);
+		expect(tracker.openedBy).toHaveBeenCalledWith("deep_link");
+	});
+
+	it("drops a source that waited too long", async () => {
+		const { reportOpenedBy } = await import("./uiUsageRegistry");
+		setUiUsageTracker(null);
+		reportOpenedBy("deep_link", () => 1_000);
+		setUiUsageTracker(tracker as unknown as UiUsageTracker, () => 60_000);
+		expect(tracker.openedBy).not.toHaveBeenCalled();
 	});
 });

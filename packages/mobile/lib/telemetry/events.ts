@@ -118,7 +118,7 @@ export const MOBILE_ALLOWLIST: Record<string, Readonly<Record<string, PropRule>>
 	},
 	[MOBILE_EVENTS.launchTimed]: {
 		launch_kind: { oneOf: ["first", "cold", "update"] },
-		outcome: { oneOf: ["usable", "timeout", "backgrounded"] },
+		outcome: { oneOf: ["usable", "timeout", "no_machine", "backgrounded"] },
 		clock_origin: { oneOf: ["process", "runtime"] },
 		landing_surface: { oneOf: SURFACES },
 		to_js_start_ms: COUNT,

@@ -42,7 +42,7 @@ describe("mobile event names", () => {
 		now += 5_000;
 		tracker.setRoute("session");
 		tracker.setVariant("session", "session_tui");
-		tracker.sessionOpened();
+		tracker.sessionOpened("h|s1");
 		tracker.errorShown("toast", "action_failed");
 		now += UI_WINDOW_MS;
 		tracker.setForeground(false);

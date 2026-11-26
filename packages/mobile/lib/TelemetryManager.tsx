@@ -2,7 +2,8 @@ import Constants from "expo-constants";
 import { useSegments } from "expo-router";
 import * as Updates from "expo-updates";
 import { useEffect, useRef } from "react";
-import { AppState, Linking, type AppStateStatus } from "react-native";
+import { AppState, type AppStateStatus } from "react-native";
+import { useCloud } from "./cloud/CloudProvider";
 import { captureMobileException, setMobileSentryContext } from "./sentry";
 import { useApp } from "./store";
 import { updateIdOf } from "./telemetry/context";
@@ -12,6 +13,7 @@ import {
 	markLaunchBackgrounded,
 	markLaunchUsable,
 	markLaunchVisible,
+	setLaunchHasMachine,
 	mobileTelemetry,
 	syncDesktopTelemetryIdentity,
 	telemetryActiveStorage,
@@ -33,9 +35,13 @@ type ErrorUtilsLike = {
 // It also feeds UI usage (the surface on screen, foreground time, links) and
 // launch timing (first frame, first frame with a machine's live data).
 export function TelemetryManager() {
-	const { hostStates } = useApp();
+	const { hostStates, cloud } = useApp();
+	const { sessionsLoaded: cloudSessionsLoaded } = useCloud();
 	const surface = surfaceForSegments(useSegments());
-	const usable = hostStates.some(({ connection, lastSyncAt }) => connection === "open" && lastSyncAt > 0);
+	// Live data from a paired machine, or Orchestrator Cloud's first list.
+	const usable = hostStates.some(({ connection, lastSyncAt }) => connection === "open" && lastSyncAt > 0)
+		|| (Boolean(cloud) && cloudSessionsLoaded);
+	const hasMachine = hostStates.length > 0 || Boolean(cloud);
 	const connected = hostStates.flatMap(({ config, connection }) => (config && connection === "open" ? [config] : []));
 	// Re-sync when a desktop connects, its endpoint or credential changes, or the
 	// app returns to the foreground; a poll refresh alone does not re-run it.
@@ -67,9 +73,6 @@ export function TelemetryManager() {
 		}
 
 		const frame = requestAnimationFrame(() => markLaunchVisible());
-		// A link that opens a screen; a session it opens credits it.
-		void Linking.getInitialURL().then((url) => { if (url) uiUsage()?.openedBy("deep_link"); }).catch(() => {});
-		const links = Linking.addEventListener("url", () => uiUsage()?.openedBy("deep_link"));
 
 		const onChange = (state: AppStateStatus) => {
 			if (state === "active") {
@@ -85,7 +88,6 @@ export function TelemetryManager() {
 		const sub = AppState.addEventListener("change", onChange);
 		return () => {
 			cancelAnimationFrame(frame);
-			links.remove();
 			sub.remove();
 		};
 	}, []);
@@ -94,6 +96,10 @@ export function TelemetryManager() {
 	useEffect(() => {
 		uiUsage()?.setRoute(surface);
 	}, [surface]);
+
+	useEffect(() => {
+		setLaunchHasMachine(hasMachine);
+	}, [hasMachine]);
 
 	useEffect(() => {
 		if (!usable) return;

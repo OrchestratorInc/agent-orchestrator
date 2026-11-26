@@ -19,7 +19,7 @@ export const LAUNCH_TIMEOUT_MS = 60_000;
 const MAX_DELTA_MS = 10 * 60_000;
 
 export type LaunchKind = "first" | "cold" | "update";
-export type LaunchOutcome = "usable" | "timeout" | "backgrounded";
+export type LaunchOutcome = "usable" | "timeout" | "no_machine" | "backgrounded";
 
 export type StartupMarks = {
 	startTime?: number | null;
@@ -66,7 +66,8 @@ export function launchProperties(input: {
 	const toJs = delta(input.marks?.executeJavaScriptBundleEntryPointStart);
 	const toVisible = delta(input.visibleAt);
 	const toUsable = input.outcome === "usable" ? delta(input.usableAt) : undefined;
-	if (toJs !== undefined) props.to_js_start_ms = toJs;
+	// From the runtime's start this step is always 0: the two marks are logged together.
+	if (toJs !== undefined && processStart !== undefined) props.to_js_start_ms = toJs;
 	if (toVisible !== undefined) props.to_visible_ms = toVisible;
 	if (toUsable !== undefined) props.to_usable_ms = toUsable;
 	return props;

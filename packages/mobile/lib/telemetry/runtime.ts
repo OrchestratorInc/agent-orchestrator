@@ -266,6 +266,13 @@ export function markLaunchUsable(): void {
 	void sendLaunch("usable");
 }
 
+let launchHasMachine = true;
+
+/** Whether the phone has anywhere to load from: a paired machine or Orchestrator Cloud. */
+export function setLaunchHasMachine(has: boolean): void {
+	launchHasMachine = has;
+}
+
 /** The app went to the background; a launch not yet usable is sent without its times. */
 export function markLaunchBackgrounded(): void {
 	if (launchUsableAt === undefined) void sendLaunch("backgrounded");
@@ -274,6 +281,9 @@ export function markLaunchBackgrounded(): void {
 async function sendLaunch(outcome: LaunchOutcome): Promise<void> {
 	if (launchSent || !telemetry || !launchHistory) return;
 	launchSent = true;
+	// A phone with nowhere to load from times out by definition; kept apart so the
+	// timeout rate measures slow machines, not unpaired phones.
+	if (outcome === "timeout" && !launchHasMachine) outcome = "no_machine";
 	if (launchTimer) clearTimeout(launchTimer);
 	// Before the waits below, so navigating meanwhile does not change it.
 	const landingSurface = uiUsageTracker?.current() ?? undefined;
