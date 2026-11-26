@@ -236,6 +236,7 @@ type BrowserBoundsInput = {
 type BrowserNavigateInput = {
   viewId: string;
   url: string;
+  preview?: boolean;
 };
 
 type BrowserHistorySuggestInput = {
@@ -256,6 +257,7 @@ type BrowserTabInput = {
 type BrowserOpenTabInput = {
   viewId: string;
   url?: string;
+  preview?: boolean;
 };
 
 type BrowserShortcutInput = {
@@ -2952,6 +2954,7 @@ export function createBrowserViewHost(
   const navigate = async ({
     viewId,
     url,
+    preview,
   }: BrowserNavigateInput): Promise<BrowserNavState> => {
     const session = entries.get(viewId);
     if (!session)
@@ -2963,9 +2966,12 @@ export function createBrowserViewHost(
     return withBrowserOperation(session, async () => {
       if (!session.tabs.size) {
         const entry = await openTab(session, url, true);
+        if (preview) session.previewTabId = entry.tabId;
         return pushNavState(options, entry);
       }
-      return navigateEntry(activeEntry(session), url);
+      const entry = activeEntry(session);
+      if (preview) session.previewTabId = entry.tabId;
+      return navigateEntry(entry, url);
     });
   };
 
@@ -2979,8 +2985,6 @@ export function createBrowserViewHost(
     if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
       throw new Error("Unsupported browser URL");
     }
-    const owner = entries.get(entry.state.viewId);
-    if (owner && isPreviewPage(normalized.href, owner.hostId)) owner.previewTabId = entry.tabId;
     return entry.driver().navigate(normalized.href, loadOptions);
   };
 
@@ -4140,7 +4144,10 @@ export function createBrowserViewHost(
       }
       return listTabs(session);
     }
-    return openUserTab(session, url);
+    const state = await openUserTab(session, url);
+    if (!input.preview) return state;
+    session.previewTabId = session.activeTabId;
+    return listTabs(session);
   });
   handle(
     "browser:annotation:setMode",
