@@ -96,6 +96,16 @@ type SpawnConfig struct {
 	// consume inline binary data). Any file type is accepted except for
 	// explicitly blocked types (e.g., SVG for security reasons).
 	Attachments []SpawnAttachment
+	// ArtifactImports are written into the session's artifact directory before
+	// the agent starts, so a prompt that names them finds them there: a page
+	// shared with the user, copied with its files to work from.
+	ArtifactImports []domain.ArtifactImportFile
+	// ArtifactImportEntry is the imported page or file itself; its folder is
+	// marked as a shared copy (sessionartifacts.MarkSharedCopy).
+	ArtifactImportEntry string
+	// OnArtifactsImported, when set, runs once ArtifactImports are written and
+	// before the agent starts, with the session as it will be stored.
+	OnArtifactsImported func(domain.SessionRecord)
 
 	// Async asks for a Chat spawn that answers as soon as the session row and
 	// its conversation exist, leaving the worktree and the agent controller to

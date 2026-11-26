@@ -854,6 +854,8 @@ export interface CloudCpArtifactShareView {
 	access?: "restricted" | "anyone";
 	/** The link's viewer page; absent where the control plane has no viewer. */
 	viewerUrl?: string;
+	/** Only for the link's owner. */
+	you?: { owner: boolean; shareId: string; grantCount: number };
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */

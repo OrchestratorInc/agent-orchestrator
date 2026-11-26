@@ -3027,6 +3027,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/artifact-imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy files into the session's artifact directory and register one as a deliverable */
+        post: operations["importSessionArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/artifact-registrations": {
         parameters: {
             query?: never;
@@ -5991,6 +6008,24 @@ export interface components {
             path: string;
             /** Format: int64 */
             size: number;
+        };
+        ArtifactImportFileInput: {
+            /** @description The file's bytes as standard base64. */
+            data: string;
+            /** @description Slash-separated path relative to the artifact directory, with no hidden or .. segments. */
+            path: string;
+        };
+        ArtifactImportRequest: {
+            /** @description The file registered as a deliverable: one of files' paths. */
+            entry: string;
+            /** @description The files to write, at most 201. A file already at a path is replaced, its current content kept as a version first. */
+            files: components["schemas"]["ArtifactImportFileInput"][];
+        };
+        ArtifactImportResponse: {
+            /** @description The registered file, relative to the artifact directory. */
+            entry: string;
+            /** @description How many files were written. */
+            files: number;
         };
         ArtifactVersionResponse: {
             /** @description The version's UTF-8 text content, cut short when truncated is set. */
@@ -9719,6 +9754,7 @@ export interface components {
             prompt?: string;
             /** @enum {string} */
             requestedOutput?: "artifact";
+            sharedArtifact?: components["schemas"]["ArtifactImportRequest"];
             terminateOnPrMerge?: null | boolean;
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
@@ -21051,6 +21087,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

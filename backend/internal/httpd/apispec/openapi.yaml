@@ -8269,6 +8269,64 @@ paths:
         theme bootstrap
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/artifact-imports:
+    post:
+      operationId: importSessionArtifacts
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactImportRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactImportResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Copy files into the session's artifact directory and register one as
+        a deliverable
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/artifact-registrations:
     post:
       operationId: registerSessionArtifacts
@@ -17815,6 +17873,46 @@ components:
       - path
       - size
       - fileFingerprint
+      type: object
+    ArtifactImportFileInput:
+      properties:
+        data:
+          description: The file's bytes as standard base64.
+          type: string
+        path:
+          description: Slash-separated path relative to the artifact directory, with
+            no hidden or .. segments.
+          type: string
+      required:
+      - path
+      - data
+      type: object
+    ArtifactImportRequest:
+      properties:
+        entry:
+          description: 'The file registered as a deliverable: one of files'' paths.'
+          type: string
+        files:
+          description: The files to write, at most 201. A file already at a path is
+            replaced, its current content kept as a version first.
+          items:
+            $ref: '#/components/schemas/ArtifactImportFileInput'
+          type: array
+      required:
+      - entry
+      - files
+      type: object
+    ArtifactImportResponse:
+      properties:
+        entry:
+          description: The registered file, relative to the artifact directory.
+          type: string
+        files:
+          description: How many files were written.
+          type: integer
+      required:
+      - entry
+      - files
       type: object
     ArtifactVersionResponse:
       properties:
@@ -27470,6 +27568,8 @@ components:
           enum:
           - artifact
           type: string
+        sharedArtifact:
+          $ref: '#/components/schemas/ArtifactImportRequest'
         terminateOnPrMerge:
           type:
           - "null"

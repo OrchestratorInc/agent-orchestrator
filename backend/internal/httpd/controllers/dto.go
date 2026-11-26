@@ -745,6 +745,10 @@ type SpawnSessionRequest struct {
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
 	Attachments []AttachmentInput `json:"attachments,omitempty"`
+	// SharedArtifact copies files into the new session's artifact directory
+	// before the agent starts and registers its entry as a deliverable: a page
+	// someone shared with the user, with the files it uses.
+	SharedArtifact *ArtifactImportRequest `json:"sharedArtifact,omitempty"`
 	// Async answers as soon as a project Chat session is addressable: the
 	// session reads as provisioning with its prompt queued, and the worktree,
 	// setup and agent start in the background. Clients follow provisionState
@@ -766,6 +770,27 @@ type AttachmentInput struct {
 	// UploadID names a file streamed in through POST /api/v1/attachment-uploads,
 	// in place of Data.
 	UploadID string `json:"uploadId,omitempty"`
+}
+
+// ArtifactImportRequest is the body of POST
+// /api/v1/sessions/{sessionId}/artifact-imports, and the sharedArtifact of a
+// spawn: files copied into a session's artifact directory, one of which is
+// registered as a deliverable.
+type ArtifactImportRequest struct {
+	Entry string                    `json:"entry" description:"The file registered as a deliverable: one of files' paths."`
+	Files []ArtifactImportFileInput `json:"files" description:"The files to write, at most 201. A file already at a path is replaced, its current content kept as a version first."`
+}
+
+// ArtifactImportFileInput is one file of an ArtifactImportRequest.
+type ArtifactImportFileInput struct {
+	Path string `json:"path" description:"Slash-separated path relative to the artifact directory, with no hidden or .. segments."`
+	Data string `json:"data" description:"The file's bytes as standard base64."`
+}
+
+// ArtifactImportResponse is the body of a successful artifact import.
+type ArtifactImportResponse struct {
+	Entry string `json:"entry" description:"The registered file, relative to the artifact directory."`
+	Files int    `json:"files" description:"How many files were written."`
 }
 
 // AttachmentUploadResponse is the body of POST /api/v1/attachment-uploads.

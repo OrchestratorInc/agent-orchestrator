@@ -1414,6 +1414,32 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnArtifactDir, err)
 		}
 	}
+	// Imported files land before the agent starts, so the opening prompt that
+	// names them never races their write.
+	if len(cfg.ArtifactImports) > 0 {
+		err := sessionartifacts.WriteImport(artifactDir, cfg.ArtifactImports)
+		if err == nil && cfg.ArtifactImportEntry != "" {
+			// Marked in the same step, so no copy is ever left publishable.
+			err = sessionartifacts.MarkSharedCopy(artifactDir, filepath.ToSlash(filepath.Dir(filepath.FromSlash(cfg.ArtifactImportEntry))))
+		}
+		if err != nil {
+			m.cleanupArtifactDir(id)
+			if prep != nil {
+				cleanupCtx, cancel := spawnRollbackContext(ctx)
+				m.discardClaimedTaskPreparation(cleanupCtx, prep)
+				m.cleanupAttachments(cleanupCtx, id)
+				cancel()
+			} else {
+				m.rollbackSpawnSeedRow(ctx, id)
+			}
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnArtifactDir, err)
+		}
+		if cfg.OnArtifactsImported != nil {
+			imported := rec
+			imported.Metadata.ArtifactDir = artifactDir
+			cfg.OnArtifactsImported(imported)
+		}
+	}
 	if prep == nil {
 		rec.Metadata.ArtifactDir = artifactDir
 		if _, err := m.store.UpdateSessionArtifactOutput(ctx, id, artifactDir, rec.OutputType); err != nil {

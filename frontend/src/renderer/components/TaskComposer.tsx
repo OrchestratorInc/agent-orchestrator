@@ -20,6 +20,10 @@ import { agentAccountProviderFor, type AgentAccountProvider } from "../hooks/use
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
+import { aoBridge } from "../lib/bridge";
+import { withoutPrompt } from "../lib/shared-artifact-draft";
+import { useSharedArtifactDraftStore } from "../stores/shared-artifact-draft-store";
+import { sharedArtifactCopiesQueryKey } from "../hooks/useSharedArtifactCopies";
 import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
 import { seedCloudOpening } from "../lib/cloud-opening";
 import {
@@ -238,9 +242,14 @@ function base64Bytes(data: string): number {
 	return Math.floor((data.length * 3) / 4) - padding;
 }
 
-export function useTaskLaunch({ projectId, hostId }: {
+export function useTaskLaunch({ projectId, hostId, sharedArtifactDraft = false }: {
 	projectId?: string;
 	hostId?: string;
+	/**
+	 * The new-chat page's own launch, which takes the shared artifact copy
+	 * waiting for it ("Start a session with this"). No other composer does.
+	 */
+	sharedArtifactDraft?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -485,7 +494,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
-			const displayName = sessionNameFromBrief(input.brief) || input.agent || "Standalone agent";
+			// A shared artifact copied for this draft lands in the session's
+			// artifact folder before its agent starts (this computer's sessions only).
+			const sharedArtifact = !hostId && sharedArtifactDraft ? useSharedArtifactDraftStore.getState().pending : null;
+			// Named for what the person asked, not for the line naming the copy.
+			const displayName = (sharedArtifact
+				? sessionNameFromBrief(withoutPrompt(input.brief, sharedArtifact.prompt)) || sharedArtifact.name
+				: sessionNameFromBrief(input.brief)) || input.agent || "Standalone agent";
 			// A file too large to inline is streamed from disk to the daemon first.
 			const wireAttachments = input.attachments?.length ? await toWireAttachments(input.attachments, hostId) : undefined;
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
@@ -502,12 +517,27 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.accountId ? { accountId: input.accountId } : {}),
 					...(wireAttachments ? { attachments: wireAttachments } : {}),
+					...(sharedArtifact ? { sharedArtifact: { entry: sharedArtifact.copy.entry, files: sharedArtifact.copy.files } } : {}),
 				},
 			});
 			if (error) {
 				throw new TaskCreateError(apiErrorMessage(error, t("newTask.unableToStart")), apiErrorCode(error), error.details);
 			}
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
+			if (sharedArtifact) {
+				const { copy } = sharedArtifact;
+				// Only the session the copy went to is remembered; a failure here
+				// only means the next click copies again.
+				await aoBridge.sharedArtifact.setSession(sharedArtifact.key, {
+					sessionId: data.session.id,
+					dir: copy.dir,
+					entry: copy.entry,
+					updatedAt: sharedArtifact.updatedAt,
+					fingerprint: copy.fingerprint,
+				}).catch(() => undefined);
+				if (useSharedArtifactDraftStore.getState().pending === sharedArtifact) useSharedArtifactDraftStore.getState().clearPending();
+				void queryClient.invalidateQueries({ queryKey: sharedArtifactCopiesQueryKey });
+			}
 			void captureRendererEvent("ao.tasks.created", { scope: "standalone" });
 			return data.session.id;
 			} catch (err) {
@@ -515,7 +545,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[hostId, t],
+		[hostId, queryClient, sharedArtifactDraft, t],
 	);
 
 	const createTask = useCallback(

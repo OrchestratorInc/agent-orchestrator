@@ -28,6 +28,7 @@ import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
 import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
 import { ShareArtifactButton, useHostShareLinks, useReconciledShareLinks } from "./ShareArtifactPopover";
+import { useIsSharedArtifactCopy } from "../hooks/useSharedArtifactCopies";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -61,6 +62,11 @@ function terminalName(): string {
 }
 
 /** Opens the session's artifact directory in the file manager or a terminal. */
+/** Its children, unless the file is a copy of an artifact someone else shared, which is never published as the person's own. */
+function UnlessSharedCopy({ children, path, sessionId }: { children: ReactNode; path: string; sessionId: string }) {
+	return useIsSharedArtifactCopy(sessionId, path) ? null : <>{children}</>;
+}
+
 function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 	const { t } = useTranslation();
 	const open = useOpenSessionArtifacts();
@@ -936,12 +942,14 @@ export function SessionArtifactsView({
 								revision={listed?.updatedAt}
 							/>
 						)) : !hostId ? (
+							<UnlessSharedCopy path={selected.path} sessionId={session.id}>
 							<ShareArtifactButton
 								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId, ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
 								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
 							/>
+							</UnlessSharedCopy>
 						) : (
 							// Downloaded from the host through its proxy, then uploaded from here.
 							<ShareArtifactButton

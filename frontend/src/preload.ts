@@ -77,7 +77,11 @@ import {
 } from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type { PushFolderInput, PushFolderPreview, PushFolderResult } from "./main/cloud-folder-push";
+import type { SharedArtifactCopy } from "./main/shared-artifact-copy";
+import type { SharedArtifactCopyInput, SharedArtifactCopyResult } from "./main/shared-artifact-ipc";
+import type { SharedArtifactCopyPlace, SharedArtifactSessionKey, SharedArtifactSessionRecord } from "./main/shared-artifact-sessions";
 export type { PushFolderInput, PushFolderPreview, PushFolderResult };
+export type { SharedArtifactCopy, SharedArtifactCopyInput, SharedArtifactCopyPlace, SharedArtifactCopyResult, SharedArtifactSessionKey, SharedArtifactSessionRecord };
 import type {
 	CloudCpProxyRequestInit,
 	CloudCpProxyResponse,
@@ -601,6 +605,15 @@ const api = {
 				ipcRenderer.off("cloudArtifact:frameNavigated", wrapped);
 			};
 		},
+	},
+	// A link someone shared with the person, copied to start a session from it,
+	// and which session works from it (main/shared-artifact-ipc.ts).
+	sharedArtifact: {
+		copy: (input: SharedArtifactCopyInput) => ipcRenderer.invoke("sharedArtifact:copy", input) as Promise<SharedArtifactCopyResult>,
+		getSession: (key: SharedArtifactSessionKey) => ipcRenderer.invoke("sharedArtifact:getSession", key) as Promise<SharedArtifactSessionRecord | null>,
+		isCopy: (sessionId: string, relativePath: string) => ipcRenderer.invoke("sharedArtifact:isCopy", sessionId, relativePath) as Promise<boolean>,
+		setSession: (key: SharedArtifactSessionKey, record: SharedArtifactSessionRecord) => ipcRenderer.invoke("sharedArtifact:setSession", key, record) as Promise<void>,
+		removeSession: (key: SharedArtifactSessionKey) => ipcRenderer.invoke("sharedArtifact:removeSession", key) as Promise<void>,
 	},
 	daemon: {
 		getStatus: () => ipcRenderer.invoke("daemon:getStatus") as Promise<DaemonStatus>,

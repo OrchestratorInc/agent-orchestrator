@@ -67,6 +67,11 @@ const (
 	// in full first. Derived from the inline total plus headroom for the prompt
 	// and JSON envelope.
 	maxSpawnBodyBytes = maxInlineAttachmentsBytes*4/3 + (2 << 20)
+	// maxArtifactImportBytes is the decoded total of one shared artifact's
+	// copy (sharedArtifact on spawn, or an artifact import). A spawn carries it
+	// as base64 (64 MiB) inside maxSpawnBodyBytes, leaving room for the
+	// message's own inline attachments, which are small: large files stream.
+	maxArtifactImportBytes = 48 << 20
 	// maxSendBodyBytes is the /send equivalent of maxSpawnBodyBytes, sized for
 	// the one attachment a send carries.
 	maxSendBodyBytes = (50<<20)*4/3 + (2 << 20)
@@ -241,6 +246,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Delete("/sessions/{sessionId}/artifact-files", c.deleteArtifactFile)
 	r.Put("/sessions/{sessionId}/artifact-files", c.updateArtifactFile)
 	r.Post("/sessions/{sessionId}/artifact-registrations", c.registerArtifacts)
+	r.Post("/sessions/{sessionId}/artifact-imports", c.importArtifacts)
 	r.Get("/sessions/{sessionId}/artifact-versions", c.listArtifactVersions)
 	r.Get("/sessions/{sessionId}/artifact-versions/{version}", c.getArtifactVersion)
 	r.Post("/sessions/{sessionId}/artifact-versions/restore", c.restoreArtifactVersion)
@@ -401,6 +407,11 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
+	imports, importEntry, importErr := decodeArtifactImport(in.SharedArtifact)
+	if importErr != nil {
+		envelope.WriteError(w, r, importErr)
+		return
+	}
 	requestHash := ""
 	if in.ClientRequestID != "" {
 		keyless := in
@@ -410,11 +421,12 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	}
 	// A standalone worker has no project to start in the background.
 	async := in.Async && in.ProjectID != ""
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", TerminateOnPRMerge: in.TerminateOnPRMerge, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", TerminateOnPRMerge: in.TerminateOnPRMerge, Attachments: attachments, ArtifactImports: imports, ArtifactImportEntry: importEntry, OnArtifactsImported: c.recordImportedVersions(r.Context(), imports), AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	c.registerSpawnedImport(r.Context(), sess.SessionRecord, importEntry)
 	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(r, sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
 }
 

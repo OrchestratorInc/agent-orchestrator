@@ -1025,6 +1025,15 @@ describe("SessionArtifactsView", () => {
 		openArtifacts.mockRestore();
 	});
 
+	it("offers no Share for a copy of an artifact someone else shared", async () => {
+		const isCopy = vi.spyOn(aoBridge.sharedArtifact, "isCopy").mockResolvedValue(true);
+		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
+		await screen.findByRole("button", { name: "notes.md" });
+		await vi.waitFor(() => expect(isCopy).toHaveBeenCalledWith(session().id, "notes.md"));
+		await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Publish: notes.md" })).not.toBeInTheDocument());
+		isCopy.mockRestore();
+	});
+
 	it.each([
 		{ location: "local", hostId: undefined, cloud: undefined, shown: true },
 		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: true },
@@ -1037,7 +1046,8 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView hostId={hostId} request={{ key: 1, path: "notes.md" }} session={currentSession} />);
 
 		await screen.findByRole("button", { name: "notes.md" });
-		const share = screen.queryByRole("button", { name: "Publish: notes.md" });
+		// A local file's Share waits for the desktop shell to say it is not a shared artifact's copy.
+		const share = shown ? await screen.findByRole("button", { name: "Publish: notes.md" }) : screen.queryByRole("button", { name: "Publish: notes.md" });
 		if (!shown) {
 			expect(share).not.toBeInTheDocument();
 			return;

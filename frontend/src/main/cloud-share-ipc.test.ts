@@ -40,7 +40,7 @@ const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
 type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void };
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean; sharedCopy?: boolean | ((relativePath: string) => boolean) } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -57,6 +57,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 		getToken: async () => (options.token === undefined ? "token-1" : options.token),
 		records,
 		hostApiBase: (hostId) => (hostId === HOST_ID ? HOST_PROXY : undefined),
+		isSharedCopy: async (_sessionId, relativePath) => (typeof options.sharedCopy === "function" ? options.sharedCopy(relativePath) : options.sharedCopy ?? false),
 		// The host's daemon, behind its proxy: the artifact route serves exact bytes tagged "<size>-<mtime ns>".
 		fetchHost: vi.fn(async (url: string, init: RequestInit) => {
 			const parsed = new URL(url);
@@ -200,6 +201,12 @@ describe("cloudShare IPC", () => {
 			{ sessionId: "sess-1", path: "docs/report.html", sentBytes: 40, totalBytes: 40 },
 		]);
 		expect(await snapshots()).toEqual([]);
+	});
+
+	it("never publishes a copy of an artifact someone else shared", async () => {
+		const { publish, requests } = setup({ sharedCopy: true });
+		expect(await publish()).toMatchObject({ status: "error" });
+		expect(requests.some((request) => request.includes("artifact-shares"))).toBe(false);
 	});
 
 	it("remembers the link a file was published to until it is unpublished", async () => {
@@ -462,6 +469,15 @@ describe("cloudShare IPC", () => {
 		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 2, videos: 0, unsupported: false } });
 		expect(requests.filter((request) => request.endsWith("/uploads/files"))).toHaveLength(1);
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:clip.webm" }] });
+	});
+
+	it("never publishes a page of the person's own that uses a copy's files", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "chart.png"), "png");
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="chart.png">`);
+		const { publish, requests } = setup({ files: true, sharedCopy: (relativePath) => relativePath === "docs/chart.png" });
+		expect(await publish()).toMatchObject({ status: "error" });
+		expect(requests.some((request) => request.includes("artifact-shares"))).toBe(false);
 	});
 
 	it("leaves out a page's file that is removed before it is copied, and still publishes the page", async () => {

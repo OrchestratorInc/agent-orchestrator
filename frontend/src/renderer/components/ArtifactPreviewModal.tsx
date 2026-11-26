@@ -20,6 +20,7 @@ import { ArtifactFileView } from "./ArtifactFileView";
 import { ArtifactPageFrame } from "./ArtifactPageFrame";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { SharedArtifactFrame } from "./SharedArtifactFrame";
+import { SharedArtifactSessionButton } from "./SharedArtifactSessionButton";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
@@ -70,8 +71,10 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="min-w-0 shrink-[2] truncate text-caption">{artifact.shared ? projectName : `${projectName} · ${artifact.sessionTitle}`}</DialogDescription>
 						</div>
 						{artifact.shared ? (
-							// Someone else's link: view only, with its viewer page a click away.
+							// Someone else's link: view only, with a session to work from a
+							// copy of it and its viewer page a click away.
 							<div className="relative z-10 flex shrink-0 items-center gap-0.5">
+								<SharedArtifactSessionButton artifact={{ linkId: artifact.shared.linkId, name: artifact.name }} onClose={onClose} />
 								{artifact.shared.viewerUrl ? (
 									<Tooltip>
 										<TooltipTrigger asChild>
