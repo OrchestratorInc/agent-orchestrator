@@ -18,7 +18,8 @@ import (
 func symlink(t *testing.T, target, path string) {
 	t.Helper()
 	err := os.Symlink(target, path)
-	if errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EOPNOTSUPP) || (runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission)) {
+	if errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EOPNOTSUPP) || (runtime.GOOS == "windows" && err != nil) {
+		// Windows needs a privilege (or Developer Mode) to create symlinks.
 		t.Skipf("symlink creation unsupported: %v", err)
 	}
 	require.NoError(t, err)

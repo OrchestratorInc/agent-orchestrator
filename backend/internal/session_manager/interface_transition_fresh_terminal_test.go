@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,10 @@ func TestInterfaceTransitionReservedTranscriptRequiresUntouchedTerminal(t *testi
 		"user prompt", "assistant response", "unknown surface", "chat",
 	} {
 		t.Run(name, func(t *testing.T) {
+			if name == "lookup error" && goruntime.GOOS == "windows" {
+				// Windows reports a path under a file as missing, not as a lookup error.
+				t.Skip("a path under a file is not a distinct lookup error on Windows")
+			}
 			manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeTUI)
 			useFastInterfaceTransitionTimings(manager)
 			manager.agents = singleAgent{agent: untouchedEmptyTransitionAgent{}}

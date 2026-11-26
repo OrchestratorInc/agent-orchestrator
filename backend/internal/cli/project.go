@@ -142,6 +142,9 @@ type projectConfig struct {
 	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
 	// Attribution must round-trip too, so a CLI edit keeps a project's opt-out.
 	Attribution *attributionConfig `json:"attribution,omitempty"`
+	// The storage offload settings round-trip the same way.
+	StorageOffloadPaths    []string `json:"storageOffloadPaths,omitempty"`
+	StorageOffloadDisabled bool     `json:"storageOffloadDisabled,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for

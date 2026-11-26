@@ -482,7 +482,9 @@ func TestSend_NoEnterNudgeAfterTheOperatorTypes(t *testing.T) {
 	m.SetTerminalInputGate(gate)
 	msg.onSend = func(_ domain.SessionID, message string) {
 		if message != "" {
-			gate.lastInputAt = time.Now() // a keystroke right after AO's write
+			// A keystroke right after AO's write; a millisecond on, since a coarse
+			// clock (Windows) can stamp both in the same instant.
+			gate.lastInputAt = time.Now().Add(time.Millisecond)
 		}
 	}
 

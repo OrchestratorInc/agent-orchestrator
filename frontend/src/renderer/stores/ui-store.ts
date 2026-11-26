@@ -43,6 +43,7 @@ export type GlobalSettingsSection =
 	| "browserProfiles"
 	| "computerUse"
 	| "diagnostics"
+	| "storage"
 	| "updates"
 	| "help";
 

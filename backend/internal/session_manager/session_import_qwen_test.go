@@ -142,6 +142,7 @@ func (qwenHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return qw
 func TestImportedConfigEnvQwen(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("QWEN_HOME", "")
 	m := &Manager{agents: qwenHomeAgents{}}
 	source := filepath.Join(home, ".qwen")

@@ -436,6 +436,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
 					reveal: async () => undefined,
 				},
+				storage: {
+					browserCacheSize: async () => 0,
+					clearBrowserCache: async () => undefined,
+				},
 				updateSettings: {
 					get: async () => currentUpdateSettings,
 					set: async (next: UpdateSettings) => {
@@ -1457,6 +1461,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					inspect: async () => ({ kind: "unknown" as const }),
 					replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
 					reveal: async () => undefined,
+				},
+				storage: {
+					browserCacheSize: async () => 0,
+					clearBrowserCache: async () => undefined,
 				},
 				updateSettings: {
 					get: async () => ({

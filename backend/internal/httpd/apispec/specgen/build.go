@@ -230,6 +230,20 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
+	"ControllersStorageReportResponse":                     "StorageReportResponse",
+	"ControllersStorageDisk":                               "StorageDisk",
+	"ControllersStorageCategoryUsage":                      "StorageCategoryUsage",
+	"ControllersStorageWorktree":                           "StorageWorktree",
+	"ControllersStorageDatabase":                           "StorageDatabase",
+	"ControllersStorageTableSize":                          "StorageTableSize",
+	"ControllersStoragePlannedAction":                      "StoragePlannedAction",
+	"ControllersStorageSettings":                           "StorageSettings",
+	"ControllersUpdateStorageSettingsRequest":              "UpdateStorageSettingsRequest",
+	"ControllersStorageCleanRequest":                       "StorageCleanRequest",
+	"ControllersStorageCleanResponse":                      "StorageCleanResponse",
+	"ControllersStorageAction":                             "StorageAction",
+	"ControllersStorageActionsResponse":                    "StorageActionsResponse",
+	"ControllersStorageActionsQuery":                       "StorageActionsQuery",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -912,6 +926,7 @@ func operations() []operation {
 	ops = append(ops, linkPreviewOperations()...)
 	ops = append(ops, prPreviewOperations()...)
 	ops = append(ops, sessionSearchOperations()...)
+	ops = append(ops, storageOperations()...)
 	return ops
 }
 
@@ -972,6 +987,65 @@ func sessionSearchOperations() []operation {
 // linkPreviewOperations declares the server-side link unfurl. Must stay 1:1
 // with the routes LinkPreviewController.Register mounts (enforced by the
 // parity test).
+// storageOperations declares AO's disk-usage report and cleanup routes.
+func storageOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/storage", id: "getStorage", tag: "system",
+			summary: "Report what AO stores on disk and what cleanup would free",
+			resps: []respUnit{
+				{http.StatusOK, controllers.StorageReportResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/storage/scan", id: "scanStorage", tag: "system",
+			summary: "Measure the disk usage of AO again in the background",
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.StorageReportResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/storage/clean", id: "cleanStorage", tag: "system",
+			summary: "Preview or start a storage cleanup",
+			reqBody: controllers.StorageCleanRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.StorageCleanResponse{}},
+				{http.StatusAccepted, controllers.StorageCleanResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/storage/actions", id: "listStorageActions", tag: "system",
+			summary:    "List what storage cleanups did, newest first",
+			pathParams: []any{controllers.StorageActionsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.StorageActionsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/storage/settings", id: "updateStorageSettings", tag: "system",
+			summary: "Change storage cleanup settings",
+			reqBody: controllers.UpdateStorageSettingsRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.StorageSettings{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
 func linkPreviewOperations() []operation {
 	return []operation{
 		{
