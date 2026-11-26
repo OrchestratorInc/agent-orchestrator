@@ -332,6 +332,32 @@ describe("chat effort", () => {
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", fastMode: true, reasoningEffort: "high" });
 	});
 
+	// A Fast flip's save replaces the whole set too: an effort pick saved and
+	// not yet reported must ride along, or the flip reverts it.
+	it("carries an effort pick not yet reported into a Fast flip", () => {
+		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], supportsFast: true }] as ChatModel[];
+		const { onSettings, report } = render({ models: fastModels });
+		act(() => slider.toggle());
+		act(() => { effort.choose("high"); effort.commit(); });
+		act(() => effort.fast!.toggle());
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: "high", fastMode: true });
+		// Once reported, the flip is built on the conversation's own again,
+		// whatever it later changes to.
+		report("high");
+		report("low");
+		act(() => effort.fast!.toggle());
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: "low", fastMode: undefined });
+	});
+
+	it("carries a pending Ultracode into a Fast flip as the Extra High it saves", () => {
+		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high", "xhigh"], defaultEffort: "high", supportsFast: true }] as ChatModel[];
+		const { onSettings } = render({ models: fastModels });
+		act(() => slider.toggle());
+		act(() => { effort.choose("ultracode"); effort.commit(); });
+		act(() => effort.fast!.toggle());
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: "xhigh", fastMode: true });
+	});
+
 	it("keeps the newest Fast flip through the report of an older one", () => {
 		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], supportsFast: true }] as ChatModel[];
 		const { update } = render({ models: fastModels });

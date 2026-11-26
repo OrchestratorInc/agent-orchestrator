@@ -31,7 +31,19 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 }) {
 	const rows = useMemo(() => turnSettingsRows(snapshot, models, options), [snapshot, models, options]);
 	const row = rows.find((item) => item.kind === "select" && turnSettingTopic(item) === "effort");
-	const fast = useFastToggle(rows, { snapshot, onSettings, onOption });
+	// The level last saved and not yet reported (Ultracode as the Extra High it
+	// saves): a Fast flip's save replaces the whole set too, so it carries this.
+	const held = useRef<string | undefined>(undefined);
+	const effortRow = useRef(row);
+	effortRow.current = row;
+	const withHeldEffort = useCallback((base: TurnSettings): TurnSettings => {
+		const value = held.current;
+		const current = effortRow.current;
+		if (value === undefined || !current) return base;
+		const write = turnSettingWrite(base, current, value);
+		return write.kind === "settings" ? write.settings : base;
+	}, []);
+	const fast = useFastToggle(rows, { snapshot, onSettings, onOption }, withHeldEffort);
 	// A provider's "Use agent effort" choice names no level, so it is no stop
 	// on the slider. With it in effect, or no level reported, the fallback is
 	// shown checked; nothing is saved until a level is picked.
@@ -85,6 +97,7 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 			const save = ++saves.current;
 			// Back on the level already saved: nothing to send, nothing to hold.
 			if (!row || saved === value) {
+				held.current = undefined;
 				slider.setPick(undefined);
 				return;
 			}
@@ -92,8 +105,11 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 			// the save replaces the whole set, and a Fast flip not yet reported
 			// would otherwise be cleared by it.
 			const write = turnSettingWrite(fast?.settings(snapshot.settings) ?? snapshot.settings, row, value);
+			held.current = value;
 			const drop = () => {
-				if (saves.current !== save || picked.current !== undefined) return;
+				if (saves.current !== save) return;
+				held.current = undefined;
+				if (picked.current !== undefined) return;
 				stopConfirmTimer();
 				slider.setPick(undefined);
 				if (pickedValue === ULTRACODE) setUltracode(false);
@@ -115,13 +131,14 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 	// show its own again. Not while a finger is still choosing.
 	const offered = useMemo(() => new Set(choices.map((choice) => choice.value)), [choices]);
 	useEffect(() => {
+		if (held.current !== undefined && (held.current === saved || !row?.choices.some((choice) => choice.value === held.current))) held.current = undefined;
 		const pick = slider.pick();
 		if (pick === undefined || picked.current !== undefined) return;
 		if ((pick === ULTRACODE ? ULTRACODE_LEVEL : pick) === saved || !offered.has(pick)) {
 			stopConfirmTimer();
 			slider.setPick(undefined);
 		}
-	}, [saved, offered, slider]);
+	}, [saved, offered, slider, row]);
 	useEffect(() => stopConfirmTimer, []);
 	const close = useCallback(() => slider.setOpen(false), [slider]);
 	return { choices, slider, busy: Boolean(disabled), close, choose, commit, ultracode, fast };
@@ -135,7 +152,7 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
  * failure drops it: a report of an older flip, or an older save failing,
  * leaves the newest showing.
  */
-function useFastToggle(rows: TurnSettingRow[], { snapshot, onSettings, onOption }: Pick<ChatTurnSettingsControlProps, "snapshot" | "onSettings" | "onOption">): (FastToggle & { settings: (base: TurnSettings) => TurnSettings }) | undefined {
+function useFastToggle(rows: TurnSettingRow[], { snapshot, onSettings, onOption }: Pick<ChatTurnSettingsControlProps, "snapshot" | "onSettings" | "onOption">, withHeldEffort: (base: TurnSettings) => TurnSettings): (FastToggle & { settings: (base: TurnSettings) => TurnSettings }) | undefined {
 	const row = rows.find((item) => item.kind === "boolean" && turnSettingTopic(item) === "fast");
 	const saved = Boolean(row?.enabled);
 	const [flipped, setFlipped] = useState<boolean | undefined>(undefined);
@@ -156,11 +173,13 @@ function useFastToggle(rows: TurnSettingRow[], { snapshot, onSettings, onOption 
 		// Not reported within the effort's wait: show the conversation's own again.
 		if (unconfirmed.current !== undefined) clearTimeout(unconfirmed.current);
 		unconfirmed.current = setTimeout(() => setFlipped(undefined), EFFORT_CONFIRM_MS);
-		const write = turnSettingWrite(snap.settings, current, next);
+		// Built on the effort last saved, not only the one reported: an effort
+		// pick not yet reported would otherwise be reverted by this save.
+		const write = turnSettingWrite(withHeldEffort(snap.settings), current, next);
 		void (write.kind === "option" ? option(write.id, write.value) : save(write.settings)).catch(() => {
 			if (flips.current === flip) setFlipped(undefined);
 		});
-	}, []);
+	}, [withHeldEffort]);
 	// Another save's settings with the flip not yet reported in them, where Fast
 	// is one of AO's own settings rather than a provider option of its own.
 	const settings = useCallback((base: TurnSettings): TurnSettings => {
