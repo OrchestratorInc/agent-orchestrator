@@ -136,15 +136,34 @@ function splitAtSteers(group: ConversationGroup): ConversationGroup[] {
 			turnId: group.turnId,
 			anchor: index === 0 ? group.anchor : items[0].sequence,
 			items,
-			turn: last
-				? { ...turn, startedAt: startedAt(index) }
-				: { id: turn.id, state: "completed", requestedAt: turn.requestedAt, startedAt: startedAt(index), completedAt: startedAt(index + 1), hasHumanPrompt: turn.hasHumanPrompt },
+			turn: segmentTurn(turn, last, startedAt(index), last ? undefined : startedAt(index + 1)),
 			endsTurn: last,
 		};
 		if (index > 0) part.continuesTurn = true;
 		if (last && group.plan) part.plan = group.plan;
 		return part;
 	});
+}
+
+/**
+ * The derived turn views, per source turn object. A part's view is the same
+ * object for as long as its turn record is, so useStableGroups keeps the part
+ * and its memoized render while another turn streams.
+ */
+const segmentTurns = new WeakMap<ConversationTurn, Map<string, ConversationTurn>>();
+
+function segmentTurn(turn: ConversationTurn, last: boolean, startedAt: string | undefined, endedAt: string | undefined): ConversationTurn {
+	const key = last ? `last\u0000${startedAt}` : `${startedAt}\u0000${endedAt}`;
+	let views = segmentTurns.get(turn);
+	if (!views) segmentTurns.set(turn, views = new Map());
+	let view = views.get(key);
+	if (!view) {
+		view = last
+			? { ...turn, startedAt }
+			: { id: turn.id, state: "completed", requestedAt: turn.requestedAt, startedAt, completedAt: endedAt, hasHumanPrompt: turn.hasHumanPrompt };
+		views.set(key, view);
+	}
+	return view;
 }
 
 function isHumanSteer(item: ConversationItem): boolean {

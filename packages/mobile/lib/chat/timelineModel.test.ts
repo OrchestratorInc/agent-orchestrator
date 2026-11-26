@@ -426,6 +426,20 @@ describe("steers split a turn", () => {
 		expect(groups[0].endsTurn).toBe(true);
 	});
 
+	it("keeps each part's turn view while its turn is unchanged, so a settled part keeps its memo", () => {
+		const value = chat("running", [user("u", 1, "go"), command("ls", 2), steer("s1", 10), command("cat", 11)]);
+		const first = groupConversationByTurn(value);
+		const streamed = { ...value, items: [...value.items, reply("r", 12, "Work")] };
+		const second = groupConversationByTurn(streamed);
+		expect(second.map((group) => group.turn)).toEqual(first.map((group) => group.turn));
+		expect(second[0].turn).toBe(first[0].turn);
+		expect(second[1].turn).toBe(first[1].turn);
+		// A new turn record from the daemon gives new views.
+		const settled = groupConversationByTurn({ ...streamed, turns: [{ ...streamed.turns[0], state: "completed", completedAt: at(50) }] });
+		expect(settled[1].turn).not.toBe(first[1].turn);
+		expect(settled[1].turn?.state).toBe("completed");
+	});
+
 	it("leaves a queued turn whole", () => {
 		const value = chat("queued", [user("u", 1, "go"), steer("s1", 10)]);
 		const groups = groupConversationByTurn(value, value.items);
