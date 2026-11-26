@@ -198,6 +198,31 @@ describe("HoverCard scroll dismissal", () => {
 		expect(screen.getByText("preview")).toBeInTheDocument();
 	});
 
+	it("stays open while a container the trigger is not in scrolls", () => {
+		render(
+			<>
+				<Timeline />
+				<div data-testid="other-pane" style={{ overflow: "auto", height: 100 }} />
+			</>,
+		);
+		fireEvent.scroll(screen.getByTestId("other-pane"));
+		expect(screen.getByText("preview")).toBeInTheDocument();
+	});
+
+	it("leaves scrolling to an owner that opts out", () => {
+		render(
+			<div data-testid="timeline" style={{ overflow: "auto", height: 100 }}>
+				<HoverCard defaultOpen dismissOnScroll={false}>
+					<HoverCardTrigger>trigger</HoverCardTrigger>
+					<HoverCardContent>preview</HoverCardContent>
+				</HoverCard>
+			</div>,
+		);
+		fireEvent.scroll(screen.getByTestId("timeline"));
+		fireEvent.scroll(window);
+		expect(screen.getByText("preview")).toBeInTheDocument();
+	});
+
 	it("asks a controlled owner to close and leaves the state to it", () => {
 		function Controlled() {
 			const [open, setOpen] = useState(true);

@@ -2884,8 +2884,15 @@ const SessionRow = memo(function SessionRow({
 	return (
 		<ContextMenu onOpenChange={setContextMenuOpen}>
 			{/* Controlled by the hover hook; Radix still reports Escape and outside
-			    presses, which close it. */}
-			<HoverCard closeDelay={0} onOpenChange={(open) => !open && preview.hide()} open={preview.open} openDelay={0}>
+			    presses, which close it. The hook also follows list scrolls itself,
+			    handing the card to the row under a still pointer. */}
+			<HoverCard
+				closeDelay={0}
+				dismissOnScroll={false}
+				onOpenChange={(open) => !open && preview.hide()}
+				open={preview.open}
+				openDelay={0}
+			>
 			<ContextMenuTrigger asChild>
 				<HoverCardTrigger asChild>
 				<SidebarMenuSubItem
