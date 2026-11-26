@@ -567,6 +567,11 @@ export async function moveSessionHere(
 		// An earlier import may have started the session here: Cloud's agent
 		// must not run beside it, so nothing starts it again.
 		if (input.importUnsettled) {
+			// An export that timed out can no longer answer: Try again must not
+			// wait on its id forever. Cloud still holds the session for the
+			// export the earlier import came from, so asking again answers with
+			// that one; nothing exports afresh, and nothing restarts.
+			if (error instanceof CloudCpError && error.code === MOVE_EXPORT_TIMED_OUT) deps.onExportMove?.(undefined);
 			throw new MoveError(
 				`${apiErrorMessage(error, "Orchestrator Cloud did not finish the export.")} ${IMPORT_UNSETTLED}`,
 				"export", errorCode(error), false, undefined, "settle", input.branch,

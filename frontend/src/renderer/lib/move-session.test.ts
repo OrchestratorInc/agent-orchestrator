@@ -574,6 +574,26 @@ describe("moveSessionHere", () => {
 		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
 	});
 
+	it("drops a timed-out export's id after an unanswered import, and still starts nothing again", async () => {
+		const timedOut = new CloudCpError("did not finish in time", { status: 504, code: "MOVE_EXPORT_TIMED_OUT", details: { moveId: "exp-1", branchMayBePushed: true } });
+		const cp = cloudFake({ exportSessionMove: async () => { throw timedOut; } });
+		const exportIds: (string | undefined)[] = [];
+		const error = await moveSessionHere({ ...input, importUnsettled: true, exportMoveId: "exp-1" }, {
+			daemon: daemon(ok()), cloud: cp, onExportMove: (id) => exportIds.push(id),
+		}).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "export", rolledBack: false, followUp: "settle" });
+		// Try again asks Cloud afresh instead of waiting on the expired export.
+		expect(exportIds).toEqual([undefined]);
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+
+		// Any other export failure keeps the id: that export may still answer.
+		const other = cloudFake({ exportSessionMove: async () => { throw new CloudCpError("gateway", { status: 502, code: "WORKER_REQUEST_FAILED" }); } });
+		const kept: (string | undefined)[] = [];
+		await moveSessionHere({ ...input, importUnsettled: true, exportMoveId: "exp-1" }, { daemon: daemon(ok()), cloud: other, onExportMove: (id) => kept.push(id) }).catch(() => undefined);
+		expect(kept).toEqual([]);
+		expect(other.restartSessionAgent).not.toHaveBeenCalled();
+	});
+
 	it("does not start the Cloud agent again on an export failure after an unanswered import", async () => {
 		const cp = cloudFake({ exportSessionMove: async () => { throw new CloudCpError("worker gone", { status: 502, code: "WORKER_REQUEST_FAILED" }); } });
 		const calls: string[] = [];

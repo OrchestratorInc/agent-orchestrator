@@ -63,7 +63,9 @@ func (p *Plugin) ImportConversation(ctx context.Context, data []byte, cwd string
 			return "", fmt.Errorf("opencode-v2: the conversation here could not be backed up, so it was not replaced: its export is not session %s", id)
 		}
 		if _, err := p.run(ctx, cwd, env, "session", "delete", id, "--standalone"); err != nil {
-			return "", err
+			// The delete may have removed it before it failed: put the backup
+			// back when OpenCode no longer has the session.
+			return "", p.putBackIfGone(ctx, id, previous, cwd, env, err)
 		}
 	case sessionNotFound(err, id):
 		// No copy here: nothing to back up or delete.
@@ -73,13 +75,29 @@ func (p *Plugin) ImportConversation(ctx context.Context, data []byte, cwd string
 	}
 	if _, err := p.run(ctx, cwd, env, "session", "import", moved, "--directory", cwd, "--standalone"); err != nil {
 		if previous != nil {
-			if restoreErr := p.restoreConversation(ctx, previous, env); restoreErr != nil {
-				return "", fmt.Errorf("%w; the copy from before could not be put back: %w", err, restoreErr)
-			}
+			return "", p.putBackIfGone(ctx, id, previous, cwd, env, err)
 		}
 		return "", err
 	}
 	return id, nil
+}
+
+// putBackIfGone restores backup, the copy deleted to make way for an import
+// that then failed with cause, unless OpenCode still has session id (its
+// delete failed before removing it). It runs even when ctx is cancelled, which
+// may be why the import failed: a cancelled move must not cost the copy that
+// was here. Each command it runs is bounded by run's own timeout.
+func (p *Plugin) putBackIfGone(ctx context.Context, id string, backup []byte, cwd string, env map[string]string, cause error) error {
+	ctx = context.WithoutCancel(ctx)
+	if _, err := p.run(ctx, cwd, env, "session", "export", id, "--standalone"); err == nil {
+		return cause
+	} else if !sessionNotFound(err, id) {
+		return fmt.Errorf("%w; could not tell whether the copy from before is still here: %w", cause, err)
+	}
+	if err := p.restoreConversation(ctx, backup, env); err != nil {
+		return fmt.Errorf("%w; the copy from before could not be put back: %w", cause, err)
+	}
+	return cause
 }
 
 // restoreConversation imports a session's earlier export back where it ran.
