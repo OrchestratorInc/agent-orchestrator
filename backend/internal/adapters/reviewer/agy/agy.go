@@ -147,7 +147,14 @@ func (r *Reviewer) verifySignedIn(ctx context.Context, binary, configRoot string
 	if !strings.Contains(strings.ToLower(string(out)), "please sign in") {
 		return nil
 	}
-	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in in this worker session's reviewer home by running `HOME=%q XDG_CONFIG_HOME=%q %q` and choosing a login method, then retry the review. The sign-in applies to this worker session's reviewer only.", configRoot, configRoot, binary)}
+	home := shellQuote(configRoot)
+	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in in this worker session's reviewer home by running `HOME=%s XDG_CONFIG_HOME=%s %s` and choosing a login method, then retry the review. The sign-in applies to this worker session's reviewer only.", home, home, shellQuote(binary))}
+}
+
+// shellQuote single-quotes a value for a POSIX shell, so paths with spaces or
+// `$` are pasted back literally rather than expanded.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
 func appendEnvironment(base []string, overrides map[string]string) []string {

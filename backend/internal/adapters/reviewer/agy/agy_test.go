@@ -53,6 +53,9 @@ func TestReviewCommandSignInProbe(t *testing.T) {
 	if !errors.Is(err, ports.ErrChatAuthRequired) || !errors.As(err, &authErr) || !strings.Contains(authErr.Guidance, home) {
 		t.Fatalf("signed-out err = %#v, want ReviewerAuthRequiredError matching ErrChatAuthRequired", err)
 	}
+	if !strings.Contains(authErr.Guidance, "HOME="+shellQuote(home)+" XDG_CONFIG_HOME="+shellQuote(home)+" '/opt/agy/bin/agy'") {
+		t.Fatalf("guidance = %q, want single-quoted sign-in command", authErr.Guidance)
+	}
 
 	for name, r := range map[string]*Reviewer{
 		"signed in":   signInReviewer("gemini-3-flash\tGemini 3 Flash\n", nil),
@@ -93,6 +96,18 @@ func TestReviewCommandSignInProbeUsesProjectEnv(t *testing.T) {
 	}
 	if want := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config"); probeEnv["HOME"] != want {
 		t.Fatalf("probe HOME = %q, want reviewer home %q", probeEnv["HOME"], want)
+	}
+}
+
+func TestShellQuoteKeepsPathsLiteral(t *testing.T) {
+	for in, want := range map[string]string{
+		"/ao/reviewer home/config": `'/ao/reviewer home/config'`,
+		"/data/$USER/config":       `'/data/$USER/config'`,
+		"/data/it's/config":        `'/data/it'"'"'s/config'`,
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
 	}
 }
 
