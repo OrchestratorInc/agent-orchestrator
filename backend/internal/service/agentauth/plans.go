@@ -49,7 +49,7 @@ var plans = []Plan{
 	plan("kilocode", ActionLogin, "Log in to Kilo Code", []string{"kilo", "auth", "login"}, "Native browser flow", "https://kilo.ai/docs/code-with-ai/platforms/cli"),
 	plan("vibe", ActionSetup, "Set up Vibe", []string{"vibe", "--setup"}, "Native provider setup; Orchestrator forwards terminal input without persisting or logging the raw input, while Vibe controls credential storage", "https://github.com/mistralai/mistral-vibe"),
 	plan("muse", ActionLogin, "Log in to Muse", []string{"muse", "login"}, "Native login flow", "https://ai.meta.com/llama/"),
-	loginMenuPlan("agy", "agy-login", nil, "Log in to Agy", []string{"agy"}, "Choose Google account or Google Cloud Application Default Credentials", "https://github.com/google-antigravity/antigravity-cli"),
+	agyLoginPlan(),
 	plan("autohand", ActionLogin, "Log in to Autohand", []string{"autohand", "login"}, "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference"),
 	kimchiLoginPlan(),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
@@ -109,6 +109,47 @@ func kimiLoginPlan() Plan {
 	p.prepareWorkspace = kimi.EnsureWorkspaceTrusted
 	return p
 }
+
+// guidedStep is one reviewed move through a native CLI's arrow-key login
+// menu: once readyText is on screen, the keys are pressed in order. Keys are
+// limited to the auth terminal's reviewed actions ("previous", "next",
+// "select"), so no free-form input ever reaches the CLI.
+type guidedStep struct {
+	readyText string
+	keys      []string
+}
+
+// loginURLRule allows a sign-in link the CLI prints in its hidden terminal to
+// be shown in the panel: https on exactly this host, under this path prefix.
+type loginURLRule struct {
+	host       string
+	pathPrefix string
+}
+
+// agyLoginPlan drives Agy's own login menu from the background UI. Agy has no
+// login subcommand: a signed-out `agy` shows "Select login method" (Google
+// OAuth, or a Google Cloud project, which then asks for its Google Cloud
+// sign-in method), opens the browser itself and prints the link. The menu is
+// arrow-key only, and Agy stays open in its chat view after signing in, so the
+// sign-in finishes when Agy's auth probe passes rather than when it exits.
+func agyLoginPlan() Plan {
+	p := plan("agy", ActionLogin, "Log in to Agy", []string{"agy"}, "Choose Google account or Google Cloud project", "https://github.com/google-antigravity/antigravity-cli")
+	p.guidedMethods = map[string][]guidedStep{
+		agyGoogleMethod: {{readyText: "Select login method", keys: []string{"select"}}},
+		agyCloudMethod: {
+			{readyText: "Select login method", keys: []string{"next", "select"}},
+			{readyText: "Continue with Google Cloud", keys: []string{"select"}},
+		},
+	}
+	p.signInKeepsRunning = true
+	p.loginURLRules = []loginURLRule{{host: "accounts.google.com", pathPrefix: "/o/oauth2/"}}
+	return p
+}
+
+const (
+	agyGoogleMethod = "browser"
+	agyCloudMethod  = "cloud_project"
+)
 
 // piLoginPlan opens Pi's TUI and injects /login automatically; Pi has no
 // login subcommand. The primary ready marker is the footer's context stat: a

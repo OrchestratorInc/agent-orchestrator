@@ -13,7 +13,6 @@ import (
 type authProbeFixture struct {
 	env          map[string]string
 	home         string
-	dataDir      string
 	goos         string
 	keychainHit  bool
 	keychainErr  error
@@ -24,14 +23,13 @@ type authProbeFixture struct {
 // must not run in parallel.
 func (f *authProbeFixture) install(t *testing.T) {
 	t.Helper()
-	prevGetenv, prevHome, prevGOOS, prevDataDir, prevKeychain := authGetenv, authUserHomeDir, authGOOS, authDataDir, keychainItemExists
+	prevGetenv, prevHome, prevGOOS, prevKeychain := authGetenv, authUserHomeDir, authGOOS, keychainItemExists
 	t.Cleanup(func() {
-		authGetenv, authUserHomeDir, authGOOS, authDataDir, keychainItemExists = prevGetenv, prevHome, prevGOOS, prevDataDir, prevKeychain
+		authGetenv, authUserHomeDir, authGOOS, keychainItemExists = prevGetenv, prevHome, prevGOOS, prevKeychain
 	})
 	authGetenv = func(key string) string { return f.env[key] }
 	authUserHomeDir = func() (string, error) { return f.home, nil }
 	authGOOS = f.goos
-	authDataDir = func() string { return f.dataDir }
 	keychainItemExists = func(_ context.Context, service, account string) (bool, error) {
 		f.keychainHits++
 		if service != keychainService || account != keychainAccount {
@@ -43,7 +41,7 @@ func (f *authProbeFixture) install(t *testing.T) {
 
 func newAuthProbeFixture(t *testing.T) *authProbeFixture {
 	t.Helper()
-	return &authProbeFixture{env: map[string]string{}, home: t.TempDir(), dataDir: t.TempDir(), goos: "darwin"}
+	return &authProbeFixture{env: map[string]string{}, home: t.TempDir(), goos: "darwin"}
 }
 
 func writeGcloudADC(t *testing.T, home string) {
@@ -114,9 +112,7 @@ func TestAuthStatusSkipsKeychainOffMacOS(t *testing.T) {
 func TestAuthStatusADCModeAuthorizedWithGcloudCredentials(t *testing.T) {
 	f := newAuthProbeFixture(t)
 	writeGcloudADC(t, f.home)
-	if err := WriteAuthMode(f.dataDir, AuthModeADC); err != nil {
-		t.Fatal(err)
-	}
+	f.env[adcAuthEnv] = "true"
 	f.install(t)
 
 	if got := authStatus(t); got != ports.AgentAuthStatusAuthorized {
@@ -130,9 +126,7 @@ func TestAuthStatusADCModeAuthorizedWithGcloudCredentials(t *testing.T) {
 func TestAuthStatusADCModeUnauthorizedWithoutCredentials(t *testing.T) {
 	f := newAuthProbeFixture(t)
 	f.keychainHit = true // a Google sign-in does not satisfy ADC mode
-	if err := WriteAuthMode(f.dataDir, AuthModeADC); err != nil {
-		t.Fatal(err)
-	}
+	f.env[adcAuthEnv] = "true"
 	f.install(t)
 
 	if got := authStatus(t); got != ports.AgentAuthStatusUnauthorized {
@@ -146,7 +140,7 @@ func TestAuthStatusADCHonorsGoogleApplicationCredentials(t *testing.T) {
 	if err := os.WriteFile(keyFile, []byte(`{"type":"service_account"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f.env[adcAuthEnv] = "true" // inherited by the daemon, no AO-recorded mode
+	f.env[adcAuthEnv] = "true"
 	f.env["GOOGLE_APPLICATION_CREDENTIALS"] = keyFile
 	f.install(t)
 
@@ -157,19 +151,5 @@ func TestAuthStatusADCHonorsGoogleApplicationCredentials(t *testing.T) {
 	f.env["GOOGLE_APPLICATION_CREDENTIALS"] = filepath.Join(t.TempDir(), "missing.json")
 	if got := authStatus(t); got != ports.AgentAuthStatusUnauthorized {
 		t.Fatalf("status with missing credentials file = %q, want unauthorized", got)
-	}
-}
-
-func TestAuthStatusGoogleModeIgnoresInheritedADCEnv(t *testing.T) {
-	f := newAuthProbeFixture(t)
-	f.env[adcAuthEnv] = "true"
-	f.keychainHit = true
-	if err := WriteAuthMode(f.dataDir, AuthModeGoogle); err != nil {
-		t.Fatal(err)
-	}
-	f.install(t)
-
-	if got := authStatus(t); got != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = %q, want authorized from Google keychain sign-in", got)
 	}
 }

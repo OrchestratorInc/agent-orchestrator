@@ -91,6 +91,8 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 		return []LoginMethod{{"browser", "GitHub account in browser", false}, {"device_code", "Device code", false}, {"copilot_token", "GitHub token", true}, {"native", "Other native sign-in", false}}
 	case "kimi":
 		return []LoginMethod{{"device_code_global", "Kimi account (kimi.ai)", false}, {"device_code_cn", "Kimi account (kimi.com)", false}, {"native", "Other native sign-in", false}}
+	case "agy":
+		return []LoginMethod{{agyGoogleMethod, "Google account in browser", false}, {agyCloudMethod, "Google Cloud project", false}, {"native", "Other native sign-in", false}}
 	default:
 		// A plan whose login screen opens only when the user types terminalInput
 		// (Droid, Qwen, Prime Agent) has no reviewed way to reach it in a hidden
@@ -134,6 +136,15 @@ type loginOperation struct {
 	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
 	// printed for it.
 	nativeDigits []string
+	// guidedSteps are the reviewed menu moves still to make; guidedReady
+	// records the tick that first saw the next step's ready text, so keys are
+	// sent only once the menu has settled.
+	guidedSteps []guidedStep
+	guidedReady bool
+	// keepsRunning marks a CLI that stays open after signing in; polls counts
+	// watcher ticks between its auth probes.
+	keepsRunning bool
+	polls        int
 	// account marks an account folder's sign-in. The harness's own sign-in
 	// is never handed it to recover, so its panel cannot show, finish or
 	// cancel another account's sign-in.
@@ -230,6 +241,12 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "Native sign-in does not accept a credential when starting.", nil)
 		}
 		return s.startNativeLogin(ctx, agentID)
+	}
+	if steps, ok := planByAgentID[agentID].guidedMethods[method]; ok {
+		if secret != "" || model != "" || opts.sharesDevice() || account {
+			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This sign-in method does not accept a credential or setting.", nil)
+		}
+		return s.startHiddenLogin(ctx, agentID, method, steps)
 	}
 	args, needsSecret, err := loginArgs(agentID, method)
 	if err != nil {
@@ -449,6 +466,13 @@ type guidedAuthTerminal interface {
 }
 
 func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSnapshot, error) {
+	return s.startHiddenLogin(ctx, agentID, "native", nil)
+}
+
+// startHiddenLogin runs the plan's native command in a hidden terminal. The
+// "native" method lets the user answer the CLI's own prompts from the panel;
+// a guided method walks the CLI's menu with its reviewed steps instead.
+func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, steps []guidedStep) (LoginSnapshot, error) {
 	plan, ok := planByAgentID[agentID]
 	if !ok || len(plan.command) == 0 || plan.LaunchMode != LaunchTerminal {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This harness has no native login command.", nil)
@@ -486,8 +510,12 @@ func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSn
 	// The native login outlives the HTTP request but keeps its trace values.
 	loginCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), expires)
 	op := &loginOperation{
-		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: "native", Status: "running", NativePrompt: "waiting", ExpiresAt: expires},
+		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires},
 		cancel:   cancel, done: make(chan struct{}), terminalID: result.Terminal.HandleID,
+		guidedSteps: steps, keepsRunning: plan.signInKeepsRunning,
+	}
+	if method == "native" {
+		op.snapshot.NativePrompt = "waiting"
 	}
 	s.operations[op.snapshot.ID] = op
 	s.mu.Unlock()
@@ -518,14 +546,12 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 				continue
 			} // A probe error is not proof of exit.
 			if observation.Alive {
-				kind, selected, options, digits := nativePrompt(observation.Output)
-				s.mu.Lock()
-				if op.snapshot.Status == "running" {
-					op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = kind, selected, options
-					op.nativeDigits = digits
+				if !s.observeHiddenLogin(ctx, terminal, op, observation.Output) {
+					continue
 				}
-				s.mu.Unlock()
-				continue
+				// The CLI stays open after signing in and its sign-in is
+				// confirmed: close its terminal below.
+				break
 			}
 			// The PTY reports no exit status, and the user may have pressed Esc
 			// or the CLI may have failed, so the harness's own probe decides.
@@ -537,22 +563,11 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			// operation succeeds and the panel shows it as configured, not
 			// verified. A signed-out or inconclusive probe fails the operation
 			// so the panel offers a retry or the terminal.
-			probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			released, releaseErr := s.releaseSubscriptionKey(probeCtx, op.snapshot.AgentID)
-			state := domain.AgentAuthenticationUnknown
-			if releaseErr == nil {
-				state = s.nativeSignInState(probeCtx, op.snapshot.AgentID)
-				if !nativeSignInFound(state) {
-					restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-					_ = s.restoreSubscriptionKey(restoreCtx, op.snapshot.AgentID, released)
-					restoreCancel()
-				}
-			}
-			probeCancel()
+			found := s.probeOwnSignIn(ctx, op.snapshot.AgentID)
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "failed"
-				if releaseErr == nil && nativeSignInFound(state) {
+				if found {
 					op.snapshot.Status = "succeeded"
 				}
 			}
@@ -580,6 +595,151 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 		s.mu.Unlock()
 		return
 	}
+}
+
+// signInPollTicks is how many watcher ticks (500ms each) pass between auth
+// probes of a CLI that stays open after signing in.
+const signInPollTicks = 4
+
+// observeHiddenLogin reduces one frame of a running hidden login. A native
+// login reports the CLI's recognized prompts; a guided login walks its
+// reviewed menu steps and shows an allowed sign-in link. For a CLI that stays
+// open after signing in it reports true once the sign-in is confirmed.
+func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTerminal, op *loginOperation, output string) bool {
+	if op.snapshot.Method == "native" {
+		kind, selected, options, digits := nativePrompt(output)
+		s.mu.Lock()
+		if op.snapshot.Status == "running" {
+			op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = kind, selected, options
+			op.nativeDigits = digits
+		}
+		s.mu.Unlock()
+	} else {
+		s.advanceGuidedLogin(ctx, terminal, op, output)
+		if link := printedLoginURL(op.snapshot.AgentID, output); link != "" {
+			s.mu.Lock()
+			if op.snapshot.Status == "running" {
+				op.snapshot.LoginURL = link
+			}
+			s.mu.Unlock()
+		}
+	}
+	if !op.keepsRunning {
+		return false
+	}
+	op.polls++
+	if op.polls%signInPollTicks != 0 || !s.signInConfirmedWhileRunning(ctx, op.snapshot.AgentID) {
+		return false
+	}
+	s.mu.Lock()
+	if op.snapshot.Status == "running" {
+		op.snapshot.Status = "succeeded"
+	}
+	op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "", "", nil
+	s.mu.Unlock()
+	return true
+}
+
+// advanceGuidedLogin presses the next step's reviewed keys once its ready
+// text has been on screen for a full tick, so a menu that is still drawing
+// never takes a key. A failed key send abandons the remaining steps rather
+// than risk a different choice on retry; the user can still cancel or use the
+// terminal.
+func (s *Service) advanceGuidedLogin(ctx context.Context, terminal guidedAuthTerminal, op *loginOperation, output string) {
+	if len(op.guidedSteps) == 0 {
+		return
+	}
+	step := op.guidedSteps[0]
+	if !strings.Contains(terminalui.PlainTerminalText(output), step.readyText) {
+		op.guidedReady = false
+		return
+	}
+	if !op.guidedReady {
+		op.guidedReady = true
+		return
+	}
+	for i, key := range step.keys {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+		if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, key); err != nil {
+			op.guidedSteps = nil
+			return
+		}
+	}
+	op.guidedSteps = op.guidedSteps[1:]
+	op.guidedReady = false
+}
+
+// signInConfirmedWhileRunning probes a CLI that stays open after signing in.
+// The cheap probe runs first; only once it passes does the full check run,
+// which withholds AO's saved key so the key cannot satisfy it.
+func (s *Service) signInConfirmedWhileRunning(ctx context.Context, agentID string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	state := s.nativeSignInState(probeCtx, agentID)
+	cancel()
+	return nativeSignInFound(state) && s.probeOwnSignIn(ctx, agentID)
+}
+
+// probeOwnSignIn reports whether the harness's own sign-in is present. AO's
+// saved key for the harness is released first so the probe cannot be
+// satisfied by it, and given back unless the probe finds the harness's own
+// sign-in.
+func (s *Service) probeOwnSignIn(ctx context.Context, agentID string) bool {
+	probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer probeCancel()
+	released, err := s.releaseSubscriptionKey(probeCtx, agentID)
+	if err != nil {
+		return false
+	}
+	if nativeSignInFound(s.nativeSignInState(probeCtx, agentID)) {
+		return true
+	}
+	restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	_ = s.restoreSubscriptionKey(restoreCtx, agentID, released)
+	restoreCancel()
+	return false
+}
+
+// urlTextLine matches a terminal line holding only URL characters.
+var urlTextLine = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$`)
+
+// printedLoginURL returns the last allowed sign-in link in a hidden login's
+// output. A full-screen CLI wraps a long link across full-width lines, so
+// each following URL-only line continues it while the line before it was
+// as wide as the line the link started on.
+func printedLoginURL(agentID, output string) string {
+	lines := strings.Split(terminalui.PlainTerminalText(output), "\n")
+	found := ""
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		start := strings.Index(line, "https://")
+		if start < 0 {
+			continue
+		}
+		link, width, previous := line[start:], len(line), line
+		if !urlTextLine.MatchString(link) {
+			link = strings.Fields(link)[0]
+		} else {
+			for i+1 < len(lines) && len(previous) == width {
+				next := strings.TrimSpace(lines[i+1])
+				if next == "" || !urlTextLine.MatchString(next) {
+					break
+				}
+				link += next
+				previous = next
+				i++
+			}
+		}
+		if safeLoginURL(agentID, link) {
+			found = link
+		}
+	}
+	return found
 }
 
 // nativeSignInFound reports whether the probe after a native sign-in found
@@ -1246,6 +1406,14 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 func safeLoginURL(agentID, raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return false
+	}
+	if rules := planByAgentID[agentID].loginURLRules; len(rules) > 0 {
+		for _, rule := range rules {
+			if u.Hostname() == rule.host && strings.HasPrefix(u.Path, rule.pathPrefix) {
+				return true
+			}
+		}
 		return false
 	}
 	if agentID == "codex" {

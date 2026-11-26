@@ -99,6 +99,16 @@ type Plan struct {
 	launcher         string
 	launcherArgs     []string
 	hiddenTerminal   bool
+	// guidedMethods are background login methods for a CLI whose sign-in
+	// exists only in its interactive menu: each runs the plan's command in a
+	// hidden terminal and walks the menu with the reviewed steps.
+	guidedMethods map[string][]guidedStep
+	// signInKeepsRunning marks a CLI that stays open after signing in, so a
+	// background sign-in finishes once the harness's auth probe passes.
+	signInKeepsRunning bool
+	// loginURLRules allow the sign-in link printed in the hidden terminal to
+	// be shown in the panel.
+	loginURLRules []loginURLRule
 }
 
 // TerminalOpener opens the daemon-trusted terminal used for a native

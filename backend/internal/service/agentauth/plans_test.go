@@ -49,7 +49,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"kilocode", "Log in to Kilo Code", "kilo", "Native browser flow", "https://kilo.ai/docs/code-with-ai/platforms/cli", "", ActionLogin, []string{"kilo", "auth", "login"}},
 		{"vibe", "Set up Vibe", "vibe", "Native provider setup; Orchestrator forwards terminal input without persisting or logging the raw input, while Vibe controls credential storage", "https://github.com/mistralai/mistral-vibe", "", ActionSetup, []string{"vibe", "--setup"}},
 		{"muse", "Log in to Muse", "muse", "Native login flow", "https://ai.meta.com/llama/", "", ActionLogin, []string{"muse", "login"}},
-		{"agy", "Log in to Agy", "agy", "Choose Google account or Google Cloud Application Default Credentials", "https://github.com/google-antigravity/antigravity-cli", "", ActionLogin, []string{"agy"}},
+		{"agy", "Log in to Agy", "agy", "Choose Google account or Google Cloud project", "https://github.com/google-antigravity/antigravity-cli", "", ActionLogin, []string{"agy"}},
 		{"autohand", "Log in to Autohand", "autohand", "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference", "", ActionLogin, []string{"autohand", "login"}},
 		{"kimchi", "Log in to Kimchi", "kimchi", "Kimchi opens the authentication method picker in the PTY", "https://docs.kimchi.dev/docs/service-keys", "", ActionLogin, []string{"kimchi"}},
 		{"prime-agent", "Log in to Prime Agent", "prime-agent", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md", "/login\r", ActionLogin, []string{"prime-agent"}},

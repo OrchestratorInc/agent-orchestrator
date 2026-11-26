@@ -16,6 +16,11 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
+// adcAuthEnv selects Agy's Application Default Credentials sign-in. Agy reads
+// it from its process environment at startup; its own logout guidance is
+// "run `unset AGY_ADC_AUTH` ... and restart the CLI".
+const adcAuthEnv = "AGY_ADC_AUTH"
+
 const (
 	// Agy saves its Google account sign-in in the OS keyring under this
 	// service/account pair (observed via `security dump-keychain` metadata).
@@ -31,7 +36,6 @@ var (
 	authGetenv         = os.Getenv
 	authUserHomeDir    = os.UserHomeDir
 	authGOOS           = runtime.GOOS
-	authDataDir        = defaultDataDir
 	keychainItemExists = macOSKeychainItemExists
 )
 
@@ -39,10 +43,11 @@ var (
 // non-interactive status command, so the probe reads the evidence each sign-in
 // method leaves behind:
 //
-//   - ADC (chosen in AO's login menu, or AGY_ADC_AUTH inherited by the
-//     daemon): authorized when Application Default Credentials exist,
+//   - ADC (AGY_ADC_AUTH inherited by the daemon, so every Agy launch uses
+//     it): authorized when Application Default Credentials exist,
 //     unauthorized when they do not.
-//   - Google account: authorized when Agy's keyring entry exists. A missing
+//   - Google sign-in (Google account or Google Cloud project, both from
+//     Agy's own login menu): authorized when Agy's keyring entry exists. A missing
 //     entry stays unknown because Agy falls back to undocumented file-based
 //     token storage when the keyring is locked or unavailable, and an
 //     unauthorized verdict would block agent switching and reviewer launches.
@@ -57,7 +62,7 @@ func localAuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if adcSelected(ReadAuthMode(authDataDir())) {
+	if strings.TrimSpace(authGetenv(adcAuthEnv)) != "" {
 		if adcCredentialsConfigured() {
 			return ports.AgentAuthStatusAuthorized, nil
 		}
@@ -73,20 +78,6 @@ func localAuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 		}
 	}
 	return ports.AgentAuthStatusUnknown, nil
-}
-
-// adcSelected reports whether Agy will launch in ADC mode: AO's recorded
-// choice wins because AugmentRuntimeEnv applies it to every launch; without
-// one, the daemon's inherited AGY_ADC_AUTH decides.
-func adcSelected(mode AuthMode) bool {
-	switch mode {
-	case AuthModeADC:
-		return true
-	case AuthModeGoogle:
-		return false
-	default:
-		return strings.TrimSpace(authGetenv(adcAuthEnv)) != ""
-	}
 }
 
 // adcCredentialsConfigured reports whether Google Application Default
