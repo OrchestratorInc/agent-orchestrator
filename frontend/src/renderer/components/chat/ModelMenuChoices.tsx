@@ -293,12 +293,14 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				</div>
 			) : null}
 			<div
-				className={cn("relative grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden", rowCap ? "min-h-(--model-list-min) shrink grow basis-(--model-list-rows)" : "flex-1")}
+				// Out to the menu's edges, the list padded back in below: this box and the scroller clip what
+				// lies past them, so a line drawn through the menu's padding (a search group's) needs the room.
+				className={cn("relative -mx-(--space-1) grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden", rowCap ? "min-h-(--model-list-min) shrink grow basis-(--model-list-rows)" : "flex-1")}
 				style={rowCap}
 			>
 				<div
 					ref={scrollRef}
-					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
+					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain px-(--space-1)"
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {
 						// A submenu's keys bubble here through React, not the DOM; they are its own.

@@ -646,7 +646,13 @@ export function AgentModelPicker({
 						// changes the agent; picking a match picks its agent with it.
 						<Fragment key={row.id}>
 							{row.harness !== matches[index - 1]?.harness ? (
-								<OptionMenuLabel className="flex items-center gap-1.5 text-muted-foreground">
+								// The agent heads its matches: tight over them, and set apart from the agent before by
+								// space and a hairline, so each group reads as one block.
+								<OptionMenuLabel className={cn(
+									"flex items-center gap-1.5 pt-2 pb-0.5 font-medium tracking-normal text-muted-foreground",
+									// The hairline runs through the menu's padding to both edges; the label's own padding is kept.
+									index > 0 && "-mx-(--space-1) mt-1.5 border-t border-border/60 px-[calc(var(--space-1)+0.5rem)] pt-2.5",
+								)}>
 									<ProviderMark provider={row.harness} className="size-3" />
 									{agentLabel(row.harness)}
 								</OptionMenuLabel>
@@ -1035,7 +1041,8 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 			radio
 			disabled={disabled}
 			onSelect={(event) => onPick(event, row.harness, row.model.id)}
-			className="text-xs text-foreground"
+			// Indented to start under its agent's name, past the agent's mark, so it reads as that agent's.
+			className="pl-[26px] text-xs text-foreground"
 		>
 			<span className="min-w-0 truncate" title={row.model.unavailableReason}>{row.model.label}</span>
 			{/* Drawn as the group's heading; read with the row, so a match names its agent. */}
