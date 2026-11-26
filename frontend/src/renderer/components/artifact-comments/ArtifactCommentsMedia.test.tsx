@@ -377,6 +377,26 @@ describe("one player for the viewer and comment mode", () => {
 		await waitFor(() => expect(document.querySelector("video")!.getAttribute("src")).toBe("https://share.test/file"));
 	});
 
+	it("falls back to the published copy when the viewer's file hasn't loaded soon (its connections are busy)", async () => {
+		stubSizes();
+		stubVideo(250);
+		rememberMediaSource(key, daemonSrc, "anonymous");
+		await renderWorkspace(fakeClient([]), "video", { mediaKey: key });
+		expect(document.querySelector("video")!.getAttribute("src")).toBe(daemonSrc);
+		// No metadata ever comes.
+		await waitFor(() => expect(document.querySelector("video")!.getAttribute("src")).toBe("https://share.test/file"), { timeout: 4000 });
+	});
+
+	it("keeps the viewer's file once it has loaded, however long the page stays open", async () => {
+		stubSizes();
+		stubVideo(250);
+		rememberMediaSource(key, daemonSrc, "anonymous");
+		await renderWorkspace(fakeClient([]), "video", { mediaKey: key });
+		act(() => { document.querySelector("video")!.dispatchEvent(new Event("loadedmetadata")); });
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2800)); });
+		expect(document.querySelector("video")!.getAttribute("src")).toBe(daemonSrc);
+	});
+
 	it("shows the published copy when the local file changed since it was published", async () => {
 		stubSizes();
 		stubVideo(250);

@@ -36,6 +36,8 @@ export type ArtifactCommentsKind = ArtifactCommentsPickKind | "image" | "video";
 // The share host's rendering (control plane shareRenderOf): images and
 // videos are served as uploaded; audio, PDF and Mermaid take no comments;
 // any other file is a text or table page.
+/** How long comment mode waits for the viewer's own image or video before showing the published copy. */
+const LOCAL_MEDIA_WAIT = 2500;
 const IMAGE_FILE = /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp|svg)$/i;
 const VIDEO_FILE = /\.(m4v|mov|mp4|ogv|webm|avi|mkv)$/i;
 const NO_COMMENTS_FILE = /\.(aac|flac|m4a|mp3|oga|ogg|opus|wav|pdf|mmd|mermaid)$/i;
@@ -115,6 +117,18 @@ export function ArtifactCommentsWorkspace({ kind, mediaKey, onClose, onShown, ou
 	// The file the viewer already has, at once and where it was; the published copy if it fails to load.
 	const [localMedia] = useState(() => (mediaKey ? mediaPlayback(mediaKey) : undefined));
 	const [localFailed, setLocalFailed] = useState(false);
+	// The local file can wait on the browser's few connections to the app's
+	// server (long-lived streams and other players hold them): if it hasn't
+	// shown soon, the published copy, from its own host.
+	const usingLocal = Boolean(localMedia && !outdated && !localFailed && (kind === "image" || kind === "video"));
+	const localShown = useRef(false);
+	useEffect(() => {
+		if (!usingLocal) return;
+		const timer = window.setTimeout(() => {
+			if (!localShown.current) setLocalFailed(true);
+		}, LOCAL_MEDIA_WAIT);
+		return () => window.clearTimeout(timer);
+	}, [usingLocal]);
 	const comments = useArtifactComments(slug, { panelOpen: true });
 	const [frame, setFrame] = useState<HTMLIFrameElement | null>(null);
 	// The element whose comments are open: a picked one brings its anchor for a
@@ -235,7 +249,7 @@ export function ArtifactCommentsWorkspace({ kind, mediaKey, onClose, onShown, ou
 			) : null}
 			<div className="relative min-h-0 min-w-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
 				{media && localMedia && !outdated && !localFailed ? (
-					<ArtifactCommentsMedia {...mediaProps(localMedia.src, shown)} crossOrigin={localMedia.crossOrigin} onError={() => setLocalFailed(true)} positionKey={mediaKey} />
+					<ArtifactCommentsMedia {...mediaProps(localMedia.src, () => { localShown.current = true; shown(); })} crossOrigin={localMedia.crossOrigin} onError={() => setLocalFailed(true)} positionKey={mediaKey} />
 				) : <SharedArtifactFrame
 					frameRef={setFrame}
 					linkId={slug}
