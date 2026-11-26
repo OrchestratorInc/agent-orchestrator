@@ -351,9 +351,14 @@ export function FrozenAppScope({ frozen, background = false, children }: { froze
 	// the board under a chat held the JS thread for a third of a second at a
 	// poll, and the reply streaming above it stopped while it did.
 	const deferred = useDeferredValue(app);
+	// What the scope last committed, written only once a render commits: a
+	// deferred render React sets aside never becomes what a frozen tab holds.
 	const held = useRef(app);
-	if (!frozen) held.current = background ? deferred : app;
-	return <AppContext.Provider value={held.current}>{children}</AppContext.Provider>;
+	const value = frozen ? held.current : background ? deferred : app;
+	useLayoutEffect(() => {
+		held.current = value;
+	}, [value]);
+	return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
 function HostConversationTransport({ config }: { config: ServerConfig }) {
