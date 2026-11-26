@@ -3977,6 +3977,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"runtime workspace cwd mismatch", fmt.Errorf("spawn mer-1: runtime: %w: session mer-1 started in \"/deleted/shipit\", want \"/tmp/ws\"", ports.ErrRuntimeWorkspaceCwdMismatch), apierr.KindConflict, "WORKSPACE_CWD_MISMATCH"},
 		{"workspace locked", fmt.Errorf("restore mer-1: %w: \"/tmp/ws\" (branch \"ao/mer-1\") is registered but its directory is missing", ports.ErrWorkspaceLocked), apierr.KindConflict, "WORKSPACE_LOCKED"},
 		{"workspace path occupied", fmt.Errorf("spawn todo-app-orchestrator: %w: \"/tmp/ws\" exists but is not a worktree of \"/tmp/repo\"", ports.ErrWorkspacePathOccupied), apierr.KindConflict, "WORKSPACE_PATH_OCCUPIED"},
+		{"project not a repo", fmt.Errorf("spawn mer-1: workspace: gitworktree: worktree list: %w", ports.ErrWorkspaceNotARepo), apierr.KindInvalid, "PROJECT_NOT_A_REPO"},
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"delete live session", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrSessionNotTerminated), apierr.KindConflict, "SESSION_NOT_TERMINATED"},
 		{"delete unreleased workspace", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrWorkspaceNotReleased), apierr.KindConflict, "WORKSPACE_NOT_RELEASED"},
@@ -3986,6 +3987,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
+		{"orchestrator permission ceiling", fmt.Errorf("spawn: %w", sessionmanager.ErrSpawnPermissionExceedsPolicy), apierr.KindInvalid, "SPAWN_PERMISSION_EXCEEDS_POLICY"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
 		{"delivery unconfirmed", fmt.Errorf("send mer-1: %w", sessionmanager.ErrDeliveryUnconfirmed), apierr.KindConflict, "SESSION_DELIVERY_UNCONFIRMED"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
@@ -4026,6 +4028,32 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 				t.Fatalf("mapped message leaked script output: %q", e.Message)
 			}
 		})
+	}
+}
+
+// TestToSpawnAPIErrorMapsProjectNotARepo covers #8905: a registered project
+// (or workspace root) whose .git was deleted surfaces a typed error naming the
+// folder and how to recover, not git's raw exit 128.
+func TestToSpawnAPIErrorMapsProjectNotARepo(t *testing.T) {
+	raw := fmt.Errorf("spawn ws-1: %w: gitworktree: worktree list: %w", sessionmanager.ErrWorkspaceCreate, &ports.WorkspaceNotARepoError{
+		Path: "/work/ws",
+		Err:  errors.New("git -C /work/ws worktree list --porcelain: exit status 128: fatal: not a git repository (or any of the parent directories): .git"),
+	})
+	var e *apierr.Error
+	if !errors.As(toSpawnAPIError(raw), &e) {
+		t.Fatalf("mapped = %v, want *apierr.Error", toSpawnAPIError(raw))
+	}
+	if e.Kind != apierr.KindInvalid || e.Code != "PROJECT_NOT_A_REPO" {
+		t.Fatalf("mapped = %v %s, want invalid PROJECT_NOT_A_REPO", e.Kind, e.Code)
+	}
+	if strings.Contains(e.Message, "exit status 128") {
+		t.Fatalf("message leaked raw git failure: %q", e.Message)
+	}
+	if !strings.Contains(e.Message, "/work/ws") || !strings.Contains(e.Message, "git init") {
+		t.Fatalf("message = %q, want folder and recovery guidance", e.Message)
+	}
+	if e.Details["path"] != "/work/ws" || e.Details["suggestedFix"] == "" {
+		t.Fatalf("details = %v, want path and suggestedFix", e.Details)
 	}
 }
 

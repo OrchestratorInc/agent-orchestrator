@@ -330,11 +330,13 @@ export const SessionInspector = memo(function SessionInspector({
 	// local worker sessions only until remote and cloud providers exist, and
 	// only with Developer mode on.
 	const deviceAvailable = devicesEnabled && session !== undefined && !session.cloud && !hostId && !orchestrator;
-	// The orchestrator's rail also offers its chat's Subagents panel while it lists
-	// any, and Background tasks once its composer strip has opened one.
+	// The orchestrator's rail also offers its chat's Side chat and Subagents panels
+	// while the host passes them, and Background tasks once its composer strip has
+	// opened one. Its chat accepts /btw, so Side chat must be able to open here.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
 		|| (entry.id === "computerUse" && hasComputerUse)
+		|| (entry.id === "sideChat" && sideChatView !== undefined)
 		|| (entry.id === "subagents" && subagentsView !== undefined)
 		|| (entry.id === "task" && Boolean(taskTabs?.length))
 		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))

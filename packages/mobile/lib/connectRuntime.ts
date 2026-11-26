@@ -15,7 +15,7 @@ import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { noteRequestAnswered } from "./answeredRequests";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
-import { IncompatibleHostVersionError, type ProbeAnswer, raceEndpoints } from "./race";
+import { IncompatibleHostVersionError, type ProbeAnswer, ProbeTimeoutError, raceEndpoints, type RaceOutcome } from "./race";
 
 function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string {
 	const hostId = typeof body.hostId === "string" ? body.hostId : "";
@@ -31,21 +31,52 @@ function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string 
 export const PROBE_TIMEOUT_MS = 3_000;
 
 /**
+ * How long each endpoint that ran out the short timeout gets in a second race:
+ * the same as an ordinary request (see api.ts's REQUEST_TIMEOUT_MS).
+ *
+ * Only a timeout earns the second, slower attempt. A refused connection or a
+ * different machine answering is a real answer for that endpoint, so it is not
+ * asked again; but it does not stop a slow endpoint beside it (an old LAN
+ * address next to a working tunnel) from getting its longer try. A link whose round trip is longer than PROBE_TIMEOUT_MS (a weak
+ * cellular signal, a congested tunnel) otherwise could never connect, though
+ * every request on it would have succeeded, and a working session dropped
+ * whenever a periodic re-check landed on a slow moment.
+ */
+export const SLOW_LINK_PROBE_TIMEOUT_MS = 12_000;
+
+export type ProbeOptions = {
+	retryTunnel?: boolean;
+	timeoutMs?: number;
+	/**
+	 * Whether our own timeout ends the attempt at once instead of earning a
+	 * tunnel propagation retry. Set only by raceWithSlowLinkRetry, which gives
+	 * an endpoint that ran out its time one longer try of its own; every other
+	 * caller (pairing, push, manual connect) has no slow race behind it and
+	 * keeps the retry. A tunnel that fails fast is still retried either way.
+	 */
+	endOnTimeout?: boolean;
+};
+
+/**
  * Asks an endpoint which machine it is.
  *
  * Unauthenticated by design: the answer is what decides whether this endpoint
  * is safe to send a credential to, so it has to come first. See
  * docs/adr/0003-unauthenticated-identity-probe.md.
  */
-export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: { retryTunnel?: boolean } = {}): Promise<ProbeAnswer> {
+export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: ProbeOptions = {}): Promise<ProbeAnswer> {
 	// A tunnel hostname may simply not have propagated yet; see probeRetry.
 	const startedAt = Date.now();
 	for (;;) {
 		try {
-			return await probeOnce(endpoint, signal);
+			return await probeOnce(endpoint, signal, options.timeoutMs);
 		} catch (e) {
 			if (signal.aborted) throw e; // The race already has a winner.
 			if (e instanceof IncompatibleHostVersionError) throw e;
+			// When the slow race (raceWithSlowLinkRetry) follows, it gives this
+			// endpoint its one longer try, so retrying a timeout here would only
+			// stretch a dead tunnel's attempt.
+			if (options.endOnTimeout && e instanceof ProbeTimeoutError) throw e;
 			if (options.retryTunnel === false || !shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
 			await waitOrAbort(TUNNEL_PROBE_RETRY_DELAY_MS, signal);
 		}
@@ -67,9 +98,10 @@ function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
 	});
 }
 
-async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<ProbeAnswer> {
+async function probeOnce(endpoint: Endpoint, signal: AbortSignal, timeoutMs = PROBE_TIMEOUT_MS): Promise<ProbeAnswer> {
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+	let timedOut = false;
+	const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
 	// Abort when either the race picked a winner or our own timeout fired.
 	const onOuterAbort = () => controller.abort();
 	signal.addEventListener("abort", onOuterAbort);
@@ -86,6 +118,10 @@ async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<Probe
 			throw new Error("identity probe returned no host id");
 		}
 		return { hostId };
+	} catch (cause) {
+		// Our own timer, not the race ending: nothing answered in time.
+		if (timedOut && !signal.aborted) throw new ProbeTimeoutError(endpoint);
+		throw cause;
 	} finally {
 		clearTimeout(timeout);
 		signal.removeEventListener("abort", onOuterAbort);
@@ -185,11 +221,30 @@ export type ConnectOptions = {
 	refreshEndpoints?: boolean;
 };
 
+/**
+ * The race, run once more with SLOW_LINK_PROBE_TIMEOUT_MS over the endpoints
+ * that timed out the first time, when none answered as this machine (see
+ * there). A fast link answers in the first race as before; an address that
+ * refused or answered as another machine is not asked again. The second race
+ * makes one attempt per endpoint (no tunnel propagation retry), so it is
+ * bounded by SLOW_LINK_PROBE_TIMEOUT_MS. Each answer still goes through the
+ * same identity and version checks.
+ */
+export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint): Promise<RaceOutcome> {
+	const quick = await raceEndpoints(endpoints, hostId, (endpoint, signal) => probe(endpoint, signal, { endOnTimeout: true }));
+	if (quick.ok || !quick.timedOut?.length) return quick;
+	const slow = await raceEndpoints(quick.timedOut, hostId, (endpoint, signal) =>
+		probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, retryTunnel: false }));
+	// Nothing compatible answered even slowly: an incompatible answer from the
+	// first race still explains it better than "unreachable".
+	return !slow.ok && quick.reason === "incompatible" ? { ok: false, reason: "incompatible" } : slow;
+}
+
 /** The production dependency set for connectHost. */
 export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 	return {
 		findHost,
-		race: (host) => raceEndpoints(host.endpoints, host.id, probeEndpoint),
+		race: (host) => raceWithSlowLinkRetry(host.endpoints, host.id),
 		// Skipped as nothing advertised: merged, that leaves the stored list as is.
 		refreshEndpoints: (config) =>
 			options.refreshEndpoints === false

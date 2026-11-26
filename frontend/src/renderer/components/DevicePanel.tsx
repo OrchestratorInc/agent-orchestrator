@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Ellipsis, GalleryHorizontal, House, Square } from "@/components/app-icons";
+import type { TFunction } from "i18next";
+import { Ban, ChevronLeft, CircleAlert, Ellipsis, GalleryHorizontal, House, LoaderCircle, Smartphone, Square } from "@/components/app-icons";
+import { AndroidIcon, AppleIcon } from "./icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import type { components } from "../../api/schema";
 import { apiClient, getApiBaseUrl } from "../lib/api-client";
@@ -11,12 +13,14 @@ import { playH264, playMjpeg } from "../lib/device-stream";
 import { deviceStreamRoutes, encodeButton, encodeTouch, normalizedPoint, type DeviceButton, type TouchPhase } from "../lib/device-input";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { DeviceFrame, deviceFrameKind } from "./DeviceFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 type DeviceStatus = components["schemas"]["DeviceStatusResponse"];
 type DeviceLease = components["schemas"]["DeviceLease"];
 type DeviceSummary = components["schemas"]["DeviceSummary"];
+type DevicePlatformStatus = components["schemas"]["DevicePlatformStatus"];
 
 const devicesQueryKey = ["devices"] as const;
 const sessionDeviceQueryKey = (sessionId: string) => ["session-device", sessionId] as const;
@@ -61,8 +65,9 @@ export function useSessionDevice(sessionId: string, enabled: boolean, watching =
 }
 
 /**
- * The Device tab: turn device support on, pick a simulator or emulator, and
- * watch and tap the device the session holds. Agents open the same device
+ * The Device tab: set up the device tools, choose iOS or Android (or how to
+ * install what one needs), pick a simulator or emulator, and watch and tap
+ * the device the session holds. Agents open the same device
  * with `ao device open`; the lease poll picks it up.
  */
 export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessionId: string }) {
@@ -75,10 +80,28 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 		refetchInterval: (query) => (query.state.data?.state === "installing" ? 1_000 : 5_000),
 	});
 	const lease = useSessionDevice(sessionId, isActive, true);
+	// Where the user is in the tab: choosing a platform, its devices, or its setup guide.
+	const [view, setView] = useState<DeviceView>({ kind: "choose" });
+	// Nothing can run yet, so there are no tools to install: Set up (or Retry
+	// after a failed setup) walks straight to the platforms and their install
+	// guides instead.
+	const [exploring, setExploring] = useState(false);
+	// Releasing a device goes back to that platform's list, not the chooser.
+	const leasedPlatform = lease.data?.device.platform;
+	useEffect(() => {
+		if (leasedPlatform) setView({ kind: "devices", platform: leasedPlatform });
+	}, [leasedPlatform]);
 	const refresh = useCallback(() => {
 		void queryClient.invalidateQueries({ queryKey: devicesQueryKey });
 		void queryClient.invalidateQueries({ queryKey: sessionDeviceQueryKey(sessionId) });
 	}, [queryClient, sessionId]);
+	// "Check again" spins for the user's own check, not the background poll.
+	const [checking, setChecking] = useState(false);
+	const refetchStatus = status.refetch;
+	const check = useCallback(() => {
+		setChecking(true);
+		void refetchStatus().finally(() => setChecking(false));
+	}, [refetchStatus]);
 
 	const setup = useMutation({
 		mutationFn: async () => {
@@ -114,115 +137,314 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 		return <DeviceLive error={release.error?.message ?? open.error?.message} isActive={isActive} lease={held} onRelease={(shutdown) => release.mutate(shutdown)} onStart={() => open.mutate(held.device)} releasing={release.isPending} sessionId={sessionId} starting={open.isPending} />;
 	}
 	if (status.isPending) return <PanelMessage>{t("device.loading")}</PanelMessage>;
-	if (status.isError) return <PanelMessage action={<RetryButton onClick={refresh} />}>{t("device.unavailable")}</PanelMessage>;
+	if (status.isError) {
+		return (
+			<DeviceIntro
+				action={<RetryButton onClick={refresh} />}
+				error={t("device.unavailable")}
+			/>
+		);
+	}
 	const current = status.data;
-	if (!current.enabled || current.state === "off") {
-		// Nothing to turn on without Xcode or the Android SDK: say what to install.
-		const canRun = current.platforms.some((platform) => platform.available);
+	const canRun = current.platforms.some((platform) => platform.available);
+	const platformOf = (key: DevicePlatform) => current.platforms.find((platform) => platform.platform === key);
+
+	// Setting up a platform this machine lacks (Xcode, the Android SDK) is a
+	// guide, whether or not the tools are installed yet.
+	if (view.kind === "guide") {
+		const platform = platformOf(view.platform);
+		if (platform && !platform.available) {
+			return <PlatformGuide checking={checking} onBack={() => setView({ kind: "choose" })} onCheck={check} platform={platform} />;
+		}
+	}
+	if (current.state === "ready" && view.kind === "devices") {
 		return (
-			<div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-				<h3 className="text-heading-sm font-semibold text-foreground">{t("device.offTitle")}</h3>
-				<p className="max-w-xs text-sm text-muted-foreground">{t(canRun ? "device.offBody" : "device.nothingRuns")}</p>
-				{canRun ? (
-					<Button disabled={setup.isPending} onClick={() => setup.mutate()} type="button">
-						{t("device.turnOn")}
-					</Button>
-				) : null}
-				{setup.error ? <p className="max-w-xs text-xs text-destructive">{setup.error.message}</p> : null}
-				<PlatformAvailability status={current} />
-			</div>
+			<DevicePicker
+				error={open.error?.message}
+				onBack={() => setView({ kind: "choose" })}
+				onOpen={(device) => open.mutate(device)}
+				opening={open.isPending ? open.variables?.id : undefined}
+				platform={view.platform}
+				sessionId={sessionId}
+				status={current}
+			/>
 		);
 	}
-	if (current.state === "installing") return <PanelMessage>{t("device.installing")}</PanelMessage>;
-	if (current.state === "error") {
+	// With the tools in place, or nothing able to run yet (so there is nothing to
+	// install the tools for), the next step is choosing a platform.
+	if (current.state === "ready" || (exploring && current.state !== "installing")) {
 		return (
-			<PanelMessage action={<RetryButton onClick={() => setup.mutate()} />}>
-				{t("device.setupFailed")}
-				{current.error ? <span className="mt-1 block text-caption">{current.error}</span> : null}
-			</PanelMessage>
+			<PlatformChooser
+				onChoose={(platform) => {
+					if (!platform.available) return setView({ kind: "guide", platform: platform.platform });
+					setView({ kind: "devices", platform: platform.platform });
+					// Ready after a guide but before the tools exist: set them up now,
+					// then land on this platform's devices.
+					if (current.state !== "ready") {
+						setExploring(false);
+						setup.mutate();
+					}
+				}}
+				platforms={current.platforms}
+			/>
 		);
 	}
+	const installing = current.state === "installing" || setup.isPending;
+	const failure = setup.error?.message ?? (current.state === "error" ? (current.error ?? t("device.setupFailed")) : undefined);
 	return (
-		<DevicePicker
-			error={open.error?.message}
-			onOpen={(device) => open.mutate(device)}
-			opening={open.isPending ? open.variables?.id : undefined}
-			sessionId={sessionId}
-			status={current}
+		<DeviceIntro
+			action={
+				<Button
+					disabled={installing}
+					onClick={() => (canRun ? setup.mutate() : setExploring(true))}
+					size="sm"
+					type="button"
+					variant="secondary"
+				>
+					{installing ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin motion-reduce:animate-none" /> : null}
+					{installing ? t("device.settingUp") : failure ? t("files.retry") : t("device.setupTools")}
+				</Button>
+			}
+			error={failure ? shortHomePaths(failure) : undefined}
 		/>
 	);
 }
 
-function PlatformAvailability({ status }: { status: DeviceStatus }) {
-	const { t } = useTranslation();
-	const unavailable = status.platforms.filter((platform) => !platform.available);
-	if (unavailable.length === 0) return null;
+type DevicePlatform = DevicePlatformStatus["platform"];
+type DeviceView = { kind: "choose" } | { kind: "devices"; platform: DevicePlatform } | { kind: "guide"; platform: DevicePlatform };
+
+/** Home-directory paths in daemon messages, written the way people read them: ~/Library/… */
+function shortHomePaths(text: string): string {
+	return text.replace(/(^|[\s"'(])\/(?:Users|home)\/[^/\s"')]+(?=\/|[\s"').,]|$)/g, "$1~");
+}
+
+/**
+ * The Device tab's own page: a header in the New project panel's type, over
+ * whatever this step offers, at the top of the tab like the device list. A
+ * `fill` page lets its content take the rest of the tab's height; a `center`
+ * page sits in the middle of the tab.
+ */
+function DevicePage({
+	back,
+	center = false,
+	children,
+	description,
+	fill = false,
+	icon,
+	title,
+}: {
+	back?: { label: string; onClick: () => void };
+	center?: boolean;
+	children: ReactNode;
+	description?: ReactNode;
+	fill?: boolean;
+	icon?: ReactNode;
+	title: ReactNode;
+}) {
 	return (
-		<ul className="flex max-w-xs flex-col gap-1 text-left text-xs text-muted-foreground">
-			{unavailable.map((platform) => (
-				<li key={platform.platform}>
-					<span className="text-foreground">{t(platform.platform === "ios" ? "device.platformIos" : "device.platformAndroid")}</span> · {platform.reason}
-				</li>
-			))}
-		</ul>
+		<div className="board-scrollbar flex h-full flex-col overflow-y-auto">
+			<div className={cn("flex w-full flex-col px-4 pt-4", fill ? "flex-1 pb-4" : center ? "m-auto max-w-sm items-center py-6 text-center" : "max-w-md pb-6")}>
+				{back ? (
+					<Button className="-ml-2 mb-3 self-start text-muted-foreground" onClick={back.onClick} size="sm" type="button" variant="quiet">
+						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
+						{back.label}
+					</Button>
+				) : null}
+				{icon ? <span aria-hidden="true" className="mb-4 flex text-muted-foreground">{icon}</span> : null}
+				<h3 className="settings-dialog-title">{title}</h3>
+				{description ? <p className="mt-1 text-[13px] leading-5 text-pretty text-muted-foreground">{description}</p> : null}
+				<div className={cn("mt-5", fill && "flex flex-1 flex-col")}>{children}</div>
+			</div>
+		</div>
+	);
+}
+
+/** Before the device tools are installed: what the tab is for, and the one way in. */
+function DeviceIntro({ action, error }: { action: ReactNode; error?: string }) {
+	const { t } = useTranslation();
+	return (
+		<DevicePage center description={t("device.introBody")} icon={<Smartphone className="size-8" />} title={t("device.introTitle")}>
+			<div className="flex flex-col items-center gap-3">
+				{error ? <p className="text-xs text-destructive [overflow-wrap:anywhere]" role="alert">{error}</p> : null}
+				{action}
+			</div>
+		</DevicePage>
+	);
+}
+
+// The daemon (backend/internal/adapters/device/local/provider.go) words the two
+// reasons a platform can never run on its host this way; any other reason is
+// something to install, so an unknown one reads as setup, not a dead end.
+const cannotRunHere = /need macOS|does not run on/i;
+
+function platformReady(platform: DevicePlatformStatus): "ready" | "setup" | "unavailable" {
+	if (platform.available) return "ready";
+	return platform.reason && cannotRunHere.test(platform.reason) ? "unavailable" : "setup";
+}
+
+const platformLook = {
+	ready: { icon: null, tone: "", label: "device.statusReady" },
+	setup: { icon: CircleAlert, tone: "text-status-in-review", label: "device.statusSetup" },
+	unavailable: { icon: Ban, tone: "text-muted-foreground", label: "device.statusUnavailable" },
+} as const;
+
+const platformMeta = {
+	ios: { icon: AppleIcon, name: "device.platformIos", hint: "device.platformIosHint" },
+	android: { icon: AndroidIcon, name: "device.platformAndroid", hint: "device.platformAndroidHint" },
+} as const;
+
+/**
+ * iOS and Android as two choices stacked down the tab, sharing its height,
+ * each marked only when it needs setup or cannot run here.
+ */
+function PlatformChooser({ onChoose, platforms }: { onChoose: (platform: DevicePlatformStatus) => void; platforms: DevicePlatformStatus[] }) {
+	const { t } = useTranslation();
+	return (
+		<DevicePage description={t("device.chooseBody")} fill title={t("device.chooseTitle")}>
+			<div className="flex flex-1 flex-col gap-3">
+				{platforms.map((platform) => {
+					const state = platformReady(platform);
+					const { icon: StateIcon, tone, label } = platformLook[state];
+					const { icon: Logo, name, hint } = platformMeta[platform.platform];
+					return (
+						<Pressable
+							aria-label={`${t(name)}, ${t(label)}`}
+							className="group relative flex min-h-36 min-w-0 flex-1 flex-col items-center justify-center gap-4 rounded-lg bg-interactive-hover p-4 text-center transition-colors duration-fast hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring/60"
+							key={platform.platform}
+							onClick={() => onChoose(platform)}
+						>
+							{StateIcon ? <StateIcon aria-hidden="true" className={cn("absolute top-3 right-3 size-icon-base", tone)} /> : null}
+							<Logo aria-hidden="true" className="size-10 text-muted-foreground transition-colors duration-fast group-hover:text-foreground" />
+							<span className="min-w-0">
+								<span className="block text-[15px] font-medium text-foreground">{t(name)}</span>
+								<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{state === "ready" ? t(hint) : t(label)}</span>
+							</span>
+						</Pressable>
+					);
+				})}
+			</div>
+		</DevicePage>
+	);
+}
+
+/**
+ * What to install for a platform this machine cannot run yet, as numbered
+ * steps. The steps follow the daemon's reason (provider.go): no Node, no
+ * Xcode, no Android SDK, or an SDK missing pieces. A reason it does not know
+ * is shown as it is.
+ */
+function guideSteps(platform: DevicePlatformStatus, t: TFunction): { steps: string[]; note?: string } {
+	const reason = platform.reason ?? "";
+	const sdk = /The Android SDK at (.+?) is missing/.exec(reason)?.[1];
+	const note = sdk ? t("device.guideSdkAt", { path: shortHomePaths(sdk) }) : undefined;
+	if (cannotRunHere.test(reason)) return { steps: [], note: shortHomePaths(reason) };
+	if (/Node\.js/.test(reason)) return { steps: [t("device.guideNode")] };
+	if (platform.platform === "ios") return { steps: [t("device.guideXcodeInstall"), t("device.guideXcodeOpen"), t("device.guideXcodeRuntime")] };
+	if (/command-line tools/.test(reason)) return { steps: [t("device.guideAndroidCmdline")], note };
+	if (/platform-tools or the emulator/.test(reason)) return { steps: [t("device.guideAndroidEmulator")], note };
+	if (/Install the Android SDK/.test(reason)) {
+		return { steps: [t("device.guideAndroidStudioInstall"), t("device.guideAndroidStudioWizard"), t("device.guideAndroidCmdline"), t("device.guideAndroidAvd")] };
+	}
+	return { steps: [], note: shortHomePaths(reason) };
+}
+
+function PlatformGuide({ checking, onBack, onCheck, platform }: { checking: boolean; onBack: () => void; onCheck: () => void; platform: DevicePlatformStatus }) {
+	const { t } = useTranslation();
+	const { name } = platformMeta[platform.platform];
+	const unavailable = platformReady(platform) === "unavailable";
+	const { steps, note } = guideSteps(platform, t);
+	return (
+		<DevicePage
+			back={{ label: t("device.back"), onClick: onBack }}
+			description={unavailable ? undefined : t("device.guideBody")}
+			title={t(unavailable ? "device.guideUnavailableTitle" : "device.guideTitle", { platform: t(name) })}
+		>
+			<div className="flex flex-col items-start gap-4">
+				{note ? <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{note}</p> : null}
+				{steps.length > 0 ? (
+					<ol className="w-full divide-y divide-border overflow-hidden rounded-md bg-settings-row text-left">
+						{steps.map((step, index) => (
+							<li className="flex gap-3 px-3 py-2.5" key={step}>
+								<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center rounded-full bg-interactive-active text-[11px] font-medium text-muted-foreground tabular-nums">{index + 1}</span>
+								<span className="min-w-0 text-[13px] leading-5 text-foreground">{step}</span>
+							</li>
+						))}
+					</ol>
+				) : null}
+				{unavailable ? null : (
+					<Button disabled={checking} onClick={onCheck} size="sm" type="button" variant="secondary">
+						{checking ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin motion-reduce:animate-none" /> : null}
+						{t("device.guideCheck")}
+					</Button>
+				)}
+			</div>
+		</DevicePage>
 	);
 }
 
 function DevicePicker({
 	error,
+	onBack,
 	onOpen,
 	opening,
+	platform,
 	sessionId,
 	status,
 }: {
 	error?: string;
+	onBack: () => void;
 	onOpen: (device: DeviceSummary) => void;
 	opening?: string;
+	platform: DevicePlatform;
 	sessionId: string;
 	status: DeviceStatus;
 }) {
 	const { t } = useTranslation();
 	const heldBy = new Map(status.leases.map((lease) => [lease.device.id, lease.sessionId]));
-	const devices = [...status.devices].sort((a, b) => Number(b.booted) - Number(a.booted) || a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name));
+	const devices = status.devices
+		.filter((device) => device.platform === platform)
+		.sort((a, b) => Number(b.booted) - Number(a.booted) || a.name.localeCompare(b.name));
+	const { name } = platformMeta[platform];
+	// The same page header as the guide one step away: Back, the platform, a hint.
 	return (
-		<div className="board-scrollbar flex h-full flex-col gap-3 overflow-y-auto p-3">
-			<p className="text-xs text-muted-foreground">{t("device.pickHint")}</p>
-			{error ? <p className="text-xs text-destructive">{error}</p> : null}
-			{/* Devices that could not be listed are not an empty machine: say why. */}
-			{status.error ? <p className="text-xs text-destructive">{status.error}</p> : null}
-			{devices.length === 0 ? (
-				status.error ? null : <PanelMessage compact>{t("device.noDevices")}</PanelMessage>
-			) : (
-				<ul className="shrink-0 divide-y divide-border overflow-hidden rounded-md bg-settings-row">
-					{devices.map((device) => {
-						const owner = heldBy.get(device.id);
-						const takenByOther = owner !== undefined && owner !== sessionId;
-						return (
-							<li className="flex min-h-9 items-center gap-2 px-3 py-1.5" key={device.id}>
-								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm text-foreground">{device.name}</p>
-									<p className="truncate text-xs text-muted-foreground">
-										{[device.version, takenByOther ? <SessionTitle key="owner" sessionId={owner} /> : device.booted ? t("device.running") : undefined]
-											.filter(Boolean)
-											.flatMap((part, index) => (index === 0 ? [part] : [" · ", part]))}
-									</p>
-								</div>
-								<Button
-									disabled={takenByOther || opening !== undefined}
-									onClick={() => onOpen(device)}
-									size="sm"
-									type="button"
-									variant="secondary"
-								>
-									{opening === device.id ? t("device.opening") : t("device.open")}
-								</Button>
-							</li>
-						);
-					})}
-				</ul>
-			)}
-			<PlatformAvailability status={status} />
-		</div>
+		<DevicePage back={{ label: t("device.back"), onClick: onBack }} description={t("device.pickHint")} fill title={t(name)}>
+			<div className="flex flex-col gap-3">
+				{error ? <p className="text-xs text-destructive">{error}</p> : null}
+				{/* Devices that could not be listed are not an empty machine: say why. */}
+				{status.error ? <p className="text-xs text-destructive [overflow-wrap:anywhere]">{shortHomePaths(status.error)}</p> : null}
+				{devices.length === 0 ? (
+					status.error ? null : <PanelMessage compact>{t(platform === "ios" ? "device.noIosDevices" : "device.noAndroidDevices")}</PanelMessage>
+				) : (
+					<ul className="shrink-0 divide-y divide-border overflow-hidden rounded-md bg-settings-row">
+						{devices.map((device) => {
+							const owner = heldBy.get(device.id);
+							const takenByOther = owner !== undefined && owner !== sessionId;
+							return (
+								<li className="flex min-h-9 items-center gap-2 px-3 py-1.5" key={device.id}>
+									<div className="min-w-0 flex-1">
+										<p className="truncate text-sm text-foreground">{device.name}</p>
+										<p className="truncate text-xs text-muted-foreground">
+											{[device.version, takenByOther ? <SessionTitle key="owner" sessionId={owner} /> : device.booted ? t("device.running") : undefined]
+												.filter(Boolean)
+												.flatMap((part, index) => (index === 0 ? [part] : [" · ", part]))}
+										</p>
+									</div>
+									<Button
+										disabled={takenByOther || opening !== undefined}
+										onClick={() => onOpen(device)}
+										size="sm"
+										type="button"
+										variant="secondary"
+									>
+										{opening === device.id ? t("device.opening") : t("device.open")}
+									</Button>
+								</li>
+							);
+						})}
+					</ul>
+				)}
+			</div>
+		</DevicePage>
 	);
 }
 
