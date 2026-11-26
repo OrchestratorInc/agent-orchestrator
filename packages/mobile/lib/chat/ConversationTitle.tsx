@@ -1,4 +1,5 @@
 import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { agentLabel } from "../../../product-ui/src/agents";
 import { AgentLogo } from "../AgentLogo";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
@@ -26,6 +27,15 @@ export function conversationStateLabel(state: string): string {
 	}
 }
 
+/**
+ * What screen readers hear for the header: the title, the project line, the
+ * agent by name (the logo inside is not announced, and an unknown harness's
+ * logo is only an initial) and the state the dot shows.
+ */
+export function conversationTitleAccessibilityLabel(title: string, subtitle: string, harness?: string | null, state?: string): string {
+	return [title, subtitle, harness ? agentLabel(harness) : undefined, state ? conversationStateLabel(state) : undefined].filter(Boolean).join(", ");
+}
+
 export function ConversationTitle({
 	title,
 	subtitle,
@@ -50,19 +60,19 @@ export function ConversationTitle({
 		<View
 			accessible
 			accessibilityRole="header"
-			accessibilityLabel={[title, subtitle, stateLabel].filter(Boolean).join(", ")}
+			accessibilityLabel={conversationTitleAccessibilityLabel(title, subtitle, harness, state)}
 			style={[styles.header, { maxWidth }]}
 		>
 			<AgentLogo harness={harness} size={22} />
 			<View style={styles.copy}>
 				{/* Capped: past them the title grew out of the bar into the status bar. */}
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.title} style={styles.title}>{title}</Text>
-				{subtitle || stateLabel ? (
-					<View style={styles.subtitleRow}>
-						{stateLabel ? <View style={[styles.dot, { backgroundColor: stateColor }]} /> : null}
-						{subtitle ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.subtitle}>{subtitle}</Text> : null}
-					</View>
-				) : null}
+				{/* Always laid out, a line tall: a row that appeared with the first
+				    state or project shifted the title up. */}
+				<View style={styles.subtitleRow}>
+					{stateLabel ? <View style={[styles.dot, { backgroundColor: stateColor }]} /> : null}
+					{subtitle ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.subtitle}>{subtitle}</Text> : null}
+				</View>
 			</View>
 		</View>
 	);
@@ -72,7 +82,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	header: { flexDirection: "row", alignItems: "center", gap: space.sm },
 	copy: { minWidth: 0, flexShrink: 1, alignItems: "flex-start", justifyContent: "center" },
 	title: { fontFamily: "DMSans_600SemiBold", maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
-	subtitleRow: { maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xs },
+	subtitleRow: { maxWidth: "100%", minHeight: type.footnote.lineHeight, flexDirection: "row", alignItems: "center", gap: space.xs },
 	subtitle: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	// A squircle, not a circle: a softened square with the continuous corner curve.
 	dot: { flexShrink: 0, width: DOT, height: DOT, borderRadius: DOT * 0.32, borderCurve: "continuous" },
