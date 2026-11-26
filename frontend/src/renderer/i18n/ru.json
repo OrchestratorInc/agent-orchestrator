@@ -4731,7 +4731,7 @@
 	"settings.agentAccounts.extraUsage": "Дополнительное использование: {{used}} из {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Аккаунт",
 	"settings.agentAccounts.handoff": "Переходить на другой аккаунт при достижении лимита",
-	"settings.agentAccounts.handoffDescription": "Действует для Claude Code и Codex. Когда сеанс Chat достигает лимита использования, Orchestrator переносит его на другой вошедший аккаунт со свободным лимитом и один раз повторяет запрос. Если свободного аккаунта нет, Orchestrator возобновит сеанс при сбросе лимита, если провайдер сообщает время сброса. У аккаунтов с API-ключом нет лимита использования, поэтому сеансы никогда не переносятся на них или с них.",
+	"settings.agentAccounts.handoffDescription": "Действует для Claude Code и Codex. Когда сеанс Chat достигает лимита использования, Orchestrator переносит его на другой вошедший аккаунт со свободным лимитом и один раз повторяет запрос. Если свободного аккаунта нет, Orchestrator возобновит сеанс при сбросе лимита, если провайдер сообщает время сброса. У аккаунтов с API-ключом нет лимита использования, поэтому сеансы никогда не переносятся на них или с них. Сеансы никогда не переносятся на вход через CLI Claude Code или Codex.",
 	"settings.agentAccounts.moved": "Перенесено из {{from}} в {{to}}",
 	"settings.agentAccounts.loading": "Загрузка аккаунтов…",
 	"settings.agentAccounts.stopAndMoveTitle": "Остановить ход и перенести?",

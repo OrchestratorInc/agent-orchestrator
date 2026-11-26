@@ -4666,7 +4666,7 @@
 	"settings.agentAccounts.extraUsage": "Uso extra {{used}} de {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Conta",
 	"settings.agentAccounts.handoff": "Mudar para outra conta ao atingir um limite de uso",
-	"settings.agentAccounts.handoffDescription": "Vale para Claude Code e Codex. Quando uma sessão de Chat atinge um limite de uso, o Orchestrator a move para outra conta conectada com margem e tenta o prompt novamente uma vez. Se nenhuma conta tiver margem, o Orchestrator retoma a sessão na redefinição quando o provedor informa o horário. Contas com chave de API não têm limite de uso, então as sessões nunca são movidas para elas nem a partir delas.",
+	"settings.agentAccounts.handoffDescription": "Vale para Claude Code e Codex. Quando uma sessão de Chat atinge um limite de uso, o Orchestrator a move para outra conta conectada com margem e tenta o prompt novamente uma vez. Se nenhuma conta tiver margem, o Orchestrator retoma a sessão na redefinição quando o provedor informa o horário. Contas com chave de API não têm limite de uso, então as sessões nunca são movidas para elas nem a partir delas. As sessões nunca são movidas para o login da CLI do Claude Code ou do Codex.",
 	"settings.agentAccounts.moved": "Movido de {{from}} para {{to}}",
 	"settings.agentAccounts.loading": "Carregando contas…",
 	"settings.agentAccounts.stopAndMoveTitle": "Parar o turno e mover?",
