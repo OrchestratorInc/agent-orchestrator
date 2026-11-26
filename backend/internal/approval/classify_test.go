@@ -299,3 +299,34 @@ func TestTruncateCountsCharactersNotBytes(t *testing.T) {
 		t.Fatalf("dialog summary split a character: %q", got.Summary)
 	}
 }
+
+func TestBenignPhraseOnlyWinsAsTheLeadingWords(t *testing.T) {
+	for _, name := range []string{"Delete search history", "Remove saved login", "Delete login details"} {
+		got := Classify(Target{Action: "click", Role: "button", Name: name}, ModeRisky)
+		if !got.NeedsApproval || got.Category != CategoryDelete {
+			t.Errorf("%q = %+v", name, got)
+		}
+	}
+	for _, name := range []string{"Sign in", "Search", "Learn more about deleting your data", "Log in to continue", "Search orders"} {
+		if got := Classify(Target{Action: "click", Role: "button", Name: name}, ModeRisky); got.NeedsApproval {
+			t.Errorf("%q asked: %+v", name, got)
+		}
+	}
+}
+
+func TestLongConfirmButtonsMatchAfterALeadingFiller(t *testing.T) {
+	for _, name := range []string{
+		"Yes, delete my account and everything in it forever",
+		"OK, delete all of my projects and their data",
+		"I understand, delete this repository and its history",
+		"Confirm and pay for the three items in your basket",
+	} {
+		if got := Classify(Target{Action: "click", Role: "button", Name: name}, ModeRisky); !got.NeedsApproval {
+			t.Errorf("%q not flagged", name)
+		}
+	}
+	// A long headline-like link still only matches as a whole label.
+	if got := Classify(Target{Action: "click", Role: "link", Name: "Yes, we delete your data when you close your account"}, ModeRisky); got.NeedsApproval {
+		t.Fatalf("link headline asked: %+v", got)
+	}
+}
