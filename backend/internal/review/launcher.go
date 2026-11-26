@@ -687,7 +687,7 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 			}
 		}
 		ready, err := l.waitForPromptReadiness(ctx, handle, hints, wait)
-		if err != nil && !(capped && errors.Is(err, errReviewerPromptBlocked)) {
+		if err != nil && (!capped || !errors.Is(err, errReviewerPromptBlocked)) {
 			return fmt.Errorf("reviewer prompt readiness: %w", err)
 		}
 		if !ready && capped {
