@@ -102,6 +102,28 @@ describe("live page and branch changes", () => {
 		expect(merged?.items[0]).toBe(live.items[0]);
 	});
 
+	it("keeps no queued or running turn the live page no longer lists", () => {
+		// Every page lists each active turn whatever its rows, so an active turn the
+		// new live page leaves out was cancelled or batched into another.
+		const turn = (id: string, state: "completed" | "queued" | "running") => ({ id, state, requestedAt: "2026-01-01" });
+		const live = page({ oldestSequence: 1, hasMoreBefore: true, items: [{ ...message("first", 1), turnId: "t1" }, message("second", 2)], turns: [turn("t1", "completed"), turn("queued", "queued"), turn("running", "running")] });
+		const slidPast = page({ oldestSequence: 2, hasMoreBefore: true, items: [message("second", 2), message("third", 3)], turns: [turn("t3", "completed")] });
+		const merged = mergeConversationPages(withLivePage([live], slidPast));
+		expect(merged?.items.map((item) => item.id)).toEqual(["first", "second", "third"]);
+		expect(merged?.turns.map((item) => item.id)).toEqual(["t1", "t3"]);
+	});
+
+	it("keeps no rows across a gap, so older rows still load from the live page", () => {
+		const live = page({ oldestSequence: 1, hasMoreBefore: false, items: [message("first", 1), message("second", 2)] });
+		const afterGap = page({ oldestSequence: 5, hasMoreBefore: true, items: [message("fifth", 5), message("sixth", 6)] });
+		const pages = withLivePage([live], afterGap);
+		const merged = mergeConversationPages(pages);
+		expect(pages).toHaveLength(1);
+		expect(merged?.items.map((item) => item.id)).toEqual(["fifth", "sixth"]);
+		expect(merged?.oldestSequence).toBe(5);
+		expect(merged?.hasMoreBefore).toBe(true);
+	});
+
 	it("adds pushed-off rows to loaded history without repeating them", () => {
 		const older = page({ oldestSequence: 0, hasMoreBefore: false, items: [message("oldest", 0), message("first", 1)] });
 		const live = page({ oldestSequence: 1, items: [message("first", 1), message("second", 2)] });
