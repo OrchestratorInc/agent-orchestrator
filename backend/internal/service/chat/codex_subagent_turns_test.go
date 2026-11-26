@@ -173,6 +173,34 @@ func TestCodexChildPlanIsAStepNotTheParentPlan(t *testing.T) {
 
 // Codex reports a child's fatal error before its failed turn ends. The error row
 // keeps the launch link, so it is one of the child's steps.
+// A child's compaction row keeps its launch link, so it files under the subagent
+// instead of reading as the parent's history shrinking.
+func TestCodexChildCompactionIsAStep(t *testing.T) {
+	h := newHarness(t)
+	startCodexParentWithChild(t, h)
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderTurnID: "provider-child-1", ProviderConversationID: "child-thread-1",
+		ProviderItemID: "cc-child", Detail: []byte(childStepDetail),
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return countActivities(s, domain.ActivityKindSystem) == 1
+	})
+	for _, activity := range snapshot.Activities {
+		if activity.Kind != domain.ActivityKindSystem {
+			continue
+		}
+		var detail struct {
+			Event     string `json:"event"`
+			Parent    string `json:"parentProviderItemId"`
+			ChildTurn bool   `json:"childTurn"`
+		}
+		if err := json.Unmarshal(activity.Detail, &detail); err != nil ||
+			detail.Event != "compaction" || detail.Parent != "call-spawn" || !detail.ChildTurn {
+			t.Fatalf("child compaction row = %s (%v)", activity.Detail, err)
+		}
+	}
+}
+
 func TestCodexChildFatalErrorIsAStep(t *testing.T) {
 	h := newHarness(t)
 	startCodexParentWithChild(t, h)

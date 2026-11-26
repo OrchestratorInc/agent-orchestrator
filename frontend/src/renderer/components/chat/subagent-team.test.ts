@@ -340,13 +340,32 @@ describe("Codex subagents", () => {
 		expect(agent.report).toBeUndefined();
 	});
 
-	it("is working again when a finished step follows its latest report", () => {
+	it("is working again while the turn after its latest report runs", () => {
+		const agent = readSubagent(
+			codexLaunch("c"),
+			[handback("h1", "call-c", "Build passes.", at(5)), step("c2", "call-c", { createdAt: at(7) })],
+			true,
+		);
+		expect(agent.state).toBe("working");
+	});
+
+	it("is working again while its own step after the report still runs", () => {
+		const agent = readSubagent(
+			codexLaunch("c"),
+			[handback("h1", "call-c", "Build passes.", at(5)), step("c2", "call-c", { status: "running", createdAt: at(7) })],
+			false,
+		);
+		expect(agent.state).toBe("working");
+	});
+
+	it("is unknown, not done, when the turn after its report ended with no report", () => {
 		const agent = readSubagent(
 			codexLaunch("c"),
 			[handback("h1", "call-c", "Build passes.", at(5)), step("c2", "call-c", { createdAt: at(7) })],
 			false,
 		);
-		expect(agent.state).toBe("working");
+		expect(agent.state).toBe("unknown");
+		expect(agent.report).toBeUndefined();
 	});
 
 	it("stays done while only a nested child keeps working after the report", () => {

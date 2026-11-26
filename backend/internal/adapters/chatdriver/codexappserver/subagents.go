@@ -465,10 +465,11 @@ func (r *subagentRouter) flush() []ports.ChatEvent {
 func (r *subagentRouter) adopt(thread string, ev ports.ChatEvent) []ports.ChatEvent {
 	parent := r.scope(r.launchOf[thread])
 	switch ev.Kind {
-	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventPlanUpdated, ports.ChatEventError:
-		// A plan or a fatal error is a step too: on the child's turn it can never
-		// replace the parent's plan or fail the parent's turn, and its row reads as
-		// the child's.
+	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventPlanUpdated, ports.ChatEventError,
+		ports.ChatEventCompacted:
+		// A plan, a fatal error or a compaction is a step too: on the child's turn it
+		// can never replace the parent's plan or fail the parent's turn, and its row
+		// reads as the child's rather than as the parent's history shrinking.
 		ev.Detail = withParent(ev.Detail, parent, false)
 		return []ports.ChatEvent{ev}
 

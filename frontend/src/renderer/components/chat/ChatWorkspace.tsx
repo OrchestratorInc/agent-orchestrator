@@ -261,6 +261,7 @@ import {
 	type ConversationMessage,
 	type ConversationTurn,
 	type ConversationUsageLimit,
+	type DiffFile,
 	type TurnArtifactChange,
 	type TurnDiff,
 	type TurnSettings,
@@ -8024,23 +8025,90 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 
 	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
 	if (!conversation) return groups.flatMap(splitAtSteers);
-	return groups.flatMap((group) =>
-		splitAtSteers(group)
-			.map((segment) => withSubagentSteps(segment, conversation))
-			// A part made only of steps that moved under a launch elsewhere has nothing
-			// left to draw. A live one keeps its Working row, and one whose turn did not
-			// simply complete keeps how it ended: a failure must not vanish with its steps.
-			// A subagent's own turn is the exception: its progress and outcome are the
-			// child's, and its row under the launch already shows them.
-			.filter((segment) =>
-				segment.items.some((item) => !conversation.stepIds.has(item.id))
-				|| (!segment.items.every(isChildTurnStep)
-					&& (segment.live || (segment.outcome !== undefined && segment.outcome.state !== "completed")))),
-	);
+	const segments = groups.flatMap((group) => splitAtSteers(group).map((segment) => withSubagentSteps(segment, conversation)));
+	const childChanges = childTurnChanges(segments, conversation);
+	return segments.flatMap((segment): TimelineGroup[] => {
+		const own = segment.items.some((item) => !conversation.stepIds.has(item.id));
+		// A subagent's own turn: its progress and outcome are the child's, and its row
+		// under the launch already shows them. A row the driver could not file under the
+		// launch, such as an approval the child asked for, still shows, on its own.
+		if (segment.items.some(isChildTurnStep)) {
+			if (!own) return [];
+			return [{
+				...segment,
+				live: false,
+				blocked: false,
+				liveProviderFailure: undefined,
+				outcome: undefined,
+				diff: undefined,
+				artifacts: undefined,
+				plan: undefined,
+				rollbackable: false,
+			}];
+		}
+		const changes = segment.items.flatMap((item) => childChanges.get(item.id) ?? []);
+		const merged = changes.length > 0 ? withChildChanges(segment, changes) : segment;
+		// A part made only of steps that moved under a launch elsewhere has nothing
+		// left to draw. A live one keeps its Working row, and one whose turn did not
+		// simply complete keeps how it ended: a failure must not vanish with its steps.
+		return own || merged.live || (merged.outcome !== undefined && merged.outcome.state !== "completed") ? [merged] : [];
+	});
 }
 
 function isChildTurnStep(item: ConversationItem): boolean {
 	return item.kind === "activity" && item.detail?.childTurn === true;
+}
+
+type TurnChanges = Pick<TimelineGroup, "diff" | "artifacts">;
+
+/**
+ * What each subagent's own turns changed, by the launch they belong to.
+ *
+ * Codex tracks a turn's diff per thread, so a child's edits land on the child's turn
+ * and not in the parent's. That turn is left out of the timeline, so its changes are
+ * counted on the turn that holds the launch instead, the way Claude's child edits
+ * already count in the parent's.
+ */
+function childTurnChanges(segments: readonly TimelineGroup[], conversation: ConversationSubagents): Map<string, TurnChanges[]> {
+	const launchOfStep = new Map<string, string>();
+	for (const [launchId, steps] of conversation.steps) for (const step of steps) launchOfStep.set(step.id, launchId);
+	const out = new Map<string, TurnChanges[]>();
+	for (const segment of segments) {
+		if (!segment.diff?.files.length && !segment.artifacts?.length) continue;
+		const step = segment.items.find((item) => isChildTurnStep(item) && launchOfStep.has(item.id));
+		const launchId = step && launchOfStep.get(step.id);
+		if (!launchId) continue;
+		const changes = out.get(launchId);
+		const entry = { diff: segment.diff, artifacts: segment.artifacts };
+		if (changes) changes.push(entry);
+		else out.set(launchId, [entry]);
+	}
+	return out;
+}
+
+/** A segment's own changes with its subagents' added: a file both touched counts both. */
+function withChildChanges(segment: TimelineGroup, changes: readonly TurnChanges[]): TimelineGroup {
+	const files = new Map<string, DiffFile>();
+	let truncated = segment.diff?.truncated === true;
+	for (const diff of [segment.diff, ...changes.map((change) => change.diff)]) {
+		if (!diff) continue;
+		truncated ||= diff.truncated === true;
+		for (const file of diff.files) {
+			const seen = files.get(file.path);
+			files.set(file.path, seen
+				? { ...seen, additions: seen.additions + file.additions, deletions: seen.deletions + file.deletions }
+				: file);
+		}
+	}
+	const artifacts = new Map<string, TurnArtifactChange>();
+	for (const list of [segment.artifacts, ...changes.map((change) => change.artifacts)]) {
+		for (const artifact of list ?? []) if (!artifacts.has(artifact.path)) artifacts.set(artifact.path, artifact);
+	}
+	return {
+		...segment,
+		diff: files.size > 0 ? { files: [...files.values()], ...(truncated ? { truncated } : {}) } : segment.diff,
+		artifacts: artifacts.size > 0 ? [...artifacts.values()] : segment.artifacts,
+	};
 }
 
 type ConversationSubagents = {

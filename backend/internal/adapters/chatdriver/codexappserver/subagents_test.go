@@ -608,6 +608,32 @@ func TestChildFatalErrorStaysUnderItsLaunch(t *testing.T) {
 	}
 }
 
+// A child that compacts its own history reports it under its launch: unlinked, the
+// row would bring the child's turn back into the timeline as one of the parent's.
+func TestChildCompactionStaysUnderItsLaunch(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"root-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":` + spawnStartedParams + `}`)
+	srv.push(`{"method":"item/completed","params":` + spawnCompletedParams + `}`)
+	srv.push(`{"method":"turn/started","params":{"threadId":"child-1","turn":{"id":"child-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/completed","params":{"item":{"type":"contextCompaction","id":"cc-child"},"threadId":"child-1","turnId":"child-turn"}}`)
+
+	got := collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool {
+		return ev.Kind == ports.ChatEventCompacted
+	})
+	compaction := got[len(got)-1]
+	if detail := decodeDetail(t, compaction); compaction.ProviderTurnID != "child-turn" ||
+		detail.ParentProviderItemID != "call-spawn" || !detail.ChildTurn {
+		t.Fatalf("child compaction = %+v detail %s", compaction, compaction.Detail)
+	}
+}
+
 // A child's reply chunk goes out like an assistant delta: dropped at once when the
 // reader is behind, since the reply's completion restates it, rather than holding
 // the shared pump.

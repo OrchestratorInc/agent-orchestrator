@@ -373,6 +373,72 @@ describe("ChatWorkspace subagents", () => {
 		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
 	});
 
+	describe("a Codex child's own turn", () => {
+		const childTurn = "turn-child";
+		const spawn: ConversationActivity = {
+			kind: "activity", id: "spawn", turnId, sequence: 2, revision: 0,
+			providerItemId: "call-spawn",
+			activityKind: "mcp_tool",
+			status: "completed",
+			summary: "Fix the build",
+			detail: { providerToolName: "spawnAgent", background: true, input: { prompt: "Fix the build" } } as ConversationActivity["detail"],
+			createdAt: at(2),
+		};
+		const ownTurn = (item: ConversationActivity, status: ConversationActivity["status"] = item.status): ConversationActivity =>
+			({ ...inTurn(item, childTurn), status, detail: { ...item.detail, childTurn: true } });
+		const codex = (child: ConversationSnapshot["turns"][number], items: ConversationItem[]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			harness: "codex",
+			controller: { state: "ready" },
+			latestSequence: 3 + items.length,
+			turns: [
+				{
+					id: turnId, state: "completed", requestedAt: at(0), startedAt: at(0), completedAt: at(3),
+					diff: { files: [{ path: "README.md", additions: 1, deletions: 0, status: "modified" }] },
+				},
+				child,
+			],
+			items: [text("prompt", 1, "user", "Fix the build with a subagent"), spawn, text("started", 3, "assistant", "Started one agent."), ...items],
+		});
+
+		it("counts the files the child changed on the turn that launched it", async () => {
+			// Codex tracks each thread's diff on its own turn, and that turn is left out of
+			// the timeline, so its edits are counted where the launch is.
+			render(<ChatWorkspace snapshot={codex(
+				{
+					id: childTurn, state: "completed", requestedAt: at(3), startedAt: at(3), completedAt: at(9),
+					diff: { files: [{ path: "main.go", additions: 4, deletions: 1, status: "modified" }] },
+				},
+				[ownTurn(child("c1", 4, "call-spawn", "go build ./...")), ownTurn(handback("hb", 5, "call-spawn", "Build fixed."))],
+			)} onOpenFiles={vi.fn()} />);
+
+			expect(await screen.findByText("2 Files Changed")).toBeInTheDocument();
+		});
+
+		it("shows an approval the child asks for without bringing back its turn", () => {
+			// The driver cannot file an approval under the launch. It still shows, but the
+			// child's turn keeps no Working row of its own: its subagent already says so.
+			render(<ChatWorkspace snapshot={codex(
+				{ id: childTurn, state: "running", requestedAt: at(3), startedAt: at(3) },
+				[
+					ownTurn(child("c1", 4, "call-spawn", "go test ./..."), "running"),
+					{
+						kind: "activity", id: "approve", turnId: childTurn, sequence: 5, revision: 0,
+						activityKind: "approval", status: "pending", summary: "Run go test?",
+						requestId: "child-approval",
+						decisions: [{ id: "allow_once", label: "Allow Once", kind: "allow_once" }],
+						detail: { command: "go test ./..." }, createdAt: at(5),
+					},
+				],
+			)} onDecide={vi.fn()} />);
+
+			expect(screen.getByRole("group", { name: "Approval request child-approval" })).toBeInTheDocument();
+			expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+			openTeam();
+			expect(within(screen.getByRole("button", { name: /Fix the build/ })).getByLabelText("Working")).toBeInTheDocument();
+		});
+	});
+
 	it("does not stop the parent turn when Escape is pressed in the Subagents panel", async () => {
 		const user = userEvent.setup();
 		const tabBody = document.createElement("div");
