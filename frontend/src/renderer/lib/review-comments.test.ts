@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { noPRDetails } from "./pr-display";
-import { buildReviewBlocks, providerReviewId, reviewCommentIsOpen, type ReviewComment } from "./review-comments";
+import { buildReviewBlocks, providerReviewId, reviewCommentIsOpen, reviewerRowKey, type ReviewComment } from "./review-comments";
 import type { PRReviewState, ReviewRunFacts } from "./session-reviews";
 
 const PR_URL = "https://github.com/acme/repo/pull/3";
@@ -331,6 +331,47 @@ describe("buildReviewBlocks", () => {
 			["dana", false, "pending"],
 		]);
 		expect(block.comments.map((comment) => [comment.author, comment.earlier])).toEqual([["dana[bot]", false], ["dana", false]]);
+	});
+
+	// GitHub lists apps among requested reviewers (re-requesting Copilot), with no
+	// flag saying so: the request must turn the bot's own row pending, not add a second.
+	it("turns a re-requested bot's row pending rather than listing it twice", () => {
+		const block = blockFor({
+			provider: summary({
+				requestedReviewers: [{ login: "copilot-pull-request-reviewer", isTeam: false }],
+				review: {
+					decision: "none",
+					hasUnresolvedHumanComments: false,
+					unresolvedBy: [],
+					reviews: [
+						{ reviewerId: "copilot-pull-request-reviewer[bot]", isBot: true, verdict: "none", submittedAt: "2026-06-15T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-21`, body: "Reviewed 3 files.", autoInjectReview: false },
+					],
+				},
+			}),
+		});
+		expect(block.reviewers.map((reviewer) => [reviewer.id, reviewer.isBot, reviewer.status])).toEqual([
+			["copilot-pull-request-reviewer[bot]", true, "pending"],
+		]);
+	});
+
+	// The person "dana" and an app GitHub's GraphQL names "dana" share an id; their rows' keys must not.
+	it("gives a person and a same-named bot different row keys", () => {
+		const block = blockFor({
+			provider: summary({
+				review: {
+					decision: "changes_requested",
+					hasUnresolvedHumanComments: false,
+					unresolvedBy: [],
+					reviews: [
+						{ reviewerId: "dana", verdict: "changes_requested", submittedAt: "2026-06-15T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-31`, body: "Please fix.", autoInjectReview: false },
+						{ reviewerId: "dana", isBot: true, verdict: "changes_requested", submittedAt: "2026-06-16T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-32`, body: "Automated check.", autoInjectReview: false },
+					],
+				},
+			}),
+		});
+		const keys = block.reviewers.map(reviewerRowKey);
+		expect(block.reviewers.map((reviewer) => reviewer.id)).toEqual(["dana", "dana"]);
+		expect(new Set(keys).size).toBe(keys.length);
 	});
 
 	it("titles a PR from its review state, then the provider, then its number", () => {

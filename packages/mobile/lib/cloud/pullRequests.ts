@@ -55,7 +55,8 @@ export function cloudReviewRun(run: CloudReviewRun): ReviewRun {
 		body: run.body,
 		githubReviewId: run.providerReviewId,
 		createdAt: run.createdAt,
-		deliveredAt: run.deliveredAt ?? null,
+		// "delivered" is folded into "completed" above; the time keeps saying it reached the worker.
+		deliveredAt: run.deliveredAt ?? (run.status === "delivered" ? run.createdAt : null),
 		autoInjectReview: run.autoInjectReview,
 	};
 }

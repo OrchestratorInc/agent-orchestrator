@@ -10,6 +10,7 @@ export {
 	buildReviewBlocks,
 	providerReviewId,
 	reviewCommentIsOpen,
+	reviewerRowKey,
 	type ReviewComment,
 	type ReviewOpenPR,
 	type ReviewReply,

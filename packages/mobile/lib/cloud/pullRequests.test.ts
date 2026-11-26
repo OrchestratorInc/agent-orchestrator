@@ -73,3 +73,11 @@ it("reads Cloud's complete and delivered runs as completed", () => {
 	expect(status("running")).toBe("running");
 	expect(status("failed")).toBe("failed");
 });
+
+// Read as "completed", a delivered run still says it reached the worker.
+it("keeps a delivered Cloud run marked delivered", () => {
+	const read = (over: Partial<CloudReviewRun>) => cloudSessionReviews({ sessionId: "s1", reviews: [], runs: [{ ...run, ...over }] }).runs[0];
+	expect(read({ status: "delivered" })).toMatchObject({ status: "completed", deliveredAt: run.createdAt });
+	expect(read({ status: "delivered", deliveredAt: "2026-11-08T10:05:00Z" })?.deliveredAt).toBe("2026-11-08T10:05:00Z");
+	expect(read({ status: "complete" })?.deliveredAt).toBeNull();
+});
