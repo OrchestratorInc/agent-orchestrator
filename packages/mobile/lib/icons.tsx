@@ -32,6 +32,7 @@ import GitMerge from "lucide-react-native/icons/git-merge";
 import GitCommitHorizontal from "lucide-react-native/icons/git-commit-horizontal";
 import GitPullRequest from "lucide-react-native/icons/git-pull-request";
 import GitPullRequestDraft from "lucide-react-native/icons/git-pull-request-draft";
+import GitPullRequestClosed from "lucide-react-native/icons/git-pull-request-closed";
 import MousePointer2 from "lucide-react-native/icons/mouse-pointer-2";
 import Globe from "lucide-react-native/icons/globe";
 import KeyRound from "lucide-react-native/icons/key-round";
@@ -123,6 +124,7 @@ export const glyphs = {
 	"git-merge": GitMerge,
 	"git-pull-request": GitPullRequest,
 	"git-pull-request-draft": GitPullRequestDraft,
+	"git-pull-request-closed": GitPullRequestClosed,
 	"globe": Globe,
 	"image": Image,
 	"key": KeyRound,

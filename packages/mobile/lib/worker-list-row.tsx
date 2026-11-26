@@ -5,15 +5,16 @@ import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { sessionHostId } from "./hostedRows";
-import { eventAtOf, workerRowPresentation, workerStatusGlyph, type WorkerStatusGlyph } from "./agentsView";
+import { eventAtOf, workerRowPresentation } from "./agentsView";
 import { relativeTime } from "./notificationView";
 import { Feather } from "./icons";
-import { AppSymbol } from "./AppSymbol";
-import type { AppSymbolName, PlatformSymbol } from "./symbols";
+import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { workerRowIndicator, type WorkerRowIndicator, type WorkerRowMarker } from "./workerRowMarker";
-import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
+import { useReducedMotion } from "./useReducedMotion";
+import { workerRowAccessibilityLabel, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
 import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
@@ -95,12 +96,11 @@ export const WorkerListRow = memo(
 	renaming.current = isRenaming;
 	const row = workerRowPresentation(t, session, projectName);
 	const visual = statusVisual(t, session.status);
-	const glyph = workerStatusGlyph(session.status);
 	const indicator = workerRowIndicator(session);
 	// The subtitle is project and machine alone (no branch: a long worktree path
-	// the session's header still shows). The pull request goes in a pill on the
-	// row's end: its number, in the status's colour and glyph.
-	const prLabel = pullRequestLabel(session);
+	// the session's header still shows), with the pull request in a pill: the
+	// live one's number, in its own lifecycle's colour and glyph.
+	const pr = workerRowPullRequest(session);
 	// When the worker last changed, the time the board orders it by; `nowBucket`
 	// re-renders the row as the minute turns.
 	const updated = relativeTime(eventAtOf(session));
@@ -221,7 +221,17 @@ export const WorkerListRow = memo(
 			rowStyle={styles.row}
 			// No gesture hint: a screen reader reaches pin, rename and archive as
 			// the row's actions, and announces that it has them.
-			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.${unreachable ? " Last known; its machine can't be reached." : ""}`}
+			accessibilityLabel={workerRowAccessibilityLabel({
+				title: row.title,
+				project: row.project,
+				indicator,
+				displayStatus: session.displayStatus,
+				statusLabel: visual.label,
+				pr,
+				machine: machine?.name,
+				updated,
+				unreachable,
+			})}
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}
@@ -232,10 +242,8 @@ export const WorkerListRow = memo(
 			{isRenaming ? (
 				<WorkerRowContents
 					row={row}
-					visual={visual}
-					glyph={glyph}
 					indicator={indicator}
-					prLabel={prLabel}
+					pr={pr}
 					updated={updated}
 					harness={session.harness}
 					machine={machine}
@@ -252,10 +260,8 @@ export const WorkerListRow = memo(
 			) : (
 				<WorkerRowContents
 					row={row}
-					visual={visual}
-					glyph={glyph}
 					indicator={indicator}
-					prLabel={prLabel}
+					pr={pr}
 					updated={updated}
 					harness={session.harness}
 					machine={machine}
@@ -288,10 +294,8 @@ export const WorkerListRow = memo(
 
 function WorkerRowContents({
 	row,
-	visual,
-	glyph,
 	indicator,
-	prLabel,
+	pr,
 	updated,
 	harness,
 	machine,
@@ -306,10 +310,8 @@ function WorkerRowContents({
 	t,
 }: {
 	row: ReturnType<typeof workerRowPresentation>;
-	visual: ReturnType<typeof statusVisual>;
-	glyph: ReturnType<typeof workerStatusGlyph>;
 	indicator: WorkerRowIndicator;
-	prLabel: string | null;
+	pr: WorkerRowPullRequest | null;
 	updated: string;
 	harness: DashboardSession["harness"];
 	machine?: { name: string; appearance: MachineAppearance };
@@ -372,12 +374,13 @@ function WorkerRowContents({
 						</View>
 					)}
 				</View>
-		</View>
+			</View>
 			<View style={styles.subtitle}>
 				<AgentLogo harness={harness} size={12} />
-				<Text style={styles.meta} numberOfLines={1}>{row.project}</Text>
+				{/* Shrinks after the machine, before the pill. */}
+				<Text style={[styles.meta, styles.project]} numberOfLines={1}>{row.project}</Text>
 				{/* The pull request right after its project: number, glyph and colour. */}
-				{prLabel ? <PullRequestPill label={prLabel} color={visual.color} glyph={pillGlyph(glyph)} t={t} styles={styles} /> : null}
+				{pr ? <PullRequestPill pr={pr} t={t} styles={styles} /> : null}
 				{/* The machine, its glyph leading, after a quiet dot that sets it apart
 				    from the project and pull request. */}
 				{machine ? <Text style={styles.separator} accessibilityElementsHidden importantForAccessibility="no">·</Text> : null}
@@ -430,67 +433,31 @@ function WorkerMarkerIcon({ marker, t }: { marker: WorkerRowMarker; t: Theme }) 
 
 /** `#1253`, or `#1253 +1` for a worker with more than one; null with none. */
 export function pullRequestLabel(session: DashboardSession): string | null {
-	const list = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
-	const real = list.filter((pr) => pr?.number > 0);
-	if (real.length === 0) return null;
-	return real.length > 1 ? `#${real[0].number} +${real.length - 1}` : `#${real[0].number}`;
+	return workerRowPullRequest(session)?.label ?? null;
 }
 
 /**
- * The pill's glyph: the status's own when it speaks to the pull request
- * (approved, CI failed, needs input), the pull request mark otherwise, such as
- * while the agent works or idles.
+ * The worker's live pull request as an icon-and-number pill, in its own
+ * lifecycle's hue over the matching tint and glyph: open, draft, merged or
+ * closed reads by colour and shape at a glance. The worker's state is the
+ * lead mark's, so the two never disagree about the same thing.
  */
-function pillGlyph(glyph: WorkerStatusGlyph | null): Exclude<WorkerStatusGlyph, "loader"> {
-	return glyph && glyph !== "loader" && glyph !== "moon" ? glyph : "git-pull-request";
-}
-
-/**
- * The worker's pull request as an icon-and-number pill: the status's glyph and
- * the PR's number in the status's hue over the matching tint, so a mergeable,
- * failing or merged pull request reads by colour and shape at a glance.
- */
-function PullRequestPill({ label, color, glyph, t, styles }: {
-	label: string;
-	color: string;
-	glyph: Exclude<WorkerStatusGlyph, "loader">;
-	t: Theme;
-	styles: ReturnType<typeof makeStyles>;
-}) {
+function PullRequestPill({ pr, t, styles }: { pr: WorkerRowPullRequest; t: Theme; styles: ReturnType<typeof makeStyles> }) {
+	const color = toneColor(t, pr.tone);
 	return (
 		<View testID="worker-pr-pill" style={[styles.pill, { backgroundColor: statusTint(t, color) }]}>
-			<StatusGlyph glyph={glyph} color={color} />
-			<Text style={[styles.pillText, { color }]} numberOfLines={1}>{label}</Text>
+			<Feather name={pr.glyph} size={iconSize.xs} color={color} />
+			<Text style={[styles.pillText, { color }]} numberOfLines={1}>{pr.label}</Text>
 		</View>
 	);
 }
 
-/** The tint that goes under a status hue; a neutral surface for the grey states. */
+/** The tint that goes under a hue; a neutral surface for the grey states. */
 function statusTint(t: Theme, color: string): string {
-	if (color === t.amber) return t.tintAmber;
 	if (color === t.green) return t.tintGreen;
 	if (color === t.red) return t.tintRed;
-	if (color === t.orange) return t.tintOrange;
 	if (color === t.purple) return t.tintPurple;
-	if (color === t.blue) return t.tintBlue;
 	return t.bgElevated;
-}
-
-/**
- * Status glyphs are chrome, so each draws as its platform's own symbol. The
- * pull request keeps its Lucide glyph: a domain mark with no system symbol.
- */
-const STATUS_SYMBOLS: Record<Exclude<WorkerStatusGlyph, "git-pull-request" | "loader">, AppSymbolName | PlatformSymbol> = {
-	"alert-circle": "error",
-	"message-square": "chat",
-	"x-octagon": { ios: "xmark.octagon", android: "dangerous" },
-	"check-circle": "checkCircle",
-	moon: "idle",
-};
-
-function StatusGlyph({ glyph, color }: { glyph: Exclude<WorkerStatusGlyph, "loader">; color: string }) {
-	if (glyph === "git-pull-request") return <Feather name={glyph} size={iconSize.xs} color={color} />;
-	return <AppSymbol name={STATUS_SYMBOLS[glyph]} size={iconSize.xs} color={color} />;
 }
 
 const makeStyles = (t: Theme) =>
@@ -522,8 +489,11 @@ const makeStyles = (t: Theme) =>
 		subtitle: { flexDirection: "row", alignItems: "center", gap: space.xs, minWidth: 0, overflow: "hidden" },
 		meta: { fontFamily: "DMSans_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontVariant: ["tabular-nums"] },
 		separator: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
-		// Gives way before the project and pull request when the line runs short.
-		machineChip: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1, minWidth: 0 },
+		// Gives way first when the line runs short: Yoga weighs shrinking by
+		// flexShrink times width, so the machine's far larger weight empties it
+		// before the project gives up much. The pill never shrinks.
+		machineChip: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1000, minWidth: 0 },
+		project: { flexShrink: 1, minWidth: 0 },
 		shrink: { flexShrink: 1 },
 		pill: { flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 0, height: 20, paddingHorizontal: 7, borderRadius: 10 },
 		pillText: { fontFamily: "DMSans_500Medium", fontSize: 12, lineHeight: 15, fontWeight: "500", fontVariant: ["tabular-nums"] },

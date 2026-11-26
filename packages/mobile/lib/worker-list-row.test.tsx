@@ -61,7 +61,7 @@ vi.mock("./agentsView", async (importOriginal) => ({
 	workerRowPresentation: () => { counters.renders++; return { title: "Polish workers", project: "Agent Orchestrator", branch: "feat/mobile", trailing: "2m", trailingKind: "time" }; },
 	workerStatusGlyph: () => undefined,
 }));
-vi.mock("./prView", () => ({ toneColor: () => "tone" }));
+vi.mock("./prView", async (importOriginal) => ({ ...await importOriginal<typeof import("./prView")>(), toneColor: (_t: unknown, tone: string) => `tone:${tone}` }));
 vi.mock("./theme", () => ({ statusVisual: () => ({ label: "Working", color: "orange", breathing: false }) }));
 vi.mock("./ThemeProvider", () => {
 	const theme = {
@@ -85,7 +85,12 @@ vi.mock("./store", () => ({ useApp: () => ({ ...boardStore, ...useContext(appCon
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("react-native-safe-area-context", () => ({ SafeAreaListener: "SafeAreaListener" }));
 vi.mock("react-native-reanimated", () => ({
-	default: { FlatList: TestList },
+	default: { FlatList: TestList, View: "AnimatedView" },
+	useSharedValue: (value: number) => ({ value }),
+	useAnimatedStyle: (style: () => object) => style(),
+	withSequence: (...steps: number[]) => steps.at(-1),
+	withSpring: (value: number) => value,
+	withTiming: (value: number) => value,
 	LayoutAnimationConfig: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 	LinearTransition: { duration: () => ({}) },
 }));
@@ -709,8 +714,51 @@ describe("a machine that pages its archive", () => {
 describe("pullRequestLabel", () => {
 	it("names the worker's pull request by number, counts the rest, and is null with none", () => {
 		expect(pullRequestLabel({ pr: { number: 1253 } } as never)).toBe("#1253");
-		expect(pullRequestLabel({ prs: [{ number: 12 }, { number: 13 }] } as never)).toBe("#12 +1");
+		// The newest of two open pull requests leads.
+		expect(pullRequestLabel({ prs: [{ number: 12 }, { number: 13 }] } as never)).toBe("#13 +1");
 		expect(pullRequestLabel({ pr: { number: 0 } } as never)).toBeNull();
 		expect(pullRequestLabel({} as never)).toBeNull();
+	});
+});
+
+describe("the pull request pill on a row", () => {
+	const handlers = {
+		onSwipeOpen: vi.fn(), onSwipeClose: vi.fn(), onRenameStart: vi.fn(), onRenameCancel: vi.fn(),
+		onRename: vi.fn(async () => {}), onSetPinned: vi.fn(async () => {}), onDelete: vi.fn(), onResume: vi.fn(), onRestore: vi.fn(),
+	};
+	const render = (over: Partial<DashboardSession>) => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<WorkerListRow session={{ ...session, ...over }} projectName="Agent Orchestrator" isRenaming={false} nowBucket={1} {...handlers} />); });
+		return renderer;
+	};
+
+	// A worker that closed #12 and opened #15 is on #15, and the pill says so.
+	it("names the live pull request in its own lifecycle's tone, whatever the session's status", () => {
+		const renderer = render({ status: "needs_input", prs: [{ number: 12, state: "closed" }, { number: 15, state: "open" }] as never });
+		const pill = renderer.root.findByProps({ testID: "worker-pr-pill" });
+		expect(pill.findByType("Feather" as never).props).toMatchObject({ name: "git-pull-request", color: "tone:success" });
+		expect(pill.findByType("Text" as never).props.children).toBe("#15 +1");
+		act(() => renderer.unmount());
+	});
+
+	it("reads a closed pull request as closed, in red, rather than as an open one", () => {
+		const renderer = render({ prs: [{ number: 12, state: "closed" }] as never });
+		const pill = renderer.root.findByProps({ testID: "worker-pr-pill" });
+		expect(pill.findByType("Feather" as never).props).toMatchObject({ name: "git-pull-request-closed", color: "tone:error" });
+		act(() => renderer.unmount());
+	});
+
+	// A merged pull request whose agent went back to work stays merged on its pill.
+	it("keeps a merged pull request purple while its agent works again", () => {
+		const renderer = render({ status: "working", prs: [{ number: 9, state: "merged" }] as never });
+		expect(renderer.root.findByProps({ testID: "worker-pr-pill" }).findByType("Feather" as never).props).toMatchObject({ name: "git-merge", color: "tone:merged" });
+		act(() => renderer.unmount());
+	});
+
+	it("tells a screen reader the mark's state, the pull request and when it changed", () => {
+		const renderer = render({ status: "pr_open", displayStatus: "Merge conflicts", activity: "idle", prs: [{ number: 15, state: "open" }] as never });
+		const label = renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.startsWith("Polish workers."))[0].props.accessibilityLabel as string;
+		expect(label).toMatch(/^Polish workers\. Merge conflicts\. Pull request 15, open\. Agent Orchestrator\. Updated .+\.$/);
+		act(() => renderer.unmount());
 	});
 });

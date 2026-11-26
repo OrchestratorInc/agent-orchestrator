@@ -39,7 +39,9 @@ describe("worker row second line", () => {
 	it("reads project and machine alone, with the pull request in a pill", () => {
 		expect(row).not.toContain("row.branch");
 		expect(row).toContain("{row.project}</Text>");
-		expect(row).toContain("{prLabel ? <PullRequestPill label={prLabel} color={visual.color}");
+		// The pill follows the pull request, not the session's status.
+		expect(row).toContain("{pr ? <PullRequestPill pr={pr}");
+		expect(row).not.toContain("statusVisual(t, session.status).color");
 	});
 });
 
