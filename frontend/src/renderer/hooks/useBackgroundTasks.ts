@@ -5,6 +5,7 @@ import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiClient } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { markApiError } from "../lib/reported-errors";
 
 export type BackgroundTaskReading = components["schemas"]["BackgroundTasksResponse"];
 export type BackgroundTask = components["schemas"]["BackgroundTaskResponse"];
@@ -17,6 +18,7 @@ function isTaskReading(data: BackgroundTaskReading | undefined): data is Backgro
 }
 
 const missingTaskRoute = new AoError("BACKGROUND_TASKS_UNSUPPORTED", "This host does not report background tasks");
+markApiError(missingTaskRoute);
 
 const selectReadings = (data: components["schemas"]["ListBackgroundTasksResponse"]) =>
 	new Map(data.sessions.map((reading) => [reading.sessionId, reading]));
@@ -63,7 +65,7 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = f
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
 			return data;
 		},
-		refetchInterval: (query) => query.state.error === missingTaskRoute ? false : fast ? 2_000 : 5_000,
+		refetchInterval: (query) => query.state.error === missingTaskRoute ? 60_000 : fast ? 2_000 : 5_000,
 		staleTime: 1_000,
 		retry: false,
 	});

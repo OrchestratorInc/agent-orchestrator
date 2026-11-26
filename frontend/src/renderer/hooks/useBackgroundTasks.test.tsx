@@ -67,7 +67,7 @@ describe("background task queries", () => {
 		client.clear();
 	});
 
-	it("stops polling a host that has no background task endpoint", async () => {
+	it("rechecks a host that has no background task endpoint once a minute", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		getMock.mockResolvedValue({ error: { message: "not found" }, response: { status: 404 } });
 		function Consumer() {
@@ -79,6 +79,8 @@ describe("background task queries", () => {
 		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
 		await vi.advanceTimersByTimeAsync(20_000);
 		expect(getMock).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(40_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
 		view.unmount();
 		client.clear();
 		vi.useRealTimers();
