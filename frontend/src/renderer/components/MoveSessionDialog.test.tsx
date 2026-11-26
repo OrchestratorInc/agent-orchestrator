@@ -663,6 +663,37 @@ describe("moving a Cloud session to this computer", () => {
 		expect(Object.values(useUnsettledMoveHereStore.getState().moves)).toEqual([expect.objectContaining({ importUnsettled: true })]);
 	});
 
+	it("saves the import as unsettled before it sends it", async () => {
+		const savedWhenSent: unknown[] = [];
+		daemon.posts = {
+			"/api/v1/sessions/move/import": () => {
+				savedWhenSent.push(...Object.values(useUnsettledMoveHereStore.getState().moves));
+				return { data: { session: { id: "local-9" } } };
+			},
+		};
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(savedWhenSent).toEqual([expect.objectContaining({ projectId: "app", importUnsettled: true })]);
+		// A definitive answer settles it.
+		expect(useUnsettledMoveHereStore.getState().moves).toEqual({});
+	});
+
+	it("keeps Cloud's agent stopped after a crash mid-import, when Cloud's next export fails", async () => {
+		// The renderer went away after sending the import: the saved move names the
+		// project but, as an older build saved it, no uncertainty flag.
+		useUnsettledMoveHereStore.getState().set("org-1:cloud-1", { moveId: "m-earlier", projectId: "app" });
+		cloud.exportSessionMove.mockRejectedValue(new CloudCpError("bad gateway", { status: 502, code: "WORKER_REQUEST_FAILED" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		await screen.findByRole("button", { name: "Try again" });
+		expect(cloud.restartSessionAgent).not.toHaveBeenCalled();
+		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/sessions/move/import")).toHaveLength(0);
+		expect(Object.values(useUnsettledMoveHereStore.getState().moves)).toEqual([expect.objectContaining({ moveId: "m-earlier", projectId: "app" })]);
+	});
+
 	it("waits on the export an earlier attempt left running, under its moveId", async () => {
 		useUnsettledMoveHereStore.getState().set("org-1:cloud-1", { moveId: "m-earlier", exportMoveId: "exp-1" });
 		renderHere();

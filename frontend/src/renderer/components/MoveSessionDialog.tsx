@@ -524,7 +524,12 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const exportMove = useRef<string | undefined>(storedHere?.exportMoveId);
 	// An import of this move got no clear answer: a session may run here, so
 	// every later attempt keeps Cloud's agent stopped until it is reconciled.
-	const importUnsettled = useRef(storedHere?.importUnsettled === true);
+	// A saved project means an import was sent (onImport saves it just before
+	// the request), and nothing settled it: it was saved with the flag, or by
+	// a build that saved the flag only after a failed answer. Either way a
+	// session may run here, so Cloud's agent stays stopped until Try again
+	// reconciles it.
+	const importUnsettled = useRef(storedHere?.importUnsettled === true || Boolean(storedHere?.projectId));
 	const [exportRunning, setExportRunning] = useState(false);
 	// One move per dialog: Try again reuses its id, so this computer returns
 	// the session it already started instead of starting a second one.
@@ -633,7 +638,9 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					onCloned: (id) => {
 						cloned.current = id;
 					},
-					onImport: (projectId) => keep({ projectId }),
+					// Saved before the request goes out, so a crash or reload while it
+					// runs still reopens as unsettled. A definitive answer clears it.
+					onImport: (projectId) => keep({ projectId, importUnsettled: true }),
 					onImportUnsettled: () => {
 						importUnsettled.current = true;
 						keep({ importUnsettled: true });
