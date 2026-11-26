@@ -395,6 +395,16 @@ describe("spawn draft", () => {
 		expect(choose).toContain("if (formEdited.current && selectedHostId !== null) {\n\t\t\thostSettled.current = true;\n\t\t\treturn;\n\t\t}");
 	});
 
+	// A restored draft holds what the person chose for its machine (project,
+	// agent, model, the last Start's id). Restoring skips `edited`, so without
+	// this an automatic move cleared those choices and the saver wrote the empty
+	// ones over the draft, under the new machine.
+	it("keeps the machine a restored draft was written for", () => {
+		const restore = between(spawn, "const restoreDraft = () => {", "}).finally(");
+		expectBefore(restore, "if (promptRef.current || attachmentsRef.current.length) return;", "formEdited.current = true;");
+		expectBefore(restore, "formEdited.current = true;", "restoreSelections(draft);");
+	});
+
 	// The choosing effect runs before the project seed in the same commit. After
 	// a move, the seed still sees the old machine and its last project, and its
 	// write would replace the reset's: the new machine would start with the old

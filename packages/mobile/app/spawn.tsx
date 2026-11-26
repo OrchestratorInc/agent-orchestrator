@@ -347,6 +347,9 @@ function SpawnPage() {
 			// Text typed or files added before the draft was read are the page's
 			// now: the old draft neither replaces nor joins them.
 			if (promptRef.current || attachmentsRef.current.length) return;
+			// What the person chose for the draft's machine: the page keeps that
+			// machine, as after an edit, so a move never clears or overwrites it.
+			formEdited.current = true;
 			setPrompt(draft.prompt);
 			attachmentsRef.current = draft.attachments;
 			setAttachments(draft.attachments);
