@@ -7040,7 +7040,7 @@ describe("browser view host credential fills", () => {
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
 		const screenshotBlocked = vi.fn(async (_sessionId: string, _documentKey: string, _cdp: unknown) => "A 2FA code is on screen" as string | undefined);
-		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, keyPressBlocked: async () => undefined, forget: () => undefined };
 		const page = setupHost(runtime, { credentialFiller: filler as never });
 		await page.host.execute("sess-1", "tabs");
 		page.setCurrentURL(`${ORIGIN}/2fa`);
@@ -7062,12 +7062,43 @@ describe("browser view host credential fills", () => {
 			.fn<(sessionId: string, documentKey: string, cdp: unknown) => Promise<string | undefined>>()
 			.mockResolvedValueOnce(undefined)
 			.mockResolvedValue("A 2FA code is on screen");
-		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, keyPressBlocked: async () => undefined, forget: () => undefined };
 		const page = setupHost(runtime, { credentialFiller: filler as never });
 		await page.host.execute("sess-1", "tabs");
 		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
 		expect(screenshotBlocked).toHaveBeenCalledTimes(2);
 		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
+	});
+
+	it("refuses agent key presses while focus is in a filled field", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		const keyPressBlocked = vi.fn(async () => "Keys cannot be sent to a filled field" as string | undefined);
+		const filler = { keyPressBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, forget: () => undefined };
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		await expect(page.host.execute("sess-1", "press", { key: "Backspace" })).rejects.toMatchObject({ code: "BROWSER_SECRET_FIELD_LOCKED" });
+		expect(vi.mocked(runtime.runAction).mock.calls.map((call) => call[1])).not.toContain("press");
+		keyPressBlocked.mockResolvedValue(undefined);
+		await page.host.execute("sess-1", "press", { key: "Tab" });
+		expect(vi.mocked(runtime.runAction).mock.calls.map((call) => call[1])).toContain("press");
+	});
+
+	it("masks a filled field's edited value in get value", async () => {
+		const edited = PASSWORD.slice(0, -1);
+		const { host, item, debuggerSendCommand } = await setupVaultHost({ get: { value: edited } });
+		await host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "proj", approvedOrigin: ORIGIN });
+		const original = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method, params) =>
+			method === "Runtime.evaluate" && String(params?.expression).includes("ao-vault:filled-values")
+				? { result: { value: [edited] } }
+				: original(method, params),
+		);
+		const value = await host.execute("sess-1", "get", { property: "value", ref: "e2" });
+		expect(JSON.stringify(value)).not.toContain(edited);
 	});
 
 	it("refuses fills without a daemon-stamped project", async () => {

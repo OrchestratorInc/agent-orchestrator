@@ -245,7 +245,8 @@ to refuse a page that redirected somewhere else. When several saved credentials 
 with `--item <id>`. For a field `login` cannot find, use
 `ao browser fill-secret <ref> --item <id> [--field username|--totp]`.
 
-Output only ever shows `••••`. Filled passwords and codes are also masked in
+Output only ever shows `••••`. `press` is refused while focus is in a filled
+password or code field (`BROWSER_SECRET_FIELD_LOCKED`); click elsewhere or submit. Filled passwords and codes are also masked in
 later `snapshot`, `get value`, console and network output. The first fill of each
 saved login on a site waits for the user to approve it in Orchestrator's
 approval prompt; if they

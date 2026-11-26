@@ -53,14 +53,31 @@ const probeFocus = (token: string) => `/*ao-vault:probe*/(() => {
 // Right before typing: the element verified by the probe must still hold
 // focus in the same document (a navigation creates a new document, which has
 // no token). Input.insertText has no target node, so this binds it.
-// It also tags the element with what is being typed, for the screenshot check.
-const selectVerified = (token: string, kind: string) => `/*ao-vault:select*/(() => {
+// It also tags the element when a secret (not a username) goes in, so later
+// reads, key presses and screenshots can treat it by element, not by string.
+export const selectVerified = (token: string, kind: string) => `/*ao-vault:select*/(() => {
   const el = document.activeElement;
   if (!el || el.__aoVaultToken !== ${JSON.stringify(token)}) return false;
   if (typeof el.select === "function") el.select();
-  el.__aoVaultFilled = ${JSON.stringify(kind)};
+  if (${JSON.stringify(kind)}) el.__aoVaultFilled = ${JSON.stringify(kind)};
   return true;
 })()`;
+
+/** True when focus is in a field that holds a filled secret. */
+export const filledFieldFocused = `/*ao-vault:filled-focus*/(() => {
+  const el = document.activeElement;
+  return Boolean(el && el.__aoVaultFilled);
+})()`;
+
+/**
+ * The current values of fields holding a filled secret, whatever they hold
+ * now (an agent may have edited them). Read only to mask them.
+ */
+export const filledFieldValues = `/*ao-vault:filled-values*/(() =>
+  [...document.querySelectorAll("input, textarea")]
+    .filter((el) => el.__aoVaultFilled && el.isConnected)
+    .map((el) => el.value)
+)()`;
 
 /**
  * True when a field Orchestrator filled is on the page, visible and not masked:
@@ -280,7 +297,7 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
       throw new FillRefused("Page origin changed before the fill", "origin changed");
     }
     if (field !== "username") redactorFor(target.sessionId).add(secret);
-    if (!(await evaluate<boolean>(target.cdp, frame.id, selectVerified(token, field)))) {
+    if (!(await evaluate<boolean>(target.cdp, frame.id, selectVerified(token, field === "username" ? "" : field)))) {
       throw new FillRefused("The verified field changed before typing; nothing was typed", "field changed");
     }
     ensureLive();
@@ -457,6 +474,67 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
         }
       }
       return undefined;
+    },
+
+    /**
+     * Why an agent key press must not reach this document, if it must not:
+     * focus is in a field holding a filled secret, where Backspace or Delete
+     * would turn it into a value the redactor no longer recognises.
+     */
+    async keyPressBlocked(sessionId: string, documentKey: string, cdp: CdpLike): Promise<string | undefined> {
+      const filled = filledDocuments.get(sessionId)?.get(documentKey);
+      if (!filled) return undefined;
+      for (const frameId of filled.frames) {
+        let focused: boolean;
+        try {
+          focused = await evaluate<boolean>(cdp, frameId, filledFieldFocused);
+        } catch (error) {
+          if (/no frame/i.test(error instanceof Error ? error.message : "")) continue;
+          return "Orchestrator could not check whether focus is in a filled password field, so the key was not sent.";
+        }
+        if (focused) {
+          return "Keys cannot be sent to a field Orchestrator filled with a saved secret. Focus another field, or submit the form.";
+        }
+      }
+      return undefined;
+    },
+
+    /**
+     * Masks a result by element as well as by string: the current values of
+     * this document's filled fields are masked whatever they now hold. Values
+     * too short to mask inside other text are masked when a whole string
+     * equals them.
+     */
+    async scrubLive<T>(sessionId: string, documentKey: string, cdp: CdpLike, value: T): Promise<T> {
+      const filled = filledDocuments.get(sessionId)?.get(documentKey);
+      const short = new Set<string>();
+      if (filled) {
+        for (const frameId of filled.frames) {
+          let current: string[];
+          try {
+            current = await evaluate<string[]>(cdp, frameId, filledFieldValues);
+          } catch {
+            // Known secrets are still masked below.
+            continue;
+          }
+          for (const text of Array.isArray(current) ? current : []) {
+            if (typeof text !== "string" || !text) continue;
+            if (text.length >= MIN_REDACT_LENGTH) redactorFor(sessionId).add(text);
+            else short.add(text);
+          }
+        }
+      }
+      const scrubbed = redactors.get(sessionId)?.scrub(value) ?? value;
+      if (!short.size) return scrubbed;
+      const walk = (item: unknown): unknown => {
+        if (typeof item === "string") return short.has(item) ? SECRET_MASK : item;
+        if (Array.isArray(item)) return item.map(walk);
+        if (item && typeof item === "object") {
+          return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, walk(entry)]));
+        }
+        return item;
+      };
+      return walk(scrubbed) as T;
     },
 
     scrub<T>(sessionId: string, value: T): T {

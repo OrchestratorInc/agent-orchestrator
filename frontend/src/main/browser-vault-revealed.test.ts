@@ -53,3 +53,56 @@ describe("revealed secret check", () => {
     expect(check()).toBe(false);
   });
 });
+
+describe("filled field scripts", () => {
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ width: 100, height: 20 } as DOMRect);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  it("reports focus on a filled field, not on others", async () => {
+    const { filledFieldFocused } = await import("./browser-vault-fill");
+    document.body.innerHTML = `<input id="pw" type="password"><input id="other">`;
+    const pw = document.getElementById("pw") as Filled;
+    pw.__aoVaultFilled = "password";
+    pw.focus();
+    expect((0, eval)(filledFieldFocused)).toBe(true);
+    (document.getElementById("other") as HTMLInputElement).focus();
+    expect((0, eval)(filledFieldFocused)).toBe(false);
+  });
+
+  it("returns the current values of filled fields, even after edits", async () => {
+    const { filledFieldValues } = await import("./browser-vault-fill");
+    document.body.innerHTML = `<input id="pw" type="password" value="Secret-pass-1"><input id="user" value="alice">`;
+    const pw = document.getElementById("pw") as Filled;
+    pw.__aoVaultFilled = "password";
+    pw.value = "Secret-pass-";
+    expect((0, eval)(filledFieldValues)).toEqual(["Secret-pass-"]);
+  });
+});
+
+describe("tagging filled fields", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("tags a field that received a secret, but not one that received a username", async () => {
+    const { selectVerified } = await import("./browser-vault-fill");
+    document.body.innerHTML = `<input id="user"><input id="pw" type="password">`;
+    const user = document.getElementById("user") as Filled & { __aoVaultToken?: string };
+    const pw = document.getElementById("pw") as Filled & { __aoVaultToken?: string };
+    user.__aoVaultToken = "t1";
+    user.focus();
+    expect((0, eval)(selectVerified("t1", ""))).toBe(true);
+    expect(user.__aoVaultFilled).toBeUndefined();
+    pw.__aoVaultToken = "t2";
+    pw.focus();
+    expect((0, eval)(selectVerified("t2", "password"))).toBe(true);
+    expect(pw.__aoVaultFilled).toBe("password");
+    // A field without the probe's token is not the verified one.
+    expect((0, eval)(selectVerified("t3", "password"))).toBe(false);
+  });
+});

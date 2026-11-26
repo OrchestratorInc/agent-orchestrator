@@ -29,6 +29,10 @@ type FakeFrame = {
   // A filled field of this kind is on the page, visible and unmasked (a code
   // in a text field, or a password revealed with an eye toggle).
   revealedKind?: "password" | "totp";
+  // Focus is in a field Orchestrator filled.
+  focusOnFilled?: boolean;
+  // Current values of the fields Orchestrator filled (after any edits).
+  filledValues?: string[];
 };
 
 function fakeCdp(frames: FakeFrame[]) {
@@ -58,6 +62,12 @@ function fakeCdp(frames: FakeFrame[]) {
       if (method === "Runtime.evaluate") {
         const frame = contexts.get(params.contextId as number)!;
         const expression = String(params.expression);
+        if (expression.includes("ao-vault:filled-focus")) {
+          return { result: { value: Boolean(frame.focusOnFilled) } };
+        }
+        if (expression.includes("ao-vault:filled-values")) {
+          return { result: { value: frame.filledValues ?? [] } };
+        }
         if (expression.includes("ao-vault:revealed")) {
           const kind = frame.revealedKind;
           return { result: { value: Boolean(kind) && !expression.includes(`ignore:${kind}`) } };
@@ -289,6 +299,42 @@ describe("credential filler", () => {
     await filler.fillSecret(t, { itemId, field: "password" });
     const failing = { sendCommand: async () => { throw new Error("target crashed"); } };
     await expect(filler.screenshotBlocked("s1", "tab1:0", failing)).resolves.toMatch(/could not check/i);
+  });
+
+  it("refuses key presses while focus is in a filled field", async () => {
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }];
+    const filler = createCredentialFiller({ store });
+    const t = { ...target(frames), documentKey: () => "tab1:0" };
+    await expect(filler.keyPressBlocked("s1", "tab1:0", t.cdp)).resolves.toBeUndefined();
+    await filler.fillSecret(t, { itemId, field: "password" });
+    frames[0].focusOnFilled = true;
+    await expect(filler.keyPressBlocked("s1", "tab1:0", t.cdp)).resolves.toMatch(/filled/);
+    await expect(filler.keyPressBlocked("s1", "tab2:0", t.cdp)).resolves.toBeUndefined();
+    frames[0].focusOnFilled = false;
+    await expect(filler.keyPressBlocked("s1", "tab1:0", t.cdp)).resolves.toBeUndefined();
+    const failing = { sendCommand: async () => { throw new Error("target crashed"); } };
+    await expect(filler.keyPressBlocked("s1", "tab1:0", failing)).resolves.toMatch(/could not check/i);
+  });
+
+  it("masks a filled field's current value even after it was edited", async () => {
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }];
+    const filler = createCredentialFiller({ store });
+    const t = { ...target(frames), documentKey: () => "tab1:0" };
+    await filler.fillSecret(t, { itemId, field: "password" });
+    // The reviewer's scenario: Backspace, then get value. And a 3-char remnant.
+    const edited = PASSWORD.slice(0, -1);
+    frames[0].filledValues = [edited, "Tr0"];
+    const scrubbed = await filler.scrubLive("s1", "tab1:0", t.cdp, {
+      value: edited,
+      snapshot: `- textbox "Password": ${edited} [ref=e4]`,
+      short: "Tr0",
+      unrelated: "Tr0ll the docs",
+    });
+    expect(JSON.stringify(scrubbed)).not.toContain(edited);
+    expect(scrubbed).toMatchObject({ value: "••••", short: "••••", unrelated: "Tr0ll the docs" });
+    // Other documents are left alone; a failed read masks nothing new but still applies known secrets.
+    const failing = { sendCommand: async () => { throw new Error("target crashed"); } };
+    await expect(filler.scrubLive("s1", "tab1:0", failing, { value: PASSWORD })).resolves.toEqual({ value: "••••" });
   });
 
   it("refuses a project the item is not allowed in", async () => {

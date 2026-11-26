@@ -4962,7 +4962,16 @@ export function createBrowserViewHost(
                 true,
               ),
             });
-          case "press":
+          case "press": {
+            // Backspace or Delete in a filled field would leave a value the
+            // redactor no longer recognises; such keys never reach it.
+            const pressed = activeEntry(session);
+            const locked = await options.credentialFiller?.keyPressBlocked(
+              sessionId,
+              vaultDocumentKey(pressed),
+              vaultCdp(pressed),
+            );
+            if (locked) throw browserError("BROWSER_SECRET_FIELD_LOCKED", locked);
             return runNative(action, {
               key: stringArg(
                 args,
@@ -4971,6 +4980,7 @@ export function createBrowserViewHost(
                 "key is required",
               ),
             });
+          }
           case "drag":
             if (args.human === true) assertPanelPainted(session);
             return runNative(action, {
@@ -5105,13 +5115,7 @@ export function createBrowserViewHost(
             const refuseIfCodeOnScreen = async (shown: BrowserEntry) => {
               const filler = options.credentialFiller;
               if (!filler) return;
-              const documentKey = `${shown.tabId}:${shown.documentGeneration}`;
-              const blocked = await filler.screenshotBlocked(sessionId, documentKey, {
-                sendCommand: async (method, params) => {
-                  await ensureDebugger(shown);
-                  return shown.view.webContents.debugger.sendCommand(method, params);
-                },
-              });
+              const blocked = await filler.screenshotBlocked(sessionId, vaultDocumentKey(shown), vaultCdp(shown));
               if (blocked) throw browserError("BROWSER_SECRET_ON_SCREEN", blocked);
             };
             await refuseIfCodeOnScreen(activeEntry(session));
@@ -5322,9 +5326,14 @@ export function createBrowserViewHost(
       };
       try {
         const result = await run();
-        return options.credentialFiller
-          ? options.credentialFiller.scrub(sessionId, result)
-          : result;
+        const filler = options.credentialFiller;
+        if (!filler) return result;
+        // Mask by element as well as by string: a filled field's current
+        // value is masked even after it was edited.
+        const shown = session.tabs.size ? activeEntry(session) : undefined;
+        return shown
+          ? filler.scrubLive(sessionId, vaultDocumentKey(shown), vaultCdp(shown), result)
+          : filler.scrub(sessionId, result);
       } finally {
         setAgentBrowserActivity(session, action, false, commandId, "finished");
       }
@@ -6507,6 +6516,21 @@ function wireAutomationEvents(
       params as Record<string, unknown>,
     );
   });
+}
+
+/** The vault's identity for the document a tab shows: `<tab>:<document>`. */
+function vaultDocumentKey(entry: BrowserEntry): string {
+  return `${entry.tabId}:${entry.documentGeneration}`;
+}
+
+/** CDP for the vault's in-page checks on this tab. */
+function vaultCdp(entry: BrowserEntry): { sendCommand(method: string, params?: Record<string, unknown>): Promise<unknown> } {
+  return {
+    sendCommand: async (method, params) => {
+      await ensureDebugger(entry);
+      return entry.view.webContents.debugger.sendCommand(method, params);
+    },
+  };
 }
 
 async function ensureDebugger(entry: BrowserEntry): Promise<void> {
