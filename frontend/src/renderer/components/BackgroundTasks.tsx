@@ -25,8 +25,8 @@ function taskSummary(tasks: BackgroundTask[], t: TFunction): string | null {
 	return t("backgroundTasks.tasks", { count: live.length });
 }
 
-export function supportsLocalBackgroundTasks(session: WorkspaceSession) {
-	return session.mode === "chat" && !session.isTerminated && !session.hostId && !session.cloud;
+export function supportsBackgroundTasks(session: WorkspaceSession) {
+	return session.mode === "chat" && !session.isTerminated && !session.cloud;
 }
 
 /** The board supplies its shared batch reading; cards never create a poller. Plain text: it opens nothing. */
@@ -36,7 +36,7 @@ export function BackgroundTasksBadge({ session, reading, stale = false }: {
 	stale?: boolean;
 }) {
 	const { t } = useTranslation();
-	if (!supportsLocalBackgroundTasks(session)) return null;
+	if (session.hostId || !supportsBackgroundTasks(session)) return null;
 	const summary = reading && reading.availability !== "unavailable" ? taskSummary(reading.tasks, t) : null;
 	if (!summary) return null;
 	return (
@@ -186,13 +186,14 @@ export function resetStopsInFlightForTest(): void {
 }
 
 /** Stop requests in flight, per task (shared by every control for this session), and the one that last failed here. */
-export function useTaskStops(sessionId: string, liveIds: string) {
-	const mutation = useStopBackgroundTask(sessionId);
+export function useTaskStops(sessionId: string, liveIds: string, hostId?: string) {
+	const mutation = useStopBackgroundTask(sessionId, hostId);
+	const stopsFor = sessionUiKey(sessionId, hostId);
 	const keys = useStopsInFlight((state) => state.keys);
 	const stopping = useMemo(() => {
-		const prefix = stopKey(sessionId, "");
+		const prefix = stopKey(stopsFor, "");
 		return new Set([...keys.keys()].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length)));
-	}, [keys, sessionId]);
+	}, [keys, stopsFor]);
 	const [failed, setFailed] = useState<string | null>(null);
 	// The stops this control started, by task: a stopped task leaves the live set and lets its stop go.
 	const started = useRef(new Map<string, number>());
@@ -201,9 +202,9 @@ export function useTaskStops(sessionId: string, liveIds: string) {
 		for (const [id, request] of [...started.current]) {
 			if (live.has(id)) continue;
 			started.current.delete(id);
-			releaseStop(stopKey(sessionId, id), request);
+			releaseStop(stopKey(stopsFor, id), request);
 		}
-	}, [liveIds, sessionId]);
+	}, [liveIds, stopsFor]);
 	useEffect(() => {
 		if (!failed) return;
 		const timer = window.setTimeout(() => setFailed(null), STOP_ERROR_MS);
@@ -212,7 +213,7 @@ export function useTaskStops(sessionId: string, liveIds: string) {
 	const stop = (id: string) => {
 		if (stopping.has(id)) return;
 		setFailed(null);
-		const key = stopKey(sessionId, id);
+		const key = stopKey(stopsFor, id);
 		const request = takeStop(key);
 		started.current.set(id, request);
 		void mutation.mutateAsync(id).catch(() => {
@@ -224,17 +225,18 @@ export function useTaskStops(sessionId: string, liveIds: string) {
 }
 
 /** Chat entry point: a tab on the composer's top edge. Renders nothing while no work shows. */
-export function SessionBackgroundTasks({ session, onOpenTask }: { session: WorkspaceSession; onOpenTask?: (task: BackgroundTask) => void }) {
-	const enabled = supportsLocalBackgroundTasks(session);
-	const query = useBackgroundTasks(session.id, enabled);
-	const seenFailures = useUiStore((state) => state.inspectorSessions[sessionUiKey(session.id, session.hostId)]?.seenFailedTasks);
+export function SessionBackgroundTasks({ session, hostId, onOpenTask }: { session: WorkspaceSession; hostId?: string; onOpenTask?: (task: BackgroundTask) => void }) {
+	const enabled = supportsBackgroundTasks(session);
+	const query = useBackgroundTasks(session.id, enabled, false, hostId);
+	const seenFailures = useUiStore((state) => state.inspectorSessions[sessionUiKey(session.id, hostId)]?.seenFailedTasks);
 	if (!enabled) return null;
-	return <ComposerBackgroundTasks sessionId={session.id} reading={query.isError ? undefined : query.data} onOpenTask={onOpenTask} seenFailures={seenFailures} />;
+	return <ComposerBackgroundTasks sessionId={session.id} hostId={hostId} reading={query.isError ? undefined : query.data} onOpenTask={onOpenTask} seenFailures={seenFailures} />;
 }
 
 /** `onOpenTask` opens a task in the side panel; without it, tasks are not clickable. */
-export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFailures }: {
+export function ComposerBackgroundTasks({ sessionId, hostId, reading, onOpenTask, seenFailures }: {
 	sessionId: string;
+	hostId?: string;
 	reading?: BackgroundTaskReading;
 	onOpenTask?: (task: BackgroundTask) => void;
 	/** Failed runs already shown in their tab (`failedTaskKey`), left out of the strip. */
@@ -249,7 +251,7 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 	const live = tasks.filter(isLive);
 	const failedCount = tasks.length - live.length;
 	const now = useNow(tasks);
-	const { stopping, failed, stop } = useTaskStops(sessionId, live.map((task) => task.id).join("\n"));
+	const { stopping, failed, stop } = useTaskStops(sessionId, live.map((task) => task.id).join("\n"), hostId);
 	const [open, setOpen] = useState(false);
 	const several = tasks.length > 1;
 	// Back to one line, the list has nothing to hold: start closed next time.

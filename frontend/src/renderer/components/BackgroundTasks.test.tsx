@@ -151,8 +151,14 @@ describe("composer tab", () => {
 		const { container, rerender } = render(<SessionBackgroundTasks session={session} />);
 		expect(container).toBeEmptyDOMElement();
 		queryMock.mockReturnValue({ data: reading });
-		rerender(<SessionBackgroundTasks session={{ ...session, hostId: "another-host" }} />);
+		rerender(<SessionBackgroundTasks session={{ ...session, cloud: { orgId: "org" } as WorkspaceSession["cloud"] }} />);
 		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("reads a remote chat's tasks from its own host", () => {
+		render(<SessionBackgroundTasks session={session} hostId="another-host" />);
+		expect(queryMock).toHaveBeenLastCalledWith(session.id, true, false, "another-host");
+		expect(screen.getByText("Dev server")).toBeVisible();
 	});
 
 	it("folds several tasks into a count and opens them as rows", async () => {

@@ -50,7 +50,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { useBackgroundTasks, useReleaseTaskOutputs } from "../hooks/useBackgroundTasks";
 import { BackgroundTasksPanel } from "./BackgroundTaskPanel";
-import { supportsLocalBackgroundTasks } from "./BackgroundTasks";
+import { supportsBackgroundTasks } from "./BackgroundTasks";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -247,13 +247,12 @@ export const SessionInspector = memo(function SessionInspector({
 	// The Background tasks tab: every task this chat ran, and one at a time when opened.
 	const uiKey = session ? sessionUiKey(session.id, hostId) : "";
 	const taskTabs = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.taskTabs : undefined));
-	useReleaseTaskOutputs(session?.id ?? "", taskTabs);
+	useReleaseTaskOutputs(uiKey, taskTabs);
 	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
 	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
-	// Only a local chat reports tasks: a session on another host (`hostId` prop or field) never polls this daemon.
-	const tasksWatchable = Boolean(session && !hostId && supportsLocalBackgroundTasks(session));
+	const tasksWatchable = Boolean(session && supportsBackgroundTasks(session));
 	// Polls every 2 s only while the tab shows; each reading asks the provider.
-	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible);
+	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible, hostId);
 	const tasksReading = tasksQuery.data;
 	// A failed refresh keeps the last reading: still shown, but marked stale.
 	const tasksStale = tasksQuery.isError && tasksReading !== undefined;
@@ -443,7 +442,7 @@ export const SessionInspector = memo(function SessionInspector({
 				}
 				tabs={tabs}
 				taskView={session && taskTabs?.length ? (
-					<BackgroundTasksPanel isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} stale={tasksStale} tasks={taskTabs} uiKey={uiKey} />
+					<BackgroundTasksPanel hostId={hostId} isVisible={isInspectorVisible} openTask={activeTaskTab} sessionId={session.id} stale={tasksStale} tasks={taskTabs} uiKey={uiKey} />
 				) : undefined}
 			/>
 		</div>

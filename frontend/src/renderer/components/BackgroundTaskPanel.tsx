@@ -17,8 +17,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
  * chat ran, running ones first, and one task's output at a time behind a header
  * that leads back to the list.
  */
-export function BackgroundTasksPanel({ sessionId, uiKey, tasks, openTask, isVisible, stale = false }: {
+export function BackgroundTasksPanel({ sessionId, hostId, uiKey, tasks, openTask, isVisible, stale = false }: {
 	sessionId: string;
+	hostId?: string;
 	/** The session's side-panel key, where the open task is kept. */
 	uiKey: string;
 	tasks: readonly BackgroundTaskTab[];
@@ -58,6 +59,7 @@ export function BackgroundTasksPanel({ sessionId, uiKey, tasks, openTask, isVisi
 					autoFocusBack={focusBackFor === openTask.task.id}
 					isVisible={isVisible}
 					onBack={back}
+					hostId={hostId}
 					sessionId={sessionId}
 					stale={stale}
 					tab={openTask}
@@ -198,8 +200,9 @@ function TaskState({ entry }: { entry: BackgroundTaskTab }) {
  * how it stands, the command it runs and its latest output. A task that just
  * failed or left the reading can still be read here.
  */
-export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFocusBack = false, stale = false }: {
+export function BackgroundTaskPanel({ sessionId, hostId, tab, isVisible, onBack, autoFocusBack = false, stale = false }: {
 	sessionId: string;
+	hostId?: string;
 	tab: BackgroundTaskTab;
 	isVisible: boolean;
 	/** The reading failed to refresh: Stop and live output wait until the provider answers again. */
@@ -213,8 +216,8 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 	const live = !ended && isLive(task);
 	const name = backgroundTaskName(task, t);
 	const now = useNow(live ? [task] : []);
-	const { stopping, failed, stop } = useTaskStops(sessionId, live ? task.id : "");
-	const output = useBackgroundTaskOutput(sessionId, task.id, task.runId, { enabled: isVisible, live: live && isVisible && !stale, over: !live });
+	const { stopping, failed, stop } = useTaskStops(sessionId, live ? task.id : "", hostId);
+	const output = useBackgroundTaskOutput(sessionId, task.id, task.runId, { enabled: isVisible, live: live && isVisible && !stale, over: !live, hostId });
 	// Output the chat no longer reports on a task that is over stays as last read (`lastRead`).
 	const shown = output.data?.availability === "ready" ? output.data : undefined;
 	// The last lines land after the task ends: read once more when it does.

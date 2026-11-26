@@ -870,7 +870,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerNotice={<>{!hostId ? <SessionBackgroundTasks session={session} onOpenTask={openBackgroundTask} /> : null}{interfaceSwitch?.errorNotice ?? (switchError ? (
+				composerNotice={<><SessionBackgroundTasks session={session} hostId={hostId} onOpenTask={openBackgroundTask} />{interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}
