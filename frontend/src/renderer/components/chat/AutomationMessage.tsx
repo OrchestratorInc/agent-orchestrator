@@ -758,7 +758,7 @@ function FailedCheckLine({ check }: { check: FailedCheck }) {
 				) : null}
 			</div>
 			{open && check.log ? (
-				<pre className="mt-1.5 max-h-64 overflow-auto rounded-md bg-surface p-2 font-mono text-caption leading-relaxed text-muted-foreground">{check.log}</pre>
+				<pre className="mt-1.5 mb-0 max-h-64 overflow-auto rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground">{check.log}</pre>
 			) : null}
 		</li>
 	);
