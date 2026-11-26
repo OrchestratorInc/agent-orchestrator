@@ -3700,7 +3700,6 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	visibility: hidden;
 	white-space: pre-wrap;
 	overflow-wrap: break-word;
-	text-wrap: pretty;
 }
 
 .chat-human-edit-field::after,
