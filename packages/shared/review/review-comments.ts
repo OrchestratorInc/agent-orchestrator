@@ -211,6 +211,14 @@ const loginKey = (login: string) => login.trim().replace(/^@+/, "").toLowerCase(
  */
 const reviewerKey = (login: string, isBot: boolean) => `${isBot ? "bot:" : ""}${loginKey(login)}`;
 
+/**
+ * One reviewer row's identity, unique within a PR's reviewers: their ids alone
+ * are not ("dana" may be both a person and, without its "[bot]" suffix, an app).
+ */
+export function reviewerRowKey(reviewer: Pick<ReviewReviewer, "id" | "isBot" | "orchestrator">): string {
+	return reviewer.orchestrator ? "orchestrator" : reviewerKey(reviewer.id, reviewer.isBot);
+}
+
 /** GitHub anchors a review at #pullrequestreview-<id> on the PR page. */
 export function providerReviewId(reviewUrl: string | undefined): string | undefined {
 	return reviewUrl?.match(/#pullrequestreview-(\d+)/)?.[1];
@@ -605,19 +613,21 @@ function buildReviewers(pr: ReviewPRFacts | undefined, aoState: ReviewStateFacts
 		});
 	}
 	for (const requested of pr.requestedReviewers ?? []) {
-		// A requested reviewer is a person or a team, never an app.
-		const key = reviewerKey(requested.login, false);
-		if (seen.has(key)) {
+		// GitHub lists apps here too (a re-requested Copilot), and the request does
+		// not say which it is: a person who reviewed is matched first, then an app.
+		const known = [reviewerKey(requested.login, false), reviewerKey(requested.login, true)].find((key) => seen.has(key));
+		if (known) {
 			// Asked again after reviewing: the provider now waits on them.
-			const existing = reviewers.find((reviewer) => !reviewer.orchestrator && reviewerKey(reviewer.id, reviewer.isBot) === key);
+			const existing = reviewers.find((reviewer) => !reviewer.orchestrator && reviewerRowKey(reviewer) === known);
 			if (existing) {
 				existing.status = "pending";
 				existing.canRerequest = false;
 			}
 			continue;
 		}
-		seen.add(key);
-		reviewers.push({ id: requested.login, orchestrator: false, isBot: false, isTeam: requested.isTeam, status: "pending", canRerequest: false });
+		const isBot = /\[bot\]$/i.test(requested.login.trim());
+		seen.add(reviewerKey(requested.login, isBot));
+		reviewers.push({ id: requested.login, orchestrator: false, isBot, isTeam: requested.isTeam, status: "pending", canRerequest: false });
 	}
 	return reviewers;
 }

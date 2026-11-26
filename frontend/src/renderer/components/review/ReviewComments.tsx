@@ -9,7 +9,7 @@ import { prDetailsLoadQueryKey, usePRDetailsLoad } from "../../hooks/usePRDetail
 import { agentLabel } from "../../lib/agent-options";
 import { sessionUiKey } from "../../lib/hosts";
 import { formatTimeCompact } from "../../lib/format-time";
-import { reviewCommentIsOpen, type ReviewComment, type ReviewPRBlock, type ReviewReviewer, type ReviewReviewerStatus } from "../../lib/review-comments";
+import { reviewCommentIsOpen, reviewerRowKey, type ReviewComment, type ReviewPRBlock, type ReviewReviewer, type ReviewReviewerStatus } from "../../lib/review-comments";
 import { replyQuote } from "../../../../../packages/shared/review/review-messages";
 import { cn } from "../../lib/utils";
 import { useReviewSentKeys, useReviewSentStore } from "../../stores/review-sent-store";
@@ -375,12 +375,12 @@ function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; bloc
 	if (block.reviewers.length === 0) return null;
 	const rerequest = async (reviewer: ReviewReviewer) => {
 		if (!actions.onRerequest) return;
-		setFailed((current) => { const next = new Set(current); next.delete(reviewer.id); return next; });
+		setFailed((current) => { const next = new Set(current); next.delete(reviewerRowKey(reviewer)); return next; });
 		try {
 			await actions.onRerequest(reviewer.id, block);
-			setAsked((current) => new Map(current).set(reviewer.id, reviewer.status));
+			setAsked((current) => new Map(current).set(reviewerRowKey(reviewer), reviewer.status));
 		} catch {
-			setFailed((current) => new Set(current).add(reviewer.id));
+			setFailed((current) => new Set(current).add(reviewerRowKey(reviewer)));
 		}
 	};
 	return (
@@ -388,7 +388,7 @@ function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; bloc
 			<DropdownMenuTrigger asChild>
 				<Button aria-label={t("inspector.review.reviewers")} className="gap-0 px-1" size="xs" title={t("inspector.review.reviewers")} variant="quiet">
 					{block.reviewers.slice(0, 4).map((reviewer, index) => (
-						<span className={cn("inline-flex rounded-full ring-2 ring-background", index > 0 && "-ml-1")} key={reviewer.id}>
+						<span className={cn("inline-flex rounded-full ring-2 ring-background", index > 0 && "-ml-1")} key={reviewerRowKey(reviewer)}>
 							<ReviewerAvatar reviewer={reviewer} />
 						</span>
 					))}
@@ -398,19 +398,20 @@ function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; bloc
 			<DropdownMenuContent align="end" className="w-64">
 				<DropdownMenuLabel>{t("inspector.review.reviewersHint")}</DropdownMenuLabel>
 				{block.reviewers.map((reviewer) => {
-					const waiting = asked.has(reviewer.id) && asked.get(reviewer.id) === reviewer.status;
+					const rowKey = reviewerRowKey(reviewer);
+					const waiting = asked.has(rowKey) && asked.get(rowKey) === reviewer.status;
 					const status = waiting ? "pending" : reviewer.status;
 					const canAct = !reviewer.orchestrator && reviewer.canRerequest && !waiting && Boolean(actions.onRerequest);
 					return (
 						<DropdownMenuItem
 							disabled={!canAct}
-							key={reviewer.id}
+							key={rowKey}
 							onSelect={() => void rerequest(reviewer)}
 						>
 							<ReviewerAvatar reviewer={reviewer} />
 							<span className="min-w-0 truncate">{reviewer.orchestrator ? t("inspector.review.orchestrator") : reviewer.id}</span>
-							<span className={cn("ml-auto inline-flex shrink-0 items-center gap-1.5 text-2xs font-medium", failed.has(reviewer.id) ? "text-error" : verdictTone[status])}>
-								{failed.has(reviewer.id) ? t("inspector.rereviewRequestFailed") : (
+							<span className={cn("ml-auto inline-flex shrink-0 items-center gap-1.5 text-2xs font-medium", failed.has(rowKey) ? "text-error" : verdictTone[status])}>
+								{failed.has(rowKey) ? t("inspector.rereviewRequestFailed") : (
 									<>
 										<span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
 										{t(verdictKey[status])}
