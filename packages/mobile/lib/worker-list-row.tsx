@@ -327,8 +327,8 @@ function WorkerRowContents({
 	styles: ReturnType<typeof makeStyles>;
 	t: Theme;
 }) {
-	// One quiet line under the title: project, then the pull request, then the
-	// machine. The state is the lead mark's alone; the row's accessibility label
+	// One quiet line under the title: project, then the pull request, and the
+	// machine at its far end. The state is the lead mark's alone; the row's accessibility label
 	// still says it in words.
 	return (
 		// The mark leads the title's line; the subtitle runs out to the row's edge
@@ -383,9 +383,8 @@ function WorkerRowContents({
 				<Text style={[styles.meta, styles.project]} numberOfLines={1}>{row.project}</Text>
 				{/* The pull request right after its project: number, glyph and colour. */}
 				{pr ? <PullRequestPill pr={pr} t={t} styles={styles} /> : null}
-				{/* The machine, its glyph leading, after a quiet dot that sets it apart
-				    from the project and pull request. */}
-				{machine ? <Text style={styles.separator} accessibilityElementsHidden importantForAccessibility="no">·</Text> : null}
+				{/* The machine, its glyph leading, at the line's far end, as the age
+				    ends the title's line. */}
 				{machine ? (
 					<View testID="worker-machine-identity" accessibilityLabel={`Machine ${machine.name}`} style={styles.machineChip}>
 						<MachineAvatar testID="machine-identity-symbol" appearance={machine.appearance} size={14} color={t.textTertiary} />
@@ -490,11 +489,10 @@ const makeStyles = (t: Theme) =>
 		title: { fontFamily: "DMSans_500Medium", color: t.textPrimary, fontSize: 16, lineHeight: 22, fontWeight: "500", letterSpacing: -0.15 },
 		subtitle: { flexDirection: "row", alignItems: "center", gap: space.xs, minWidth: 0, overflow: "hidden" },
 		meta: { fontFamily: "DMSans_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontVariant: ["tabular-nums"] },
-		separator: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
-		// Gives way first when the line runs short: Yoga weighs shrinking by
-		// flexShrink times width, so the machine's far larger weight empties it
-		// before the project gives up much. The pill never shrinks.
-		machineChip: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1000, minWidth: 0 },
+		// Pushed to the line's end. Gives way first when the line runs short: Yoga
+		// weighs shrinking by flexShrink times width, so the machine's far larger
+		// weight empties it before the project gives up much. The pill never shrinks.
+		machineChip: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1000, minWidth: 0, marginLeft: "auto", paddingLeft: space.sm },
 		project: { flexShrink: 1, minWidth: 0 },
 		shrink: { flexShrink: 1 },
 		pill: { flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 0, height: 20, paddingHorizontal: 7, borderRadius: 10 },
