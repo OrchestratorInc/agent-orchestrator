@@ -4920,7 +4920,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	border-radius: 6px;
 	border: 1px solid color-mix(in srgb, var(--red) 28%, transparent);
 	background: color-mix(in srgb, var(--red) 8%, transparent);
-	padding: 8px 10px;
+	padding: 9px 11px;
 	font-size: 11.5px;
 	line-height: 1.45;
 	color: var(--red);
@@ -4931,7 +4931,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	border-radius: 6px;
 	border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
 	background: color-mix(in srgb, var(--green) 8%, transparent);
-	padding: 8px 10px;
+	padding: 9px 11px;
 	font-size: 11.5px;
 	line-height: 1.45;
 	color: var(--green);
@@ -6325,7 +6325,7 @@ html[data-shell-linux] body > .files-popout-overlay {
 	right: 10px;
 	bottom: 10px;
 	margin: 0;
-	padding: 8px 10px;
+	padding: 9px 11px;
 	border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
 	border-radius: 7px;
 	background: color-mix(in srgb, var(--red) 8%, var(--bg));
@@ -7873,10 +7873,10 @@ html[data-new-desktop-ui] .cursor-chat-composer {
 	padding: var(--composer-inset);
 }
 
-/* The user's message bubble tightens by the same 2px as the composer: 8px
- * above and below and 10px at the sides (10px and 12px with the flag off). */
+/* The user's message bubble tightens by 1px on every side: 9px above and
+ * below and 11px at the sides (10px and 12px with the flag off). */
 html[data-new-desktop-ui] .cursor-chat-human-message {
-	padding: 8px 10px;
+	padding: 9px 11px;
 }
 
 /* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
