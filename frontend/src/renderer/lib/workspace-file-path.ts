@@ -186,3 +186,63 @@ export function matchWorkspaceFilePath(
 
 	return normalized;
 }
+
+/** Reuse one set of every folder that holds a workspace file, built on first use. */
+export function createWorkspaceDirLookup(paths: readonly string[]): (reference: string) => boolean {
+	let dirs: Set<string> | undefined;
+	return (reference) => {
+		const normalized = normalizeWorkspaceFileReference(reference).replace(/\/+$/, "");
+		if (!normalized) return false;
+		if (!dirs) {
+			dirs = new Set();
+			for (const path of paths) {
+				const parts = normalizeWorkspacePath(path).split("/");
+				for (let end = 1; end < parts.length; end += 1) dirs.add(parts.slice(0, end).join("/"));
+			}
+		}
+		return dirs.has(normalized);
+	};
+}
+
+/**
+ * Extensions that make a bare name read as a file. A list rather than "any dot":
+ * `process.env`, `arr.map` and `user.name` are code, not files. A name with a
+ * folder in it (`tasks/b6x6u8ikl.output`) counts with any extension.
+ */
+const FILE_EXTENSIONS = new Set([
+	"ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "json", "jsonc", "json5", "md", "mdx", "txt", "rst",
+	"css", "scss", "sass", "less", "html", "htm", "vue", "svelte", "astro",
+	"go", "py", "pyi", "rb", "rs", "java", "kt", "kts", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php",
+	"scala", "dart", "lua", "ex", "exs", "erl", "hs", "zig", "clj", "sql", "prisma", "graphql", "gql", "proto",
+	"sh", "bash", "zsh", "fish", "ps1", "bat", "yml", "yaml", "toml", "ini", "cfg", "conf", "xml", "plist",
+	"svg", "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "bmp", "pdf", "mp4", "mov", "webm", "mp3", "wav",
+	"woff", "woff2", "ttf", "otf", "lock", "log", "csv", "tsv", "tf", "wasm", "zip", "tar", "gz",
+]);
+
+export type NamedPath = { kind: "file"; iconPath: string } | { kind: "dir"; name: string };
+
+/**
+ * Whether inline code names a file or a folder, opened or not: the icon a chat
+ * chip draws for it. `isDir` answers for a name that holds a folder but no
+ * extension (`public/catalog`). A name an agent cut short keeps its extension
+ * after the ellipsis (`photo-1416…jpg`), so its icon still matches.
+ */
+export function namedPath(text: string, isDir: (reference: string) => boolean = () => false): NamedPath | undefined {
+	const raw = text.trim();
+	if (!raw || raw.length > 260 || /\s/.test(raw) || raw.startsWith("-") || hasNonFileScheme(raw)) return undefined;
+	if (/[(){}[\]<>=,;'"`*?|$&!^+]/.test(raw)) return undefined;
+	const reference = raw.replace(/#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$/i, "").replace(/:\d+(?::\d+)?$/, "");
+	if (/\/$/.test(reference)) {
+		const name = fileBasename(reference.replace(/\/+$/, ""));
+		return name && name !== "." && name !== ".." ? { kind: "dir", name } : undefined;
+	}
+	const base = fileBasename(reference);
+	if (!base) return undefined;
+	const extension = /(?:\.|…)([A-Za-z0-9]{1,10})$/.exec(base)?.[1];
+	const iconPath = base.replace(/…(?=[A-Za-z0-9]+$)/, "….");
+	if (/^\.(?=[\w.-]*[A-Za-z])[\w.-]+$/.test(base)) return { kind: "file", iconPath };
+	if (extension && FILE_EXTENSIONS.has(extension.toLowerCase())) return { kind: "file", iconPath };
+	if (!reference.includes("/")) return undefined;
+	if (isDir(reference)) return { kind: "dir", name: base };
+	return extension && /[A-Za-z]/.test(extension) ? { kind: "file", iconPath } : undefined;
+}
