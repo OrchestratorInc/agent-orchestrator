@@ -143,6 +143,7 @@ type Service struct {
 	prewarming         sync.Map // domain.AgentHarness -> struct{}
 	providerSwitches   sync.Map // domain.SessionID -> chan struct{}, one switch at a time
 	terminalSwitcher   TerminalProviderSwitcher
+	agentChoices       AgentChoiceRecorder
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
