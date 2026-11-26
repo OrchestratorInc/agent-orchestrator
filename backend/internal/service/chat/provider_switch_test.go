@@ -747,7 +747,7 @@ func (c variantModelConversation) SetConfigOption(context.Context, string, ports
 
 func (c variantModelConversation) ModelVariantBase(model string) (string, bool) {
 	base, found := strings.CutSuffix(model, "-low")
-	return base, found && base == "gemini-3.8-flash"
+	return base, found && (base == "gemini-3.8-flash" || base == "gemini-3.8-pro")
 }
 
 func TestProviderSwitchKeepsAPickThatRunsAsABaseModelAndLevel(t *testing.T) {
@@ -769,7 +769,8 @@ func TestProviderSwitchSavesTheLiveModelWhenAVariantPickDidNotTake(t *testing.T)
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
 	driver.target = func(conv *fakeConversation) ports.ChatConversation { return variantModelConversation{conv} }
-	// The pro base is offered too, but the chat kept running flash.
+	// The pick resolves to the offered pro base, but the chat kept running
+	// flash, so the base differs from the live model.
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessAgy, Model: "gemini-3.8-pro-low",
 	}); err != nil {
