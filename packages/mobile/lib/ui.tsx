@@ -200,7 +200,7 @@ export function ListSectionHeader({
 	onToggle?: () => void;
 	/** A glyph before the label, naming the section by shape (the board's). */
 	icon?: AppSymbolProps["name"];
-	/** Quiet: no rule after the label, and the whole header at a low voice (the board's). */
+	/** Quiet: no rule after the label, and its glyph a step fainter (the board's). The label keeps its contrast. */
 	bare?: boolean;
 }) {
 	const t = useTheme();
@@ -208,7 +208,7 @@ export function ListSectionHeader({
 	const feedback = usePressFeedback("row");
 	const body = (
 		<>
-			{icon ? <AppSymbol name={icon} size={iconSize.xs} color={t.textTertiary} /> : null}
+			{icon ? <AppSymbol name={icon} size={iconSize.xs} color={bare ? t.textFaint : t.textTertiary} /> : null}
 			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={s.listSectionLabel}>
 				{label}
 			</Text>
@@ -571,7 +571,9 @@ const makeStyles = (t: Theme) =>
 			paddingTop: space.xl,
 			paddingBottom: space.xs,
 		},
-		listSectionBare: { gap: space.xs, opacity: 0.6 },
+		// No opacity on the whole header: at 60% the small label fell to about
+		// 2.5:1 on the light background. The glyph and count carry the quiet.
+		listSectionBare: { gap: space.xs },
 		listSectionRule: { flex: 1, height: rowDividerWidth, backgroundColor: t.borderDefault },
 		listSectionLabel: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		// Mono and tabular so a count changing from 9 to 10 does not shift the rule.
