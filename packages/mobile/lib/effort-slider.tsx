@@ -38,17 +38,17 @@ const BLOB_SHADOW = "#000000";
 export function EffortSliderOverlay({ bottom, visible = true, ...props }: EffortSliderProps & { bottom: DimensionValue; visible?: boolean }) {
 	return (
 		<ComposerOverlay bottom={bottom} visible={visible}>
-			<EffortSlider {...props} />
+			<EffortSlider {...props} visible={visible} />
 		</ComposerOverlay>
 	);
 }
 
-export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps) {
+export function EffortSlider({ choices, onChoose, onRelease, visible = true }: EffortSliderProps & { visible?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
 	const [width, setWidth] = useState(0);
-	const { index, label, pick } = useEffortSlider(choices, onChoose, haptics.detent);
+	const { index, label, pick } = useEffortSlider(choices, onChoose, haptics.detent, visible);
 	const count = choices.length;
 	const trackWidth = Math.max(MIN_TRACK, END * 2 + Math.max(count - 1, 0) * LEVEL_GAP);
 	const stepFor = (trackWidth: number) => count > 1 ? (trackWidth - END * 2) / (count - 1) : 0;

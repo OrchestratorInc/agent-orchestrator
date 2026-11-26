@@ -19,7 +19,12 @@ import { useRef } from "react";
  */
 export function useTouchDownPress(act: () => void) {
 	const touch = useRef({ active: false, pending: false });
-	const end = () => { setTimeout(() => { touch.current = { active: false, pending: false }; }, 0); };
+	// The clear applies only to the touch that scheduled it: a touch that
+	// lands before the tick has its own state, which the clear must keep.
+	const end = () => {
+		const ended = touch.current;
+		setTimeout(() => { if (touch.current === ended) touch.current = { active: false, pending: false }; }, 0);
+	};
 	return {
 		onPressIn: () => {
 			if (touch.current.active) return;

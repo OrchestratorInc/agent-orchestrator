@@ -242,4 +242,20 @@ describe("effort slider", () => {
 		await act(async () => renderer!.update(<EffortSlider choices={three} onChoose={() => {}} />));
 		expect(blobCentre()).toBe(120);
 	});
+
+	// Kept mounted between opens; a pick whose save failed leaves the chosen
+	// level where it was, and the next open must show that level, not the pick.
+	it("goes back to the chosen level each time it is put away", async () => {
+		const props = { choices: levels("low"), onChoose: () => {}, bottom: "100%" as const };
+		await act(async () => { renderer = create(<EffortSliderOverlay visible {...props} />); });
+		const root = renderer!.root;
+		const label = () => root.findAll((node) => hostType(node) === "Text" && node.props.testID === "effort-slider-value")[0].props.children;
+		const track = () => root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider")[0];
+		await act(async () => track().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
+		expect(label()).toBe("Medium");
+		await act(async () => renderer!.update(<EffortSliderOverlay visible={false} {...props} />));
+		expect(label()).toBe("Low");
+		await act(async () => renderer!.update(<EffortSliderOverlay visible {...props} />));
+		expect(label()).toBe("Low");
+	});
 });

@@ -84,4 +84,25 @@ describe("effort gauge", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	// The clear a touch's end schedules must not wipe a touch that lands
+	// before it runs, or that touch's lift would toggle a second time.
+	it("keeps a late clear from an earlier touch off the next one", async () => {
+		vi.useFakeTimers();
+		try {
+			const onPress = vi.fn();
+			await act(async () => { renderer = create(<EffortGaugeButton choices={levels("high")} open={false} onPress={onPress} disabled={false} testID="gauge" />); });
+			const button = () => hosts(renderer!.root, "Pressable")[0];
+			await act(async () => { button().props.onPressIn(); button().props.onTouchEnd(); button().props.onPress(); });
+			expect(onPress).toHaveBeenCalledOnce();
+			// The next touch lands before the first touch's clear has run.
+			await act(async () => button().props.onPressIn());
+			expect(onPress).toHaveBeenCalledTimes(2);
+			await act(async () => { vi.runAllTimers(); });
+			await act(async () => button().props.onPress());
+			expect(onPress).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
