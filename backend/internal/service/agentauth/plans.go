@@ -132,8 +132,9 @@ type loginURLRule struct {
 // sign-in method), opens the browser itself and prints the link. The menu is
 // arrow-key only, and Agy stays open in its chat view after signing in, so the
 // sign-in finishes when Agy's auth probe passes rather than when it exits.
-// Only macOS has a sign-in probe (Agy's Keychain entry); elsewhere Agy keeps
-// the plain native sign-in, which finishes when the user leaves Agy.
+// Only macOS and Windows have a sign-in probe (Agy's Keychain or Credential
+// Manager entry); elsewhere Agy keeps the plain native sign-in, which finishes
+// when the user leaves Agy.
 func agyLoginPlan() Plan {
 	p := plan("agy", ActionLogin, "Log in to Agy", []string{"agy"}, "Choose Google account or Google Cloud project", "https://github.com/google-antigravity/antigravity-cli")
 	p.guidedMethods = map[string][]guidedStep{
@@ -145,7 +146,7 @@ func agyLoginPlan() Plan {
 	}
 	p.signInKeepsRunning = true
 	p.loginURLRules = []loginURLRule{{host: "accounts.google.com", pathPrefix: "/o/oauth2/"}}
-	p.guidedPlatforms = []string{"darwin"}
+	p.guidedPlatforms = []string{"darwin", "windows"}
 	return p
 }
 

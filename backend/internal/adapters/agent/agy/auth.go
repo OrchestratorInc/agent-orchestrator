@@ -23,7 +23,9 @@ const adcAuthEnv = "AGY_ADC_AUTH"
 
 const (
 	// Agy saves its Google account sign-in in the OS keyring under this
-	// service/account pair (observed via `security dump-keychain` metadata).
+	// service/account pair (observed via `security dump-keychain` metadata on
+	// macOS, and as the Credential Manager target "gemini:antigravity" with
+	// user "antigravity" on Windows).
 	keychainService = "gemini"
 	keychainAccount = "antigravity"
 	// macOSSecurityExitItemNotFound is `security`'s errSecItemNotFound exit.
@@ -36,7 +38,7 @@ var (
 	authGetenv         = os.Getenv
 	authUserHomeDir    = os.UserHomeDir
 	authGOOS           = runtime.GOOS
-	keychainItemExists = macOSKeychainItemExists
+	keychainItemExists = keyringItemExists
 )
 
 // AuthStatus returns the plugin's local authentication status. Agy has no
@@ -46,9 +48,10 @@ var (
 //   - ADC (AGY_ADC_AUTH inherited by the daemon, so every Agy launch uses
 //     it): authorized when Application Default Credentials exist,
 //     unauthorized when they do not.
-//   - Google sign-in on macOS (Google account or Google Cloud project, both
-//     from Agy's own login menu): authorized when Agy's Keychain entry
-//     exists. A missing entry stays unknown because Agy falls back to
+//   - Google sign-in on macOS and Windows (Google account or Google Cloud
+//     project, both from Agy's own login menu): authorized when Agy's
+//     Keychain or Credential Manager entry exists. A missing entry stays
+//     unknown because Agy falls back to
 //     undocumented file-based token storage when the keyring is locked or
 //     unavailable, and an unauthorized verdict would block agent switching
 //     and reviewer launches.
@@ -71,7 +74,7 @@ func localAuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 		}
 		return ports.AgentAuthStatusUnauthorized, nil
 	}
-	if authGOOS != "darwin" {
+	if authGOOS != "darwin" && authGOOS != "windows" {
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	found, err := keychainItemExists(ctx, keychainService, keychainAccount)
@@ -118,6 +121,14 @@ func nonEmptyRegularFile(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
 
+// keyringItemExists looks up Agy's keyring entry in the platform's store.
+func keyringItemExists(ctx context.Context, service, account string) (bool, error) {
+	if authGOOS == "windows" {
+		return windowsCredentialExists(ctx, service+":"+account)
+	}
+	return macOSKeychainItemExists(ctx, service, account)
+}
+
 // macOSKeychainItemExists checks for a generic-password item by attributes
 // only. Without -g/-w, `security` never reads the secret, so the lookup does
 // not trigger a Keychain access prompt.
@@ -134,4 +145,50 @@ func macOSKeychainItemExists(ctx context.Context, service, account string) (bool
 		return false, nil
 	}
 	return false, err
+}
+
+// windowsCredentialExists checks Credential Manager for a generic credential
+// by target name. `cmdkey /list` prints names and users only, never the
+// secret, and exits 0 whether or not the target exists, so the listing itself
+// decides.
+func windowsCredentialExists(ctx context.Context, target string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, keychainProbeTimeout)
+	defer cancel()
+	root := strings.TrimSpace(authGetenv("SystemRoot"))
+	if root == "" {
+		root = `C:\Windows`
+	}
+	cmd := aoprocess.CommandContext(ctx, filepath.Join(root, "System32", "cmdkey.exe"), "/list:"+target) //nolint:gosec // fixed argv; target is a package constant.
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	return cmdkeyListsTarget(string(out), target), nil
+}
+
+// cmdkeyListsTarget reports whether a `cmdkey /list:<target>` listing holds
+// target. Labels are localized, so it matches a line whose last field is the
+// target name itself ("Target: gemini:antigravity", or the
+// "LegacyGeneric:target=" form of an unfiltered listing). The first line
+// repeats the filter ("... for gemini:antigravity:") and is skipped.
+func cmdkeyListsTarget(out, target string) bool {
+	header := true
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if header {
+			header = false
+			continue
+		}
+		name := fields[len(fields)-1]
+		if i := strings.LastIndex(strings.ToLower(name), "target="); i >= 0 {
+			name = name[i+len("target="):]
+		}
+		if strings.EqualFold(name, target) {
+			return true
+		}
+	}
+	return false
 }

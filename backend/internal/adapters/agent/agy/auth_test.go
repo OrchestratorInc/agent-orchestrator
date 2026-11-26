@@ -95,7 +95,54 @@ func TestAuthStatusUnknownWhenKeychainProbeFails(t *testing.T) {
 	}
 }
 
-func TestAuthStatusKeepsInstalledMeansAuthorizedOffMacOS(t *testing.T) {
+func TestAuthStatusOnWindowsReadsCredentialManagerEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hit  bool
+		want ports.AgentAuthStatus
+	}{
+		{"found", true, ports.AgentAuthStatusAuthorized},
+		{"missing", false, ports.AgentAuthStatusUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAuthProbeFixture(t)
+			f.goos = "windows"
+			f.keychainHit = tc.hit
+			f.install(t)
+
+			if got := authStatus(t); got != tc.want {
+				t.Fatalf("status = %q, want %q", got, tc.want)
+			}
+			if f.keychainHits != 1 {
+				t.Fatalf("credential store probed %d times, want 1", f.keychainHits)
+			}
+		})
+	}
+}
+
+func TestCmdkeyListsTarget(t *testing.T) {
+	const target = "gemini:antigravity"
+	for _, tc := range []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{"filtered hit", "Currently stored credentials for gemini:antigravity:\r\n\r\n    Target: gemini:antigravity\r\n    Type: Generic \r\n    User: antigravity\r\n    Local machine persistence\r\n", true},
+		{"unfiltered hit", "Currently stored credentials:\r\n\r\n    Target: LegacyGeneric:target=gemini:antigravity\r\n    Type: Generic \r\n    User: antigravity\r\n", true},
+		{"localized labels", "Derzeit gespeicherte Anmeldeinformationen für gemini:antigravity:\r\n\r\n    Ziel: gemini:antigravity\r\n    Typ: Generisch\r\n", true},
+		{"none", "\r\nCurrently stored credentials for gemini:antigravity:\r\n\r\n* NONE *\r\n", false},
+		{"other target", "Currently stored credentials for gemini:anti*:\r\n\r\n    Target: gemini:antigravity-old\r\n    User: antigravity\r\n", false},
+		{"empty", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cmdkeyListsTarget(tc.out, target); got != tc.want {
+				t.Fatalf("cmdkeyListsTarget = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthStatusKeepsInstalledMeansAuthorizedOnLinux(t *testing.T) {
 	f := newAuthProbeFixture(t)
 	f.goos = "linux"
 	f.install(t)
@@ -104,7 +151,7 @@ func TestAuthStatusKeepsInstalledMeansAuthorizedOffMacOS(t *testing.T) {
 		t.Fatalf("status = %q, want authorized", got)
 	}
 	if f.keychainHits != 0 {
-		t.Fatalf("keychain probed %d times off macOS", f.keychainHits)
+		t.Fatalf("keychain probed %d times on linux", f.keychainHits)
 	}
 }
 

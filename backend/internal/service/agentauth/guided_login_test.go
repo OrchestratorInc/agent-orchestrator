@@ -88,17 +88,21 @@ func (f *guidedTerminalFake) isClosed() bool {
 }
 
 func TestAgyLoginMethodsListGoogleAccountAndCloudProject(t *testing.T) {
-	onPlatform(t, "darwin")
+	for _, goos := range []string{"darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			onPlatform(t, goos)
 
-	var ids []string
-	for _, method := range loginMethods("agy") {
-		ids = append(ids, method.ID)
-		if method.Secret {
-			t.Fatalf("method %q asks for a secret", method.ID)
-		}
-	}
-	if want := []string{"browser", "cloud_project", "native"}; !reflect.DeepEqual(ids, want) {
-		t.Fatalf("agy methods = %v, want %v", ids, want)
+			var ids []string
+			for _, method := range loginMethods("agy") {
+				ids = append(ids, method.ID)
+				if method.Secret {
+					t.Fatalf("method %q asks for a secret", method.ID)
+				}
+			}
+			if want := []string{"browser", "cloud_project", "native"}; !reflect.DeepEqual(ids, want) {
+				t.Fatalf("agy methods = %v, want %v", ids, want)
+			}
+		})
 	}
 }
 
@@ -272,20 +276,20 @@ func TestGuidedLoginRefusesCredentials(t *testing.T) {
 	}
 }
 
-func TestAgyOffMacOSKeepsPlainNativeSignIn(t *testing.T) {
+func TestAgyWithoutSignInProbeKeepsPlainNativeSignIn(t *testing.T) {
 	onPlatform(t, "linux")
 
 	methods := loginMethods("agy")
 	if len(methods) != 1 || methods[0].ID != "native" {
-		t.Fatalf("agy methods off macOS = %+v, want only native sign-in", methods)
+		t.Fatalf("agy methods on linux = %+v, want only native sign-in", methods)
 	}
 	pty := &guidedTerminalFake{output: agyMenuScreen}
-	// Off macOS Agy's probe reports an installed binary as authorized, so a
-	// login that finished while Agy runs would succeed before any sign-in.
+	// Without a sign-in probe Agy reports an installed binary as authorized, so
+	// a login that finished while Agy runs would succeed before any sign-in.
 	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
 	t.Cleanup(svc.Close)
 	if _, err := svc.StartLogin(t.Context(), "agy", "browser", ""); err == nil {
-		t.Fatal("started a guided row off macOS")
+		t.Fatal("started a guided row on linux")
 	}
 	started, err := svc.StartLogin(t.Context(), "agy", "native", "")
 	if err != nil {
