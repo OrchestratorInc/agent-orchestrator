@@ -315,17 +315,39 @@ function CommentItem({ aside, comment, comments, readOnly = false, reply, viewer
 	);
 }
 
+/** Up to this many people's initials on a folded row; the rest as "+N". */
+const ROW_PEOPLE = 3;
+
+/** Everyone in a thread once each, by their latest comment: the latest commenter first. */
+function participants(thread: ArtifactCommentThread): ArtifactComment[] {
+	const seen = new Set<string>();
+	const people: ArtifactComment[] = [];
+	for (const comment of [...visibleComments(thread)].reverse()) {
+		if (comment.deleted) continue;
+		const key = comment.author?.id ?? `name:${comment.author?.name ?? ""}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		people.push(comment);
+	}
+	return people;
+}
+
 /**
  * A folded thread: a faint grey row, so it reads as something to open, with
- * its first comment cut to one line, its reply count and a chevron. Click to
- * open it in place.
+ * who's in it (stacked initials, the latest commenter in front), its first
+ * comment cut to one line, when it last moved and a chevron. Click to open it
+ * in place.
  */
 function ThreadLine({ onExpand, thread, viewer }: { onExpand: () => void; thread: ArtifactCommentThread; viewer: Viewer }) {
 	const { t } = useTranslation();
 	const authorName = useAuthorName();
 	const first = thread.comments[0];
 	if (!first) return null;
-	const name = authorName(first, viewer);
+	const people = participants(thread);
+	const names = people.map((comment) => authorName(comment, viewer));
+	const shown = people.slice(0, ROW_PEOPLE);
+	const more = people.length - shown.length;
+	const latest = visibleComments(thread).at(-1) ?? first;
 	const replies = repliesOf(thread);
 	return (
 		<button
@@ -336,13 +358,21 @@ function ThreadLine({ onExpand, thread, viewer }: { onExpand: () => void; thread
 			onClick={onExpand}
 			type="button"
 		>
-			<span className="opacity-70 group-hover:opacity-100"><Avatar author={first.author} name={name} /></span>
-			<span className="sr-only">{name}: </span>
+			<span className="flex shrink-0 items-center opacity-80 group-hover:opacity-100" data-testid="artifact-comments-people">
+				{shown.map((comment, index) => (
+					<span className={cn("relative rounded-full ring-[1.5px] ring-background", index > 0 && "-ml-1.5")} key={comment.id} style={{ zIndex: ROW_PEOPLE - index }}>
+						<Avatar author={comment.author} name={names[index]!} />
+					</span>
+				))}
+				{more > 0 ? <span aria-hidden="true" className="ml-0.5 text-caption tabular-nums">+{more}</span> : null}
+			</span>
+			<span className="sr-only">{names.join(", ")}: </span>
 			<span className={cn("min-w-0 flex-1 truncate text-sm", first.deleted && "italic")}>
 				{first.deleted ? t("artifactComments.deleted") : first.body}
 			</span>
 			{/* Nothing when there are no replies yet. */}
-			{replies > 0 && <span className="shrink-0 text-caption tabular-nums">{t("artifactComments.replies", { count: replies })}</span>}
+			{replies > 0 && <span className="sr-only">{t("artifactComments.replies", { count: replies })}</span>}
+			<span className="shrink-0 text-caption tabular-nums">{formatTimeTerse(latest.createdAt)}</span>
 			<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 opacity-60 group-hover:opacity-100" />
 		</button>
 	);

@@ -525,6 +525,30 @@ describe("ArtifactCommentsPanel: one element's comments", () => {
 		port.close();
 	});
 
+	it("shows who's in a folded thread as stacked initials, the latest commenter first, in posted order", async () => {
+		const ronish = { id: "ronish-1", name: "Ronish Rohan" };
+		const dam = { id: "dam-1", name: "Dam Mehta" };
+		const c = (id: string, author: typeof sam, at: string, body = "…") => ({ id, threadId: "t1", clientId: `k-${id}`, author, body, createdAt: at, editedAt: null, deleted: false });
+		const busy = thread({ comments: [
+			c("c1", aditi, "2026-11-23T08:00:00Z", "Too bright on mobile"),
+			c("c2", sam, "2026-11-23T08:10:00Z"),
+			c("c3", aditi, "2026-11-23T08:20:00Z"),
+			c("c4", ronish, "2026-11-23T08:30:00Z"),
+			c("c5", dam, "2026-11-23T08:40:00Z"),
+		] });
+		const { port } = await ready(fakeClient(snapshot({ threads: [busy, twoThreads()[1]!] })));
+		const popover = await openElement(port);
+		const row = await within(popover).findByRole("button", { expanded: false, name: /Too bright on mobile/ });
+		// The latest commenter in front, each person once, three at most and then +N.
+		const people = within(row).getByTestId("artifact-comments-people");
+		expect([...people.querySelectorAll("[data-testid=artifact-comment-avatar]")].map((node) => node.textContent)).toEqual(["DM", "RR", "AD"]);
+		expect(people).toHaveTextContent("+1");
+		expect(row).toHaveAccessibleName(/^Dam Mehta, Ronish Rohan, Aditi, Sam:\s*Too bright on mobile/);
+		// Order is by when each thread was started; t1's newer replies (08:40) don't lift it above t2 (09:30).
+		expect([...popover.querySelectorAll("[data-thread-id]")].map((node) => node.getAttribute("data-thread-id"))).toEqual(["t2", "t1"]);
+		port.close();
+	});
+
 	it("starts a new comment on the same element from the footer's Add a comment…", async () => {
 		const client = fakeClient();
 		const { port } = await ready(client);
