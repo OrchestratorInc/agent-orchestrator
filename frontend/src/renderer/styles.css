@@ -8246,8 +8246,9 @@ html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-surface .chat-m
 /* Board cards. In dark the card's fill draws it: a 9% edge on the 5% face
  * added up into a ring, so the edge drops to 4% and the footer line with
  * it; under the pointer the face brightens (the hover tint replaced it
- * with a fainter one, so the card sank). No card shrinks on press. */
-html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"] {
+ * with a fainter one, so the card sank). A selected, needs-you or ended
+ * card keeps its own edge and tint. No card shrinks on press. */
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"]:not([data-selected], .border-status-needs-you, .session-card-terminated) {
 	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
 }
 
@@ -8255,7 +8256,7 @@ html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-
 	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
 }
 
-html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"]:is(:hover, :focus-within) {
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"]:not([data-selected], .border-status-needs-you, .session-card-terminated):is(:hover, :focus-within) {
 	background-color: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
 }
 
