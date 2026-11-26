@@ -5723,6 +5723,6 @@
 	"artifactComments.seek": "Buscar",
 	"artifactComments.addComment": "Adicionar comentário",
 	"artifactComments.timelinePoint": "Comentários em {{time}}: {{n}} abertos",
-	"artifactComments.videoEmpty": "Ainda não há comentários. Arraste sobre o quadro para desenhar uma caixa e comentar nela.",
+	"artifactComments.frameAt": "Quadro em {{time}}",
 	"artifactComments.markerLabel": "{{label}}: {{n}} abertos"
 }

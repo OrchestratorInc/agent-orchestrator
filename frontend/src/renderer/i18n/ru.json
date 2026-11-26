@@ -5888,6 +5888,6 @@
 	"artifactComments.seek": "Перемотка",
 	"artifactComments.addComment": "Добавить комментарий",
 	"artifactComments.timelinePoint": "Комментарии на {{time}}: открыто {{n}}",
-	"artifactComments.videoEmpty": "Комментариев пока нет. Проведите по кадру, чтобы нарисовать рамку и прокомментировать её.",
+	"artifactComments.frameAt": "Кадр на {{time}}",
 	"artifactComments.markerLabel": "{{label}}: открыто {{n}}"
 }

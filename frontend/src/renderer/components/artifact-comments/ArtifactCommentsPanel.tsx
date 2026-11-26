@@ -10,6 +10,7 @@ import { RetryButton } from "../WorkspaceDiffView";
 import {
 	ARTIFACT_COMMENT_MAX_BODY_LENGTH,
 	artifactCommentAnchorKind,
+	formatArtifactCommentTime,
 	type ArtifactComment,
 	type ArtifactCommentAnchor,
 	type ArtifactCommentAuthor,
@@ -462,8 +463,6 @@ export type ArtifactCommentsPanelProps = {
 	 * moment (images and videos, where the place can't be clicked again).
 	 */
 	onAddComment?: () => void;
-	/** Inside the video's side panel: no header of its own, full width. */
-	embedded?: boolean;
 };
 
 /**
@@ -476,7 +475,6 @@ export function ArtifactCommentsPanel({
 	className,
 	comments,
 	element,
-	embedded = false,
 	groups,
 	onAddComment,
 	onClose,
@@ -497,7 +495,11 @@ export function ArtifactCommentsPanel({
 	// Lines or a video's moment: where, in words. Not an image's point or
 	// region: its pin on the picture shows where.
 	const whereAnchor = anchor ?? openGroup?.anchor ?? resolvedGroup?.anchor;
-	const where = whereAnchor && artifactCommentAnchorKind(whereAnchor) === "image" ? null : artifactCommentAnchorText(t, whereAnchor);
+	// An image's pin shows where; a video says which frame is highlighted; the others in words.
+	const whereKind = whereAnchor ? artifactCommentAnchorKind(whereAnchor) : null;
+	const where = whereKind === "image" ? null
+		: whereKind === "video" ? t("artifactComments.frameAt", { time: formatArtifactCommentTime(whereAnchor?.time ?? 0) })
+		: artifactCommentAnchorText(t, whereAnchor);
 	// One thread open: the newest, until another is clicked; back to the newest
 	// for another element or once a new thread is posted here.
 	const [openThreadId, setOpenThreadId] = useState<string | null>(null);
@@ -545,7 +547,7 @@ export function ArtifactCommentsPanel({
 	return (
 		<aside
 			aria-label={t("artifactComments.title")}
-			className={cn("flex flex-col", embedded ? "w-full" : "w-[340px]", className)}
+			className={cn("flex w-[340px] flex-col", className)}
 			onKeyDown={(event) => {
 				if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLTextAreaElement)) {
 					// Handled here: full screen's own Esc leaves it alone.
@@ -556,20 +558,18 @@ export function ArtifactCommentsPanel({
 			ref={asideRef}
 			style={style}
 		>
-			{embedded ? null : (
-				<div className="flex h-10 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-3">
-					<h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-						{t("artifactComments.title")}
-						{!anchor && threads.length > 0 ? <span className="font-normal text-muted-foreground">{" · "}{t("artifactComments.openCount", { n: threads.length })}</span> : null}
-					</h2>
-					<Button aria-label={t("artifactComments.close")} onClick={onClose} size="icon-sm" type="button" variant="quiet">
-						<X aria-hidden="true" className="size-icon-sm" />
-					</Button>
-				</div>
-			)}
-			<div className={cn("min-h-0 flex-1", !embedded && "board-scrollbar overflow-y-auto")} ref={scrollRef}>
-				<div className={cn("flex flex-col gap-2.5", embedded ? "px-2.5 pb-2.5" : "p-2.5")} ref={contentRef}>
-					{where && !embedded ? <p className="text-caption font-medium text-muted-foreground tabular-nums" data-testid="artifact-comments-where">{where}</p> : null}
+			<div className="flex h-10 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-3">
+				<h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+					{t("artifactComments.title")}
+					{!anchor && threads.length > 0 ? <span className="font-normal text-muted-foreground">{" · "}{t("artifactComments.openCount", { n: threads.length })}</span> : null}
+				</h2>
+				<Button aria-label={t("artifactComments.close")} onClick={onClose} size="icon-sm" type="button" variant="quiet">
+					<X aria-hidden="true" className="size-icon-sm" />
+				</Button>
+			</div>
+			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto" ref={scrollRef}>
+				<div className="flex flex-col gap-2.5 p-2.5" ref={contentRef}>
+					{where ? <p className="text-caption font-medium text-muted-foreground tabular-nums" data-testid="artifact-comments-where">{where}</p> : null}
 					{!snapshot && comments.error ? (
 						<div className="flex flex-col items-center gap-2 p-4 text-center text-xs text-muted-foreground" role="alert">
 							{t("artifactComments.loadError")}

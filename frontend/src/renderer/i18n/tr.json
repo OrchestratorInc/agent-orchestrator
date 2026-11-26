@@ -5527,6 +5527,6 @@
 	"artifactComments.seek": "Sar",
 	"artifactComments.addComment": "Yorum ekle",
 	"artifactComments.timelinePoint": "{{time}} anındaki yorumlar: {{n}} açık",
-	"artifactComments.videoEmpty": "Henüz yorum yok. Kareye bir kutu çizmek ve yorum yapmak için sürükleyin.",
+	"artifactComments.frameAt": "{{time}} karesi",
 	"artifactComments.markerLabel": "{{label}}: {{n}} açık"
 }

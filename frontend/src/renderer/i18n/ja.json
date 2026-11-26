@@ -5547,6 +5547,6 @@
 	"artifactComments.seek": "シーク",
 	"artifactComments.addComment": "コメントを追加",
 	"artifactComments.timelinePoint": "{{time}} のコメント: {{n}} 件未解決",
-	"artifactComments.videoEmpty": "まだコメントはありません。フレーム上をドラッグして枠を描き、コメントしてください。",
+	"artifactComments.frameAt": "{{time}} のフレーム",
 	"artifactComments.markerLabel": "{{label}}: {{n}} 件未解決"
 }

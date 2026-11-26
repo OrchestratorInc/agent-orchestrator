@@ -5547,6 +5547,6 @@
 	"artifactComments.seek": "Springen",
 	"artifactComments.addComment": "Kommentar hinzufügen",
 	"artifactComments.timelinePoint": "Kommentare bei {{time}}: {{n}} offen",
-	"artifactComments.videoEmpty": "Noch keine Kommentare. Ziehe auf dem Bild einen Rahmen auf, um ihn zu kommentieren.",
+	"artifactComments.frameAt": "Bild bei {{time}}",
 	"artifactComments.markerLabel": "{{label}}: {{n}} offen"
 }

@@ -5529,6 +5529,6 @@
 	"artifactComments.seek": "跳转",
 	"artifactComments.addComment": "添加评论",
 	"artifactComments.timelinePoint": "{{time}} 的评论：{{n}} 条未解决",
-	"artifactComments.videoEmpty": "还没有评论。在画面上拖动以框选区域并发表评论。",
+	"artifactComments.frameAt": "{{time}} 的画面",
 	"artifactComments.markerLabel": "{{label}}：{{n}} 条未解决"
 }

@@ -5723,6 +5723,6 @@
 	"artifactComments.seek": "Buscar",
 	"artifactComments.addComment": "Añadir comentario",
 	"artifactComments.timelinePoint": "Comentarios en {{time}}: {{n}} abiertos",
-	"artifactComments.videoEmpty": "Aún no hay comentarios. Arrastra sobre el fotograma para dibujar un recuadro y comentarlo.",
+	"artifactComments.frameAt": "Fotograma en {{time}}",
 	"artifactComments.markerLabel": "{{label}}: {{n}} abiertos"
 }

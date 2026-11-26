@@ -5723,6 +5723,6 @@
 	"artifactComments.seek": "Avancer",
 	"artifactComments.addComment": "Ajouter un commentaire",
 	"artifactComments.timelinePoint": "Commentaires à {{time}} : {{n}} ouverts",
-	"artifactComments.videoEmpty": "Aucun commentaire pour l’instant. Faites glisser sur l’image pour tracer un cadre et le commenter.",
+	"artifactComments.frameAt": "Image à {{time}}",
 	"artifactComments.markerLabel": "{{label}} : {{n}} ouverts"
 }

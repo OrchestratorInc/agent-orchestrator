@@ -8,7 +8,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PanelMessage } from "../WorkspaceDiffView";
 import { ArtifactCommentsMedia } from "./ArtifactCommentsMedia";
 import { ArtifactCommentsPanel, ArtifactCommentsReadOnlyList } from "./ArtifactCommentsPanel";
-import { ArtifactCommentsVideoPanel } from "./ArtifactCommentsVideoPanel";
 import {
 	artifactCommentAnchorKey,
 	artifactCommentMarkers,
@@ -16,6 +15,7 @@ import {
 	placeCommentsPopover,
 	type CommentsSelectionRect,
 	type ArtifactCommentAnchor,
+	type ArtifactCommentGroup,
 	type ArtifactCommentsPickKind,
 } from "../../../shared/artifact-comments";
 import type { ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
@@ -110,8 +110,9 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 	const { t } = useTranslation();
 	const comments = useArtifactComments(slug, { panelOpen: true });
 	const [frame, setFrame] = useState<HTMLIFrameElement | null>(null);
-	// The element whose comments are open: a picked one brings its anchor for a new comment.
-	const [element, setElement] = useState<{ path: string; anchor: ArtifactCommentAnchor | null } | null>(null);
+	// The element whose comments are open: a picked one brings its anchor for a
+	// new comment; a video's seek-bar badge brings every group at it (keys).
+	const [element, setElement] = useState<{ path: string; anchor: ArtifactCommentAnchor | null; keys?: string[] } | null>(null);
 	// Where the selected element is in the frame, from the bridge: the popover sits beside it.
 	const [selection, setSelection] = useState<({ path: string } & CommentsSelectionRect) | null>(null);
 	const closePopover = useCallback(() => setElement(null), []);
@@ -139,6 +140,23 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 
 	const threads = comments.snapshot?.threads;
 	const groups = useMemo(() => groupArtifactCommentThreads(threads ?? []), [threads]);
+	// A video badge with several moments at it: the popover shows them all, as one group.
+	const pointKeys = element && !element.anchor && element.keys && element.keys.length > 1 ? element.keys : null;
+	const popoverGroups = useMemo(() => {
+		if (!pointKeys || !element) return groups;
+		const merge = (list: ArtifactCommentGroup[]) => {
+			const at = list.filter((group) => pointKeys.includes(group.path));
+			if (at.length === 0) return list;
+			const merged: ArtifactCommentGroup = {
+				...at[0]!,
+				path: element.path,
+				threads: at.flatMap((group) => group.threads),
+				openCount: at.reduce((n, group) => n + group.openCount, 0),
+			};
+			return [merged, ...list.filter((group) => !pointKeys.includes(group.path))];
+		};
+		return { ...groups, open: merge(groups.open), resolved: merge(groups.resolved) };
+	}, [element, groups, pointKeys]);
 	// Counts on the elements; a picked element without comments is sent too, so the bridge can find it.
 	const pickedAnchor = element?.anchor ?? null;
 	const anchorsKey = useMemo(() => {
@@ -192,7 +210,6 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 					{t("artifactComments.publishedVersion", { version })}
 				</p>
 			) : null}
-			<div className="flex min-h-0 flex-1">
 			<div className="relative min-h-0 min-w-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
 				<SharedArtifactFrame
 					frameRef={setFrame}
@@ -202,11 +219,12 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						<ArtifactCommentsMedia
 							kind={media}
 							onPick={(anchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor })}
-							onSelect={(key) => setElement({ path: key, anchor: null })}
+							onSelect={(key, keys) => setElement({ path: key, anchor: null, keys })}
 							onSelection={(rect) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null)}
 							onShown={mediaShown}
 							picked={element?.anchor ?? null}
 							selected={selectedPath}
+							selectedKeys={element?.keys ?? null}
 							src={contentUrl}
 							threads={threads ?? []}
 							title={title}
@@ -223,13 +241,13 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						onNaturalHeight={setPopoverHeight}
 						style={placement ? { top: placement.top, maxHeight: placement.maxHeight } : undefined}
 					/>
-				) : element && media !== "video" ? (
+				) : element ? (
 					<ArtifactCommentsPanel
 						className={POPOVER_CLASS}
 						comments={comments}
 						element={element}
-						groups={groups}
-						onAddComment={media === "image" ? () => {
+						groups={popoverGroups}
+						onAddComment={media ? () => {
 							const group = groups.open.find((item) => item.path === element.path) ?? groups.resolved.find((item) => item.path === element.path);
 							if (group) writeOn(group.anchor);
 						} : undefined}
@@ -240,20 +258,6 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						style={placement ? { top: placement.top, maxHeight: placement.maxHeight } : undefined}
 					/>
 				) : null}
-			</div>
-			{media === "video" ? (
-				<ArtifactCommentsVideoPanel
-					comments={comments}
-					element={element}
-					groups={groups}
-					onClose={onClose}
-					onDeselect={closePopover}
-					onPosted={showThreads}
-					onSelect={(key) => setElement({ path: key, anchor: null })}
-					onWriteOn={writeOn}
-					sendTarget={sendTarget}
-				/>
-			) : null}
 			</div>
 		</div>
 	);

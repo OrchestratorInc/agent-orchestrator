@@ -5547,6 +5547,6 @@
 	"artifactComments.seek": "탐색",
 	"artifactComments.addComment": "댓글 추가",
 	"artifactComments.timelinePoint": "{{time}}의 댓글: {{n}}개 열림",
-	"artifactComments.videoEmpty": "아직 댓글이 없습니다. 프레임 위를 드래그해 상자를 그리고 댓글을 남기세요.",
+	"artifactComments.frameAt": "{{time}} 프레임",
 	"artifactComments.markerLabel": "{{label}}: {{n}}개 열림"
 }

@@ -21,9 +21,6 @@ import {
 } from "../../../shared/artifact-comments";
 import { artifactCommentAnchorText } from "./anchor-label";
 
-/** How close (seconds) the video must be to a comment's time for its region to show on the frame. */
-const REGION_SHOWS_WITHIN = 0.5;
-
 const percent = (value: number) => `${value * 100}%`;
 const regionStyle = (region: ArtifactCommentRegion) => ({ left: percent(region.x), top: percent(region.y), width: percent(region.w), height: percent(region.h) });
 const pinStyle = (region: ArtifactCommentRegion) => (isPointRegion(region) ? { left: percent(region.x), top: percent(region.y) } : regionStyle(region));
@@ -58,12 +55,14 @@ export function artifactCommentTimelinePoints(groups: readonly ArtifactCommentGr
  * the file itself, so an overlay on the drawn picture picks: a click is a
  * point, a drag a rectangle, as fractions of the picture. Open groups show as
  * numbered pins or outlined rectangles; a click opens the group. On an image
- * a click is a point and a drag a box. A video is one player: its control bar
- * has play and pause, the time and a seek bar with a point per comment
- * moment; on the frame a drag draws a box (pausing there) and a click plays
- * or pauses. Selecting a group seeks to its time and pauses.
+ * a click is a point and a drag a box. A video is one player, like a text
+ * page's markers: its seek bar has a numbered badge per comment moment (the
+ * count of comments there), and a click on one opens its popover beside it,
+ * seeks to its frame and outlines its boxes there; nothing else is drawn on
+ * the frame. On the frame a drag draws a box (pausing there) and a click
+ * plays or pauses.
  */
-export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onShown, picked, selected, src, threads, title }: {
+export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onShown, picked, selected, selectedKeys, src, threads, title }: {
 	kind: "image" | "video";
 	src: string;
 	title: string;
@@ -72,8 +71,11 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	picked: ArtifactCommentAnchor | null;
 	/** The open popover's group key. */
 	selected: string | null;
+	/** A video: every group key at the selected seek-bar badge (several moments can share one). */
+	selectedKeys?: readonly string[] | null;
 	onPick: (anchor: ArtifactCommentAnchor) => void;
-	onSelect: (key: string) => void;
+	/** A pin or badge was clicked: its group, and for a badge every group at it. */
+	onSelect: (key: string, keys?: string[]) => void;
 	/** The selected pin, rectangle or dot's top and bottom inside this view, for the popover; null when none. */
 	onSelection: (rect: CommentsSelectionRect | null) => void;
 	onShown?: () => void;
@@ -158,11 +160,10 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	};
 	const pickAt = (region: ArtifactCommentRegion) => onPick(kind === "image" ? imageCommentAnchor(region) : videoCommentAnchor(videoRef.current?.currentTime ?? 0, region));
 
-	const visible = groups.filter((group) => {
-		if (!group.anchor.region) return false;
-		if (kind === "image") return true;
-		return group.path === selected || Math.abs((group.anchor.time ?? 0) - time) <= REGION_SHOWS_WITHIN;
-	});
+	// An image shows every group's pin or box; a video only the selected
+	// moment's boxes, on its frame (its badges are on the seek bar).
+	const highlighted = new Set(selectedKeys && selectedKeys.length > 0 ? selectedKeys : selected !== null ? [selected] : []);
+	const visible = groups.filter((group) => group.anchor.region && (kind === "image" || highlighted.has(group.path)));
 	const pickedHere = picked && artifactCommentAnchorKind(picked) === kind ? picked : null;
 	const draftRegion = drag ? artifactCommentRegionFromDrag(drag.from, drag.to) : pickedHere?.region;
 	const togglePlay = () => {
@@ -205,6 +206,21 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 		>
 			{visible.map((group) => {
 				const region = group.anchor.region!;
+				if (kind === "video") {
+					// The selected moment's box (or point), outlined; the popover sits by its badge.
+					return (
+						<span
+							aria-hidden="true"
+							className={cn(
+								"pointer-events-none absolute border-2 border-logo-accent bg-logo-accent/15",
+								isPointRegion(region) ? "size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full" : "rounded-sm",
+							)}
+							data-testid="artifact-comments-frame-highlight"
+							key={group.path}
+							style={pinStyle(region)}
+						/>
+					);
+				}
 				const isSelected = group.path === selected && !pickedHere;
 				const count = group.openCount > 99 ? "99+" : String(group.openCount);
 				const stop = (event: ReactPointerEvent) => event.stopPropagation();
@@ -332,21 +348,23 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 					<span className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-muted-foreground/50" style={{ width: duration > 0 ? percent(Math.min(1, time / duration)) : 0 }} />
 					{duration > 0
 						? artifactCommentTimelinePoints(groups, duration).map((point) => {
-							const isSelected = !pickedHere && point.groups.some((group) => group.path === selected);
+							const isSelected = !pickedHere && point.groups.some((group) => highlighted.has(group.path));
 							const first = point.groups[0]!;
 							return (
 								<button
 									aria-label={t("artifactComments.timelinePoint", { time: formatArtifactCommentTime(point.time), n: point.count })}
-									className={cn(PIN, "top-1/2 h-3.5 min-w-3.5 text-[9px]", isSelected && "ring-2 ring-logo-accent ring-offset-1")}
-									data-selection-target={isSelected && !point.groups.some((group) => group.anchor.region) ? "" : undefined}
+									className={cn(PIN, "top-1/2", isSelected && "ring-2 ring-logo-accent ring-offset-1")}
+									data-selected={isSelected ? "" : undefined}
+									data-selection-target={isSelected ? "" : undefined}
 									data-testid="artifact-comments-timeline-point"
 									key={first.path}
-									onClick={() => onSelect((point.groups.find((group) => group.path === selected) ?? first).path)}
+									onClick={() => onSelect(first.path, point.groups.map((group) => group.path))}
 									style={{ left: percent(Math.min(1, point.time / duration)) }}
 									title={formatArtifactCommentTime(point.time)}
 									type="button"
 								>
-									{point.count > 1 ? (point.count > 99 ? "99+" : point.count) : null}
+									{/* Like a text page's marker: how many comments are at this moment. */}
+									{point.count > 99 ? "99+" : point.count}
 								</button>
 							);
 						})

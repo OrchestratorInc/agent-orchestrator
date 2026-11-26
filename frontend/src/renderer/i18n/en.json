@@ -5527,6 +5527,6 @@
 	"artifactComments.seek": "Seek",
 	"artifactComments.addComment": "Add comment",
 	"artifactComments.timelinePoint": "Comments at {{time}}: {{n}} open",
-	"artifactComments.videoEmpty": "No comments yet. Drag on the frame to draw a box and comment on it.",
+	"artifactComments.frameAt": "Frame at {{time}}",
 	"artifactComments.markerLabel": "{{label}}: {{n}} open"
 }

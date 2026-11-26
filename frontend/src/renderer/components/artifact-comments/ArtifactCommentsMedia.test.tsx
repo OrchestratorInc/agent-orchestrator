@@ -162,97 +162,93 @@ describe("comments on an image", () => {
 });
 
 describe("comments on a video", () => {
-	it("is one player with comment points on its seek bar and a side panel by timestamp", async () => {
+	const badges = () => screen.getAllByTestId("artifact-comments-timeline-point");
+
+	it("shows numbered badges on the seek bar; a badge opens its popover at its frame with its box", async () => {
 		stubSizes();
 		const video = stubVideo(250);
 		const client = fakeClient([
-			thread("t1", videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0, h: 0 }), "Typo in the title card", "2026-11-23T08:00:00Z"),
+			thread("t1", videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0.2, h: 0.2 }), "Typo in the title card", "2026-11-23T08:00:00Z"),
+			// About the same moment (within 1.2% of the length): the same badge.
 			thread("t2", videoCommentAnchor(84), "Music too loud", "2026-11-23T09:00:00Z"),
 			thread("t3", videoCommentAnchor(12), "Intro drags", "2026-11-23T10:00:00Z"),
 		]);
 		await renderWorkspace(client, "video");
 		const element = document.querySelector("video")!;
 		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
-		// One player: no native controls, one Play button, nothing else to turn on.
+		// One player: no native controls, no side panel, no Annotate or "Comment at".
 		expect(element.controls).toBe(false);
 		expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
-		expect(screen.queryByRole("button", { name: "Annotate" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^Comment at/ })).not.toBeInTheDocument();
-		// Comments at about the same moment share one point on the seek bar.
-		expect(screen.getAllByTestId("artifact-comments-timeline-point").map((point) => point.getAttribute("aria-label")))
-			.toEqual(["Comments at 00:12: 1 open", "Comments at 01:23: 2 open"]);
-		// The side panel lists every moment by time, with its newest comment.
-		const panel = screen.getByTestId("artifact-comments-video-panel");
-		const rows = within(panel).getAllByTestId("artifact-comments-video-row");
-		expect(rows.map((row) => row.textContent)).toEqual([
-			expect.stringContaining("00:12"),
-			expect.stringContaining("01:23"),
-			expect.stringContaining("01:24"),
+		expect(screen.queryByTestId("artifact-comments-video-panel")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Annotate|^Comment at/ })).not.toBeInTheDocument();
+		// Badges with their counts, like a text page's markers; nothing on the frame.
+		expect(badges().map((badge) => [badge.getAttribute("aria-label"), badge.textContent])).toEqual([
+			["Comments at 00:12: 1 open", "1"],
+			["Comments at 01:23: 2 open", "2"],
 		]);
-		expect(rows[1]).toHaveTextContent("Typo in the title card");
+		expect(screen.queryByTestId("artifact-comments-frame-highlight")).not.toBeInTheDocument();
+		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
 
-		// A row seeks the video to its frame, paused, and opens in place.
-		await userEvent.click(within(rows[0]!).getByRole("button"));
-		expect(video.time).toBe(12);
-		expect(video.paused).toBe(true);
-		expect(within(panel).getAllByTestId("artifact-comments-video-row")[0]).toHaveAttribute("data-selected", "");
-		// So does a point on the seek bar.
-		await userEvent.click(screen.getByRole("button", { name: "Comments at 01:23: 2 open" }));
+		// A badge: its popover, the video at its frame, paused, with its box outlined.
+		await userEvent.click(badges()[1]!);
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
 		expect(video.time).toBe(83.5);
-		expect(within(panel).getAllByTestId("artifact-comments-video-row")[1]).toHaveAttribute("data-selected", "");
+		expect(video.paused).toBe(true);
+		expect(within(popover).getByTestId("artifact-comments-where")).toHaveTextContent("Frame at 01:23");
+		// Both moments at the badge, in one popover.
+		expect(within(popover).getByText("Typo in the title card")).toBeInTheDocument();
+		expect(within(popover).getByText(/Music too loud/)).toBeInTheDocument();
+		expect(screen.getAllByTestId("artifact-comments-frame-highlight")).toHaveLength(1);
+		expect(badges()[1]).toHaveAttribute("data-selected", "");
 
-		// A click on the frame plays and pauses, and picks nothing.
+		// Another badge: its own popover and frame; no box (it has none).
+		await userEvent.click(badges()[0]!);
+		await waitFor(() => expect(within(screen.getByRole("complementary", { name: "Comments" })).getByText("Intro drags")).toBeInTheDocument());
+		expect(video.time).toBe(12);
+		expect(screen.queryByTestId("artifact-comments-frame-highlight")).not.toBeInTheDocument();
+	});
+
+	it("a click on the frame plays and pauses; a drag draws a box and comments on it at that time", async () => {
+		stubSizes();
+		const video = stubVideo(250);
+		const client = fakeClient([]);
+		await renderWorkspace(client, "video");
+		const element = document.querySelector("video")!;
+		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
 		const overlay = screen.getByTestId("artifact-comments-media-overlay");
 		fireEvent.pointerDown(overlay, { button: 0, clientX: 100, clientY: 150 });
 		fireEvent.pointerUp(overlay, { button: 0, clientX: 100, clientY: 150 });
 		expect(video.paused).toBe(false);
-		expect(screen.queryByTestId("artifact-comments-media-draft")).not.toBeInTheDocument();
+		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
 		video.time = 125.25;
 		act(() => { element.dispatchEvent(new Event("timeupdate")); });
 
-		// A drag draws a box: the video pauses there and the comment is on the box at that time.
 		fireEvent.pointerDown(overlay, { button: 0, clientX: 200, clientY: 200 });
 		fireEvent.pointerMove(overlay, { button: 0, clientX: 360, clientY: 260 });
 		expect(video.paused).toBe(true);
 		fireEvent.pointerUp(overlay, { button: 0, clientX: 360, clientY: 260 });
-		const box = await within(panel).findByRole("textbox", { name: "Add a comment…" });
-		// The new comment is a row at its time, the last one, with no words for where.
-		const last = within(panel).getAllByTestId("artifact-comments-video-row").at(-1)!;
-		expect(last).toHaveTextContent("02:05");
-		expect(last.textContent).not.toMatch(/box|region|point/);
-		await userEvent.type(box, "Cut here");
-		await userEvent.click(within(panel).getByRole("button", { name: "Comment" }));
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		expect(within(popover).getByTestId("artifact-comments-where")).toHaveTextContent("Frame at 02:05");
+		await userEvent.type(within(popover).getByRole("textbox", { name: "Add a comment…" }), "Cut here");
+		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
 		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
-		const input = client.createArtifactShareThread.mock.calls[0]![1];
-		expect(input.anchor).toMatchObject({ kind: "video", time: 125.25, region: { x: 0.5, y: 0.5, w: 0.4, h: 0.3 } });
+		expect(client.createArtifactShareThread.mock.calls[0]![1].anchor).toMatchObject({ kind: "video", time: 125.25, region: { x: 0.5, y: 0.5, w: 0.4, h: 0.3 } });
 	});
 
-	it("adds another comment on the same moment, then draws a box on the frame", async () => {
+	it("adds another comment on the same moment and box from its popover", async () => {
 		stubSizes();
 		stubVideo(250);
-		const anchor = videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0, h: 0 });
+		const anchor = videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0.2, h: 0.2 });
 		const client = fakeClient([thread("t1", anchor, "Typo in the title card")]);
 		await renderWorkspace(client, "video");
 		act(() => { document.querySelector("video")!.dispatchEvent(new Event("loadedmetadata")); });
-		const panel = screen.getByTestId("artifact-comments-video-panel");
-
-		// Another comment on an existing moment and point: Add comment.
-		await userEvent.click(within(within(panel).getAllByTestId("artifact-comments-video-row")[0]!).getAllByRole("button")[0]!);
-		await userEvent.click(within(panel).getByRole("button", { name: "Add comment" }));
-		await userEvent.type(await within(panel).findByRole("textbox", { name: "Add a comment…" }), "Also the colour");
-		await userEvent.click(within(panel).getByRole("button", { name: "Comment" }));
-		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(1));
+		await userEvent.click(badges()[0]!);
+		const popover = await screen.findByRole("complementary", { name: "Comments" });
+		await userEvent.click(within(popover).getByRole("button", { name: "Add comment" }));
+		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add a comment…" }), "Also the colour");
+		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
 		expect(client.createArtifactShareThread.mock.calls[0]![1].anchor).toEqual(anchor);
-
-		// A box: drag on the frame.
-		const overlay = screen.getByTestId("artifact-comments-media-overlay");
-		fireEvent.pointerDown(overlay, { button: 0, clientX: 200, clientY: 200 });
-		fireEvent.pointerMove(overlay, { button: 0, clientX: 360, clientY: 260 });
-		fireEvent.pointerUp(overlay, { button: 0, clientX: 360, clientY: 260 });
-		await userEvent.type(await within(panel).findByRole("textbox", { name: "Add a comment…" }), "Logo too big");
-		await userEvent.click(within(panel).getByRole("button", { name: "Comment" }));
-		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalledTimes(2));
-		expect(client.createArtifactShareThread.mock.calls[1]![1].anchor).toMatchObject({ kind: "video", region: { x: 0.5, y: 0.5, w: 0.4, h: 0.3 } });
 	});
 });
 
