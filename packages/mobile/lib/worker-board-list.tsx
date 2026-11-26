@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewProps } from "react-native";
+import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewProps, type ViewToken } from "react-native";
+import { BoardRowScope, createVisibleRows, VisibleRowsContext } from "./boardRowVisibility";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import { SafeAreaListener } from "react-native-safe-area-context";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./agentsView";
 import type { DashboardSession } from "./api";
 import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolProps } from "./AppSymbol.types";
 import { ArchivedWorkerRow } from "./archived-worker-row";
 import { useArchivedSessions, type ArchiveSource } from "./archive/useArchivedSessions";
 import { haptics } from "./haptics";
@@ -92,6 +94,9 @@ const sessionRow = (session: DashboardSession): BoardRow =>
  * a fling, and the rows are cheap enough to fill it as the list moves.
  */
 export const BOARD_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 8, windowSize: 7 } as const;
+
+/** A row any part of which shows counts as on screen, so its lattice is never seen still. */
+const BOARD_ROW_VIEWABILITY = { itemVisiblePercentThreshold: 1, minimumViewTime: 0 } as const;
 
 /**
  * The Workers board's grouped list: Pinned, Needs you, Recent, and a
@@ -285,6 +290,18 @@ function WorkerBoard({
 	// re-sorts the rows under the reader.
 	const ownListRef = useRef<FlatList<BoardRow>>(null);
 	const list = listRef ?? ownListRef;
+	// The rows on screen, so a working row's lattice animates only while it is
+	// seen (see boardRowVisibility). Both stable, as FlatList requires.
+	const [visibleRows] = useState(createVisibleRows);
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<BoardRow>[] }) => {
+		visibleRows.set(new Set(viewableItems.map((token) => token.key)));
+	}).current;
+	// Tabs keep the board mounted while another screen shows, so its lattices
+	// also rest while the board is out of focus, and resume on its return.
+	useFocusEffect(useCallback(() => {
+		visibleRows.focus(true);
+		return () => visibleRows.focus(false);
+	}, [visibleRows]));
 	// Where the list's top rests: iOS insets a list under a clear header by the
 	// bars' share of its safe area (`contentInsetAdjustmentBehavior`), so the top
 	// is at minus that, and offset 0 leaves the first rows under the bar. Measured
@@ -562,17 +579,17 @@ function WorkerBoard({
 		if (item.kind === "archive") return <ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />;
 		if (item.kind === "archive-status") return <ArchiveStatusRow loading={pagedArchive.loading} error={pagedArchive.error}
 			hasMore={pagedArchive.hasMore} onRetry={pagedArchive.retry} onLoadMore={pagedArchive.loadMore} />;
-		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open}
+		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open} bare icon={SECTION_ICONS[item.key.replace("header:", "")]}
 			onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined} />;
 		if (item.kind === "archived") return <ArchivedWorkerRow session={item.session} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			restoring={restoringKey === item.key} restoreDisabled={restoringKey !== undefined}
 			offline={machineOffline(item.session)} restoreError={restoreErrors[item.key]} onRestore={restoreArchived} showMachine={showMachine} />;
-		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
+		return <BoardRowScope rowKey={item.key}><BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
 			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine}
-			freshness={freshness.get(sessionHostId(item.session) ?? currentHostId ?? "")} />;
+			freshness={freshness.get(sessionHostId(item.session) ?? currentHostId ?? "")} /></BoardRowScope>;
 	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, showMachine, projectNameFor,
 		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline, freshness]);
 
@@ -617,6 +634,7 @@ function WorkerBoard({
 		<View style={styles.listWrap}>
 			{/* A new text size rebuilds the list, so every row is measured again.
 			    Nothing enters or leaves with an animation as it does. */}
+			<VisibleRowsContext.Provider value={visibleRows}>
 			<LayoutAnimationConfig key={fontScale} skipEntering skipExiting>
 				<FlatList
 					ref={list}
@@ -641,8 +659,11 @@ function WorkerBoard({
 					onEndReachedThreshold={1.5}
 					onScroll={handleScroll}
 					scrollEventThrottle={16}
+					viewabilityConfig={BOARD_ROW_VIEWABILITY}
+					onViewableItemsChanged={onViewableItemsChanged}
 				/>
 			</LayoutAnimationConfig>
+			</VisibleRowsContext.Provider>
 			{/* After the list, never before it: iOS's large title follows the page's
 			    first subviews down to a scroll view, and a view ahead of the list
 			    left the title expanded over the rows as they scrolled. */}
@@ -652,6 +673,14 @@ function WorkerBoard({
 		</View>
 	);
 }
+
+/** Each board section's glyph, before its label. */
+const SECTION_ICONS: Record<string, AppSymbolProps["name"]> = {
+	pinned: "pin",
+	needs_you: "notifications",
+	recent: "history",
+	search: "search",
+};
 
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {

@@ -110,6 +110,13 @@ type SpawnConfig struct {
 	TaskPreparation domain.TaskPreparationToken
 	// Fork makes this spawn a copy of another session. Nil for ordinary spawns.
 	Fork *SpawnFork
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction ("200k", "500k", "1m" or "off"), saved with its new
+	// conversation. They are chat settings, not launch options: a spawn that
+	// asks for a terminal (RequestedMode TUI) ignores them, and any other spawn
+	// is refused when the agent it launches cannot take them.
+	FastMode          bool
+	AutoCompactWindow string
 }
 
 // SpawnFork describes a fork of an existing session. The source's worktree and

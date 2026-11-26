@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -615,6 +616,47 @@ func TestProviderSwitchBackToClaudeOnAutoClearsTheSavedCompactionWindow(t *testi
 	}
 }
 
+func TestProviderSwitchToOpenCodeWithAutoCompactOffTurnsItsCompactionOff(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessOpenCodeV2, IdempotencyKey: "to-opencode-off", AutoCompactWindow: domain.AutoCompactOff,
+	}); err != nil {
+		t.Fatalf("switch to OpenCode: %v", err)
+	}
+	var config struct {
+		Compaction struct {
+			Auto *bool `json:"auto"`
+		} `json:"compaction"`
+	}
+	if err := json.Unmarshal([]byte(lastStart(driver).Env["OPENCODE_CONFIG_CONTENT"]), &config); err != nil {
+		t.Fatalf("OpenCode config: %v", err)
+	}
+	if config.Compaction.Auto == nil || *config.Compaction.Auto {
+		t.Fatalf("OpenCode compaction.auto = %v, want false", config.Compaction.Auto)
+	}
+	if conversation, err := h.st.ConversationForSession(ctx, testSession); err != nil || conversation.Settings.AutoCompactWindow != domain.AutoCompactOff {
+		t.Fatalf("saved auto-compact = %q, %v; want off", conversation.Settings.AutoCompactWindow, err)
+	}
+}
+
+func TestProviderSwitchBackToOpenCodeOnAutoTurnsItsCompactionBackOn(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	for _, req := range []domain.ProviderSwitchRequest{
+		{TargetHarness: domain.HarnessOpenCodeV2, IdempotencyKey: "to-opencode-off", AutoCompactWindow: domain.AutoCompactOff},
+		{TargetHarness: domain.HarnessCodex, IdempotencyKey: "to-codex"},
+		{TargetHarness: domain.HarnessOpenCodeV2, IdempotencyKey: "back-on-auto"},
+	} {
+		if err := h.svc.SwitchProvider(ctx, testSession, req); err != nil {
+			t.Fatalf("switch to %s: %v", req.TargetHarness, err)
+		}
+	}
+	if got := lastStart(driver).Env["OPENCODE_CONFIG_CONTENT"]; strings.Contains(got, "compaction") {
+		t.Fatalf("OpenCode config after switching back on Auto = %s, want no compaction setting", got)
+	}
+}
+
 func TestProviderSwitchTargetPermissionMode(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -769,6 +811,66 @@ func TestProviderSwitchSavesTheModelATargetRunsWhenThePickDidNotTake(t *testing.
 	conversation, err := h.st.ConversationForSession(ctx, testSession)
 	if err != nil || conversation.Settings.Model != "opus" {
 		t.Fatalf("saved model = %q, %v; want the opus the target runs", conversation.Settings.Model, err)
+	}
+}
+
+// variantModelConversation lists base models with the reasoning level in a
+// separate option, as Antigravity's chat does, and runs a level-suffixed id as
+// its base model at that level.
+type variantModelConversation struct {
+	*fakeConversation
+}
+
+func (c variantModelConversation) ListConfigOptions(context.Context) ([]ports.ChatConfigOption, error) {
+	return []ports.ChatConfigOption{{
+		ID: "model", Category: "model", Type: ports.ChatConfigOptionSelect,
+		Current: ports.ChatConfigOptionValue{Select: "gemini-3.8-flash"},
+		Choices: []ports.ChatConfigOptionChoice{{Value: "gemini-3.8-flash"}, {Value: "gemini-3.8-pro"}},
+	}, {
+		ID: "thought_level", Category: "thought_level", Type: ports.ChatConfigOptionSelect,
+		Current: ports.ChatConfigOptionValue{Select: "low"},
+		Choices: []ports.ChatConfigOptionChoice{{Value: "low"}, {Value: "high"}},
+	}}, nil
+}
+
+func (c variantModelConversation) SetConfigOption(context.Context, string, ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
+	return c.ListConfigOptions(context.Background())
+}
+
+func (c variantModelConversation) ModelVariantBase(model string) (string, bool) {
+	base, found := strings.CutSuffix(model, "-low")
+	return base, found && (base == "gemini-3.8-flash" || base == "gemini-3.8-pro")
+}
+
+func TestProviderSwitchKeepsAPickThatRunsAsABaseModelAndLevel(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	driver.target = func(conv *fakeConversation) ports.ChatConversation { return variantModelConversation{conv} }
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessAgy, Model: "gemini-3.8-flash-low",
+	}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil || conversation.Settings.Model != "gemini-3.8-flash-low" {
+		t.Fatalf("saved model = %q, %v; want the picked gemini-3.8-flash-low, so a restart keeps its level", conversation.Settings.Model, err)
+	}
+}
+
+func TestProviderSwitchSavesTheLiveModelWhenAVariantPickDidNotTake(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	driver.target = func(conv *fakeConversation) ports.ChatConversation { return variantModelConversation{conv} }
+	// The pick resolves to the offered pro base, but the chat kept running
+	// flash, so the base differs from the live model.
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessAgy, Model: "gemini-3.8-pro-low",
+	}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil || conversation.Settings.Model != "gemini-3.8-flash" {
+		t.Fatalf("saved model = %q, %v; want the gemini-3.8-flash the target runs", conversation.Settings.Model, err)
 	}
 }
 
@@ -1027,4 +1129,55 @@ func TestForcedSettingsChangeOnTheRunningAgentStopsItsTurn(t *testing.T) {
 	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
 		return len(snapshot.Turns) == 2 && snapshot.Turns[0].State.Terminal() && snapshot.Turns[1].State.Terminal()
 	})
+}
+
+type recordedAgentChoices struct {
+	mu  sync.Mutex
+	ids []domain.SessionID
+}
+
+func (r *recordedAgentChoices) RecordAgentChoice(_ context.Context, id domain.SessionID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ids = append(r.ids, id)
+	return nil
+}
+
+func (r *recordedAgentChoices) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.ids)
+}
+
+// A switch to another agent records the choice, so the board never reads it as
+// the project's agent setting drifting. A failed switch, or a pick of the agent
+// already running, chose nothing new.
+func TestProviderSwitchRecordsTheAgentChoiceOnlyWhenTheAgentChanged(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	choices := &recordedAgentChoices{}
+	h.svc.SetAgentChoiceRecorder(choices)
+
+	driver.startErr = errProviderSwitchTarget
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "fails"}); err == nil {
+		t.Fatal("switch with a failing target = nil, want an error")
+	}
+	if got := choices.count(); got != 0 {
+		t.Fatalf("recorded %d choices after a failed switch, want 0", got)
+	}
+
+	driver.startErr = nil
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "works"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := choices.count(); got != 1 || choices.ids[0] != testSession {
+		t.Fatalf("recorded choices = %v, want one for %s", choices.ids, testSession)
+	}
+
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "same"}); !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		t.Fatalf("switch to the running agent = %v, want already active", err)
+	}
+	if got := choices.count(); got != 1 {
+		t.Fatalf("recorded %d choices after picking the running agent, want 1", got)
+	}
 }
