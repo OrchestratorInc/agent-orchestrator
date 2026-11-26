@@ -1438,19 +1438,24 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
-	base := "ao/" + string(sr.session.ID)
-	if branch == base {
-		return true
+	// New sessions use "orchestrator/"; sessions created before the rename
+	// still own their "ao/" branches.
+	for _, prefix := range domain.SessionBranchPrefixes {
+		base := prefix + "/" + string(sr.session.ID)
+		if branch == base {
+			return true
+		}
+		suffix, ok := strings.CutPrefix(branch, base+"-")
+		if !ok {
+			continue
+		}
+		// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
+		// Do not treat arbitrary topics, another session ID, or padded numbers as
+		// a generated branch and broaden their ownership.
+		n, err := strconv.Atoi(suffix)
+		return err == nil && n >= 2 && strconv.Itoa(n) == suffix
 	}
-	suffix, ok := strings.CutPrefix(branch, base+"-")
-	if !ok {
-		return false
-	}
-	// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
-	// Do not treat arbitrary topics, another session ID, or padded numbers as
-	// a generated branch and broaden their ownership.
-	n, err := strconv.Atoi(suffix)
-	return err == nil && n >= 2 && strconv.Itoa(n) == suffix
+	return false
 }
 
 func sessionBranchPrefixes(branch string) []string {
@@ -1777,7 +1782,11 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 	}
 	for i := range obs.CI.FailedChecks {
 		tail := obs.CI.FailedChecks[i].LogTail
-		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" {
+		// A current cancellation is listed for its link, not its log: it is
+		// never sent to the agent, and a job cancelled before it started has
+		// no log, so fetching one only costs a request and a fetch-failed tail.
+		cancelled := obs.CI.FailedChecks[i].Status == string(domain.PRCheckCancelled)
+		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" && !cancelled {
 			var err error
 			repo := ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}
 			started := time.Now()

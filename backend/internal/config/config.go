@@ -26,6 +26,10 @@ const EnvComputerUse = "AO_COMPUTER_USE"
 // EnvConnectorToken carries a session's connector token to an agent CLI and to the ao-mcp it starts.
 const EnvConnectorToken = "AO_CONNECTOR_TOKEN" // #nosec G101 -- the name of an environment variable, not a credential.
 
+// EnvTerminateOnPRMerge sets the daemon-wide default for whether sessions
+// auto-terminate when their PR is merged.
+const EnvTerminateOnPRMerge = "AO_TERMINATE_ON_PR_MERGE"
+
 const (
 	// LoopbackHost is the only host the daemon ever binds. There is deliberately
 	// no AO_HOST env var: the daemon has no auth/CORS/TLS and a stray
@@ -236,6 +240,9 @@ type Config struct {
 	// AgentBrowserToken is the agent browser's own credential
 	// (AO_AGENT_BROWSER_TOKEN). The daemon adds it; clients never see it.
 	AgentBrowserToken string
+	// TerminateOnPRMerge is the daemon-wide default for whether sessions auto-terminate
+	// when their PR is merged (AO_TERMINATE_ON_PR_MERGE). Nil falls back to hardcoded false.
+	TerminateOnPRMerge *bool
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -428,6 +435,13 @@ func Load() (Config, error) {
 		}
 		cfg.HarnessUpdateInterval = d
 	}
+	if raw, present := os.LookupEnv(EnvTerminateOnPRMerge); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv(EnvTerminateOnPRMerge, raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TerminateOnPRMerge = &v
+	}
 	if raw, present := os.LookupEnv("AO_TELEMETRY_EVENTS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_EVENTS", raw)
 		if err != nil {
@@ -584,6 +598,11 @@ func ScrubTelemetryEnv() {
 	for _, key := range telemetryEnvKeys {
 		_ = os.Unsetenv(key)
 	}
+}
+
+// ParseToggle parses boolean toggle strings (on/true/1/yes vs off/false/0/no).
+func ParseToggle(name, raw string) (bool, error) {
+	return parseToggleEnv(name, raw)
 }
 
 func parseToggleEnv(name, raw string) (bool, error) {

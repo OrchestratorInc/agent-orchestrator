@@ -30,6 +30,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | `browser` | Inspect and control the session's shared live browser | Verifying a web app through snapshots, interactions, waits, screenshots, console, and errors | [commands/browser.md](commands/browser.md) |
 | `browser` (remote host) | Drive the host's shared remote Chromium, used when `AO_AGENT_BROWSER_URL` is set | Same browser verification on a self-hosted remote host; one browser is shared across sessions | [commands/browser-remote.md](commands/browser-remote.md) |
 | `remote-host` | Link this machine to the user's Orchestrator account, or turn its remote access on or off | Setting up a VM or other headless machine so the user's desktops and phones can use it | [commands/remote-host.md](commands/remote-host.md) |
+| `device` | Open, install onto and release an iOS Simulator or Android Emulator for this session | Verifying a mobile app on a device the user watches in the Device tab | [commands/device.md](commands/device.md) |
 | `start` | Fetch (if needed) and open the Orchestrator desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the Orchestrator daemon | Shutting down Orchestrator | [commands/stop.md](commands/stop.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |

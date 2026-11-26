@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import {
 	Fragment,
 	useCallback,
@@ -344,6 +345,8 @@ export function SplitPaneHeader({
 	onPress?: () => void;
 }) {
 	const { t } = useTranslation();
+	// Pane headers exist only while the window is split.
+	useTelemetrySurface("split_view");
 	useShellAgentStream(Boolean(member.agentHandleId));
 	const agents = useShellAgentStore((state) => state.agents);
 	const shown = withMemberAgent(member, agents);
@@ -355,6 +358,7 @@ export function SplitPaneHeader({
 			)}
 			data-focused={focused || undefined}
 			data-split-pane-header={member.key}
+			data-telemetry-surface="split_view"
 			onPointerDown={(event) => {
 				if (event.button !== 0) return;
 				member.onSelect();

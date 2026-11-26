@@ -45,6 +45,11 @@ describe("chat turn summary styling", () => {
 		expect(turnSummarySource).toContain("<LatticeLoader color={t.textTertiary} />");
 		expect(turnSummarySource).not.toContain('<Feather name="loader"');
 		expect(turnSummarySource).not.toContain("<ActivityIndicator");
+		// Chat's lattice laps on the UI thread, so it keeps moving while the JS
+		// thread streams the reply; the board's stepped comet is its own loader.
+		const loader = readFileSync(new URL("./LatticeLoader.tsx", import.meta.url), "utf8");
+		expect(loader).toContain("withRepeat(withTiming(1, { duration: LATTICE_LAP_MS");
+		expect(loader).not.toContain("setInterval");
 	});
 
 	it("shows only the ticking timer while running, like the desktop, and still says Working to screen readers", () => {
@@ -426,7 +431,9 @@ describe("following the newest message", () => {
 	// text into view just as the keyboard began to close.
 	it("does not scroll to text a tap has focused", () => {
 		expect(source).toContain("scrollsChildToFocus={false}");
-		expect(source).toContain("onEditFocus={revealEdit}");
+		// Through the list's stable forwarders, so the memoized turn keeps its render.
+		expect(source).toContain("onEditFocus={rowHandlers.revealEdit}");
+		expect(source).toContain("rowHandlers = useStableFunctionProps({ onDecide, onResolveInput, onRollback, onFork, startEdit, cancelEdit, submitEdit, revealEdit, toggleWorked })");
 	});
 
 	// With focus scrolling off, a request form's field reveals itself when it

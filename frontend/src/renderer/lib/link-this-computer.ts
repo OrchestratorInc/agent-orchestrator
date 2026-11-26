@@ -43,7 +43,13 @@ export async function linkThisComputer(
 	const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
 		headers: { Authorization: `Bearer ${password}`, "X-AO-Account-ID": accountId },
 	});
-	if (issued.error || !issued.data) throw apiErrorException(issued.error);
+	if (issued.error || !issued.data) {
+		const err = apiErrorException(issued.error);
+		if (issued.response?.status) {
+			Object.assign(err, { status: issued.response.status });
+		}
+		throw err;
+	}
 	await saveAccountRemoteHost(cloudBaseUrl, {
 		hostId: issued.data.hostId,
 		label: fitLabel(await aoBridge.remotes.computerName()),

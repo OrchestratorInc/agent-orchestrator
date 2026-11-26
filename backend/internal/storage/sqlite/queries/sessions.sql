@@ -23,7 +23,7 @@ INSERT INTO sessions (
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash, import_source, display_name_explicit
+    client_request_id, client_request_hash, import_source, display_name_explicit, role_agent
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -31,7 +31,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -58,6 +58,13 @@ UPDATE sessions SET
     is_pinned = ?, pinned_at = ?, auto_inject_review = ?, auto_inject_ci = ?,
     automation_launch_completed = ?
 WHERE id = ?;
+
+-- name: SetSessionRoleAgent :execrows
+-- Generic session updates leave role_agent alone: only a spawn (insert) and a
+-- switch to another agent record which agent the project named at the time.
+UPDATE sessions
+SET role_agent = sqlc.arg(role_agent)
+WHERE id = sqlc.arg(id);
 
 -- name: UpdateSessionModel :execrows
 UPDATE sessions
@@ -297,7 +304,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -319,7 +326,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -341,7 +348,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -363,7 +370,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source
+    runtime_released_launch_id, import_source, role_agent
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListPreviewSessions :many
@@ -444,6 +451,7 @@ UPDATE sessions SET
     updated_at = sqlc.arg(updated_at),
     auto_inject_review = sqlc.arg(auto_inject_review),
     auto_inject_ci = sqlc.arg(auto_inject_ci),
+    terminate_on_pr_merge = sqlc.arg(terminate_on_pr_merge),
     provision_state = sqlc.arg(provision_state),
     provision_error = '',
     client_request_id = sqlc.arg(client_request_id),

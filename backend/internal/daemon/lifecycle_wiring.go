@@ -102,7 +102,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	reaperStart := make(chan struct{})
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
 	activityStart := make(chan struct{})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart, Rechecks: lcm})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{
 		Logger:   logger,
 		Wake:     sessionChanges,
@@ -287,6 +287,8 @@ type sessionLifecycle interface {
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
 	SetSessionConnectors(servers func(context.Context, sessionmanager.SessionConnectorsInput) []ports.ChatMCPServerConfig)
+	SetDevicesOffered(offered func() bool)
+	SetCommitAttributionEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
@@ -409,6 +411,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Logger:              log,
 		ReconcileWorkers:    startupReconcileWorkers,
 		CodexOperationGate:  codexOperationGate,
+		TerminateOnPRMerge:  cfg.TerminateOnPRMerge,
 	})
 	mgr.SetAgentReadiness(agentReadiness)
 	scmProvider := newMultiSCMProvider(cfg.GitLab, log)

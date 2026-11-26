@@ -26,7 +26,9 @@ import (
 )
 
 const (
-	eventBuffer  = 4096
+	eventBuffer = 4096
+	// approvalWait bounds an unanswered permission request. Questions have no
+	// such bound (see requestInput).
 	approvalWait = 30 * time.Minute
 	// sessionCloseWait bounds the session/close sent before a provider is
 	// terminated (quickSessionCloseWait for a QuickStop provider).
@@ -51,6 +53,9 @@ type preparedTurn struct {
 	id              string
 	clientMessageID string
 	prompt          []acpsdk.ContentBlock
+	// endedCycle is the agent's own cycle this turn ended, settled when the
+	// turn runs (see settleEndedCycle).
+	endedCycle *providerCycle
 }
 
 type interruptAttempt struct {
@@ -67,6 +72,7 @@ type parkedPermission struct {
 
 type parkedInput struct {
 	request ports.ChatInputRequest
+	turnID  string
 	result  chan ports.ChatInputResponse
 	ready   chan struct{}
 }
@@ -233,6 +239,7 @@ type conversation struct {
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	backgroundTasks              func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
 	stopBackgroundTask           func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
+	backgroundTaskOutput         func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	historyNotice                func(string) bool
 	hideCommand                  func(acpsdk.AvailableCommand) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.
@@ -243,6 +250,18 @@ type conversation struct {
 	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// plansSpanTurns: see Config.PlansSpanTurns.
 	plansSpanTurns bool
+	// toolsOutliveTurn: see Config.ToolsOutliveTurn.
+	toolsOutliveTurn bool
+	// cycle is work the agent is running on its own between AO's turns; see
+	// providerCycle. providerReportsState records that the agent reports its
+	// own running and idle states, so its idle, not quiet, ends a cycle.
+	cycle                *providerCycle
+	providerReportsState bool
+	// cycleStateMu orders a cycle's active and idle reports: it is held, before
+	// mu, from opening a cycle through reporting it active, and from ending one
+	// through reporting it idle, so a cycle that opens as another ends cannot
+	// report active before the ended one reports idle.
+	cycleStateMu sync.Mutex
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -303,6 +322,7 @@ var _ ports.ChatConversation = (*conversation)(nil)
 var _ ports.ChatHistoryReader = (*conversation)(nil)
 var _ ports.ChatDeferredTurnStarter = (*conversation)(nil)
 var _ ports.ChatConfigOptionController = (*conversation)(nil)
+var _ ports.ChatModelVariantResolver = (*conversation)(nil)
 var _ ports.ChatSkillLister = (*conversation)(nil)
 var _ ports.ChatSteerer = (*conversation)(nil)
 var _ ports.ChatInputResponder = (*conversation)(nil)
@@ -662,7 +682,9 @@ func (c *conversation) checkOptionalModelOffered(model string) error {
 	if optionsFor == nil || legacyModel {
 		return nil
 	}
-	for _, option := range optionsFor(ports.ChatTurnSettings{Model: model}) {
+	// A variant id whose base model the session offers is applied as that base
+	// plus its reasoning level, so it is offered too.
+	for _, option := range c.expandModelVariant(optionsFor(ports.ChatTurnSettings{Model: model})) {
 		if option.ID != "model" || !option.Optional {
 			continue
 		}
@@ -748,12 +770,32 @@ func (c *conversation) expandModelVariant(options []SessionOption) []SessionOpti
 			if offered, _ := c.configOptionOffers("model", base); offered {
 				options[i].Value = base
 				options[i].Name = ""
-				options = append(options, variant)
+				options = append(options, c.variantOptionFor(variant))
 			}
 		}
 		break
 	}
 	return options
+}
+
+// ModelVariantBase is the base model a composite model id runs as, when the
+// live catalog offers that base instead of the id itself, as
+// expandModelVariant applies it.
+func (c *conversation) ModelVariantBase(model string) (string, bool) {
+	if c.splitModelVariant == nil || model == "" {
+		return "", false
+	}
+	if offered, known := c.configOptionOffers("model", model); !known || offered {
+		return "", false
+	}
+	base, _, split := c.splitModelVariant(model)
+	if !split {
+		return "", false
+	}
+	if offered, _ := c.configOptionOffers("model", base); !offered {
+		return "", false
+	}
+	return base, true
 }
 
 // markRestored names value current for option id and remembers the snapshot's
@@ -834,7 +876,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			if !ok && c.splitModelVariant != nil {
 				if base, variant, split := c.splitModelVariant(model); split {
 					if resolved, ok = resolveModelChoice(c.harness, option.Choices, base); ok {
-						options = append(options, variant)
+						options = append(options, c.variantOptionFor(variant))
 					}
 				}
 			}
@@ -1050,6 +1092,9 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
 		c.preambleSpent = true
 	}
+	// A cycle the agent was still running on its own ends here: what it wrote
+	// so far stays its own, and the turn's output starts fresh items.
+	turn.endedCycle = c.detachProviderCycleLocked()
 	c.activeTurn = turn.id
 	c.turnModelID = turn.id
 	c.turnModel = c.configOptionCurrentLocked("model")
@@ -1070,11 +1115,14 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.providerFailure = nil
 	c.mu.Unlock()
 
+	// The ended cycle settles in runTurn: its settle can wait on an update
+	// still being emitted, and this caller may be the one that drains events.
 	go c.runTurn(turnCtx, sessionID, turn)
 	return nil
 }
 
 func (c *conversation) runTurn(ctx context.Context, sessionID string, turn preparedTurn) {
+	c.settleEndedCycle(turn.endedCycle)
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.id})
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
 	// ACP message ids are opaque idempotency/correlation keys. Preserve AO's
@@ -1161,7 +1209,8 @@ func (c *conversation) finishPrompt(
 		turnModel = c.turnModel
 	}
 	c.mu.Unlock()
-	c.settleOpenItems(turnID)
+	interruptRequested := interrupt != nil && interrupt.turnID == turnID
+	c.settleOpenItems(turnID, c.keepToolsOutlivingTurn(interruptRequested, resp, err))
 	interruptedLocally := false
 	if interrupt != nil && interrupt.turnID == turnID {
 		// ACP cancellation and Prompt completion can race. Wait for the sender's
@@ -1351,6 +1400,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	}
 	before := c.contextTokens
 	id := uuid.NewString()
+	cycle := c.detachProviderCycleLocked()
 	c.activeTurn = id
 	c.turnModelID = id
 	c.turnModel = c.configOptionCurrentLocked("model")
@@ -1371,10 +1421,23 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.providerFailure = nil
 	c.mu.Unlock()
 
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
-
-	go c.runCompactionTurn(turnCtx, sessionID, id)
+	start := func() {
+		c.settleEndedCycle(cycle)
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
+	}
+	if cycle == nil {
+		start()
+		go c.runCompactionTurn(turnCtx, sessionID, id)
+	} else {
+		// The ended cycle settles off this call, as in runTurn: its settle can
+		// wait on an update blocked emitting, and the caller may hold a lock the
+		// event drain needs. Its items still settle before the turn starts.
+		go func() {
+			start()
+			c.runCompactionTurn(turnCtx, sessionID, id)
+		}()
+	}
 	return ports.ChatCompactionResult{TokensBefore: before}, nil
 }
 
@@ -1515,10 +1578,29 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	if err != nil {
 		return fmt.Errorf("ACP session/cancel: %w", err)
 	}
+	// Not every provider withdraws its open questions on session/cancel (ACP
+	// leaves answering them to the client), so close them here: otherwise
+	// Stop leaves the turn waiting on a question nobody can answer.
+	c.cancelTurnInputs(active)
 	// The provider owns the root Prompt until it returns a terminal result. Keep
 	// AO busy after accepting session/cancel so a restart cannot start a second
 	// root prompt while the first one is still executing downstream.
 	return nil
+}
+
+// turnInterruptedLocked reports whether session/cancel was sent for turnID.
+// The caller must hold c.mu.
+func (c *conversation) turnInterruptedLocked(turnID string) bool {
+	attempt := c.interrupt
+	if attempt == nil || attempt.turnID != turnID {
+		return false
+	}
+	select {
+	case <-attempt.done:
+		return attempt.err == nil
+	default:
+		return false
+	}
 }
 
 func (c *conversation) ResolveRequest(
@@ -1603,6 +1685,10 @@ func (c *conversation) Terminate() error {
 const staleBackgroundTask = 30 * time.Minute
 
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.providerCycleActive(time.Now()) {
+		// The agent is working on its own; hibernating would kill that work.
+		return false, nil
+	}
 	if c.hibernationCheck == nil {
 		return !c.backgroundObserved.Active(time.Now(), staleBackgroundTask), nil
 	}
@@ -1677,6 +1763,9 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
+		if c.cycle != nil && c.cycle.timer != nil {
+			c.cycle.timer.Stop()
+		}
 		close(c.closing)
 		c.releasePendingSteersLocked()
 		persistent := c.proc.terminate != nil
@@ -1801,7 +1890,9 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	}
 }
 
-func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+// keepOpen names tools that outlive the turn (see keepToolsOutlivingTurn);
+// they stay running instead of failing with it.
+func (c *conversation) settleOpenItems(turnID string, keepOpen map[string]bool, turnState ...domain.TurnState) {
 	// Copy what is settled while holding the lock. A late session/update for the
 	// same turn can still write these maps and tool states (processUpdate) while
 	// the items below are emitted, so iterating the live ones raced.
@@ -1844,7 +1935,7 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	toolIDs := sortedKeys(tools)
 	for _, id := range toolIDs {
 		tool := tools[id]
-		if toolStatusOpen(tool.status) && c.toolStillOpen(liveTools, id) {
+		if toolStatusOpen(tool.status) && !keepOpen[id] && c.toolStillOpen(liveTools, id) {
 			snapshot := tool
 			snapshot.status = acpsdk.ToolCallStatusFailed
 			event := c.toolEvent(turnID, &snapshot, true)
@@ -1888,6 +1979,33 @@ func (c *conversation) failPendingPermissions() {
 	for _, request := range pending {
 		select {
 		case request.result <- "":
+		default:
+		}
+	}
+}
+
+// cancelTurnInputs answers the turn's open questions with Cancel.
+func (c *conversation) cancelTurnInputs(turnID string) {
+	c.mu.Lock()
+	var cancelled map[string]*parkedInput
+	for id, input := range c.pendingInputs {
+		if input.turnID != turnID {
+			continue
+		}
+		if cancelled == nil {
+			cancelled = make(map[string]*parkedInput)
+		}
+		cancelled[id] = input
+		delete(c.pendingInputs, id)
+	}
+	c.mu.Unlock()
+	for id, input := range cancelled {
+		// requestInput emits InputRequested after it registers the question;
+		// wait for that so the resolution never comes first.
+		<-input.ready
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: id})
+		select {
+		case input.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
 		default:
 		}
 	}

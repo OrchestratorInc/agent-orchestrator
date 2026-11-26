@@ -325,6 +325,7 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 		UpdatedAt:           rec.UpdatedAt,
 		AutoInjectReview:    rec.AutoInjectReview,
 		AutoInjectCI:        rec.AutoInjectCI,
+		TerminateOnPRMerge:  rec.TerminateOnPRMerge,
 		ProvisionState:      rec.ProvisionState.WithDefault(),
 		ClientRequestID:     rec.ClientRequestID,
 		ClientRequestHash:   rec.ClientRequestHash,
@@ -489,6 +490,21 @@ func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, mod
 	})
 	if err != nil {
 		return false, fmt.Errorf("update session model for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// SetSessionRoleAgent records the agent the project named for the session's
+// role when the session's agent was chosen. Only this and the insert write it.
+func (s *Store) SetSessionRoleAgent(ctx context.Context, id domain.SessionID, agent domain.AgentHarness) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionRoleAgent(ctx, gen.SetSessionRoleAgentParams{
+		ID:        id,
+		RoleAgent: string(agent),
+	})
+	if err != nil {
+		return false, fmt.Errorf("set session role agent for %s: %w", id, err)
 	}
 	return rows > 0, nil
 }
@@ -1291,6 +1307,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			Model:                            row.Model,
 			Effort:                           row.Effort,
 			Permissions:                      domain.PermissionMode(row.SessionPermissions),
+			RoleAgent:                        domain.AgentHarness(row.RoleAgent),
 		},
 		RequestedOutput:   domain.RequestedOutput(row.RequestedOutput),
 		CleanupGeneration: row.CleanupGeneration,
@@ -1433,6 +1450,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		AutomationLaunchCompleted:        rec.AutomationLaunchCompleted,
 		ClientRequestID:                  rec.ClientRequestID,
 		ClientRequestHash:                rec.ClientRequestHash,
+		RoleAgent:                        string(rec.Metadata.RoleAgent),
 	}
 }
 

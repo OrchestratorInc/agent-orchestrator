@@ -42,9 +42,11 @@ export function prStatusDot(pr: SessionPRSummary): { className: string; labelKey
 
 /**
  * The session's PRs as a row of pills over the PR card, one per open or
- * draft PR with its status dot; merged and closed ones wait behind one
- * "+N earlier" pill. The pill of the PR on screen is pressed, and the PR the
- * branch updates carries a branch mark. Picking a pill shows that PR.
+ * draft PR with its status dot and number; merged and closed ones wait behind
+ * one "+N earlier" pill. The card below names the PR on screen in full, so a
+ * pill leaves its title to the tooltip and screen readers. The pill of the PR
+ * on screen is pressed, and the PR the branch updates carries a branch mark.
+ * Picking a pill shows that PR.
  */
 export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 	/** The PR the branch updates; its pill carries a branch mark. */
@@ -94,9 +96,8 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 						{/* A long repository name gives way; the number always shows. */}
 						{repository ? <span className="min-w-0 shrink truncate font-medium">{repository}</span> : null}
 						<span className="shrink-0 font-medium">{t("pr.others.short", { number: pr.number })}</span>
-						{pr.title && !repository ? <span className="min-w-0 truncate">{pr.title}</span> : null}
 						{branch ? <GitBranch aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" /> : null}
-						<span className="sr-only">, {status}{branch ? `, ${t("pr.others.checkedOut")}` : ""}</span>
+						<span className="sr-only">{pr.title ? `, ${pr.title}` : ""}, {status}{branch ? `, ${t("pr.others.checkedOut")}` : ""}</span>
 					</button>
 				);
 			})}
