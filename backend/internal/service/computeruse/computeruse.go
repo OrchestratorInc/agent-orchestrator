@@ -155,11 +155,11 @@ type Service struct {
 	stop       context.CancelFunc
 	workers    sync.WaitGroup
 
-	mu         sync.Mutex
+	mu sync.Mutex
 	// daemonStart is the start of the background service in progress, if any.
 	daemonStart *daemonStart
-	granting   bool
-	grantError string
+	granting    bool
+	grantError  string
 	// sessionless are tools the driver refused a `session` argument for.
 	sessionless map[string]bool
 	snapshots   snapshotWindows
@@ -543,7 +543,9 @@ func (s *Service) locate(ctx context.Context) (string, error) {
 type daemonStart struct {
 	done chan struct{}
 	err  error
-	// joined counts the callers waiting on this attempt.
+	// joined counts the callers that have joined this attempt. It is never
+	// decremented when a waiter gives up; only tests read it, to know every
+	// caller has reached the shared start.
 	joined int
 }
 
