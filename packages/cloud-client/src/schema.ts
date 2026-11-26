@@ -3265,12 +3265,14 @@ export interface components {
             sessionId?: string;
             /** @constant */
             source: "cloud";
+            /** @description What happened, such as needs_input or pr_merged. Clients show title and body for a type they do not know. An automation run that finished is automation_run_completed, one that failed or timed out automation_run_failed, and a skipped occurrence automation_run_skipped; each goes to the automation's subscribers, once per run. Its sessionId is the run's session or, for a run that got none, the session of the automation's latest run that had one (no notification when no run had one). */
             type: string;
             title: string;
             body: string;
             /** @enum {string} */
             status: "unread" | "read";
             eventId?: string;
+            /** @description Details by type. An automation run's notification carries automationId, runId, status (AutomationRunStatus) and errorCode (AutomationRun.errorCode, empty when it completed). */
             metadata: Record<string, never>;
             /** Format: date-time */
             resolvedAt?: string;
@@ -3829,7 +3831,7 @@ export interface components {
         /** @enum {string} */
         AutomationMode: "standard" | "trusted";
         /**
-         * @description pending, starting and running are in flight. completed means the session's opening turn finished. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), the automation was turned off before it started (AUTOMATION_DISABLED), or the organization or plan was full (the create-session refusal's code: SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL, ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED). failed means it started and did not finish, or its start was refused for any other reason. timed_out means it reached maxRuntimeMinutes. A run's session ends when the run reaches completed, failed or timed_out.
+         * @description pending, starting and running are in flight. completed means the run's turn finished: the opening turn of the session it started, or the turn its prompt started in the session it continued. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), the automation was turned off before it started (AUTOMATION_DISABLED), or the organization or plan was full (the create-session refusal's code: SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL, ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED). failed means it started and did not finish, or its start was refused for any other reason. timed_out means it reached maxRuntimeMinutes. When the run reaches completed, failed or timed_out, its session ends with it only while the automation's deleteSessionOnComplete is on; otherwise the session stays (paused while idle) for the next run.
          * @enum {string}
          */
         AutomationRunStatus: "pending" | "starting" | "running" | "completed" | "failed" | "skipped" | "timed_out";
@@ -3861,7 +3863,7 @@ export interface components {
             startedAt?: string;
             /** Format: date-time */
             finishedAt?: string;
-            /** @description Why a skipped, failed or timed_out run did not finish: a skip's code (AutomationRunStatus), TIMED_OUT, AGENT_FAILED (the opening turn failed), SESSION_ENDED (its session was deleted first), START_FAILED, or the create-session refusal's own code (such as agent_provider_required). Clients show errorMessage for a code they do not know. */
+            /** @description Why a skipped, failed or timed_out run did not finish: a skip's code (AutomationRunStatus), TIMED_OUT, AGENT_FAILED (the run's turn failed), STOPPED (someone stopped the run's turn in its session), SESSION_ENDED (its session was deleted first), START_FAILED, or the create-session refusal's own code (such as agent_provider_required when the person it runs as has no valid credential for the harness, forbidden when they are no longer an active member of the organization, or PLAN_REQUIRED when they have no plan). Clients show errorMessage for a code they do not know. */
             errorCode?: string;
             /** @description The reason in words, for a person to read. */
             errorMessage?: string;
