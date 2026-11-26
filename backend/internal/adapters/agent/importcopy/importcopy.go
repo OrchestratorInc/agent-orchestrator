@@ -180,6 +180,20 @@ func SetStringField(line []byte, field, value string) ([]byte, error) {
 	return marshal(record)
 }
 
+// DeleteField returns the JSON record without a top-level field. Every other
+// field keeps its exact value; a record without the field is re-encoded as is.
+func DeleteField(line []byte, field string) ([]byte, error) {
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(line, &record); err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, errors.New("record is not a JSON object")
+	}
+	delete(record, field)
+	return marshal(record)
+}
+
 // marshal encodes without HTML escaping, so untouched text keeps its bytes.
 func marshal(v any) ([]byte, error) {
 	var buf bytes.Buffer

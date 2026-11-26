@@ -86,7 +86,40 @@ describe("ChatWorkspace retry", () => {
 		expect(loadOlder).not.toHaveBeenCalled();
 	});
 
-	it("does not offer usage-limit recovery without a durable human prompt", () => {
+	function limitedEventSnapshot(): ConversationSnapshot {
+		const snapshot = limitedSnapshot();
+		snapshot.turns[0] = { ...snapshot.turns[0]!, hasHumanPrompt: false, hasEventPrompt: true };
+		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user"
+			? { ...item, origin: "automation" } : item);
+		return snapshot;
+	}
+
+	it("offers auto-resume for the latest limited turn an event started", async () => {
+		const setAutoResume = vi.fn();
+		render(<ChatWorkspace snapshot={limitedEventSnapshot()} retryControl={{ retry: vi.fn(), setAutoResume }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Auto-resume at reset" }));
+		expect(setAutoResume).toHaveBeenCalledWith("turn-1", true);
+	});
+
+	it("resumes a limited turn an event started once the reset has passed", async () => {
+		const snapshot = limitedEventSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("offers nothing on an event's limited turn once a newer turn ran", () => {
+		const snapshot = limitedEventSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.turns.push({ id: "later", state: "completed", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
+	});
+
+	it("does not offer usage-limit recovery without a durable human or event prompt", () => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.hasHumanPrompt = false;
 		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
@@ -365,6 +398,42 @@ describe("ChatWorkspace retry", () => {
 		const retry = screen.getByRole("button", { name: "Retry this turn" });
 		expect(retry).toBeDisabled();
 		expect(retry).toHaveTextContent("Retrying…");
+	});
+
+	/** turn-1 as an event started it: a review comment relayed by Orchestrator. */
+	function eventFailedSnapshot(hasEventPrompt: boolean): ConversationSnapshot {
+		const snapshot = failedSnapshot();
+		snapshot.turns = snapshot.turns.map((turn) => turn.id === "turn-1"
+			? { ...turn, hasEventPrompt, errorMessage: "Request timed out. If the API is slow to answer, set API_TIMEOUT_MS." }
+			: turn);
+		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user" && item.turnId === "turn-1"
+			? { ...item, origin: "automation" } : item);
+		return snapshot;
+	}
+
+	it("offers a retry on a timed-out turn an event started", async () => {
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={eventFailedSnapshot(true)} retryControl={{ retry: onRetryTurn }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("keeps an event turn's retry when its prompt is paged out", async () => {
+		const snapshot = eventFailedSnapshot(true);
+		snapshot.items = snapshot.items.filter((item) => !(item.kind === "message" && item.role === "user" && item.turnId === "turn-1"));
+		snapshot.hasMoreBefore = true;
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: onRetryTurn }} hasOlder onLoadOlder={vi.fn()} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("offers no retry on an event turn the daemon does not confirm a prompt for", () => {
+		render(<ChatWorkspace snapshot={eventFailedSnapshot(false)} retryControl={{ retry: vi.fn() }} />);
+
+		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
 	});
 
 	it("hides retry when delivery was never provider-confirmed", () => {

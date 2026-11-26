@@ -739,7 +739,7 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	// The mode-aware messenger, so a Chat original is told as a chat message.
-	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
+	sessionForkSvc := wireSessionFork(cfg.DataDir, store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
 		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
@@ -840,6 +840,16 @@ func Run(buildVersion string) (retErr error) {
 	wireManagedPreviewExit(managedPreview, sessionSvc, log)
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
+	sessionImportSvc.SetImportVersionCheck(func(ctx context.Context, harness domain.AgentHarness) error {
+		agent, ok := agents.Agent(harness)
+		if !ok {
+			return nil
+		}
+		if checker, ok := agent.(ports.AgentImportVersionChecker); ok {
+			return checker.CheckImportVersion(ctx)
+		}
+		return nil
+	})
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
 	// The Orchestrator attribution beta credits Orchestrator on new sessions'
 	// commits and PRs. Wired before tracker intake starts, so a session its
@@ -1600,7 +1610,7 @@ func Run(buildVersion string) (retErr error) {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
-				reapForkSeeds(ctx, store, log)
+				reapForkSeeds(ctx, cfg.DataDir, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {

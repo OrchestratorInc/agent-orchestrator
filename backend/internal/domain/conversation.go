@@ -573,8 +573,9 @@ type ConversationSettings struct {
 	// OpenCodeMode is the provider-owned mode explicitly selected through ACP.
 	// It is separate from approval policy and restored before accepting turns.
 	OpenCodeMode string `json:"openCodeMode,omitempty"`
-	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or
-	// "1m". Empty leaves it to Claude Code. It is read when the agent starts.
+	// AutoCompactWindow is where Claude Code compacts on its own: "200k",
+	// "500k" or "1m". "off" turns OpenCode's compaction off. Empty leaves it to the agent.
+	// It is read when the agent starts.
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 }
 
@@ -606,6 +607,7 @@ type ConversationTurn struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt is a snapshot-only fact independent of timeline pagination.
 	HasHumanPrompt bool      `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool      `json:"hasEventPrompt,omitempty"`
 	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
 	ErrorMessage string                  `json:"errorMessage,omitempty"`
@@ -739,6 +741,7 @@ type RetryPrompt struct {
 	Text                string
 	ProviderInputText   string
 	Origin              MessageOrigin
+	AuthoredByUser      bool
 	DeliveryContentJSON string
 	ActiveLineage       bool
 }

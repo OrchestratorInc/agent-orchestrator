@@ -278,6 +278,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the skills an agent offers in a project, read from its skill folders without a session */
+        get: operations["listAgentSkills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/update-advisory": {
         parameters: {
             query?: never;
@@ -7472,6 +7489,7 @@ export interface components {
             errorMessage?: string;
             /** @enum {string} */
             failureCode?: "provider_key_missing" | "auth_required";
+            hasEventPrompt?: boolean;
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
@@ -7489,7 +7507,7 @@ export interface components {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             /** @enum {string} */
-            autoCompactWindow?: "200k" | "1m";
+            autoCompactWindow?: "200k" | "500k" | "1m" | "off";
             fastMode?: boolean;
             model?: string;
             planMode?: boolean;
@@ -7595,11 +7613,14 @@ export interface components {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
+            /** @enum {string} */
+            autoCompactWindow?: "200k" | "500k" | "1m" | "off";
             baseBranch?: string;
             branch?: string;
             brief: string;
             clientRequestId?: string;
             effort?: null | string;
+            fastMode?: boolean;
             /** @enum {string} */
             mode?: "tui" | "chat";
             model?: string;
@@ -8539,7 +8560,7 @@ export interface components {
         };
         ProviderSwitchRequest: {
             /** @enum {string} */
-            autoCompactWindow?: "200k" | "1m";
+            autoCompactWindow?: "200k" | "500k" | "1m" | "off";
             effort?: string;
             fastMode?: boolean;
             force?: boolean;
@@ -8603,6 +8624,8 @@ export interface components {
         RegisterArtifactsRequest: {
             /** @description Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it. */
             paths: string[];
+            /** @description The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there. */
+            workingDir?: string;
         };
         RegisterArtifactsResponse: {
             /** @description How many of the session's files are not registered. */
@@ -9735,12 +9758,15 @@ export interface components {
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             async?: boolean;
             attachments?: components["schemas"]["AttachmentInput"][];
+            /** @enum {string} */
+            autoCompactWindow?: "200k" | "500k" | "1m" | "off";
             baseBranch?: string;
             branch?: string;
             clientRequestId?: string;
             displayName?: string;
             displayNameExplicit?: boolean;
             effort?: string;
+            fastMode?: boolean;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;
@@ -11508,6 +11534,50 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listAgentSkills: {
+        parameters: {
+            query?: {
+                /** @description Project whose skill folders are read before the user's. Omitted scans only the user's own skills. */
+                projectId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

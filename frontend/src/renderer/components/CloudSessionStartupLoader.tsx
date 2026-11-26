@@ -37,7 +37,7 @@ export function CloudSessionStartupLoader({
 		<figure aria-labelledby={queuedMessageLabel} className="flex min-w-0 flex-col items-center gap-1.5">
 			<figcaption id={queuedMessageLabel} className="text-xs text-muted-foreground">{t("terminal.sessionLoader.queuedMessage")}</figcaption>
 			{/* The chat's queued message: the agent has not seen it yet. */}
-			<p data-queued="" className={cn(humanBubbleClass(true), "max-h-40 overflow-y-auto break-words whitespace-pre-wrap text-pretty")}>{queuedMessage}</p>
+			<p data-queued="" className={cn(humanBubbleClass(true), "max-h-40 overflow-y-auto break-words whitespace-pre-wrap")}>{queuedMessage}</p>
 		</figure>
 	) : null;
 	const wide = Boolean(panel || message);

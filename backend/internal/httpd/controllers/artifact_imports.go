@@ -120,7 +120,7 @@ func (c *SessionsController) importArtifacts(w http.ResponseWriter, r *http.Requ
 	if err := sessionartifacts.MarkSharedCopy(sess.Metadata.ArtifactDir, path.Dir(entry)); err != nil {
 		slog.Default().Warn("mark shared artifact copy", "session", sess.ID, "path", entry, "err", err)
 	}
-	if _, err := c.Svc.RegisterArtifacts(r.Context(), sess.ID, []string{entry}); err != nil {
+	if _, err := c.Svc.RegisterArtifacts(r.Context(), sess.ID, "", []string{entry}); err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
@@ -199,7 +199,7 @@ func (c *SessionsController) registerSpawnedImport(ctx context.Context, sess dom
 	if entry == "" {
 		return
 	}
-	if _, err := c.Svc.RegisterArtifacts(ctx, sess.ID, []string{entry}); err != nil {
+	if _, err := c.Svc.RegisterArtifacts(ctx, sess.ID, "", []string{entry}); err != nil {
 		slog.Default().Warn("register imported artifact", "session", sess.ID, "path", entry, "err", err)
 	}
 }
