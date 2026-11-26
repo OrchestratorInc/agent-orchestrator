@@ -1014,7 +1014,11 @@ function AssistantReply({ message, conversationId, completed }: { message: Conve
 	const written = useLiveReplyText(message);
 	const text = usePacedReply(message.id, written, message.streaming);
 	const revealing = text.length < written.length;
-	return <ChatMarkdown text={text} streaming={message.streaming || revealing} continuousSelection selectionSource={completed && !message.streaming && !revealing ? { conversationId, messageId: message.id, revision: message.revision } : undefined} />;
+	const quotable = completed && !message.streaming && !revealing;
+	// Kept as one object while the reply holds still, so the selection handler
+	// built from it stays the same and the memoized text and code blocks hold.
+	const selectionSource = useMemo(() => quotable ? { conversationId, messageId: message.id, revision: message.revision } : undefined, [quotable, conversationId, message.id, message.revision]);
+	return <ChatMarkdown text={text} streaming={message.streaming || revealing} continuousSelection selectionSource={selectionSource} />;
 }
 
 const TimelineItem = memo(function TimelineItem({

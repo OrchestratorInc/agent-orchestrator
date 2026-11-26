@@ -78,7 +78,10 @@ describe("streaming response layout", () => {
 		expect(reply).toContain("const text = usePacedReply(message.id, written, message.streaming);");
 		expect(reply).toContain("const revealing = text.length < written.length;");
 		expect(reply).toContain("streaming={message.streaming || revealing}");
-		expect(reply).toContain("completed && !message.streaming && !revealing ?");
+		expect(reply).toContain("const quotable = completed && !message.streaming && !revealing;");
+		// The quote source is memoized, so the selection handler and the memoized
+		// text and code blocks below it hold while the reply holds still.
+		expect(reply).toContain("const selectionSource = useMemo(() => quotable ?");
 		expect(source).toContain("<AssistantReply message={item} conversationId={conversationId} completed={completed} />");
 	});
 
