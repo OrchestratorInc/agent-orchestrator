@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,45 @@ func TestPersistentACPReconnectRestoresSplitModelVariant(t *testing.T) {
 		if got := conv.configOptionCurrent(id); got != want {
 			t.Errorf("%s current = %q, want %q", id, got, want)
 		}
+	}
+}
+
+func TestModelVariantBaseNamesTheOfferedBaseOfASplitModel(t *testing.T) {
+	conv := &conversation{
+		configOptions: []ports.ChatConfigOption{{
+			ID: "model", Type: ports.ChatConfigOptionSelect,
+			Current: ports.ChatConfigOptionValue{Select: "gemini-3.8-flash"},
+			Choices: []ports.ChatConfigOptionChoice{{Value: "gemini-3.8-flash"}, {Value: "gemini-3.8-flash-xhigh"}},
+		}},
+		splitModelVariant: func(model string) (string, SessionOption, bool) {
+			for _, level := range []string{"-low", "-xhigh"} {
+				if base, ok := strings.CutSuffix(model, level); ok {
+					return base, SessionOption{ID: "thinking_level", Value: level[1:], Optional: true}, true
+				}
+			}
+			return "", SessionOption{}, false
+		},
+	}
+	for _, tc := range []struct {
+		model, base string
+		ok          bool
+	}{
+		{model: "gemini-3.8-flash-low", base: "gemini-3.8-flash", ok: true},
+		// Offered as itself, so it is not a variant.
+		{model: "gemini-3.8-flash-xhigh"},
+		// Its base is not offered.
+		{model: "gemini-3.8-pro-low"},
+		// No level to split off.
+		{model: "gemini-3.8-pro"},
+		{model: ""},
+	} {
+		base, ok := conv.ModelVariantBase(tc.model)
+		if base != tc.base || ok != tc.ok {
+			t.Errorf("ModelVariantBase(%q) = %q, %v; want %q, %v", tc.model, base, ok, tc.base, tc.ok)
+		}
+	}
+	if base, ok := (&conversation{configOptions: conv.configOptions}).ModelVariantBase("gemini-3.8-flash-low"); ok {
+		t.Errorf("without a split, ModelVariantBase = %q, true; want false", base)
 	}
 }
 

@@ -53,7 +53,7 @@ func TestPromptReadinessWaitsForTheAgentLabelOnTheRenderedScreen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(hints.Patterns, []string{"Ao-Sess-1"}) || !slices.Equal(hints.BlockingPatterns, []string{"No provider selected"}) || !hints.RenderedScreen || hints.Timeout <= 0 || hints.RequireReady {
+	if !slices.Equal(hints.Patterns, []string{"Ao-Sess-1"}) || !slices.Equal(hints.BlockingPatterns, []string{"No provider selected"}) || !hints.RenderedScreen || hints.Timeout <= 0 || !hints.RequireReady {
 		t.Fatalf("hints = %+v", hints)
 	}
 }
@@ -112,6 +112,19 @@ func TestTypedFirstTaskTurnsOffReleaseHighlights(t *testing.T) {
 	cmd, err = New().GetLaunchCommand(context.Background(), ports.LaunchConfig{SessionID: "w-1"})
 	if err != nil || envValue(cmd, cliConfigEnv) != "" {
 		t.Fatalf("no-agent launch = %#v, %v", cmd, err)
+	}
+
+	// The project's environment wins over the daemon's, and "" there unsets it.
+	project := cfg
+	project.Env = map[string]string{cliConfigEnv: `{"theme":"project"}`}
+	cmd, err = New().GetLaunchCommand(context.Background(), project)
+	if err != nil || envValue(cmd, cliConfigEnv) != `{"highlights":false,"theme":"project"}` {
+		t.Fatalf("project %s: %#v, %v", cliConfigEnv, cmd, err)
+	}
+	project.Env = map[string]string{cliConfigEnv: ""}
+	cmd, err = New().GetLaunchCommand(context.Background(), project)
+	if err != nil || envValue(cmd, cliConfigEnv) != `{"highlights":false}` {
+		t.Fatalf("unset %s: %#v, %v", cliConfigEnv, cmd, err)
 	}
 
 	t.Setenv(cliConfigEnv, "[1]")

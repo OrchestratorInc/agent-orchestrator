@@ -726,6 +726,11 @@ type SpawnSessionRequest struct {
 	// AccountID is the subscription account the agent starts on. Empty uses the
 	// provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -1552,6 +1557,11 @@ type DelegateTaskRequest struct {
 	// AccountID is the subscription account the worker starts on. Empty uses
 	// the provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path
@@ -3659,7 +3669,7 @@ type ProviderSwitchRequest struct {
 	Effort            string `json:"effort,omitempty" maxLength:"64"`
 	FastMode          bool   `json:"fastMode,omitempty"`
 	Ultracode         bool   `json:"ultracode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	Force          bool   `json:"force,omitempty"`
@@ -3927,7 +3937,7 @@ type ConversationTurnSettingsPayload struct {
 	// The rest are described on domain.ConversationSettings.
 	FastMode          bool   `json:"fastMode,omitempty"`
 	PlanMode          bool   `json:"planMode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 }
 
 // InterruptConversationRequest is the optional body of a chat Stop. TurnID is

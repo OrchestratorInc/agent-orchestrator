@@ -308,7 +308,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			.catch(() => undefined);
 	}, [hostId, pendingHarness]);
 	// Ultracode is asked for in each message, so it is kept here, not on the agent.
-	const [ultracodeOn, setUltracodeOn] = useState(false);
+	// A task started with it on, from the new chat page, keeps it on.
+	const [ultracodeOn, setUltracodeOn] = useState(() => Boolean(launchSettings?.ultracode));
 	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);
 	const autoCompactWindow = snapshot?.settings.autoCompactWindow;
 	const [applyingAutoCompact, setApplyingAutoCompact] = useState(false);

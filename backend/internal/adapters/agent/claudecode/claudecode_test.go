@@ -1441,6 +1441,22 @@ func TestLaunchSettingsShareOneSettingsFlagWithTheNudgeGuard(t *testing.T) {
 	}
 }
 
+// Each compaction window choice reaches Claude Code as its token count.
+func TestLaunchSettingsCarryEachAutoCompactWindow(t *testing.T) {
+	p := &Plugin{resolvedBinary: "claude"}
+	for window, tokens := range map[string]string{"200k": "200000", "500k": "500000", "1m": "1000000"} {
+		cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+			Config: ports.AgentConfig{Launch: domain.AgentLaunchOptions{AutoCompactWindow: window}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(cmd, " "), `"autoCompactWindow":`+tokens) {
+			t.Fatalf("%s: launch %#v, want autoCompactWindow %s", window, cmd, tokens)
+		}
+	}
+}
+
 // PreLaunch marks the dialog seen in the global config only for a launch in
 // AO's default mode whose user settings would make Claude offer it, and never
 // touches the user's settings or permission mode.

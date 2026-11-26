@@ -91,6 +91,13 @@ func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request 
 		return nil, &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported,
 			Detail: fmt.Sprintf("permission mode %q is not one of default, accept-edits, auto, bypass-permissions", request.PermissionMode)}
 	}
+	if problem := domain.AutoCompactWindowProblem(request.TargetHarness, request.AutoCompactWindow); problem != "" {
+		return nil, &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: problem}
+	}
+	if request.FastMode && !domain.CanUseFastMode(request.TargetHarness) {
+		return nil, &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported,
+			Detail: fmt.Sprintf("%s has no Fast mode", request.TargetHarness)}
+	}
 	if c.Models == nil || (request.Model == "" && request.Effort == "") {
 		return nil, nil
 	}
@@ -125,6 +132,10 @@ func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request 
 		default:
 			warnings = append(warnings, fmt.Sprintf("%s is not in %s's model list; the agent may refuse it", request.Model, target))
 		}
+	}
+	if request.FastMode && picked != nil && !picked.SupportsFast {
+		return nil, &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported,
+			Detail: fmt.Sprintf("%s has no Fast mode", picked.ID)}
 	}
 	if request.Effort == "" {
 		return warnings, nil
