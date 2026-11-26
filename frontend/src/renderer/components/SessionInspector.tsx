@@ -89,7 +89,7 @@ import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prRepositoryLabels, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -2842,6 +2842,8 @@ function ReviewPanel({
 	const showPerPRRows = perPRRows.length > 1;
 	// Across repositories two PRs can share a number, so the row names its repository.
 	const perPRSpanRepositories = prsSpanRepositories(perPRRows.map(({ pr }) => pr));
+	// Short names, or owner/name where two owners share one (a fork and its upstream).
+	const perPRRepositoryLabels = prRepositoryLabels(perPRRows.map(({ pr }) => pr));
 	// Review now's rules, applied to one PR: a running pass or a reviewer change in
 	// flight blocks it; auto-review does not, as it does not lock Review now.
 	const perPRLocked = reviewRunning || isTriggering || isKilling || isSwitchingReviewer || isCancelling;
@@ -3000,7 +3002,7 @@ function ReviewPanel({
 											? t("inspector.review.prRerun")
 											: t("inspector.review.prRun");
 									const repository = perPRSpanRepositories ? prRepositoryFromUrl(pr.url) : undefined;
-									const repositoryPrefix = repository ? `${prRepositoryShortName(repository)} ` : "";
+									const repositoryPrefix = repository ? `${perPRRepositoryLabels.get(repository) ?? prRepositoryShortName(repository)} ` : "";
 									const button = (
 										<Button
 											aria-label={t("inspector.review.prActionLabel", { action, number: pr.number, repository: repositoryPrefix })}

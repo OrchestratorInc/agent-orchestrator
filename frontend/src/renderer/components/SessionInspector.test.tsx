@@ -5924,6 +5924,23 @@ describe("SessionInspector summary reviews", () => {
     expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).toEqual({ prUrl: apiUrl });
   });
 
+  it("names the owner on per-PR rows when two repositories share a short name", async () => {
+    const acmeUrl = "https://github.com/acme/app/pull/7";
+    const adaUrl = "https://github.com/ada/app/pull/7";
+    mockCommonGets([], "", [
+      { ...reviewState(7, "needs_review"), prUrl: acmeUrl },
+      { ...reviewState(7, "needs_review"), prUrl: adaUrl },
+    ]);
+    postMock.mockResolvedValue({ response: { status: 201 }, data: { reviews: [], runs: [], reviewerHandleId: "" } });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: acmeUrl }), pr(7, "open", { url: adaUrl })])} />);
+    await openReviewsSection();
+
+    expect(await screen.findByRole("button", { name: "Review acme/app PR #7" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Review ada/app PR #7" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).toEqual({ prUrl: adaUrl });
+  });
+
   it("disables the per-PR row of a PR that is not eligible", async () => {
     mockCommonGets([], "", [reviewState(3, "needs_review"), reviewState(5, "ineligible")]);
     renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(5, "draft")])} />);
