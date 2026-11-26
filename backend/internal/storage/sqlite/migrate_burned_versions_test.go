@@ -294,6 +294,7 @@ var shippedMigrations = map[int64]string{
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
 	20261125223857431: "20261125223857431_codex_agent_account_workspace.sql",
+	20261126154409684: "20261126154409684_session_role_agent.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

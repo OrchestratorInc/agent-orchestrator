@@ -921,6 +921,47 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 	});
 
+	it("comes back from Settings as it was left, at the end, in the frame it is shown again", () => {
+		// Settings hides the page with display: none and keeps it mounted: every size
+		// reads 0 and observers report it, but nothing on screen changes.
+		let hidden = false;
+		const checkVisibility = Object.getOwnPropertyDescriptor(Element.prototype, "checkVisibility");
+		Object.defineProperty(Element.prototype, "checkVisibility", { configurable: true, value: () => !hidden });
+		const observers = captureResizeObservers();
+		try {
+			const view = render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+			const log = screen.getByRole("log");
+			const scrollbar = screen.getByTestId("chat-conversation-minimap");
+			const spacer = screen.getByTestId("chat-prompt-spacer");
+			stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+			fireEvent.scroll(log);
+			expect(scrollbar).toHaveAttribute("aria-valuenow", "100");
+			const spacerHeight = spacer.style.height;
+
+			hidden = true;
+			stubGeometry(log, { scrollHeight: 0, clientHeight: 0, scrollTop: 0 });
+			act(() => observers.resize(log, 0, 0));
+			// A reply lands while Settings is open.
+			view.rerender(<ChatWorkspace snapshot={chatFixtureLongHistory(9)} />);
+			// Measured against zeros, the thumb would sit at the top and the spacer
+			// collapse, and the chat would come back drawn that way before moving.
+			expect(scrollbar).toHaveAttribute("aria-valuenow", "100");
+			expect(spacer.style.height).toBe(spacerHeight);
+
+			hidden = false;
+			// The browser restores the offset the chat left at; the reply is below it.
+			stubGeometry(log, { scrollHeight: 4600, clientHeight: 800, scrollTop: 3200 });
+			act(() => observers.resize(log, 768, 800));
+			// Observers report before paint, so this is the first frame drawn.
+			expect(log.scrollTop).toBeGreaterThanOrEqual(log.scrollHeight - log.clientHeight);
+			expect(scrollbar).toHaveAttribute("aria-valuenow", "100");
+		} finally {
+			observers.restore();
+			if (checkVisibility) Object.defineProperty(Element.prototype, "checkVisibility", checkVisibility);
+			else delete (Element.prototype as { checkVisibility?: unknown }).checkVisibility;
+		}
+	});
+
 	it("shows a local human echo until the matching durable turn arrives", () => {
 		const snapshot = idleSnapshot(chatFixtureEmpty);
 		const localEchos = [
@@ -3282,6 +3323,28 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(screen.getByRole("button", { name: "Open shell" }));
 		expect(resume).toHaveBeenCalledOnce();
 		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	// #7759: the controller died mid-turn, so the durable turn is still "running" — but
+	// the stopped banner owns that state. The live row with its spinner and elapsed
+	// timer must go, or it would keep counting for hours next to a stopped controller.
+	it("never shows the stopped banner and the live turn spinner together", async () => {
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items = snapshot.items.filter(
+			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
+		);
+		const view = render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />);
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+
+		// The controller dies mid-turn; no turn-end event follows it.
+		view.rerender(
+			<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		// The live row fades out as the turn settles (LIVE_ROW_EXIT_MS), then it is gone.
+		await waitFor(() => expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument());
+		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
 	});
 
 	// #6064: a reviewer whose controller died mid-turn spun "Working for…" forever.

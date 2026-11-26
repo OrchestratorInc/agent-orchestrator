@@ -106,6 +106,8 @@ describe("prepareUnpublish", () => {
 		const { fake, unpublished } = bridge({ "a.md": "share-a", "b.md": "share-b" });
 		const pending = await prepareUnpublish(BASE, files, { bridge: fake });
 		expect(fake.inspect).toHaveBeenCalledTimes(2);
+		// The link alone: whether the page's files changed is not looked up for a delete.
+		expect(fake.inspect).toHaveBeenCalledWith(expect.objectContaining({ path: "a.md" }), { linkOnly: true });
 		expect(unpublished).toEqual([]);
 		const changed = vi.fn();
 		const stop = onArtifactLinksUnpublished(changed);

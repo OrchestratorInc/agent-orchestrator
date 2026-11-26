@@ -840,6 +840,7 @@ type Session struct {
 	DisplayNameExplicit              bool
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string
+	RoleAgent                        string
 }
 
 type SessionAgentAccount struct {

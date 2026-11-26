@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, type RefCallback, type RefObject } from "react";
+import { notRendered } from "../lib/page-hidden";
 
 /**
  * Scroll edge fades, shared by every scroll container that fades its content
@@ -62,6 +63,8 @@ export function observeEdgeFade(element: HTMLElement, axis: EdgeFadeAxis = "y"):
 	}, INSTANT_FADE_LIMIT_MS);
 	let settling = false;
 	const sync = () => {
+		// Hidden (display: none) reads no overflow; keep the fades it had until it is back.
+		if (notRendered(element)) return;
 		const overflows = syncEdgeFade(element, axis);
 		if (!overflows || settling || !element.hasAttribute("data-fade-instant")) return;
 		settling = true;
