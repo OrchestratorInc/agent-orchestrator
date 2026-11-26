@@ -2455,13 +2455,13 @@ export const ChatComposer = memo(function ChatComposer({
 
 	// Images get an inline chip only beside prose that can refer to them.
 	// Image-only drafts already show every image in the attachment strip.
-	function attachFiles(files: File[]) {
+	function attachFiles(files: File[], ids?: ReadonlyMap<File, string>) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
-		return fileAttachments.addFiles(files).then((added) => {
+		return fileAttachments.addFiles(files, ids).then((added) => {
 			if (reservation) {
 				editor.current?.fillImages(reservation, added.flatMap((attachment) =>
 					attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
@@ -2489,14 +2489,17 @@ export const ChatComposer = memo(function ChatComposer({
 		// text becomes a file.
 		if (text === "" || textAsFile) event.preventDefault();
 		uiUsage.attachmentAdded("paste");
-		const attached = attachFiles(files);
-		if (!textAsFile) return;
+		if (!textAsFile) {
+			void attachFiles(files);
+			return;
+		}
 		const pasted = files[files.length - 1]!;
+		const pastedId = crypto.randomUUID();
 		const scope = restoredSessionId.current;
 		const upload = { cancelled: false };
-		textPasteUploads.current.set(pasted.name, upload);
-		const landed = attached.then((added) => {
-			if (textPasteUploads.current.get(pasted.name) === upload) textPasteUploads.current.delete(pasted.name);
+		textPasteUploads.current.set(pastedId, upload);
+		const landed = attachFiles(files, new Map([[pasted, pastedId]])).then((added) => {
+			textPasteUploads.current.delete(pastedId);
 			if (upload.cancelled || added.some((attachment) => attachment.name === pasted.name)) return true;
 			if (restoredSessionId.current === scope) editor.current?.appendText(text);
 			return false;
@@ -2732,7 +2735,7 @@ export const ChatComposer = memo(function ChatComposer({
 										statusLabel={`Attaching ${file.name}`}
 										cancelLabel={`Cancel attaching ${file.name}`}
 										onCancel={() => {
-											const upload = textPasteUploads.current.get(file.name);
+											const upload = textPasteUploads.current.get(file.id);
 											if (upload) upload.cancelled = true;
 											fileAttachments.cancelPending(file.id);
 											editor.current?.focus();
