@@ -225,6 +225,11 @@ function useSkillSuggestions({ prompt, onChangePrompt, onLoadSkills, enabled }: 
 	// Text that only looks like a command (`/usr/bin`, an unknown name) gets no
 	// list rather than an empty one in the way.
 	const show = Boolean(suggestion && !(items?.length === 0 && suggestion.query.trim()));
+	// Read at the pick, not a dependency: the page hands a new `onChangePrompt`
+	// every render, and a new `select` would make a new panel, which the page
+	// stores (SpawnSuggestionHost) and so renders again, without end.
+	const changePrompt = useRef(onChangePrompt);
+	changePrompt.current = onChangePrompt;
 	const select = useCallback((value: string) => {
 		const { prompt: text, cursor: caret } = latest.current;
 		const trigger = findComposerSuggestion(text, caret);
@@ -235,8 +240,8 @@ function useSkillSuggestions({ prompt, onChangePrompt, onLoadSkills, enabled }: 
 		const nextCaret = /\s/.test(next[tokenEnd] ?? "") ? tokenEnd + 1 : tokenEnd;
 		latest.current = { prompt: next, cursor: nextCaret };
 		setCursor(nextCaret);
-		onChangePrompt(next);
-	}, [onChangePrompt]);
+		changePrompt.current(next);
+	}, []);
 	// The same element while nothing in it changes: the page holds it in its own
 	// state (see SpawnSuggestionHost), so a new one each render would loop.
 	const panel = useMemo(() => show ? <ComposerSuggestionPanel kind="skills" items={items} onSelect={select} /> : null, [items, select, show]);

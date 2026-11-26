@@ -1,4 +1,5 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { useCallback, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({
@@ -280,6 +281,32 @@ describe("SpawnComposer", () => {
 			await act(async () => renderer!.update(hosted(props)));
 			await act(async () => root.findByType("TextInput" as never).props.onSelectionChange({ nativeEvent: { selection: { start: 9, end: 9 } } }));
 			expect(overlays.at(-1)).toBeNull();
+		});
+
+		// The page keeps the panel in its state and hands a new onChangePrompt on
+		// every render (spawn.tsx: edited(setPrompt)), so a panel that changed with
+		// it rendered the page again without end.
+		it("settles with a page that stores the panel and hands a new onChangePrompt each render", async () => {
+			let pageRenders = 0;
+			function Page({ prompt }: { prompt: string }) {
+				pageRenders += 1;
+				const [overlay, setOverlay] = useState<SpawnSuggestionOverlay | null>(null);
+				// A loop past this cap would otherwise hang the test.
+				const host = useCallback((next: SpawnSuggestionOverlay | null) => { if (pageRenders < 40) setOverlay(next); }, []);
+				return <SpawnSuggestionHost.Provider value={host}>
+					<SpawnComposer {...baseProps({ prompt, onChangePrompt: (value: string) => void value, onLoadSkills: stableLoader })} />
+					{overlay?.panel}
+				</SpawnSuggestionHost.Provider>;
+			}
+			const stableLoader = async () => skills;
+			await act(async () => { renderer = create(<Page prompt="" />); });
+			const field = renderer!.root.findByType("TextInput" as never);
+			await act(async () => field.props.onFocus());
+			pageRenders = 0;
+			await act(async () => renderer!.update(<Page prompt="/" />));
+			await act(async () => renderer!.root.findByType("TextInput" as never).props.onSelectionChange({ nativeEvent: { selection: { start: 1, end: 1 } } }));
+			expect(panel(renderer!.root)).toBeDefined();
+			expect(pageRenders).toBeLessThan(10);
 		});
 
 		it("says when the machine offers none, and closes when the field loses focus", async () => {
