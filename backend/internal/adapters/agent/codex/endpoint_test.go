@@ -126,3 +126,34 @@ func TestLaunchAndRestoreRejectUnreadableEndpointWithoutPreparedEnv(t *testing.T
 		t.Fatalf("a prepared empty endpoint snapshot must allow launch, got argv=%v, err=%v", cmd, err)
 	}
 }
+
+// A prepared env wins over the saved endpoint, so a project's own gateway is
+// what argv names when the process env carries the project's key.
+func TestRestoreCommandPrefersPreparedEnvOverSavedEndpoint(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dataDir).Save("codex", harnessendpoint.Input{BaseURL: "https://saved.example.com/v1", APIKey: "sk-saved"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	plugin := &Plugin{resolvedBinary: "codex"}
+	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		DataDir: dataDir,
+		Session: ports.SessionRef{
+			ID: "session-1", WorkspacePath: canonicalTempDir(t),
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "thread-123"},
+		},
+		Env: map[string]string{
+			harnessendpoint.CodexBaseURLEnv: "https://project.example.com/v1",
+			harnessendpoint.CodexAPIKeyEnv:  "sk-project",
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore: argv=%v ok=%t err=%v", cmd, ok, err)
+	}
+	joined := strings.Join(cmd, " ")
+	if !strings.Contains(joined, "https://project.example.com/v1") || strings.Contains(joined, "saved.example.com") {
+		t.Fatalf("restore argv must name the prepared gateway only: %v", cmd)
+	}
+	if strings.Contains(joined, "sk-project") || strings.Contains(joined, "sk-saved") {
+		t.Fatalf("restore argv exposes a key: %v", cmd)
+	}
+}
