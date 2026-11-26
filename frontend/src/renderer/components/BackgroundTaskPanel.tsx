@@ -55,7 +55,7 @@ export function BackgroundTasksPanel({ sessionId, hostId, uiKey, tasks, openTask
 		<div ref={rootRef} className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
 			{openTask ? (
 				<BackgroundTaskPanel
-					key={openTask.task.id}
+					key={`${uiKey}:${openTask.task.id}`}
 					autoFocusBack={focusBackFor === openTask.task.id}
 					isVisible={isVisible}
 					onBack={back}
