@@ -10,10 +10,31 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/shellterm"
 )
+
+func TestStartPrimeAgentLoginUsesTheSessionProfile(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "shellterm-123", Title: "Log in to Prime Agent"}}
+	svc := NewWithAgentResolver(foundExecutable("prime-agent"), nil, opener, dataDir)
+
+	if _, err := svc.Start(context.Background(), "prime-agent"); err != nil {
+		t.Fatalf("Start(prime-agent): %v", err)
+	}
+	if got, want := opener.input.Env["PRIME_AGENT_CODING_AGENT_DIR"], filepath.Join(dataDir, "agent-runtime", "prime-agent"); got != want {
+		t.Fatalf("login profile = %q, want %q", got, want)
+	}
+	session := map[string]string{}
+	primeagent.New().AugmentRuntimeEnv(session, dataDir)
+	if !reflect.DeepEqual(opener.input.Env, session) {
+		t.Fatalf("login env = %#v, want the session env %#v", opener.input.Env, session)
+	}
+}
 
 func TestStartRejectsUnstartablePlans(t *testing.T) {
 	t.Parallel()

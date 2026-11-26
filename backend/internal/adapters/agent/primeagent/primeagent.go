@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,24 @@ func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 // ~/.prime/agent profile.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	providerenv.Capture(env)
+	setProfileEnv(env, dataDir)
+}
+
+// RuntimeCredentialEnv points work outside a session, such as model discovery,
+// at the profile sessions run with, so the model list offers the providers
+// signed in there rather than those in ~/.prime/agent.
+func (p *Plugin) RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string {
+	env := make(map[string]string, len(base)+2)
+	maps.Copy(env, base)
+	setProfileEnv(env, dataDir)
+	if len(env) == 0 {
+		return nil
+	}
+	return env
+}
+
+// setProfileEnv selects AO's Prime profile and its private daemon.
+func setProfileEnv(env map[string]string, dataDir string) {
 	dir, err := primeDataDir(dataDir)
 	if err != nil {
 		return
@@ -59,6 +78,7 @@ var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
+var _ ports.AgentRuntimeCredentialEnv = (*Plugin)(nil)
 var _ ports.AgentNativeSessionTerminator = (*Plugin)(nil)
 var _ ports.ActiveTurnSteerer = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)

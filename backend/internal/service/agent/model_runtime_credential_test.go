@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	agentregistry "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
@@ -49,6 +50,30 @@ func TestModelDiscoveryRequestCarriesRuntimeCredential(t *testing.T) {
 	}
 	if len(request.Env) != 0 {
 		t.Fatalf("credential-scope discovery env = %v, want none", request.Env)
+	}
+}
+
+// Prime sessions run with a profile under the data directory, so discovery
+// must read that one: a login only in ~/.prime/agent lists models sessions
+// can't use.
+func TestModelDiscoveryRequestReadsThePrimeSessionProfile(t *testing.T) {
+	dataDir := t.TempDir()
+	plugin := primeagent.New()
+	svc := newService([]agentregistry.HarnessAgent{{
+		Harness:  domain.HarnessPrimeAgent,
+		Manifest: plugin.Manifest(),
+		Agent:    plugin,
+	}}, nil, nil)
+	svc.dataDir = dataDir
+	request, err := svc.modelDiscoveryRequest(context.Background(), "prime-agent", "", "/bin/prime-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := map[string]string{}
+	plugin.AugmentRuntimeEnv(session, dataDir)
+	const profile = "PRIME_AGENT_CODING_AGENT_DIR"
+	if request.Env[profile] == "" || request.Env[profile] != session[profile] {
+		t.Fatalf("discovery profile = %q, want the session profile %q", request.Env[profile], session[profile])
 	}
 }
 
