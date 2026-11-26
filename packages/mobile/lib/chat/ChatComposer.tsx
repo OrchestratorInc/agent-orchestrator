@@ -40,7 +40,7 @@ import { EffortSliderHost } from "../effort-slider-host";
 import { ModelWheelHost } from "../model-wheel";
 import { PermissionPickerHost } from "../permission-picker";
 import { useChatEffort } from "./useChatEffort";
-import { withUltracode } from "./ultracode";
+import { isSentDraft, withUltracode } from "./ultracode";
 import { useChatModelWheel } from "./useChatModelWheel";
 import { useChatPermissions } from "./useChatPermissions";
 import { compactCount } from "../files/model";
@@ -55,7 +55,7 @@ import { queuedConversationMessages } from "./timelineModel";
 import { userFacingError } from "../connectionError";
 import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRChipContent, prChipAccessibilityLabel } from "./PRChip";
-import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
+import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
 import { composerTrayItems, forgetComposerAttachments, readComposerAttachments, removeComposerAttachment, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
@@ -406,7 +406,7 @@ function Composer({
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		const current = latestText.current;
 		const currentQuotes = latestQuotes.current;
-		const matches = currentQuotes.length <= 8 && currentQuotes.every((quote) => isChatExcerpt({ ...quote.source, text: quote.text })) && excerptDraftText(responseReplyText(current, currentQuotes), responseExcerpts(currentQuotes)) === completedRetry.draftText;
+		const matches = currentQuotes.length <= 8 && currentQuotes.every((quote) => isChatExcerpt({ ...quote.source, text: quote.text })) && isSentDraft(completedRetry.draftText, responseReplyText(current, currentQuotes), responseExcerpts(currentQuotes));
 		if (matches) {
 			latestText.current = "";
 			setText("");
