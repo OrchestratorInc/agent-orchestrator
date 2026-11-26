@@ -10,6 +10,7 @@ import type { Theme } from "./theme";
 import { useThemeState, useThemedStyles } from "./ThemeProvider";
 import { space, type } from "./tokens";
 import type { MachineEditor } from "./useMachineEditor";
+import { useGlassBarInset } from "./useHeaderOverlap";
 
 export type MachineEditorFormProps = { host: PairedHost; editor: MachineEditor };
 
@@ -23,10 +24,11 @@ export type MachineEditorFormProps = { host: PairedHost; editor: MachineEditor }
 export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
+	const barInset = useGlassBarInset();
 	const { draft, saving, failure } = editor;
 	return (
 		<KeyboardAvoidingView behavior="padding" automaticOffset style={styles.screen}>
-			<ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+			<ScrollView style={styles.scroll} contentContainerStyle={[styles.content, barInset > 0 ? { paddingTop: space.lg + barInset } : null]} keyboardShouldPersistTaps="handled">
 				<Host matchContents={{ vertical: true }} colorScheme={scheme}>
 					<FormTextField
 						label="Name"
