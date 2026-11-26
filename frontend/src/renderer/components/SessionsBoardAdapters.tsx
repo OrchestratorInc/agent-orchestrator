@@ -450,12 +450,13 @@ function DesktopSessionCard({
 			<ContextMenu>
 				<ContextMenuTrigger asChild>
 					{/* The menu opens on its final rows: its data is read when the pointer
-					    rests on the card, or at once on a press. */}
+					    rests on the card, or at once on a press or focus. */}
 					<div
-						onPointerDownCapture={() => prefetchEditorHandoffState(queryClient, session.id)}
+						onFocusCapture={() => prefetchEditorHandoffState(queryClient, session)}
+						onPointerDownCapture={() => prefetchEditorHandoffState(queryClient, session)}
 						onPointerEnter={() => {
 							clearTimeout(menuPrefetchTimer.current);
-							menuPrefetchTimer.current = setTimeout(() => prefetchEditorHandoffState(queryClient, session.id), 100);
+							menuPrefetchTimer.current = setTimeout(() => prefetchEditorHandoffState(queryClient, session), 100);
 						}}
 						onPointerLeave={() => clearTimeout(menuPrefetchTimer.current)}
 					>

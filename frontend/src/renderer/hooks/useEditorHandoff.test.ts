@@ -44,19 +44,25 @@ describe("editorHandoffErrorMessage", () => {
 describe("prefetchEditorHandoffState", () => {
 	const getState = vi.mocked(aoBridge.editorHandoff.getState);
 
-	it("keeps a found workspace fresh so the menu opens on it", async () => {
+	it("reads an older session's workspace once", async () => {
 		const queryClient = new QueryClient();
-		getState.mockResolvedValueOnce({ workspaceAvailable: true, targets: [] } as never);
-		prefetchEditorHandoffState(queryClient, "s1");
-		await vi.waitFor(() => expect(queryClient.getQueryData(editorHandoffQueryKey("s1"))).toBeDefined());
-		await Promise.resolve();
-		expect(queryClient.getQueryState(editorHandoffQueryKey("s1"))?.isInvalidated).toBe(false);
+		getState.mockReset().mockResolvedValue({ workspaceAvailable: false, targets: [] } as never);
+		prefetchEditorHandoffState(queryClient, { id: "s1", createdAt: "2026-01-01T00:00:00Z" });
+		await vi.waitFor(() => expect(queryClient.getQueryData(editorHandoffQueryKey("s1"))).toEqual({ workspaceAvailable: false, targets: [] }));
+		expect(getState).toHaveBeenCalledTimes(1);
 	});
 
-	it("leaves a missing workspace stale so the menu's own read retries it", async () => {
+	it("waits out a new session's workspace like the menu's own read, so a menu opening mid-read gets the final answer", async () => {
 		const queryClient = new QueryClient();
-		getState.mockResolvedValueOnce({ workspaceAvailable: false, targets: [] } as never);
-		prefetchEditorHandoffState(queryClient, "s2");
-		await vi.waitFor(() => expect(queryClient.getQueryState(editorHandoffQueryKey("s2"))?.isInvalidated).toBe(true));
+		getState
+			.mockReset()
+			.mockResolvedValueOnce({ workspaceAvailable: false, targets: [] } as never)
+			.mockResolvedValue({ workspaceAvailable: true, targets: [] } as never);
+		prefetchEditorHandoffState(queryClient, { id: "s2", createdAt: new Date().toISOString() });
+		await vi.waitFor(
+			() => expect(queryClient.getQueryData(editorHandoffQueryKey("s2"))).toEqual({ workspaceAvailable: true, targets: [] }),
+			{ timeout: 3000 },
+		);
+		expect(getState).toHaveBeenCalledTimes(2);
 	});
 });

@@ -2818,7 +2818,7 @@ const SessionRow = memo(function SessionRow({
 	useEffect(() => () => clearTimeout(menuPrefetchTimerRef.current), []);
 	const prefetchMenu = () => {
 		clearTimeout(menuPrefetchTimerRef.current);
-		prefetchEditorHandoffState(queryClient, session.id);
+		prefetchEditorHandoffState(queryClient, session);
 	};
 	const prefetchConversation = () => {
 		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
