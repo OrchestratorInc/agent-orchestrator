@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,18 @@ describe("SharedArtifactSessions", () => {
 		expect(await check("ao-7", "shared/r/r.html")).toBe(true);
 		expect(await check("ao-7", "notes.md")).toBe(false);
 		expect(await check("ao-7", "../ao-8/shared/r/r.html")).toBe(false);
+	});
+
+	it("still knows a copied file moved out of its copy's folder", async () => {
+		const root = path.join(dir, "artifacts", "ao-7");
+		await fs.mkdir(path.join(root, "shared", "r"), { recursive: true });
+		const sum = createHash("sha256").update("chart bytes").digest("hex");
+		await fs.writeFile(path.join(root, "shared", "r", SHARED_COPY_MARKER), `${sum}\n`);
+		await fs.writeFile(path.join(root, "report.png"), "chart bytes");
+		await fs.writeFile(path.join(root, "mine.png"), "my own work");
+		const check = sharedCopyCheck({ isCopy: async () => false }, () => root);
+		expect(await check("ao-7", "report.png")).toBe(true);
+		expect(await check("ao-7", "mine.png")).toBe(false);
 	});
 
 	it("never takes a file it cannot read for an empty one", async () => {

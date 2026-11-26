@@ -4,6 +4,7 @@
  */
 
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { copySharedArtifact, SharedArtifactCopyError, type SharedArtifactCopy } from "./shared-artifact-copy";
 import type { SharedArtifactSessionKey, SharedArtifactSessionRecord, SharedArtifactSessions } from "./shared-artifact-sessions";
 
@@ -38,7 +39,7 @@ export async function copySharedArtifactResult(
  */
 function requireMainFrame(event: unknown): void {
 	const { senderFrame } = event as Partial<IpcMainInvokeEvent>;
-	if (senderFrame === null || (senderFrame && senderFrame.parent !== null)) throw new Error("Only the app window can do this.");
+	if (senderFrame === null || (senderFrame && senderFrame.parent !== null)) throw new AoError("SHARED_ARTIFACT_NOT_APP_WINDOW", "Only the app window can do this.");
 }
 
 export function registerSharedArtifactIpc(deps: {

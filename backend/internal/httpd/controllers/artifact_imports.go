@@ -68,9 +68,16 @@ func decodeArtifactImport(in *ArtifactImportRequest) ([]domain.ArtifactImportFil
 			}
 		}
 	}
-	// A copy lives in its own folder under shared/, which is what gets marked as a copy.
-	if parts := strings.Split(entry, "/"); len(parts) < 3 || parts[0] != "shared" {
+	// A copy lives in one folder under shared/, the folder marked as a copy:
+	// every file is in it, so the marker covers them all.
+	copyRoot := sessionartifacts.CopyRoot(entry)
+	if copyRoot == "" {
 		return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "entry must be in a folder under shared/", nil)
+	}
+	for _, file := range files {
+		if !strings.HasPrefix(file.Path, copyRoot+"/") {
+			return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "every file must be in the copy's folder", map[string]any{"path": file.Path, "folder": copyRoot})
+		}
 	}
 	if !seen[strings.ToLower(entry)] {
 		return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "entry must be one of the files", nil)
@@ -117,7 +124,7 @@ func (c *SessionsController) importArtifacts(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// Already marked when the session started from it; marked again in case it was not.
-	if err := sessionartifacts.MarkSharedCopy(sess.Metadata.ArtifactDir, path.Dir(entry)); err != nil {
+	if err := sessionartifacts.MarkSharedCopy(sess.Metadata.ArtifactDir, sessionartifacts.CopyRoot(entry), files); err != nil {
 		slog.Default().Warn("mark shared artifact copy", "session", sess.ID, "path", entry, "err", err)
 	}
 	if _, err := c.Svc.RegisterArtifacts(r.Context(), sess.ID, "", []string{entry}); err != nil {

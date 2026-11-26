@@ -14,8 +14,10 @@
  *   earlier session's copy marked as a copy.
  */
 
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 
 export interface SharedArtifactSessionRecord {
 	sessionId: string;
@@ -185,7 +187,7 @@ export class SharedArtifactSessions {
 	}
 
 	async set(key: SharedArtifactSessionKey, record: SharedArtifactSessionRecord): Promise<void> {
-		if (!validKey(key) || !isRecord(record)) throw new Error("Invalid shared artifact session record");
+		if (!validKey(key) || !isRecord(record)) throw new AoError("SHARED_ARTIFACT_SESSION_INVALID", "Invalid shared artifact session record");
 		const store = await this.load();
 		store.links[sharedArtifactSessionKey(key)] = {
 			sessionId: record.sessionId,
@@ -245,7 +247,7 @@ export class SharedArtifactSessions {
 			}
 			const version = (parsed as Record<string, unknown>).version;
 			// A newer app's file is left as it is: writing it in this shape would drop what it holds.
-			if (version !== undefined && version !== 2) throw new Error(`Unknown shared artifact sessions file version: ${String(version)}`);
+			if (version !== undefined && version !== 2) throw new AoError("SHARED_ARTIFACT_SESSIONS_NEWER_VERSION", `Unknown shared artifact sessions file version: ${String(version)}`);
 			if (version === 2 && !wellShaped(parsed as Record<string, unknown>)) await fs.copyFile(this.file, `${this.file}.${Date.now()}.bak`);
 		}
 		this.store = storeFrom(parsed as Record<string, unknown>);
@@ -279,6 +281,44 @@ export function sharedCopyCheck(sessions: Pick<SharedArtifactSessions, "isCopy">
 		} catch (error) {
 			console.warn("AO: unable to read the shared artifact sessions file", error);
 		}
-		return hasCopyMarker(artifactRoot(sessionId), relativePath);
+		const root = artifactRoot(sessionId);
+		return await hasCopyMarker(root, relativePath) || await isCopiedContent(root, relativePath);
 	};
+}
+
+/** Files no larger than the daemon copies (50 MiB) are hashed; nothing larger is a copy. */
+const MAX_HASHED_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Whether the file at relativePath holds content a copy in this session was
+ * made of: its sha256 is listed by one of the session's copy markers
+ * (shared/<name>/.ao-shared-copy). So a copied file moved or renamed out of
+ * its copy's folder is still recognised as a copy.
+ */
+export async function isCopiedContent(artifactRoot: string, relativePath: string): Promise<boolean> {
+	let folders: string[];
+	try {
+		folders = await fs.readdir(path.join(artifactRoot, "shared"));
+	} catch {
+		return false;
+	}
+	const listed = new Set<string>();
+	for (const folder of folders) {
+		try {
+			for (const line of (await fs.readFile(path.join(artifactRoot, "shared", folder, SHARED_COPY_MARKER), "utf8")).split(/\s+/)) {
+				if (line) listed.add(line);
+			}
+		} catch {
+			// Not a copy's folder.
+		}
+	}
+	if (listed.size === 0) return false;
+	try {
+		const file = path.join(artifactRoot, ...relativePath.replace(/\\/g, "/").split("/"));
+		const stat = await fs.stat(file);
+		if (!stat.isFile() || stat.size > MAX_HASHED_BYTES) return false;
+		return listed.has(createHash("sha256").update(await fs.readFile(file)).digest("hex"));
+	} catch {
+		return false;
+	}
 }

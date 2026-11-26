@@ -1465,7 +1465,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		err := sessionartifacts.WriteImport(artifactDir, cfg.ArtifactImports)
 		if err == nil && cfg.ArtifactImportEntry != "" {
 			// Marked in the same step, so no copy is ever left publishable.
-			err = sessionartifacts.MarkSharedCopy(artifactDir, filepath.ToSlash(filepath.Dir(filepath.FromSlash(cfg.ArtifactImportEntry))))
+			err = sessionartifacts.MarkSharedCopy(artifactDir, sessionartifacts.CopyRoot(cfg.ArtifactImportEntry), cfg.ArtifactImports)
 		}
 		if err != nil {
 			m.cleanupArtifactDir(id)

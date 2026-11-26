@@ -142,6 +142,27 @@ describe("names and places", () => {
 		expect(decode(copy.files[0].data)).toBe("moved here");
 	});
 
+	it("finds a redirected page's files beside where it was served from", async () => {
+		const fetcher = vi.fn(async (raw: string) => {
+			const pathname = new URL(raw).pathname;
+			if (pathname === "/raw") return new Response(null, { status: 302, headers: { location: "/v2/raw" } });
+			if (pathname === "/v2/raw") return new Response('<img src="a.png">', { status: 200 });
+			return pathname === "/v2/a.png" ? new Response("A", { status: 200 }) : new Response("", { status: 404 });
+		});
+		const copy = await copySharedArtifact(fetcher, { contentUrl: PAGE, name: "page.html" });
+		expect(copy.missing).toEqual([]);
+		expect(copy.files.map((file) => file.path)).toContain("shared/page/a.png");
+	});
+
+	it("tries at most the page-file limit, found or not", async () => {
+		const html = Array.from({ length: 250 }, (_, index) => `<img src="gone-${index}.png">`).join("");
+		const fetcher = vi.fn(async (raw: string) => new URL(raw).pathname === "/raw" ? new Response(html, { status: 200 }) : new Response("", { status: 404 }));
+		const copy = await copySharedArtifact(fetcher, { contentUrl: PAGE, name: "page.html" });
+		expect(copy.missing).toHaveLength(250);
+		// The page, then each tried file with and without the view token.
+		expect(fetcher.mock.calls.length).toBeLessThanOrEqual(1 + 200 * 2);
+	});
+
 	it("stops reading a reply with no length once it passes the limit", async () => {
 		let pulled = 0;
 		const endless = new ReadableStream<Uint8Array>({

@@ -162,14 +162,14 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
  * site: one leading anywhere else is never requested, so neither the view
  * token nor the app's cookies go there. "moved" when a redirect leaves.
  */
-async function fetchSameSite(fetcher: Fetch, url: string, page: URL): Promise<Response | "moved"> {
+async function fetchSameSite(fetcher: Fetch, url: string, page: URL): Promise<{ response: Response; url: string } | "moved"> {
 	let next = url;
 	for (let hops = 0; hops <= 5; hops++) {
 		const response = await fetcher(next, { redirect: "manual" });
 		if (response.type === "opaqueredirect") return "moved";
-		if (!REDIRECT_STATUSES.has(response.status)) return stayedOn(response, page) ? response : "moved";
+		if (!REDIRECT_STATUSES.has(response.status)) return stayedOn(response, page) ? { response, url: next } : "moved";
 		const location = response.headers.get("location");
-		if (!location) return response;
+		if (!location) return { response, url: next };
 		const target = new URL(location, next);
 		if (target.origin !== page.origin) return "moved";
 		next = target.toString();
@@ -221,15 +221,15 @@ async function fetchPageFile(fetcher: Fetch, page: URL, served: string, budget: 
 	for (const withToken of page.search ? [true, false] : [false]) {
 		const url = pageFileURL(page, served, withToken);
 		if (new URL(url).origin !== page.origin) return null;
-		let response: Response | "moved";
+		let fetched: Awaited<ReturnType<typeof fetchSameSite>>;
 		try {
-			response = await fetchSameSite(fetcher, url, page);
+			fetched = await fetchSameSite(fetcher, url, page);
 		} catch {
 			continue;
 		}
-		if (response === "moved" || !response.ok) continue;
+		if (fetched === "moved" || !fetched.response.ok) continue;
 		try {
-			return await readBounded(response, budget);
+			return await readBounded(fetched.response, budget);
 		} catch {
 			return null;
 		}
@@ -264,14 +264,19 @@ export async function copySharedArtifact(
 ): Promise<SharedArtifactCopy> {
 	const page = sharedURL(input.contentUrl, options.allowLocal ?? false);
 	const { dir, entry } = copyTarget(input.name, input.into);
-	let response: Response | "moved";
+	let fetched: Awaited<ReturnType<typeof fetchSameSite>>;
 	try {
-		response = await fetchSameSite(fetcher, page.toString(), page);
+		fetched = await fetchSameSite(fetcher, page.toString(), page);
 	} catch {
 		throw new SharedArtifactCopyError("unavailable", "Could not download the shared artifact");
 	}
-	if (response === "moved") throw new SharedArtifactCopyError("unavailable", "The shared artifact moved to another site");
+	if (fetched === "moved") throw new SharedArtifactCopyError("unavailable", "The shared artifact moved to another site");
+	const { response } = fetched;
 	if (!response.ok) throw new SharedArtifactCopyError("unavailable", `Could not download the shared artifact (${response.status})`);
+	// Page files resolve against where the page was served from, after any
+	// redirect on its own site, as a browser resolves them; the view token goes along.
+	const pageBase = new URL(fetched.url);
+	pageBase.search = page.search;
 	const main = await readBounded(response, Math.min(MAX_SHARED_COPY_FILE_BYTES, MAX_SHARED_COPY_BYTES));
 	let total = main.byteLength;
 	const copied = new Map<string, Uint8Array>([[entry, main]]);
@@ -288,23 +293,30 @@ export async function copySharedArtifact(
 		const sameName = (path: string) => [...path.normalize("NFC")].map((char) => char.toLowerCase()).join("").replace(/i̇/g, "i");
 		const seen = new Map<string, string>([[sameName(entry), entry]]);
 		const folders = new Set<string>();
+		// Downloads tried, found or not: past MAX_PAGE_FILES, the rest are reported, never fetched.
+		let attempted = 0;
 		for (const reference of pageFileReferences(html)) {
 			const served = servedPath(reference.url);
 			if (!served || "skip" in served) continue;
 			const local = `${dir}/${served.path}`;
 			const earlier = seen.get(sameName(local));
 			if (earlier === local) continue;
+			// The cheap checks first, so a reference that is refused costs little.
+			if (earlier !== undefined || !validCopyPath(local) || attempted >= MAX_PAGE_FILES) {
+				missing.push(reference.url);
+				continue;
+			}
 			// A name that is already a file can't also be a folder, nor the other way round.
 			const parts = local.split("/");
 			const parents = parts.slice(0, -1).map((_, index) => sameName(parts.slice(0, index + 1).join("/")));
-			const clash = folders.has(sameName(local)) || parents.some((parent) => seen.has(parent));
-			if (earlier !== undefined || clash || !validCopyPath(local) || copied.size > MAX_PAGE_FILES) {
+			if (folders.has(sameName(local)) || parents.some((parent) => seen.has(parent))) {
 				missing.push(reference.url);
 				continue;
 			}
 			seen.set(sameName(local), local);
 			for (const parent of parents) folders.add(parent);
-			const bytes = await fetchPageFile(fetcher, page, served.path, Math.min(MAX_SHARED_COPY_FILE_BYTES, MAX_SHARED_COPY_BYTES - total));
+			attempted++;
+			const bytes = await fetchPageFile(fetcher, pageBase, served.path, Math.min(MAX_SHARED_COPY_FILE_BYTES, MAX_SHARED_COPY_BYTES - total));
 			if (!bytes) {
 				missing.push(reference.url);
 				continue;

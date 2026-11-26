@@ -60,7 +60,8 @@ func TestSessionsAPI_SpawnRefusesAnUnsafeSharedArtifact(t *testing.T) {
 		"no files":               `{"entry":"page.html","files":[]}`,
 		"repeated path":          `{"entry":"a.html","files":[{"path":"a.html","data":"eA=="},{"path":"A.html","data":"eA=="}]}`,
 		"not base64":             `{"entry":"a.html","files":[{"path":"a.html","data":"%%%"}]}`,
-		"file is also a folder":  importBody(t, "a.html", map[string]string{"a.html": "x", "img": "x", "img/b.png": "x"}),
+		"file is also a folder":  importBody(t, "shared/r/a.html", map[string]string{"shared/r/a.html": "x", "shared/r/img": "x", "shared/r/img/b.png": "x"}),
+		"file outside the copy":  importBody(t, "shared/r/pages/index.html", map[string]string{"shared/r/pages/index.html": "x", "report.html": "x"}),
 		"trailing dot":           importBody(t, "a.html", map[string]string{"a.html": "x", "b.": "x"}),
 	} {
 		t.Run(name, func(t *testing.T) {

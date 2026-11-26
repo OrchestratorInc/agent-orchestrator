@@ -13,7 +13,7 @@ import { CloudCpError } from "../lib/cloud-cp";
 import { LOCAL_HOST } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { checkForUpdate, nextSharedArtifactStep, type LinkedSession, type SharedArtifactSessionDeps, type SharedArtifactSessionStep } from "../lib/shared-artifact-session";
-import { dropSharedArtifactDraft } from "../lib/shared-artifact-draft";
+import { dropSharedArtifactDraft, rememberSharedArtifactPrompt } from "../lib/shared-artifact-draft";
 import { useSharedArtifactDraftStore } from "../stores/shared-artifact-draft-store";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -21,7 +21,10 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-type Dialog = Extract<SharedArtifactSessionStep, { kind: "archived" } | { kind: "update" }>;
+/** The latest "Start a session with this" draft request, across every preview. */
+let latestDraftRequest = 0;
+
+type Dialog =Extract<SharedArtifactSessionStep, { kind: "archived" } | { kind: "update" }>;
 
 async function linkedSession(sessionId: string): Promise<LinkedSession> {
 	const { data, error, response } = await apiClient.GET("/api/v1/sessions/{sessionId}", { params: { path: { sessionId } } });
@@ -73,7 +76,15 @@ export function SharedArtifactSessionButton({ artifact, onClose }: { artifact: {
 		navigateToSession(projectId || undefined, sessionId, LOCAL_HOST);
 	}, [navigateToSession, onClose]);
 
+	// Page files the link did not serve: the copy went ahead without them.
+	const reportMissing = useCallback((missing: string[]) => {
+		if (missing.length > 0) useUiStore.getState().showGlobalToast(t("artifacts.shared.missingFiles", { files: missing.slice(0, 5).join(", ") }), undefined, "info");
+	}, [t]);
+
 	const startDraft = useCallback(async () => {
+		// Only the latest request, across every preview, may set the draft: a slow
+		// copy that finishes after a newer one is dropped.
+		const request = ++latestDraftRequest;
 		// A draft already holding this link's copy, not sent yet, is opened again as it is.
 		const held = useSharedArtifactDraftStore.getState().pending;
 		let pending = held && JSON.stringify(held.key) === JSON.stringify(key) ? held : null;
@@ -91,6 +102,7 @@ export function SharedArtifactSessionButton({ artifact, onClose }: { artifact: {
 				return;
 			}
 			const result = await aoBridge.sharedArtifact.copy({ contentUrl: share.contentUrl, name: share.name || artifact.name });
+			if (request !== latestDraftRequest) return;
 			if (!result.ok) {
 				fail(result.code === "too_large" ? t("artifacts.shared.tooLarge") : undefined);
 				return;
@@ -110,13 +122,12 @@ export function SharedArtifactSessionButton({ artifact, onClose }: { artifact: {
 			fail();
 			return;
 		}
+		rememberSharedArtifactPrompt(prompt);
 		onClose();
 		useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
 		useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID);
-		if (copy.missing.length > 0) {
-			useUiStore.getState().showGlobalToast(t("artifacts.shared.missingFiles", { files: copy.missing.slice(0, 5).join(", ") }), undefined, "info");
-		}
-	}, [artifact.linkId, artifact.name, client, fail, key, onClose, t]);
+		reportMissing(copy.missing);
+	}, [artifact.linkId, artifact.name, client, fail, key, onClose, reportMissing, t]);
 
 	const act = useCallback(async (work: () => Promise<void>) => {
 		if (running.current) return;
@@ -191,6 +202,7 @@ export function SharedArtifactSessionButton({ artifact, onClose }: { artifact: {
 		await deps.setRecord(key, { sessionId: step.sessionId, dir: step.copy.dir, entry: step.copy.entry, updatedAt: step.updatedAt, fingerprint: step.copy.fingerprint }).catch(() => undefined);
 		setDialog(null);
 		openSession(step.projectId, step.sessionId, step.copy.entry);
+		reportMissing(step.copy.missing);
 	});
 
 	const keepMine = (step: Extract<Dialog, { kind: "update" }>) => void act(async () => {
@@ -203,7 +215,9 @@ export function SharedArtifactSessionButton({ artifact, onClose }: { artifact: {
 
 	// The link's owner has the original; there is nothing to copy. Shown only
 	// once the view says who is looking, so the owner never sees it meanwhile.
-	if (!view.data || view.data.you?.owner) return null;
+	// When the view can't load (offline, no access) it shows anyway: it still
+	// opens a session already linked to the link, and a new copy fails plainly.
+	if (view.data?.you?.owner || (!view.data && !view.isError)) return null;
 
 	return (
 		<>

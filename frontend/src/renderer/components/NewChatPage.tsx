@@ -64,8 +64,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	// a prompt whose copy is gone (a reload) leaves the draft.
 	useEffect(() => {
 		if (hostId || projectId !== STANDALONE_WORKSPACE_ID) dropSharedArtifactDraft();
-		dropOrphanSharedArtifactPrompt(t("artifacts.shared.startSessionPrompt", { path: "\u0000" }));
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- on arriving at a target only; t is stable
+		dropOrphanSharedArtifactPrompt();
 	}, [hostId, projectId]);
 	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,13 +90,21 @@ func TestWriteImportIsAllOrNothing(t *testing.T) {
 	write("shared/r/page.html", "old page")
 	write("shared/r/style.css", "old style")
 	// Another program holds style.css: renaming the new one over it fails.
-	real := renameInRoot
-	t.Cleanup(func() { renameInRoot = real })
-	renameInRoot = func(root *os.Root, from, to string) error {
-		if to == filepath.Join("shared", "r", "style.css") && filepath.Base(from) != "style.css" && !strings.Contains(from, "ao-backup") {
+	realLink := linkInRoot
+	t.Cleanup(func() { linkInRoot = realLink })
+	linkInRoot = func(root *os.Root, from, to string) error {
+		if to == filepath.Join("shared", "r", "style.css") && strings.Contains(from, "ao-import") {
 			return os.ErrPermission
 		}
-		return real(root, from, to)
+		return realLink(root, from, to)
+	}
+	realRename := renameInRoot
+	t.Cleanup(func() { renameInRoot = realRename })
+	renameInRoot = func(root *os.Root, from, to string) error {
+		if to == filepath.Join("shared", "r", "style.css") && strings.Contains(from, "ao-import") {
+			return os.ErrPermission
+		}
+		return realRename(root, from, to)
 	}
 	err := WriteImport(dir, []domain.ArtifactImportFile{
 		{Path: "shared/r/page.html", Data: []byte("new page")},
@@ -204,14 +213,23 @@ func TestWriteImportNamesWhatItCouldNotUndo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "b.css"), []byte("old b"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	real := renameInRoot
-	t.Cleanup(func() { renameInRoot = real })
-	renameInRoot = func(root *os.Root, from, to string) error {
-		// b.css cannot be swapped in, and a.html's original cannot be put back.
-		if (to == "b.css" && strings.Contains(from, "ao-import")) || (to == "a.html" && strings.Contains(from, "ao-backup")) {
+	// b.css cannot be swapped in, and a.html's original cannot be put back.
+	fail := func(from, to string) bool {
+		return (to == "b.css" && strings.Contains(from, "ao-import")) || (to == "a.html" && strings.Contains(from, "ao-backup"))
+	}
+	realLink, realRename := linkInRoot, renameInRoot
+	t.Cleanup(func() { linkInRoot, renameInRoot = realLink, realRename })
+	linkInRoot = func(root *os.Root, from, to string) error {
+		if fail(from, to) {
 			return os.ErrPermission
 		}
-		return real(root, from, to)
+		return realLink(root, from, to)
+	}
+	renameInRoot = func(root *os.Root, from, to string) error {
+		if fail(from, to) {
+			return os.ErrPermission
+		}
+		return realRename(root, from, to)
 	}
 	err := WriteImport(dir, []domain.ArtifactImportFile{{Path: "a.html", Data: []byte("new a")}, {Path: "b.css", Data: []byte("new b")}})
 	if !errors.Is(err, ErrImportIncomplete) || errors.Is(err, ErrImportFileChanged) {
@@ -227,8 +245,22 @@ func TestMarkSharedCopyHidesItsMarkerFromTheList(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "shared", "r"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := MarkSharedCopy(dir, "shared/r"); err != nil {
+	if err := MarkSharedCopy(dir, "shared/r", []domain.ArtifactImportFile{{Path: "shared/r/a.png", Data: []byte("a")}}); err != nil {
 		t.Fatal(err)
+	}
+	// An update adds its files' sums to those already listed.
+	if err := MarkSharedCopy(dir, "shared/r", []domain.ArtifactImportFile{{Path: "shared/r/a.png", Data: []byte("a2")}}); err != nil {
+		t.Fatal(err)
+	}
+	listed, _ := os.ReadFile(filepath.Join(dir, "shared", "r", SharedCopyMarker))
+	for _, data := range []string{"a", "a2"} {
+		sum := sha256.Sum256([]byte(data))
+		if !strings.Contains(string(listed), hex.EncodeToString(sum[:])) {
+			t.Fatalf("marker %q does not list %q", listed, data)
+		}
+	}
+	if CopyRoot("shared/r/pages/index.html") != "shared/r" || CopyRoot("report.html") != "" {
+		t.Fatal("CopyRoot")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "shared", "r", SharedCopyMarker)); err != nil {
 		t.Fatalf("marker missing: %v", err)
@@ -269,10 +301,10 @@ func TestWriteImportLeavesAFileWrittenWhileTheOriginalWasAside(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "page.html"), []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	real := renameInRoot
-	t.Cleanup(func() { renameInRoot = real })
+	realRename := renameInRoot
+	t.Cleanup(func() { renameInRoot = realRename })
 	renameInRoot = func(root *os.Root, from, to string) error {
-		err := real(root, from, to)
+		err := realRename(root, from, to)
 		// An editor's autosave writes page.html again just after it is moved aside.
 		if err == nil && from == "page.html" && strings.Contains(to, "ao-backup") {
 			_ = os.WriteFile(filepath.Join(dir, "page.html"), []byte("autosaved"), 0o644)
@@ -286,5 +318,68 @@ func TestWriteImportLeavesAFileWrittenWhileTheOriginalWasAside(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "page.html")); string(got) != "autosaved" {
 		t.Fatalf("page = %q, want the autosaved file left as it is", got)
+	}
+}
+
+func TestWriteImportNeverUndoesOverASaveMadeAfterIt(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{"a.html": "old a", "b.css": "old b"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	realLink := linkInRoot
+	t.Cleanup(func() { linkInRoot = realLink })
+	linkInRoot = func(root *os.Root, from, to string) error {
+		if to == "b.css" && strings.Contains(from, "ao-import") {
+			// An editor saves a.html after it was updated; then b.css fails.
+			_ = os.WriteFile(filepath.Join(dir, "a.html"), []byte("saved by editor"), 0o644)
+			return os.ErrPermission
+		}
+		return realLink(root, from, to)
+	}
+	realRename := renameInRoot
+	t.Cleanup(func() { renameInRoot = realRename })
+	renameInRoot = func(root *os.Root, from, to string) error {
+		if to == "b.css" && strings.Contains(from, "ao-import") {
+			return os.ErrPermission
+		}
+		return realRename(root, from, to)
+	}
+	err := WriteImport(dir, []domain.ArtifactImportFile{{Path: "a.html", Data: []byte("new a")}, {Path: "b.css", Data: []byte("new b")}})
+	if !errors.Is(err, ErrImportIncomplete) {
+		t.Fatalf("WriteImport = %v, want ErrImportIncomplete naming a.html", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a.html")); string(got) != "saved by editor" {
+		t.Fatalf("a.html = %q, want the editor's save kept", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "b.css")); string(got) != "old b" {
+		t.Fatalf("b.css = %q, want put back", got)
+	}
+}
+
+func TestPlaceNewNeverReplacesAFile(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	for name, data := range map[string]string{"from": "new", "to": "someone's save"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := placeNew(root, "from", "to"); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("placeNew = %v, want fs.ErrExist", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "to")); string(got) != "someone's save" {
+		t.Fatalf("to = %q, want left as it was", got)
+	}
+	if err := placeNew(root, "from", "free"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "from")); !os.IsNotExist(err) {
+		t.Fatal("from was not moved")
 	}
 }

@@ -29,22 +29,48 @@ var ErrImportIncomplete = errors.New("the import could not be undone")
 
 // SharedCopyMarker is the hidden file in a copy's folder that marks it as a
 // copy of an artifact someone else shared: the desktop app refuses to publish
-// anything under it. Hidden, so List leaves it out.
+// anything under it, or any file in the session whose sha256 it lists (one per
+// line), so a copied file moved out of the folder is still refused. Hidden,
+// so List leaves it out.
 const SharedCopyMarker = ".ao-shared-copy"
 
-// MarkSharedCopy writes SharedCopyMarker into copyDir, a clean folder inside dir.
-func MarkSharedCopy(dir, copyDir string) error {
+// CopyRoot is the folder a copy lives in, "shared/<name>", for any path in
+// it; "" for a path that is not in such a folder.
+func CopyRoot(p string) string {
+	parts := strings.Split(p, "/")
+	if len(parts) < 3 || parts[0] != "shared" || parts[1] == "" {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
+}
+
+// MarkSharedCopy writes SharedCopyMarker into copyDir, a clean folder inside
+// dir, adding the sha256 of each of files to those it already lists.
+func MarkSharedCopy(dir, copyDir string, files []domain.ArtifactImportFile) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
 	name := filepath.Join(filepath.FromSlash(copyDir), SharedCopyMarker)
-	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
+	sums := map[string]bool{}
+	var lines []string
+	if old, err := root.ReadFile(name); err == nil {
+		for _, line := range strings.Fields(string(old)) {
+			if line = strings.TrimSpace(line); line != "" && !sums[line] {
+				sums[line] = true
+				lines = append(lines, line)
+			}
+		}
 	}
-	return f.Close()
+	for _, file := range files {
+		sum := sha256.Sum256(file.Data)
+		if line := hex.EncodeToString(sum[:]); !sums[line] {
+			sums[line] = true
+			lines = append(lines, line)
+		}
+	}
+	return root.WriteFile(name, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
 // CleanImportPath returns p as the slash-separated path an imported file is
@@ -123,7 +149,7 @@ func WriteImport(dir string, files []domain.ArtifactImportFile) error {
 			if len(stranded) > 0 {
 				// Not "nothing changed": say what is left, and never delete a backup,
 				// which may be the only copy of what a file held.
-				return fmt.Errorf("%w: import %s failed (%v) and could not undo %s", ErrImportIncomplete, filepath.ToSlash(staged[i].name), err, strings.Join(stranded, "; "))
+				return fmt.Errorf("%w: import %s failed (%w) and could not undo %s", ErrImportIncomplete, filepath.ToSlash(staged[i].name), err, strings.Join(stranded, "; "))
 			}
 			return fmt.Errorf("import %s: %w", filepath.ToSlash(staged[i].name), err)
 		}
@@ -143,6 +169,8 @@ type stagedImport struct {
 	name, temp, backup string
 	guard              bool
 	kept               string
+	// wrote is the sha256 of what this import puts at name.
+	wrote string
 	// left is what swapIn could not undo of itself.
 	left []string
 }
@@ -183,7 +211,8 @@ func stageImportFile(root *os.Root, file domain.ArtifactImportFile) (stagedImpor
 		_ = root.Remove(temp)
 		return stagedImport{}, err
 	}
-	return stagedImport{name: name, temp: temp, guard: file.Guard, kept: file.Kept}, nil
+	sum := sha256.Sum256(file.Data)
+	return stagedImport{name: name, temp: temp, guard: file.Guard, kept: file.Kept, wrote: hex.EncodeToString(sum[:])}, nil
 }
 
 const (
@@ -267,8 +296,9 @@ func leftoverOf(name, kind string) (string, bool) {
 }
 
 // swapIn moves the file at name aside to a backup, when there is one, and
-// renames the staged file into its place. A guarded file is checked once it
-// is aside, where the agent can no longer change it under the check.
+// puts the staged file in its place. The staged file only ever takes an empty
+// name (placeNew), so a file written there meanwhile (an agent, an editor's
+// autosave) is never overwritten: the import stops and that file stays.
 func swapIn(root *os.Root, file *stagedImport) error {
 	if _, err := root.Lstat(file.name); err == nil {
 		backup, err := siblingName(file.name, importBackupKind)
@@ -282,6 +312,7 @@ func swapIn(root *os.Root, file *stagedImport) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	// A guarded file is checked once it is aside, where it can no longer change under the check.
 	if file.guard {
 		sum := ""
 		if file.backup != "" {
@@ -295,47 +326,70 @@ func swapIn(root *os.Root, file *stagedImport) error {
 			file.left = putBack(root, file)
 			return ErrImportFileChanged
 		}
-		// Written again while the original was aside (an agent or an editor's
-		// autosave): that new file is the person's, not the import's to replace.
-		if _, err := root.Lstat(file.name); err == nil {
-			// The new file stays. The original it replaced matched what was
-			// kept as a version, so its backup is not the only copy of it.
-			if file.backup != "" && removeRetrying(root, file.backup) == nil {
+	}
+	if err := placeNew(root, file.temp, file.name); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			// Written while the original was aside: that file stays. The
+			// original matched what was kept as a version, so a guarded
+			// backup is not the only copy of it.
+			if file.guard && file.backup != "" && removeRetrying(root, file.backup) == nil {
 				file.backup = ""
 			}
 			file.left = putBack(root, file)
 			return ErrImportFileChanged
 		}
-	}
-	if err := renameRetrying(root, file.temp, file.name); err != nil {
 		file.left = putBack(root, file)
 		return err
 	}
 	file.temp = ""
-	if file.guard && file.backup != "" {
-		// Written through a handle already open on the original while it was
-		// checked: its content is no longer what was kept, so it goes back.
-		if sum, err := fileSHA256(root, file.backup); err != nil || sum != file.kept {
-			file.left = putBack(root, file)
-			return ErrImportFileChanged
-		}
-	}
 	return nil
 }
 
+// placeNew moves from to name only while name is free, and reports
+// fs.ErrExist otherwise. It hard-links, which never replaces a file, then
+// removes from; where the file system has no hard links (FAT, some network
+// drives) it renames after checking that name is still free.
+func placeNew(root *os.Root, from, name string) error {
+	err := linkInRoot(root, from, name)
+	if err == nil {
+		_ = removeRetrying(root, from)
+		return nil
+	}
+	if errors.Is(err, fs.ErrExist) {
+		return fs.ErrExist
+	}
+	if _, statErr := root.Lstat(name); statErr == nil {
+		return fs.ErrExist
+	}
+	return renameRetrying(root, from, name)
+}
+
 // putBack undoes swapIn: the file it replaced returns, or a file it added
-// goes. It returns what it could not undo, for the error to name.
+// goes, but only while name still holds what this import wrote. A file
+// changed there since (an editor's save) is left as it is, with the original
+// kept at its backup. It returns what it could not undo, for the error to name.
 func putBack(root *os.Root, file *stagedImport) []string {
 	var left []string
-	// temp is cleared once the new file is in place; until then name holds nothing of this import.
-	if file.temp == "" && file.backup == "" {
+	if file.temp == "" {
+		// The new file is in place: it goes only if it is still the import's own.
+		if sum, err := fileSHA256(root, file.name); err == nil && sum != file.wrote {
+			if file.backup != "" {
+				left = append(left, filepath.ToSlash(file.name)+" (changed since; original kept at "+filepath.ToSlash(file.backup)+")")
+			}
+			return left
+		}
+		if file.backup == "" {
+			if err := removeRetrying(root, file.name); err != nil && !os.IsNotExist(err) {
+				left = append(left, filepath.ToSlash(file.name)+" (added, not removed)")
+			}
+			return left
+		}
 		if err := removeRetrying(root, file.name); err != nil && !os.IsNotExist(err) {
-			left = append(left, filepath.ToSlash(file.name)+" (added, not removed)")
+			return append(left, filepath.ToSlash(file.name)+" (original kept at "+filepath.ToSlash(file.backup)+")")
 		}
 	}
 	if file.backup != "" {
-		// A rename over the new file replaces it on every system.
-		if err := renameRetrying(root, file.backup, file.name); err == nil {
+		if err := placeNew(root, file.backup, file.name); err == nil {
 			file.backup = ""
 		} else {
 			left = append(left, filepath.ToSlash(file.name)+" (original kept at "+filepath.ToSlash(file.backup)+")")
@@ -388,5 +442,9 @@ func renameRetrying(root *os.Root, from, to string) error {
 	return err
 }
 
-// renameInRoot is os.Root.Rename; a test replaces it to fail one rename.
-var renameInRoot = func(root *os.Root, from, to string) error { return root.Rename(from, to) }
+// renameInRoot and linkInRoot are os.Root.Rename and os.Root.Link; a test
+// replaces them to fail one move.
+var (
+	renameInRoot = func(root *os.Root, from, to string) error { return root.Rename(from, to) }
+	linkInRoot   = func(root *os.Root, from, to string) error { return root.Link(from, to) }
+)

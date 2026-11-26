@@ -2,9 +2,51 @@ import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "
 import { useSharedArtifactDraftStore } from "../stores/shared-artifact-draft-store";
 import { useUiStore } from "../stores/ui-store";
 
-/** text without prompt, and the blank line written after it. */
+/**
+ * The exact prompt line last written into the new-chat draft for a shared
+ * artifact's copy. Saved beside the draft, which survives a reload while the
+ * copy (held in memory) does not, so the line can be taken out exactly.
+ */
+const PROMPT_KEY = "ao.sharedArtifactDraftPrompt";
+
+function readSavedPrompt(): string | null {
+	try {
+		return localStorage.getItem(PROMPT_KEY);
+	} catch {
+		return null;
+	}
+}
+
+/** Remembers the prompt line written into the draft for a shared artifact's copy. */
+export function rememberSharedArtifactPrompt(prompt: string): void {
+	try {
+		localStorage.setItem(PROMPT_KEY, prompt);
+	} catch {
+		// Without storage, a reload leaves the line for the person to delete.
+	}
+}
+
+function forgetSavedPrompt(): void {
+	try {
+		localStorage.removeItem(PROMPT_KEY);
+	} catch {
+		// Nothing saved.
+	}
+}
+
+/** text without prompt, and the blank line written after it. Anything else the person typed stays. */
 export function withoutPrompt(text: string, prompt: string): string {
 	return text.replace(`${prompt}\n\n`, "").replace(prompt, "").trim();
+}
+
+/** Takes prompt, exactly, out of the new-chat draft. */
+function removeFromDraft(prompt: string): void {
+	const scope = newChatDraftScope();
+	const draft = readChatSessionDraft(scope).composer.text;
+	if (!draft.includes(prompt)) return;
+	if (writeChatComposerText(scope, withoutPrompt(draft, prompt)).ok) {
+		useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
+	}
 }
 
 /**
@@ -16,31 +58,19 @@ export function dropSharedArtifactDraft(): void {
 	const pending = useSharedArtifactDraftStore.getState().pending;
 	if (!pending) return;
 	useSharedArtifactDraftStore.getState().clearPending();
-	const scope = newChatDraftScope();
-	const draft = readChatSessionDraft(scope).composer.text;
-	if (!draft.includes(pending.prompt)) return;
-	if (writeChatComposerText(scope, withoutPrompt(draft, pending.prompt)).ok) {
-		useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
-	}
+	forgetSavedPrompt();
+	removeFromDraft(pending.prompt);
 }
-
 
 /**
  * Takes a shared artifact's prompt out of the new-chat draft when no copy is
- * waiting for it any more: the copy is held in memory, the draft is saved, so
- * after a reload the line would name a file that will never be copied.
- * template is the prompt with "\u0000" for the path.
+ * waiting for it any more (after a reload): only the exact line that was
+ * written, never text the person added around it.
  */
-export function dropOrphanSharedArtifactPrompt(template: string): void {
+export function dropOrphanSharedArtifactPrompt(): void {
 	if (useSharedArtifactDraftStore.getState().pending) return;
-	const [before = "", after = ""] = template.split("\u0000");
-	const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const line = new RegExp(`${escape(before)}shared/[^\\n]*${escape(after)}(\\n\\n)?`, "g");
-	const scope = newChatDraftScope();
-	const draft = readChatSessionDraft(scope).composer.text;
-	const rest = draft.replace(line, "").trim();
-	if (rest === draft.trim()) return;
-	if (writeChatComposerText(scope, rest).ok) {
-		useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
-	}
+	const prompt = readSavedPrompt();
+	if (!prompt) return;
+	forgetSavedPrompt();
+	removeFromDraft(prompt);
 }

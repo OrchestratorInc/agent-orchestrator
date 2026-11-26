@@ -523,6 +523,13 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 					onSessionChanged: unsubscribe,
 				},
+				sharedArtifact: {
+					copy: async () => ({ ok: false as const, code: "unavailable" as const, message: "" }),
+					getSession: async () => null,
+					isCopy: async () => false,
+					setSession: async () => undefined,
+					removeSession: async () => undefined,
+				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
 					requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
@@ -1541,6 +1548,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						throw new Error("local auth is unavailable in e2e");
 					},
 					onSessionChanged: unsubscribe,
+				},
+				sharedArtifact: {
+					copy: async () => ({ ok: false as const, code: "unavailable" as const, message: "" }),
+					getSession: async () => null,
+					isCopy: async () => false,
+					setSession: async () => undefined,
+					removeSession: async () => undefined,
 				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
