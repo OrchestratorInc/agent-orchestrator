@@ -58,6 +58,17 @@ type Spec struct {
 	ModelsHeaders map[string]string
 }
 
+// apiVersionSegment is the leading path segment the harness puts before every
+// request path, such as "/v1" for ModelsPath "/v1/models", or "" when its
+// requests start right under the base URL.
+func (s Spec) apiVersionSegment() string {
+	segment, rest, ok := strings.Cut(strings.TrimPrefix(s.ModelsPath, "/"), "/")
+	if !ok || segment == "" || rest == "" {
+		return ""
+	}
+	return "/" + segment
+}
+
 // AuthStyles returns the spec's supported auth styles in stable order.
 func (s Spec) AuthStyles() []AuthStyle {
 	out := make([]AuthStyle, 0, len(s.KeyEnv))
@@ -529,6 +540,12 @@ func normalize(spec Spec, in Input) (Config, error) {
 	}
 	if parsed.User != nil {
 		return Config{}, &ValidationError{Message: "Put credentials in the API key field, not the base URL."}
+	}
+	// A harness whose requests start with an API version adds it itself, so a
+	// base URL that already ends with it sends every request to a doubled path
+	// such as /v1/v1/messages, which no endpoint serves.
+	if version := spec.apiVersionSegment(); version != "" && strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), version) {
+		return Config{}, &ValidationError{Message: fmt.Sprintf("Remove %s from the end of the base URL. This harness adds %s to every request itself.", version, version)}
 	}
 	style := in.AuthStyle
 	if style == "" {
