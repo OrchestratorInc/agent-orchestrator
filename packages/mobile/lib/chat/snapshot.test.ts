@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as snapshotModule from "./snapshot";
 
-const { cacheConversationPages, cachedConversationState, createConversationPageCache, discardHistoricalPages, mergeConversationPages, olderPageFits, withLivePage } = snapshotModule;
+const { cacheConversationPages, cachedConversationState, createConversationPageCache, discardHistoricalPages, estimatePageBytes, mergeConversationPages, olderPageFits, streamingTextChanges, withLivePage } = snapshotModule;
 type ConversationPage = snapshotModule.ConversationPage;
 
 function page(overrides: Partial<ConversationPage> = {}): ConversationPage {
@@ -85,6 +85,37 @@ describe("live page and branch changes", () => {
 		const pages = [live, older];
 		expect(withLivePage(pages, page({ items: [message("a", 1)], turns: [{ id: "t", state: "completed", requestedAt: "2026-01-01" }] }))).toBe(pages);
 		expect(withLivePage(pages, page({ items: [message("a", 1)], controller: { state: "busy" } }))).not.toBe(pages);
+	});
+
+	it("keeps rows newer ones pushed off the live page, so the list's first rows stay put", () => {
+		const turn = (id: string) => ({ id, state: "completed" as const, requestedAt: "2026-01-01" });
+		const live = page({ oldestSequence: 1, hasMoreBefore: true, items: [{ ...message("first", 1), turnId: "t1" }, message("second", 2)], turns: [turn("t1"), turn("t2")] });
+		const slidPast = page({ oldestSequence: 2, hasMoreBefore: true, items: [message("second", 2), message("third", 3)], turns: [turn("t2"), turn("t3")] });
+		const pages = withLivePage([live], slidPast);
+		const merged = mergeConversationPages(pages);
+		expect(merged?.items.map((item) => item.id)).toEqual(["first", "second", "third"]);
+		expect(merged?.turns.map((item) => item.id)).toEqual(["t1", "t2", "t3"]);
+		// Older rows still load from where the first page left off.
+		expect(merged?.oldestSequence).toBe(1);
+		expect(merged?.hasMoreBefore).toBe(true);
+		// The kept row is the object already on screen.
+		expect(merged?.items[0]).toBe(live.items[0]);
+	});
+
+	it("adds pushed-off rows to loaded history without repeating them", () => {
+		const older = page({ oldestSequence: 0, hasMoreBefore: false, items: [message("oldest", 0), message("first", 1)] });
+		const live = page({ oldestSequence: 1, items: [message("first", 1), message("second", 2)] });
+		const pages = withLivePage([live, older], page({ oldestSequence: 2, hasMoreBefore: true, items: [message("second", 2), message("third", 3)] }));
+		expect(pages).toHaveLength(2);
+		expect(pages[1].items.map((item) => item.id)).toEqual(["oldest", "first"]);
+		expect(mergeConversationPages(pages)?.items.map((item) => item.id)).toEqual(["oldest", "first", "second", "third"]);
+		expect(mergeConversationPages(pages)?.hasMoreBefore).toBe(false);
+	});
+
+	it("keeps no row a live page holding the whole conversation left out", () => {
+		const live = page({ hasMoreBefore: false, items: [message("first", 1), message("second", 2)] });
+		const pages = withLivePage([live], page({ hasMoreBefore: false, items: [message("second", 2), message("third", 3)] }));
+		expect(mergeConversationPages(pages)?.items.map((item) => item.id)).toEqual(["second", "third"]);
 	});
 
 	it("refuses an older page that loaded for a branch no longer active", () => {
@@ -185,5 +216,40 @@ describe("mobile conversation reopen cache", () => {
 		cache.set("oversized", [page({ sessionId: "oversized" })]);
 
 		expect(cache.get("oversized")).toBeUndefined();
+	});
+});
+
+describe("streaming text changes", () => {
+	const user = { kind: "message" as const, id: "m1", sequence: 1, revision: 1, role: "user" as const, origin: "human" as const, text: "Fix it", streaming: false, createdAt: "2026-01-01" };
+	const reply = { kind: "message" as const, id: "m2", sequence: 2, revision: 3, role: "assistant" as const, origin: "provider" as const, text: "On it", streaming: true, createdAt: "2026-01-01" };
+	const turn = { id: "t", state: "running" as const, requestedAt: "2026-01-01" };
+	const before = page({ latestSequence: 2, items: [user, reply], turns: [turn] });
+	const grown = { ...reply, revision: 4, text: "On it, reading" };
+
+	it("names the replies when their text is all that grew", () => {
+		const next = page({ latestSequence: 3, items: [user, grown], turns: [turn] });
+		expect(streamingTextChanges(before, next)).toEqual([grown]);
+	});
+
+	it("is null for anything more than that", () => {
+		const finished = { ...grown, streaming: false };
+		expect(streamingTextChanges(before, page({ latestSequence: 2, items: [user, finished], turns: [turn] }))).toBeNull();
+		expect(streamingTextChanges(before, page({ latestSequence: 2, items: [user, grown, { ...user, id: "m3", sequence: 3 }], turns: [turn] }))).toBeNull();
+		expect(streamingTextChanges(before, page({ latestSequence: 2, items: [user, grown], turns: [{ ...turn, state: "completed" }] }))).toBeNull();
+		expect(streamingTextChanges(before, page({ latestSequence: 2, items: [user, grown], turns: [turn], controller: { state: "busy" } }))).toBeNull();
+		expect(streamingTextChanges(before, page({ latestSequence: 2, items: [user, { ...grown, senderLabel: "Codex" }], turns: [turn] }))).toBeNull();
+		// Nothing changed at all is not a streaming change either.
+		expect(streamingTextChanges(before, before)).toBeNull();
+	});
+});
+
+describe("page weight", () => {
+	it("weighs a row again only once it is a new object", () => {
+		const reply = { kind: "message" as const, id: "m", sequence: 1, revision: 1, role: "assistant" as const, origin: "provider" as const, text: "short", streaming: true, createdAt: "2026-01-01" };
+		const before = page({ items: [reply] });
+		const weight = estimatePageBytes(before);
+		expect(estimatePageBytes(page({ items: [reply] }))).toBe(weight);
+		const grown = page({ items: [{ ...reply, revision: 2, text: "short, and then a good deal longer" }] });
+		expect(estimatePageBytes(grown) - weight).toBe(("short, and then a good deal longer".length - "short".length) * 2);
 	});
 });

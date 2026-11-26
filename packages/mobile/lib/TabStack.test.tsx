@@ -39,6 +39,21 @@ afterEach(() => {
 	fixtures.selectedKey = "workers";
 });
 
+function scope(): { frozen: boolean; background: boolean } {
+	act(() => { renderer = create(<TabStack screen="index" title="Workers" />); });
+	return renderer!.root.findByType("FrozenAppScope" as never).props as { frozen: boolean; background: boolean };
+}
+
+// Live under a pushed page, but rendered in the background: the page's own
+// frames (a reply streaming in a chat) come first.
+it("follows the store in the background only under a page pushed over the board", () => {
+	fixtures.focused = false;
+	expect(scope()).toMatchObject({ frozen: false, background: true });
+	act(() => renderer?.unmount());
+	fixtures.focused = true;
+	expect(scope()).toMatchObject({ frozen: false, background: false });
+});
+
 function frozen(): boolean {
 	act(() => { renderer = create(<TabStack screen="index" title="Workers" />); });
 	return renderer!.root.findByType("FrozenAppScope" as never).props.frozen;

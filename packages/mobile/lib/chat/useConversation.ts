@@ -35,7 +35,8 @@ import {
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
-import { cacheConversationPages, cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
+import { cacheConversationPages, cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, streamingTextChanges, withLivePage } from "./snapshot";
+import { createLiveReplies, type LiveReplies } from "./liveReplies";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
@@ -95,6 +96,11 @@ export type ConversationAction =
 
 export type MobileConversation = {
 	snapshot?: ConversationSnapshot;
+	/**
+	 * Streaming replies' newer text than `snapshot` holds: a read that changed
+	 * nothing but that text is published here rather than re-rendering the screen.
+	 */
+	liveReplies: LiveReplies;
 	/**
 	 * The snapshot is the page saved on the phone (see savedPageView), shown
 	 * read-only until the first live read replaces it.
@@ -173,6 +179,15 @@ export function useMobileConversation(
 		? cachedConversationState(conversationPageCache, cacheKey)
 		: { pages: [] as ConversationPage[], loading: true });
 	const [pages, setPages] = useState<ConversationPage[]>(initialState.pages);
+	// The newest pages: `pages`, or ahead of it by streaming text published to
+	// `liveReplies` alone. Each read builds on these.
+	const newestPages = useRef(pages);
+	const shownPages = useRef(pages);
+	if (shownPages.current !== pages) {
+		shownPages.current = pages;
+		newestPages.current = pages;
+	}
+	const [liveReplies] = useState(createLiveReplies);
 	const [loading, setLoading] = useState(initialState.loading);
 	// The page loaded from the phone, and whether no live read has answered since.
 	const [savedShown, setSavedShown] = useState(false);
@@ -246,13 +261,21 @@ export function useMobileConversation(
 					? await getReviewerConversationPage(cfg, options.reviewId)
 					: await getConversationPage(cfg, sessionId);
 				if (!mounted.current || !isCurrent()) return;
-				setPages((old) => {
-					const next = withLivePage(old, live);
-					cacheConversationPages(conversationPageCache, cacheKey, old, next);
+				const old = newestPages.current;
+				const next = withLivePage(old, live);
+				cacheConversationPages(conversationPageCache, cacheKey, old, next);
+				if (next !== old) {
 					// Also on the phone, for after the app is closed (see savedConversations).
-					if (next !== old) conversationSaver.schedule(cacheKey, next[0]);
-					return next;
-				});
+					conversationSaver.schedule(cacheKey, next[0]);
+					newestPages.current = next;
+					// Only a streaming reply's text grew: only that reply renders.
+					const grown = old[0] && next[0] && next.length === old.length && next.every((page, index) => index === 0 || page === old[index])
+						? streamingTextChanges(old[0], next[0])
+						: null;
+					if (grown) liveReplies.publish(grown);
+					// From the state itself: another update (older history) may have landed since.
+					else setPages((state) => state === old ? next : withLivePage(state, live));
+				}
 				setSavedShown(false);
 				setUnavailable(undefined);
 				setError(undefined);
@@ -302,6 +325,7 @@ export function useMobileConversation(
 			? cachedConversationState(conversationPageCache, cacheKey)
 			: { pages: [] as ConversationPage[], loading: true };
 		setPages(cached.pages);
+		liveReplies.clear();
 		setLoading(cached.loading);
 		setUnavailable(undefined);
 		setSavedShown(false);
@@ -317,7 +341,7 @@ export function useMobileConversation(
 			setLoading(false);
 		});
 		return () => { active = false; };
-	}, [cacheKey]);
+	}, [cacheKey, liveReplies]);
 
 	// Asks the machine whenever a verified connection to it is (again) available.
 	useEffect(() => {
@@ -640,6 +664,7 @@ export function useMobileConversation(
 
 	return {
 		snapshot,
+		liveReplies,
 		saved: savedShown && pages[0] !== undefined && pages[0] === savedPage.current,
 		loading,
 		loadingOlder,

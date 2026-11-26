@@ -570,8 +570,11 @@ function reviewConversationPath(reviewId: string, suffix = ""): string {
 }
 
 function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
-	const messages = (wire.messages ?? []).map((message) => ({ ...message, kind: "message" as const }));
-	const activities = (wire.activities ?? []).map((activity): ConversationActivity => {
+	// The wire's rows become `items`; carried along as well, every page held each
+	// row twice, and every read compared and saved both copies.
+	const { messages: wireMessages, activities: wireActivities, ...page } = wire;
+	const messages = (wireMessages ?? []).map((message) => ({ ...message, kind: "message" as const }));
+	const activities = (wireActivities ?? []).map((activity): ConversationActivity => {
 		const detail = (activity.detail ?? {}) as ActivityDetail;
 		return {
 			...activity,
@@ -583,7 +586,7 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		};
 	});
 	return {
-		...wire,
+		...page,
 		controller: { state: wire.controller },
 		oldestSequence: wire.oldestSequence ?? wire.latestSequence + 1,
 		hasMoreBefore: Boolean(wire.hasMoreBefore),

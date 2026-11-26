@@ -1,5 +1,5 @@
 import { sameJson } from "../keepUnchanged";
-import type { ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
+import type { ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn } from "./types";
 
 export type ConversationPage = ConversationSnapshot;
 
@@ -53,9 +53,31 @@ export function createConversationPageCache(
 }
 
 export function createMobileConversationPageCache(
-	weigh?: (page: ConversationPage) => number,
+	weigh: (page: ConversationPage) => number = estimatePageBytes,
 ): ConversationPageCache {
 	return createConversationPageCache(16, 2 * 1024 * 1024, weigh);
+}
+
+const rowBytes = new WeakMap<object, number>();
+
+/**
+ * A page's estimated size, each row's weighed once: a refresh keeps every row
+ * that did not change as the same object (reuseUnchangedRows), and a streaming
+ * reply is read several times a second, each read walking the whole page.
+ */
+export function estimatePageBytes(page: ConversationPage): number {
+	let bytes = estimateRetainedBytes({ ...page, items: [], turns: [] });
+	for (const rows of [page.items, page.turns]) {
+		for (const row of rows) {
+			let size = rowBytes.get(row);
+			if (size === undefined) {
+				size = estimateRetainedBytes(row);
+				rowBytes.set(row, size);
+			}
+			bytes += size;
+		}
+	}
+	return bytes;
 }
 
 function estimateRetainedBytes(value: unknown): number {
@@ -121,7 +143,40 @@ export function withLivePage(pages: ConversationPage[], live: ConversationPage):
 	const shared = reuseUnchangedRows(pages, live);
 	// Nothing moved: the same pages, so the screen does not render again.
 	if (shared === current) return pages;
-	return [shared, ...pages.slice(1)];
+	return [shared, ...withSlidRows(pages, live)];
+}
+
+/**
+ * The history behind a new live page, holding on to the rows the last live page
+ * had that this one does not because newer rows pushed them past its limit.
+ *
+ * The live page is the newest rows only, so once a conversation outgrew it,
+ * every new row dropped the oldest from the top of the list. The list's rows
+ * all moved up an index, its measurements no longer matched them, and it
+ * mounted and dropped whole turns around the one on screen at every new turn.
+ * The rows stay as history instead, as a loaded older page's do; the cursor
+ * for loading older rows stays where it was.
+ */
+function withSlidRows(pages: ConversationPage[], live: ConversationPage): ConversationPage[] {
+	const current = pages[0];
+	const history = pages.slice(1);
+	// Only a live page with rows before it has moved past any: one that holds the
+	// whole conversation is authoritative about what is no longer in it.
+	const floor = live.items[0]?.sequence;
+	if (!current || !live.hasMoreBefore || floor === undefined) return history;
+	const slid = current.items.filter((item) => item.sequence < floor);
+	if (!slid.length) return history;
+	const liveTurns = new Set(live.turns.map((turn) => turn.id));
+	const slidTurns = current.turns.filter((turn) => !liveTurns.has(turn.id));
+	const behind = history[0];
+	if (!behind) return [{ ...current, items: slid, turns: slidTurns }];
+	const held = new Set(behind.items.map(itemKey));
+	const heldTurns = new Set(behind.turns.map((turn) => turn.id));
+	return [{
+		...behind,
+		items: [...behind.items, ...slid.filter((item) => !held.has(itemKey(item)))],
+		turns: [...behind.turns, ...slidTurns.filter((turn) => !heldTurns.has(turn.id))],
+	}, ...history.slice(1)];
 }
 
 /**
@@ -158,6 +213,30 @@ export function reuseUnchangedRows(pages: ConversationPage[], live: Conversation
 	});
 	if (!changed && sameJson({ ...live, items: [], turns: [] }, { ...current, items: [], turns: [] })) return current;
 	return { ...live, items: nextItems, turns: nextTurns };
+}
+
+/**
+ * The streaming replies whose text is all that changed from `previous` to
+ * `next`, or null when anything else did: a row came or went, a turn moved, a
+ * reply finished, settings or state changed. Only the newest sequence may move
+ * alongside the text. Rows `next` shares with `previous` are the same objects
+ * (see reuseUnchangedRows), so this is a pass over references, not a deep compare.
+ */
+export function streamingTextChanges(previous: ConversationPage, next: ConversationPage): ConversationMessage[] | null {
+	if (previous.items.length !== next.items.length || previous.turns.length !== next.turns.length) return null;
+	if (next.turns.some((turn, index) => turn !== previous.turns[index])) return null;
+	const grown: ConversationMessage[] = [];
+	for (let index = 0; index < next.items.length; index++) {
+		const after = next.items[index];
+		const before = previous.items[index];
+		if (after === before) continue;
+		if (after.kind !== "message" || before.kind !== "message" || after.id !== before.id || !after.streaming || !before.streaming) return null;
+		if (!sameJson({ ...before, text: "", revision: 0 }, { ...after, text: "", revision: 0 })) return null;
+		grown.push(after);
+	}
+	if (!grown.length) return null;
+	const shell = (page: ConversationPage) => ({ ...page, items: [], turns: [], latestSequence: 0 });
+	return sameJson(shell(previous), shell(next)) ? grown : null;
 }
 
 function itemKey(item: ConversationItem): string {

@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 // Aliased: this file already declares its own `AppState` type for the
 // provider's context value, so the React Native app-lifecycle API imports
 // under a different name to avoid colliding with it.
@@ -344,10 +344,15 @@ function cloudScope(app: AppState): AppState {
  * hides what it freezes, the content stays drawn: a tab the platform switches
  * to natively shows what it had until the switch reaches JS.
  */
-export function FrozenAppScope({ frozen, children }: { frozen: boolean; children: ReactNode }) {
+export function FrozenAppScope({ frozen, background = false, children }: { frozen: boolean; background?: boolean; children: ReactNode }) {
 	const app = useApp();
+	// In the `background` a tab still follows the store, as a render React can
+	// break up and set aside for the frames of the page over it. Rendered at once,
+	// the board under a chat held the JS thread for a third of a second at a
+	// poll, and the reply streaming above it stopped while it did.
+	const deferred = useDeferredValue(app);
 	const held = useRef(app);
-	if (!frozen) held.current = app;
+	if (!frozen) held.current = background ? deferred : app;
 	return <AppContext.Provider value={held.current}>{children}</AppContext.Provider>;
 }
 

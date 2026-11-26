@@ -110,6 +110,20 @@ describe("live reply pacing on a burst/pause fixture", () => {
 		expect(after.updates).toBeGreaterThan(before.updates * 5);
 	});
 
+	it("moves at an even speed while the agent writes, not in a rush as each read lands", () => {
+		// Characters drawn in each tenth of a second across the steady stretch
+		// before the tool runs. Paced to the backlog alone, the stream rushed out
+		// as each read landed and slowed nearly to a stop before the next: the
+		// speed varied by a third of itself and a fast tenth drew three slow ones.
+		const shownAt = (time: number) => trace.filter((point) => point.at <= time).at(-1)?.length ?? 0;
+		const speeds: number[] = [];
+		for (let time = 1000; time < 4100; time += 100) speeds.push(shownAt(time + 100) - shownAt(time));
+		const mean = speeds.reduce((sum, speed) => sum + speed, 0) / speeds.length;
+		const spread = Math.sqrt(speeds.reduce((sum, speed) => sum + (speed - mean) ** 2, 0) / speeds.length) / mean;
+		expect(spread).toBeLessThan(0.2);
+		expect(Math.max(...speeds)).toBeLessThan(Math.min(...speeds) * 2.5);
+	});
+
 	it("keeps moving between bursts rather than holding still for the next one", () => {
 		expect(before.longestStill).toBeGreaterThanOrEqual(200);
 		expect(after.longestStill).toBeLessThan(120);
