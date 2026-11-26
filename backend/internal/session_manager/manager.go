@@ -1646,6 +1646,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
+	if cfg.Transfer != nil {
+		// A moved session's work goes into this worktree next. Recording it keeps
+		// the row through a daemon restart, so a retried receive ends this attempt
+		// instead of reusing its id and worktree.
+		if err := m.recordSpawnWorkspace(ctx, id, ws); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnTransfer, err)
+		}
+	}
 	// Per-project workspace provisioning: symlink shared files, copy the files
 	// .worktreeinclude names, then run any post-create commands (e.g.
 	// `pnpm install`) before the agent launches.
@@ -2949,6 +2958,16 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 		return
 	}
 	m.markSpawnFailedTerminatedAfterFailure(ctx, rec.ID, false)
+}
+
+func (m *Manager) recordSpawnWorkspace(ctx context.Context, id domain.SessionID, ws ports.WorkspaceInfo) error {
+	rec, err := m.getRecord(ctx, id)
+	if err != nil {
+		return err
+	}
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = ws.Branch, ws.Path, ws.RepoPath
+	rec.UpdatedAt = m.clock()
+	return m.store.UpdateSession(ctx, rec)
 }
 
 func (m *Manager) preserveFailedSpawnWorkspace(ctx context.Context, id domain.SessionID, ws ports.WorkspaceInfo, runtimeDestroyed bool) {

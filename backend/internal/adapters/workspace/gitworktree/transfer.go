@@ -274,34 +274,39 @@ func (w *Workspace) FetchTransfer(ctx context.Context, repoPath, branch, head, b
 		}
 		return nil
 	}
-	if bundlePath == "" {
-		if _, err := w.run(ctx, w.binary, "-C", repo, "cat-file", "-e", head+"^{commit}"); err == nil {
-			return nil
+	if bundlePath != "" {
+		if _, err := w.run(ctx, w.binary, "-C", repo, "bundle", "verify", "--quiet", bundlePath); err != nil {
+			if err := fetchOrigin("the moved work builds on commits this computer does not have"); err != nil {
+				return err
+			}
+			if out, err := w.run(ctx, w.binary, "-C", repo, "bundle", "verify", "--quiet", bundlePath); err != nil {
+				return fmt.Errorf("%w: neither this computer nor origin has the commits the moved work builds on: %s", ports.ErrTransferFetch, gitSaid(out))
+			}
 		}
-		if err := fetchOrigin("this computer does not have " + head); err != nil {
-			return err
+		// The bundle carries the branch only when origin lacks its head. The
+		// head lands in FETCH_HEAD; AlignTransferBranch then points the branch at it.
+		var refspecs []string
+		if heads, err := w.run(ctx, w.binary, "-C", repo, "bundle", "list-heads", bundlePath, "refs/heads/"+branch); err == nil && len(bytes.TrimSpace(heads)) > 0 {
+			refspecs = append(refspecs, "refs/heads/"+branch)
 		}
-		if _, err := w.run(ctx, w.binary, "-C", repo, "cat-file", "-e", head+"^{commit}"); err != nil {
-			return fmt.Errorf("%w: origin does not have %s", ports.ErrTransferFetch, head)
+		if remotePreservedRef != "" {
+			// The trailing * also takes the staged state's ref, which is not always there.
+			refspecs = append(refspecs, "+"+remotePreservedRef+"*:"+remotePreservedRef+"*")
 		}
+		if len(refspecs) > 0 {
+			if out, err := w.run(ctx, w.binary, append([]string{"-C", repo, "fetch", "--quiet", bundlePath}, refspecs...)...); err != nil {
+				return fmt.Errorf("%w: %s", ports.ErrTransferFetch, gitSaid(out))
+			}
+		}
+	}
+	if _, err := w.run(ctx, w.binary, "-C", repo, "cat-file", "-e", head+"^{commit}"); err == nil {
 		return nil
 	}
-	if _, err := w.run(ctx, w.binary, "-C", repo, "bundle", "verify", "--quiet", bundlePath); err != nil {
-		if err := fetchOrigin("the moved work builds on commits this computer does not have"); err != nil {
-			return err
-		}
-		if out, err := w.run(ctx, w.binary, "-C", repo, "bundle", "verify", "--quiet", bundlePath); err != nil {
-			return fmt.Errorf("%w: neither this computer nor origin has the commits the moved work builds on: %s", ports.ErrTransferFetch, gitSaid(out))
-		}
+	if err := fetchOrigin("this computer does not have " + head); err != nil {
+		return err
 	}
-	// The head lands in FETCH_HEAD; AlignTransferBranch then points the branch at it.
-	refspecs := []string{"refs/heads/" + branch}
-	if remotePreservedRef != "" {
-		// The trailing * also takes the staged state's ref, which is not always there.
-		refspecs = append(refspecs, "+"+remotePreservedRef+"*:"+remotePreservedRef+"*")
-	}
-	if out, err := w.run(ctx, w.binary, append([]string{"-C", repo, "fetch", "--quiet", bundlePath}, refspecs...)...); err != nil {
-		return fmt.Errorf("%w: %s", ports.ErrTransferFetch, gitSaid(out))
+	if _, err := w.run(ctx, w.binary, "-C", repo, "cat-file", "-e", head+"^{commit}"); err != nil {
+		return fmt.Errorf("%w: origin does not have %s", ports.ErrTransferFetch, head)
 	}
 	return nil
 }

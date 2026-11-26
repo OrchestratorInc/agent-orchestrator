@@ -30,7 +30,7 @@ var (
 	// ErrTransferPreservedMismatch refuses uncommitted work captured on another head.
 	ErrTransferPreservedMismatch = errors.New("session: the moved uncommitted work does not belong to the moved head")
 	// ErrTransferArchive reports a missing or damaged conversation archive.
-	ErrTransferArchive = errors.New("session: the moved conversation archive is missing or damaged")
+	ErrTransferArchive = errors.New("session: the moved work is missing or damaged")
 	// ErrSessionMoved refuses to run a session that continues on another machine.
 	ErrSessionMoved = errors.New("session: moved to another computer")
 	// ErrSpawnTransfer is the spawn stage that applies moved state.

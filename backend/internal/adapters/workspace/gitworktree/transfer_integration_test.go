@@ -74,6 +74,26 @@ func TestTransferBundleFetchAlign(t *testing.T) {
 		t.Fatalf("fast-forward: %v", err)
 	}
 
+	// Pushed with a draft: the bundle carries the draft and not the branch.
+	writeFile(t, info.Path, "draft2.txt", "draft\n")
+	draft, err := wsA.StashUncommitted(ctx, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, bundled, err := wsA.BundleTransfer(ctx, info, draft, remotePreserved, bundle); err != nil || !bundled {
+		t.Fatalf("pushed with a draft = %v, %v", bundled, err)
+	}
+	if heads := gitOutput(t, git, info.Path, "bundle", "list-heads", bundle); strings.Contains(heads, "refs/heads/") {
+		t.Fatalf("the bundle carries the branch:\n%s", heads)
+	}
+	if err := wsB.FetchTransfer(ctx, repoB, branch, head2, bundle, remotePreserved); err != nil {
+		t.Fatalf("fetch a draft on a pushed branch: %v", err)
+	}
+	if got := gitOutput(t, git, repoB, "rev-parse", remotePreserved+"^"); got != head2 {
+		t.Fatalf("draft builds on %s, want %s", got, head2)
+	}
+	runGit(t, git, info.Path, "clean", "-fdq")
+
 	// The bundle builds on a commit B lacks: B fetches it from origin.
 	commit("three.txt")
 	runGit(t, git, info.Path, "push", "-q", "origin", "HEAD:refs/heads/"+branch)

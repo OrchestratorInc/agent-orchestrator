@@ -56,6 +56,15 @@ func (s *moveStore) SessionMovedTo(_ context.Context, id domain.SessionID) (doma
 type moveWorkspace struct {
 	*fakeWorkspace
 	bundle func(path string) error
+	head   string
+	apply  func(ports.WorkspaceInfo)
+}
+
+func (w *moveWorkspace) ApplyPreserved(_ context.Context, ws ports.WorkspaceInfo, _ string) error {
+	if w.apply != nil {
+		w.apply(ws)
+	}
+	return nil
 }
 
 func (w *moveWorkspace) CheckTransfer(context.Context, ports.WorkspaceInfo) error { return nil }
@@ -68,7 +77,7 @@ func (w *moveWorkspace) FetchTransfer(context.Context, string, string, string, s
 func (w *moveWorkspace) AlignTransferBranch(context.Context, string, string, string) error {
 	return nil
 }
-func (w *moveWorkspace) RevParse(context.Context, string, string) (string, error)         { return "", nil }
+func (w *moveWorkspace) RevParse(context.Context, string, string) (string, error)         { return w.head, nil }
 func (w *moveWorkspace) ReleaseTransferBranch(context.Context, ports.WorkspaceInfo) error { return nil }
 func (w *moveWorkspace) RestoreTransferIndex(context.Context, ports.WorkspaceInfo, string) error {
 	return nil
@@ -288,5 +297,26 @@ func TestReceiveTransferWithoutAConversationStartsFromTheNote(t *testing.T) {
 	}
 	if rec.Harness != domain.HarnessCodex || agent.lastLaunch.Prompt != "NOTE" {
 		t.Fatalf("received %s with prompt %q; want codex with the handoff note", rec.Harness, agent.lastLaunch.Prompt)
+	}
+}
+
+func TestReceiveTransferRecordsTheWorktreeBeforeApplyingTheWork(t *testing.T) {
+	m, store, ws, _ := newMoveManager(t)
+	m.agents = singleAgent{agent: &recordingAgent{}}
+	origin := "https://github.com/o/r"
+	store.projects["web"] = domain.ProjectRecord{ID: "web", Path: "/repo/web", RepoOriginURL: origin}
+	ws.head = strings.Repeat("a", 40)
+	recorded := ""
+	ws.apply = func(info ports.WorkspaceInfo) {
+		recorded = store.sessions[info.SessionID].Metadata.WorkspacePath
+	}
+	if _, err := m.ReceiveTransfer(ctx, "web", domain.SessionTransfer{
+		TransferID: "trrecv001", RepoKey: domain.RepositoryKey(origin), Branch: "feat/x", HeadSHA: ws.head,
+		PreservedRef: "refs/ao/preserved/trrecv001", Harness: domain.HarnessClaudeCode, HandoffNote: "NOTE",
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if recorded == "" {
+		t.Fatal("the moved work went into a worktree the session row does not record")
 	}
 }
