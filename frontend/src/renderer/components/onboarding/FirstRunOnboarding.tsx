@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Archive, ArrowLeft, ChevronDown, ChevronUp, CircleDot, Cloud, Code2, Eye, ListChecks, LoaderCircle, MessageSquare, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
-import { OrchestratorIcon } from "../icons";
+import { Archive, ArrowLeft, ChevronRight, CircleDot, Cloud, Code2, Eye, ListChecks, LoaderCircle, MessageSquare, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -73,6 +72,9 @@ import { GitHubIcon } from "../GitHubIcon";
 import { FocusScope } from "@radix-ui/react-focus-scope";
 import { Badge } from "../ui/badge";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { Dialog, DialogClose, DialogContent, DialogTitle, settingsDialogBodyClass, settingsDialogContentClass, settingsDialogHeaderClass } from "../ui/dialog";
+import { CloseButton } from "../ui/close-button";
+import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
 import { GitHubLoginActions, GitHubLoginTerminal, useGitHubLogin } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
@@ -86,16 +88,15 @@ import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, Ins
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
-// Five pages: what Orchestrator is (with its three-part story playing in the
+// Four pages: what Orchestrator is (with its three-part story playing in the
 // preview), the optional account, the tools a worker needs (GitHub CLI and a
-// coding agent), the agents new projects run their orchestrator and workers
-// on, and how agents finish their work (review, auto-fix, archive on merge,
-// assigned issues). Log in and Your tools are skipped when there is nothing to
-// do on them; the agents page always shows once an agent is ready, since which
-// one runs what is a choice even on a set-up machine. Then the real app takes over with Add Project open: no tour, the
+// coding agent), and the defaults new projects start with (the agent they run
+// on, review, auto-fix, archive on merge, assigned issues). Log in and Your
+// tools are skipped when there is nothing to do on them; the defaults page
+// always shows. Then the real app takes over with Add Project open: no tour, the
 // app has to make the first project and task obvious on its own
 // (FirstTaskFunnel only measures whether it does).
-const STEPS = ["welcome", "signin", "tools", "agents", "defaults"] as const;
+const STEPS = ["welcome", "signin", "tools", "defaults"] as const;
 type Step = (typeof STEPS)[number];
 // Where a step stored by the earlier seven-page flow resumes.
 const LEGACY_STEPS: Record<string, Step> = {
@@ -106,7 +107,7 @@ const LEGACY_STEPS: Record<string, Step> = {
 	project: "tools",
 };
 /** Each page's step in the onboarding funnel (onboarding-steps.ts). */
-const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools", agents: "default_agents", defaults: "work_defaults" };
+const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools", defaults: "work_defaults" };
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
 /** Longest the Tools page's view waits for its checks before reporting what it knows. */
@@ -307,9 +308,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	const skips = (candidate: Step) =>
 		candidate === "signin" ? cloud.status === "authenticated"
 		: candidate === "tools" ? ghReady && agentReady
-		// The agents page is never passed over: which agent runs what is a
-		// choice even on a set-up machine. Right after an install, Tools can
-		// finish before the readiness list catches up; the page waits for it.
+		// The defaults page is never passed over: the choices are the person's.
 		: false;
 	// Past the last page with something to do, setup is over: the app takes
 	// over with Add Project open. `skipped`: the person moved on without doing
@@ -367,7 +366,6 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		const timer = window.setTimeout(() => setToolsWaitOver(true), TOOLS_VIEW_WAIT_MS);
 		return () => window.clearTimeout(timer);
 	}, [step, toolsWaitOver]);
-	useOnboardingStep("default_agents", step === "agents", { autoComplete: false });
 	useOnboardingStep("work_defaults", step === "defaults", { autoComplete: false });
 	useOnboardingStep("tools", step === "tools", {
 		autoComplete: false,
@@ -421,9 +419,10 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		if (step === "welcome") return { story_points_seen: cycle > 0 ? STORY_POINTS : point + 1, story_completed: cycle > 0 };
 		if (step === "tools") return { agents_ready: readyAgentCount, gh_ready: ghReady };
 		const chosen = readProjectDefaults();
-		if (step === "agents") return chosen ? { orchestrator_agent: chosen.orchestratorAgent, worker_agent: chosen.workerAgent } : {};
 		if (step === "defaults") {
 			return chosen ? {
+				orchestrator_agent: chosen.orchestratorAgent,
+				worker_agent: chosen.workerAgent,
 				archive_on_merge: chosen.archiveOnMerge,
 				auto_review: chosen.review,
 				assigned_issues: chosen.assignedIssues,
@@ -434,13 +433,6 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		return {};
 	}
 	const toolAgents = useToolAgents();
-	// On the agents page the drawing's composer shows the orchestrator agent
-	// being picked.
-	const [orchestratorPick, setOrchestratorPick] = useState<{ id: string; label: string }>();
-	const showPick = step === "agents" && orchestratorPick;
-	const pickerAgents = showPick && !toolAgents.pickerAgents.some((agent) => agent.id === orchestratorPick.id)
-		? [orchestratorPick, ...toolAgents.pickerAgents]
-		: toolAgents.pickerAgents;
 	const scene = (
 		<OnboardingScene
 			step={step}
@@ -448,8 +440,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 			cycle={cycle}
 			finishCycle={finishCycle}
 			sortBeat={sortBeat}
-			pickerAgents={pickerAgents}
-			selectedAgentId={showPick ? orchestratorPick.id : toolAgents.selectedId}
+			pickerAgents={toolAgents.pickerAgents}
+			selectedAgentId={toolAgents.selectedId}
 			phoneShown={step === "signin"}
 			phoneDelay={0}
 			githubShown={githubShown}
@@ -501,7 +493,6 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 									login={harnessLogin}
 								/>
 							) : null}
-							{step === "agents" ? <DefaultAgentsStep onNext={() => goNext()} onOrchestratorPick={setOrchestratorPick} /> : null}
 							{step === "defaults" ? <WorkDefaultsStep onNext={() => goNext()} /> : null}
 						</motion.div>
 					</AnimatePresence>
@@ -563,15 +554,13 @@ const BackContext = createContext<(() => void) | undefined>(undefined);
 
 /** The step's actions, one row just under its content, in the shared Button
  * sizes: Back at the start, the step's own at the end (a way past the step,
- * then its primary last). On a step taller than the window they stay in view
- * at the column's foot while the content scrolls under them. */
+ * then its primary last). On a step taller than the window they stay put
+ * below the content, which scrolls and fades out above them (StepSplit). */
 function StepActions({ setSlot }: { setSlot: (slot: HTMLDivElement | null) => void }) {
 	const { t } = useTranslation();
 	const onBack = useContext(BackContext);
 	return (
-		// The fade above it lets rows scrolling under the row trail off instead of
-		// being cut along a hard edge.
-		<div className="sticky bottom-0 z-10 flex items-center gap-2 bg-background pb-14 pt-8 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-8 before:bg-linear-to-t before:from-background before:to-transparent" data-testid="first-run-actions">
+		<div className="flex shrink-0 items-center gap-2 pb-14 pt-4" data-testid="first-run-actions">
 			{onBack ? (
 				<Button type="button" variant="quiet" className="-ms-2" onClick={onBack}>
 					<ArrowLeft aria-hidden="true" />
@@ -613,20 +602,30 @@ function StepSplit({
 		// The copy and its actions sit centred in the column's height, a little
 		// below the middle (more padding on top than under it). my-auto rather
 		// than justify-center so a tall step still scrolls from its top.
-		// No bottom padding here: the actions carry it, so when they stick to the
-		// foot of a tall step nothing shows beneath them.
-		<div className="flex min-h-0 w-full flex-col overflow-y-auto bg-background pl-12 pr-10 pt-[max(6rem,16vh)]">
-			<div className="my-auto flex w-full max-w-md flex-col">
-				<h1 className={titleHidden ? "sr-only" : "text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground"}>{title}</h1>
-				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
-				<ActionSlotContext.Provider value={actionSlot}>
-					{children ? <div className={cn("flex flex-col gap-4", !titleHidden && "pt-6")}>{children}</div> : null}
-				</ActionSlotContext.Provider>
+		// A step taller than the window scrolls its content only, never the
+		// actions: the content fades out above them along a mask rather than
+		// hiding behind a painted bar, since the page is see-through in a
+		// translucent window (FADE_FOOT). The side padding keeps focus rings and
+		// row edges clear of the scroller's clip.
+		<div className="flex min-h-0 w-full flex-col overflow-hidden bg-background pl-12 pr-10 pt-[max(6rem,16vh)]">
+			<div className="my-auto flex min-h-0 w-full max-w-md flex-col">
+				<div className={cn("-mx-1 flex min-h-0 flex-col overflow-y-auto px-1", FADE_FOOT)}>
+					<h1 className={titleHidden ? "sr-only" : "text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground"}>{title}</h1>
+					{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
+					<ActionSlotContext.Provider value={actionSlot}>
+						{children ? <div className={cn("flex flex-col gap-4", !titleHidden && "pt-6")}>{children}</div> : null}
+					</ActionSlotContext.Provider>
+				</div>
 				<StepActions setSlot={setActionSlot} />
 			</div>
 		</div>
 	);
 }
+
+/** A scroller's fading foot: the bottom padding is the fade's height, so the
+ * last row clears it once scrolled to the end, and a short list's fade covers
+ * only that padding. */
+const FADE_FOOT = "pb-10 [mask-image:linear-gradient(to_bottom,black_calc(100%-2.5rem),transparent)]";
 
 function Waiting({ children }: { children: ReactNode }) {
 	return (
@@ -696,14 +695,15 @@ const MORE_HARNESS_MARKS = ["cursor", "gemini", "copilot", "opencode", "aider", 
 
 /** The last row of the harness list: three well-known marks and how many more
  * harnesses AO can install, opening the full list. */
-function MoreHarnessesRow({ ids, onShow }: { ids: string[]; onShow: () => void }) {
+function MoreHarnessesRow({ ids, expanded, onShow }: { ids: string[]; expanded: boolean; onShow: () => void }) {
 	const { t } = useTranslation();
 	const marks = [...MORE_HARNESS_MARKS.filter((id) => ids.includes(id)), ...ids.filter((id) => !MORE_HARNESS_MARKS.includes(id))].slice(0, 3);
 	return (
 		<li className="[&+&]:border-t [&+&]:border-border">
 			<Pressable
 				className="flex w-full items-center gap-3 px-4 py-3 transition-colors duration-fast hover:bg-muted/60 focus-visible:bg-muted/60"
-				aria-expanded={false}
+				aria-haspopup="dialog"
+				aria-expanded={expanded}
 				onClick={onShow}
 			>
 				<span className="flex shrink-0 -space-x-1.5" aria-hidden="true">
@@ -717,10 +717,34 @@ function MoreHarnessesRow({ ids, onShow }: { ids: string[]; onShow: () => void }
 				<span className="min-w-0 flex-1 truncate text-sm text-foreground">{t("firstRun.moreHarnesses", { count: ids.length })}</span>
 				<span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
 					{t("firstRun.showAllHarnesses")}
-					<ChevronDown className="size-icon-sm" aria-hidden="true" />
+					<ChevronRight className="size-icon-sm" aria-hidden="true" />
 				</span>
 			</Pressable>
 		</li>
+	);
+}
+
+/** Every harness, over the Tools page. */
+function MoreHarnessesDialog({ open, onOpenChange, children }: { open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
+	const { t } = useTranslation();
+	const restoreFocusOnClose = useRestoreFocusOnClose(open);
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent
+				showCloseButton={false}
+				aria-describedby={undefined}
+				className={cn(settingsDialogContentClass, "w-[min(440px,calc(100vw-24px))]")}
+				onCloseAutoFocus={restoreFocusOnClose}
+			>
+				<DialogClose asChild>
+					<CloseButton floating aria-label={t("common.close")} title={t("common.close")} />
+				</DialogClose>
+				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
+					<DialogTitle className="settings-dialog-title text-base">{t("firstRun.toolsAgentsHeading")}</DialogTitle>
+				</div>
+				<div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-5")}>{children}</div>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -833,7 +857,7 @@ function OnboardingScene({
 	const project = t("firstRun.projectPlaceholder");
 	const welcome = step === "welcome";
 	const stage: WorkStage = welcome ? (point === 0 ? "none" : point === 1 ? "working" : "sorted") : "sorted";
-	const picking = step === "tools" || step === "agents";
+	const picking = step === "tools";
 	const page: ScenePage = welcome && point === 0 ? "chat" : picking ? "new" : "board";
 	const finishing = step === "defaults";
 	const cards = exampleCards(tasks, stage, welcome || finishing ? sortBeat : undefined);
@@ -1142,6 +1166,10 @@ function ToolsStep({ onNext, onSkip, login }: {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const wasInSettings = useRef(false);
 	const [showAllAgents, setShowAllAgents] = useState(false);
+	// A sign-in opens its terminal on the page, so the harness dialog steps aside.
+	useEffect(() => {
+		if (workflow) setShowAllAgents(false);
+	}, [workflow]);
 	// A login in progress (not one that timed out or is being cleaned up).
 	const signingInAgent = workflow?.phase === "running" ? workflow.agentId : undefined;
 	// Any harness can be signed in to here, the ones under "more" included.
@@ -1357,24 +1385,18 @@ function ToolsStep({ onNext, onSkip, login }: {
 					>
 						<ul className={ROW_LIST}>
 							{listed.map(agentRow)}
-							{rest.length > 0 && !showAllAgents ? (
-								<MoreHarnessesRow ids={rest.map(({ agent }) => agent.id)} onShow={() => setShowAllAgents(true)} />
+							{rest.length > 0 ? (
+								<MoreHarnessesRow ids={rest.map(({ agent }) => agent.id)} expanded={showAllAgents} onShow={() => setShowAllAgents(true)} />
 							) : null}
 						</ul>
-						{showAllAgents && rest.length > 0 ? (
-							<>
-								{/* Every other harness, installable from here too. The step scrolls
-								    as one: a list scrolling inside it gave two scrollbars, and on
-								    macOS its rows drew over the action row. */}
-								<ul className={ROW_LIST} aria-label={t("firstRun.moreHarnessesList")}>
-									{rest.map(agentRow)}
-								</ul>
-								<Button type="button" variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setShowAllAgents(false)}>
-									{t("firstRun.showFewerHarnesses")}
-									<ChevronUp aria-hidden="true" />
-								</Button>
-							</>
-						) : null}
+						{/* Every harness, the page's ones first, in a dialog so the page never
+						    grows past the window. Installs show on their rows here; a sign-in
+						    closes it (its terminal opens on the page). */}
+						<MoreHarnessesDialog open={showAllAgents && rest.length > 0} onOpenChange={setShowAllAgents}>
+							{/* Its box clips its rows, so it would shrink to the dialog's height
+							    instead of the dialog scrolling: it keeps its size. */}
+							<ul className={cn(ROW_LIST, "shrink-0")}>{[...listed, ...rest].map(agentRow)}</ul>
+						</MoreHarnessesDialog>
 					</RowGroup>
 				</div>
 			)}
@@ -1420,7 +1442,7 @@ function ToolsStep({ onNext, onSkip, login }: {
 	);
 }
 
-// ── 4. The agents new projects start on ─────────────────────────────────────
+// ── 3. Picking agents ───────────────────────────────────────────────────────
 
 /** Ready agents, ranked as a new project would pick them (best first). */
 function useReadyAgents() {
@@ -1463,66 +1485,12 @@ function AgentPicker({ value, options, labelFor, labelledBy, onChange }: {
 	);
 }
 
-/**
- * Which agent runs each project's orchestrator and its workers. Starts on the
- * agents a new project would pick anyway (project-defaults.ts applies the
- * choice where projects pick their agents); each project's settings can
- * change it later.
- */
-function DefaultAgentsStep({ onNext, onOrchestratorPick }: { onNext: () => void; onOrchestratorPick: (agent: { id: string; label: string }) => void }) {
-	const { t } = useTranslation();
-	const { ranked, ranking, labelFor } = useReadyAgents();
-	const saved = readProjectDefaults();
-	const initial = (chosen: string | undefined, fallback: string) =>
-		chosen && ranked.includes(chosen) ? chosen : ranked.includes(fallback) ? fallback : ranked[0];
-	const [picked, setPicked] = useState<{ orchestrator?: string; worker?: string }>({});
-	const orchestrator = picked.orchestrator ?? initial(saved?.orchestratorAgent, ranking.orchestratorAgent);
-	const worker = picked.worker ?? initial(saved?.workerAgent, ranking.workerAgent);
-	useEffect(() => {
-		if (orchestrator) onOrchestratorPick({ id: orchestrator, label: labelFor(orchestrator) });
-		// labelFor is fresh each render; the pick is what changes.
-	}, [orchestrator]);
-	const finish = () => {
-		// Nothing picked yet (still checking): new projects rank their own.
-		if (orchestrator && worker) saveProjectDefaults({ orchestratorAgent: orchestrator, workerAgent: worker });
-		onNext();
-	};
-	return (
-		<StepSplit title={t("firstRun.agentsTitle")} body={t("firstRun.agentsBody")}>
-			{/* Right after Tools, the ready list can still be catching up. */}
-			{!orchestrator || !worker ? <Waiting>{t("firstRun.agentsChecking")}</Waiting> : (
-			<ul className={ROW_LIST}>
-				<CheckRow
-					icon={<OrchestratorIcon className="size-icon-md text-muted-foreground" />}
-					label={<span id="onboarding-orchestrator-agent">{t("firstRun.agentsOrchestrator")}</span>}
-					detail={t("firstRun.agentsOrchestratorDetail")}
-					wrap
-					trailing={orchestrator ? (
-						<AgentPicker value={orchestrator} options={ranked} labelFor={labelFor} labelledBy="onboarding-orchestrator-agent" onChange={(id) => setPicked((current) => ({ ...current, orchestrator: id }))} />
-					) : null}
-				/>
-				<CheckRow
-					icon={<Code2 className="size-icon-md text-muted-foreground" />}
-					label={<span id="onboarding-worker-agent">{t("firstRun.agentsWorkers")}</span>}
-					detail={t("firstRun.agentsWorkersDetail")}
-					wrap
-					trailing={worker ? (
-						<AgentPicker value={worker} options={ranked} labelFor={labelFor} labelledBy="onboarding-worker-agent" onChange={(id) => setPicked((current) => ({ ...current, worker: id }))} />
-					) : null}
-				/>
-			</ul>
-			)}
-			<StepAction>
-				<NextButton onClick={finish}>{t("firstRun.continue")}</NextButton>
-			</StepAction>
-		</StepSplit>
-	);
-}
-
-// ── 5. How agents finish their work ─────────────────────────────────────────
+// ── 4. What new projects start with ─────────────────────────────────────────
 
 /**
- * Defaults every project added from here starts with (project-defaults.ts): a
+ * Defaults every project added from here starts with (project-defaults.ts): the
+ * agent its orchestrator and workers run on (the one a new project would pick
+ * anyway until changed; each project's settings can change it later), a
  * second agent reviews each PR, agents fix failing checks and merge conflicts
  * and review comments on their own, a chat is archived once its PR merges, and
  * agents pick up issues assigned to you. The preview plays the PRs' trips
@@ -1534,17 +1502,27 @@ function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
 	const intakeAvailable = settings?.trackerIntakeEnabled === true;
 	const [choices, setChoices] = useState<ProjectDefaults>(() => readProjectDefaults() ?? INITIAL_PROJECT_DEFAULTS);
 	const change = (patch: Partial<ProjectDefaults>) => setChoices((current) => ({ ...current, ...patch }));
-	// Reviewers: only ready agents that can review (not every worker agent
-	// can), the usual pick first when it is one of them.
+	// The reviewer isn't asked here: a ready agent that can review (not every
+	// worker agent can), the usual pick first; project settings can change it.
 	const { ranked, ranking, labelFor } = useReadyAgents();
 	const reviewerIds = ranked.filter((id) => toReviewerHarnessId(id) !== undefined);
 	const suggested = reviewerIds.includes(ranking.reviewerAgent) ? ranking.reviewerAgent : reviewerIds[0];
 	const reviewer = choices.reviewerAgent && reviewerIds.includes(choices.reviewerAgent) ? choices.reviewerAgent : suggested;
+	// One agent for the orchestrator and the workers; projects can split them later.
+	const chosenAgent = choices.workerAgent ?? choices.orchestratorAgent;
+	const agent = chosenAgent && ranked.includes(chosenAgent) ? chosenAgent : ranked.includes(ranking.workerAgent) ? ranking.workerAgent : ranked[0];
 	const finish = () => {
-		saveProjectDefaults({ ...choices, reviewerAgent: choices.review ? reviewer : undefined, assignedIssues: intakeAvailable && choices.assignedIssues });
+		saveProjectDefaults({
+			...choices,
+			// Nothing ready yet (still checking): new projects rank their own.
+			orchestratorAgent: agent,
+			workerAgent: agent,
+			reviewerAgent: choices.review ? reviewer : undefined,
+			assignedIssues: intakeAvailable && choices.assignedIssues,
+		});
 		onNext();
 	};
-	const row = (id: string, key: "archiveOnMerge" | "review" | "fixChecks" | "fixReviewComments" | "assignedIssues", icon: ReactNode, label: string, detail: string, below?: ReactNode) => (
+	const row = (id: string, key: "archiveOnMerge" | "review" | "fixChecks" | "fixReviewComments" | "assignedIssues", icon: ReactNode, label: string, detail: string) => (
 		<CheckRow
 			key={id}
 			icon={icon}
@@ -1552,20 +1530,20 @@ function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
 			detail={detail}
 			wrap
 			trailing={<Switch id={id} checked={choices[key]} onCheckedChange={(checked) => change({ [key]: checked })} />}
-			below={below}
 		/>
 	);
 	const iconClass = "size-icon-md text-muted-foreground";
 	return (
 		<StepSplit title={t("firstRun.defaultsTitle")} body={t("firstRun.defaultsBody")}>
 			<ul className={ROW_LIST}>
-				{row("onboarding-review", "review", <Eye className={iconClass} />, t("firstRun.defaultsReview"), t("firstRun.defaultsReviewDetail"),
-					choices.review && reviewer ? (
-						<div className="flex items-center justify-between gap-3">
-							<span id="onboarding-reviewer" className="text-xs text-muted-foreground">{t("firstRun.defaultsReviewer")}</span>
-							<AgentPicker value={reviewer} options={reviewerIds} labelFor={labelFor} labelledBy="onboarding-reviewer" onChange={(reviewerAgent) => change({ reviewerAgent })} />
-						</div>
-					) : undefined)}
+				{agent ? (
+					<CheckRow
+						icon={<Code2 className={iconClass} />}
+						label={<span id="onboarding-default-agent">{t("firstRun.defaultsAgent")}</span>}
+						trailing={<AgentPicker value={agent} options={ranked} labelFor={labelFor} labelledBy="onboarding-default-agent" onChange={(id) => change({ orchestratorAgent: id, workerAgent: id })} />}
+					/>
+				) : null}
+				{row("onboarding-review", "review", <Eye className={iconClass} />, t("firstRun.defaultsReview"), t("firstRun.defaultsReviewDetail"))}
 				{row("onboarding-fix-checks", "fixChecks", <ListChecks className={iconClass} />, t("firstRun.defaultsFixChecks"), t("firstRun.defaultsFixChecksDetail"))}
 				{row("onboarding-fix-comments", "fixReviewComments", <MessageSquare className={iconClass} />, t("firstRun.defaultsFixComments"), t("firstRun.defaultsFixCommentsDetail"))}
 				{row("onboarding-archive-on-merge", "archiveOnMerge", <Archive className={iconClass} />, t("firstRun.defaultsArchive"), t("firstRun.defaultsArchiveDetail"))}
