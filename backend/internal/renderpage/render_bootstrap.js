@@ -3,7 +3,9 @@
 // to open links and, when the host asks for them, clicked images. A host that
 // zooms the page (the artifact viewer) gets its pinch and Cmd+=/-/0 forwarded,
 // hears when the pointer nears the bottom edge where its zoom controls float,
-// and sets the page zoom.
+// and sets the page zoom. A host that keeps the page's scroll (the artifact
+// viewer, to show the page again as it was left) hears where it is scrolled
+// and can scroll it back.
 // The messages are the MCP Apps postMessage methods, so this host could later
 // show upstream MCP apps.
 (function () {
@@ -91,6 +93,21 @@
     zoomStyle.textContent = next === 1 ? "" : "html,body{overflow:visible!important}";
     window.scrollTo(left, top);
   }
+  // A page shown again goes back to where it was scrolled. It may still be
+  // laying out, so this is tried again as its size changes, until it is
+  // reached, the reader takes over, or a few seconds pass.
+  var scrollReport = false, restoreTarget = null, restoreUntil = 0;
+  function restoreScroll() {
+    if (!restoreTarget) return;
+    window.scrollTo(restoreTarget.x, restoreTarget.y);
+    if ((Math.abs(window.scrollX - restoreTarget.x) <= 1 && Math.abs(window.scrollY - restoreTarget.y) <= 1) ||
+        Date.now() > restoreUntil) stopRestore();
+  }
+  function stopRestore() {
+    if (!restoreTarget) return;
+    restoreTarget = null;
+    scheduleScrollReport();
+  }
   window.addEventListener("message", function (e) {
     var d = e.data;
     var p = d && d.params;
@@ -103,6 +120,13 @@
     if (p.zoomable !== undefined) zoomable = p.zoomable === true;
     if (typeof p.zoomRevealPx === "number" && p.zoomRevealPx >= 0) revealPx = p.zoomRevealPx;
     if (p.zoom !== undefined) setZoom(p.zoom, p.zoomAnchor);
+    if (p.scrollReport !== undefined) scrollReport = p.scrollReport === true;
+    var to = p.scrollTo;
+    if (to && typeof to.x === "number" && typeof to.y === "number" && isFinite(to.x) && isFinite(to.y)) {
+      restoreTarget = { x: to.x, y: to.y };
+      restoreUntil = Date.now() + 3000;
+      restoreScroll();
+    }
   });
   if (!framed) return;
   function notify(method, params, id) {
@@ -113,8 +137,24 @@
   function zoomRequest(params) {
     notify("ao/zoom", params);
   }
+  // Where the page is scrolled, once a frame at most, for a host that asked.
+  // Nothing is reported while a restore is on its way there.
+  var scrollScheduled = false;
+  function scheduleScrollReport() {
+    if (!scrollReport || restoreTarget || scrollScheduled) return;
+    scrollScheduled = true;
+    window.requestAnimationFrame(function () {
+      scrollScheduled = false;
+      if (scrollReport && !restoreTarget) notify("ao/scroll", { x: window.scrollX, y: window.scrollY });
+    });
+  }
+  window.addEventListener("scroll", scheduleScrollReport, { passive: true });
+  // The reader scrolling or pressing first ends a restore.
+  window.addEventListener("pointerdown", stopRestore, { capture: true, passive: true });
+  window.addEventListener("touchstart", stopRestore, { capture: true, passive: true });
   // A trackpad pinch arrives as a wheel event with ctrlKey.
   window.addEventListener("wheel", function (e) {
+    stopRestore();
     if (!zoomable || !e.ctrlKey) return;
     e.preventDefault();
     zoomRequest({ deltaY: e.deltaY, deltaMode: e.deltaMode, x: e.clientX, y: e.clientY });
@@ -130,6 +170,7 @@
     zoomRequest({ reveal: true });
   }, { passive: true });
   document.addEventListener("keydown", function (e) {
+    stopRestore();
     if (!zoomable || e.altKey || !(e.metaKey || e.ctrlKey)) return;
     var action = e.key === "=" || e.key === "+" ? "in" : e.key === "-" || e.key === "_" ? "out" : e.key === "0" ? "reset" : "";
     if (!action) return;
@@ -167,6 +208,7 @@
     scheduled = true;
     window.requestAnimationFrame(function () {
       scheduled = false;
+      restoreScroll();
       var root = document.documentElement;
       var overflowing = root.scrollHeight > root.clientHeight;
       var height = Math.ceil(overflowing ? root.scrollHeight : root.getBoundingClientRect().height);

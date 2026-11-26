@@ -312,4 +312,48 @@ describe("render page bootstrap", () => {
 		page.context({ zoom: 1 });
 		expect(page.page.documentElement.style.transform).toBe("");
 	});
+
+	it("reports its scroll to a host that asks, and goes back to a scroll the host restores", () => {
+		const page = bootPage();
+		const scrollable = (height: number) => page.view.scrollTo.mockImplementation((x: number, y: number) => {
+			page.view.scrollX = x;
+			page.view.scrollY = Math.min(y, height);
+		});
+		scrollable(10_000);
+		const scroll = () => page.windowEvents.get("scroll")?.({});
+		scroll();
+		expect(page.frames).toHaveLength(0);
+
+		page.context({ scrollReport: true });
+		page.view.scrollY = 320;
+		scroll();
+		scroll();
+		expect(page.frames).toHaveLength(1);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 320 } }, "*");
+
+		// Too short for the position yet: it waits for the page to lay out, and reports nothing on the way.
+		scrollable(400);
+		page.postMessage.mockClear();
+		page.context({ scrollTo: { x: 0, y: 900 } });
+		expect(page.view.scrollTo).toHaveBeenLastCalledWith(0, 900);
+		expect(page.view.scrollY).toBe(400);
+		scroll();
+		expect(page.frames).toHaveLength(0);
+		scrollable(10_000);
+		page.resize();
+		page.frames.shift()!();
+		expect(page.view.scrollY).toBe(900);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 900 } }, "*");
+
+		// The reader scrolling or pressing first ends a restore.
+		scrollable(400);
+		page.context({ scrollTo: { x: 0, y: 1200 } });
+		page.windowEvents.get("pointerdown")?.({});
+		page.view.scrollTo.mockClear();
+		page.resize();
+		for (const frame of page.frames.splice(0)) frame();
+		expect(page.view.scrollTo).not.toHaveBeenCalled();
+	});
 });
