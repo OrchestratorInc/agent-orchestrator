@@ -7,7 +7,7 @@ import PostHog from "posthog-react-native";
 import { getTelemetryIdentity, type SessionMode } from "../api";
 import type { ServerConfig } from "../config";
 import { cachedInstallId } from "../installId";
-import { setMobileDaemonVersion, setMobileSentryConsent, setMobileSentryPairedInstallId } from "../sentry";
+import { setMobileDaemonVersions, setMobileSentryConsent, setMobileSentryPairedInstallId } from "../sentry";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -152,12 +152,13 @@ export async function loadMobileOptOut(): Promise<void> {
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
-const desktopIdentitySync = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
-	{
+const desktopIdentitySync = createDesktopIdentitySync(
+	getTelemetryIdentity,
+	(identity) => {
 		telemetry?.adoptDesktopIdentity(identity);
 		setMobileSentryPairedInstallId(identity && !identity.optedOut ? identity.installId ?? null : null);
-		setMobileDaemonVersion(identity?.daemonVersion);
 	},
+	setMobileDaemonVersions,
 );
 
 export function syncDesktopTelemetryIdentity(configs: ServerConfig[]): Promise<void> {

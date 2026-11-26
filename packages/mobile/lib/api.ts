@@ -487,10 +487,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			// error envelope stalls. Never turn a 401 into a retryable timeout.
 		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
-			captureMobileApiError(apiOperation(init?.method, path), "timeout");
+			captureMobileApiError(apiOperation(init?.method, path), "timeout", undefined, undefined, undefined, cfg.hostId);
 			throw new UnreachableError("timeout", { cause: e });
 		} else {
-			captureMobileApiError(apiOperation(init?.method, path), "offline");
+			captureMobileApiError(apiOperation(init?.method, path), "offline", undefined, undefined, undefined, cfg.hostId);
 			throw new UnreachableError("offline", { cause: e });
 		}
 	} finally {
@@ -515,7 +515,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		// Server answered with an error: classify by status + daemon code, named
 		// by its route. The requestId stays on ApiError; the daemon's Sentry does
 		// not tag it, so sending it would correlate with nothing.
-		captureMobileApiError(apiOperation(init?.method, path), httpCategory(res.status), res.status, code, detail);
+		captureMobileApiError(apiOperation(init?.method, path), httpCategory(res.status), res.status, code, detail, cfg.hostId);
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,

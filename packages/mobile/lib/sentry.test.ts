@@ -278,12 +278,12 @@ it.each([
 });
 
 describe("mobile Sentry API context", () => {
-	async function apiEvent(operation: string, setup?: (sentry: typeof import("./sentry")) => void) {
+	async function apiEvent(operation: string, setup?: (sentry: typeof import("./sentry")) => void, hostId?: string) {
 		const sentry = await import("./sentry");
 		setup?.(sentry);
 		sentry.setMobileSentryConsent(true);
 		await sentry.initMobileSentry();
-		sentry.captureMobileApiError(operation, "http_5xx", 500);
+		sentry.captureMobileApiError(operation, "http_5xx", 500, undefined, undefined, hostId);
 		const [message, hint] = sdk.captureMessage.mock.calls.at(-1) ?? [];
 		return sentry.sanitizeMobileSentryEvent({ type: undefined, message, tags: hint?.tags });
 	}
@@ -310,20 +310,42 @@ describe("mobile Sentry API context", () => {
 		expect(JSON.stringify(event)).not.toMatch(/Acme|Secret/);
 	});
 
-	it("tags the OTA update as dist and the paired daemon's version", async () => {
+	it("tags the OTA update as dist and the version of the daemon that answered", async () => {
 		const id = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 		const event = await apiEvent("GET /api/v1/sessions", (sentry) => {
 			sentry.setMobileSentryContext({ release: "2.4.0@12", updateId: id });
-			sentry.setMobileDaemonVersion("1.9.0");
-		});
+			sentry.setMobileDaemonVersions({ "host-a": "1.9.0" });
+		}, "host-a");
 		expect(event).toMatchObject({ dist: id, tags: { "ao.update_id": id, "ao.daemon_version": "1.9.0" } });
 	});
 
-	it("forgets the daemon version when the phone unpairs", async () => {
+	// With two desktops paired, an error names the one that served it.
+	it("tags each API error with its own desktop's version", async () => {
+		const versions = { "host-a": "1.9.0", "host-b": "1.7.2" };
+		const fromB = await apiEvent("GET /api/v1/sessions", (sentry) => sentry.setMobileDaemonVersions(versions), "host-b");
+		expect(fromB?.tags).toMatchObject({ "ao.daemon_version": "1.7.2" });
+		const unknownHost = await apiEvent("GET /api/v1/sessions", (sentry) => sentry.setMobileDaemonVersions(versions));
+		expect(unknownHost?.tags).not.toHaveProperty("ao.daemon_version");
+	});
+
+	it("tags an exception only when every connected desktop runs one version", async () => {
+		const exceptionWith = async (versions: Record<string, string>) => {
+			const sentry = await import("./sentry");
+			sentry.setMobileDaemonVersions(versions);
+			sentry.setMobileSentryConsent(true);
+			await sentry.initMobileSentry();
+			sentry.captureMobileException(new Error("boom"), { category: "render_crash" });
+			return sentry.sanitizeMobileSentryEvent({ type: undefined, tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags });
+		};
+		expect((await exceptionWith({ a: "1.9.0", b: "1.9.0" }))?.tags).toMatchObject({ "ao.daemon_version": "1.9.0" });
+		expect((await exceptionWith({ a: "1.9.0", b: "1.7.2" }))?.tags).not.toHaveProperty("ao.daemon_version");
+	});
+
+	it("forgets the daemon versions when no desktop is connected", async () => {
 		const event = await apiEvent("GET /api/v1/sessions", (sentry) => {
-			sentry.setMobileDaemonVersion("1.9.0");
-			sentry.setMobileDaemonVersion(undefined);
-		});
+			sentry.setMobileDaemonVersions({ "host-a": "1.9.0" });
+			sentry.setMobileDaemonVersions({});
+		}, "host-a");
 		expect(event?.tags).not.toHaveProperty("ao.daemon_version");
 	});
 });

@@ -18,6 +18,22 @@ function deferred<T>() {
 }
 
 describe("createDesktopIdentitySync", () => {
+	// Only one identity is adopted, but every desktop's version is kept by host.
+	it("reports each connected desktop's daemon version by host", async () => {
+		const versions: Record<string, string>[] = [];
+		const sync = createDesktopIdentitySync(
+			(c) => Promise.resolve(c.hostId === "a"
+				? { distinctId: "ins_a", optedOut: false, daemonVersion: "1.9.0" }
+				: { distinctId: "ins_b", optedOut: false, daemonVersion: "1.7.2" }),
+			() => {},
+			(byHost) => versions.push(byHost),
+		);
+		await sync([cfg("a"), cfg("b")]);
+		expect(versions.at(-1)).toEqual({ a: "1.9.0", b: "1.7.2" });
+		await sync([]);
+		expect(versions.at(-1)).toEqual({});
+	});
+
 	it("discards a slow response from an obsolete connection set", async () => {
 		const a = deferred<DesktopTelemetryIdentity>();
 		const adopted: (DesktopTelemetryIdentity | null)[] = [];

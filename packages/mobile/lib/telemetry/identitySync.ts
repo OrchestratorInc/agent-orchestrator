@@ -13,6 +13,9 @@ import type { DesktopTelemetryIdentity } from "./telemetry";
 export function createDesktopIdentitySync(
 	fetchIdentity: (cfg: ServerConfig) => Promise<DesktopTelemetryIdentity>,
 	adopt: (identity: DesktopTelemetryIdentity | null) => void,
+	// Each connected desktop's daemon version by host id, from every answer, not
+	// only the adopted one, so an error can name the daemon that served it.
+	versions: (byHost: Record<string, string>) => void = () => {},
 ): (configs: ServerConfig[]) => Promise<void> {
 	let generation = 0;
 	let currentHosts = "";
@@ -25,7 +28,10 @@ export function createDesktopIdentitySync(
 			currentEndpoints = endpoints;
 			adopt(null);
 		}
-		if (configs.length === 0) return;
+		if (configs.length === 0) {
+			versions({});
+			return;
+		}
 		let hosts: string;
 		try {
 			hosts = JSON.stringify(await Promise.all(configs.map(async (cfg) => [
@@ -46,6 +52,12 @@ export function createDesktopIdentitySync(
 		}
 		const results = await Promise.all(configs.map((cfg) => fetchIdentity(cfg).catch(() => null)));
 		if (mine !== generation) return;
+		const byHost: Record<string, string> = {};
+		configs.forEach((cfg, index) => {
+			const version = results[index]?.daemonVersion;
+			if (cfg.hostId && version) byHost[cfg.hostId] = version;
+		});
+		versions(byHost);
 		const reported = results.filter((r): r is DesktopTelemetryIdentity => r !== null);
 		const next = reported.find((r) => r.optedOut) ?? reported.find((r) => r.distinctId);
 		adopt(next ?? null);

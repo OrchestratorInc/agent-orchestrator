@@ -153,12 +153,8 @@ export default function PairScreen() {
 		// back is only for this screen: after leaving early it would pop
 		// whatever screen is now in front.
 		if (!fromOnboarding && !mounted.current) return;
-		if (fromOnboarding) {
-			// Both ways of pairing end here, so a manual connection completes the
-			// onboarding funnel the same as a scan.
-			mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
-			completeOnboarding(navigation);
-		} else backOr(router);
+		if (fromOnboarding) completeOnboarding(navigation);
+		else backOr(router);
 	}
 
 	async function onScan({ data }: { data: string }) {
@@ -311,6 +307,8 @@ export default function PairScreen() {
 			}
 		}).catch(() => {});
 		mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "qr", from_onboarding: fromOnboarding });
+		// The manual connection page reports its own (app/connect.tsx).
+		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();
 		await finish(pairedNotice(result));
 		// A successful scan counts as a deliberate trigger for the one-shot OS
@@ -436,10 +434,7 @@ export default function PairScreen() {
 					variant="secondary"
 					icon={{ ios: "keyboard", android: "keyboard" }}
 					title="Enter details manually"
-					onPress={() => router.push(connectRoute(() => {
-						mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual", from_onboarding: fromOnboarding });
-						void finish();
-					}, repairHost?.id))}
+					onPress={() => router.push(connectRoute(() => void finish(), repairHost?.id, fromOnboarding))}
 				/>
 			</View>
 		</View>

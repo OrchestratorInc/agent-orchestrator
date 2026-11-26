@@ -14,7 +14,9 @@ let permitted = false;
 let initPromise: Promise<void> | null = null;
 let sentry: typeof import("@sentry/react-native") | null = null;
 let pairedInstallId: string | null = null;
-let daemonVersion: string | undefined;
+// Each connected desktop's daemon version, by host id.
+let daemonVersions: Record<string, string> = {};
+const DAEMON_VERSION = /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/;
 let observabilityContext: MobileObservabilityContext = {};
 let consentGeneration = 0;
 const allowedEventIds = new Set<string>();
@@ -94,7 +96,7 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 			...(updateId ? { "ao.update_id": updateId } : {}),
 			...(identity.code ? { "ao.code": identity.code } : {}),
 			...(severity ? { "ao.severity": severity } : {}),
-			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
+			...(typeof event.tags?.["ao.daemon_version"] === "string" && DAEMON_VERSION.test(event.tags["ao.daemon_version"]) ? { "ao.daemon_version": event.tags["ao.daemon_version"] } : {}),
 		},
 		fingerprint: ["mobile", kindTitle, category, ...(operation ? [operation] : []), ...(primary ? [primary.type] : []),
 			...(identity.code ? ["code", identity.code] : messageFingerprint)],
@@ -111,9 +113,22 @@ export function setMobileSentryContext(context: MobileObservabilityContext): voi
 	if (permitted) void initMobileSentry();
 }
 
-/** The paired daemon's release, tagged on every event; undefined while unpaired. */
-export function setMobileDaemonVersion(version: string | undefined): void {
-	daemonVersion = version;
+/** Each connected desktop's daemon version by host id; empty while none answers. */
+export function setMobileDaemonVersions(byHost: Record<string, string>): void {
+	daemonVersions = { ...byHost };
+}
+
+// The daemon an error came from: the host's own version for an API error;
+// otherwise the one version every connected desktop runs, or none when they
+// differ, rather than naming a desktop that may not be involved.
+function daemonVersionFor(hostId?: string): Record<string, string> {
+	const version = hostId !== undefined
+		? daemonVersions[hostId]
+		: (() => {
+			const distinct = [...new Set(Object.values(daemonVersions))];
+			return distinct.length === 1 ? distinct[0] : undefined;
+		})();
+	return version && DAEMON_VERSION.test(version) ? { "ao.daemon_version": version } : {};
 }
 
 export function setMobileSentryPairedInstallId(id: string | null): void {
@@ -210,18 +225,21 @@ export function captureMobileException(error: unknown, meta: CaptureMeta = {}): 
 	const code = sentryErrorCode(error) ?? safeSentryCode(meta.code);
 	sentry?.captureException(error, {
 		level: triage.level,
-		tags: { "ao.category": SAFE_CATEGORIES.has(meta.category ?? "") ? meta.category : "other", ...(code ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+		tags: { "ao.category": SAFE_CATEGORIES.has(meta.category ?? "") ? meta.category : "other", ...(code ? { "ao.code": code } : {}), ...daemonVersionFor(), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
 	});
 }
 
-/** `operation` is apiOperation()'s route name; anything else is dropped at send. */
-export function captureMobileApiError(operation: string, category: string, status?: number, code?: string, message?: string): void {
+/**
+ * `operation` is apiOperation()'s route name; anything else is dropped at send.
+ * `hostId` is the machine the request went to, which names its daemon version.
+ */
+export function captureMobileApiError(operation: string, category: string, status?: number, code?: string, message?: string, hostId?: string): void {
 	if (!initialized || !permitted) return;
 	const triage = classifyError({ category, httpStatus: status, code });
 	if (!triage.report) return;
 	sentry?.captureMessage(typeof message === "string" && message.length <= 4096 && message ? message : "Mobile API error", {
 		level: triage.level,
-		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.kind": "api", "ao.operation": operation, ...(safeSentryCode(code) ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.kind": "api", "ao.operation": operation, ...daemonVersionFor(hostId ?? ""), ...(safeSentryCode(code) ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
 	});
 }
 

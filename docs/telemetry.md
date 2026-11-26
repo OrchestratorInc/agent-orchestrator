@@ -105,8 +105,10 @@ send, so an event still queued when opt-out arrives is discarded.
 Mobile Sentry sends application codes and applies the same normalized first-line display rule for JavaScript engine errors. Other uncoded errors contribute only a hash of the cleaned-up text. It also receives the error category, safe stack line numbers with generic
 frame names, release version and build number, the running OTA update ID
 (`embedded` for the bundle in the binary) as `dist` and `ao.update_id`, the
-paired daemon's version as `ao.daemon_version`, and the production or preview
-environment. A failed daemon request is named by its method and route as
+daemon's version as `ao.daemon_version`, and the production or preview
+environment. For a failed request that is the version of the desktop the
+request went to; for other errors it is sent only when every connected desktop
+runs the same version. A failed daemon request is named by its method and route as
 `ao.operation`, such as `POST /api/v1/sessions/:id/send`: only the app's fixed
 route words are kept, every other path segment becomes `:id`, and a workspace
 file path becomes `*`, so no session, project, branch or file name is sent.
@@ -276,8 +278,13 @@ Orchestrator.inc sends structured events in a few broad categories:
   running OTA update as `update_id` (a UUID, or `embedded` for the bundle in the
   binary) and `update_channel` (`production`, `preview`, `development`, or
   `other`), and while a desktop is paired its daemon's version as
-  `paired_daemon_version`. `notification_opened` reports its `target` as
-  `session`, `review`, `prs`, or `cloud`
+  `paired_daemon_version` (the desktop named by `paired_install_id`; with
+  several connected, the one whose identity the phone adopted).
+  `notification_opened` reports its `target` as `session`, `review`, `prs`, or
+  `cloud`. `paired` is sent for every pairing finished from Pair a machine, by
+  scan or manual entry: a new machine, a re-pair, or an edited connection. A
+  manual pairing is reported even if the person left the page while it
+  connected
 - Coarse geographic location (country, and where available region and city),
   derived by PostHog from the connection's IP address when it receives each
   event. Orchestrator.inc does not resolve or send precise coordinates, and does not store
