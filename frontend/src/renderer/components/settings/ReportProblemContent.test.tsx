@@ -100,7 +100,7 @@ describe("Report a problem", () => {
 		expect(url.searchParams.get("body")).toContain("[redacted-local-path]");
 		expect(url.searchParams.get("body")).not.toContain("private");
 		await waitFor(() => expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "github", outcome: "succeeded" }));
-		for (const [name, href] of [["Discord", "https://discord.gg/WjKNa7EbB8"], ["Email", "mailto:prasad@untrivial.ai?cc=prateek@untrivial.ai"]]) {
+		for (const [name, href] of [["Discord", "https://discord.gg/WjKNa7EbB8"], ["Email", "mailto:prasad@untrivial.ai?cc=prateek@orchestrator.inc"]]) {
 			expect(screen.getByRole("link", { name })).toHaveAttribute("href", href);
 			fireEvent.click(screen.getByRole("link", { name }));
 			expect(open).toHaveBeenLastCalledWith(href);

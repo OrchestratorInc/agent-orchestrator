@@ -2732,6 +2732,7 @@ export const ChatComposer = memo(function ChatComposer({
 									<ComposerPendingTile
 										key={file.id}
 										name={file.name}
+										mimeType={file.mimeType}
 										statusLabel={`Attaching ${file.name}`}
 										cancelLabel={`Cancel attaching ${file.name}`}
 										onCancel={() => {
