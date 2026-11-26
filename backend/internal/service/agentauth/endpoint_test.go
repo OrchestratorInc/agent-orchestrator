@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
@@ -26,7 +29,15 @@ func newEndpointService(t *testing.T) (*Service, *invalidatingResolver) {
 	t.Helper()
 	resolver := &invalidatingResolver{managedExecutableResolver: managedExecutableResolver{agentID: "claude-code", path: "/test/bin/claude"}}
 	svc := NewWithAgentResolver(nil, resolver, &recordingTerminalOpener{}, t.TempDir())
+	// Tests never reach a real endpoint: an unreachable one keeps the default style.
+	svc.endpointProbeClient = &http.Client{Transport: offlineTransport{}}
 	return svc, resolver
+}
+
+type offlineTransport struct{}
+
+func (offlineTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("offline")
 }
 
 func claudePlan(t *testing.T, svc *Service) Plan {
@@ -138,5 +149,62 @@ func TestEndpointStatusReportsUnusableEndpoint(t *testing.T) {
 	}
 	if status := claudePlan(t, svc).CustomEndpoint; status == nil || status.Error != "" || !status.Configured {
 		t.Fatalf("CustomEndpoint after repair = %+v, want a configured endpoint without an error", status)
+	}
+}
+
+// The key is sent the way the endpoint accepts: Bearer first, then the
+// x-api-key header, and the style that worked is saved.
+func TestSetEndpointDetectsTheAuthStyleTheEndpointAccepts(t *testing.T) {
+	t.Parallel()
+	var probes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probes.Add(1)
+		if r.URL.Path == "/v1/models" && r.Header.Get("x-api-key") == "sk-header" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(server.Close)
+	svc, _ := newEndpointService(t)
+	svc.endpointProbeClient = server.Client()
+
+	status, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, APIKey: "sk-header"})
+	if err != nil {
+		t.Fatalf("SetEndpoint: %v", err)
+	}
+	if status.AuthStyle != harnessendpoint.AuthAPIKey || probes.Load() != 2 {
+		t.Fatalf("status = %+v after %d probes, want api-key after trying Bearer first", status, probes.Load())
+	}
+
+	// Changing only the model keeps the style that works, without asking again.
+	if status, err = svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, Model: "gateway-model"}); err != nil {
+		t.Fatalf("SetEndpoint model only: %v", err)
+	}
+	if status.AuthStyle != harnessendpoint.AuthAPIKey || probes.Load() != 2 {
+		t.Fatalf("status = %+v after %d probes, want the saved style kept without a probe", status, probes.Load())
+	}
+}
+
+// A key the endpoint refuses in every style is not saved.
+func TestSetEndpointRejectsAKeyTheEndpointRefuses(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+	svc, resolver := newEndpointService(t)
+	svc.endpointProbeClient = server.Client()
+
+	_, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, APIKey: "sk-wrong"})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_ENDPOINT_KEY_REJECTED" || strings.Contains(apiErr.Error(), "sk-wrong") {
+		t.Fatalf("SetEndpoint error = %#v, want AGENT_ENDPOINT_KEY_REJECTED without the key", err)
+	}
+	if status := claudePlan(t, svc).CustomEndpoint; status == nil || status.Configured {
+		t.Fatalf("CustomEndpoint = %+v, want nothing saved", status)
+	}
+	if len(resolver.invalidated) != 0 {
+		t.Fatalf("a refused key must not invalidate readiness: %v", resolver.invalidated)
 	}
 }

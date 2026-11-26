@@ -44,6 +44,13 @@ func (s *Service) SetEndpoint(ctx context.Context, agentID string, in harnessend
 	if err := s.requireEndpointTarget(agentID); err != nil {
 		return harnessendpoint.Status{}, err
 	}
+	if in.AuthStyle == "" {
+		style, err := s.detectEndpointAuthStyle(ctx, agentID, in)
+		if err != nil {
+			return harnessendpoint.Status{}, err
+		}
+		in.AuthStyle = style
+	}
 	status, err := s.endpoints().Save(agentID, in, time.Now())
 	if err != nil {
 		return harnessendpoint.Status{}, endpointError(err)
@@ -70,6 +77,31 @@ func (s *Service) ClearEndpoint(ctx context.Context, agentID string) (harnessend
 		return harnessendpoint.Status{}, endpointError(err)
 	}
 	return status, nil
+}
+
+// detectEndpointAuthStyle picks how the key is sent when the client leaves it
+// open: the endpoint is asked with each style the harness supports, and the
+// first it accepts is saved. A save that keeps the saved URL and key keeps the
+// style that already works. Without a key yet, Save reports the missing key.
+func (s *Service) detectEndpointAuthStyle(ctx context.Context, agentID string, in harnessendpoint.Input) (harnessendpoint.AuthStyle, error) {
+	target, ok, err := s.endpoints().ProbeTarget(agentID, in)
+	if err != nil {
+		return "", endpointError(err)
+	}
+	if !ok {
+		return "", nil
+	}
+	if target.SavedStyle != "" {
+		return target.SavedStyle, nil
+	}
+	style, err := harnessendpoint.DetectAuthStyle(ctx, s.endpointProbeClient, agentID, target.BaseURL, target.Key)
+	if errors.Is(err, harnessendpoint.ErrKeyRejected) {
+		return "", apierr.Invalid("AGENT_ENDPOINT_KEY_REJECTED", "The endpoint rejected this key. Check the key and the base URL.", nil)
+	}
+	if err != nil {
+		return "", err
+	}
+	return style, nil
 }
 
 func (s *Service) requireEndpointTarget(agentID string) error {

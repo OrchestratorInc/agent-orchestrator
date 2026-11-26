@@ -5,10 +5,7 @@ import { clearAgentEndpoint, setAgentEndpoint, type AgentEndpointStatus, type Se
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Pressable } from "../../ui/pressable";
-import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import { KEY_FIELD_CLASS, KeyWarning } from "../providerKeyUi";
-
-type AuthStyle = NonNullable<SetAgentEndpointRequest["authStyle"]>;
 
 /** Hostname for compact summaries; falls back to the raw value. */
 export function endpointHost(baseUrl: string | undefined): string {
@@ -27,7 +24,9 @@ export function endpointSaved(endpoint: AgentEndpointStatus | undefined): boolea
 
 /** One sign-in option beside the API keys: the harness sends its requests to
  * the user's own base URL and key. It expands in place like a key row; the
- * saved key is never shown, and leaving the key field empty keeps it. */
+ * saved key is never shown, and leaving the key field empty keeps it. How the
+ * key is sent (Bearer or x-api-key) is not asked: the daemon tries each with
+ * the endpoint on save and keeps the one it accepts. */
 export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled, onToggle, onChanged }: {
 	agentId: string;
 	endpoint: AgentEndpointStatus;
@@ -43,12 +42,10 @@ export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled
 	const [pending, setPending] = useState<"save" | "remove" | null>(null);
 	const [baseUrl, setBaseUrl] = useState("");
 	const [apiKey, setApiKey] = useState("");
-	const [authStyle, setAuthStyle] = useState<AuthStyle>(endpoint.defaultAuthStyle);
 	const [model, setModel] = useState("");
 	const [error, setError] = useState("");
 	const busy = pending !== null;
 	const locked = busy || Boolean(disabled);
-	const styles = endpoint.authStyles.filter((style): style is AuthStyle => style === "bearer" || style === "api-key");
 	const unusable = Boolean(endpoint.error);
 	const saved = endpointSaved(endpoint);
 
@@ -58,11 +55,10 @@ export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled
 		if (!open) return;
 		setBaseUrl(endpoint.baseUrl ?? "");
 		setApiKey("");
-		setAuthStyle(endpoint.authStyle ?? endpoint.defaultAuthStyle);
 		setModel(endpoint.model ?? "");
 		setError("");
 		rowRef.current?.querySelector("input")?.focus({ preventScroll: true });
-	}, [open, endpoint.baseUrl, endpoint.authStyle, endpoint.defaultAuthStyle, endpoint.model]);
+	}, [open, endpoint.baseUrl, endpoint.model]);
 
 	// An unusable endpoint has no key AO can keep, so it needs a new one.
 	const canSave = baseUrl.trim() !== "" && ((endpoint.hasApiKey && !unusable) || apiKey.trim() !== "") && !locked;
@@ -70,7 +66,7 @@ export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled
 	const save = async () => {
 		if (!canSave) return;
 		setError("");
-		const body: SetAgentEndpointRequest = { baseUrl: baseUrl.trim(), authStyle };
+		const body: SetAgentEndpointRequest = { baseUrl: baseUrl.trim() };
 		if (apiKey.trim()) body.apiKey = apiKey.trim();
 		if (endpoint.supportsModel) body.model = model.trim();
 		setPending("save");
@@ -117,8 +113,6 @@ export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled
 		: endpoint.configured ? t("settings.harness.endpoint.active", { host: endpointHost(endpoint.baseUrl) })
 		: t("settings.harness.endpoint.notSet");
 	const fieldLabelClass = "block text-xs leading-4 text-settings-muted";
-	const fieldTriggerClass = "h-control-form w-full justify-between rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 text-control text-settings-label";
-	const styleLabel = (style: AuthStyle) => t(style === "bearer" ? "settings.harness.endpoint.authStyleBearer" : "settings.harness.endpoint.authStyleApiKey");
 	const saveButton = <Button type="button" disabled={!canSave} onClick={() => void save()}>
 		{pending === "save" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 		{t("settings.harness.endpoint.save")}
@@ -139,15 +133,8 @@ export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled
 			<label htmlFor={id + "-key"} className={fieldLabelClass}>{t("settings.harness.endpoint.apiKey")}</label>
 			<div className="flex min-w-0 items-center gap-2">
 				<Input id={id + "-key"} className={`${KEY_FIELD_CLASS} min-w-0 flex-1`} type="password" value={apiKey} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={endpoint.hasApiKey && !unusable ? t("settings.harness.endpoint.apiKeyKeep") : t("settings.harness.endpoint.apiKeyPlaceholder")} onChange={(event) => { setApiKey(event.target.value); setError(""); }} />
-				{styles.length > 1 || endpoint.supportsModel ? null : saveButton}
+				{endpoint.supportsModel ? null : saveButton}
 			</div>
-			{styles.length > 1 ? <>
-				<span id={id + "-style"} className={fieldLabelClass}>{t("settings.harness.endpoint.authStyle")}</span>
-				<div className="flex min-w-0 items-center gap-2">
-					<SettingsOptionMenu aria-label={t("settings.harness.endpoint.authStyle")} value={authStyle} options={styles.map((style) => ({ value: style, label: styleLabel(style) }))} onChange={(value) => setAuthStyle(value as AuthStyle)} disabled={locked} triggerClassName={`${fieldTriggerClass} min-w-0 flex-1`} menuAlign="start" menuClassName="w-(--radix-dropdown-menu-trigger-width)" />
-					{endpoint.supportsModel ? null : saveButton}
-				</div>
-			</> : null}
 			{endpoint.supportsModel ? <>
 				<label htmlFor={id + "-model"} className={fieldLabelClass}>{t("settings.harness.endpoint.model")}</label>
 				<div className="flex min-w-0 items-center gap-2">
