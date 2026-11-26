@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
 	remote: [] as PendingApproval[],
 	cloud: [] as PendingApproval[],
 	watch: vi.fn(),
+	liveReads: 0,
 	routedSessionId: undefined as string | undefined,
 	routedHostId: undefined as string | undefined,
 	decide: vi.fn(async () => undefined),
@@ -21,7 +22,10 @@ vi.mock("../../lib/approvals", () => ({
 }));
 vi.mock("../../lib/cloud-approvals", () => ({
 	useCloudPendingApprovals: () => state.cloud,
-	useLiveCloudPendingApprovals: () => state.cloud,
+	useLiveCloudPendingApprovals: () => {
+		state.liveReads += 1;
+		return state.cloud;
+	},
 	useWatchCloudApprovals: state.watch,
 }));
 vi.mock("@tanstack/react-router", () => ({
@@ -42,7 +46,7 @@ vi.mock("../../hooks/useWorkspaceQuery", () => ({
 }));
 
 import { useUiStore } from "../../stores/ui-store";
-import { GlobalApprovalCard, SessionApprovalDock, SessionChatApprovalCard } from "./ApprovalHost";
+import { CloudApprovalReader, GlobalApprovalCard, SessionApprovalDock, SessionChatApprovalCard } from "./ApprovalHost";
 
 function request(id: string, sessionId: string): PendingApproval {
 	return {
@@ -204,6 +208,24 @@ describe("approval hosts", () => {
 		expect(screen.queryByRole("checkbox")).toBeNull();
 		fireEvent.keyDown(screen.getByTestId("approval-prompt"), { key: "Escape" });
 		expect(state.decide).not.toHaveBeenCalled();
+	});
+
+	it("puts a request the viewer can decide ahead of one waiting for someone else", () => {
+		const cloud = { baseUrl: "https://cp.test", orgId: "org-1" };
+		state.cloud = [
+			{ ...request("theirs", "cloud-2"), cloud, waitingFor: { name: "Priya Shah" } },
+			{ ...request("mine", "cloud-3"), cloud },
+		];
+		state.routedSessionId = "ao-1";
+		renderWith(<GlobalApprovalCard />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(mine)");
+		expect(screen.queryByTestId("approval-waiting")).toBeNull();
+	});
+
+	it("reads cloud approvals from a reader of its own, not the approval card", () => {
+		state.liveReads = 0;
+		renderWith(<CloudApprovalReader />);
+		expect(state.liveReads).toBeGreaterThan(0);
 	});
 
 	it("does not watch a remote host's session in the cloud", () => {

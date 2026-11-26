@@ -623,7 +623,7 @@ export interface CloudCpClient {
 
 	/** The session's agent browser actions waiting for approval, oldest first. */
 	listBrowserApprovals(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpBrowserApprovalList>;
-	/** 409: already decided otherwise, or expired. 403: a viewer. */
+	/** 409: already decided otherwise, or expired. 403: anyone but the session's creator or the person it was started for (BrowserApproval.canDecide). */
 	decideBrowserApproval(
 		orgId: string,
 		sessionId: string,

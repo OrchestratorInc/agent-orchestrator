@@ -17,6 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CloudCpOrganization, CloudCpUser } from "../lib/cloud-cp";
 import { selectActiveOrganization } from "../lib/cloud-offering";
 import { useCloudCp } from "./useCloudCp";
+import { recoverWhileHidden } from "../lib/hidden-window";
 
 export const cloudOrgQueryKey = ["cloud-org"] as const;
 
@@ -65,7 +66,8 @@ export function useCloudOrg(enabled = true): UseCloudOrgResult {
 		staleTime: 30_000,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		retry: 1,
+		// Every cloud read hangs off the org: it must load in a hidden window too.
+		...recoverWhileHidden(),
 		queryFn: async (): Promise<CloudCpOrganization> => {
 			const me = await client.me();
 			const active = selectActiveOrganization(me.organizations, me.activeOrganizationId);

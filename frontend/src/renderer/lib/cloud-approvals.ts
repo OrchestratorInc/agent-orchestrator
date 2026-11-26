@@ -19,6 +19,7 @@ import { CloudCpError } from "./cloud-cp/errors";
 import { tapCloudSessionEvents } from "./cloud-cp/session-events-hub";
 import { usesPreviewWorkspaceData } from "./preview-mode";
 import type { ApprovalDecision, PendingApproval } from "./approvals";
+import { retryUnlessHidden } from "./hidden-window";
 
 export interface CloudApprovalTarget {
 	baseUrl: string;
@@ -91,12 +92,11 @@ export async function decideCloudApproval(
 	}
 }
 
-/** Requests still waiting at `now`: the worker refuses one once it expires. */
-export function unexpired(requests: PendingApproval[], now: number): PendingApproval[] {
-	return requests.filter((request) => !(Date.parse(request.expiresAt) <= now));
-}
-
-/** Milliseconds until the next request expires, or undefined when none will. */
+/**
+ * Milliseconds until the next request expires by this machine's clock, or
+ * undefined when none will. It only schedules a reread: expiresAt is the
+ * control plane's time, so a request is never hidden by the local clock.
+ */
 export function nextExpiryIn(requests: PendingApproval[], now: number): number | undefined {
 	let next: number | undefined;
 	for (const request of requests) {
@@ -136,6 +136,13 @@ function addHeard(ref: SessionRef) {
 	heard = [...heard, ref];
 	notifyRefs();
 }
+/** A session the control plane no longer has stops being read. */
+function dropHeard(ref: SessionRef) {
+	const next = heard.filter((known) => refKey(known) !== refKey(ref));
+	if (next.length === heard.length) return;
+	heard = next;
+	notifyRefs();
+}
 
 /** Keeps a cloud session's approvals read often while it is on screen. */
 export function useWatchCloudApprovals(orgId: string | undefined, sessionId: string): void {
@@ -156,23 +163,32 @@ export function mayHaveApprovals(cloud: { desiredState?: string; observedState?:
 	return cloud.desiredState === "running" || cloud.observedState === "running";
 }
 
-// Approval reads leave a short trace in the console when what they find
-// changes, so a missing card can be traced in a packaged build.
+// Approval reads can leave a short trace in the console when what they find
+// changes, to follow a missing card: in dev builds, or in a packaged build
+// with localStorage["ao.debug.approvals"] = "1".
+function tracing(): boolean {
+	if (import.meta.env.DEV) return true;
+	try {
+		return window.localStorage.getItem("ao.debug.approvals") === "1";
+	} catch {
+		return false;
+	}
+}
+function trace(message: string) {
+	if (tracing()) console.info(`[approvals] ${message}`);
+}
 const lastCounts = new Map<string, number>();
 function traceRead(sessionId: string, count: number) {
 	if (lastCounts.get(sessionId) === count) return;
 	lastCounts.set(sessionId, count);
-	console.info(`[approvals] cloud session ${sessionId}: ${count} pending`);
+	trace(`cloud session ${sessionId}: ${count} pending`);
 }
 
 const CLOUD_PENDING_PREFIX = ["approvals", "pending", "cloud"] as const;
 
-/** Every cloud session's pending requests in the query cache, still waiting at `now`. */
-export function cachedCloudPendingApprovals(queryClient: QueryClient, now: number): PendingApproval[] {
-	return unexpired(
-		queryClient.getQueriesData<PendingApproval[]>({ queryKey: CLOUD_PENDING_PREFIX }).flatMap(([, data]) => data ?? []),
-		now,
-	);
+/** Every cloud session's pending requests in the query cache, as the control plane last listed them. */
+export function cachedCloudPendingApprovals(queryClient: QueryClient): PendingApproval[] {
+	return queryClient.getQueriesData<PendingApproval[]>({ queryKey: CLOUD_PENDING_PREFIX }).flatMap(([, data]) => data ?? []);
 }
 
 /**
@@ -184,7 +200,7 @@ export function useCloudPendingApprovals(): PendingApproval[] {
 	const last = useRef<PendingApproval[]>([]);
 	const subscribe = useCallback((listener: () => void) => queryClient.getQueryCache().subscribe(listener), [queryClient]);
 	const read = useCallback(() => {
-		const next = cachedCloudPendingApprovals(queryClient, Date.now());
+		const next = cachedCloudPendingApprovals(queryClient);
 		const same = next.length === last.current.length && next.every((request, index) => request === last.current[index]);
 		if (!same) last.current = next;
 		return last.current;
@@ -237,6 +253,11 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 					traceRead(target.sessionId, pending.length);
 					return pending;
 				}, (error: unknown) => {
+					if (error instanceof CloudCpError && error.status === 404) {
+						// Gone (deleted, or never this person's): stop reading it.
+						dropHeard(target);
+						return [];
+					}
 					// A failed read must not pass for "nothing pending" without a trace.
 					console.warn(`Could not read browser approvals for cloud session ${target.sessionId}`, error);
 					throw error;
@@ -245,12 +266,15 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 			// People step away while an agent works: a request must reach the
 			// app while its window is hidden or unfocused, not on its return.
 			refetchIntervalInBackground: true,
+			// A retry started while the window is hidden would pause until it is
+			// shown; the poll above tries again instead.
+			retry: retryUnlessHidden,
 		})),
 	});
 	const all = results.flatMap((result) => result.data ?? []);
 
-	// A request the user leaves alone ends at its expiry: drop it then, and
-	// reread so the list agrees with the control plane.
+	// A request the user leaves alone ends at its expiry: reread then, so it
+	// leaves once the control plane no longer lists it.
 	const [now, setNow] = useState(() => Date.now());
 	const wait = nextExpiryIn(all, now);
 	useEffect(() => {
@@ -263,8 +287,8 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 	}, [queryClient, wait]);
 	const targetList = targets.map((target) => target.sessionId).join(", ");
 	useEffect(() => {
-		console.info(`[approvals] reading browser approvals for ${targets.length} cloud session(s)${targetList ? `: ${targetList}` : ""}`);
+		trace(`reading browser approvals for ${targets.length} cloud session(s)${targetList ? `: ${targetList}` : ""}`);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [targetList]);
-	return unexpired(all, Math.max(now, Date.now()));
+	return all;
 }

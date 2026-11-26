@@ -127,17 +127,36 @@ export function GlobalApprovalCard() {
 	return useContext(QueryClientContext) ? <GlobalApprovalCardContent /> : null;
 }
 
+/**
+ * Reads AO Cloud's pending approvals for the whole renderer. Mounted apart
+ * from the approval card, which waits for the local daemon: a cloud session's
+ * request must still be read while this machine's daemon restarts.
+ */
+export function CloudApprovalReader() {
+	return useContext(QueryClientContext) ? <CloudApprovalReaderContent /> : null;
+}
+
+function CloudApprovalReaderContent() {
+	useLiveCloudPendingApprovals();
+	return null;
+}
+
+/** Requests the viewer can answer first: one they cannot must never hide one they can. */
+export function decidableFirst(requests: PendingApproval[]): PendingApproval[] {
+	return [...requests.filter((request) => !request.waitingFor), ...requests.filter((request) => request.waitingFor)];
+}
+
 function GlobalApprovalCardContent() {
 	// The shell's card holds the one live stream every approval reader shares.
 	const pending = usePendingApprovals({ live: true });
 	// Self-hosted remote hosts gate their agent browsers the same way.
 	const remote = useRemotePendingApprovals({ live: true });
-	// AO Cloud gates cloud sessions' agent browsers; one org stream holds them.
-	const cloud = useLiveCloudPendingApprovals();
+	// AO Cloud gates cloud sessions' agent browsers; CloudApprovalReader reads them.
+	const cloud = useCloudPendingApprovals();
 	const routed = useRoutedSessionKey();
 	const workspaces = useWorkspaceQuery();
 	const navigateToSession = useNavigateToSession();
-	const elsewhere = [...(pending.data ?? []), ...remote, ...cloud].filter((request) => requestKey(request) !== routed);
+	const elsewhere = decidableFirst([...(pending.data ?? []), ...remote, ...cloud].filter((request) => requestKey(request) !== routed));
 	const request = elsewhere[0];
 	const { decide, busy, error } = useDecide(request);
 	const placement = useCornerPlacement();

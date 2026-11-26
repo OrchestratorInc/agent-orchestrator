@@ -55,6 +55,7 @@ import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
+import { recoverWhileHidden } from "../lib/hidden-window";
 
 function standaloneWorkspaceName(): string {
 	return appI18n.t("standalone.workspaceName");
@@ -698,7 +699,9 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryKey: [...cloudProjectsQueryKey, baseUrl, orgId ?? ""],
 		enabled: options.enabled !== false && ready && orgId !== undefined,
 		subscribed: options.subscribed,
-		retry: 1,
+		// Not polled while it reads fine, but a failed read (a reload while
+		// the window is hidden) recovers without the window being shown.
+		...recoverWhileHidden(),
 		// Projects change rarely and are not polled; returning to the app picks up
 		// one made elsewhere meanwhile, as the cloud org and offering do.
 		refetchOnWindowFocus: true,
@@ -758,10 +761,10 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryKey: [...cloudSessionsQueryKey, baseUrl, orgId ?? ""],
 		enabled: options.enabled !== false && ready && orgId !== undefined,
 		subscribed: options.subscribed,
-		retry: 1,
 		// A provisioning sandbox changes state without a client action, so poll to
 		// reflect requested -> running -> ready the same way local sessions stream.
-		refetchInterval: 5000,
+		// While hidden it polls only to recover from a failed read.
+		...recoverWhileHidden(5000),
 		queryFn: async (): Promise<CloudCpSession[]> => {
 			if (orgId === undefined) return [];
 			const readStartedAt = renameReadStarted();

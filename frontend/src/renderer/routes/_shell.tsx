@@ -28,7 +28,7 @@ import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding"
 import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
-import { GlobalApprovalCard } from "../components/approvals/ApprovalHost";
+import { CloudApprovalReader, GlobalApprovalCard } from "../components/approvals/ApprovalHost";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
@@ -1702,6 +1702,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<ArchiveModalHost />
 				<GlobalToast />
 				{daemonStatus.state === "ready" ? <GlobalApprovalCard /> : null}
+				{/* Cloud approvals do not wait for this machine's daemon. */}
+				<CloudApprovalReader />
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
 				{quitConfirmDialog}

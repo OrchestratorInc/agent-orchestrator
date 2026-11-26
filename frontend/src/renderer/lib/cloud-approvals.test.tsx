@@ -29,7 +29,6 @@ import {
 	fetchCloudPendingApprovals,
 	nextExpiryIn,
 	toPendingApproval,
-	unexpired,
 	useCloudPendingApprovals,
 	useLiveCloudPendingApprovals,
 	useWatchCloudApprovals,
@@ -90,14 +89,48 @@ describe("cloud approvals", () => {
 		await expect(decideCloudApproval(failWith(403), TARGET, "a-1", "deny")).rejects.toThrow("no");
 	});
 
-	it("drops a request once it expires, and says when the next one will", () => {
+	it("says when the next request expires, to reread then", () => {
 		const soon = toPendingApproval(cloudRequest({ id: "soon", expiresAt: "2026-11-17T10:00:10Z" }), TARGET);
 		const later = toPendingApproval(cloudRequest({ id: "later", expiresAt: "2026-11-17T10:01:00Z" }), TARGET);
 		const now = Date.parse("2026-11-17T10:00:05Z");
 		expect(nextExpiryIn([soon, later], now)).toBe(5_000);
-		expect(unexpired([soon, later], now).map((request) => request.id)).toEqual(["soon", "later"]);
-		expect(unexpired([soon, later], now + 5_000).map((request) => request.id)).toEqual(["later"]);
 		expect(nextExpiryIn([soon], now + 5_000)).toBeUndefined();
+	});
+
+	it("keeps a request the control plane still lists, whatever this machine's clock says", async () => {
+		// expiresAt by the control plane's clock is already past by this one's: a clock running ahead.
+		hooks.sessions = [{ id: "s-skew", cloud: { orgId: "org-1", desiredState: "running", observedState: "running" } }];
+		hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => ({
+			pending: sessionId === "s-skew" ? [cloudRequest({ id: "skewed", sessionId: "s-skew", expiresAt: new Date(Date.now() - 60_000).toISOString() })] : [],
+		}));
+		const client = new QueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		const reader = renderHook(() => useCloudPendingApprovals(), { wrapper });
+		await waitFor(() => expect(shell.result.current.map((request) => request.id)).toContain("skewed"));
+		expect(reader.result.current.map((request) => request.id)).toContain("skewed");
+		shell.unmount();
+		client.clear();
+	});
+
+	it("stops reading a session the control plane no longer has", async () => {
+		hooks.sessions = [];
+		hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => {
+			if (sessionId === "s-gone") throw new CloudCpError("not found", { status: 404 });
+			return { pending: [] };
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		await waitFor(() => expect(hooks.tap).toBeDefined());
+		act(() => hooks.tap?.({ baseUrl: "https://cp.test", orgId: "org-1", sessionId: "s-gone" }, { type: "browser.approval_requested" }));
+		await waitFor(() => expect(hooks.listBrowserApprovals.mock.calls.map(([, id]) => id)).toContain("s-gone"));
+		await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: ["approvals", "pending", "cloud"] }).some((q) => q.queryKey.includes("s-gone") && q.getObserversCount() > 0)).toBe(false));
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("s-gone"), expect.anything());
+		warn.mockRestore();
+		shell.unmount();
+		client.clear();
 	});
 
 	it("reads only running cloud sessions, and every other reader sees the result without fetching", async () => {
@@ -107,7 +140,7 @@ describe("cloud approvals", () => {
 			{ id: "s-1", cloud: { orgId: "org-1", observedState: "running" } },
 			{ id: "s-2", cloud: { orgId: "org-1", observedState: "stopped" } },
 		];
-		hooks.listBrowserApprovals.mockResolvedValue({ pending: [cloudRequest({ expiresAt: future })] });
+		hooks.listBrowserApprovals.mockReset().mockResolvedValue({ pending: [cloudRequest({ expiresAt: future })] });
 		const client = new QueryClient();
 		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 		const reader = renderHook(() => useCloudPendingApprovals(), { wrapper });
@@ -201,7 +234,7 @@ describe("cloud approvals", () => {
 	it("shows a request in a window hidden from startup, even when the first read fails", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-		// The app's own client, with its focus handling.
+		// The app's own client and defaults: only the approval read's own options keep it going.
 		const { queryClient: appClient } = await import("./query-client");
 		appClient.mount();
 		hooks.sessions = [{ id: "s-startup", cloud: { orgId: "org-1", desiredState: "running", observedState: "running" } }];
