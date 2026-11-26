@@ -21,13 +21,19 @@ export function createDesktopIdentitySync(
 	let generation = 0;
 	let currentHosts = "";
 	let currentEndpoints = "";
+	// The versions go with the identity: a desktop that is no longer the one
+	// connected must not name the daemon of an error that follows.
+	const clear = () => {
+		adopt(null);
+		versions({}, false);
+	};
 	return async (configs) => {
 		const mine = ++generation;
 		const endpoints = JSON.stringify(configs.map((cfg) => [cfg.hostId, cfg.host, cfg.httpPort, cfg.secure]));
 		const endpointsChanged = endpoints !== currentEndpoints;
 		if (endpointsChanged) {
 			currentEndpoints = endpoints;
-			adopt(null);
+			clear();
 		}
 		if (configs.length === 0) {
 			versions({}, false);
@@ -43,13 +49,13 @@ export function createDesktopIdentitySync(
 				await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, cfg.password),
 			])));
 		} catch {
-			if (mine === generation) adopt(null);
+			if (mine === generation) clear();
 			return;
 		}
 		if (mine !== generation) return;
 		if (hosts !== currentHosts) {
 			currentHosts = hosts;
-			if (!endpointsChanged) adopt(null);
+			if (!endpointsChanged) clear();
 		}
 		const results = await Promise.all(configs.map((cfg) => fetchIdentity(cfg).catch(() => null)));
 		if (mine !== generation) return;
