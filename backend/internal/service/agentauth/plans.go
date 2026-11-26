@@ -147,6 +147,11 @@ func agyLoginPlan() Plan {
 	p.signInKeepsRunning = true
 	p.loginURLRules = []loginURLRule{{host: "accounts.google.com", pathPrefix: "/o/oauth2/"}}
 	p.guidedPlatforms = []string{"darwin", "windows"}
+	// Signed in, Agy skips its login menu: it signs in silently, then asks
+	// whether to trust the (fresh) working folder. It has /logout but no
+	// /login, so switching accounts starts with signing out.
+	p.signedInHint = "Agy is already signed in. To use a different account, run /logout in Agy, then sign in here again."
+	p.signedInScreens = []string{"Do you trust the contents of this project?"}
 	return p
 }
 

@@ -252,6 +252,14 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		if secret != "" || model != "" || opts.sharesDevice() || account {
 			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This sign-in method does not accept a credential or setting.", nil)
 		}
+		if hint := planByAgentID[agentID].signedInHint; hint != "" {
+			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			state := s.nativeSignInState(probeCtx, agentID)
+			cancel()
+			if nativeSignInFound(state) {
+				return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_ALREADY_SIGNED_IN", hint, nil)
+			}
+		}
 		return s.startHiddenLogin(ctx, agentID, method, steps)
 	}
 	args, needsSecret, err := loginArgs(agentID, method)
@@ -624,6 +632,16 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 		}
 		s.mu.Unlock()
 	} else {
+		if len(op.guidedSteps) > 0 && showsSignedInScreen(op.snapshot.AgentID, output) {
+			// The CLI was already signed in (the start check could not tell,
+			// say from file-based storage), so its menu will never appear.
+			s.mu.Lock()
+			if op.snapshot.Status == "running" {
+				op.snapshot.Status = "failed"
+			}
+			s.mu.Unlock()
+			return true
+		}
 		s.advanceGuidedLogin(ctx, terminal, op, output)
 		if link := printedLoginURL(op.snapshot.AgentID, output); link != "" {
 			s.mu.Lock()
@@ -652,6 +670,22 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 	op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "", "", nil
 	s.mu.Unlock()
 	return true
+}
+
+// showsSignedInScreen reports whether output holds one of the texts the
+// plan's CLI shows only once it is signed in.
+func showsSignedInScreen(agentID, output string) bool {
+	screens := planByAgentID[agentID].signedInScreens
+	if len(screens) == 0 {
+		return false
+	}
+	plain := terminalui.PlainTerminalText(output)
+	for _, text := range screens {
+		if strings.Contains(plain, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // advanceGuidedLogin presses the next step's reviewed keys once its ready

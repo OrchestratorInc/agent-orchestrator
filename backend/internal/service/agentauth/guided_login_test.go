@@ -184,10 +184,9 @@ func TestAgyCloudProjectLoginWalksBothMenus(t *testing.T) {
 func TestGuidedLoginFinishesOnlyAfterItsStepsAreSent(t *testing.T) {
 	onPlatform(t, "darwin")
 
-	// An earlier Google sign-in is already in the Keychain, so the probe
-	// passes from the start.
 	pty := &guidedTerminalFake{output: agyMenuScreen}
-	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+	prober := &switchableProberFake{state: domain.AgentAuthenticationUnknown}
+	svc := NewWithAgentResolver(foundExecutable("agy"), prober, pty, "")
 	t.Cleanup(svc.Close)
 
 	started, err := svc.StartLogin(t.Context(), "agy", "cloud_project", "")
@@ -195,6 +194,8 @@ func TestGuidedLoginFinishesOnlyAfterItsStepsAreSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the project entry to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 2 })
+	// A Google sign-in now passes the probe while the Cloud menu is pending.
+	prober.set(domain.AgentAuthenticationAuthorized)
 	// The Cloud menu never appears: past several probe rounds the login must
 	// still be waiting on its last step instead of reporting success.
 	time.Sleep(3 * time.Second)
@@ -222,9 +223,9 @@ func TestGuidedLoginFinishesOnlyAfterItsStepsAreSent(t *testing.T) {
 func TestGuidedLoginThatExitsWithStepsUnsentFails(t *testing.T) {
 	onPlatform(t, "darwin")
 
-	// An earlier Google sign-in is already in the Keychain.
 	pty := &guidedTerminalFake{output: agyMenuScreen}
-	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+	prober := &switchableProberFake{state: domain.AgentAuthenticationUnknown}
+	svc := NewWithAgentResolver(foundExecutable("agy"), prober, pty, "")
 	t.Cleanup(svc.Close)
 
 	started, err := svc.StartLogin(t.Context(), "agy", "cloud_project", "")
@@ -232,6 +233,8 @@ func TestGuidedLoginThatExitsWithStepsUnsentFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the project entry to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 2 })
+	// A Google sign-in now passes the probe.
+	prober.set(domain.AgentAuthenticationAuthorized)
 	// Agy exits before its Cloud menu appears.
 	pty.mu.Lock()
 	pty.alive = false
@@ -244,6 +247,49 @@ func TestGuidedLoginThatExitsWithStepsUnsentFails(t *testing.T) {
 	if current.Status != "failed" {
 		t.Fatalf("status = %q, want failed with a reviewed step unsent", current.Status)
 	}
+}
+
+func TestGuidedLoginRefusesWhenAlreadySignedIn(t *testing.T) {
+	onPlatform(t, "darwin")
+
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+	t.Cleanup(svc.Close)
+
+	for _, method := range []string{"browser", "cloud_project"} {
+		_, err := svc.StartLogin(t.Context(), "agy", method, "")
+		if err == nil || !strings.Contains(err.Error(), "/logout") {
+			t.Fatalf("%s: err = %v, want the already-signed-in hint", method, err)
+		}
+	}
+	if len(pty.input.Argv) != 0 {
+		t.Fatalf("opened a hidden terminal %+v while signed in", pty.input)
+	}
+}
+
+func TestGuidedLoginEndsWhenAgyShowsItsSignedInScreen(t *testing.T) {
+	onPlatform(t, "darwin")
+
+	// The start check can't see the sign-in, but Agy signs in silently and
+	// asks about the working folder instead of showing its login menu.
+	pty := &guidedTerminalFake{output: "Welcome to the Antigravity CLI. You are currently not signed in.\n⣟  Signing in...\n"}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationUnknown}, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty.setOutput("Accessing workspace:\n/tmp/x\nDo you trust the contents of this project?\n> Yes, I trust this folder\n  No, exit\n")
+	var current LoginSnapshot
+	waitFor(t, "the login to end", 5*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.Status != "running"
+	})
+	if current.Status != "failed" || len(pty.pressed()) != 0 {
+		t.Fatalf("status = %q keys = %v, want failed with no keys pressed", current.Status, pty.pressed())
+	}
+	waitFor(t, "the hidden terminal to close", 5*time.Second, pty.isClosed)
 }
 
 func TestGuidedLoginWaitsForItsMenu(t *testing.T) {

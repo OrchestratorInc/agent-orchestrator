@@ -115,6 +115,14 @@ type Plan struct {
 	// operating systems where the harness's auth probe can confirm a sign-in
 	// while the CLI runs. Empty means every platform.
 	guidedPlatforms []string
+	// signedInHint is the message a guided login returns when the harness is
+	// already signed in: a CLI that shows its login menu only when signed out
+	// can't switch accounts from it.
+	signedInHint string
+	// signedInScreens are texts the CLI shows only once it is signed in. Seen
+	// while a guided login still waits for its menu, they end the login
+	// instead of leaving it waiting for a menu that will never appear.
+	signedInScreens []string
 }
 
 // currentGOOS is the platform guidedPlatforms is checked against; tests
