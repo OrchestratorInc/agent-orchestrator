@@ -195,8 +195,12 @@ function SandboxSwitchRow({ project, readOnly, configKey, id, label, description
 	const save = useMutation({
 		mutationKey,
 		mutationFn: (value: boolean) => client.updateProjectSettings(project.orgId, project.id, { config: { [configKey]: value } }),
-		onSuccess: (response) => {
-			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
+		onSuccess: async (response) => {
+			// A read that started before the save would otherwise land after it
+			// and put the old value back.
+			const settingsKey = cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id);
+			await queryClient.cancelQueries({ queryKey: settingsKey });
+			queryClient.setQueryData(settingsKey, response.project);
 			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		},
 		onError: (error) => { if (configKeyUnsupported(error, configKey)) setUnsupported(true); },
