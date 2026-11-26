@@ -7843,7 +7843,7 @@ html[data-new-desktop-ui] .cursor-chat-composer {
  * no layout space and follows the corners). Light keeps its own ring and
  * shadow. */
 html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 6%, transparent);
 	transition: none;
 }
 
@@ -7854,7 +7854,7 @@ html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
  * start where the composer's corners end; its total height is unchanged. */
 html[data-new-desktop-ui]:not([data-theme="light"]) :is([data-composer-tray], .chat-composer-tray) {
 	--composer-merge-fillet: 6px;
-	--composer-merge-edge: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+	--composer-merge-edge: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
 	--composer-merge-fill: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
