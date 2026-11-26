@@ -61,7 +61,7 @@ import { trustPreviewCertificate } from "./preview-certificate";
 import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
-import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
+import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse, isLoopbackHost } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
 import type {
 	BrowserLiveSink,
@@ -619,7 +619,6 @@ type BrowserEntry = {
   // Set on a tab that shows the agent's own browser: the agent browser tab it
   // shows, for life ("" until its viewer first reports).
   agentTab?: string;
-  preview?: boolean;
   // The agent browser page this tab shows, as its viewer last reported it.
   remote?: RemoteTabReport;
   // An agent tab not shown yet: the viewer it loads when first shown
@@ -851,6 +850,16 @@ const SITE_CHALLENGE_LOOP_MS = 60_000;
 const PROFILE_SWITCH_SETTLE_MS = 10_000;
 // A remote session's previews show on AO's own preview origins (remote-proxy.ts).
 const REMOTE_PREVIEW_URL = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
+
+function isPreviewPage(url: string, hostId?: string): boolean {
+  if (REMOTE_PREVIEW_URL.test(url)) return true;
+  if (!hostId) return false;
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
 
 function temporaryBrowserPartition(): string {
   return `${TEMPORARY_BROWSER_PARTITION_PREFIX}${randomUUID()}`;
@@ -2963,7 +2972,6 @@ export function createBrowserViewHost(
     if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
       throw new Error("Unsupported browser URL");
     }
-    entry.preview = REMOTE_PREVIEW_URL.test(normalized.href);
     return entry.driver().navigate(normalized.href, loadOptions);
   };
 
@@ -3027,10 +3035,9 @@ export function createBrowserViewHost(
         active.agentTab === undefined
           ? active
           : [...session.tabs.values()].find(
-              (tab) => tab.agentTab === undefined && tab.preview,
+              (tab) => tab.agentTab === undefined && isPreviewPage(tab.view.webContents.getURL(), session.hostId),
             );
       if (!entry) return pushNavState(options, active);
-      entry.preview = false;
       cancelAnnotation(options, entry, "navigation");
       if (entry === active) {
         if (session.devtools) destroyDevTools(session);
@@ -3194,7 +3201,7 @@ export function createBrowserViewHost(
   // agentTab and viewer: an agent tab's binding and, until it is first shown,
   // its viewer (BrowserEntry). They are kept as is: its address says nothing
   // while its host is away.
-  type SavedBrowserTab = { tabId: string; url?: string; agentTab?: string; viewer?: string; preview?: boolean };
+  type SavedBrowserTab = { tabId: string; url?: string; agentTab?: string; viewer?: string };
 
   const disposeSessionTabs = (session: BrowserSessionEntry): void => {
     for (const entry of session.tabs.values()) {
@@ -3213,18 +3220,17 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
   ): SavedBrowserTab[] =>
     [...session.tabs.values()].map((entry) => {
-      const { tabId, agentTab, viewer, preview } = entry;
+      const { tabId, agentTab, viewer } = entry;
       try {
         const url = entry.view.webContents.getURL();
         return {
           tabId,
           agentTab,
           viewer,
-          preview,
           ...(isAllowedBrowserURL(url, options.rendererOrigin) ? { url } : {}),
         };
       } catch {
-        return { tabId, agentTab, viewer, preview };
+        return { tabId, agentTab, viewer };
       }
     });
 
@@ -3254,7 +3260,6 @@ export function createBrowserViewHost(
       // An agent tab stays one, bound to the same page.
       entry.agentTab = saved.agentTab;
       entry.viewer = saved.viewer;
-      entry.preview = saved.preview;
     }
     session.nextTabNumber = Math.max(nextTabNumber, highestTabNumber + 1);
     // Activate before reloading: pages can take seconds to load in the new
@@ -5722,7 +5727,6 @@ function tabResult(
     active,
     ...(entry.favicon ? { favicon: entry.favicon } : {}),
     ...(entry.agentTab !== undefined ? { remote: { tabId: entry.agentTab } } : {}),
-    ...(entry.preview ? { preview: true } : {}),
     untrustedExternalContent: true,
   };
 }
@@ -5851,9 +5855,10 @@ function listTabs(
   return {
     viewId: session.viewId,
     activeTabId: session.activeTabId,
-    tabs: [...session.tabs.values()].map((entry) =>
-      tabResult(entry, entry.tabId === session.activeTabId),
-    ),
+    tabs: [...session.tabs.values()].map((entry) => {
+      const tab = tabResult(entry, entry.tabId === session.activeTabId);
+      return isPreviewPage(tab.url, session.hostId) ? { ...tab, preview: true } : tab;
+    }),
     untrustedExternalContent: true,
     ...(change ? { change } : {}),
   };

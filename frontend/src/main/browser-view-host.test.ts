@@ -4448,11 +4448,11 @@ describe("agent browser runtime", () => {
 		const viewer = `${AGENT_VIEWER}?embed=1&sq=70&ss=1`;
 		// The sync runs off the reporting tab's own event.
 		const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-		type Tab = { id: string; url: string; title: string; active: boolean; favicon?: string; remote?: { tabId: string } };
+		type Tab = { id: string; url: string; title: string; active: boolean; favicon?: string; remote?: { tabId: string }; preview?: boolean };
 		// A remote session's view: its first tab (t1) and the agent browser (a1, views[1]).
-		const openAgent = async (store?: BrowserProfileStore) => {
+		const openAgent = async (store?: BrowserProfileStore, sessionId = "sess-1") => {
 			const host = setupTabHost(store);
-			const { viewId } = (await host.invoke("browser:ensure", "sess-1")) as { viewId: string };
+			const { viewId } = (await host.invoke("browser:ensure", sessionId)) as { viewId: string };
 			await host.invoke("browser:openTab", { viewId, url: viewer });
 			await settle();
 			const tabs = async () => ((await host.invoke("browser:getTabs", viewId)) as { tabs: Tab[] }).tabs;
@@ -4897,24 +4897,22 @@ describe("agent browser runtime", () => {
 		});
 
 		it("clears the person's preview tab behind an agent tab, never the agent's page", async () => {
-			const { invoke, agent, views, viewId, tabs } = await openAgent();
+			const { invoke, agent, views, viewId, tabs } = await openAgent(undefined, "remote:h_box:ao-1");
+			const load = views[0].webContents.loadURL as unknown as (url: string) => Promise<void>;
+			const preview = async () => (await tabs()).find((tab) => tab.id === "t1")?.preview;
 			await invoke("browser:navigate", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/" });
-			await (views[0].webContents.loadURL as unknown as (url: string) => Promise<void>)("http://localhost:3000/");
-			expect((await tabs()).find((tab) => tab.id === "t1")).toMatchObject({ preview: true });
+			expect(await preview()).toBe(true);
+			await load("https://example.com/");
+			expect(await preview()).toBeUndefined();
+			await load("https://localhost:8443/");
+			expect(await preview()).toBe(true);
+			await load("http://localhost:3000/");
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });
 			// `ao preview clear`, with the agent's page in front.
 			await invoke("browser:clear", viewId);
 			expect(views[0].webContents.getURL()).toBe("about:blank");
 			expect(agent.getURL()).toBe(viewer);
 			expect((await tabs()).find((tab) => tab.active)?.id).toBe("a1");
-		});
-
-		it("keeps a preview tab marked as one through a profile switch", async () => {
-			const profile: BrowserProfile = { id: "22222222-2222-4222-8222-222222222222", name: "Work", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
-			const { host, invoke, viewId, tabs } = await openAgent(fakeBrowserProfileStore(profile, { "sess-1": profile.id }));
-			await invoke("browser:navigate", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/" });
-			await host.switchProfile(viewId, null);
-			expect((await tabs()).find((tab) => tab.id === "t1")).toMatchObject({ preview: true });
 		});
 
 		it("leaves Cmd+F in an agent tab to its viewer, whose find searches the agent's page", async () => {
