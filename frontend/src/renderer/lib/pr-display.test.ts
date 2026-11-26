@@ -617,7 +617,7 @@ describe("merge readiness rows", () => {
 
 describe("readinessSignals", () => {
 	const review = (over: Partial<SessionPRSummary["review"]>) => summary({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [], ...over } });
-	const approved = (reviewerId: string) => ({ reviewerId, verdict: "approved" as const, submittedAt: "2026-10-20T10:00:00Z" });
+	const approved = (reviewerId: string) => ({ reviewerId, verdict: "approved" as const, submittedAt: "2026-10-20T10:00:00Z", autoInjectReview: false });
 
 	it("says nothing with no open comments and no reviews", () => {
 		expect(readinessSignals(review({}))).toEqual([]);
@@ -633,7 +633,7 @@ describe("readinessSignals", () => {
 		expect(readinessSignals(review({ decision: "approved", reviews: [approved("lin")] }))).toEqual([{ key: "approvals", count: 1, tone: "success", label: "Approved by lin" }]);
 		expect(readinessSignals(review({ decision: "review_required", reviews: [approved("lin")] }))[0]).toMatchObject({ count: 1, tone: "warning" });
 		expect(readinessSignals(review({ decision: "review_required" }))[0]).toMatchObject({ count: 0, tone: "warning" });
-		expect(readinessSignals(review({ decision: "changes_requested", reviews: [{ reviewerId: "sam", verdict: "changes_requested", submittedAt: "2026-10-20T10:00:00Z" }] }))[0]).toMatchObject({ count: 0, tone: "error", label: "Changes requested by sam" });
+		expect(readinessSignals(review({ decision: "changes_requested", reviews: [{ reviewerId: "sam", verdict: "changes_requested", submittedAt: "2026-10-20T10:00:00Z", autoInjectReview: false }] }))[0]).toMatchObject({ count: 0, tone: "error", label: "Changes requested by sam" });
 	});
 
 	it("puts them on the card's presentation only when there is something to say", () => {
