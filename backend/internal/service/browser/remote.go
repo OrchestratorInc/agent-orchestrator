@@ -71,6 +71,8 @@ type remoteGate struct {
 	name     string
 	// typed: the command types a line break, which presses Enter.
 	typed bool
+	// source is what a drag picks up; selector is where it drops.
+	source string
 }
 
 // Commands that read, navigate by URL, or change a field's value without
@@ -80,8 +82,8 @@ var remoteBenign = map[string]struct{}{
 	"screenshot": {}, "pdf": {}, "get": {}, "is": {}, "wait": {}, "scroll": {}, "scrollintoview": {},
 	"hover": {}, "focus": {}, "fill": {}, "type": {}, "select": {}, "check": {}, "uncheck": {},
 	"highlight": {}, "tab": {}, "tabs": {}, "window": {}, "frame": {}, "dialog": {}, "console": {},
-	"errors": {}, "network": {}, "set": {}, "diff": {}, "upload": {}, "download": {}, "close": {},
-	"help": {}, "version": {}, "drag": {}, "record": {}, "trace": {}, "cookies": {}, "storage": {},
+	"errors": {}, "network": {}, "set": {}, "diff": {}, "upload": {}, "close": {},
+	"help": {}, "version": {}, "record": {}, "trace": {}, "cookies": {}, "storage": {},
 }
 
 // classifyRemoteArgs reads an agent-browser command line the way the service
@@ -134,6 +136,25 @@ func classifyRemoteArgs(args []string) remoteGate {
 		return remoteGate{}
 	case "find":
 		return classifyFind(rest)
+	case "download":
+		// agent-browser downloads by clicking the element: it is a click.
+		if len(rest) == 0 {
+			return remoteGate{}
+		}
+		return remoteGate{kind: remoteDescribe, action: "click", selector: rest[0]}
+	case "drag":
+		// A drag presses on one element and releases on another: what it
+		// does is decided where it drops ("Delete", "Trash").
+		var ends []string
+		for _, word := range rest {
+			if !strings.HasPrefix(word, "-") {
+				ends = append(ends, word)
+			}
+		}
+		if len(ends) < 2 {
+			return remoteGate{kind: remoteAsk, action: "drag"}
+		}
+		return remoteGate{kind: remoteDescribe, action: "drag", selector: ends[1], source: ends[0]}
 	case "dialog":
 		// Accepting a confirm or prompt lets the page carry on with what it
 		// asked about; reading or dismissing it does not.
@@ -230,7 +251,15 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		approved, approvedIdentified, approvedDocument = target, identified, document
 		target.PageURL, target.PageTitle = pageURL, pageTitle
 		if identified {
-			verdict = approval.Classify(target, mode)
+			judged := target
+			if gate.action == "drag" {
+				// The drop lands on the target as a click would.
+				judged.Action = "click"
+			}
+			verdict = approval.Classify(judged, mode)
+			if gate.action == "drag" && verdict.NeedsApproval {
+				verdict.Summary = onSite(fmt.Sprintf("Drag %s onto %q", remoteSelectorLabel(gate.source), target.Name), pageURL)
+			}
 		}
 		if identified && partial && !verdict.NeedsApproval {
 			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
@@ -333,6 +362,8 @@ func remoteSummary(gate remoteGate, args []string) string {
 		}
 	}
 	switch {
+	case gate.action == "drag":
+		return fmt.Sprintf("Drag %s onto %s", remoteSelectorLabel(gate.source), target)
 	case gate.typed:
 		return "Type a line break into " + target
 	case gate.action == "press":
@@ -341,6 +372,14 @@ func remoteSummary(gate remoteGate, args []string) string {
 		return "Double-click " + target
 	}
 	return "Click " + target
+}
+
+// remoteSelectorLabel shortens a selector or ref for a prompt.
+func remoteSelectorLabel(selector string) string {
+	if len(selector) > 80 {
+		return selector[:80] + "…"
+	}
+	return selector
 }
 
 // remoteCommandArgs returns what follows the command verb in args.

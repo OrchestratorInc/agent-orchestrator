@@ -563,3 +563,43 @@ func TestRemoteApprovedUnknownTargetRunsOnTheSamePage(t *testing.T) {
 		t.Fatalf("forwarded %v", got)
 	}
 }
+
+func TestRemoteDownloadClicksItsElementAndAsksLikeAClick(t *testing.T) {
+	// agent-browser's download clicks the element to start the download: on a
+	// "Place order" button that is a payment click.
+	if got := classifyRemoteArgs([]string{"download", "@e2", "/tmp/x"}); got != (remoteGate{kind: remoteDescribe, action: "click", selector: "@e2"}) {
+		t.Fatalf("gate = %+v", got)
+	}
+	remote := &fakeRemote{refs: checkoutRefs}
+	svc, gate, token := remoteService(t, remote)
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"download", "@e2", "/tmp/x"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+		t.Fatalf("err=%v forwarded=%v", err, remote.sent())
+	}
+	if p := <-asked; p.Category != approval.CategoryPayment {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestRemoteDragIsJudgedByWhereItDrops(t *testing.T) {
+	refs := `{"success":true,"data":{"refs":{"e1":{"role":"listitem","name":"Invoice 42"},"e2":{"role":"button","name":"Delete forever"},"e3":{"role":"region","name":"Done"}}}}`
+	if got := classifyRemoteArgs([]string{"drag", "@e1", "@e2", "--human"}); got != (remoteGate{kind: remoteDescribe, action: "drag", selector: "@e2", source: "@e1"}) {
+		t.Fatalf("gate = %+v", got)
+	}
+	// Dropping onto "Delete forever" asks as a delete.
+	remote := &fakeRemote{refs: refs, focused: `{"success":true,"data":{"result":{"role":"button","name":"Delete forever"}}}`}
+	svc, gate, token := remoteService(t, remote)
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"drag", "@e1", "@e2"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+		t.Fatalf("err=%v forwarded=%v", err, remote.sent())
+	}
+	if p := <-asked; p.Category != approval.CategoryDelete || p.Action != `Drag @e1 onto "Delete forever" on shop.example` {
+		t.Fatalf("prompt = %+v", p)
+	}
+	// Dropping onto an ordinary zone does not ask.
+	calm := &fakeRemote{refs: refs, focused: `{"success":true,"data":{"result":{"role":"region","name":"Done"}}}`}
+	svc2, gate2, token2 := remoteService(t, calm)
+	if _, err := svc2.ExecuteRemote(context.Background(), "s1", token2, []string{"drag", "@e1", "@e3"}, nil); err != nil || len(gate2.Pending()) != 0 || len(calm.sent()) != 1 {
+		t.Fatalf("err=%v pending=%d forwarded=%v", err, len(gate2.Pending()), calm.sent())
+	}
+}
