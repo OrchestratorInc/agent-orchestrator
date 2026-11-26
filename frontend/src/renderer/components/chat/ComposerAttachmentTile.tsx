@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Play, X } from "@/components/app-icons";
+import { isSupportedImageAttachment } from "../../hooks/useFileAttachments";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { artifactFileIcon } from "../artifact-file-icon";
@@ -254,8 +255,21 @@ function TextThumbnail({ file, url }: { file?: File; url?: string }) {
 	);
 }
 
-/** A file still being read or staged: a card-shaped placeholder that can be cancelled. */
-export function ComposerPendingTile({ name, statusLabel, cancelLabel, onCancel }: { name: string; statusLabel: string; cancelLabel: string; onCancel: () => void }) {
+/**
+ * A file still being read or staged: a placeholder that can be cancelled. It is
+ * the shape the finished tile will be, a square for an image or a video and a
+ * card for any other file, so nothing changes size when the file lands.
+ */
+export function ComposerPendingTile({ name, mimeType, statusLabel, cancelLabel, onCancel }: { name: string; mimeType: string; statusLabel: string; cancelLabel: string; onCancel: () => void }) {
+	const cancel = <ComposerTileRemove label={cancelLabel} onRemove={onCancel} />;
+	if (isSupportedImageAttachment(mimeType) || attachmentPreviewKind(name) === "video") {
+		return (
+			<li role="status" aria-label={statusLabel} className={cn(TILE_CLASS, "size-14")}>
+				<span aria-hidden="true" className={cn(SQUARE_CLASS, "block bg-surface motion-safe:animate-pulse")} />
+				{cancel}
+			</li>
+		);
+	}
 	return (
 		<li role="status" aria-label={statusLabel} className={cn(TILE_CLASS, "flex w-50 items-center gap-2.5 p-1.5 pr-4")}>
 			<span aria-hidden="true" className={cn(THUMB_CLASS, "bg-surface motion-safe:animate-pulse")} />
@@ -266,7 +280,7 @@ export function ComposerPendingTile({ name, statusLabel, cancelLabel, onCancel }
 				</span>
 				<span className="h-2 w-12 rounded-sm bg-surface motion-safe:animate-pulse" />
 			</span>
-			<ComposerTileRemove label={cancelLabel} onRemove={onCancel} />
+			{cancel}
 		</li>
 	);
 }

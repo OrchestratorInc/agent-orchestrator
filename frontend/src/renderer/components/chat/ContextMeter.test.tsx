@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ContextMeter } from "./ContextMeter";
 import type { ConversationUsage } from "../../types/conversation";
 
@@ -44,6 +44,68 @@ describe("ContextMeter", () => {
 		render(<ContextMeter usage={usage({ contextWindow: 1_000_000 })} compactsAt="200k" />);
 		await userEvent.hover(screen.getByRole("progressbar"));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Compacts on its own at 200K");
+	});
+
+	describe("compact button", () => {
+		it("compacts from the card that opens on hover", async () => {
+			const onCompact = vi.fn().mockResolvedValue(undefined);
+			render(<ContextMeter usage={usage()} onCompact={onCompact} />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			await userEvent.click(await screen.findByRole("button", { name: "Compact now" }));
+			expect(onCompact).toHaveBeenCalledTimes(1);
+		});
+
+		it("says why it cannot compact right now", async () => {
+			const onCompact = vi.fn();
+			render(<ContextMeter usage={usage()} onCompact={onCompact} compactBlockedReason="Stop the current turn before compacting." />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			expect(await screen.findByRole("button", { name: "Compact now" })).toBeDisabled();
+			expect(screen.getByText("Stop the current turn before compacting.")).toBeInTheDocument();
+		});
+
+		it("reports a failed compaction", async () => {
+			render(<ContextMeter usage={usage()} onCompact={() => Promise.reject(new Error("nope"))} />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			await userEvent.click(await screen.findByRole("button", { name: "Compact now" }));
+			expect(await screen.findByRole("alert")).toHaveTextContent("Conversation history could not be compacted. Try again.");
+		});
+
+		it("is reached from the meter with the keyboard, and Escape or Tab returns there", async () => {
+			const user = userEvent.setup();
+			render(<ContextMeter usage={usage()} onCompact={vi.fn()} />);
+			const meter = screen.getByRole("progressbar");
+			for (const leave of ["{Escape}", "{Tab}"]) {
+				act(() => meter.focus());
+				await user.keyboard("{Enter}");
+				const button = await screen.findByRole("button", { name: "Compact now" });
+				await waitFor(() => expect(button).toHaveFocus());
+				await user.keyboard(leave);
+				await waitFor(() => expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument());
+				expect(meter).toHaveFocus();
+				act(() => meter.blur());
+			}
+		});
+
+		it("returns focus to the meter after compacting from the keyboard", async () => {
+			const user = userEvent.setup();
+			const onCompact = vi.fn().mockResolvedValue(undefined);
+			render(<ContextMeter usage={usage()} onCompact={onCompact} />);
+			const meter = screen.getByRole("progressbar");
+			act(() => meter.focus());
+			await user.keyboard("{ArrowDown}");
+			await waitFor(() => expect(screen.getByRole("button", { name: "Compact now" })).toHaveFocus());
+			await user.keyboard("{Enter}");
+			expect(onCompact).toHaveBeenCalledTimes(1);
+			await waitFor(() => expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument());
+			expect(meter).toHaveFocus();
+		});
+
+		it("is absent without a compact action", async () => {
+			render(<ContextMeter usage={usage()} />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			await screen.findByRole("tooltip");
+			expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument();
+		});
 	});
 
 	it("encodes fullness in the circular stroke", () => {

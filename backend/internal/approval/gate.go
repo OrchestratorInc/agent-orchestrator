@@ -60,7 +60,7 @@ func (d Decision) Allowed() bool {
 // ErrNotPending reports a decision for a request that is no longer waiting.
 var ErrNotPending = errors.New("approval request is not pending")
 
-// ErrSiteRuleNotAllowed: "Always allow" is not offered for the catch-all
+// ErrSiteRuleNotAllowed is returned for an "Always allow" on the catch-all
 // script category, which covers eval and anything that could not be read.
 var ErrSiteRuleNotAllowed = errors.New("this kind of action cannot be always allowed for a site")
 
