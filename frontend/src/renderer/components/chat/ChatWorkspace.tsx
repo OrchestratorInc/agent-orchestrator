@@ -204,7 +204,7 @@ import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
-import { pageHidden } from "../../lib/page-hidden";
+import { notRendered, pageHidden } from "../../lib/page-hidden";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
@@ -3631,6 +3631,10 @@ export function Timeline({
 	// instead of snapping. Opening a chat never animates, so the first layout snaps.
 	const glideRequested = useRef(false);
 	const initialLayoutDone = useRef(false);
+	// Set while the scroller is not rendered (Settings hides the page with display:
+	// none and leaves it mounted). Nothing is laid out or measured meanwhile; the
+	// resize that shows it again lays it out once, before it is painted.
+	const hiddenAway = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
 	const skipRelatchFollow = useRef(false);
@@ -4638,7 +4642,8 @@ export function Timeline({
 	const virtualItemKey = useCallback((index: number) => groups[index]!.key, [groups]);
 	const captureViewportResize = useCallback((instance: Virtualizer<HTMLDivElement, Element>) => {
 		const node = instance.scrollElement;
-		if (!node) return;
+		// Hidden (Settings over the page) is not a resize: keep the size it left with.
+		if (!node || notRendered(node)) return;
 		const previous = viewportSize.current;
 		const next = { width: node.clientWidth, height: node.clientHeight };
 		if (previous && (previous.width !== next.width || previous.height !== next.height) && !viewportResize.current) {
@@ -4678,6 +4683,8 @@ export function Timeline({
 		followOnAppend: false,
 		// Bootstrap unmeasurable panels until their real geometry is available.
 		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) => {
+			// A hidden chat keeps the viewport it had; one never shown yet still bootstraps.
+			if (instance.scrollElement && notRendered(instance.scrollElement) && viewportSize.current) return;
 			captureViewportResize(instance);
 			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT });
 		}),
@@ -4685,6 +4692,9 @@ export function Timeline({
 			// Capture the old row positions before the first width remeasurement.
 			captureViewportResize(instance);
 			const index = Number(element.getAttribute("data-index"));
+			// Hidden, every row reads 0 tall. Keep the size it had, so the chat comes back
+			// at the height it left with instead of re-laying out from estimates.
+			if (notRendered(element)) return instance.measurementsCache[index]?.size ?? CHAT_ESTIMATED_TURN_HEIGHT;
 			const group = groups[index];
 			if (group && !measuredVirtualGroups.current.has(group)) {
 				measuredVirtualGroups.current.add(group);
@@ -4961,7 +4971,7 @@ export function Timeline({
 	const updateScrollbar = useCallback(() => {
 		const node = scroller.current;
 		const track = scrollTrack.current;
-		if (!node || !track) return;
+		if (!node || !track || notRendered(node)) return;
 
 		const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
 		const visible = maxScroll > 1;
@@ -5050,7 +5060,7 @@ export function Timeline({
 	const syncPromptSpacer = useCallback(() => {
 		const node = scroller.current;
 		const pad = promptSpacer.current;
-		if (!node || !pad) return;
+		if (!node || !pad || notRendered(node)) return;
 
 		const anchors = scrollContent.current?.querySelectorAll<HTMLElement>(
 			"[data-chat-scroll-anchor]",
@@ -5114,6 +5124,10 @@ export function Timeline({
 	}, [followEnd, markWritten, cancelScrollFollow, isFlying, isGliding, reaim]);
 
 	const syncScrollLayout = useCallback(() => {
+		if (scroller.current && notRendered(scroller.current)) {
+			hiddenAway.current = true;
+			return;
+		}
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
@@ -5170,8 +5184,9 @@ export function Timeline({
 	// end smoothly once the reply is taller than the viewport.
 	const syncStreamedGrowth = useCallback(() => {
 		if (!pinnedRef.current || !initialLayoutDone.current) return;
-		anchorGeometry.current = null;
 		const node = scroller.current;
+		if (node && notRendered(node)) return;
+		anchorGeometry.current = null;
 		// Something at the end shrank on its own (a finished plan folding away). The
 		// browser has already clamped scrollTop by the time this observer runs, before
 		// the spacer could grow back, so put the view back now, before paint, instead
@@ -5197,7 +5212,7 @@ export function Timeline({
 	followVirtualHeight.current = () => {
 		const node = scroller.current;
 		const content = virtualContent.current;
-		if (!virtualized || !node || !content || viewportResize.current || !initialLayoutDone.current) return;
+		if (!virtualized || !node || !content || viewportResize.current || !initialLayoutDone.current || notRendered(node)) return;
 		const total = virtualizer.getTotalSize();
 		const shrink = renderedVirtualHeight.current - total;
 		if (shrink === 0) return;
@@ -5237,7 +5252,7 @@ export function Timeline({
 	// rows were on screen just before the fold...
 	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
 		const node = scroller.current;
-		if (!node || !initialLayoutDone.current) return undefined;
+		if (!node || !initialLayoutDone.current || notRendered(node)) return undefined;
 		const folded = !groups.some((group) => group.key === key && !group.live);
 		if (folded && !(pinnedRef.current && groups.some((group) => group.folded?.members.some((member) => member.key === key)))) return undefined;
 		const wrapper = Array.from(virtualContent.current?.children ?? [])
@@ -5420,7 +5435,13 @@ export function Timeline({
 		entranceGate.catchUpAt = performance.now();
 		if (isFlying()) cancelScrollFollow();
 		const node = scroller.current;
-		if (!node || !initialLayoutDone.current) return;
+		// Still hidden under Settings: the resize that shows it runs this again.
+		if (!node || notRendered(node)) return;
+		// Opened while hidden: this is its first layout, which lands at the end.
+		if (!initialLayoutDone.current) {
+			syncScrollLayout();
+			return;
+		}
 		if (pinnedRef.current) {
 			syncPromptSpacer();
 			followOrSnapToEnd(node);
@@ -5498,9 +5519,26 @@ export function Timeline({
 	useEffect(() => loadOlderToFill(), [loadOlderToFill, oldestRow, hasOlder, loadingOlder]);
 
 	useEffect(() => {
+		// Setting up means this chat runs effects: a hidden <Activity> (a kept session)
+		// runs none, and showing it runs this again, laid out. Only a chat still under
+		// Settings is away, and syncScrollLayout marks it so again.
+		hiddenAway.current = false;
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(() => {
+			const node = scroller.current;
+			if (node && notRendered(node)) {
+				hiddenAway.current = true;
+				return;
+			}
+			// Shown again. Observers report before paint, so the chat is put back here,
+			// in the frame it reappears: what it had stays where the browser restored it,
+			// and what landed while it was hidden is history (as for a hidden window),
+			// with a reader at the end snapped to the new end rather than gliding there.
+			if (hiddenAway.current) {
+				hiddenAway.current = false;
+				onPageShown.current();
+			}
 			captureViewportResize(virtualizer);
 			onContentResize.current();
 			loadOlderToFill();
