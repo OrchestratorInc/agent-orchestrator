@@ -35,6 +35,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
 	background: (color: string) => ({ background: color }),
 	clickable: (handler: () => void, options?: { indication?: boolean }) => ({ clickable: handler, indication: options?.indication }),
 	clip: () => ({ clip: true }),
+	defaultMinSize: (options: { minWidth?: number; minHeight?: number }) => ({ defaultMinSize: options }),
 	dropShadow: () => ({ dropShadow: true }),
 	height: (value: number) => ({ height: value }),
 	padding: (start: number, top: number, end: number, bottom: number) => ({ padding: [start, top, end, bottom] }),
@@ -45,6 +46,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
 	Shapes: { Circle: "circle", RoundedCorner: (radius: number) => `rounded:${radius}` },
 	size: (width: number, height: number) => ({ size: [width, height] }),
 	testID: (tag: string) => ({ testID: tag }),
+	width: (value: number) => ({ width: value }),
 }));
 import { BoardTabBar } from "./BoardTabBar.android";
 import type { BoardTabBarProps } from "./BoardTabBar.types";
@@ -109,6 +111,15 @@ describe("BoardTabBar on Android", () => {
 		expect(modifier(row, "dropShadow")).toBeUndefined();
 		// The selected icon in the pill's own ink.
 		expect(tabs.findAllByType("Icon" as never).map((icon) => icon.props.tint)).toEqual(["#textSecondary", "#onAccent"]);
+	});
+
+	// A fixed height had no room left for the label's taller line at 1.15x and 1.3x.
+	it("lets a tab grow past the bar's height as the label's line grows with the font", () => {
+		render();
+		const tab = withTag("board-tab-workers");
+		expect(modifier(tab, "size")).toBeUndefined();
+		expect(modifier(tab, "width")).toBe(72);
+		expect(modifier(tab, "defaultMinSize")).toEqual({ minHeight: 56 });
 	});
 
 	it("draws no press ripple, on the tabs or the round button, and keeps the tabs' semantics", () => {

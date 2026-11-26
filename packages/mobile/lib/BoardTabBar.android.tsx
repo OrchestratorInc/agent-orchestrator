@@ -3,6 +3,7 @@ import {
 	background,
 	clickable,
 	clip,
+	defaultMinSize,
 	dropShadow,
 	height,
 	padding,
@@ -13,6 +14,7 @@ import {
 	Shapes,
 	size,
 	testID,
+	width,
 } from "@expo/ui/jetpack-compose/modifiers";
 import { StyleSheet, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -96,7 +98,12 @@ export function BoardTabBar({ selected, onSelect, waiting, onNewTask }: BoardTab
 								horizontalAlignment="center"
 								verticalArrangement="center"
 								modifiers={[
-									size(ITEM_WIDTH, ITEM_HEIGHT),
+									// At 1.0x the indicator, gap and label fill ITEM_HEIGHT
+									// exactly (36 + 4 + 16); the label's line grows with the
+									// font scale up to the chrome cap, so the tab grows with
+									// it rather than clipping the label's descenders.
+									width(ITEM_WIDTH),
+									defaultMinSize({ minHeight: ITEM_HEIGHT }),
 									// No clip: the badge stands past the tab's top edge.
 									selectable(active, () => onSelect(tab.name), "tab"),
 									// Takes the touch before `selectable` (Compose hands it to the
