@@ -249,14 +249,23 @@ The daemon schedules a tidy turn from `memory_tidy`. A tidy runs only when the b
 | `weekly` | Due once a week, on Monday after 03:00 local time, if there were new turns since the last tidy. |
 | `off` | Never. The owner can still run a tidy from the Memory tab. |
 
-**Catch-up.** The rule checks turns since the last tidy, not just the previous day. So turns from days when the daemon was offline are never skipped.
+**Catch-up.** The rule checks journal entries after the last tidy's watermark (below), not just the previous day. So turns from days when the daemon was offline, or turns that arrived during a tidy, are never skipped.
 
-- When the daemon resumes past a due time it missed, it runs one catch-up tidy covering every journal day since the last tidy. It runs one tidy, not one per missed night. This follows the automation scheduler's catch-up limit.
-- The last tidy time is a durable fact: the newest tidy event in the bot conversation.
+- When the daemon resumes past a due time it missed, it runs one catch-up tidy covering every journal entry since the last tidy. It runs one tidy, not one per missed night. This follows the automation scheduler's catch-up limit.
+- **The cutoff is an input watermark, not the tidy's own timestamp.**
+  - Every journal entry gets a per-bot sequence number that only increases.
+  - A tidy fixes its input range when it starts: every entry after the previous watermark, up to the newest entry at that moment.
+  - The tidy event records the newest entry it read as the new watermark.
+  - Eligibility and the next tidy's input both start after that watermark. A turn journaled while a tidy is running therefore lands after the watermark and is picked up by the next tidy.
+- **Tidy does not block normal turns, and it does not overwrite concurrent memory writes.**
+  - Normal turns keep going to the main bot session while a tidy runs.
+  - The tidy's `ao bot memory replace` carries the `MEMORY.md` revision it read.
+  - If the main session changed `MEMORY.md` in the meantime, the daemon rejects the replace. The tidy then retries once with a fresh read. If that also conflicts, the tidy is abandoned, the watermark does not advance, and the tidy runs at the next due time.
+  - Memory written by the bot is never lost to a tidy.
 
 The turn runs in a fresh bot session with these instructions:
 
-- read the journal days since the last tidy and the current MEMORY.md;
+- read the journal entries in its fixed input range and the current MEMORY.md;
 - write a consolidated MEMORY.md through `ao bot memory replace`;
 - make no other tool calls, spawns, or sends.
 
@@ -280,21 +289,29 @@ This is an open question below.
   | `asks.json` | Open bot asks (no `answered_at` or `withdrawn_at`), with question, kind, options, subject, and created time | Recreated as open asks, so the moved bot's system prompt and Needs-you inbox have them from its first session. Answered asks are history and live in the conversation. |
   | `schedules.json` | Every automation with this `bot_id`: RRULE, timezone, prompt, template, enabled flag | Recreated with the same RRULE and timezone, but **disabled**. The owner re-enables them in one confirmation. |
   | `conversation.jsonl` | The bot conversation's turns and messages | Imported as the new bot conversation. |
+  | `queue.jsonl` | Messages accepted but not yet delivered, for example while the bot was paused | Delivered to the target bot in their original order once it starts. Each one shows in the conversation as carried over from the source. |
 
 - **Export is a copy; a move is export plus a source-side stop.** Exporting alone, for example as a backup, does not change the source bot. Its schedules keep running. Importing that copy and enabling its schedules would run the same RRULE on both homes. So the import screen warns that the source may still be live, and AO makes no single-home guarantee for a plain copy.
 - **The move flow (Phase 2) guarantees one live home.** It runs in this order:
   1. Pause the source bot and disable all its schedules.
-  2. Record `moved_to` (the target home) on the source row.
-  3. Export.
+  2. Record `moved_to` (the target home and new bot ID, once known) on the source row.
+  3. Export. The bundle's `queue.jsonl` carries every message the source accepted but had not delivered, including ones queued during the pause.
   4. Import on the target, with schedules disabled.
   5. Only after the source confirms step 1 can the owner enable schedules on the target.
 
   If the source home is unreachable, the move does not proceed. The owner must either archive the source bot or explicitly accept a copy.
+
+- **Messages that arrive during or after a move are refused, not queued.**
+  - From step 2 on, the source accepts no new messages or asks for the bot. It refuses them with `BOT_MOVED`, and the error names the target `Ref{host, id}`.
+  - Nothing is queued on the source after step 2, so the queue exported in step 3 is complete and no message is stranded on a home the bot has left.
+  - The sender is told directly. The CLI and renderer show "moved to *target*; resend there" and offer one-click resend. The Phase 1 relay redirects to the target automatically.
+  - Crew detach at step 2, as on Archive. Their `bot_id` is cleared, so their later reports follow normal project routing on the source instead of being refused or lost.
+  - Resuming the source after a completed move is refused. Undoing a move means moving the bot back.
 - **Not in the bundle:**
   - Crew sessions and their worktrees stay on the source home, detached as ordinary sessions, like on Archive.
   - Credentials and sign-ins are never exported. The target home uses its own agent sign-ins.
   - Session IDs, project IDs, and absolute paths are never carried over.
-- **Phase 0 builds the format, not the move.** It implements bundle export and import behind the daemon API, plus a round-trip test: export, import into a fresh data dir, then assert that the bot row, open asks, disabled schedules, memory files, and conversation match. The move UX and non-local homes are Phase 2.
+- **Phase 0 builds the format, not the move.** It implements bundle export and import behind the daemon API, plus a round-trip test: export, import into a fresh data dir, then assert that the bot row, open asks, disabled schedules, memory files, conversation, and undelivered queue (in order) match. The move UX and non-local homes are Phase 2.
 - Every renderer and API surface addresses a bot as `Ref{host, id}`. The Phase 1 relay will route Slack and GitHub events to `(host, bot id)` the same way.
 - Inbox aggregation happens in the client, across hosts. This follows the cloud architecture rule of federation at the client, not in the local daemon.
 - Handles are unique per project, not globally, so two homes never fight over a name.
