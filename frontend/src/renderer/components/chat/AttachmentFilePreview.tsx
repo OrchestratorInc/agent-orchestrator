@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
 import { AttachmentLightbox } from "./AttachmentLightbox";
@@ -63,7 +65,10 @@ function TextViewer({ src, name, start, onOpenChange }: {
 	start?: string;
 	onOpenChange: (open: boolean) => void;
 }) {
+	const { t } = useTranslation();
 	const [full, setFull] = useState<string>();
+	const [failed, setFailed] = useState(false);
+	const [attempt, setAttempt] = useState(0);
 	useEffect(() => {
 		const controller = new AbortController();
 		void fetch(rawTextUrl(src), { signal: controller.signal })
@@ -72,15 +77,36 @@ function TextViewer({ src, name, start, onOpenChange }: {
 				return response.text();
 			})
 			.then(setFull)
-			.catch(() => undefined);
+			.catch(() => {
+				if (!controller.signal.aborted) setFailed(true);
+			});
 		return () => controller.abort();
-	}, [src]);
+	}, [src, attempt]);
 	return (
 		<Dialog open onOpenChange={onOpenChange}>
 			<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
 				<div className="flex min-w-0 items-center gap-2 pr-8">
 					<DialogTitle className="min-w-0 flex-1 truncate text-sm">{name}</DialogTitle>
-					{full === undefined ? null : <CopyButton text={full} label="Copy text" />}
+					{full !== undefined ? (
+						<CopyButton text={full} label="Copy text" />
+					) : failed ? (
+						<>
+							<span role="alert" className="text-xs text-destructive">{t("chat.attachment.readFailed")}</span>
+							<Button
+								type="button"
+								variant="secondary"
+								size="xs"
+								onClick={() => {
+									setFailed(false);
+									setAttempt((count) => count + 1);
+								}}
+							>
+								{t("files.retry")}
+							</Button>
+						</>
+					) : (
+						<span className="text-xs text-muted-foreground">{t("common.loading")}</span>
+					)}
 				</div>
 				<pre className="m-0 min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words font-mono text-sm text-foreground">{full ?? start}</pre>
 			</DialogContent>

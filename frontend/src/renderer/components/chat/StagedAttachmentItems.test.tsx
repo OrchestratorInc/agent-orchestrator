@@ -117,11 +117,7 @@ describe("AttachmentStrip", () => {
 });
 
 describe("StagedAttachmentItems opening a text file", () => {
-	afterEach(() => {
-		vi.unstubAllGlobals();
-	});
-
-	it("shows a sent text file's whole saved copy with Copy", async () => {
+	beforeEach(() => {
 		vi.stubGlobal("IntersectionObserver", class {
 			constructor(private readonly callback: IntersectionObserverCallback) {}
 			observe() {
@@ -129,6 +125,13 @@ describe("StagedAttachmentItems opening a text file", () => {
 			}
 			disconnect() {}
 		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("shows a sent text file's whole saved copy with Copy", async () => {
 		const whole = `first line\n${"middle\n".repeat(500)}last line`;
 		const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
 			new Response((init?.headers as Record<string, string> | undefined)?.Range ? "first line" : whole, { status: 200 }));
@@ -141,5 +144,28 @@ describe("StagedAttachmentItems opening a text file", () => {
 		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
 		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
 		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`, expect.not.objectContaining({ headers: expect.anything() }));
+	});
+
+	it("says when the whole file can't be read, and loads it on Retry", async () => {
+		let reachable = false;
+		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+			if ((init?.headers as Record<string, string> | undefined)?.Range) return new Response("first line", { status: 200 });
+			return reachable ? new Response("first line\nlast line", { status: 200 }) : new Response("", { status: 502 });
+		}));
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByRole("alert")).toHaveTextContent("Couldn't load the whole file");
+		expect(within(viewer).getByText("first line")).toBeInTheDocument();
+		expect(within(viewer).queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
+
+		reachable = true;
+		fireEvent.click(within(viewer).getByRole("button", { name: "Retry" }));
+
+		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
+		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+		expect(within(viewer).queryByRole("alert")).not.toBeInTheDocument();
 	});
 });

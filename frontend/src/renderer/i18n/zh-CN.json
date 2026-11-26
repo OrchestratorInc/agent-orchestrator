@@ -85,6 +85,7 @@
 	"chat.attachment.remove": "移除 {{name}}",
 	"chat.attachment.save": "保存 {{name}}",
 	"chat.attachment.saveFailed": "无法保存文件",
+	"chat.attachment.readFailed": "无法加载完整文件",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.annotation.commentPlaceholder": "添加评论",
 	"chat.annotation.commentLabel": "对所选文本的评论",
