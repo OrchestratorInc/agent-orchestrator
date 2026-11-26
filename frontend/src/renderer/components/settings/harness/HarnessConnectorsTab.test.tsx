@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "../../ui/tooltip";
 import { CLAUDE_CONNECTORS_URL, HarnessConnectorsTab } from "./HarnessConnectorsTab";
 
 const h = vi.hoisted(() => ({
@@ -29,7 +30,7 @@ const claudeAccount = (overrides: Record<string, unknown>) => ({
 const renderTab = (onOpenAccount = vi.fn()) => {
 	render(
 		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-			<HarnessConnectorsTab onOpenAccount={onOpenAccount} />
+			<TooltipProvider><HarnessConnectorsTab onOpenAccount={onOpenAccount} /></TooltipProvider>
 		</QueryClientProvider>,
 	);
 	return onOpenAccount;

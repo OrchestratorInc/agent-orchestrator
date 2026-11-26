@@ -54,9 +54,14 @@ func (c *AgentAccountsController) Register(r chi.Router) {
 	r.Post("/agents/accounts/login/{operationId}/verify", c.verifyLogin)
 	r.Post("/agents/accounts/login/{operationId}/cancel", c.cancelLogin)
 	r.Post("/agents/accounts/api-keys", c.addAPIKey)
-	r.Put("/agents/accounts/{accountId}/api-key", c.replaceAPIKey)
 	r.Get("/agents/accounts/sessions/{sessionId}", c.sessionAccounts)
 	r.Put("/agents/accounts/sessions/{sessionId}", c.switchSession)
+	c.registerAccount(r)
+}
+
+// registerAccount adds the routes that act on one account.
+func (c *AgentAccountsController) registerAccount(r chi.Router) {
+	r.Put("/agents/accounts/{accountId}/api-key", c.replaceAPIKey)
 	r.Post("/agents/accounts/{accountId}/login", c.signInAgain)
 	r.Post("/agents/accounts/{accountId}/default", c.setDefault)
 	r.Get("/agents/accounts/{accountId}/connectors", c.connectors)
