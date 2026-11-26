@@ -1,4 +1,3 @@
-import { Feather } from "./icons";
 import { useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, BackHandler, Keyboard, StyleSheet, Text, TextInput, View } from "react-native";
@@ -6,25 +5,29 @@ import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { sessionHostId } from "./hostedRows";
-import { prLine, workerRowPresentation, workerStatusGlyph, type WorkerStatusGlyph } from "./agentsView";
-import { AppSymbol } from "./AppSymbol";
-import type { AppSymbolName, PlatformSymbol } from "./symbols";
+import { eventAtOf, workerRowPresentation } from "./agentsView";
+import { relativeTime } from "./notificationView";
+import { Feather } from "./icons";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
-import { rowDividerWidth } from "./divider";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { workerRowIndicator, type WorkerRowIndicator, type WorkerRowMarker } from "./workerRowMarker";
+import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
+import { useReducedMotion } from "./useReducedMotion";
+import { workerRowAccessibilityLabel, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
 import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
 import { Spinner } from "./Spinner";
+import { LatticeCometLoader } from "./chat/LatticeCometLoader";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { useOpenPage } from "./pageNavigation";
 import { iconSize, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
-import { reviewRouteForSession } from "./reviewView";
+import { reviewRouteForPR } from "./reviewView";
 import { isCloudHost } from "./cloud/mapping";
-import { MachineIdentity } from "./MachineIdentity";
+import { MachineAvatar } from "./MachineIdentity";
 import type { MachineAppearance } from "./machineAppearance";
 
 export const WorkerListRow = memo(
@@ -93,16 +96,14 @@ export const WorkerListRow = memo(
 	renaming.current = isRenaming;
 	const row = workerRowPresentation(t, session, projectName);
 	const visual = statusVisual(t, session.status);
-	const glyph = workerStatusGlyph(session.status);
-	const prs = prLine(session);
-	// The second line is the pull request when there is one, and the branch when
-	// there is not. The branch used to lead unconditionally, which put a worktree
-	// path (`ao/dev/<project>-N/root`) under every title — the same string the
-	// session header already shows. Then it went missing entirely for a row with no
-	// PR, which left the line blank on exactly the sessions that had no other way to
-	// name their branch. `workerRowPresentation` has already dropped a branch that
-	// only restates the title, so whatever reaches here says something new.
-	const details = prs?.text ?? row.branch ?? "";
+	const indicator = workerRowIndicator(session);
+	// The subtitle is project and machine alone (no branch: a long worktree path
+	// the session's header still shows), with the pull request in a pill: the
+	// live one's number, in its own lifecycle's colour and glyph.
+	const pr = workerRowPullRequest(session);
+	// When the worker last changed, the time the board orders it by; `nowBucket`
+	// re-renders the row as the minute turns.
+	const updated = relativeTime(eventAtOf(session));
 	useEffect(() => {
 		if (isRenaming) renameSettled.current = false;
 	}, [isRenaming]);
@@ -174,7 +175,9 @@ export const WorkerListRow = memo(
 
 	const cloudRow = isCloudHost(sessionHostId(session) ?? hostId);
 	// The PR page reads the worker's own host: its machine's daemon, or Orchestrator Cloud.
-	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? hostId);
+	// The pull request the pill names, not the first one listed: with #12
+	// closed and #15 open, "Open PR" opens #15.
+	const reviewRoute = pr ? reviewRouteForPR(session.id, pr.lead, sessionHostId(session) ?? hostId) : undefined;
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
@@ -220,7 +223,17 @@ export const WorkerListRow = memo(
 			rowStyle={styles.row}
 			// No gesture hint: a screen reader reaches pin, rename and archive as
 			// the row's actions, and announces that it has them.
-			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.${unreachable ? " Last known; its machine can't be reached." : ""}`}
+			accessibilityLabel={workerRowAccessibilityLabel({
+				title: row.title,
+				project: row.project,
+				indicator,
+				displayStatus: session.displayStatus,
+				statusLabel: visual.label,
+				pr,
+				machine: machine?.name,
+				updated,
+				unreachable,
+			})}
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}
@@ -231,10 +244,9 @@ export const WorkerListRow = memo(
 			{isRenaming ? (
 				<WorkerRowContents
 					row={row}
-					visual={visual}
-					glyph={glyph}
-					details={details}
-					prsTone={prs?.tone}
+					indicator={indicator}
+					pr={pr}
+					updated={updated}
 					harness={session.harness}
 					machine={machine}
 					unreachable={unreachable}
@@ -250,10 +262,9 @@ export const WorkerListRow = memo(
 			) : (
 				<WorkerRowContents
 					row={row}
-					visual={visual}
-					glyph={glyph}
-					details={details}
-					prsTone={prs?.tone}
+					indicator={indicator}
+					pr={pr}
+					updated={updated}
 					harness={session.harness}
 					machine={machine}
 					unreachable={unreachable}
@@ -285,10 +296,9 @@ export const WorkerListRow = memo(
 
 function WorkerRowContents({
 	row,
-	visual,
-	glyph,
-	details,
-	prsTone,
+	indicator,
+	pr,
+	updated,
 	harness,
 	machine,
 	unreachable = false,
@@ -302,10 +312,9 @@ function WorkerRowContents({
 	t,
 }: {
 	row: ReturnType<typeof workerRowPresentation>;
-	visual: ReturnType<typeof statusVisual>;
-	glyph: ReturnType<typeof workerStatusGlyph>;
-	details: string;
-	prsTone?: Parameters<typeof toneColor>[1];
+	indicator: WorkerRowIndicator;
+	pr: WorkerRowPullRequest | null;
+	updated: string;
 	harness: DashboardSession["harness"];
 	machine?: { name: string; appearance: MachineAppearance };
 	unreachable?: boolean;
@@ -318,118 +327,177 @@ function WorkerRowContents({
 	styles: ReturnType<typeof makeStyles>;
 	t: Theme;
 }) {
+	// One quiet line under the title: project, then the pull request, and the
+	// machine at its far end. The state is the lead mark's alone; the row's accessibility label
+	// still says it in words.
 	return (
-		<>
-			<View style={[styles.eyebrow, unreachable && styles.lastKnown]}>
-				<AgentLogo harness={harness} size={14} />
-				<Text style={styles.project} numberOfLines={1}>
-					{row.project}
-				</Text>
-				{/* Paired with the tinted label so status reads by shape as well as
-				    colour. Only shown alongside a real status — when the row is
-				    showing an elapsed time instead, there is no state to depict.
-				    A working or starting row shows the system's spinner: a still
-				    circle reads as stuck, and a pulse says "waiting", which is what
-				    the row above it says for a different state. */}
-				{glyph && row.trailingKind === "status" ? (
-					visual.breathing || glyph === "loader"
-						? <Spinner size={iconSize.xs} color={visual.color} />
-						: <StatusGlyph glyph={glyph} color={visual.color} />
-				) : null}
-				<Text
-					style={[styles.trailing, { color: row.trailingKind === "status" ? visual.color : t.textTertiary }]}
-					numberOfLines={1}
-				>
-					{row.trailing}
-				</Text>
+		// The mark leads the title's line; the subtitle runs out to the row's edge
+		// under it rather than indented under the title, so the line has room.
+		<View style={[styles.stack, unreachable && styles.lastKnown]}>
+			<View style={styles.line}>
+				{/* The row's state at a glance, as the desktop sidebar draws it: the
+				    lattice while the agent works, an icon only for what asks something
+				    of the user, and a quiet ring for everything else. */}
+				<View style={styles.lead}>
+					{indicator === "working" ? <LatticeCometLoader color={t.orange} />
+					: indicator ? <WorkerMarkerIcon marker={indicator} t={t} />
+					: <View testID="worker-status-ring" style={styles.ring} />}
+				</View>
+				<View style={styles.body}>
+					{isRenaming ? (
+						<View style={styles.titleEditor}>
+							<TextInput
+								autoFocus
+								accessibilityLabel="Worker name"
+								accessibilityHint="Saves when you press Return or leave the field."
+								// VoiceOver's escape scrub backs out of the rename.
+								onAccessibilityEscape={onRenameCancel}
+								value={renameTitle}
+								onChangeText={onRenameTitleChange}
+								editable={!renameSaving}
+								placeholder="Worker name"
+								placeholderTextColor={t.textFaint}
+								{...textSelectionColors(t)}
+								maxLength={120}
+								returnKeyType="done"
+								onSubmitEditing={onRenameCommit}
+								onBlur={onRenameCommit}
+								style={styles.renameInput}
+							/>
+							{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
+						</View>
+					) : (
+						<View style={styles.titleLine}>
+							<Text style={[styles.title, styles.shrink]} numberOfLines={1}>
+								{row.title}
+							</Text>
+							{/* When it last changed, quiet at the line's end, as a mail list dates its rows. */}
+							{updated ? <Text testID="worker-updated" style={styles.updated} numberOfLines={1}>{updated}</Text> : null}
+						</View>
+					)}
+				</View>
 			</View>
-
-			{isRenaming ? (
-				<View style={styles.titleEditor}>
-					<TextInput
-						autoFocus
-						accessibilityLabel="Worker name"
-						accessibilityHint="Saves when you press Return or leave the field."
-						// VoiceOver's escape scrub backs out of the rename.
-						onAccessibilityEscape={onRenameCancel}
-						value={renameTitle}
-						onChangeText={onRenameTitleChange}
-						editable={!renameSaving}
-						placeholder="Worker name"
-						placeholderTextColor={t.textFaint}
-						{...textSelectionColors(t)}
-						maxLength={120}
-						returnKeyType="done"
-						onSubmitEditing={onRenameCommit}
-						onBlur={onRenameCommit}
-						style={styles.renameInput}
-					/>
-					{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
-				</View>
-			) : (
-				<Text style={[styles.title, unreachable && styles.lastKnown]} numberOfLines={1}>
-					{row.title}
-				</Text>
-			)}
-
-			{details || machine ? (
-				<View style={[styles.metadata, unreachable && styles.lastKnown]}>
-					{details ? (
-						<Text style={[styles.details, prsTone && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
-							{details}
-						</Text>
-					) : <View style={styles.metadataSpacer} />}
-					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} style={styles.machineIdentity} /> : null}
-				</View>
-			) : null}
-		</>
+			<View style={styles.subtitle}>
+				<AgentLogo harness={harness} size={12} />
+				{/* Shrinks after the machine, before the pill. */}
+				<Text style={[styles.meta, styles.project]} numberOfLines={1}>{row.project}</Text>
+				{/* The pull request right after its project: number, glyph and colour. */}
+				{pr ? <PullRequestPill pr={pr} t={t} styles={styles} /> : null}
+				{/* The machine, its glyph leading, at the line's far end, as the age
+				    ends the title's line. */}
+				{machine ? (
+					<View testID="worker-machine-identity" accessibilityLabel={`Machine ${machine.name}`} style={styles.machineChip}>
+						<MachineAvatar testID="machine-identity-symbol" appearance={machine.appearance} size={14} color={t.textTertiary} />
+						<Text testID="machine-identity-name" style={[styles.meta, styles.shrink]} numberOfLines={1}>{machine.name}</Text>
+					</View>
+				) : null}
+			</View>
+		</View>
 	);
 }
 
 /**
- * Status glyphs are chrome, so each draws as its platform's own symbol. The
- * pull request keeps its Lucide glyph: a domain mark with no system symbol.
+ * The desktop sidebar's marker icons. Each state has its own glyph, so colour is
+ * never the only difference: a red alert needs you now, an orange alert is a
+ * person's review next, a green pull request is ready to merge, and a merged
+ * one sits a step below, dimmed.
  */
-const STATUS_SYMBOLS: Record<Exclude<WorkerStatusGlyph, "git-pull-request" | "loader">, AppSymbolName | PlatformSymbol> = {
-	"alert-circle": "error",
-	"message-square": "chat",
-	"x-octagon": { ios: "xmark.octagon", android: "dangerous" },
-	"check-circle": "checkCircle",
-	moon: "idle",
+const MARKER_ICONS: Record<WorkerRowMarker, { name: "alert-circle" | "git-pull-request" | "git-merge"; tone: (t: Theme) => string; opacity: number }> = {
+	attention: { name: "alert-circle", tone: (t) => t.red, opacity: 1 },
+	review: { name: "alert-circle", tone: (t) => t.orange, opacity: 1 },
+	ready: { name: "git-pull-request", tone: (t) => t.green, opacity: 1 },
+	merged: { name: "git-merge", tone: (t) => t.purple, opacity: 0.7 },
 };
 
-function StatusGlyph({ glyph, color }: { glyph: Exclude<WorkerStatusGlyph, "loader">; color: string }) {
-	if (glyph === "git-pull-request") return <Feather name={glyph} size={iconSize.xs} color={color} />;
-	return <AppSymbol name={STATUS_SYMBOLS[glyph]} size={iconSize.xs} color={color} />;
+/**
+ * A marker that appears while the row is on screen pops in once, as on the
+ * desktop; one already there when the row mounts does not.
+ */
+function WorkerMarkerIcon({ marker, t }: { marker: WorkerRowMarker; t: Theme }) {
+	const { name, tone, opacity } = MARKER_ICONS[marker];
+	const reduceMotion = useReducedMotion();
+	const scale = useSharedValue(1);
+	const previous = useRef(marker);
+	useEffect(() => {
+		if (previous.current === marker) return;
+		previous.current = marker;
+		if (reduceMotion) return;
+		scale.value = withSequence(withTiming(0.6, { duration: 0 }), withSpring(1, { damping: 9, stiffness: 260, mass: 0.6 }));
+	}, [marker, reduceMotion, scale]);
+	const popStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+	return (
+		<Animated.View testID="worker-status-marker" style={[{ opacity }, popStyle]}>
+			<Feather name={name} size={15} color={tone(t)} strokeWidth={2.25} />
+		</Animated.View>
+	);
+}
+
+/** `#1253`, or `#1253 +1` for a worker with more than one; null with none. */
+export function pullRequestLabel(session: DashboardSession): string | null {
+	return workerRowPullRequest(session)?.label ?? null;
+}
+
+/**
+ * The worker's live pull request as an icon-and-number pill, in its own
+ * lifecycle's hue over the matching tint and glyph: open, draft, merged or
+ * closed reads by colour and shape at a glance. The worker's state is the
+ * lead mark's, so the two never disagree about the same thing.
+ */
+function PullRequestPill({ pr, t, styles }: { pr: WorkerRowPullRequest; t: Theme; styles: ReturnType<typeof makeStyles> }) {
+	const color = toneColor(t, pr.tone);
+	return (
+		<View testID="worker-pr-pill" style={[styles.pill, { backgroundColor: statusTint(t, color) }]}>
+			<Feather name={pr.glyph} size={iconSize.xs} color={color} />
+			<Text style={[styles.pillText, { color }]} numberOfLines={1}>{pr.label}</Text>
+		</View>
+	);
+}
+
+/** The tint that goes under a hue; a neutral surface for the grey states. */
+function statusTint(t: Theme, color: string): string {
+	if (color === t.green) return t.tintGreen;
+	if (color === t.red) return t.tintRed;
+	if (color === t.purple) return t.tintPurple;
+	return t.bgElevated;
 }
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		shell: {
-			minHeight: 76,
+			minHeight: 64,
 			overflow: "hidden",
 		},
 		foreground: { backgroundColor: t.bgBase },
 		row: {
-			minHeight: 76,
+			minHeight: 64,
 			paddingHorizontal: space.lg,
-			paddingVertical: space.sm,
-			gap: space.hair,
+			paddingVertical: space.md,
+			justifyContent: "center",
 		},
-		// Inset to the text, and drawn inside the row
-		// so it travels with a swipe instead of staying behind on the rail.
-		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
-		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xs },
-		renameInput: { fontFamily: "DMSans_600SemiBold", flex: 1, minWidth: 0, minHeight: 32, paddingHorizontal: space.none, paddingVertical: space.none, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
-		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-		trailing: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
-		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
+		stack: { gap: 4 },
+		line: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
+		// As tall as the title's line, so the dot or spinner sits level with it.
+		lead: { alignSelf: "flex-start", width: 16, height: 22, alignItems: "center", justifyContent: "center" },
+		// The desktop's quiet dot for a row with nothing to flag, so every title
+		// still starts on the same column.
+		ring: { width: 9, height: 9, borderRadius: 4.5, borderWidth: 1.5, borderColor: t.textFaint },
+		body: { flex: 1, minWidth: 0 },
+		titleEditor: { minHeight: 22, flexDirection: "row", alignItems: "center", gap: space.xs },
+		renameInput: { fontFamily: "DMSans_500Medium", flex: 1, minWidth: 0, minHeight: 22, paddingHorizontal: space.none, paddingVertical: space.none, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: 16, lineHeight: 22, fontWeight: "500", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
+		titleLine: { flexDirection: "row", alignItems: "baseline", gap: space.sm },
+		updated: { fontFamily: "DMSans_400Regular", flexShrink: 0, marginLeft: "auto", color: t.textFaint, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontVariant: ["tabular-nums"] },
+		title: { fontFamily: "DMSans_500Medium", color: t.textPrimary, fontSize: 16, lineHeight: 22, fontWeight: "500", letterSpacing: -0.15 },
+		subtitle: { flexDirection: "row", alignItems: "center", gap: space.xs, minWidth: 0, overflow: "hidden" },
+		meta: { fontFamily: "DMSans_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontVariant: ["tabular-nums"] },
+		// Pushed to the line's end. Gives way first when the line runs short: Yoga
+		// weighs shrinking by flexShrink times width, so the machine's far larger
+		// weight empties it before the project gives up much. The pill never shrinks.
+		machineChip: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1000, minWidth: 0, marginLeft: "auto", paddingLeft: space.sm },
+		project: { flexShrink: 1, minWidth: 0 },
+		shrink: { flexShrink: 1 },
+		pill: { flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 0, height: 20, paddingHorizontal: 7, borderRadius: 10 },
+		pillText: { fontFamily: "DMSans_500Medium", fontSize: 12, lineHeight: 15, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		// A row whose machine can't be reached shows the last thing heard, so it
 		// must not read as live: the spinner and status stay, at a lower voice.
 		lastKnown: { opacity: 0.5 },
-		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
-		metadataSpacer: { flex: 1 },
-		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
-		machineIdentity: { maxWidth: "52%", marginLeft: "auto" },
 	});
