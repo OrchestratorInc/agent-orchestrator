@@ -11,6 +11,11 @@ import ArrowDown from "lucide-react-native/icons/arrow-down";
 import ArrowUp from "lucide-react-native/icons/arrow-up";
 import ArrowUpFromLine from "lucide-react-native/icons/arrow-up-from-line";
 import ArrowRight from "lucide-react-native/icons/arrow-right";
+import ChevronLeft from "lucide-react-native/icons/chevron-left";
+import Ellipsis from "lucide-react-native/icons/ellipsis";
+import GalleryHorizontal from "lucide-react-native/icons/gallery-horizontal";
+import House from "lucide-react-native/icons/house";
+import Square from "lucide-react-native/icons/square";
 import ClipboardCheck from "lucide-react-native/icons/clipboard-check";
 import Check from "lucide-react-native/icons/check";
 import CircleCheck from "lucide-react-native/icons/circle-check";
@@ -46,6 +51,7 @@ import Image from "lucide-react-native/icons/image";
 import Layers from "lucide-react-native/icons/layers";
 import MessageSquare from "lucide-react-native/icons/message-square";
 import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";
+import Maximize2 from "lucide-react-native/icons/maximize-2";
 import Pause from "lucide-react-native/icons/pause";
 import Play from "lucide-react-native/icons/play";
 import ChartBar from "lucide-react-native/icons/chart-bar";
@@ -80,6 +86,9 @@ import Shuffle from "lucide-react-native/icons/shuffle";
 import Smartphone from "lucide-react-native/icons/smartphone";
 import Terminal from "lucide-react-native/icons/terminal";
 import Wrench from "lucide-react-native/icons/wrench";
+import Info from "lucide-react-native/icons/info";
+import CircleX from "lucide-react-native/icons/circle-x";
+import User from "lucide-react-native/icons/user";
 import WifiOff from "lucide-react-native/icons/wifi-off";
 import X from "lucide-react-native/icons/x";
 import { useTheme } from "./ThemeProvider";
@@ -100,6 +109,11 @@ export const glyphs = {
 	"arrow-up": ArrowUp,
 	"arrow-up-from-line": ArrowUpFromLine,
 	"arrow-right": ArrowRight,
+	"chevron-left": ChevronLeft,
+	"gallery-horizontal": GalleryHorizontal,
+	"more-horizontal": Ellipsis,
+	"home": House,
+	"square": Square,
 	"bar-chart": ChartBar,
 	"check": Check,
 	"check-circle": CircleCheck,
@@ -127,6 +141,7 @@ export const glyphs = {
 	"git-pull-request-closed": GitPullRequestClosed,
 	"globe": Globe,
 	"image": Image,
+	"info": Info,
 	"key": KeyRound,
 	"layers": Layers,
 	"link": Link,
@@ -134,6 +149,7 @@ export const glyphs = {
 	"list-checks": ListChecks,
 	"list-tree": ListTree,
 	"message-circle": MessageCircle,
+	"maximize-2": Maximize2,
 	"message-square": MessageSquare,
 	"message-square-plus": MessageSquarePlus,
 	"minus-circle": CircleMinus,
@@ -168,9 +184,11 @@ export const glyphs = {
 	"tool": Wrench,
 	"trash-2": Trash,
 	"unplug": Unplug,
+	"user": User,
 	"video": Video,
 	"wifi-off": WifiOff,
 	"x": X,
+	"x-circle": CircleX,
 } as const;
 
 export type FeatherIconName = keyof typeof glyphs;

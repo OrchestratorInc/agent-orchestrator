@@ -1,6 +1,32 @@
 import { expect, test } from "@playwright/test";
 import { installFakeBridge } from "./support/fake-bridge";
 
+for (const [locale, status, action] of [
+	["de", "Update fehlgeschlagen", "Wiederholen"],
+	["pt-BR", "Falha na atualização", "Tentar de novo"],
+] as const) {
+	test(`@P0 localized update failure stays readable and voice-accessible in ${locale}`, async ({ page }) => {
+		await page.setViewportSize({ width: 1010, height: 700 });
+		await installFakeBridge(page, {
+			locale,
+			updateStatus: { state: "error", errorInfo: { kind: "generic", phase: "download" } },
+		});
+		await page.goto("/");
+
+		const row = page.getByTestId("sidebar-update-failed");
+		await expect(row.getByText(action, { exact: true })).toBeVisible();
+		await expect(row).toHaveAccessibleName(action);
+		await expect(row).toHaveAccessibleDescription(new RegExp(status));
+
+		const titleFits = await row.getByText(status).evaluate(async (title) => {
+			await document.fonts.ready;
+			const { textOverflow } = getComputedStyle(title);
+			return textOverflow !== "ellipsis" && title.scrollWidth === title.clientWidth;
+		});
+		expect(titleFits).toBe(true);
+	});
+}
+
 test("downloaded update keeps the full version readable and actions aligned", async ({ page }) => {
 	await page.setViewportSize({ width: 1010, height: 700 });
 	await page.emulateMedia({ colorScheme: "dark" });
@@ -70,14 +96,14 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } });
 	});
-	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Ready to install");
+	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Update ready");
 	await expect(page.getByTestId("update-status-line")).toContainText("Preparing update…");
 	await expect(page.getByRole("button", { name: "Restart & install", exact: true })).toHaveCount(0);
 
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "downloaded", version: "2.0.0" });
 	});
-	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Ready to install");
+	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Update ready");
 	await expect(page.getByTestId("sidebar-update-ready")).toHaveAccessibleName("Restart to install update v2.0.0");
 	await expect(page.getByRole("button", { name: "Restart & install", exact: true })).toBeEnabled();
 });

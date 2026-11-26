@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { rememberSentAttachments, resetSentAttachmentPreviewsForTest } from "../../lib/sent-attachment-previews";
-import { StagedAttachmentItems } from "./StagedAttachmentItems";
+import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 import { attachmentURL } from "./messageAttachments";
 
 const API = "http://127.0.0.1:4000";
@@ -93,5 +93,25 @@ describe("StagedAttachmentItems with a just-sent local copy", () => {
 		expect(await screen.findByText(/^first line/)).toBeInTheDocument();
 		await waitFor(() => expect(cancel).toHaveBeenCalled());
 		expect(pulls).toBeLessThan(8);
+	});
+});
+
+describe("AttachmentStrip", () => {
+	// The composer's row scrolls sideways; a file added past its end would land
+	// out of sight behind the fade.
+	it("glides to its end when a tile is added, and stays put otherwise", () => {
+		const tiles = (count: number) => Array.from({ length: count }, (_, index) => <span key={index}>tile {index}</span>);
+		const { rerender } = render(<AttachmentStrip itemCount={2} data-testid="strip">{tiles(2)}</AttachmentStrip>);
+		const strip = screen.getByTestId("strip");
+		Object.defineProperty(strip, "scrollWidth", { configurable: true, value: 900 });
+		expect(strip).toHaveClass("edge-fade", "edge-fade-x", "overflow-x-auto");
+		expect(strip.scrollLeft).toBe(0);
+
+		rerender(<AttachmentStrip itemCount={3} data-testid="strip">{tiles(3)}</AttachmentStrip>);
+		expect(strip.scrollLeft).toBe(900);
+
+		strip.scrollLeft = 120;
+		rerender(<AttachmentStrip itemCount={2} data-testid="strip">{tiles(2)}</AttachmentStrip>);
+		expect(strip.scrollLeft).toBe(120);
 	});
 });

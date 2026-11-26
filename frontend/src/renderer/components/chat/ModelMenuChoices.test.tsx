@@ -182,6 +182,14 @@ describe("ModelMenuChoices", () => {
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(30);
 	});
 
+	it("keeps two rows of the list in a window too short for all of it", () => {
+		renderRows(generateModels(30), undefined, 4);
+		const pane = document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
+		// Past this the menu scrolls as a whole, rather than closing the list up to nothing.
+		expect(pane.style.getPropertyValue("--model-list-min")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 2)");
+		expect(pane).toHaveClass("min-h-(--model-list-min)");
+	});
+
 	it("keeps the footer, and with it the menu's height, while searching a fixed-height list", async () => {
 		const user = userEvent.setup();
 		render(
@@ -215,6 +223,23 @@ describe("ModelMenuChoices", () => {
 		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 5 + 1px * 5)");
 		await user.clear(screen.getByRole("searchbox"));
 		expect(screen.getByTestId("rail")).toBeInTheDocument();
+	});
+
+	it("leaves the rows a search hides, such as rows above the list, out of the search's cap", async () => {
+		const user = userEvent.setup();
+		render(
+			<ModelMenuChoices models={generateModels(30)} searchable rows={14} searchHidesRows={10} header={<div data-testid="rail" />}>
+				{(matches) => matches.map((model) => (
+					<button key={model.id} type="button" role="menuitemradio">{model.label}</button>
+				))}
+			</ModelMenuChoices>,
+		);
+		const pane = () => document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
+		// Ten rows above four model rows while browsing.
+		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 14 + 1px * 14)");
+		// Searching hides those rows, so many matches scroll in four rows plus the rail's, not fifteen.
+		await user.type(screen.getByRole("searchbox"), "Model");
+		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 5 + 1px * 5)");
 	});
 
 	it("passes over matches that cannot be picked when Enter picks from the search", async () => {
@@ -284,15 +309,18 @@ describe("ModelMenuChoices", () => {
 		const { container } = renderRows(generateModels(5), undefined, 3);
 		const root = container.firstElementChild as HTMLElement;
 		const notify = () => watching.get(root)?.();
+		// Held no taller than the room the menu has now, so a window made shorter while it is open still
+		// shrinks the list instead of scrolling the whole menu.
+		expect(root).toHaveClass("min-h-[min(var(--model-menu-held,0px),calc(var(--radix-dropdown-menu-content-available-height,100vh)-var(--space-2)-2px))]");
 		act(() => notify());
-		expect(root.style.minHeight).toBe("240px");
+		expect(root.style.getPropertyValue("--model-menu-held")).toBe("240px");
 		// Another agent's footer is one row shorter: the menu keeps its height.
 		height = 204;
 		act(() => notify());
-		expect(root.style.minHeight).toBe("240px");
+		expect(root.style.getPropertyValue("--model-menu-held")).toBe("240px");
 		// A taller one grows it, and that becomes the height held.
 		height = 276;
 		act(() => notify());
-		expect(root.style.minHeight).toBe("276px");
+		expect(root.style.getPropertyValue("--model-menu-held")).toBe("276px");
 	});
 });

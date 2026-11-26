@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
@@ -62,6 +64,25 @@ type commandSpec struct {
 	// retryEmpty reruns a listing that exits cleanly with no output once.
 	// OpenCode 2 prints nothing the first time it runs in a new folder.
 	retryEmpty bool
+	// env adds to the environment of the model command.
+	env map[string]string
+	// killTree stops the command's children too when it times out, for CLIs
+	// whose launcher waits on the real binary.
+	killTree bool
+}
+
+func (s commandSpec) command(ctx context.Context, binary, workingDir string, env map[string]string) *exec.Cmd {
+	merged := make(map[string]string, len(env)+len(s.env))
+	maps.Copy(merged, env)
+	agentbase.ApplyEnvOverrides(merged, s.env, runtime.GOOS == "windows")
+	cmd := modelCommand(ctx, binary, s.args, workingDir, merged)
+	if s.killTree {
+		aoprocess.ConfigureTreeCancellation(cmd)
+	}
+	if s.interruptOnCancel {
+		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
+	}
+	return cmd
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -146,7 +167,15 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseProviderIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
-	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
+	"mimo-code": {
+		args:   []string{"models"},
+		parser: parseMiMoModels,
+		// Every MiMo command but --version copies all Claude Code history into
+		// MiMo's database at startup, so a listing must not start that scan.
+		env: map[string]string{"MIMOCODE_DISABLE_CLAUDE_IMPORT": "1"},
+		// `mimo` is a Node wrapper that waits on the real binary.
+		killTree: true,
+	},
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
 	"command-code":     {args: []string{"--list-models"}, parser: parseCommandCodeModels},
@@ -499,16 +528,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
-	if spec.interruptOnCancel {
-		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
-	}
-	output, err := cmd.CombinedOutput()
+	output, err := spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
 		cancel()
 		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
 		defer cancel()
-		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
+		output, err = spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	}
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
@@ -911,7 +936,17 @@ func BinaryVersion(ctx context.Context, binary string) string {
 
 // catalogSchemaVersions invalidates snapshots when an adapter's catalog format
 // changes independently of its installed executable or configuration.
-var catalogSchemaVersions = map[string]string{"memcode": "native-picker-v1"}
+var catalogSchemaVersions = map[string]string{
+	"memcode": "native-picker-v1",
+	// Catalogs cached before resource-path IDs were labelled with the model's
+	// name still show the whole path.
+	"aider":       "path-labels-v1",
+	"crush":       "path-labels-v1",
+	"kilocode":    "path-labels-v1",
+	"mimo-code":   "path-labels-v1",
+	"opencode":    "path-labels-v1",
+	"opencode-v2": "path-labels-v1",
+}
 
 // CatalogFingerprint hashes every stable discovery input for an agent: the
 // resolved executable plus the configuration and credentials its discovery
@@ -1071,12 +1106,32 @@ func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 	return models, nil
 }
 
+// accountModelPathPattern matches the resource name Fireworks uses as a model
+// ID, accounts/<account>/models/<model>.
+var accountModelPathPattern = regexp.MustCompile(`^accounts/([^/]+)/models/([^/]+)$`)
+
+// sharedModelAccount is the account Fireworks publishes its public models under.
+const sharedModelAccount = "fireworks"
+
 // splitProviderID labels a provider/model selector with its provider and the
-// name after the first slash, reporting whether the ID had both parts.
+// name after the first slash, reporting whether the ID had both parts. A
+// resource path is labelled with its model's name, and another account's
+// deployment as account/model so it does not read as the public one. Any other
+// nested name (a router's vendor/model) is kept whole, as the vendor is part of
+// it. So is a public path to a model literally named "default", because
+// normalize reads that label as the default-model marker.
 func splitProviderID(item *ports.AgentModelInfo) bool {
 	provider, name, ok := strings.Cut(item.ID, "/")
 	if !ok || provider == "" || name == "" {
 		return false
+	}
+	if match := accountModelPathPattern.FindStringSubmatch(name); len(match) == 3 {
+		switch account, model := match[1], match[2]; {
+		case account != sharedModelAccount:
+			name = account + "/" + model
+		case !strings.EqualFold(model, "default"):
+			name = model
+		}
 	}
 	item.Provider, item.Label = provider, name
 	return true

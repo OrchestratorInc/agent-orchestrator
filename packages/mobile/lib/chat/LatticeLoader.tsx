@@ -67,6 +67,10 @@ const COMET_RESTING = COMET.map(({ left, top, opacity }) => ({ opacity, transfor
  * the spinner the lattice replaced. Decorative: the label beside it says what
  * is happening. Under Reduce Motion, and off screen, the lattice holds still.
  */
+/**
+ * Memoized: the row around it re-renders every second for its "12s" label,
+ * and the lattice (sixteen dots and a comet) does not change with it.
+ */
 export const LatticeLoader = memo(function LatticeLoader({ color }: { color: string }) {
 	const reduceMotion = useReducedMotion();
 	// Off screen (a board row scrolled out of view) the comet rests.

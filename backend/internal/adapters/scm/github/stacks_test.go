@@ -218,3 +218,18 @@ func TestMergeStack_StopsWaitingButDoesNotCallItFailed(t *testing.T) {
 		t.Fatalf("got=%q err=%v", got, err)
 	}
 }
+
+func TestCommitsBehind_ReadsTheComparison(t *testing.T) {
+	const below = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	f := newFakeGH(t)
+	f.on(http.MethodGet, "/repos/octocat/hello/compare/"+below+"..."+stackHead, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "diverged", "ahead_by": 1, "behind_by": 2})
+	})
+	got, err := newProviderForTest(t, f).CommitsBehind(ctx(), stackRepo, below, stackHead)
+	if err != nil || got != 2 {
+		t.Fatalf("behind = %d err=%v", got, err)
+	}
+	if _, err := newProviderForTest(t, f).CommitsBehind(ctx(), stackRepo, "main", stackHead); err == nil {
+		t.Fatal("a branch name compared, want only commit SHAs")
+	}
+}

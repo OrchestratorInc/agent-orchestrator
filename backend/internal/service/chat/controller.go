@@ -16,11 +16,13 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -224,6 +226,18 @@ type Controller struct {
 	started       time.Time
 
 	conv                   ports.ChatConversation
+	backgroundMu           sync.Mutex
+	backgroundInFlight     chan struct{}
+	backgroundVersion      uint64
+	backgroundTasks        []ports.ChatBackgroundTask
+	backgroundSampledAt    time.Time
+	backgroundPartial      bool
+	backgroundErr          error
+	backgroundCommands     map[string]backgroundCommand
+	backgroundCommandOrder []string
+	// backgroundRuns hands out run tokens: never reused, so a log read for an
+	// evicted entry can't land in a later entry for the same task ID.
+	backgroundRuns         uint64
 	store                  Store
 	continuationReader     SnapshotReader
 	activity               ActivityRecorder
@@ -373,9 +387,8 @@ var ErrControllerHandoff = errors.New("chat controller is switching interfaces")
 var ErrForcedHandoffStoppedSource = errors.New("the forced handoff stopped the source")
 
 // ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
-// this conversation, not failed, was rolled back, or carries no durable prompt
-// the user authored. A retry is only ever offered for an eligible failed human
-// turn.
+// this conversation, not failed, was rolled back, or carries no durable human or
+// event prompt to send again.
 var ErrTurnNotRetryable = errors.New("turn is not retryable")
 
 // ErrRetryStaleBranch reports a durable failed turn that is no longer visible
@@ -1593,6 +1606,14 @@ func (c *Controller) readRateLimits() {
 // ProviderConversationID is the handle to persist for resume.
 func (c *Controller) ProviderConversationID() string { return c.conv.ProviderConversationID() }
 
+// providerConversationID is the live provider thread, or empty before one exists.
+func (c *Controller) providerConversationID() string {
+	if c.conv == nil {
+		return ""
+	}
+	return c.conv.ProviderConversationID()
+}
+
 // ConversationID is the durable conversation this controller writes to.
 func (c *Controller) ConversationID() string { return c.conversation.ID }
 
@@ -1801,7 +1822,12 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
 	}
-	if prompt.Origin != domain.MessageOriginHuman {
+	// An event's prompt (a review comment, a CI failure, an orchestrator message)
+	// is sent again as it was, like a human one: a turn it started that failed on
+	// a timeout or a dropped connection is otherwise stuck with no way to finish.
+	// A limited one resumes through its continuation below instead.
+	limitedEvent := prompt.Origin == domain.MessageOriginAutomation && source.UsageLimit != nil
+	if prompt.Origin != domain.MessageOriginHuman && prompt.Origin != domain.MessageOriginAutomation {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
 	}
 
@@ -1829,6 +1855,12 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, ErrTurnRunning
 	}
 
+	relayed := prompt.AuthoredByUser && cmp.Or(prompt.ProviderInputText, prompt.Text) == prompt.Text
+	if limitedEvent && !relayed {
+		if prompt, err = c.usageLimitEventContinuation(ctx, source); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	content, err := retryPromptContent(prompt.DeliveryContentJSON, c.Capabilities())
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1847,6 +1879,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		ClientMessageID:     key,
 		DeliveryContentJSON: prompt.DeliveryContentJSON,
 		Continuation:        prompt.Continuation,
+		AuthoredByUser:      prompt.AuthoredByUser,
 	}
 	var created bool
 	if autoResume {
@@ -1879,6 +1912,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
+		AuthoredByUser:  prompt.AuthoredByUser,
 		ClientMessageID: key,
 	}, now, false, nil)
 }
@@ -2858,6 +2892,29 @@ func (c *Controller) HandoffInterruptedTurn() string {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
+	return c.InterruptTurn(ctx, "")
+}
+
+// InterruptTurn is Interrupt aimed at the turn the user pressed Stop on.
+//
+// A Stop is aimed at the turn the user saw running, but it can land after that
+// turn ended and a later one started: a slow request, a retry, a second click.
+// Following "whatever runs now" would cancel work nobody asked to stop, so a
+// Stop for a turn that is no longer the running one is refused with
+// ErrNoActiveTurn, and one for a turn that already stopped answers nil without
+// reaching the provider. An empty expectedTurnID keeps the untargeted behaviour
+// for internal callers (handoffs, provider switches) that mean "the current turn".
+func (c *Controller) InterruptTurn(ctx context.Context, expectedTurnID string) error {
+	var aimed domain.ConversationTurn
+	if expectedTurnID != "" {
+		// Answer the common stale case before cancelling forks or withdrawing steers
+		// that belong to a later turn. The check is repeated under sendMu below.
+		var stopped bool
+		var err error
+		if aimed, stopped, err = c.stopTarget(ctx, expectedTurnID); err != nil || stopped {
+			return err
+		}
+	}
 	c.mu.Lock()
 	c.interrupts++
 	if c.forkCancel != nil {
@@ -2868,8 +2925,12 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
 	// it so Stop does not wait for that steer to time out. Withdrawing also
 	// refuses later steers for the turn; a Stop that fails gives them back.
+	// A targeted Stop withdraws only from its own turn: if that turn ends and the
+	// next starts before this runs, the next turn's steers are not settled.
 	var restore func()
-	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+	if targeted, ok := c.conv.(ports.ChatTurnSteerWithdrawer); ok && expectedTurnID != "" {
+		restore = targeted.WithdrawPendingSteersFor(aimed.ProviderTurnID)
+	} else if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
 		restore = withdrawer.WithdrawPendingSteers()
 	}
 	restoreSteering := func() {
@@ -2884,9 +2945,32 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	// lock first is existing work Stop should cancel; a Send that arrives after
 	// this point waits and is therefore post-Stop work that must survive.
 	c.sendMu.Lock()
+	var target domain.ConversationTurn
+	if expectedTurnID != "" {
+		// Read again now that dispatch is complete: no turn can start while sendMu
+		// is held, so a target still running here is the turn in flight, not one a
+		// later turn replaced.
+		var stopped bool
+		var err error
+		target, stopped, err = c.stopTarget(ctx, expectedTurnID)
+		if err != nil || stopped {
+			c.sendMu.Unlock()
+			restoreSteering()
+			return err
+		}
+	}
 	cutoff := c.now()
 	c.mu.Lock()
 	turn := c.pendingTurnID
+	if expectedTurnID != "" && target.State == domain.TurnStateQueued && target.ProviderTurnID != turn {
+		// A message still waiting in the queue is not the turn in flight. Stopping
+		// it must not interrupt the running turn or cancel the rest of the queue;
+		// the queued message has its own cancel.
+		c.mu.Unlock()
+		c.sendMu.Unlock()
+		restoreSteering()
+		return ErrNoActiveTurn
+	}
 	if turn != "" {
 		// Publish the queue cutoff before releasing sendMu. A completion can then
 		// win the provider race, but it cannot drain pre-Stop work as if Stop had
@@ -2909,6 +2993,17 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		// The list uses the snapshot's visibility and ordering rules, so its first
 		// row is the same running turn whose Working bar the user pressed Stop on.
 		providerTurnID := providerTurnIDs[0]
+		if expectedTurnID != "" {
+			// A targeted Stop settles only work that includes its own turn. If its
+			// turn is not among the visible running ones, the Working bar belongs to
+			// some other turn, and Stop must not reach it.
+			if target.ProviderTurnID == "" || !slices.Contains(providerTurnIDs, target.ProviderTurnID) {
+				c.sendMu.Unlock()
+				restoreSteering()
+				return ErrNoActiveTurn
+			}
+			providerTurnID = target.ProviderTurnID
+		}
 		if err := c.conv.Interrupt(ctx, providerTurnID); err != nil &&
 			!errors.Is(err, ports.ErrChatNoActiveTurn) {
 			c.log.Warn("provider interrupt during reconciliation failed",
@@ -2958,6 +3053,28 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		return fmt.Errorf("interrupt turn %s: %w", turn, err)
 	}
 	return nil
+}
+
+// stopTarget reads the turn a Stop was aimed at. stopped reports a turn that
+// already ended by being stopped, which answers a repeated Stop without reaching
+// the provider. A turn that ended any other way is ErrNoActiveTurn: there is
+// nothing left to stop, and the client should show the turn's real outcome.
+func (c *Controller) stopTarget(ctx context.Context, turnID string) (domain.ConversationTurn, bool, error) {
+	target, err := c.store.TurnByID(ctx, turnID)
+	if err != nil {
+		return domain.ConversationTurn{}, false, err
+	}
+	if target.ConversationID != c.conversation.ID {
+		return domain.ConversationTurn{}, false, domain.ErrNoConversationTurn
+	}
+	switch target.State {
+	case domain.TurnStateRunning, domain.TurnStateQueued:
+		return target, false, nil
+	case domain.TurnStateInterrupted, domain.TurnStateCancelled:
+		return target, true, nil
+	default:
+		return target, false, ErrNoActiveTurn
+	}
 }
 
 // reconcileDurableTurnsLocked settles work the controller can no longer cancel
@@ -4221,7 +4338,15 @@ func (c *Controller) applyThreadState(
 	update ports.ChatThreadState,
 	now time.Time,
 ) error {
+	// A conversation outlives its provider thread. What another agent or an
+	// earlier thread reported is not merged into this thread's state. Read before
+	// taking c.mu: a driver may guard its handle with its own lock.
+	thread := c.providerConversationID()
 	c.mu.Lock()
+	if !c.threadState.AppliesTo(c.harness, thread) {
+		c.threadState = domain.ConversationThreadState{}
+	}
+	c.threadState.Harness, c.threadState.ProviderConversationID = c.harness, thread
 	if update.Status != "" {
 		c.threadState.Status = update.Status
 		// The flags belong to the status report that carried them: an active thread

@@ -66,6 +66,19 @@ describe("daemon failure telemetry", () => {
 		});
 	});
 
+	it("includes why the daemon exited", () => {
+		stop = startDaemonFailureTelemetry();
+
+		pushStatus({ state: "stopped", code: "exited", exitCode: 1, exitReason: "already_running", details: "daemon already running (pid 4, port 3001)" });
+
+		expect(captureMock).toHaveBeenCalledWith("ao.daemon.failed", {
+			daemon_state: "stopped",
+			code: "exited",
+			exit_code: 1,
+			exit_reason: "already_running",
+		});
+	});
+
 	it("ignores statuses without a failure code (healthy or user-initiated stop)", () => {
 		stop = startDaemonFailureTelemetry();
 

@@ -1,3 +1,6 @@
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
+import type { SendInput } from "../../lib/ui-usage-registry";
+import { surfaceOf } from "../../lib/ui-surfaces";
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
@@ -53,7 +56,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
@@ -69,6 +72,7 @@ import { UnsentMessageStrip } from "./UnsentMessageStrip";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
+import { AGENT_SWITCH_FAILED, SEND_REJECTION_CODES, sendRejectionCode, type ComposerErrorCode } from "../../lib/composer-send-failure";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
 	ComposerEditor,
@@ -90,7 +94,6 @@ import {
 	MAX_ATTACHMENTS,
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
-import { File } from "@/components/app-icons";
 import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
@@ -125,13 +128,15 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
-import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
+import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { ComposerAttachmentTile, ComposerPendingTile } from "./ComposerAttachmentTile";
+import { AttachmentStrip } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
+import { noteComposerDropTargetFocus, registerComposerDropTarget, type ComposerDropTarget } from "../../lib/composer-drop-targets";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
+import { subscribeChatComposerReferences, subscribeChatComposerText, takeComposerHandoff, type ComposerHandoff } from "../../lib/chat-context-bus";
 
 /**
  * AO's own `/model`: it opens the composer's agent and model menu instead of
@@ -140,50 +145,7 @@ import { subscribeChatComposerReferences, subscribeChatComposerText } from "../.
  */
 const MODEL_COMMAND = "model";
 
-// These responses precede AppendUserMessage. Provider/transport errors can
-// follow durable acceptance and must keep the original delivery ID for recovery.
-/** The agent switch that runs before a send failed, so the message never left. */
-export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
-const DEFINITIVE_SEND_REJECTIONS = new Set([
-	AGENT_SWITCH_FAILED,
-	// The new chat page could not create the session this brief would start.
-	"TASK_CREATE_FAILED",
-	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",
-	// Cloud validation failures reject the request before durable acceptance.
-	"validation_error",
-	"INVALID_BODY",
-	"CHAT_MESSAGE_EMPTY",
-	"INVALID_RESOURCE",
-	"UNSUPPORTED_ATTACHMENT_TYPE",
-	"INVALID_ATTACHMENT_DATA",
-	"ATTACHMENT_TOO_LARGE",
-	"TOO_MANY_ATTACHMENTS",
-	"ATTACHMENTS_TOO_LARGE",
-	"SESSION_NOT_FOUND",
-	"SESSION_MODE_MISMATCH",
-	"CHAT_CONTROLLER_NOT_READY",
-	"CHAT_RESUME_FAILED",
-	"CHAT_INTERFACE_TRANSITION",
-	"CHAT_OPEN_ELSEWHERE",
-	// A shared session refused the send because someone else holds its
-	// composer; nothing was accepted, so the text goes back to the draft.
-	"COMPOSER_LOCKED",
-	"COMPOSER_LEASE_LOST",
-	// Excerpts are verified before AppendUserMessage, so retrying the same
-	// references can only fail again; return them to the draft for removal.
-	"CHAT_EXCERPT_INVALID",
-	"CHAT_EXCERPT_STALE",
-	// A /btw request the daemon refused never opened a side chat, so a
-	// retry cannot succeed; return the draft instead of locking the composer.
-	"CHAT_SIDE_UNAVAILABLE",
-	"CHAT_SIDE_UNSUPPORTED",
-	"CHAT_SIDE_ANCHOR_UNAVAILABLE",
-	"CHAT_SIDE_INVALID_REQUEST",
-	"CHAT_SIDE_NOT_READY",
-	"CHAT_SIDE_RECREATE_REQUIRED",
-	"CHAT_SIDE_CLOSED",
-	"CHAT_SIDE_IDEMPOTENCY_CONFLICT",
-]);
+const DEFINITIVE_SEND_REJECTIONS = new Set<string>(SEND_REJECTION_CODES);
 
 // Native image blocks are persisted with the chat turn and sent to the provider.
 // Larger attachments still reach the agent through their staged workspace paths.
@@ -275,6 +237,12 @@ export type ChatComposerHandle = {
 	isEmpty(): boolean;
 	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
 	setDraft(text: string): void;
+	/**
+	 * Takes the typed text for the surface that replaces this one, with whether
+	 * Enter was pressed on exactly that text. The saved draft is cleared, so it
+	 * does not come back here; the box itself is left for the surface to unmount.
+	 */
+	takeDraft(): ComposerHandoff | undefined;
 };
 
 /**
@@ -290,6 +258,9 @@ function useDockEntrance(shown: string | null): boolean {
 	return quiet.current === null;
 }
 
+/** A draft at least this long, erased by hand, counts as discarded. */
+const DISCARDED_DRAFT_MIN_CHARS = 10;
+
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
 	onSend,
@@ -301,6 +272,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked = false,
 	sendBlockedReason,
 	starting,
+	restoring = false,
 	holdAttachments,
 	onHeldAttachmentsChange,
 	attachmentsRefusal,
@@ -310,6 +282,7 @@ export const ChatComposer = memo(function ChatComposer({
 	elicitation,
 	skills = [],
 	skillsLoading = false,
+	filePathsLoading = false,
 	filePaths = [],
 	filePathsTruncated,
 	onFileQuery,
@@ -319,6 +292,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onSteer,
 	showSteerButton,
 	onInterrupt,
+	stopping,
 	onContinue,
 	canSteer,
 	sendPending,
@@ -347,6 +321,7 @@ export const ChatComposer = memo(function ChatComposer({
 	autoFocus = true,
 	draftSessionId,
 	draftSessionIncarnation,
+	handoffSessionId,
 	assetBaseUrl,
 	remoteHost = false,
 	assetSessionId,
@@ -404,6 +379,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked?: boolean;
 	sendBlockedReason?: string;
 	starting?: boolean;
+	restoring?: boolean;
 	/**
 	 * Files that cannot be staged yet (no workspace to write into) stay in the
 	 * composer with their bytes and go to `onSend` with the message, for a chat
@@ -430,6 +406,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * belong to the editor.
 	 */
 	skillsLoading?: boolean;
+	filePathsLoading?: boolean;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/**
@@ -463,6 +440,8 @@ export const ChatComposer = memo(function ChatComposer({
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
+	/** Stop already landed; the turn is winding down, so Stop shows progress instead of firing again. */
+	stopping?: boolean;
 	/**
 	 * Pick a stopped turn back up when there is no draft to send: the same button
 	 * that stopped it continues it, like play after pause. Present only while the
@@ -517,6 +496,12 @@ export const ChatComposer = memo(function ChatComposer({
 	draftSessionId?: string;
 	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
+	/**
+	 * The session whose follow-up from the new chat page this composer takes
+	 * (takeComposerHandoff). Set even where drafts cannot be saved, when
+	 * draftSessionId is not.
+	 */
+	handoffSessionId?: string;
 	/** Host-specific proxy origin for staged attachment reads. */
 	assetBaseUrl?: string;
 	/** The session belongs to a remote host, even if its proxy is disconnected. */
@@ -568,7 +553,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
 	const enterSends = chatSendKeyMode === "enter";
 	const [dragging, setDragging] = useState(false);
-	const [sendError, setSendError] = useState<string | null>(null);
+	// The code says why, for telemetry; the message is what the composer shows.
+	const [sendError, setSendError] = useState<{ message: string; code: ComposerErrorCode } | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
@@ -638,7 +624,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * own Enter. A held message never overtakes a send that did not go through.
 	 * The daemon then queues each one behind the running turn as usual.
 	 */
-	const [heldSubmit, setHeldSubmit] = useState<HeldSubmit | null>(null);
+	const [heldSubmit, setHeldSubmitState] = useState<HeldSubmit | null>(null);
+	// Read outside render (takeDraft) before React commits the state.
+	const heldSubmitRef = useRef<HeldSubmit | null>(null);
+	const setHeldSubmit = useCallback((held: HeldSubmit | null) => {
+		heldSubmitRef.current = held;
+		setHeldSubmitState(held);
+	}, []);
 	// Held during a submit, and decided when that submit settles.
 	const heldDuringSubmit = useRef<HeldSubmit | null>(null);
 	const submitAccepted = useRef(false);
@@ -674,7 +666,7 @@ export const ChatComposer = memo(function ChatComposer({
    if (getChatComposerMutation(draftScope).pending || draft.composer.delivery) return false;
    const files = draft.composer.fileReferences ?? [];
    if(files.some(file => file.path===reference.path && file.side===reference.side && file.line===reference.line && file.endLine===reference.endLine && file.scope===reference.scope && file.commitSha===reference.commitSha && JSON.stringify(file.source)===JSON.stringify(reference.source) && JSON.stringify(file.lines)===JSON.stringify(reference.lines)))return true;
-   if (files.length + (draft.composer.excerpts?.length ?? 0) >= 8) { setSendError("chat.draft.annotationLimit"); return false; }
+   if (files.length + (draft.composer.excerpts?.length ?? 0) >= 8) { setSendError({ message: "chat.draft.annotationLimit", code: "ANNOTATION_LIMIT" }); return false; }
    const order = Math.max(Date.now(), ...files.map(item => item.order + 1), ...(draft.composer.excerpts ?? []).map(item => (item.order ?? 0) + 1));
    const result = writeChatFileReferences(draftScope, [...files, { ...reference, order }]);
    composerRevision.current = result.draft.composer.revision;
@@ -705,6 +697,8 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
+	const sentFiles = Boolean(holdAttachments || durableDelivery?.draft?.attachments.length);
+	const takesNextFiles = optimisticSend && restoring && !sentFiles;
 	const chatReferences = draftScope
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
@@ -715,6 +709,8 @@ export const ChatComposer = memo(function ChatComposer({
  const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
 	const unsavedText = useRef<{ text: string; revision: number } | undefined>(undefined);
+	// A handed-off follow-up the session's draft could not save (see the hand-off).
+	const unsavedHandoff = useRef<string | undefined>(undefined);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
 	const restoredAttachments = useMemo<FileAttachment[]>(
 		() =>
@@ -791,6 +787,24 @@ export const ChatComposer = memo(function ChatComposer({
 		setAttachmentDraftPersistenceError(null);
 		automaticDeliveryRecoveryAttempted.current = undefined;
 	}, [draftScope, draftScopeKey, parkUnsentSends]);
+	// A handed-off follow-up that could not be saved stays in the box and in memory,
+	// like typing whose save failed: beside the save error, or under the in-memory
+	// composer's own storage notice. It runs after the reset above, which starts
+	// the scope with nothing unsaved, and before the restore, which then leaves the
+	// unsaved text alone. Nothing sends it by itself; the person sends it.
+	useEffect(() => {
+		const text = unsavedHandoff.current;
+		if (text === undefined) return;
+		unsavedHandoff.current = undefined;
+		if (draftScope) {
+			unsavedText.current = { text, revision: composerRevision.current };
+			setTextDraftPersistenceError("chat.draft.saveFailed");
+		}
+		textRef.current = text;
+		hasTextRef.current = text.trim().length > 0;
+		setHasText(hasTextRef.current);
+		editor.current?.setText(text);
+	}, [draftScope]);
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
 		initialKey: attachmentScopeKey,
@@ -870,7 +884,14 @@ export const ChatComposer = memo(function ChatComposer({
 	// Drawn even with nothing to pick while the skills are on their way, so `/` is
 	// never answered with silence. Keyboard handling still follows `menuOpen`.
 	const skillsNote = skillsLoading && trigger?.kind === "skill" && trigger.key !== dismissedKey;
-	const menuShown = menuOpen || skillsNote;
+	const filesNote = filePathsLoading && trigger?.kind === "file" && trigger.key !== dismissedKey;
+	const menuShown = menuOpen || skillsNote || filesNote;
+	const markSlashPick = useTelemetrySurface("slash_menu", Boolean(menuShown && trigger?.kind === "skill"), { choice: true });
+	const markMentionPick = useTelemetrySurface("mention_menu", Boolean(menuShown && trigger?.kind === "file"), { choice: true });
+	useTelemetrySurface("composer");
+	useEffect(() => {
+		if (sendError) uiUsage.errorShown("composer_send_failed", "inline", "composer", sendError.code);
+	}, [sendError]);
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -909,14 +930,17 @@ export const ChatComposer = memo(function ChatComposer({
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
 	const stripConcealed = steerInFlight && sendConcealed;
-	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const stripAttachments = (stripConcealed || (sentFiles && (optimisticSend || nextDraftHasChanged)) ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		// A cloud file's reference is no daemon path: it previews from its bytes
 		// while they are in memory, else as a file.
 		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
-		return { file, path, preview };
+		// Videos, PDFs and text files preview from the staged copy once the picked file is gone.
+		const mediaUrl = path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && attachmentPreviewKind(path)
+			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined;
+		return { file, path, preview, mediaUrl };
 	});
 	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
 		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
@@ -933,6 +957,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const acceptedClearFailed = composerMutation.accepted?.result.ok === false;
 	const draftMutationPending =
 		submitting || composerMutation.pending || acceptedMutationWaiting || Boolean(durableDelivery);
+	const attachBlocked = !takesNextFiles && (fileAttachments.preparing || draftMutationPending);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -1005,7 +1030,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setSendError(null);
 		setContinuing(true);
 		void Promise.resolve().then(onContinue)
-			.catch((error: unknown) => setSendError(apiErrorMessage(error, "Couldn't continue the turn. Try again.")))
+			.catch((error: unknown) => setSendError({ message: apiErrorMessage(error, "Couldn't continue the turn. Try again."), code: "CONTINUE_FAILED" }))
 			.finally(() => setContinuing(false));
 	};
 	const canSteerNext =
@@ -1150,7 +1175,7 @@ export const ChatComposer = memo(function ChatComposer({
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
-			if (result.draft.composer.attachments.length === 0) {
+			if (result.draft.composer.attachments.length === 0 && !fileAttachments.preparing) {
 				fileAttachments.clear();
 			} else {
 				for (const attachment of fileAttachments.getAttachments()) {
@@ -1502,6 +1527,35 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [draftScope]);
+	// A follow-up typed on the new chat page while this session was being created
+	// becomes the draft, saved before the restore below loads it into the editor.
+	// Entered there, it is held here and sent once the box can send, which queues
+	// it behind the brief. A draft of the session's own keeps its place: the
+	// follow-up goes below it, for the person to send.
+	// Where drafts cannot be saved (an in-memory composer), it is shown as unsaved
+	// typing instead.
+	useLayoutEffect(() => {
+		const sessionId = draftSessionId ?? handoffSessionId;
+		if (!sessionId) return;
+		const handoff = takeComposerHandoff(sessionId);
+		if (!handoff) return;
+		if (!draftScope) {
+			unsavedHandoff.current = handoff.text;
+			return;
+		}
+		const own = readChatSessionDraft(draftScope).composer;
+		const kept = own.text.trim() ? own.text.replace(/\s+$/, "") : "";
+		const text = kept ? `${kept}\n\n${handoff.text}` : handoff.text;
+		const result = writeChatComposerText(draftScope, text);
+		if (!result.ok) {
+			// Shown once the scope's reset has run (see unsavedHandoff).
+			unsavedHandoff.current = text;
+			return;
+		}
+		composerRevision.current = result.draft.composer.revision;
+		textRef.current = text;
+		if (handoff.send && !kept && !own.delivery) setHeldSubmit({ text, steer: false, own: true });
+	}, [draftScope, draftSessionId, handoffSessionId, setHeldSubmit]);
 	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
 	// draft below what is already typed, ready for the person's own words.
 	useEffect(() => {
@@ -1519,6 +1573,12 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [draftSessionId, draftScope, persistComposerText]);
 
 	const draftCaretRef = useRef<number | undefined>(undefined);
+	// Whether the draft being typed reached DISCARDED_DRAFT_MIN_CHARS, so erasing
+	// it a character at a time still counts as one discard.
+	const draftWorthDiscarding = useRef(false);
+	useEffect(() => {
+		draftWorthDiscarding.current = false;
+	}, [draftScope]);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
@@ -1526,6 +1586,16 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
+		// A real draft erased by hand (not cleared by a send, not a recalled message) was given up on.
+		const trimmed = snapshot.text.trim();
+		if (submitInFlight.current || historyBrowse.current) {
+			draftWorthDiscarding.current = false;
+		} else if (trimmed.length >= DISCARDED_DRAFT_MIN_CHARS) {
+			draftWorthDiscarding.current = true;
+		} else if (!trimmed && previousText.trim() && draftWorthDiscarding.current) {
+			draftWorthDiscarding.current = false;
+			if (surfaceOf(document.activeElement) === "composer") uiUsage.draftDiscarded();
+		}
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
@@ -1580,13 +1650,27 @@ export const ChatComposer = memo(function ChatComposer({
 				if (snapshot) onEditorChange(snapshot);
 				editor.current?.focus();
 			},
+			takeDraft: () => {
+				// The saved draft, not the box: a recalled message is only shown, and a
+				// draft its owner cleared (a launched brief) is not the person's text.
+				const text = unsavedText.current?.text ?? (draftScope ? readChatSessionDraft(draftScope).composer.text : textRef.current);
+				if (!text.trim()) return undefined;
+				// Entered during a send that is still settling, or after it settled.
+				const held = heldDuringSubmit.current ?? heldSubmitRef.current;
+				heldDuringSubmit.current = null;
+				setHeldSubmit(null);
+				persistComposerText("");
+				return { text, send: held?.text === text };
+			},
 		}),
-		[focusEditor, hasDraft, onEditorChange],
+		[draftScope, focusEditor, hasDraft, onEditorChange, persistComposerText, setHeldSubmit],
 	);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
+		if (currentTrigger.kind === "skill") markSlashPick();
+		else markMentionPick();
 		const opensModelMenu = currentTrigger.kind === "skill" && value === MODEL_COMMAND && modelMenuUsable();
 		if (opensModelMenu) editor.current?.removeTrigger(currentTrigger);
 		else editor.current?.insertToken(currentTrigger, value);
@@ -1598,7 +1682,7 @@ export const ChatComposer = memo(function ChatComposer({
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
 		if (opensModelMenu) openModelMenu();
-	}, [modelMenuUsable, openModelMenu]);
+	}, [markMentionPick, markSlashPick, modelMenuUsable, openModelMenu]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1642,6 +1726,8 @@ export const ChatComposer = memo(function ChatComposer({
 			const matches = suggestionsFor(currentTrigger);
 			const chosen = matches[Math.min(highlightedRef.current, matches.length - 1)];
 			if (!chosen) return undefined;
+			if (currentTrigger.kind === "skill") markSlashPick();
+			else markMentionPick();
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
@@ -1655,12 +1741,23 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return chosen.value;
 		},
-		[modelMenuUsable, onCompact, openModelMenu, skills, suggestionsFor],
+		[markMentionPick, markSlashPick, modelMenuUsable, onCompact, openModelMenu, skills, suggestionsFor],
 	);
 
-	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
+	function submit(event?: FormEvent, forceSteer?: boolean, input?: SendInput): Promise<void> {
 		event?.preventDefault();
 		if (sendBlockedReason) return Promise.resolve();
+		// Only a person's Enter or click on a new message is counted: never a held
+		// draft sent later, a repeat Enter on the message already sending, /model, /compact
+		// or saving an edit to a queued message, which sends nothing new.
+		const countSend = () => {
+			if (savingQueuedEdit) return;
+			const draft = textRef.current.trim();
+			if (draft === "/compact" && onCompact) return;
+			if (input && !typingLocked && (draft || fileAttachments.attachments.length > 0 || contextReferences.length > 0)) {
+				uiUsage.messageSent(input, forceSteer && canSteerDraft ? "steer" : queuesDraft ? "queue" : "send", fileAttachments.attachments.length > 0);
+			}
+		};
 		if (submitInFlight.current) {
 			// React cannot publish the next busy prop until after this event returns. A
 			// repeat Enter on the message being sent joins that submission instead of
@@ -1670,9 +1767,13 @@ export const ChatComposer = memo(function ChatComposer({
 			if (
 				!savingQueuedEdit &&
 				editorClears.current !== editorClearsAtSubmit.current &&
-				textRef.current.trim()
+				(textRef.current.trim() || fileAttachments.hasPendingReads() ||
+					(draftScope && readChatSessionDraft(draftScope).composer.attachments.length > 0))
 			) {
+				// A repeat Enter re-holds the same draft; count it only once.
+				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;
 				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId() };
+				if (!alreadyHeld) countSend();
 			}
 			return submitInFlight.current;
 		}
@@ -1690,6 +1791,7 @@ export const ChatComposer = memo(function ChatComposer({
 			openModelMenu();
 			return Promise.resolve();
 		}
+		countSend();
 		setHeldSubmit(null);
 		heldDuringSubmit.current = null;
 		submitAccepted.current = false;
@@ -1767,21 +1869,21 @@ export const ChatComposer = memo(function ChatComposer({
 		setSteerOutcomeNotice(null);
 
 		if (!recoveringDelivery && !savingQueuedEdit && body === "/compact" && onCompact) {
-			if (fileReferences.length) { setSendError("chat.draft.fileReferencesCompactUnsupported"); return; }
+			if (fileReferences.length) { setSendError({ message: "chat.draft.fileReferencesCompactUnsupported", code: "FILE_REFERENCES_UNSUPPORTED" }); return; }
 			if (draftScope && !mutationToken) return;
 			let mutationFinished = false;
 			setSubmitting(true);
 			try {
 				if (compactBlocked) {
-					setSendError("Stop the current turn before compacting.");
+					setSendError({ message: "Stop the current turn before compacting.", code: "COMPACT_UNAVAILABLE" });
 					return;
 				}
 				if (compacting) {
-					setSendError("Conversation history is already being compacted.");
+					setSendError({ message: "Conversation history is already being compacted.", code: "COMPACT_UNAVAILABLE" });
 					return;
 				}
 				if (compactUnavailable) {
-					setSendError(compactUnavailable);
+					setSendError({ message: compactUnavailable, code: "COMPACT_UNAVAILABLE" });
 					return;
 				}
 				await onCompact();
@@ -1791,7 +1893,7 @@ export const ChatComposer = memo(function ChatComposer({
 				setDismissedKey(null);
 				setHighlighted(0);
 			} catch {
-				setSendError("Conversation history could not be compacted. Try again.");
+				setSendError({ message: "Conversation history could not be compacted. Try again.", code: "COMPACT_FAILED" });
 			} finally {
 				if (draftScope && mutationToken && !mutationFinished) {
 					cancelChatComposerMutation(draftScope, mutationToken);
@@ -1854,7 +1956,7 @@ export const ChatComposer = memo(function ChatComposer({
 			? settledAttachments.flatMap((attachment) => attachment.stagedPath ? [] : attachmentPayload(attachment))
 			: [];
 		if (hasAttachments && settledPaths.length + heldPayloads.length !== settledAttachments.length) {
-			setSendError("chat.draft.filesUnavailable");
+			setSendError({ message: "chat.draft.filesUnavailable", code: "ATTACHMENTS_UNAVAILABLE" });
 			return;
 		}
 		const sendPayloads = (native: FileAttachmentPayload[]) => {
@@ -1914,14 +2016,14 @@ export const ChatComposer = memo(function ChatComposer({
 				nativePayloads = restored;
 				return true;
 			} catch {
-				setSendError("chat.draft.readAttachmentFailed");
+				setSendError({ message: "chat.draft.readAttachmentFailed", code: "ATTACHMENT_UNREADABLE" });
 				return false;
 			}
 		};
 		if ((!draftScope || savingQueuedEdit) && !await restoreNativePayloads()) return;
 
 		if (savingQueuedEdit && nativePayloads.length + retainedNativeImageCount > MAX_ATTACHMENTS) {
-			setSendError(`You can attach up to ${MAX_ATTACHMENTS} images.`);
+			setSendError({ message: `You can attach up to ${MAX_ATTACHMENTS} images.`, code: "TOO_MANY_ATTACHMENTS" });
 			return;
 		}
 		if (!draftScope || savingQueuedEdit) {
@@ -1960,13 +2062,14 @@ export const ChatComposer = memo(function ChatComposer({
 					setHasText(hasTextRef.current);
 					editor.current?.setText(currentText);
 				}
-				setSendError(
-					savingQueuedEdit
+				setSendError({
+					message: savingQueuedEdit
 						? apiErrorMessage(error, "chat.draft.queueSaveFailed")
 						: staged
 						? "chat.draft.sendAttachmentsFailed"
 						: "chat.draft.sendFailed",
-				);
+					code: savingQueuedEdit ? "QUEUE_SAVE_FAILED" : "SEND_FAILED",
+				});
 			} finally {
 				setSubmitting(false);
 			}
@@ -1974,12 +2077,12 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 
   if ((recoveringDelivery?.fileReferences?.length || fileReferences.length) && (fileReferenceDelivery ?? (fileReferencesEnabled ? "structured" : "unsupported")) === "unsupported") {
-   setSendError("chat.draft.fileReferencesUnsupported");
+   setSendError({ message: "chat.draft.fileReferencesUnsupported", code: "FILE_REFERENCES_UNSUPPORTED" });
    return;
   }
 		const sizeError = !recoveringDelivery && excerptSizeError(chatReferences);
 		if (sizeError) {
-			setSendError(sizeError);
+			setSendError({ message: sizeError, code: sizeError === "chat.draft.annotationLimit" ? "ANNOTATION_LIMIT" : "EXCERPT_TOO_LONG" });
 			return;
 		}
 		const requestText = recoveringDelivery
@@ -1991,7 +2094,7 @@ export const ChatComposer = memo(function ChatComposer({
 			try {
 				capturedReferences = fitExcerptContext(capturedReferences, requestText, messageByteLimit, capturedFiles);
 			} catch (error) {
-				setSendError(apiErrorMessage(error));
+				setSendError({ message: apiErrorMessage(error), code: "MESSAGE_TOO_LONG" });
 				return;
 			}
 			if (draftScope && JSON.stringify(capturedReferences) !== JSON.stringify(chatReferences)) {
@@ -2130,12 +2233,15 @@ export const ChatComposer = memo(function ChatComposer({
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
 				// A failed agent switch is reported in its own strip above the box.
 				const code = apiErrorCode(error);
-				setSendError(code === AGENT_SWITCH_FAILED ? null : code === "CHAT_OPEN_ELSEWHERE" ? "chat.draft.openElsewhere" : apiErrorMessage(error));
+				setSendError(code === AGENT_SWITCH_FAILED ? null : {
+					message: code === "CHAT_OPEN_ELSEWHERE" ? "chat.draft.openElsewhere" : apiErrorMessage(error),
+					code: sendRejectionCode(code),
+				});
 				return;
 			}
 			console.warn("[chat] send got no answer", { sessionId: draftScope.sessionId, code: apiErrorCode(error) ?? (error instanceof Error ? error.name : "unknown"), retry: prepared.recovered });
 			if (parks) {
-				if (prepared.recovered) setSendError("chat.draft.unsentRetryFailed");
+				if (prepared.recovered) setSendError({ message: "chat.draft.unsentRetryFailed", code: "UNSENT_RETRY_FAILED" });
 				return;
 			}
 			setDeliveryUncertain(true);
@@ -2177,7 +2283,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const parked = parkedUnsentId();
 		if (parked && parked !== heldSubmit.unsentId) return;
 		void submitLatest.current(undefined, heldSubmit.steer && canSteerDraft);
-	}, [canSteerDraft, heldSubmit, heldSubmitReady]);
+	}, [canSteerDraft, heldSubmit, heldSubmitReady, setHeldSubmit]);
 
 	function onEditorEnter(
 		snapshot: ComposerEditorSnapshot,
@@ -2219,7 +2325,7 @@ export const ChatComposer = memo(function ChatComposer({
 				return true;
 			}
 			const wantsSteer = enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft;
-			void submit(undefined, wantsSteer);
+			void submit(undefined, wantsSteer, "keyboard");
 			return true;
 		},
 		[canSteerDraft, canSteerNext, enterSends, fileAttachments, messageByteLimit, onCompact, pick, suggestionsFor],
@@ -2263,7 +2369,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		// The "Loading skills…" note closes the same way a menu does.
-		if (event.key === "Escape" && skillsLoading && liveTrigger?.kind === "skill" && liveTrigger.key !== dismissedKeyRef.current) {
+		if (event.key === "Escape" && liveTrigger && ((skillsLoading && liveTrigger.kind === "skill") || (filePathsLoading && liveTrigger.kind === "file")) && liveTrigger.key !== dismissedKeyRef.current) {
 			event.preventDefault();
 			event.stopPropagation();
 			dismissedKeyRef.current = liveTrigger.key;
@@ -2309,6 +2415,8 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start");
 		const snapshot = editor.current?.getSnapshot();
 		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
+		// Stepping back to the saved draft is not erasing anything.
+		draftWorthDiscarding.current = false;
 		if (snapshot) onEditorChange(snapshot);
 		return true;
 	}
@@ -2338,8 +2446,12 @@ export const ChatComposer = memo(function ChatComposer({
 		});
 	}
 
+	function acceptsFiles(): boolean {
+		return canAttach && !attachBlocked && (takesNextFiles || !submitInFlight.current);
+	}
+
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
+		if (!acceptsFiles()) return;
 		const clipboard = event.clipboardData;
 		const files = Array.from(clipboard?.files ?? []);
 		if (files.length === 0) return;
@@ -2347,18 +2459,38 @@ export const ChatComposer = memo(function ChatComposer({
 		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
+		uiUsage.attachmentAdded("paste");
 		attachFiles(files);
+	}
+
+	function acceptDroppedFiles(files: File[]): boolean {
+		if (!acceptsFiles() || files.length === 0) return false;
+		uiUsage.attachmentAdded("drop");
+		attachFiles(files);
+		return true;
 	}
 
 	function onDrop(event: DragEvent<HTMLFormElement>) {
 		setDragging(false);
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
-		const files = Array.from(event.dataTransfer?.files ?? []);
-		if (files.length === 0) return;
-		event.preventDefault();
-		event.stopPropagation();
-		attachFiles(files);
+		// No stopPropagation: the shell's window listener must still see the drop
+		// to reset its drag tracking. preventDefault tells it the drop is taken.
+		if (acceptDroppedFiles(Array.from(event.dataTransfer?.files ?? []))) event.preventDefault();
 	}
+
+	// Files dropped anywhere in the window, outside any drop zone of their own,
+	// land here when this is the nearest composer (see composer-drop-targets).
+	const dropHandlersRef = useRef({ accepts: acceptsFiles, attach: acceptDroppedFiles });
+	dropHandlersRef.current = { accepts: acceptsFiles, attach: acceptDroppedFiles };
+	const dropTarget = useMemo<ComposerDropTarget>(() => ({
+		element: () => formRef.current,
+		accepts: () => dropHandlersRef.current.accepts(),
+		attach: (files) => dropHandlersRef.current.attach(files),
+		setDragging,
+	}), []);
+	useEffect(() => {
+		if (!canAttach) return;
+		return registerComposerDropTarget(dropTarget);
+	}, [canAttach, dropTarget]);
 
 	// Only modifier transitions re-render: React bails out when the value is unchanged.
 	useEffect(() => {
@@ -2379,11 +2511,11 @@ export const ChatComposer = memo(function ChatComposer({
 	}, []);
 
 	const attachmentError =
-		fileAttachments.error ??
+		(sendError?.code === "SESSION_RESTORE_FAILED" ? null : fileAttachments.error) ??
 		draftPersistenceError ??
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
 		(attachmentsRefusal && fileAttachments.attachments.length > 0 && !durableDelivery ? attachmentsRefusal : null) ??
-		sendError ??
+		sendError?.message ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath && !file.file)
 			? "chat.draft.filesUnavailable" : null) ??
 		commandError;
@@ -2456,14 +2588,16 @@ export const ChatComposer = memo(function ChatComposer({
 		<form
 			ref={formRef}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
-			onSubmit={(event) => void submit(event, steersDraft)}
+			onSubmit={(event) => void submit(event, steersDraft, "button")}
+			data-telemetry-surface="composer"
 				onDragOver={(event) => {
-					if (!canAttach || submitInFlight.current) return;
+					if (!canAttach || (submitInFlight.current && !takesNextFiles)) return;
 					event.preventDefault();
 					setDragging(true);
 				}}
 				onDragLeave={() => setDragging(false)}
 				onDropCapture={onDrop}
+				onFocusCapture={() => noteComposerDropTargetFocus(dropTarget)}
 				// The border colors for rest, hover, focus and drag are one set of states
 				// on one surface, so they are declared together in CSS rather than half
 				// here and half there.
@@ -2496,7 +2630,7 @@ export const ChatComposer = memo(function ChatComposer({
 						highlighted={activeIndex}
 						onPick={pick}
 						truncated={trigger?.kind === "file" && filePathsTruncated}
-						loadingNote={skillsNote ? "Loading skills…" : undefined}
+						loadingNote={skillsNote ? "Loading skills…" : filesNote ? "Loading files…" : undefined}
 					/>
 				) : null}
 
@@ -2515,93 +2649,57 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{(staged && !stripConcealed) || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
-					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
+					<AttachmentStrip
+						// The top and right padding leave room for each tile's corner remove control and its focus ring.
+						className="-mr-1 -mt-1 max-w-none pr-2.5 pt-2.5"
+						itemCount={stripAttachments.length + pendingAttachments.length}
+						data-testid="composer-attachments-and-annotations"
+					>
 						{(staged && !stripConcealed) || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
-								{stripAttachments.map(({ file, path, preview }) => {
-									return (
-									<li
+								{stripAttachments.map(({ file, path, preview, mediaUrl }) => (
+									<ComposerAttachmentTile
 										key={file.id}
-										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										{preview ? (
-											<AttachmentThumbnail src={preview} name={file.name} />
-										) : (
-											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											</div>
-										)}
-										{preview ? (
-											<span className="max-w-[120px] truncate text-xs text-muted-foreground" title={file.name}>
-												{file.name}
-											</span>
-										) : (
-											<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
-												<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
-											</span>
-										)}
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
+										name={file.name}
+										bytes={"bytes" in file ? file.bytes : undefined}
+										imageSrc={preview}
+										file={"file" in file ? file.file : undefined}
+										mediaUrl={mediaUrl}
+										removeLabel={`Remove ${file.name}`}
+										removeDisabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										onRemove={() => {
 											if (submitInFlight.current) return;
 											if (path) {
-											editor.current?.removeImage(path);
-											removeImageFromSavedDraft(path);
-										}
+												editor.current?.removeImage(path);
+												removeImageFromSavedDraft(path);
+											}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
 											} else fileAttachments.remove(file.id);
 											editor.current?.focus();
-											}}
-											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-											aria-label={`Remove ${file.name}`}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</li>
-									);
-								})}
+										}}
+									/>
+								))}
+								{/* Removing a file while it attaches cancels it. */}
 								{pendingAttachments.map((file) => (
-									<li
+									<ComposerPendingTile
 										key={file.id}
-										role="status"
-										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
-										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
-											<span className="invisible">{file.name}</span>
-											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
-										</span>
-										{/* Removing a file while it attaches cancels it. */}
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
-												fileAttachments.cancelPending(file.id);
-												editor.current?.focus();
-											}}
-											aria-label={`Cancel attaching ${file.name}`}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</li>
+										name={file.name}
+										statusLabel={`Attaching ${file.name}`}
+										cancelLabel={`Cancel attaching ${file.name}`}
+										onCancel={() => {
+											fileAttachments.cancelPending(file.id);
+											editor.current?.focus();
+										}}
+									/>
 								))}
 							</ul>
 						) : null}
 						{contextReferences.length > 0 ? (
 							<ChatAnnotationSummary
+								appearance="card"
 								annotations={contextReferences}
 								onSelect={onSelectAnnotation}
 								disabled={controlsDisabled || draftMutationPending}
@@ -2629,7 +2727,7 @@ export const ChatComposer = memo(function ChatComposer({
 								}}
 							/>
 						) : null}
-					</div>
+					</AttachmentStrip>
 				) : null}
 
 				<ComposerEditor
@@ -2701,9 +2799,10 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={controlsDisabled}
+									disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 									onChange={(event) => {
-										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
+										if (!disabled && acceptsFiles()) {
+											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
 											attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
@@ -2723,7 +2822,7 @@ export const ChatComposer = memo(function ChatComposer({
 										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
-											disabled={controlsDisabled}
+											disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 											aria-label="Add"
 											title="Add files or change mode"
 											className={cn("size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", GHOST_PILL_CLASS)}
@@ -2744,7 +2843,7 @@ export const ChatComposer = memo(function ChatComposer({
 												icon={Paperclip}
 												title="Files"
 												description="Attach files to this message"
-												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+												disabled={queuedEditRecovery || attachBlocked}
 												onSelect={() => filePicker.current?.click()}
 											/>
 											{addMenuItems}
@@ -2757,8 +2856,9 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="quiet"
 										size="icon-sm"
 										shape="pill"
-										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked}
 										onClick={() => filePicker.current?.click()}
+										data-telemetry-id="composer.attach"
 										aria-label="Attach a file"
 										className="shrink-0"
 									>
@@ -2773,7 +2873,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
-							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn">
+							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true, "button")} aria-label="Steer into running turn">
 								Steer
 							</Button>
 						) : null}
@@ -2794,6 +2894,7 @@ export const ChatComposer = memo(function ChatComposer({
 												dictation.toggle();
 											}}
 											data-shortcut-target="dictate"
+											data-telemetry-id="composer.dictation"
 											aria-label={dictating ? "Finish dictation" : "Dictate"}
 											aria-pressed={dictating}
 											className={cn(
@@ -2820,11 +2921,14 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="primary"
 										size="icon-sm"
 										shape="pill"
-										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										disabled={canStopTurn ? Boolean(stopping) : canContinueTurn ? continuing : !sendActionEnabled}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
-										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
+										aria-label={canStopTurn ? (stopping ? "Stopping turn" : "Stop turn") : canContinueTurn ? "Continue turn" : sendActionLabel}
+										data-telemetry-id={canStopTurn ? "composer.stop" : "composer.send"}
 									>
-										{canStopTurn ? (
+										{canStopTurn && stopping ? (
+											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+										) : canStopTurn ? (
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
@@ -2838,7 +2942,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
+							<TooltipContent side="bottom">{canStopTurn ? (stopping ? "Stopping…" : "Stop turn") : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>

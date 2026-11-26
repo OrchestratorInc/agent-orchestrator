@@ -205,3 +205,43 @@ func TestParserZeroLengthFrame(t *testing.T) {
 		t.Errorf("payload len = %d, want 0", len(got[0].payload))
 	}
 }
+
+// TestFilteredParserDiscardsUnwantedFramesUnbuffered: a probe's parser streams
+// past a frame it ignores (an older host's scrollback replay) without holding
+// it, at any chunk boundary, and still delivers the frames it wants intact.
+func TestFilteredParserDiscardsUnwantedFramesUnbuffered(t *testing.T) {
+	replay := bytes.Repeat([]byte("scrollback "), 200_000) // ~2 MB
+	var stream []byte
+	for _, f := range []struct {
+		typ     byte
+		payload []byte
+	}{
+		{MsgTerminalData, replay},
+		{MsgStatusRes, []byte(`{"alive":true}`)},
+		{MsgTerminalData, []byte("live")},
+		{MsgStatusRes, nil},
+	} {
+		frame, err := EncodeMessage(f.typ, f.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream = append(stream, frame...)
+	}
+	for _, size := range []int{1, 3, 5, 4096, 32 << 10, len(stream)} {
+		var got []collected
+		p := newFilteredParser(isType(MsgStatusRes), collect(&got))
+		maxBuffered := 0
+		for chunk := stream; len(chunk) > 0; {
+			n := min(size, len(chunk))
+			p.Feed(chunk[:n])
+			chunk = chunk[n:]
+			maxBuffered = max(maxBuffered, cap(p.buf))
+		}
+		if len(got) != 2 || string(got[0].payload) != `{"alive":true}` || len(got[1].payload) != 0 {
+			t.Fatalf("chunk size %d: delivered %+v, want the two status frames", size, got)
+		}
+		if size < len(stream) && maxBuffered > 2*size+64 {
+			t.Fatalf("chunk size %d: parser buffered up to %d bytes of an ignored frame", size, maxBuffered)
+		}
+	}
+}
