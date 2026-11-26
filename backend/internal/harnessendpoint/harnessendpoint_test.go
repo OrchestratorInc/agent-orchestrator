@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -140,6 +141,9 @@ func TestSaveValidation(t *testing.T) {
 		"unknown style":    {BaseURL: "https://a.example.com", APIKey: "k", AuthStyle: "basic"},
 		"space in model":   {BaseURL: "https://a.example.com", APIKey: "k", Model: "a b"},
 		"newline in model": {BaseURL: "https://a.example.com", APIKey: "k", Model: "a\nb"},
+		// Claude Code adds /v1 to every request itself.
+		"version suffix":       {BaseURL: "https://a.example.com/v1", APIKey: "k"},
+		"version suffix slash": {BaseURL: "https://a.example.com/anthropic/v1/", APIKey: "k"},
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -153,7 +157,7 @@ func TestSaveValidation(t *testing.T) {
 }
 
 func TestSaveAllowsLoopbackHTTP(t *testing.T) {
-	for _, baseURL := range []string{"http://localhost:4000", "http://127.0.0.1:8080/v1", "http://[::1]:9000"} {
+	for _, baseURL := range []string{"http://localhost:4000", "http://127.0.0.1:8080/proxy", "http://[::1]:9000"} {
 		store := NewStore(t.TempDir())
 		if _, err := store.Save("claude-code", Input{BaseURL: baseURL, APIKey: "k"}, testNow); err != nil {
 			t.Fatalf("Save(%s): %v", baseURL, err)
@@ -306,7 +310,7 @@ func TestCodexEnvUsesAOVariablesAndClearsCodexCredentials(t *testing.T) {
 
 func TestProjectEnvKeepsKeyWithItsOrigin(t *testing.T) {
 	store := NewStore(t.TempDir())
-	if _, err := store.Save("claude-code", Input{BaseURL: "https://gateway.example.com/v1", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://gateway.example.com/anthropic", APIKey: "sk-endpoint"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	for name, tc := range map[string]struct {
@@ -381,4 +385,20 @@ func keysOf(env map[string]string) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+// The version check follows the harness's own request paths: Claude Code adds
+// /v1 itself, so only a base URL ending with exactly /v1 is refused.
+func TestSaveChecksTheVersionSegmentPerHarness(t *testing.T) {
+	store := NewStore(t.TempDir())
+	for _, baseURL := range []string{"https://gateway.example.com/anthropic", "https://gateway.example.com/v1beta", "https://gateway.example.com/v1/anthropic"} {
+		if _, err := store.Save("claude-code", Input{BaseURL: baseURL, APIKey: "k"}, testNow); err != nil {
+			t.Fatalf("claude-code %s: %v", baseURL, err)
+		}
+	}
+	_, err := store.Save("claude-code", Input{BaseURL: "https://gateway.example.com/v1", APIKey: "k"}, testNow)
+	var validation *ValidationError
+	if !errors.As(err, &validation) || !strings.Contains(validation.Message, "Remove /v1") {
+		t.Fatalf("claude-code with /v1: err = %v, want a message naming /v1", err)
+	}
 }
