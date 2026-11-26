@@ -5541,6 +5541,10 @@
 	"artifactComments.play": "再生",
 	"artifactComments.pause": "一時停止",
 	"artifactComments.seek": "シーク",
+	"artifactComments.mute": "ミュート",
+	"artifactComments.unmute": "ミュート解除",
+	"artifactComments.fullscreen": "全画面表示",
+	"artifactComments.exitFullscreen": "全画面表示を終了",
 	"artifactComments.timelinePoint": "{{time}} のコメント: {{n}} 件未解決",
 	"artifactComments.frameAt": "{{time}} のフレーム",
 	"artifactComments.markerLabel": "{{label}}: {{n}} 件未解決"

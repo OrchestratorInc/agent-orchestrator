@@ -22,6 +22,7 @@ import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { artifactChangeError, canChangeSessionArtifacts, findHostShareLink, type ArtifactRow } from "../lib/artifacts";
 import { isArchivedSession } from "../lib/standalone-archive";
 import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
+import { mediaPlaybackKey } from "../lib/media-playback";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
@@ -1042,6 +1043,7 @@ export function SessionArtifactsView({
 						<div className={cn("absolute inset-0 bg-background", !commentsCover && "invisible")} data-testid="artifact-comments-layer">
 							<ArtifactCommentsWorkspace
 								kind={commentsKind}
+								mediaKey={mediaPlaybackKey(session.id, selected.path, hostId)}
 								onClose={() => { setCommentsOpen(false); setCommentsShownFor(null); }}
 								onShown={() => setCommentsShownFor(commentsSlug)}
 								outdated={publishedOutdated}

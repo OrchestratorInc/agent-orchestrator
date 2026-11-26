@@ -1,3 +1,4 @@
+import { Maximize, Minimize, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -20,6 +21,7 @@ import {
 	type CommentsSelectionRect,
 } from "../../../shared/artifact-comments";
 import type { SharedMediaSource } from "../SharedArtifactFrame";
+import { mediaTime, rememberMediaTime } from "../../lib/media-playback";
 import { artifactCommentAnchorText } from "./anchor-label";
 
 const percent = (value: number) => `${value * 100}%`;
@@ -66,7 +68,39 @@ export function artifactCommentTimelinePoints(groups: readonly ArtifactCommentGr
  * the frame. On the frame a drag draws a box (pausing there) and a click
  * plays or pauses.
  */
-export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, onSelection, onShown, picked, selected, selectedKeys, source, src, threads, title }: {
+const NO_THREADS: readonly ArtifactCommentThread[] = [];
+const ignore = () => undefined;
+
+/**
+ * The artifact viewer's video player: the same player as the comment
+ * workspace's (without comments), so opening comments keeps the player and
+ * the moment it was at.
+ */
+export function ArtifactVideoPlayer({ crossOrigin, onError, positionKey, src, title }: {
+	crossOrigin?: "anonymous" | "use-credentials";
+	onError?: () => void;
+	positionKey?: string;
+	src: string;
+	title: string;
+}) {
+	return (
+		<ArtifactCommentsMedia
+			crossOrigin={crossOrigin}
+			kind="video"
+			onError={onError}
+			onSelect={ignore}
+			onSelection={ignore}
+			picked={null}
+			positionKey={positionKey}
+			selected={null}
+			src={src}
+			threads={NO_THREADS}
+			title={title}
+		/>
+	);
+}
+
+export function ArtifactCommentsMedia({ crossOrigin, focused = null, kind, onError, onPick, onSelect, onSelection, onShown, picked, positionKey, selected, selectedKeys, source, src, threads, title }: {
 	kind: "image" | "video";
 	/** A video: the anchor key of the thread open in the popover; the frame outlines only its box. */
 	focused?: string | null;
@@ -79,7 +113,8 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 	selected: string | null;
 	/** A video: every group key at the selected seek-bar badge (several moments can share one). */
 	selectedKeys?: readonly string[] | null;
-	onPick: (anchor: ArtifactCommentAnchor) => void;
+	/** Absent: a plain player (a click on the frame plays or pauses). */
+	onPick?: (anchor: ArtifactCommentAnchor) => void;
 	/** A pin or badge was clicked: its group, and for a badge every group at it. */
 	onSelect: (key: string, keys?: string[]) => void;
 	/** The selected pin, rectangle or dot's top and bottom inside this view, for the popover; null when none. */
@@ -87,6 +122,11 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 	onShown?: () => void;
 	/** Where src came from, to fetch a fresh one before its view token ends. */
 	source?: SharedMediaSource;
+	crossOrigin?: "anonymous" | "use-credentials";
+	/** The file failed to load (after a fresh view token, when it has a source). */
+	onError?: () => void;
+	/** A video: where it was is kept under this key, and it opens there. */
+	positionKey?: string;
 }) {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -98,6 +138,13 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 	const [time, setTime] = useState(0);
 	const [duration, setDuration] = useState(0);
 	const [playing, setPlaying] = useState(false);
+	const [muted, setMuted] = useState(false);
+	const [fullscreen, setFullscreen] = useState(false);
+	useEffect(() => {
+		const onChange = () => setFullscreen(document.fullscreenElement !== null && document.fullscreenElement === rootRef.current);
+		document.addEventListener("fullscreenchange", onChange);
+		return () => document.removeEventListener("fullscreenchange", onChange);
+	}, []);
 
 	useLayoutEffect(() => {
 		const element = kind === "image" ? imageRef.current : videoRef.current;
@@ -137,6 +184,13 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 	sourceRef.current = source;
 	const pendingSeek = useRef<number | null>(null);
 	const lastTime = useRef(0);
+	const positionKeyRef = useRef(positionKey);
+	positionKeyRef.current = positionKey;
+	const noteTime = (at: number) => {
+		lastTime.current = at;
+		setTime(at);
+		if (positionKeyRef.current) rememberMediaTime(positionKeyRef.current, at);
+	};
 	const seek = (at: number) => {
 		const video = videoRef.current;
 		if (!video) return;
@@ -207,7 +261,7 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 			y: rect.height > 0 ? clamp((event.clientY - rect.top) / rect.height) : 0,
 		};
 	};
-	const pickAt = (region: ArtifactCommentRegion) => onPick(kind === "image" ? imageCommentAnchor(region) : videoCommentAnchor(videoRef.current?.currentTime ?? 0, region));
+	const pickAt = (region: ArtifactCommentRegion) => onPick?.(kind === "image" ? imageCommentAnchor(region) : videoCommentAnchor(videoRef.current?.currentTime ?? 0, region));
 
 	// An image shows every group's pin or box; a video only the selected
 	// moment's boxes, on its frame (its badges are on the seek bar).
@@ -218,7 +272,7 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 		? (focusedAnchor?.region ? [{ path: focused, anchor: focusedAnchor } as ArtifactCommentGroup] : [])
 		: groups.filter((group) => group.anchor.region && (kind === "image" || highlighted.has(group.path)));
 	const pickedHere = picked && artifactCommentAnchorKind(picked) === kind ? picked : null;
-	const draftRegion = drag ? artifactCommentRegionFromDrag(drag.from, drag.to) : pickedHere?.region;
+	const draftRegion = !onPick ? undefined : drag ? artifactCommentRegionFromDrag(drag.from, drag.to) : pickedHere?.region;
 	const togglePlay = () => {
 		const video = videoRef.current;
 		if (!video) return;
@@ -229,7 +283,7 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 
 	const overlay = box ? (
 		<div
-			className="absolute cursor-crosshair touch-none"
+			className={cn("absolute touch-none", onPick ? "cursor-crosshair" : "cursor-pointer")}
 			data-testid="artifact-comments-media-overlay"
 			onPointerCancel={() => setDrag(null)}
 			onPointerDown={(event) => {
@@ -240,7 +294,7 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 				setDrag({ from: point, to: point });
 			}}
 			onPointerMove={(event) => {
-				if (!drag) return;
+				if (!drag || !onPick) return;
 				const to = pointAt(event);
 				// A video pauses once the press becomes a box.
 				if (kind === "video" && !isPointRegion(artifactCommentRegionFromDrag(drag.from, to))) videoRef.current?.pause();
@@ -251,7 +305,8 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 				const region = artifactCommentRegionFromDrag(drag.from, pointAt(event));
 				setDrag(null);
 				// On a video a click plays or pauses; only a box comments.
-				if (kind === "video" && isPointRegion(region)) togglePlay();
+				if (kind === "video" && (isPointRegion(region) || !onPick)) togglePlay();
+				else if (!onPick) return;
 				else pickAt(region);
 			}}
 			ref={overlayRef}
@@ -325,7 +380,9 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 				<img
 					alt={title}
 					className="absolute inset-0 h-full w-full object-contain select-none"
+					crossOrigin={crossOrigin}
 					draggable={false}
+					onError={() => onError?.()}
 					onLoad={() => onShown?.()}
 					ref={imageRef}
 					referrerPolicy="no-referrer"
@@ -347,12 +404,16 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 			>
 				<video
 					aria-label={title}
+					crossOrigin={crossOrigin}
 					className="absolute inset-0 h-full w-full object-contain"
 					onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
 					onError={() => {
 						// Its view token ran out (or the host refused it): once per URL, a fresh one, back at the same moment.
 						const current = sourceRef.current;
-						if (!current || retriedFor.current === src) return;
+						if (!current || retriedFor.current === src) {
+							onError?.();
+							return;
+						}
 						retriedFor.current = src;
 						pendingSeek.current ??= selectedTimeRef.current ?? lastTime.current;
 						current.refresh();
@@ -360,6 +421,8 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 					onLoadedMetadata={(event) => {
 						const video = event.currentTarget;
 						setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+						// A video opens where this file's player last was (the viewer's, or the comment workspace's), read as it loads: the other one may have played on meanwhile.
+						if (pendingSeek.current === null && lastTime.current === 0 && positionKeyRef.current) pendingSeek.current = mediaTime(positionKeyRef.current) || null;
 						if (pendingSeek.current !== null) {
 							video.currentTime = pendingSeek.current;
 							pendingSeek.current = null;
@@ -368,14 +431,9 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 					}}
 					onPause={() => setPlaying(false)}
 					onPlay={() => setPlaying(true)}
-					onSeeked={(event) => {
-						lastTime.current = event.currentTarget.currentTime;
-						setTime(event.currentTarget.currentTime);
-					}}
-					onTimeUpdate={(event) => {
-						lastTime.current = event.currentTarget.currentTime;
-						setTime(event.currentTarget.currentTime);
-					}}
+					onSeeked={(event) => noteTime(event.currentTarget.currentTime)}
+					onTimeUpdate={(event) => noteTime(event.currentTarget.currentTime)}
+					onVolumeChange={(event) => setMuted(event.currentTarget.muted)}
 					playsInline
 					preload="metadata"
 					ref={videoRef}
@@ -441,6 +499,28 @@ export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, 
 						})
 						: null}
 				</div>
+				<button
+					aria-label={muted ? t("artifactComments.unmute") : t("artifactComments.mute")}
+					className="grid size-7 shrink-0 place-items-center rounded-md text-foreground hover:bg-muted"
+					onClick={() => {
+						const video = videoRef.current;
+						if (video) video.muted = !video.muted;
+					}}
+					type="button"
+				>
+					{muted ? <VolumeX aria-hidden="true" className="size-4" /> : <Volume2 aria-hidden="true" className="size-4" />}
+				</button>
+				<button
+					aria-label={fullscreen ? t("artifactComments.exitFullscreen") : t("artifactComments.fullscreen")}
+					className="grid size-7 shrink-0 place-items-center rounded-md text-foreground hover:bg-muted"
+					onClick={() => {
+						if (document.fullscreenElement) void document.exitFullscreen?.()?.catch(() => undefined);
+						else void rootRef.current?.requestFullscreen?.()?.catch(() => undefined);
+					}}
+					type="button"
+				>
+					{fullscreen ? <Minimize aria-hidden="true" className="size-4" /> : <Maximize aria-hidden="true" className="size-4" />}
+				</button>
 			</div>
 		</div>
 	);

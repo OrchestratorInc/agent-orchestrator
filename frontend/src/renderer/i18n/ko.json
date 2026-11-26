@@ -5541,6 +5541,10 @@
 	"artifactComments.play": "재생",
 	"artifactComments.pause": "일시정지",
 	"artifactComments.seek": "탐색",
+	"artifactComments.mute": "음소거",
+	"artifactComments.unmute": "음소거 해제",
+	"artifactComments.fullscreen": "전체 화면",
+	"artifactComments.exitFullscreen": "전체 화면 종료",
 	"artifactComments.timelinePoint": "{{time}}의 댓글: {{n}}개 열림",
 	"artifactComments.frameAt": "{{time}} 프레임",
 	"artifactComments.markerLabel": "{{label}}: {{n}}개 열림"

@@ -5882,6 +5882,10 @@
 	"artifactComments.play": "Воспроизвести",
 	"artifactComments.pause": "Пауза",
 	"artifactComments.seek": "Перемотка",
+	"artifactComments.mute": "Выключить звук",
+	"artifactComments.unmute": "Включить звук",
+	"artifactComments.fullscreen": "Во весь экран",
+	"artifactComments.exitFullscreen": "Выйти из полноэкранного режима",
 	"artifactComments.timelinePoint": "Комментарии на {{time}}: открыто {{n}}",
 	"artifactComments.frameAt": "Кадр на {{time}}",
 	"artifactComments.markerLabel": "{{label}}: открыто {{n}}"

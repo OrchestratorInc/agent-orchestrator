@@ -5521,6 +5521,10 @@
 	"artifactComments.play": "Oynat",
 	"artifactComments.pause": "Duraklat",
 	"artifactComments.seek": "Sar",
+	"artifactComments.mute": "Sesi kapat",
+	"artifactComments.unmute": "Sesi aç",
+	"artifactComments.fullscreen": "Tam ekran",
+	"artifactComments.exitFullscreen": "Tam ekrandan çık",
 	"artifactComments.timelinePoint": "{{time}} anındaki yorumlar: {{n}} açık",
 	"artifactComments.frameAt": "{{time}} karesi",
 	"artifactComments.markerLabel": "{{label}}: {{n}} açık"

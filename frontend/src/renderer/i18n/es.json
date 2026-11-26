@@ -5717,6 +5717,10 @@
 	"artifactComments.play": "Reproducir",
 	"artifactComments.pause": "Pausar",
 	"artifactComments.seek": "Buscar",
+	"artifactComments.mute": "Silenciar",
+	"artifactComments.unmute": "Activar sonido",
+	"artifactComments.fullscreen": "Pantalla completa",
+	"artifactComments.exitFullscreen": "Salir de pantalla completa",
 	"artifactComments.timelinePoint": "Comentarios en {{time}}: {{n}} abiertos",
 	"artifactComments.frameAt": "Fotograma en {{time}}",
 	"artifactComments.markerLabel": "{{label}}: {{n}} abiertos"

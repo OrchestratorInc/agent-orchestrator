@@ -5541,6 +5541,10 @@
 	"artifactComments.play": "Abspielen",
 	"artifactComments.pause": "Pause",
 	"artifactComments.seek": "Springen",
+	"artifactComments.mute": "Stummschalten",
+	"artifactComments.unmute": "Ton ein",
+	"artifactComments.fullscreen": "Vollbild",
+	"artifactComments.exitFullscreen": "Vollbild beenden",
 	"artifactComments.timelinePoint": "Kommentare bei {{time}}: {{n}} offen",
 	"artifactComments.frameAt": "Bild bei {{time}}",
 	"artifactComments.markerLabel": "{{label}}: {{n}} offen"

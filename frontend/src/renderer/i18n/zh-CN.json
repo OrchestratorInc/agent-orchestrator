@@ -5523,6 +5523,10 @@
 	"artifactComments.play": "播放",
 	"artifactComments.pause": "暂停",
 	"artifactComments.seek": "跳转",
+	"artifactComments.mute": "静音",
+	"artifactComments.unmute": "取消静音",
+	"artifactComments.fullscreen": "全屏",
+	"artifactComments.exitFullscreen": "退出全屏",
 	"artifactComments.timelinePoint": "{{time}} 的评论：{{n}} 条未解决",
 	"artifactComments.frameAt": "{{time}} 的画面",
 	"artifactComments.markerLabel": "{{label}}：{{n}} 条未解决"

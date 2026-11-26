@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { MessageSquare } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { SharedArtifactFrame } from "../SharedArtifactFrame";
+import { mediaPlayback } from "../../lib/media-playback";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PanelMessage } from "../WorkspaceDiffView";
@@ -96,7 +97,7 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
  * belong to the published version, so the local file is not shown meanwhile;
  * a notice says so when the local file has changed since publishing.
  */
-export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, sendTarget, slug, title }: {
+export function ArtifactCommentsWorkspace({ kind, mediaKey, onClose, onShown, outdated, sendTarget, slug, title }: {
 	kind: ArtifactCommentsKind;
 	/** Leaves comment mode. */
 	onClose: () => void;
@@ -107,8 +108,13 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 	sendTarget?: ArtifactCommentsSendTarget;
 	slug: string;
 	title: string;
+	/** The viewer's image or video for this file (see media-playback): shown here too while it is the published version. */
+	mediaKey?: string;
 }) {
 	const { t } = useTranslation();
+	// The file the viewer already has, at once and where it was; the published copy if it fails to load.
+	const [localMedia] = useState(() => (mediaKey ? mediaPlayback(mediaKey) : undefined));
+	const [localFailed, setLocalFailed] = useState(false);
 	const comments = useArtifactComments(slug, { panelOpen: true });
 	const [frame, setFrame] = useState<HTMLIFrameElement | null>(null);
 	// The element whose comments are open: a picked one brings its anchor for a
@@ -206,6 +212,20 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 		);
 	}
 	const version = comments.snapshot?.currentVersion;
+	const mediaProps = (src: string, mediaShown: () => void) => ({
+		kind: media!,
+		focused: element && !element.anchor ? openThreadKey : null,
+		onPick: (anchor: ArtifactCommentAnchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor }),
+		onSelect: (key: string, keys?: string[]) => setElement({ path: key, anchor: null, keys }),
+		onSelection: (rect: CommentsSelectionRect | null) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null),
+		onShown: mediaShown,
+		picked: element?.anchor ?? null,
+		selected: selectedPath,
+		selectedKeys: element?.keys ?? null,
+		src,
+		threads: threads ?? [],
+		title,
+	});
 	return (
 		<div className="flex h-full min-h-0 flex-col" data-testid="artifact-comments-workspace">
 			{outdated && version !== undefined ? (
@@ -214,29 +234,17 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 				</p>
 			) : null}
 			<div className="relative min-h-0 min-w-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
-				<SharedArtifactFrame
+				{media && localMedia && !outdated && !localFailed ? (
+					<ArtifactCommentsMedia {...mediaProps(localMedia.src, shown)} crossOrigin={localMedia.crossOrigin} onError={() => setLocalFailed(true)} positionKey={mediaKey} />
+				) : <SharedArtifactFrame
 					frameRef={setFrame}
 					linkId={slug}
 					onShown={shown}
 					renderMedia={media ? (contentUrl, mediaShown, source) => (
-						<ArtifactCommentsMedia
-							kind={media}
-							onPick={(anchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor })}
-							onSelect={(key, keys) => setElement({ path: key, anchor: null, keys })}
-							onSelection={(rect) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null)}
-							focused={element && !element.anchor ? openThreadKey : null}
-							onShown={mediaShown}
-							picked={element?.anchor ?? null}
-							selected={selectedPath}
-							selectedKeys={element?.keys ?? null}
-							source={source}
-							src={contentUrl}
-							threads={threads ?? []}
-							title={title}
-						/>
+						<ArtifactCommentsMedia {...mediaProps(contentUrl, mediaShown)} source={source} />
 					) : undefined}
 					title={title}
-				/>
+				/>}
 				{unsupported && !media ? (
 					<ArtifactCommentsReadOnlyList
 						className={POPOVER_CLASS}

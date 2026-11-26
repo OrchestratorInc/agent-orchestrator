@@ -5521,6 +5521,10 @@
 	"artifactComments.play": "Play",
 	"artifactComments.pause": "Pause",
 	"artifactComments.seek": "Seek",
+	"artifactComments.mute": "Mute",
+	"artifactComments.unmute": "Unmute",
+	"artifactComments.fullscreen": "Full screen",
+	"artifactComments.exitFullscreen": "Exit full screen",
 	"artifactComments.timelinePoint": "Comments at {{time}}: {{n}} open",
 	"artifactComments.frameAt": "Frame at {{time}}",
 	"artifactComments.markerLabel": "{{label}}: {{n}} open"

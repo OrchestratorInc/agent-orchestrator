@@ -5,7 +5,9 @@ import { useEffect, useState, type ReactNode, type Ref } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { CloudCpClient } from "../../lib/cloud-cp";
 import { TooltipProvider } from "../ui/tooltip";
+import { forgetMediaPlayback, mediaPlaybackKey, mediaTime, rememberMediaSource, rememberMediaTime } from "../../lib/media-playback";
 import { ArtifactCommentsWorkspace, artifactCommentsKind, type ArtifactCommentsKind } from "./ArtifactComments";
+import { ArtifactVideoPlayer } from "./ArtifactCommentsMedia";
 import {
 	ARTIFACT_COMMENTS_PROTOCOL_VERSION,
 	imageCommentAnchor,
@@ -84,12 +86,12 @@ function fakeClient(threads: ArtifactCommentThread[]): FakeClient {
 	return client;
 }
 
-async function renderWorkspace(client: FakeClient, kind: ArtifactCommentsKind) {
+async function renderWorkspace(client: FakeClient, kind: ArtifactCommentsKind, { mediaKey, outdated = false }: { mediaKey?: string; outdated?: boolean } = {}) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ArtifactCommentsWorkspace kind={kind} onClose={vi.fn()} outdated={false} slug="cf-staging-x7" title="file" />
+				<ArtifactCommentsWorkspace kind={kind} mediaKey={mediaKey} onClose={vi.fn()} outdated={outdated} slug="cf-staging-x7" title="file" />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -127,6 +129,7 @@ function stubVideo(duration = 250) {
 
 beforeEach(() => {
 	vi.restoreAllMocks();
+	forgetMediaPlayback();
 	Object.assign(mocks.media, { url: "https://share.test/file", fetchedAt: Date.now(), refreshes: 0 });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -339,5 +342,88 @@ describe("comments on a text page", () => {
 		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
 		await waitFor(() => expect(client.createArtifactShareThread.mock.calls[0]![1]).toMatchObject({ anchor: lines }));
 		port.close();
+	});
+});
+
+describe("one player for the viewer and comment mode", () => {
+	const key = mediaPlaybackKey("sess-1", "demo.mp4");
+	const daemonSrc = "http://127.0.0.1:3500/api/v1/sessions/sess-1/preview/files/demo.mp4?source=artifact&raw=true&v=7";
+
+	it("plays the viewer's own file where it was, without the share host, while it is the published version", async () => {
+		stubSizes();
+		const video = stubVideo(250);
+		rememberMediaSource(key, daemonSrc, "anonymous");
+		rememberMediaTime(key, 42);
+		await renderWorkspace(fakeClient([thread("t1", videoCommentAnchor(5), "Intro drags")]), "video", { mediaKey: key });
+		const element = document.querySelector("video")!;
+		expect(element.getAttribute("src")).toBe(daemonSrc);
+		expect(element.getAttribute("crossorigin")).toBe("anonymous");
+		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
+		expect(video.time).toBe(42);
+		// Its badges are there as on the published copy.
+		expect(screen.getAllByTestId("artifact-comments-timeline-point")).toHaveLength(1);
+		// Where it is now is kept for the viewer to come back to.
+		video.time = 61;
+		act(() => { element.dispatchEvent(new Event("timeupdate")); });
+		expect(mediaTime(key)).toBe(61);
+	});
+
+	it("falls back to the published copy when the viewer's file fails to load", async () => {
+		stubSizes();
+		stubVideo(250);
+		rememberMediaSource(key, daemonSrc, "anonymous");
+		await renderWorkspace(fakeClient([]), "video", { mediaKey: key });
+		act(() => { document.querySelector("video")!.dispatchEvent(new Event("error")); });
+		await waitFor(() => expect(document.querySelector("video")!.getAttribute("src")).toBe("https://share.test/file"));
+	});
+
+	it("shows the published copy when the local file changed since it was published", async () => {
+		stubSizes();
+		stubVideo(250);
+		rememberMediaSource(key, daemonSrc, "anonymous");
+		rememberMediaTime(key, 42);
+		await renderWorkspace(fakeClient([]), "video", { mediaKey: key, outdated: true });
+		const element = document.querySelector("video")!;
+		expect(element.getAttribute("src")).toBe("https://share.test/file");
+		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
+		// Another version: not the local file's moment.
+		expect(element.currentTime).toBe(0);
+	});
+
+	it("the viewer's player: a click on the frame plays and pauses and never starts a comment; mute and full screen", async () => {
+		stubSizes();
+		const video = stubVideo(250);
+		rememberMediaSource(key, daemonSrc);
+		rememberMediaTime(key, 30);
+		const requestFullscreen = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { configurable: true, value: requestFullscreen });
+		try {
+			render(<ArtifactVideoPlayer positionKey={key} src={daemonSrc} title="demo.mp4" />);
+			const element = document.querySelector("video")!;
+			expect(element.controls).toBe(false);
+			act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
+			// Back where comment mode (or this viewer) left it.
+			expect(video.time).toBe(30);
+			const overlay = screen.getByTestId("artifact-comments-media-overlay");
+			fireEvent.pointerDown(overlay, { button: 0, clientX: 100, clientY: 150 });
+			fireEvent.pointerUp(overlay, { button: 0, clientX: 100, clientY: 150 });
+			expect(video.paused).toBe(false);
+			// A drag is no box here: it plays or pauses too, and nothing is drawn.
+			fireEvent.pointerDown(overlay, { button: 0, clientX: 200, clientY: 200 });
+			fireEvent.pointerMove(overlay, { button: 0, clientX: 360, clientY: 260 });
+			expect(screen.queryByTestId("artifact-comments-media-draft")).not.toBeInTheDocument();
+			fireEvent.pointerUp(overlay, { button: 0, clientX: 360, clientY: 260 });
+			expect(video.paused).toBe(true);
+			expect(screen.queryByTestId("artifact-comments-timeline-point")).not.toBeInTheDocument();
+
+			await userEvent.click(screen.getByRole("button", { name: "Mute" }));
+			expect(element.muted).toBe(true);
+			act(() => { element.dispatchEvent(new Event("volumechange")); });
+			expect(screen.getByRole("button", { name: "Unmute" })).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Full screen" }));
+			expect(requestFullscreen).toHaveBeenCalledTimes(1);
+		} finally {
+			delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
+		}
 	});
 });
