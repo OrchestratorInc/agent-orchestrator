@@ -4,7 +4,7 @@ import { formatExternalReviewMessage, formatInlineReviewCommentMessage, formatRe
 
 const run = (id: string, createdAt: string, prUrl = "https://github.com/ao/repo/pull/42"): ReviewRun => ({
 	id, reviewId: "review", sessionId: "session", batchId: "batch", harness: "codex", triggerSource: "auto", prUrl,
-	targetSha: "abcdef123456", status: "delivered", verdict: "approved", body: "Looks good.", githubReviewId: "99", createdAt,
+	targetSha: "abcdef123456", status: "completed", verdict: "approved", body: "Looks good.", githubReviewId: "99", createdAt,
 	autoInjectReview: true,
 });
 
