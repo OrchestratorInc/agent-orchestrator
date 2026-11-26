@@ -498,16 +498,16 @@ describe("durable workspace cleanup feedback", () => {
 		expect(toasts()[0].action).toBeUndefined();
 	});
 
-	it("says a kept standalone folder holds files, without worktree or retry wording", async () => {
+	it("says nothing when a standalone agent's folder is kept, its only copy of the work", async () => {
 		const queryClient = newQueryClient();
 		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
 		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+		setCleanup(queryClient, "pending");
 
-		setCleanup(queryClient, "preserved_dirty");
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
 
-		await waitFor(() => expect(toasts()).toHaveLength(1));
-		expect(toasts()[0]).toMatchObject({ title: "Session folder kept because it has your files in it.", tone: "info" });
-		expect(toasts()[0].action).toBeUndefined();
+		expect(toasts()).toEqual([]);
 	});
 
 	it("raises nothing for a cleanup a sweep recorded", async () => {

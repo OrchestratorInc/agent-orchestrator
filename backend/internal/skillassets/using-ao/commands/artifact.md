@@ -8,7 +8,9 @@ Register files in the session's artifact directory as its deliverables.
 ao artifact add <path>...
 ```
 
-A path is absolute, or relative to the artifact directory. It names a regular
+A path is absolute, or relative to the artifact directory. Run from a folder
+inside the artifact directory, a relative path is read from that folder when the
+file is there. Put quotes around a path that contains spaces. It names a regular
 file or a bundle directory (`.icon`, `.app`, `.bundle`, `.xcassets`), which is
 listed as one artifact.
 

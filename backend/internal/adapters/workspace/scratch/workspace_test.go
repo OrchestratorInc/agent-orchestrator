@@ -274,3 +274,23 @@ func TestWorkspaceDestroyIgnoresForeignGitignore(t *testing.T) {
 		t.Fatalf("file named by a foreign .gitignore was not preserved: %v", err)
 	}
 }
+
+// AO's .gitignore lists globs and whole directories (tau's per-session
+// instructions and __pycache__/). Both are AO's, as git treats them in a
+// project worktree, so neither keeps the folder.
+func TestWorkspaceDestroyRemovesGlobAndDirectoryEntriesAOListed(t *testing.T) {
+	ws, info := createStandaloneScratch(t)
+	dir := filepath.Join(info.Path, ".tau")
+	if err := hookutil.EnsureWorkspaceGitignore(dir, "ao-standing-instructions-*.md", "__pycache__/"); err != nil {
+		t.Fatalf("EnsureWorkspaceGitignore: %v", err)
+	}
+	writeScratchFile(t, filepath.Join(dir, "ao-standing-instructions-abc.md"), "rules\n")
+	writeScratchFile(t, filepath.Join(dir, "__pycache__", "ao_activity.cpython-312.pyc"), "bytecode\n")
+
+	if err := ws.Destroy(context.Background(), info); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scratch dir holding only AO-listed entries still exists or stat failed differently: %v", err)
+	}
+}

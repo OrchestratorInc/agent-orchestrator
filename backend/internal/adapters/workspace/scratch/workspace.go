@@ -136,7 +136,7 @@ func scanScratchContents(root string) (scratchContents, error) {
 	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
 		return contents, nil
 	}
-	managedByDir := map[string]map[string]struct{}{}
+	managedByDir := map[string]managedNames{}
 	err := filepath.WalkDir(root, func(fullPath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -150,7 +150,7 @@ func scanScratchContents(root string) (scratchContents, error) {
 			managed = aoManagedNamesIn(dir)
 			managedByDir[dir] = managed
 		}
-		if _, ok := managed[entry.Name()]; ok {
+		if managed.match(entry.Name()) {
 			contents.managed = append(contents.managed, fullPath)
 			if entry.IsDir() {
 				return filepath.SkipDir
@@ -198,11 +198,29 @@ func (c scratchContents) remove(root string) error {
 	return nil
 }
 
+// managedNames are the patterns an AO-managed .gitignore lists, each naming
+// one entry of its directory: a literal name, or a glob such as
+// "ao-standing-instructions-*.md".
+type managedNames []string
+
+func (m managedNames) match(name string) bool {
+	for _, pattern := range m {
+		if pattern == name {
+			return true
+		}
+		if ok, err := filepath.Match(pattern, name); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
 // aoManagedNamesIn returns the names an AO-managed .gitignore in dir lists.
-// Adapters anchor each pattern to that directory. A missing, foreign or
+// Adapters anchor each pattern to that directory. A listed directory is AO's
+// whole, as git treats it in a project worktree. A missing, foreign or
 // unreadable marker claims nothing, so its neighbours count as user work.
-func aoManagedNamesIn(dir string) map[string]struct{} {
-	managed := map[string]struct{}{}
+func aoManagedNamesIn(dir string) managedNames {
+	var managed managedNames
 	content, ok := readSmallRegularFile(filepath.Join(dir, ".gitignore"))
 	if !ok || !strings.Contains(content, hookutil.GitignoreSentinel) {
 		return managed
@@ -216,7 +234,10 @@ func aoManagedNamesIn(dir string) map[string]struct{} {
 		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 			continue
 		}
-		managed[name] = struct{}{}
+		if _, err := filepath.Match(name, ""); err != nil {
+			continue
+		}
+		managed = append(managed, name)
 	}
 	return managed
 }

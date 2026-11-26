@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -1926,6 +1927,205 @@ func TestSpawn_IgnoresNonOrchestratorParent(t *testing.T) {
 	}
 	if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(domain.PermissionModeAuto) {
 		t.Fatalf("worker permission environment = %q, want project default %q", got, domain.PermissionModeAuto)
+	}
+}
+
+// The orchestrator's approval mode fills in only what the project leaves
+// unset: an explicit project permission for the role is the user's choice and
+// wins over it. A stricter permission named by the spawn is still allowed (#5954).
+func TestSpawn_ExplicitProjectPermissionBeatsOrchestratorInheritance(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*domain.ProjectConfig)
+		requested domain.PermissionMode
+		want      domain.PermissionMode
+	}{
+		{"worker role permission", func(c *domain.ProjectConfig) {
+			c.Worker.AgentConfig.Permissions = domain.PermissionModeAcceptEdits
+		}, "", domain.PermissionModeAcceptEdits},
+		{"project-wide permission", func(c *domain.ProjectConfig) {
+			c.AgentConfig.Permissions = domain.PermissionModeDefault
+		}, "", domain.PermissionModeDefault},
+		{"stricter spawn permission", func(c *domain.ProjectConfig) {
+			c.Worker.AgentConfig.Permissions = domain.PermissionModeAcceptEdits
+		}, domain.PermissionModeDefault, domain.PermissionModeDefault},
+		{"equal spawn permission", func(c *domain.ProjectConfig) {
+			c.Worker.AgentConfig.Permissions = domain.PermissionModeAcceptEdits
+		}, domain.PermissionModeAcceptEdits, domain.PermissionModeAcceptEdits},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			tc.configure(&project.Config)
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindOrchestrator}
+			st.conversations["mer-0"] = domain.ConversationRecord{
+				SessionID: "mer-0", Settings: domain.ConversationSettings{ApprovalMode: domain.PermissionModeBypassPermissions},
+			}
+			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+				AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.want) {
+				t.Fatalf("worker permission environment = %q, want %q (not the orchestrator's bypass-permissions)", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSpawn_OrchestratorPermissionCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		project    domain.PermissionMode
+		parent     domain.PermissionMode
+		requested  domain.PermissionMode
+		wantError  bool
+		wantActive domain.PermissionMode
+	}{
+		{"project default blocks bypass", domain.PermissionModeDefault, domain.PermissionModeBypassPermissions, domain.PermissionModeBypassPermissions, true, ""},
+		{"project accept-edits blocks auto", domain.PermissionModeAcceptEdits, domain.PermissionModeBypassPermissions, domain.PermissionModeAuto, true, ""},
+		{"project auto allows stricter", domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, domain.PermissionModeAcceptEdits, false, domain.PermissionModeAcceptEdits},
+		{"parent default blocks bypass when project is unset", "", domain.PermissionModeDefault, domain.PermissionModeBypassPermissions, true, ""},
+		{"default auto blocks bypass when project and parent are unset", "", "", domain.PermissionModeBypassPermissions, true, ""},
+		{"parent auto allows equal when project is unset", "", domain.PermissionModeAuto, domain.PermissionModeAuto, false, domain.PermissionModeAuto},
+		{"parent mode fills an unset request", "", domain.PermissionModeAcceptEdits, "", false, domain.PermissionModeAcceptEdits},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.Worker.AgentConfig.Permissions = tc.project
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindOrchestrator}
+			st.conversations["mer-0"] = domain.ConversationRecord{
+				SessionID: "mer-0", Settings: domain.ConversationSettings{ApprovalMode: tc.parent},
+			}
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+				AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			})
+			if tc.wantError {
+				if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+					t.Fatalf("spawn error = %v, want permission ceiling refusal", err)
+				}
+				if rt.created != 0 {
+					t.Fatal("runtime was created for an over-permissive worker")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.wantActive) {
+				t.Fatalf("worker permission environment = %q, want %q", got, tc.wantActive)
+			}
+		})
+	}
+}
+
+func TestSpawn_OrchestratorPermissionCeilingUsesParentSessionWithoutChat(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["mer-0"] = domain.SessionRecord{
+		ID: "mer-0", ProjectID: "mer", Kind: domain.KindOrchestrator,
+		Metadata: domain.SessionMetadata{Permissions: domain.PermissionModeDefault},
+	}
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+		AgentConfig: ports.AgentConfig{Permissions: domain.PermissionModeBypassPermissions},
+	})
+	if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+		t.Fatalf("spawn error = %v, want parent permission ceiling refusal", err)
+	}
+	if rt.created != 0 {
+		t.Fatal("runtime was created for an over-permissive worker")
+	}
+}
+
+func TestSpawn_MastraDefaultDoesNotBecomeProjectPermissionCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		parentKind domain.SessionKind
+		project    domain.PermissionMode
+		role       domain.PermissionMode
+		requested  domain.PermissionMode
+		want       domain.PermissionMode
+		wantError  bool
+	}{
+		{"orchestrator explicit auto", domain.KindOrchestrator, "", "", domain.PermissionModeAuto, domain.PermissionModeAuto, false},
+		{"orchestrator inherits auto", domain.KindOrchestrator, "", "", "", domain.PermissionModeAuto, false},
+		{"worker explicit auto", domain.KindWorker, "", "", domain.PermissionModeAuto, domain.PermissionModeAuto, false},
+		{"project default blocks auto", domain.KindOrchestrator, domain.PermissionModeDefault, "", domain.PermissionModeAuto, "", true},
+		{"role default blocks auto", domain.KindOrchestrator, "", domain.PermissionModeDefault, domain.PermissionModeAuto, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.AgentConfig.Permissions = tc.project
+			project.Config.Worker.AgentConfig.Permissions = tc.role
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: tc.parentKind}
+			st.conversations["mer-0"] = domain.ConversationRecord{
+				SessionID: "mer-0", Settings: domain.ConversationSettings{ApprovalMode: domain.PermissionModeAuto},
+			}
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessMastraCode,
+				ParentSessionID: "mer-0", AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			})
+			if tc.wantError {
+				if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) || rt.created != 0 {
+					t.Fatalf("spawn error = %v, runtimes = %d, want permission ceiling refusal", err, rt.created)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.want) {
+				t.Fatalf("permission environment = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSpawn_WorkerParentCannotExceedProjectPermission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		project   domain.PermissionMode
+		requested domain.PermissionMode
+		want      domain.PermissionMode
+		refused   bool
+	}{
+		{"default blocks bypass", domain.PermissionModeDefault, domain.PermissionModeBypassPermissions, "", true},
+		{"auto blocks bypass", domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, "", true},
+		{"auto allows stricter", domain.PermissionModeAuto, domain.PermissionModeDefault, domain.PermissionModeDefault, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.Worker.AgentConfig.Permissions = tc.project
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindWorker}
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+				AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			})
+			if tc.refused {
+				if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+					t.Fatalf("spawn error = %v, want project permission ceiling refusal", err)
+				}
+				if rt.created != 0 {
+					t.Fatal("runtime was created for an over-permissive worker")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.want) {
+				t.Fatalf("worker permission environment = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -13399,4 +13599,32 @@ func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.Sessi
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil
+}
+
+func TestLaunchBinaryUnwrapsProviderEnvWrapper(t *testing.T) {
+	argv := []string{"sh", "-c", "exec \"$@\"", agentlaunch.ProviderEnvMarker, "env", "A=b", "/opt/agents/memcode", "--resume", "id"}
+	if got, ok := launchBinary(argv); !ok || got != "/opt/agents/memcode" {
+		t.Fatalf("launchBinary = %q, %v; want the wrapped agent", got, ok)
+	}
+}
+
+func TestAOSkillPointerNamesDeviceGuideOnlyWhenOffered(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	if pointer := m.aoSkillPointer(false); strings.Contains(pointer, "AO Device panel") {
+		t.Fatalf("device section present with no devices gate:\n%s", pointer)
+	}
+	offered := false
+	m.SetDevicesOffered(func() bool { return offered })
+	if pointer := m.aoSkillPointer(false); strings.Contains(pointer, "AO Device panel") {
+		t.Fatalf("device section present while devices are not offered:\n%s", pointer)
+	}
+	offered = true
+	pointer := m.aoSkillPointer(false)
+	guide := filepath.ToSlash(filepath.Join(dir, "skills", "using-ao", "commands", "device.md"))
+	for _, want := range []string{"## AO Device panel", "`" + guide + "`", "ao device open"} {
+		if !strings.Contains(pointer, want) {
+			t.Fatalf("device section missing %q:\n%s", want, pointer)
+		}
+	}
 }
