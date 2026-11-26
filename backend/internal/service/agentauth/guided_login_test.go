@@ -177,6 +177,44 @@ func TestAgyCloudProjectLoginWalksBothMenus(t *testing.T) {
 	}
 }
 
+func TestGuidedLoginFinishesOnlyAfterItsStepsAreSent(t *testing.T) {
+	onPlatform(t, "darwin")
+
+	// An earlier Google sign-in is already in the Keychain, so the probe
+	// passes from the start.
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "cloud_project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the project entry to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 2 })
+	// The Cloud menu never appears: past several probe rounds the login must
+	// still be waiting on its last step instead of reporting success.
+	time.Sleep(3 * time.Second)
+	current, err := svc.Login(t.Context(), "agy", started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "running" || pty.isClosed() {
+		t.Fatalf("status = %q closed = %v with a menu step unsent, want still running", current.Status, pty.isClosed())
+	}
+
+	pty.setOutput(agyMenuScreen + "Google Cloud sign-in method:\n> 1. Continue with Google Cloud\n  2. Use advanced SSO config\n")
+	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.Status != "running"
+	})
+	if current.Status != "succeeded" {
+		t.Fatalf("status = %q, want succeeded", current.Status)
+	}
+	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"next", "select", "select"}) {
+		t.Fatalf("keys = %v, want every reviewed step sent before finishing", got)
+	}
+}
+
 func TestGuidedLoginWaitsForItsMenu(t *testing.T) {
 	onPlatform(t, "darwin")
 

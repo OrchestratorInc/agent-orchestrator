@@ -144,6 +144,9 @@ type loginOperation struct {
 	// sent only once the menu has settled.
 	guidedSteps []guidedStep
 	guidedReady bool
+	// guidedStuck marks a guided login whose key send failed: its remaining
+	// steps are never sent, so it cannot finish on its own.
+	guidedStuck bool
 	// keepsRunning marks a CLI that stays open after signing in; polls counts
 	// watcher ticks between its auth probes.
 	keepsRunning bool
@@ -627,7 +630,12 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 			s.mu.Unlock()
 		}
 	}
-	if !op.keepsRunning {
+	// A guided login finishes only after every reviewed step was sent: an
+	// earlier sign-in (a Google account in the Keychain, say) must not end a
+	// Cloud project login before its menu is walked. A menu that diverges or
+	// a failed key send leaves it running until the user cancels or the
+	// deadline passes; the hidden terminal offers no manual path to finish.
+	if !op.keepsRunning || len(op.guidedSteps) > 0 || op.guidedStuck {
 		return false
 	}
 	op.polls++
@@ -645,11 +653,10 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 
 // advanceGuidedLogin presses the next step's reviewed keys once its ready
 // text has been on screen for a full tick, so a menu that is still drawing
-// never takes a key. A failed key send abandons the remaining steps rather
-// than risk a different choice on retry; the user can still cancel or use the
-// terminal.
+// never takes a key. A failed key send stops the remaining steps rather than
+// risk a different choice on retry; the user can still cancel.
 func (s *Service) advanceGuidedLogin(ctx context.Context, terminal guidedAuthTerminal, op *loginOperation, output string) {
-	if len(op.guidedSteps) == 0 {
+	if len(op.guidedSteps) == 0 || op.guidedStuck {
 		return
 	}
 	step := op.guidedSteps[0]
@@ -670,7 +677,7 @@ func (s *Service) advanceGuidedLogin(ctx context.Context, terminal guidedAuthTer
 			}
 		}
 		if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, key); err != nil {
-			op.guidedSteps = nil
+			op.guidedStuck = true
 			return
 		}
 	}
