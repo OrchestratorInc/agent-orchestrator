@@ -283,6 +283,7 @@ func TestAccountTransitionRefusesMovingAnImportedAgySessionOutOfItsFolder(t *tes
 	accounts.homes["acct-import"] = "/imports/agy"
 	rec := store.sessions["session-1"]
 	rec.Harness = domain.HarnessAgy
+	rec.Metadata.ProviderConversationID = "native-1"
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-1", ConfigDir: "/imports/agy"}
 	store.sessions[rec.ID] = rec
 
@@ -298,6 +299,14 @@ func TestAccountTransitionRefusesMovingAnImportedAgySessionOutOfItsFolder(t *tes
 	for _, target := range []string{"device-claude", "acct-import"} {
 		if err := manager.refuseImportPinnedMove(ctx, rec, target); err != nil {
 			t.Fatalf("move to %s refused: %v", target, err)
+		}
+	}
+	// A session that left the imported conversation launches in the account's
+	// folder again, so it moves like any other.
+	for _, conversation := range []string{"", "fresh-2"} {
+		rec.Metadata.ProviderConversationID = conversation
+		if err := manager.refuseImportPinnedMove(ctx, rec, "acct-b"); err != nil {
+			t.Fatalf("conversation %q: move refused: %v", conversation, err)
 		}
 	}
 }

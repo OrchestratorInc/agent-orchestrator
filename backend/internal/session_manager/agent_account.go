@@ -160,9 +160,12 @@ const agyFileTokenEnv = "AGY_CLI_FORCE_FILE_TOKEN_STORAGE" //nolint:gosec // a v
 // account whose folder is not the import's own: agy resumes an import with the
 // import's folder as its --gemini-dir, whatever the account, so the session
 // would record an account its agent never signs in as. A move to the
-// computer's own login is allowed; that login is the one agy uses there.
+// computer's own login is allowed; that login is the one agy uses there. Once
+// the session runs another conversation than the imported one, its launches
+// use the account's folder again, as applyImportedConfigEnv decides.
 func (m *Manager) refuseImportPinnedMove(ctx context.Context, rec domain.SessionRecord, accountID string) error {
-	if rec.Harness != domain.HarnessAgy || rec.Metadata.ImportSource == nil {
+	if rec.Harness != domain.HarnessAgy || rec.Metadata.ImportSource == nil ||
+		rec.Metadata.ProviderConversationID != importedNativeRef(rec.Metadata.ImportSource).NativeSessionID {
 		return nil
 	}
 	env, err := m.agentAccounts.SessionLaunchEnvWith(ctx, rec.ID, accountID)
