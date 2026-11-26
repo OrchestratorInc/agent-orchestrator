@@ -48,6 +48,14 @@ type fakeProvider struct {
 	controlErr  error
 	shutdownErr error
 	readyGate   chan struct{}
+	// noted records each device NoteBooted heard, as id@bootID.
+	noted []string
+}
+
+func (f *fakeProvider) NoteBooted(d ports.DeviceInfo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.noted = append(f.noted, d.ID+"@"+d.BootID)
 }
 
 func (f *fakeProvider) removeDevice(id string) {
@@ -661,6 +669,43 @@ func TestLiveLeaseReportsADeviceShutDownOutsideAO(t *testing.T) {
 	}
 	if _, ok := svc.LiveLease(ctx, "s-2"); ok {
 		t.Fatal("a session without a device has a live lease")
+	}
+}
+
+// Each look at a running leased device tells the provider which boot it is on,
+// so a reboot outside AO can be caught (see the local provider's NoteBooted).
+// A device that is off is not reported.
+func TestLiveLeaseTellsTheProviderWhichBootADeviceIsOn(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	now := time.Unix(100, 0)
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, Now: func() time.Time { return now }})
+	if _, err := svc.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	for i := range p.devices {
+		if p.devices[i].ID == lease.Device.ID {
+			p.devices[i].Booted, p.devices[i].BootID = true, "boot-2"
+		}
+	}
+	p.noted = nil
+	p.mu.Unlock()
+	now = now.Add(liveListTTL + time.Second)
+	if _, ok := svc.LiveLease(ctx, "s-1"); !ok {
+		t.Fatal("no live lease")
+	}
+	p.setBooted(lease.Device.ID, false)
+	now = now.Add(liveListTTL + time.Second)
+	svc.LiveLease(ctx, "s-1")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.noted) != 1 || p.noted[0] != lease.Device.ID+"@boot-2" {
+		t.Fatalf("noted = %v, want the running device's boot once", p.noted)
 	}
 }
 
