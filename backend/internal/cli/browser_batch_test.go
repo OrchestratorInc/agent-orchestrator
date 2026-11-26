@@ -109,6 +109,15 @@ ao browser act Sign\ in --expect-text "Welcome, \"Ada\""
 		t.Fatalf("explicit empty value: steps=%#v err=%v", steps, err)
 	}
 
+	steps, err = parseBrowserBatch(`wait --text "C:\Users\d+" "a\b" "say \"hi\" \\ ok" 'x\y' plain\ word`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = [][]string{{"wait", "--text", `C:\Users\d+`, `a\b`, `say "hi" \ ok`, `x\y`, "plain word"}}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("backslashes in quotes: %#v", steps)
+	}
+
 	for name, input := range map[string]string{
 		"empty":         "  \n# only a comment\n",
 		"unterminated":  `act "Sign in`,
@@ -617,6 +626,38 @@ func TestBrowserBatchRedactsTypedValues(t *testing.T) {
 		if got := browserBatchReportArgs(step); got[2] != browserBatchRedacted || got[1] != step[1] {
 			t.Fatalf("remote keyboard text must be redacted: %#v", got)
 		}
+	}
+}
+
+// A flag-parse error quotes the offending token; for a typed value that token
+// is the secret, so the error must not repeat it.
+func TestBrowserBatchValidationErrorsHideTypedValues(t *testing.T) {
+	server := &batchBrowserServer{}
+	deps := startBatchBrowserServer(t, server)
+	for _, steps := range []string{
+		"fill e2 -s3cretpw",
+		"type e2 --s3cretpw",
+		"type e2 ok -s3cretpw",
+	} {
+		_, _, err := executeCLI(t, deps, "browser", "batch", "--steps", steps)
+		if ExitCode(err) != 2 || strings.Contains(err.Error(), "s3cretpw") || !strings.Contains(err.Error(), "--") {
+			t.Fatalf("%q: err = %v", steps, err)
+		}
+	}
+	// Errors that do not echo the value keep their detail.
+	_, _, err := executeCLI(t, deps, "browser", "batch", "--steps", "fill e2")
+	if err == nil || !strings.Contains(err.Error(), "accepts 2 arg") {
+		t.Fatalf("arg count err = %v", err)
+	}
+}
+
+func TestBrowserBatchReportMasksURLCredentials(t *testing.T) {
+	got := browserBatchReportArgs([]string{"open", "https://ada:hunter2@example.test/path?q=1"})
+	if strings.Contains(got[1], "hunter2") || strings.Contains(got[1], "ada") || !strings.Contains(got[1], "example.test/path?q=1") {
+		t.Fatalf("report = %#v", got)
+	}
+	if got := browserBatchReportArgs([]string{"open", "https://example.test/a@b"}); got[1] != "https://example.test/a@b" {
+		t.Fatalf("a URL without credentials must stay as is: %#v", got)
 	}
 }
 

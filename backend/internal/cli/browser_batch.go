@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -263,8 +264,18 @@ func splitBrowserBatchLine(line string) ([]string, error) {
 	inWord := false
 	var quote rune
 	escaped := false
+	// Inside double quotes a backslash escapes only `"` and `\` (there are no
+	// variables to escape); before anything else it is kept, as a POSIX shell
+	// keeps it, so `"C:\Users"` stays `C:\Users`.
+	quotedEscape := false
 	for _, r := range line {
 		switch {
+		case quotedEscape:
+			if r != '"' && r != '\\' {
+				current.WriteRune('\\')
+			}
+			current.WriteRune(r)
+			quotedEscape = false
 		case escaped:
 			current.WriteRune(r)
 			escaped = false
@@ -279,7 +290,7 @@ func splitBrowserBatchLine(line string) ([]string, error) {
 			case '"':
 				quote = 0
 			case '\\':
-				escaped = true
+				quotedEscape = true
 			default:
 				current.WriteRune(r)
 			}
@@ -301,7 +312,7 @@ func splitBrowserBatchLine(line string) ([]string, error) {
 	if quote != 0 {
 		return nil, fmt.Errorf("unterminated %c quote", quote)
 	}
-	if escaped {
+	if escaped || quotedEscape {
 		return nil, errors.New("trailing backslash")
 	}
 	if inWord {
@@ -358,6 +369,11 @@ func validateBrowserBatchStep(step []string, checkTree bool) error {
 		return errors.New(reason)
 	}
 	if err := target.ParseFlags(rest); err != nil {
+		// pflag quotes the token it rejected; in a step that types text that
+		// token can be the secret (`fill e2 -s3cret`), so say why instead.
+		if !reflect.DeepEqual(browserBatchReportArgs(step), step) {
+			return errors.New("a flag could not be parsed (details hidden because this step types text); put -- before a value that starts with -")
+		}
 		return err
 	}
 	// The raw scan above stops at `--`, but pflag may consume `--` as a flag
@@ -606,6 +622,9 @@ func browserBatchReportArgs(step []string) []string {
 		}
 	}
 	for i := 0; i < len(out); i++ {
+		out[i] = browserBatchMaskURLCredentials(out[i])
+	}
+	for i := 0; i < len(out); i++ {
 		switch {
 		case out[i] == "--value" && i+1 < len(out):
 			out[i+1] = browserBatchRedacted
@@ -615,6 +634,24 @@ func browserBatchReportArgs(step []string) []string {
 		}
 	}
 	return out
+}
+
+// browserBatchMaskURLCredentials hides the user:password part of a URL such
+// as `https://ada:pw@host/`; any other argument is returned unchanged.
+func browserBatchMaskURLCredentials(arg string) string {
+	scheme, rest, ok := strings.Cut(arg, "://")
+	if !ok || scheme == "" {
+		return arg
+	}
+	authority := rest
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		authority = rest[:end]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return arg
+	}
+	return scheme + "://" + browserBatchRedacted + "@" + rest[at+1:]
 }
 
 // browserBatchFindActionIndex returns the index of the action word in a remote
