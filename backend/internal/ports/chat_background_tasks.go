@@ -18,6 +18,10 @@ var ErrBackgroundTasksUnsupported = errors.New("provider cannot report backgroun
 // it has no stop control, or the task is no longer running.
 var ErrBackgroundTaskNotStoppable = errors.New("background task cannot be stopped")
 
+// ErrBackgroundTaskOutputUnavailable means the provider cannot report this
+// task's output: it keeps none, or does not know the task.
+var ErrBackgroundTaskOutputUnavailable = errors.New("background task output unavailable")
+
 // ChatBackgroundTask is native background work, never an OS process or a
 // foreground tool call. IDs are scoped to one provider controller.
 type ChatBackgroundTask struct {
@@ -25,7 +29,10 @@ type ChatBackgroundTask struct {
 	RunID       string
 	Kind        string
 	Description string
-	State       string
+	// Command is the shell command line when the provider reports one apart
+	// from the description. Empty when unknown.
+	Command string
+	State   string
 	// StartedAt is the native start time or when AO observed its start event.
 	// Inventory membership alone leaves it nil.
 	StartedAt *time.Time
@@ -44,4 +51,34 @@ type ChatBackgroundTaskInspector interface {
 // returns ErrBackgroundTaskNotStoppable when the provider has no stop control.
 type ChatBackgroundTaskStopper interface {
 	StopBackgroundTask(ctx context.Context, taskID string) error
+}
+
+// ChatBackgroundTaskOutput is the recent output of one background task.
+type ChatBackgroundTaskOutput struct {
+	Text string
+	// Truncated is true when older output was left out.
+	Truncated bool
+	// Stale is true when the provider stopped sending this task's output, so
+	// anything it printed since is missing.
+	Stale bool
+	// LogOutsideWorkspace is true when the task's command sends its output to
+	// a log file outside the session's workspace, which is never read.
+	LogOutsideWorkspace bool
+	// LogOmitted is true when the task's command writes a log that can't be
+	// shown as this run's: a later run writes the same file, the file was
+	// written after the run ended, or the run's final log isn't kept yet and
+	// no earlier read of it was saved. Text then holds only what the task
+	// printed itself.
+	LogOmitted bool
+	// RunID names the run this output belongs to, when the provider gives
+	// runs their own ID, so a reader of an earlier run under a reused task ID
+	// can tell the output isn't that run's.
+	RunID string
+}
+
+// ChatBackgroundTaskOutputReader reads one task's recent output. Like a
+// reading, it must not start or wake a provider. It returns
+// ErrBackgroundTaskOutputUnavailable when the provider keeps no output for it.
+type ChatBackgroundTaskOutputReader interface {
+	BackgroundTaskOutput(ctx context.Context, taskID string) (ChatBackgroundTaskOutput, error)
 }

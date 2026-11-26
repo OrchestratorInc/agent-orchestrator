@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
@@ -21,6 +22,7 @@ import { STANDALONE_AGENTS_FEATURE } from "../lib/cloud-offering";
 import { standaloneAgentProjectId } from "../lib/cloud-standalone-agents";
 import type { ApprovalMode, ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
+import { mergeChatSkills, useAgentSkillsQuery } from "../hooks/useAgentSkillsQuery";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
 import { ChatWorkspace } from "./chat/ChatWorkspace";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
@@ -28,7 +30,7 @@ import { handOffComposerDraft } from "../lib/chat-context-bus";
 import { sessionUiKey } from "../lib/hosts";
 import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
 import { LaunchSettingsBar, rememberLaunchSettings, rememberOpeningStart, type LaunchSettings } from "./chat/LaunchSettingsBar";
-import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar } from "./chat/TurnSettingsBar";
+import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar, withUltracode } from "./chat/TurnSettingsBar";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, isPhone, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
@@ -48,6 +50,7 @@ import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
  */
 // A page opened from Report a problem is `report`: its agent runs on Scratchpad only.
 export function NewChatPage({ projectId, hostId, report }: { projectId: string; hostId?: string; report?: boolean }) {
+	useTelemetrySurface("new_chat");
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -145,20 +148,19 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
-	// the first message of its Chat session, up to the size one upload may be.
-	// A Cloud standalone agent starts without them (createCloudTask).
+	// the first message of its Chat session, in a project or of its own
+	// (createCloudTask), up to the size one upload may be.
 	const cloudOffering = useCloudOffering(task.isCloudProject);
-	const cloudTaskTakesFiles = task.isCloudProject && projectId !== CLOUD_STANDALONE_WORKSPACE_ID;
-	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
+	const cloudFiles = useMemo(() => task.isCloudProject && cloudOffering.maxAttachmentBytes !== undefined
 		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
-	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
+	[cloudOffering.maxAttachmentBytes, task.isCloudProject]);
 	// A draft keeps the files it brought from a target that takes them; here
 	// they stay with why this target takes none, until they are removed.
-	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
-		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
-		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
-			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
-			: undefined;
+	const attachmentsRefusal = task.isCloudProject && cloudOffering.loaded && !cloudFiles
+		? projectId === CLOUD_STANDALONE_WORKSPACE_ID
+			? t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." })
+			: t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
+		: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
@@ -167,7 +169,13 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		writeChatAttachments(draftScope, []);
 	}
 	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
-	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId, projectId), [hostId, projectId, task.agent.value, task.isCloudProject]);
+	// The host reads the agent's skill folders, so a first chat with an agent lists
+	// them too; the list a session of this agent last reported comes first.
+	const scannedSkills = useAgentSkillsQuery(task.agent.value, projectId, hostId, !task.isCloudProject);
+	const skills = useMemo(
+		() => task.isCloudProject ? [] : mergeChatSkills(readChatSkills(task.agent.value, hostId, projectId), scannedSkills),
+		[hostId, projectId, scannedSkills, task.agent.value, task.isCloudProject],
+	);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
@@ -181,6 +189,10 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		() => task.isCloudProject ? undefined : readChatSettingsTemplate(harness, hostId),
 		[harness, hostId, task.isCloudProject],
 	);
+	// Claude Code's Ultracode, asked for in the opening message. Only a local chat keeps it
+	// for the messages after, so a Cloud task does not offer it.
+	const [ultracodeOn, setUltracodeOn] = useState(false);
+	const offersUltracode = harness === "claude-code" && !task.isCloudProject;
 	const barFor = (settings: TurnSettings): LaunchSettings => {
 		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.approvalModes) : undefined;
 		return {
@@ -195,6 +207,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			// A Cloud task with no model picked runs the project's or the agent's
 			// default, as the New Task picker words it; it needs no choice.
 			...(task.isCloudProject ? { unsetModelLabel: t("newTask.cloudConfiguredDefault") } : {}),
+			...(offersUltracode ? { ultracode: ultracodeOn } : {}),
 		};
 	};
 	const barSettings = barFor(task.turnSettings);
@@ -352,7 +365,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
+			// Ultracode is the one saved with the send, so a retry asks for it as the first try did.
+			const sessionId = await launch.launch(settings.ultracode ? withUltracode(text) : text, { clientRequestId: clientMessageId, replay, attachments });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -404,7 +418,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			const sessionId = await task.launchFallback(brief.text, clientMessageId, heldAttachments);
+			const sessionId = await task.launchFallback(settings.ultracode ? withUltracode(brief.text) : brief.text, clientMessageId, heldAttachments);
 			fallbackRequest.current = undefined;
 			writeChatComposerText(draftScope, "");
 			writeChatAttachments(draftScope, []);
@@ -480,7 +494,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	) : task.modelWarning;
 
 	return (
-		<div className="flex h-full min-h-0 flex-col">
+		<div className="flex h-full min-h-0 flex-col" data-telemetry-surface="new_chat">
 			{/* No session yet: the shared session frame with no tabs holds the header's
 			    place and surface, so nothing moves or changes colour at handoff. The
 			    divider is dropped (styles.css) so the bar reads as bare chrome. */}
@@ -557,6 +571,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 									if (next) task.switchAgent(next.harness, { model: next.model, effort: next.effort ?? next.shownEffort });
 								},
 								account: accountChoice,
+								...(offersUltracode ? { ultracode: { on: ultracodeOn, onChange: setUltracodeOn } } : {}),
+								...(task.autoCompact ? { autoCompact: task.autoCompact } : {}),
 							}}
 							autoSelectEffortOnOpen
 						/>

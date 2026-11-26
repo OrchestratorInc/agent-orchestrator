@@ -23,7 +23,21 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
+// Usage telemetry names for each inspector view: the desktop's
+// `inspector_<name>` surfaces and `inspector.tab_<name>` controls.
+const INSPECTOR_TELEMETRY_NAMES: Record<InspectorView, string> = {
+	summary: "summary",
+	reviews: "reviews",
+	browser: "browser",
+	device: "device",
+	sideChat: "side_chat",
+	subagents: "subagents",
+	files: "files",
+	artifacts: "artifacts",
+	task: "background_tasks",
+};
+
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -46,6 +60,7 @@ export function SessionInspectorShellView({
 	artifactsView,
 	browserPoppedOut,
 	browserView,
+	deviceView,
 	sideChatView,
 	subagentsView,
 	filesView,
@@ -56,12 +71,14 @@ export function SessionInspectorShellView({
 	reviewsView,
 	summaryView,
 	tabs,
+	taskView,
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
 	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	deviceView?: ReactNode;
 	sideChatView?: ReactNode;
 	subagentsView?: ReactNode;
 	filesView?: ReactNode;
@@ -72,6 +89,8 @@ export function SessionInspectorShellView({
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
+	/** The Background tasks tab: its list, or the task it has open. */
+	taskView?: ReactNode;
 }) {
 
 	if (loadingText) {
@@ -134,6 +153,7 @@ export function SessionInspectorShellView({
 								key={tab.id}
 								type="button"
 								role="tab"
+								data-telemetry-id={`inspector.tab_${INSPECTOR_TELEMETRY_NAMES[tab.id]}`}
 								aria-selected={activeView === tab.id}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
@@ -181,24 +201,27 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
 					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts") && "p-0 overflow-hidden",
+					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
 					activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
 				)}
 				inert={!isVisible}
+				data-telemetry-surface={`inspector_${INSPECTOR_TELEMETRY_NAMES[activeView]}`}
 			>
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
+				{activeView === "device" ? deviceView : null}
 				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "subagents" ? subagentsView : null}
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
+				{activeView === "task" ? taskView : null}
 			</div>
 		</aside>
 	);
@@ -207,12 +230,15 @@ export function SessionInspectorShellView({
 export function InspectorSection({
 	children,
 	defaultOpen = true,
+	meta,
 	surface = true,
 	title,
 }: {
 	children: ReactNode;
 	/** Off for reference detail the reader opens on demand (a Setup log). */
 	defaultOpen?: boolean;
+	/** A short fact beside the title, such as a count. */
+	meta?: ReactNode;
 	surface?: boolean;
 	title: string;
 }) {
@@ -226,13 +252,14 @@ export function InspectorSection({
 				<button
 					aria-controls={contentId}
 					aria-expanded={open}
-					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full items-center rounded-lg p-1.5 text-left text-muted-foreground")}
+					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full select-none items-center rounded-lg p-1.5 text-left text-muted-foreground")}
 					onClick={() => setOpen((current) => !current)}
 					type="button"
 				>
 					<NavRowHighlight />
 					<span className="relative z-[1] flex w-full min-w-0 items-center justify-between gap-2 text-sm">
 						<span className="min-w-0 flex-1">{title}</span>
+						{meta ? <span className="shrink-0 pr-1.5 text-xs text-passive">{meta}</span> : null}
 						<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" direction={open ? "down" : "right"} />
 					</span>
 				</button>
@@ -263,13 +290,14 @@ export function InspectorSection({
 }
 
 export function SessionInspectorSummaryView({
-	activity,
-	activityTitle,
+	activity: _activity,
+	activityTitle: _activityTitle,
 	artifactCards,
 	artifactTitle,
 	branch,
 	completion,
 	context,
+	footer,
 	pullRequestCards,
 	pullRequestTitle,
 	reviews,
@@ -277,19 +305,24 @@ export function SessionInspectorSummaryView({
 	usage,
 	workers,
 }: {
-	activity: ReactNode;
-	activityTitle: string;
+	activity?: ReactNode;
+	activityTitle?: string;
 	/** Omit alongside {@link artifactTitle} to skip the artifacts section entirely. */
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
 	branch?: ReactNode;
 	completion?: ReactNode;
 	context?: ReactNode;
+	/**
+	 * Rows under the sections (the session's account, Resume agent), on the
+	 * sections' content inset. Each may render nothing.
+	 */
+	footer?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
 	pullRequestCards?: ReactNode;
 	pullRequestTitle?: string;
 	reviews?: ReactNode;
-	/** The project's Setup and Cleanup runs (Cloud sessions), just before the activity. */
+	/** The project's Setup and Cleanup runs (Cloud sessions), just before the footer. */
 	scripts?: ReactNode;
 	usage?: ReactNode;
 	/**
@@ -299,7 +332,9 @@ export function SessionInspectorSummaryView({
 	workers?: ReactNode;
 }) {
 	return (
-		<div role="tabpanel">
+		// An empty footer is still the last child, so the section above it drops
+		// its bottom padding here, as it would if it were last.
+		<div className="[&>section:has(+[data-inspector-footer]:empty:last-child)>*>div]:pb-0" role="tabpanel">
 			{workers}
 			{context}
 			{branch}
@@ -316,7 +351,15 @@ export function SessionInspectorSummaryView({
 			{reviews}
 			{completion}
 			{scripts}
-			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
+			{/* Activity is hidden for now. To restore it, uncomment this:
+			{_activityTitle ? <InspectorSection title={_activityTitle}>{_activity}</InspectorSection> : null}
+			*/}
+			{/* No divider above the first row: sections are set apart by spacing alone. */}
+			{footer ? (
+				<div className="min-w-0 px-3 empty:hidden [&>:first-child]:mt-0 [&>:first-child]:border-t-0 [&>:first-child]:pt-0" data-inspector-footer="">
+					{footer}
+				</div>
+			) : null}
 			{usage}
 		</div>
 	);
@@ -1306,8 +1349,12 @@ export function commentTextLines(body: string): string[] {
 			// Fences and rules go before any marker is stripped, while they still look like
 			// themselves: a suggestion block previews as its code, not as "suggestion".
 			if (/^(?:```|~~~)/.test(raw) || /^(?:[-*_=]\s*){3,}$/.test(raw)) return "";
+			// A GitHub alert's "> [!NOTE]" marker is its type, not its text.
+			if (/^(?:>\s*)?\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/i.test(raw)) return "";
 			return raw
-				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|>\s*)/, "")
+				// A quoted line can carry its own heading or list marker ("> ## Reviews paused").
+				.replace(/^(?:>\s*)+/, "")
+				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?)/, "")
 				// Emphasis is stripped outside inline code only; `_` must sit at a word edge, so snake_case stays.
 				.split(/(`[^`\n]*`)/)
 				.map((part, index) => index % 2 === 1 ? part.slice(1, -1) : part

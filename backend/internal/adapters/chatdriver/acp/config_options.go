@@ -245,6 +245,27 @@ func (c *conversation) configOptionValueNamed(id, name string) string {
 	return ""
 }
 
+// variantOptionFor points a split model's reasoning variant at the option the
+// live session has. Agents rename that option between releases (Antigravity's
+// agy_acp_server 1.4 says thinking_level, `agy acp` 1.5 says thought_level), so
+// when the binding's id is not advertised, the session's select option in the
+// thought_level category takes the value instead.
+func (c *conversation) variantOptionFor(variant SessionOption) SessionOption {
+	if _, known := c.configOptionOffers(variant.ID, variant.Value); known {
+		return variant
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		option := &c.configOptions[i]
+		if option.Category == string(acpsdk.SessionConfigOptionCategoryThoughtLevel) && option.Type == ports.ChatConfigOptionSelect {
+			variant.ID = option.ID
+			break
+		}
+	}
+	return variant
+}
+
 // configOptionCurrent is a select option's current value, or "" when the
 // session does not list it.
 func (c *conversation) configOptionCurrent(id string) string {

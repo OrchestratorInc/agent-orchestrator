@@ -34,7 +34,10 @@ import type {
   Cue,
   CueDefinitionInput,
   InvokeCueResult,
+  DataRetention,
+  DataRetentionChange,
   PutAgentProviderConnectionInput,
+  PutDataRetentionInput,
   RedactedProviderConnection,
   RequestOptions,
   Session,
@@ -109,6 +112,7 @@ interface JSONRequestOptions extends RequestOptions {
 }
 
 export class CloudApiError extends Error {
+  readonly telemetryCode: string = "CLOUD_API_ERROR";
   readonly status: number;
   readonly code: string;
   readonly requestId: string;
@@ -145,6 +149,21 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  /** How long the signed-in user's Cloud sessions and their conversation content are kept. */
+  getDataRetention(options: RequestOptions = {}): Promise<DataRetention> {
+    return this.request("/api/cloud/v1/me/data-retention", options);
+  }
+
+  /**
+   * Choose how long the signed-in user's Cloud sessions are kept. With
+   * `dryRun` nothing changes; both modes count the sessions the period deletes.
+   */
+  putDataRetention(input: PutDataRetentionInput, options: RequestOptions = {}): Promise<DataRetentionChange> {
+    return this.request("/api/cloud/v1/me/data-retention", {
+      method: "PUT", body: input, signal: options.signal,
+    });
   }
 
   async listAgents(

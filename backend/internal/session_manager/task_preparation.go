@@ -53,7 +53,7 @@ func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.Proje
 	}
 	now := m.clock()
 	projectID := domain.ProjectID(project.ID)
-	rec := seedRecord(ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindWorker}, project.Config, now)
+	rec := m.seedRecord(ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindWorker}, project.Config, now)
 	rec.IsTaskPreparation = true
 	rec.ProvisionState = domain.SessionProvisionProvisioning
 	rec, err := m.store.CreateSession(ctx, rec)

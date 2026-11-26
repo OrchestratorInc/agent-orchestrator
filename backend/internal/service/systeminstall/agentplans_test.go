@@ -323,7 +323,7 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 	}{
 		{"claude brew", "darwin", TargetClaudeCode, []string{"brew"}, "homebrew", "brew install --cask claude-code"},
 		{"codex npm", "linux", TargetCodex, []string{"npm"}, "npm", "npm install -g @openai/codex"},
-		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
+		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
 		{"vibe pipx", "linux", TargetVibe, []string{"pipx"}, "pipx", "pipx install mistral-vibe"},
 		{"openhands uv", "windows", TargetOpenHands, []string{"uv"}, "uv", "uv tool install openhands"},
 		{"docker agent brew", "darwin", TargetDockerAgent, []string{"brew"}, "homebrew", "brew install docker-agent"},
@@ -335,6 +335,36 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 				t.Fatalf("plan = %+v, want method %q command %q", plan, tt.wantMethod, tt.wantCommand)
 			}
 		})
+	}
+}
+
+func TestWindowsWingetAgentOperationsStayNoninteractive(t *testing.T) {
+	tests := []struct {
+		target Target
+		id     string
+	}{
+		{TargetOpencode, "SST.opencode"},
+		{TargetCopilot, "GitHub.Copilot"},
+	}
+	for _, tt := range tests {
+		for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationReinstall, AgentOperationUpdate} {
+			t.Run(string(tt.target)+"/"+string(operation), func(t *testing.T) {
+				s := newTestService("windows", "winget")
+				plan := s.planWinget(tt.target, tt.id)
+				plan = requestPlanner{Service: s}.planForOperation(plan, operation)
+				verb := "install"
+				if operation == AgentOperationUpdate {
+					verb = "upgrade"
+				}
+				want := []string{"winget", verb, "-e", "--id", tt.id, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
+				if operation == AgentOperationReinstall {
+					want = append(want, "--force")
+				}
+				if !slices.Equal(plan.Command, want) {
+					t.Fatalf("command = %v, want %v", plan.Command, want)
+				}
+			})
+		}
 	}
 }
 

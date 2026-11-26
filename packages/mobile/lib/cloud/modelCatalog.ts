@@ -116,6 +116,12 @@ const MODELS_FAILED_RETRIES = 6;
 const TIMEOUT_RETRIES = 3;
 const AGENT_SETUP_RETRIES = 36;
 const AGENT_SETUP_RETRY_DELAY = 5_000;
+/** A worker still starting is asked again after its Retry-After, or this. */
+const STARTING_RETRY_DELAY = 5_000;
+const MIN_STARTING_RETRY_DELAY = 1_000;
+const MAX_STARTING_RETRY_DELAY = 5 * 60_000;
+/** How long a worker that keeps answering it is still starting is waited for, as on the desktop. */
+export const MAX_STARTING_WAIT_MS = 30 * 60_000;
 
 function code(error: unknown): string | undefined {
 	return error instanceof CloudError ? error.code : undefined;
@@ -126,10 +132,20 @@ function code(error: unknown): string | undefined {
  * reads, or undefined to stop. The desktop's schedule: a worker still
  * connecting is asked again quickly (1s, 2s, 4s… up to 30s); one still
  * installing the agent every 5s for up to three minutes; a failed operation a
- * few times with backoff; a timeout three times.
+ * few times with backoff; a timeout three times. A worker still preparing its
+ * workspace (WORKER_STARTING) is asked again after its Retry-After (5s when it
+ * sends none) until `startingForMs`, how long it has answered that, reaches
+ * half an hour.
  */
-export function modelsRetryDelay(failures: number, error: unknown): number | undefined {
+export function modelsRetryDelay(failures: number, error: unknown, startingForMs = 0): number | undefined {
 	switch (code(error)) {
+		case "WORKER_STARTING": {
+			if (startingForMs >= MAX_STARTING_WAIT_MS) return undefined;
+			const retryAfter = error instanceof CloudError ? error.retryAfterMs : undefined;
+			return retryAfter !== undefined && Number.isFinite(retryAfter)
+				? Math.min(Math.max(retryAfter, MIN_STARTING_RETRY_DELAY), MAX_STARTING_RETRY_DELAY)
+				: STARTING_RETRY_DELAY;
+		}
 		case "WORKER_UNAVAILABLE":
 			return Math.min(1_000 * 2 ** (failures - 1), 30_000);
 		case "TRANSPORT_TIMEOUT":
@@ -143,4 +159,35 @@ export function modelsRetryDelay(failures: number, error: unknown): number | und
 		default:
 			return undefined;
 	}
+}
+
+/**
+ * Reads a session worker's catalog until it answers, waiting between reads as
+ * modelsRetryDelay says. Resolves undefined once that says to stop, or at once
+ * when `signal` aborts, even in the middle of a wait.
+ */
+export async function readSessionCatalog<T>(read: () => Promise<T>, signal: AbortSignal, now: () => number = Date.now): Promise<T | undefined> {
+	// When the worker first answered that it is still starting, for its 30-minute budget.
+	let startingSince: number | undefined;
+	for (let failures = 0; !signal.aborted;) {
+		try {
+			const answer = await read();
+			return signal.aborted ? undefined : answer;
+		} catch (cause) {
+			failures += 1;
+			if (code(cause) === "WORKER_STARTING") startingSince ??= now();
+			const delay = modelsRetryDelay(failures, cause, startingSince === undefined ? 0 : now() - startingSince);
+			if (delay === undefined || signal.aborted) return undefined;
+			await new Promise<void>((resolve) => {
+				const done = () => {
+					clearTimeout(timer);
+					signal.removeEventListener("abort", done);
+					resolve();
+				};
+				const timer = setTimeout(done, delay);
+				signal.addEventListener("abort", done);
+			});
+		}
+	}
+	return undefined;
 }

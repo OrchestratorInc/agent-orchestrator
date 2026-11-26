@@ -1,5 +1,10 @@
+import { createHash } from "node:crypto";
+import { AoError } from "../../shared/telemetry/ao-error";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
+
+const digest = vi.hoisted(() => vi.fn());
+vi.mock("expo-crypto", () => ({ CryptoDigestAlgorithm: { SHA256: "SHA-256" }, digestStringAsync: digest }));
 
 const sdk = vi.hoisted(() => ({
 	init: vi.fn(),
@@ -28,6 +33,7 @@ beforeEach(() => {
 	vi.resetModules();
 	vi.clearAllMocks();
 	sdk.importGate = null;
+	digest.mockReset().mockImplementation(async (_algorithm, value: string) => createHash("sha256").update(value).digest("hex"));
 	vi.stubEnv("EXPO_PUBLIC_AO_TELEMETRY_DISABLED", undefined);
 	vi.stubEnv("EXPO_PUBLIC_SENTRY_DSN", undefined);
 });
@@ -57,7 +63,7 @@ describe("mobile Sentry consent and payload", () => {
 			{ name: "InboundFilters" },
 		])).toEqual([{ name: "InboundFilters" }]);
 		sentry.captureMobileException(new Error("private uncaught error"), { category: "native_crash", unhandled: true });
-		const event = options.beforeSend({ event_id: "uncaught-1", tags: sdk.captureException.mock.calls[0]?.[1]?.tags });
+		const event = await options.beforeSend({ event_id: "uncaught-1", tags: sdk.captureException.mock.calls[0]?.[1]?.tags });
 		expect(event).toMatchObject({ event_id: "uncaught-1", message: "Mobile error" });
 	});
 
@@ -70,7 +76,7 @@ describe("mobile Sentry consent and payload", () => {
 		expect(sdk.captureException).toHaveBeenCalledTimes(1);
 		const options = sdk.init.mock.calls[0]?.[0];
 		const transport = options.transport({});
-		const safe = options.beforeSend({ type: "error", event_id: "event-1", tags: sdk.captureException.mock.calls[0]?.[1]?.tags });
+		const safe = await options.beforeSend({ type: "error", event_id: "event-1", tags: sdk.captureException.mock.calls[0]?.[1]?.tags });
 		expect(safe?.event_id).toBe("event-1");
 		sentry.setMobileSentryConsent(false);
 		sentry.captureMobileException(new Error("private message"), { category: "render_crash" });
@@ -79,7 +85,7 @@ describe("mobile Sentry consent and payload", () => {
 		await transport.send([{}, [[{ type: "event" }, { event_id: "event-1" }]]]);
 		expect(sdk.send).not.toHaveBeenCalled();
 		sentry.setMobileSentryConsent(false);
-		expect(options.beforeSend({ message: "private message" })).toBeNull();
+		expect(await options.beforeSend({ message: "private message" })).toBeNull();
 	});
 
 	it("retains only the authenticated paired desktop install ID and safe frames", async () => {
@@ -92,7 +98,7 @@ describe("mobile Sentry consent and payload", () => {
 		const id = "ins_12345678-1234-1234-1234-123456789abc";
 		sentry.setMobileSentryPairedInstallId(id);
 		sentry.captureMobileException(new Error("private"), { category: "render_crash" });
-		const clean = sentry.sanitizeMobileSentryEvent({
+		const clean = await sentry.sanitizeMobileSentryEvent({
 			type: undefined,
 			tags: sdk.captureException.mock.calls[0]?.[1]?.tags,
 			release: "private release",
@@ -101,7 +107,7 @@ describe("mobile Sentry consent and payload", () => {
 			request: { url: "https://host/private" },
 			extra: { token: "secret" },
 			user: { id: "raw-account-id", email: "private@example.com" },
-			exception: { values: [{ type: "SecretError", value: "private path", stacktrace: { frames: [
+			exception: { values: [{ type: "SecretError", value: "private ".repeat(40), stacktrace: { frames: [
 				{ function: "safeFunction", filename: "C:\\Users\\private\\repo.ts", lineno: 42 },
 				{ function: "project name", abs_path: "/Users/private/repo.ts" },
 			] } }] },
@@ -122,11 +128,15 @@ describe("mobile Sentry consent and payload", () => {
 			tags: sdk.captureException.mock.calls[0]?.[1]?.tags,
 			exception: { values: [{ type: "TypeError", value }] },
 		});
-		const first = clean("HTTP error 500: /etc/private http://localhost:8080/x alice@example.test");
-		expect(first?.exception?.values).toMatchObject([{ type: "TypeError", value: "HTTP error 500 (in mobile, render_crash)" }]);
-		expect(clean("HTTP error 502: '12345678-1234-1234-1234-123456789abc'")?.fingerprint).toEqual(first?.fingerprint);
-		expect(clean("Invalid array length")?.fingerprint).not.toEqual(first?.fingerprint);
-		expect(clean("/home/alice/private")?.exception?.values?.[0]?.value).toBe("Mobile error");
+		const first = await clean("HTTP error 500: /etc/private http://localhost:8080/x alice@example.test");
+		expect(first?.exception?.values).toMatchObject([{ type: "TypeError", value: "HTTP error <n>: <path> <url> <email> (in mobile, render_crash)" }]);
+		expect((await clean("HTTP error 502: ~/private wss://host bob@example.test"))?.fingerprint).toEqual(first?.fingerprint);
+		expect((await clean("Invalid array length"))?.fingerprint).not.toEqual(first?.fingerprint);
+		expect((await clean("/home/alice/private"))?.message).toBe("<path>");
+		const unsafe = await clean("private ".repeat(40));
+		expect(unsafe?.message).toBe("Mobile error");
+		expect(unsafe?.fingerprint?.slice(-2)).toEqual(["sha256", createHash("sha256").update("private ".repeat(40).trim()).digest("hex").slice(0, 10)]);
+		expect(JSON.stringify(unsafe)).not.toContain("private");
 	});
 
 	it("does not initialize after opt-out wins an in-flight SDK import", async () => {
@@ -157,4 +167,112 @@ describe("mobile Sentry consent and payload", () => {
 		await sentry.initMobileSentry();
 		expect(sdk.init).not.toHaveBeenCalled();
 	});
+});
+
+it("groups translated mobile exceptions by the cause code", async () => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	const capture = async (value: string, category = "render_crash") => {
+		const error = new Error(value, { cause: new AoError("RENDER_DATA_FAILED", "Data unavailable") });
+		sentry.captureMobileException(error, { category });
+		return sentry.sanitizeMobileSentryEvent({
+			type: undefined,
+			tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
+			exception: { values: [{ type: "Error", value }] },
+		});
+	};
+	const first = await capture("Data unavailable");
+	expect(first?.message).toBe("Mobile error (RENDER_DATA_FAILED)");
+	expect((await capture("Données indisponibles"))?.fingerprint).toEqual(first?.fingerprint);
+	expect((await capture("Data unavailable", "native_crash"))?.fingerprint).not.toEqual(first?.fingerprint);
+});
+
+it("drops a hash in progress when consent changes", async () => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	sentry.captureMobileException(new Error("unsafe ".repeat(50)), { category: "render_crash" });
+	let finishDigest!: (hash: string) => void;
+	digest.mockReturnValueOnce(new Promise<string>((resolve) => { finishDigest = resolve; }));
+	const send = sentry.sanitizeMobileSentryEvent({
+		type: undefined,
+		event_id: "pending-hash",
+		tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
+		exception: { values: [{ type: "Error", value: "unsafe ".repeat(50) }] },
+	});
+	await vi.waitFor(() => expect(digest).toHaveBeenCalledOnce());
+	sentry.setMobileSentryConsent(false);
+	sentry.setMobileSentryConsent(true);
+	finishDigest("0123456789abc");
+	expect(await send).toBeNull();
+});
+
+it.each([
+	["open /Users/alice/My ConfidentialProject/offer.txt failed", "open <path> failed", /alice|ConfidentialProject|offer\.txt/],
+	["request failed access_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed refresh_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed client_secret=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["repository acme/secret-project not found", "repository acme/secret-project not found", /secret-project/],
+	["git checkout feature/acme-merger failed", "git checkout feature/acme-merger failed", /acme-merger/],
+	["getaddrinfo ENOTFOUND build.acme-internal.corp", "getaddrinfo enotfound build.acme-internal.corp", /acme-internal/],
+	["Session alice-laptop not found", "session alice-laptop not found", /alice-laptop/],
+	["HTTP 401 Bad credentials sk-ant-abcdefghijklmnop", "http <n> bad credentials sk-ant-abcdefghijklmnop", /abcdefghijklmnop/],
+] as const)("scrubs sensitive values in the final mobile event", async (value, normalized, privateText) => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	sentry.captureMobileException(new Error(value), { category: "render_crash" });
+	const event = await sentry.sanitizeMobileSentryEvent({
+		type: undefined,
+		tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
+		exception: { values: [{ type: "Error", value }] },
+	});
+	expect(event?.message).toBe("Mobile error");
+	expect(event?.fingerprint?.at(-1)).toBe(createHash("sha256").update(normalized).digest("hex").slice(0, 10));
+	expect(JSON.stringify(event)).not.toMatch(privateText);
+});
+
+it.each([
+	["TypeError", undefined, "Cannot read properties of undefined (reading 'id')", "Cannot read properties of undefined (reading '?')"],
+	["Error", undefined, "Cannot read properties of undefined (reading 'id')", "Mobile error"],
+	["TypeError", "READ_FAILED", "Cannot read properties of undefined (reading 'id')", "Mobile error (READ_FAILED)"],
+	["TypeError", undefined, "x".repeat(301), "Mobile error"],
+	["TypeError", undefined, "private ".repeat(26).trim(), "Mobile error"],
+	["TypeError", undefined, "Open /home/alice/config from https://host.test/path for alice@example.test 'prompt' comic-12", "Open <path> from <url> for <email> '?' <id>"],
+	["Error", undefined, "Error invoking remote method 'browser:ensure': TypeError: Cannot read properties of undefined (reading 'x')", "Cannot read properties of undefined (reading '?')"],
+] as const)("limits mobile message display by type, code and size", async (type, code, value, title) => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	sentry.captureMobileException(new Error(value), { category: "render_crash" });
+	const event = await sentry.sanitizeMobileSentryEvent({
+		type: undefined,
+		tags: { ...sdk.captureException.mock.calls.at(-1)?.[1]?.tags, "ao.code": code },
+		exception: { values: [{ type, value }] },
+	});
+	expect(event?.message).toBe(title);
+	expect(event?.fingerprint?.at(-2)).toBe(code ? "code" : "sha256");
+	expect(JSON.stringify(event)).not.toContain(value);
+	if (title === "Mobile error" || code) expect(JSON.stringify(event)).not.toContain("Cannot read properties");
+});
+
+it.each([
+	["SyntaxError", 'Unexpected token \'o\', "ok {"token":"abc"}" is not valid JSON', /['"]token['"]|abc/],
+	["SyntaxError", 'Unexpected token \'x\', "x{"custome"... is not valid JSON', /custome/],
+	["SyntaxError", "Cannot convert acme payroll to a BigInt", /acme payroll/],
+	["TypeError", "Cannot add property acmePayroll, object is not extensible", /acmePayroll/],
+] as const)("keeps unquoted engine input out of the mobile event", async (type, value, privateText) => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	sentry.captureMobileException(new Error(value), { category: "render_crash" });
+	const event = await sentry.sanitizeMobileSentryEvent({
+		type: undefined,
+		tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
+		exception: { values: [{ type, value }] },
+	});
+	expect(event?.message).toBe("Mobile error");
+	expect(event?.fingerprint?.at(-2)).toBe("sha256");
+	expect(JSON.stringify(event)).not.toMatch(privateText);
 });

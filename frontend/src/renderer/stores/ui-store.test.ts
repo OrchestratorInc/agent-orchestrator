@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
+import { FINISHED_TASK_TABS_KEPT, failedTaskKey, rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
 import { previewDocumentThemeStyle } from "../lib/theme";
 import { aoBridge } from "../lib/bridge";
@@ -619,5 +619,113 @@ describe("retired new sidebar design switch", () => {
 		expect(state).not.toHaveProperty("setNewSidebarDesign");
 		expect(window.localStorage.getItem("ao.newSidebarDesign")).toBeNull();
 		expect(document.documentElement.hasAttribute("data-legacy-status-colors")).toBe(false);
+	});
+});
+
+describe("background tasks side panel", () => {
+	const id = "task-tabs-session";
+	const task = (taskId: string, extra: Record<string, unknown> = {}) => ({ id: taskId, kind: "shell" as const, state: "running" as const, description: `Task ${taskId}`, ...extra });
+	const panel = () => useUiStore.getState().inspectorSessions[id];
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: { [id]: { isOpen: false, view: "browser" } } });
+	});
+
+	it("opens a task in the Background tasks tab, back to the list, and into another listed task", () => {
+		const store = useUiStore.getState();
+		store.openTaskTab(id, task("a"));
+		expect(panel()).toMatchObject({ isOpen: true, view: "task", activeTaskTab: "a" });
+		store.openTaskTab(id, task("b"));
+		store.openTaskTab(id, task("a", { description: "renamed" }));
+		expect(panel().taskTabs?.map((tab) => tab.task.id)).toEqual(["a", "b"]);
+		expect(panel().taskTabs?.[0].task.description).toBe("renamed");
+		store.showTaskList(id);
+		expect(panel()).toMatchObject({ view: "task", activeTaskTab: undefined });
+		store.selectTaskTab(id, "b");
+		expect(panel().activeTaskTab).toBe("b");
+		store.selectTaskTab(id, "missing");
+		expect(panel().activeTaskTab).toBe("b");
+	});
+
+	it("lists every task a reading names but agents, and marks a live task that left it as ended", () => {
+		const store = useUiStore.getState();
+		store.syncTaskTabs(id, [task("dev"), task("helper", { kind: "agent" })]);
+		expect(panel().taskTabs?.map((tab) => tab.task.id)).toEqual(["dev"]);
+		store.syncTaskTabs(id, [task("dev"), task("build", { state: "failed", endedAt: "2026-11-14T10:00:00Z" })]);
+		expect(panel().taskTabs?.map((tab) => [tab.task.id, tab.task.state, Boolean(tab.ended)])).toEqual([["dev", "running", false], ["build", "failed", false]]);
+		const before = panel();
+		store.syncTaskTabs(id, [task("dev"), task("build", { state: "failed", endedAt: "2026-11-14T10:00:00Z" })]);
+		expect(panel()).toBe(before);
+		store.syncTaskTabs(id, []);
+		expect(panel().taskTabs?.map((tab) => [tab.task.id, Boolean(tab.ended)])).toEqual([["dev", true], ["build", false]]);
+		// Listed again, it is live again.
+		store.syncTaskTabs(id, [task("dev")]);
+		expect(panel().taskTabs?.[0].ended).toBeUndefined();
+	});
+
+	it("keeps running tasks, the open one and the newest finished ones, and forgets failures seen on the rest", () => {
+		const store = useUiStore.getState();
+		const done = (n: number) => task(`done-${n}`, { state: "failed", runId: "r", endedAt: "2026-11-14T10:00:00Z" });
+		store.syncTaskTabs(id, [task("dev"), done(0), done(1)]);
+		store.acknowledgeFailedTask(id, done(0));
+		store.acknowledgeFailedTask(id, done(1));
+		store.selectTaskTab(id, "done-1");
+		store.syncTaskTabs(id, [task("dev"), ...Array.from({ length: FINISHED_TASK_TABS_KEPT + 1 }, (_, n) => done(n + 2))]);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toContain("dev");
+		// The oldest finished row goes; the open one, and the rows the reading still lists, stay past the cap.
+		expect(ids).not.toContain("done-0");
+		expect(ids).toContain("done-1");
+		expect(ids.filter((taskId) => taskId !== "dev")).toHaveLength(FINISHED_TASK_TABS_KEPT + 2);
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(done(1))]);
+	});
+
+	it("prunes finished rows once a reading stops listing them, even when none of them changed", () => {
+		const store = useUiStore.getState();
+		const finished = Array.from({ length: FINISHED_TASK_TABS_KEPT + 1 }, (_, n) => task(`done-${n}`, { state: "succeeded", endedAt: `2026-11-14T10:${String(n).padStart(2, "0")}:00Z` }));
+		store.syncTaskTabs(id, finished);
+		expect(panel().taskTabs).toHaveLength(FINISHED_TASK_TABS_KEPT + 1);
+		store.syncTaskTabs(id, []);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toHaveLength(FINISHED_TASK_TABS_KEPT);
+		expect(ids).not.toContain("done-0");
+		const before = panel();
+		store.syncTaskTabs(id, []);
+		expect(panel()).toBe(before);
+	});
+
+	it("drops the finished rows that ended longest ago, not the first seen", () => {
+		const store = useUiStore.getState();
+		const at = (minute: number) => `2026-11-14T10:${String(minute).padStart(2, "0")}:00Z`;
+		// A dev server seen first, which only just failed.
+		store.syncTaskTabs(id, [task("dev")]);
+		const finished = Array.from({ length: FINISHED_TASK_TABS_KEPT }, (_, n) => task(`done-${n}`, { state: "succeeded", endedAt: at(n) }));
+		store.syncTaskTabs(id, [task("dev"), ...finished]);
+		const failed = task("dev", { state: "failed", runId: "r", endedAt: at(59) });
+		store.syncTaskTabs(id, [failed]);
+		store.acknowledgeFailedTask(id, failed);
+		// The reading no longer lists the others, and one more task finishes.
+		store.syncTaskTabs(id, [failed, task("late", { state: "succeeded", endedAt: at(58) })]);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toContain("dev");
+		expect(ids).not.toContain("done-0");
+		expect(ids).toHaveLength(FINISHED_TASK_TABS_KEPT);
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(failed)]);
+	});
+
+	it("leaves a session with no tasks untouched", () => {
+		const before = useUiStore.getState().inspectorSessions;
+		useUiStore.getState().syncTaskTabs("never-ran-a-task", []);
+		expect(useUiStore.getState().inspectorSessions).toBe(before);
+	});
+
+	it("remembers each failed run that its tab has shown, once", () => {
+		const store = useUiStore.getState();
+		const failed = task("build", { state: "failed", runId: "r1" });
+		store.acknowledgeFailedTask(id, failed);
+		const before = panel();
+		store.acknowledgeFailedTask(id, failed);
+		expect(panel()).toBe(before);
+		store.acknowledgeFailedTask(id, task("build", { state: "failed", runId: "r2" }));
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(failed), failedTaskKey(task("build", { runId: "r2" }))]);
 	});
 });
