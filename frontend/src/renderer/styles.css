@@ -8138,13 +8138,20 @@ html[data-new-desktop-ui] [role="menu"] > [role="separator"] {
 	background-color: color-mix(in oklab, var(--border), transparent 35%);
 }
 
-/* Overlays nest their corners. A menu, select or option panel has a 10px
- * corner (`--radius-control`), a 1px edge and 4px of padding, so anything
- * that reaches its side (a row's highlight, its search field) sits 5px in
- * and takes 10 - 5 = 5px. Cmd+K keeps its own: a 14px panel with rows 7px
- * in already lands within a pixel. */
+/* Overlays nest their corners by R = r + d: an outer corner is the inner
+ * corner plus the gap between them, the only radius that keeps the gap even
+ * round the curve. Rows (a highlight, a search field) keep an 8px corner
+ * (`--radius-md`); a menu, select or option panel has a 1px edge and 4px of
+ * padding, so the gap is 5px and the panel takes 8 + 5 = 13px. Cmd+K's rows
+ * sit 7px in (a 1px edge and a 6px margin), so its panel takes 15px. */
 html[data-new-desktop-ui] {
-	--radius-overlay-row: calc(var(--radius-control) - 5px);
+	--radius-overlay-row: var(--radius-md);
+	--radius-overlay: calc(var(--radius-overlay-row) + 5px);
+	--radius-command-palette: calc(var(--radius-overlay-row) + 1px + var(--size-command-item-inset));
+}
+
+html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) {
+	border-radius: var(--radius-overlay);
 }
 
 html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [data-slot="select-item"]),
