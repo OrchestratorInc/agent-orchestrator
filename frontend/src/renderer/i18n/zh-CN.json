@@ -3861,6 +3861,7 @@
 	"artifacts.share.pageFiles.skipped_other": "此页面使用的 {{count}} 个文件未包含在内，共享页面中不会显示。",
 	"artifacts.share.pageFiles.unsupported": "此页面的图片未包含在内：Orchestrator Cloud 暂时无法随页面共享图片。",
 	"artifacts.share.pageFiles.videos": "视频暂时无法随页面共享。",
+	"artifacts.share.pageFiles.hostOutdated": "其中一些位于运行旧版 Orchestrator 的机器上：请在该机器上更新 Orchestrator 以包含它们。",
 	"artifacts.share.unpublished": "此文件的链接已取消发布。发布后会生成新链接。",
 	"artifacts.share.upgradeTitle": "升级以分享更多",
 	"artifacts.share.limitReached": "免费版：最多 {{limit}} 个有效链接。升级即可分享更多。",
