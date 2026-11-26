@@ -2,8 +2,11 @@ import createClient from "openapi-fetch";
 import type { components, paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
+import { freshMachineSimActive, simulateFreshMachine } from "./fresh-machine-sim";
+import { IS_DEV } from "./is-dev";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
+import { markApiError, withApiErrorOwnership } from "./reported-errors";
 
 function devApiBaseUrl(): string {
 	return typeof window === "undefined" ? "http://127.0.0.1:3001" : window.location.origin;
@@ -93,7 +96,9 @@ const ROUTE_TEMPLATES = [
     "/api/v1/awake/recover", "/api/v1/awake/history", "/api/v1/awake/downloads",
     "/api/v1/awake/low-power/authorize", "/api/v1/awake/low-power/revoke", "/api/v1/awake/sessions/{awakeId}/end",
     "/api/v1/awake/sessions/{awakeId}/extend",
+    "/api/v1/session-import",
 	"/api/v1/agents",
+	"/api/v1/attachment-uploads",
 	"/api/v1/agents/install-jobs",
 	"/api/v1/agents/auth-plans",
 	"/api/v1/agents/installers",
@@ -131,6 +136,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/{agent}/models",
 	"/api/v1/agents/{agent}/models/refresh",
 	"/api/v1/agents/{agent}/probe",
+	"/api/v1/agents/{agent}/skills",
 	"/api/v1/agents/{agent}/verify",
 	"/api/v1/desktop/sessions/{sessionId}/workspace",
 	"/api/v1/events",
@@ -146,6 +152,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/projects",
 "/api/v1/projects/clone",
 	"/api/v1/projects/clone/prepare",
+	"/api/v1/projects/clone/prepare/stream",
 	"/api/v1/projects/clone/check",
 	"/api/v1/projects/clone/cleanup",
 	"/api/v1/projects/initialize",
@@ -153,7 +160,14 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/projects/{id}/config",
 	"/api/v1/prs/{id}/merge",
 	"/api/v1/prs/{id}/resolve-comments",
+	"/api/v1/prs/{id}/state",
+	"/api/v1/prs/{id}/comments",
+	"/api/v1/prs/{id}/attachment-access",
 	"/api/v1/sessions",
+	"/api/v1/sessions/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/activity",
 	"/api/v1/sessions/{sessionId}/exit-agent",
@@ -233,7 +247,9 @@ function fallbackNormalize(pathname: string): string {
 			i += 1;
 		}
 	}
-	return segments.join("/");
+	// Route words never contain a digit, apart from the API version; any other
+	// segment with one is an identifier (a side-chat UUID, a shell terminal ID).
+	return segments.map((segment) => (/\d/.test(segment) && !/^v\d+$/.test(segment) ? ":id" : segment)).join("/");
 }
 
 export function normalizeApiOperation(method: string, pathname: string): string {
@@ -255,6 +271,8 @@ const API_ERROR_DEDUPE_MS = 30_000;
 // wired in this process, or a shell the user already closed. Other 401 and
 // 404 responses still report, including an expired GitHub token.
 const EXPECTED_API_ERROR_CODES = new Set([
+	"UPSTREAM_UNAVAILABLE",
+	"HOST_IDENTITY_UNVERIFIED",
 	"CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE",
 	"SHELL_TERMINAL_NOT_FOUND",
 ]);
@@ -267,6 +285,9 @@ const EXPECTED_PROBE_CONFLICTS = new Set([
 	"GET /api/v1/sessions/:id/conversation/config-options",
 	"GET /api/v1/sessions/:id/conversation/models",
 	"GET /api/v1/sessions/:id/conversation/skills",
+	// A remote host older than the new chat page's skill scan answers 404; the
+	// page keeps the list a session last reported.
+	"GET /api/v1/agents/:id/skills",
 ]);
 
 function expectedProbeConflict(operation: string, status?: number): boolean {
@@ -280,33 +301,91 @@ function reportApiError(
 	status?: number,
 	code?: string,
 	requestId?: string,
+	message?: string,
 ): void {
 	const key = `${operation}|${category}|${status ?? ""}`;
 	const now = Date.now();
 	const last = lastApiErrorAt.get(key);
 	if (last !== undefined && now - last < API_ERROR_DEDUPE_MS) return;
 	lastApiErrorAt.set(key, now);
-	void captureRendererEvent("ao.renderer.api_error", {
+	void captureRendererEvent("ao.requests.failed", {
 		operation,
 		error_category: category,
 		status,
+		error_code: code,
 	});
 	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
-		captureApiErrorToSentry(operation, category, status, code, requestId);
+		captureApiErrorToSentry(operation, category, status, code, requestId, message);
 	}
 }
 
+// Reads the daemon error envelope's `code` (via a clone so the caller still
+// gets an unconsumed body) and reports the failure unless it is expected.
+async function reportResponseError(operation: string, response: Response): Promise<void> {
+	let code: string | undefined;
+	let requestId: string | undefined;
+	let message: string | undefined;
+	try {
+		const body = (await response.clone().json()) as Partial<components["schemas"]["APIError"]>;
+		if (typeof body?.code === "string" && body.code !== "") code = body.code;
+		if (typeof body?.message === "string") message = body.message;
+		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+	} catch {
+		// Non-JSON or empty body: fall back to status-only classification.
+	}
+	if (!(code && EXPECTED_API_ERROR_CODES.has(code)) && !expectedProbeConflict(operation, response.status)) reportApiError(
+		operation,
+		response.status >= 500 ? "http_5xx" : "http_4xx",
+		response.status,
+		code,
+		requestId,
+		message,
+	);
+}
+
+// Agent prompts name the user's time zone. The daemon may run on a remote host
+// in another zone, so the app reports its own. Only writes carry it: spawns are
+// POSTs, and a custom header on GETs would add a CORS preflight per polled URL.
+export const CLIENT_TIME_ZONE_HEADER = "X-AO-Client-Time-Zone";
+let clientTimeZone: { value: string; at: number } | undefined;
+function currentTimeZone(): string {
+	const now = Date.now();
+	if (!clientTimeZone || now - clientTimeZone.at > 60_000) {
+		let value = "";
+		try { value = Intl.DateTimeFormat().resolvedOptions().timeZone ?? ""; } catch { /* unsupported */ }
+		clientTimeZone = { value, at: now };
+	}
+	return clientTimeZone.value;
+}
+export function tagClientTimeZone(input: Request): void {
+	if (input.method === "GET" || input.method === "HEAD" || input.method === "OPTIONS") return;
+	const zone = currentTimeZone();
+	if (!zone || input.headers.has(CLIENT_TIME_ZONE_HEADER)) return;
+	try { input.headers.set(CLIENT_TIME_ZONE_HEADER, zone); } catch { /* immutable headers: send without it */ }
+}
+
+// A fetch for clients that talk to a daemon directly (a connected remote host)
+// rather than through runtimeFetch's rebasing. Failures are reported the same
+// way the local client reports them; they used to be invisible.
+export async function reportingFetch(input: Request): Promise<Response> {
+	tagClientTimeZone(input);
+	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
+	let response: Response;
+	try {
+		response = await fetch(input);
+	} catch (error) {
+		markApiError(error);
+		if (!(error instanceof DOMException && error.name === "AbortError")) reportApiError(operation, "network_error");
+		throw error;
+	}
+	if (!response.ok) await reportResponseError(operation, response);
+	return response;
+}
+
 async function runtimeFetch(input: Request): Promise<Response> {
+	tagClientTimeZone(input);
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	const baseUrl = runtimeApiBaseUrl;
-	if (baseUrl === null) {
-		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
-		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
-			status: 503,
-			headers: { "Content-Type": "application/json" },
-		});
-	}
-
 	const send = async (): Promise<Response> => {
 		if (!baseUrl) {
 			return fetch(input);
@@ -339,43 +418,42 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		});
 	};
 
+	// Dev builds with Developer mode on can simulate a new machine for walking
+	// first-run onboarding (fresh-machine-sim). Ahead of the daemon check, so
+	// the browser preview, which has no daemon, is answered too. IS_DEV folds
+	// to false in production, which strips this.
+	if (IS_DEV && freshMachineSimActive()) {
+		const simulated = await simulateFreshMachine(input, send);
+		if (simulated) return simulated;
+	}
+
+	if (baseUrl === null) {
+		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
+		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
+			status: 503,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+
 	let response: Response;
 	try {
 		response = await send();
 	} catch (error) {
+		markApiError(error);
 		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
 		if (!(error instanceof DOMException && error.name === "AbortError")) {
 			reportApiError(operation, "network_error");
 		}
 		throw error;
 	}
-	if (!response.ok) {
-		// Best-effort read the daemon error envelope's `code` (via a clone so the
-		// caller still gets an unconsumed body) to drive classification.
-		let code: string | undefined;
-		let requestId: string | undefined;
-		try {
-			const body = (await response.clone().json()) as Partial<components["schemas"]["APIError"]>;
-			if (typeof body?.code === "string" && body.code !== "") code = body.code;
-			if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
-		} catch {
-			// Non-JSON or empty body: fall back to status-only classification.
-		}
-		if (!(code && EXPECTED_API_ERROR_CODES.has(code)) && !expectedProbeConflict(operation, response.status)) reportApiError(
-			operation,
-			response.status >= 500 ? "http_5xx" : "http_4xx",
-			response.status,
-			code,
-			requestId,
-		);
-	}
+	if (!response.ok) await reportResponseError(operation, response);
 	return response;
 }
 
-export const apiClient = createClient<paths>({
+export const apiClient = withApiErrorOwnership(createClient<paths>({
 	baseUrl: initialApiBaseUrl,
 	fetch: runtimeFetch,
-});
+}));
 
 // Build each request against the daemon's current address, so runtimeFetch
 // passes it straight to fetch. Rebasing a request built against the

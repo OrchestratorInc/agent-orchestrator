@@ -45,14 +45,17 @@ export type ActiveProxy = {
 	agentBrowserUrl: (sessionId: string) => Promise<string>;
 	/** Whether a URL is one of this host's agent-browser viewers (see agentBrowserUrl). */
 	isAgentBrowserUrl: (url: string) => boolean;
+	/** Whether a URL is one of this host's renders, as previewUrl maps them. */
+	isRenderUrl: (url: string) => boolean;
 	/** A preview's address for a browser outside AO; any other URL unchanged. */
 	externalUrl: (url: string) => string;
 	close: () => Promise<void>;
 };
 
 // "agent" is the host's agent browser (the Chromium the session's agent drives),
-// streamed through the daemon's agent-browser route.
-type PreviewTarget = { sessionId: string; kind: "static" | "app" | "artifact" | "agent"; entry: string };
+// streamed through the daemon's agent-browser route. "render" is an agent page
+// framed in the chat, served by the daemon's render route.
+type PreviewTarget = { sessionId: string; kind: "static" | "app" | "artifact" | "agent" | "render"; entry: string };
 
 // What both loopback servers hand the shared handler: HTTP/1.1 requests from
 // the plain server, and HTTP/1.1 or HTTP/2 ones from the TLS server.
@@ -66,7 +69,9 @@ type ProxyResponse = Writable & {
 
 // The HTTP/2 session could not carry this host's requests (no HTTP/2 on the
 // host or an intermediary, or the session failed); HTTP/1.1 takes over.
-class UpstreamHttp2Unavailable extends Error {}
+class UpstreamHttp2Unavailable extends Error {
+	readonly code: string = "UPSTREAM_HTTP2_UNAVAILABLE_ERROR";
+}
 
 // fetch found no host to ask who it is (no connection, or no answer in time),
 // which does not make it another host. Anything that did answer (a redirect, a
@@ -107,6 +112,10 @@ const UPSTREAM_SESSION_WINDOW = 32 << 20;
 // How long opening an upstream session may take (connect, TLS, the tunnel's
 // handshake, the identity probe), and how often a live session is pinged.
 const UPSTREAM_TIMING = { openMs: 5_000, pingMs: 10_000 };
+
+// A render id as the daemon makes them (renderTagID in conversation_render.go):
+// nothing percent-encoded reaches the host, where a proxy in front of it might decode it.
+const RENDER_ID = /^[A-Za-z0-9_-]{1,200}$/;
 
 function previewHostForSession(id: string, label = "ao-preview"): string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
@@ -206,6 +215,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	const server: Server = createServer();
 	const previewHosts = new Map<string, PreviewTarget>(); // by hostname: see previewPath
 	const artifactHosts = new Map<string, { host: string; sourceHref: string }>();
+	const renderHosts = new Map<string, string>();
 	const previewSessions = new Map<string, { host: string; sourceUrl: string; sourceHref: string; url: string }>();
 	const tunnels = new Set<() => void>();
 	// Allow slow uploads; SSE response timeouts are disabled on the upstream request below.
@@ -233,6 +243,10 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		const asset = target.kind === "static" ? previewAssetPath(target.entry, parsed.pathname) : parsed.pathname.replace(/^\/+/, "");
 		if (target.kind === "agent") {
 			return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/agent-browser/${asset}${parsed.search}`, kind: target.kind };
+		}
+		if (target.kind === "render") {
+			if (!RENDER_ID.test(asset) || asset === "check") return null;
+			return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/renders/${asset}${parsed.search}`, kind: target.kind };
 		}
 		if (target.kind === "artifact") {
 			const query = new URLSearchParams(parsed.search);
@@ -858,6 +872,19 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				if (previous) { previewHosts.delete(previous.host); previewSessions.delete(sessionId); }
 				return "";
 			}
+			// A render's API path: the chat frames it from an origin of its own,
+			// since the proxy URL's path carries the token the page could read.
+			const render = /^\/api\/v1\/sessions\/([^/?#]+)\/renders\/([^/?#]+)$/.exec(raw);
+			if (render) {
+				if (decodeURIComponent(render[1]!) !== sessionId || !RENDER_ID.test(render[2]!) || render[2] === "check") throw new Error("render does not belong to this session");
+				let host = renderHosts.get(sessionId);
+				if (!host) {
+					host = `ao-preview-${randomBytes(16).toString("hex")}.localhost`;
+					renderHosts.set(sessionId, host);
+					previewHosts.set(host, { sessionId, kind: "render", entry: "" });
+				}
+				return `http://${host}:${port}/${render[2]}`;
+			}
 			const parsed = new URL(/^(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(raw) ? `http://${raw}` : raw);
 			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported preview URL");
 			if (parsed.hostname === previewHostForSession(sessionId, "ao-preview-artifact")) {
@@ -932,6 +959,14 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			try {
 				const parsed = new URL(url);
 				return parsed.protocol === "https:" && parsed.port === String(securePort) && parsed.pathname === "/v/cdp" && previewHosts.get(parsed.hostname)?.kind === "agent";
+			} catch {
+				return false;
+			}
+		},
+		isRenderUrl: (url) => {
+			try {
+				const parsed = new URL(url);
+				return parsed.protocol === "http:" && parsed.port === String(port) && previewHosts.get(parsed.hostname)?.kind === "render";
 			} catch {
 				return false;
 			}

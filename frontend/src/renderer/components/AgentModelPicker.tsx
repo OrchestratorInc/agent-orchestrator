@@ -99,6 +99,7 @@ export function AgentModelPicker({
 
 	return (
 		<AgentModelCombobox
+			hostId={hostId}
 			key={hostId ? `${hostId}:${agentId}` : agentId}
 			aria-label={t("newTask.model")}
 			value={value}

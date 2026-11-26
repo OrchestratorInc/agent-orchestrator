@@ -95,11 +95,8 @@ func TestCodexUsageLimitResetWindows(t *testing.T) {
 			if tracker.turnID != "" || !tracker.resetAt.IsZero() {
 				t.Fatalf("completed turn retained quota metadata: %#v", tracker)
 			}
-			if tc.name == "primary saturated" {
-				want := "Usage limit exceeded; resets 2026-08-02T10:01:00Z\n\n" + codexQuotaCopy
-				if ev.Err.Error() != want {
-					t.Fatalf("durable copy = %q, want %q", ev.Err, want)
-				}
+			if ev.Err.Error() != codexQuotaCopy {
+				t.Fatalf("durable copy = %q, want %q", ev.Err, codexQuotaCopy)
 			}
 		})
 	}
@@ -162,6 +159,66 @@ func TestCodexUsageLimitNotificationOrdering(t *testing.T) {
 					}
 				case <-deadline:
 					t.Fatal("timed out awaiting quota sequence")
+				}
+			}
+		})
+	}
+}
+
+// Codex marks a thread systemError on every error until its next turn starts,
+// a usage-limit refusal included. The thread is fine and the refusal has its own
+// failure card, so AO must not report it as a broken thread, whichever of the
+// status and the error Codex sends first.
+func TestCodexUsageLimitDoesNotReportBrokenThread(t *testing.T) {
+	const start = `{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress"}}}`
+	const quota = `{"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":false,"error":{"message":"` + codexQuotaCopy + `","codexErrorInfo":"usageLimitExceeded"}}}`
+	const network = `{"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":false,"error":{"message":"Network failed."}}}`
+	const quotaCompleted = `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"` + codexQuotaCopy + `","codexErrorInfo":"usageLimitExceeded"}}}}`
+	const completed = `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed"}}}`
+	const systemError = `{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"systemError"}}}`
+	const idleStatus = `{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"idle"}}}`
+	const childSystemError = `{"method":"thread/status/changed","params":{"threadId":"child-thread","status":{"type":"systemError"}}}`
+	const idle = domain.ThreadStatusIdle
+	const broken = domain.ThreadStatusSystemError
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   []domain.ThreadStatus
+	}{
+		{"status after refusal", []string{start, quota, systemError, completed}, []domain.ThreadStatus{idle}},
+		{"status before refusal is corrected", []string{start, systemError, quota, completed}, []domain.ThreadStatus{broken, idle}},
+		{"refusal only on completion", []string{start, systemError, quotaCompleted}, []domain.ThreadStatus{broken, idle}},
+		{"status after completion", []string{start, quota, completed, systemError}, []domain.ThreadStatus{idle}},
+		{"other errors stay system errors", []string{start, network, systemError, completed}, []domain.ThreadStatus{broken}},
+		{"later error replaces the refusal", []string{start, quota, network, systemError}, []domain.ThreadStatus{broken}},
+		{"later error restores a hidden status", []string{start, quota, systemError, network}, []domain.ThreadStatus{idle, broken}},
+		{"later error restores a corrected status", []string{start, systemError, quota, network}, []domain.ThreadStatus{broken, idle, broken}},
+		{"native idle after the refusal stays idle", []string{start, quota, systemError, idleStatus, network}, []domain.ThreadStatus{idle, idle}},
+		{"next turn forgets the refusal", []string{start, quota, completed, start, systemError}, []domain.ThreadStatus{broken}},
+		{"child thread is not the root's refusal", []string{start, quota, childSystemError}, []domain.ThreadStatus{broken}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv, srv := openProviderFailureConversation(t)
+			for _, frame := range tc.frames {
+				srv.push(frame)
+			}
+			srv.push(`{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":"sentinel"}}`)
+			var got []domain.ThreadStatus
+			deadline := time.After(5 * time.Second)
+			for {
+				select {
+				case ev := <-conv.Events():
+					if ev.Kind == ports.ChatEventThreadState && ev.ThreadState != nil {
+						got = append(got, ev.ThreadState.Status)
+					}
+					if ev.Kind == ports.ChatEventThreadRenamed {
+						if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+							t.Fatalf("thread statuses = %v, want %v", got, tc.want)
+						}
+						return
+					}
+				case <-deadline:
+					t.Fatal("timed out awaiting thread statuses")
 				}
 			}
 		})
@@ -241,9 +298,10 @@ func assertCodexQuotaReset(t *testing.T, ev ports.ChatEvent, reset int64) {
 	if ev.Err == nil || !strings.Contains(ev.Err.Error(), codexQuotaCopy) {
 		t.Fatalf("quota failure lost provider explanation: %#v", ev)
 	}
-	limit := domain.ParseConversationUsageLimit(ev.Err.Error(), nil)
-	if limit == nil || (reset == 0 && limit.ResetsAt != nil) ||
-		(reset != 0 && (limit.ResetsAt == nil || limit.ResetsAt.Unix() != reset)) {
-		t.Fatalf("quota reset = %#v, want Unix %d; error = %v", limit, reset, ev.Err)
+	if limit := domain.ParseConversationUsageLimit(ev.Err.Error(), nil); limit == nil || limit.ResetsAt != nil {
+		t.Fatalf("quota failure = %#v; error = %v", limit, ev.Err)
+	}
+	if ev.UsageLimitResetsAt.IsZero() != (reset == 0) || (reset != 0 && ev.UsageLimitResetsAt.Unix() != reset) {
+		t.Fatalf("quota reset = %v, want Unix %d", ev.UsageLimitResetsAt, reset)
 	}
 }

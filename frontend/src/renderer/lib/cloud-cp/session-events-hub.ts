@@ -124,7 +124,12 @@ function connect(hub: Hub, from?: number): void {
 	hub.joined = [];
 	const live = wantsLive(hub);
 	const events = wantsEvents(hub);
-	if (!live && !events) return;
+	// Nobody left wants a stream, so none is open: a listener that only reads
+	// the state must not be told one still is.
+	if (!live && !events) {
+		publish(hub, CLOSED_CLOUD_SESSION_EVENTS);
+		return;
+	}
 	const resume = events ? resumePoint(hub, from) : { after: undefined };
 	if (resume === "wait") {
 		hub.timer = setTimeout(() => connect(hub), RESUME_WAIT_STEP_MS);

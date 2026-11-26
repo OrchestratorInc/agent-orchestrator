@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 var (
@@ -610,7 +611,7 @@ func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID,
 		}
 	}
 	if len(request.Env) == 0 {
-		request.Env = s.runtimeCredentialEnv(agentID)
+		request.Env = s.runtimeCredentialEnv(ctx, agentID)
 	}
 	return s.globalModelDiscoveryRequest(request)
 }
@@ -618,7 +619,7 @@ func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID,
 // runtimeCredentialEnv is the credential AO adds to agentID's local sessions
 // (a Claude setup token saved through AO's login menu), so the catalog lists
 // the models those sessions can run even with no native login on the computer.
-func (s *Service) runtimeCredentialEnv(agentID string) map[string]string {
+func (s *Service) runtimeCredentialEnv(ctx context.Context, agentID string) map[string]string {
 	if s.dataDir == "" {
 		return nil
 	}
@@ -630,7 +631,10 @@ func (s *Service) runtimeCredentialEnv(agentID string) map[string]string {
 	if !ok {
 		return nil
 	}
-	return source.RuntimeCredentialEnv(s.dataDir)
+	// Keys AO holds back from this harness's sessions stay out of the
+	// discovery its sessions' models come from, and the credential is chosen
+	// with them held back, as for a session.
+	return source.RuntimeCredentialEnv(s.dataDir, providerkeys.HoldBack(ctx, nil, s.dataDir, agentID))
 }
 
 func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryRequest) (ports.AgentModelDiscoveryRequest, error) {
@@ -884,6 +888,8 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	}
 	if discoverErr != nil {
 		warningCode := modelCatalogWarningCode(discoverErr)
+		// Discovery failures are not sent to Sentry: a missing, outdated or
+		// misconfigured agent CLI (exec_exit included) is user setup state.
 		// Provider model IDs are credential-scoped. Reuse a cached catalog only
 		// when it was produced from the same discovery inputs; otherwise a revoked
 		// key or provider switch could leave invalid IDs in the picker.
@@ -1025,7 +1031,7 @@ func applyCustomModelEntryPolicy(catalog, policy ports.AgentModelCatalog) ports.
 }
 
 func appendCacheWarning(current string) string {
-	const next = "Models loaded, but AO could not update the model cache."
+	const next = "Models loaded, but Orchestrator could not update the model cache."
 	if current == "" {
 		return next
 	}

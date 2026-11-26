@@ -8,11 +8,13 @@ package reaper
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -80,6 +82,22 @@ type Reaper struct {
 	// Reaper concurrently, so the per-run warning set needs synchronization.
 	missingHandleMu     sync.Mutex
 	warnedMissingHandle map[domain.SessionID]struct{}
+
+	// reviewers is bound after construction because the review engine is
+	// built after the lifecycle stack. reviewersBooted records whether the
+	// boot pass, which settles runs a previous daemon left, has been applied.
+	reviewersMu     sync.Mutex
+	reviewers       ports.ReviewerObserver
+	reviewersBooted bool
+}
+
+// BindReviewers makes every cycle also observe the reviewers that serve an
+// in-progress review run. It is called once during daemon wiring, before the
+// boot reconciliation pass.
+func (r *Reaper) BindReviewers(observer ports.ReviewerObserver) {
+	r.reviewersMu.Lock()
+	defer r.reviewersMu.Unlock()
+	r.reviewers = observer
 }
 
 // New constructs a Reaper. sink is the lifecycle fact destination; sessions
@@ -144,13 +162,20 @@ func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 		case <-t.C:
 			if err := r.Tick(ctx); err != nil {
 				r.logger.Error("reaper: tick failed", "err", err)
+				sentryobs.CaptureBackground(ctx, err, "reaper", "reaper_tick", nil)
 			}
 		}
 	}
 }
 
+// errMassDeath stands in for the tripped mass-death breaker, which has no
+// error of its own.
+var errMassDeath = errors.New("reaper: mass-death circuit breaker tripped")
+
 // Tick runs one observation cycle: it enumerates non-terminated sessions,
-// probes each one's runtime, and reports each result back as a fact.
+// probes each one's runtime, and reports each result back as a fact. It then
+// does the same for reviewers serving an in-progress review run, reported to
+// the bound reviewer observer instead of the LCM.
 //
 // Probing and reporting are two phases so the cycle can be arbitrated as a
 // whole: if the dead fraction of one pass trips the mass-death circuit
@@ -165,8 +190,16 @@ func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 // are logged but never propagated — one failed call must not bring down the loop.
 func (r *Reaper) Tick(ctx context.Context) error {
 	now := r.clock()
+	// Workers and reviewers are independent: a failed session listing must
+	// not stop reviewer observation, nor the other way round.
+	return errors.Join(r.observeSessions(ctx, now), r.observeReviewers(ctx, now))
+}
 
-	sessions, err := r.sessions.ListAllSessions(ctx)
+func (r *Reaper) observeSessions(ctx context.Context, now time.Time) error {
+	// Not cancellable: a cancellable context makes the SQLite driver and
+	// database/sql each start a watcher goroutine for every query, and this runs
+	// every tick. The loop still stops on ctx; one in-flight read simply finishes.
+	sessions, err := r.sessions.ListAllSessions(context.WithoutCancel(ctx))
 	if err != nil {
 		return err
 	}
@@ -197,6 +230,9 @@ func (r *Reaper) Tick(ctx context.Context) error {
 		// board untouched and let the next probe decide.
 		r.logger.Error("reaper: mass-death circuit breaker tripped, reporting the pass as inconclusive",
 			"dead", dead, "probed", len(observations))
+		// The outage signal: many agents "died" in one pass. The counts are
+		// logged locally; Sentry only needs to know the breaker tripped.
+		sentryobs.CaptureBackground(ctx, errMassDeath, "reaper", "reaper_breaker", map[string]string{"reason": "mass_death"})
 		for i := range observations {
 			if observations[i].facts.Runtime == ports.ProbeDead {
 				observations[i].facts.Runtime = ports.ProbeFailed
@@ -208,9 +244,81 @@ func (r *Reaper) Tick(ctx context.Context) error {
 		if err := r.sink.ApplyRuntimeObservation(ctx, obs.id, obs.facts); err != nil {
 			r.logger.Error("reaper: ApplyRuntimeObservation failed",
 				"session", obs.id, "err", err)
+			sentryobs.CaptureBackground(ctx, err, "reaper", "runtime_observation", nil)
 		}
 	}
 	return nil
+}
+
+// observeReviewers probes each reviewer serving an in-progress review run and
+// hands the pass to the review side, which reduces it into run transitions.
+// With no review in progress it does one listing and nothing else. Reviewers
+// get their own mass-death breaker, so a runtime outage cannot fail every
+// review at once, and workers and reviewers never skew each other's ratio.
+func (r *Reaper) observeReviewers(ctx context.Context, now time.Time) error {
+	r.reviewersMu.Lock()
+	observer := r.reviewers
+	boot := !r.reviewersBooted
+	r.reviewersBooted = true
+	r.reviewersMu.Unlock()
+	if observer == nil {
+		r.reviewersMu.Lock()
+		r.reviewersBooted = false
+		r.reviewersMu.Unlock()
+		return nil
+	}
+	pass, err := r.probeReviewers(ctx, observer, now, boot)
+	if err == nil && (boot || len(pass.Observations) > 0) {
+		err = observer.ApplyReviewerObservations(ctx, pass)
+	}
+	if err != nil && boot {
+		// Retry the boot settlement on the next cycle.
+		r.reviewersMu.Lock()
+		r.reviewersBooted = false
+		r.reviewersMu.Unlock()
+	}
+	return err
+}
+
+func (r *Reaper) probeReviewers(ctx context.Context, observer ports.ReviewerObserver, now time.Time, boot bool) (ports.ReviewerObservationPass, error) {
+	pass := ports.ReviewerObservationPass{ObservedAt: now, Boot: boot}
+	// Not cancellable, like the session listing above.
+	targets, err := observer.ListObservableReviewers(context.WithoutCancel(ctx))
+	if err != nil {
+		return pass, err
+	}
+	probed, dead := 0, 0
+	for _, target := range targets {
+		obs := ports.ReviewerObservation{Target: target, ObservedAt: now, Reviewer: ports.ProbeDead}
+		if target.HandleID != "" {
+			// A reviewer with no handle has nothing running to probe; it is
+			// reported dead without counting towards the breaker.
+			probed++
+			alive, probeErr := observer.ProbeReviewer(ctx, target)
+			switch {
+			case probeErr != nil:
+				obs.Reviewer = ports.ProbeFailed
+				r.logger.Debug("reaper: reviewer probe error reported as failed fact",
+					"review", target.ReviewID, "session", target.SessionID, "err", probeErr)
+			case alive:
+				obs.Reviewer = ports.ProbeAlive
+			default:
+				dead++
+			}
+		}
+		pass.Observations = append(pass.Observations, obs)
+	}
+	if dead >= massDeadMinSessions && float64(dead) > massDeadFraction*float64(probed) {
+		r.logger.Error("reaper: reviewer mass-death circuit breaker tripped, reporting the pass as inconclusive",
+			"dead", dead, "probed", probed)
+		sentryobs.CaptureBackground(ctx, errMassDeath, "reaper", "reaper_breaker", map[string]string{"reason": "reviewer_mass_death"})
+		for i := range pass.Observations {
+			if pass.Observations[i].Target.HandleID != "" && pass.Observations[i].Reviewer == ports.ProbeDead {
+				pass.Observations[i].Reviewer = ports.ProbeFailed
+			}
+		}
+	}
+	return pass, nil
 }
 
 // probeOne probes a single session and returns the resulting facts. Every

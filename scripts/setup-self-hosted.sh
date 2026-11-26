@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# Install AO's daemon resources from a desktop release or a locally built host bundle.
+# Install AO's daemon resources from a release (the desktop app, or the Linux
+# arm64 host package) or a locally built host bundle.
 set -euo pipefail
 
 usage() {
-	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only]'
-	printf '%s\n' 'Installs AO under ~/.ao/host, starts a user service, and links it to your AO account (or prints pairing details).'
+	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only | --upgrade]'
+	printf '%s\n' 'Installs Orchestrator under ~/.ao/host, starts a user service, and links it to your Orchestrator account (or prints pairing details).'
 	printf '%s\n' 'Downloads stable by default; --nightly downloads the newest published nightly.'
+	printf '%s\n' '--upgrade replaces the release of an installed systemd or launchd host and restarts it, keeping its service, access and pairing.'
 }
 
 bundle=""
 nightly=false
 tunnel=false
 install_only=false
+upgrade=false
 while (($#)); do
 	case "$1" in
 		--nightly) nightly=true; shift ;;
 		--bundle) bundle="${2:?--bundle needs a path}"; shift 2 ;;
 		--tunnel) tunnel=true; shift ;;
 		--install-only) install_only=true; shift ;;
+		--upgrade) upgrade=true; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage >&2; exit 2 ;;
 	esac
@@ -25,9 +29,12 @@ done
 if "$nightly" && [[ -n "$bundle" ]]; then
 	printf '%s\n' '--nightly cannot be combined with --bundle.' >&2; exit 2
 fi
+if "$upgrade" && { "$install_only" || "$tunnel"; }; then
+	printf '%s\n' '--upgrade cannot be combined with --install-only or --tunnel.' >&2; exit 2
+fi
 
 if [[ "$(id -u)" == 0 ]]; then
-	printf '%s\n' 'Run this as the user who will own AO sessions, not as root.' >&2
+	printf '%s\n' 'Run this as the user who will own Orchestrator sessions, not as root.' >&2
 	exit 1
 fi
 
@@ -79,17 +86,19 @@ case "$platform:$arch" in
 	Darwin:arm64) asset='agent-orchestrator-darwin-arm64.zip' ;;
 	Darwin:x86_64) asset='agent-orchestrator-darwin-x64.zip' ;;
 	Linux:x86_64) asset='agent-orchestrator-linux-x64.AppImage' ;;
-	Linux:aarch64|Linux:arm64) if [[ -z "$bundle" ]]; then
-		printf 'No published desktop artifact for %s/%s; pass --bundle from a native build.\n' "$platform" "$arch" >&2
-		exit 1
-	fi ;;
+	# No arm64 Linux desktop app: releases carry the headless host package instead.
+	Linux:aarch64|Linux:arm64) asset='ao-host-linux-arm64.tar.gz' ;;
 	*) printf 'Unsupported host platform: %s/%s\n' "$platform" "$arch" >&2; exit 1 ;;
 esac
-command -v git >/dev/null || { printf '%s\n' 'git is required for AO projects and worktrees.' >&2; exit 1; }
+command -v git >/dev/null || { printf '%s\n' 'git is required for Orchestrator projects and worktrees.' >&2; exit 1; }
+service_file="$HOME/.config/systemd/user/ao-self-hosted.service"
+[[ "$platform" == Darwin ]] && service_file="$HOME/Library/LaunchAgents/dev.aoagents.self-hosted.plist"
+if "$upgrade" && [[ ! -L "$host_root/current" || ! -x "$host_root/run-daemon.sh" || ! -f "$service_file" ]]; then
+	printf '%s\n' '--upgrade needs a host installed as a service by this script.' >&2; exit 1
+fi
 
-if [[ -n "$bundle" ]]; then
-	[[ -f "$bundle" ]] || { printf 'Bundle not found: %s\n' "$bundle" >&2; exit 1; }
-	python3 - "$bundle" <<'PY'
+extract_host_package() {
+	python3 - "$1" <<'PY'
 import posixpath, sys, tarfile
 with tarfile.open(sys.argv[1], 'r:gz') as archive:
     for entry in archive:
@@ -103,14 +112,19 @@ with tarfile.open(sys.argv[1], 'r:gz') as archive:
         elif not (entry.isfile() or entry.isdir()):
             raise SystemExit(f'Unsafe host bundle entry: {name}')
 PY
-	tar -xzf "$bundle" -C "$stage"
+	tar -xzf "$1" -C "$stage"
 	resources="$stage/resources"
+}
+
+if [[ -n "$bundle" ]]; then
+	[[ -f "$bundle" ]] || { printf 'Bundle not found: %s\n' "$bundle" >&2; exit 1; }
+	extract_host_package "$bundle"
 else
 	command -v curl >/dev/null || { printf '%s\n' 'curl is required.' >&2; exit 1; }
 	metadata="$stage/release.json"
 	release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases/latest'
 	"$nightly" && release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases?per_page=100'
-	curl -fsSL --retry 3 "$release_api" -o "$metadata"
+	curl -fsSL --retry 3 --connect-timeout 20 --speed-limit 1024 --speed-time 60 "$release_api" -o "$metadata"
 	asset_info="$(python3 - "$metadata" "$asset" "$nightly" <<'PY'
 import json, re, sys
 release = json.load(open(sys.argv[1]))
@@ -122,8 +136,10 @@ if sys.argv[3] == 'true':
     release = max(candidates, key=lambda r: r['published_at'])
 item = next((a for a in release.get('assets', []) if a['name'] == sys.argv[2]), None)
 if not item or not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest') or ''):
-    raise SystemExit(f'No verified release asset: {sys.argv[2]}')
-print(f"Downloading AO release: {release['tag_name']}", file=sys.stderr)
+    hint = ('; this release predates Linux arm64 support: build from source with'
+            ' bootstrap-self-hosted.sh --source-ref main, or pass --bundle') if sys.argv[2].startswith('ao-host-') else ''
+    raise SystemExit(f'No verified release asset: {sys.argv[2]}{hint}')
+print(f"Downloading Orchestrator release: {release['tag_name']}", file=sys.stderr)
 print(item['browser_download_url'])
 print(item['digest'][7:])
 PY
@@ -131,22 +147,26 @@ PY
 	url="${asset_info%%$'\n'*}"
 	digest="${asset_info#*$'\n'}"
 	archive="$stage/$asset"
-	curl -fL --retry 3 "$url" -o "$archive"
+	curl -fL --retry 3 --connect-timeout 20 --speed-limit 1024 --speed-time 60 "$url" -o "$archive"
 	if command -v shasum >/dev/null; then
 		actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
 	else
 		actual="$(sha256sum "$archive" | awk '{print $1}')"
 	fi
 	[[ "$actual" == "$digest" ]] || { printf '%s\n' 'Release SHA-256 mismatch.' >&2; exit 1; }
-	if [[ "$platform" == Darwin ]]; then
-		ditto -x -k "$archive" "$stage/extracted"
+	if [[ "$asset" == *.tar.gz ]]; then
+		extract_host_package "$archive"
 	else
-		mkdir "$stage/extracted"
-		(cd "$stage/extracted" && chmod +x "$archive" && "$archive" --appimage-extract >/dev/null)
+		if [[ "$platform" == Darwin ]]; then
+			ditto -x -k "$archive" "$stage/extracted"
+		else
+			mkdir "$stage/extracted"
+			(cd "$stage/extracted" && chmod +x "$archive" && "$archive" --appimage-extract >/dev/null)
+		fi
+		mapfile_path="$(find "$stage/extracted" \( -path '*/resources/daemon/ao' -o -path '*/Resources/daemon/ao' \) -type f -print -quit)"
+		[[ -n "$mapfile_path" ]] || { printf '%s\n' 'Orchestrator daemon missing from release artifact.' >&2; exit 1; }
+		resources="$(dirname "$(dirname "$mapfile_path")")"
 	fi
-	mapfile_path="$(find "$stage/extracted" \( -path '*/resources/daemon/ao' -o -path '*/Resources/daemon/ao' \) -type f -print -quit)"
-	[[ -n "$mapfile_path" ]] || { printf '%s\n' 'AO daemon missing from release artifact.' >&2; exit 1; }
-	resources="$(dirname "$(dirname "$mapfile_path")")"
 fi
 
 ao="$resources/daemon/ao"
@@ -154,17 +174,17 @@ node="$resources/acp-runtime/node/bin/node"
 adapter="$resources/acp-runtime/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
 tmux="$resources/tmux/bin/tmux"
 for required in "$ao" "$node" "$adapter"; do
-	[[ -f "$required" ]] || { printf 'Incomplete AO host package: %s\n' "$required" >&2; exit 1; }
+	[[ -f "$required" ]] || { printf 'Incomplete Orchestrator host package: %s\n' "$required" >&2; exit 1; }
 done
 [[ -f "$tmux" ]] || {
-	printf '%s\n' 'AO host package is missing its bundled tmux.' >&2; exit 1;
+	printf '%s\n' 'Orchestrator host package is missing its bundled tmux.' >&2; exit 1;
 }
 [[ -x "$tmux" ]] || {
-	printf '%s\n' 'AO host package bundled tmux is not executable.' >&2; exit 1;
+	printf '%s\n' 'Orchestrator host package bundled tmux is not executable.' >&2; exit 1;
 }
 "$ao" version >/dev/null
 "$ao" remote-host --help >/dev/null || {
-	printf '%s\n' 'This AO build predates self-hosted remote support; use --bundle from this PR.' >&2
+	printf '%s\n' 'This Orchestrator build predates self-hosted remote support; use --bundle from this PR.' >&2
 	exit 1
 }
 "$node" --version >/dev/null
@@ -174,12 +194,14 @@ status="$("$ao" status --json)"
 state="$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))')"
 if [[ "$state" == ready ]]; then
 	current_exe="$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("executablePath", ""))')"
+	real_root="$(cd "$host_root" 2>/dev/null && pwd -P || printf '%s' "$host_root")"
+	[[ "$current_exe" == "$real_root"/* ]] && current_exe="$host_root/${current_exe#"$real_root"/}"
 	case "$current_exe" in
 		"$host_root"/releases/*/resources/daemon/ao|"$host_root"/current/resources/daemon/ao) ;;
-		*) printf 'Another AO daemon is already running: %s. Stop it before setting up this host.\n' "$current_exe" >&2; exit 1 ;;
+		*) printf 'Another Orchestrator daemon is already running: %s. Stop it before setting up this host.\n' "$current_exe" >&2; exit 1 ;;
 	esac
 elif [[ "$state" != stopped && "$state" != stale ]]; then
-	printf 'An AO daemon is already present but not ready (%s); resolve it before host setup.\n' "$state" >&2
+	printf 'An Orchestrator daemon is already present but not ready (%s); resolve it before host setup.\n' "$state" >&2
 	exit 1
 fi
 
@@ -219,7 +241,7 @@ prune_old_releases() {
 		rm -rf -- "$old"
 	done
 }
-printf 'Installed AO host at %s\n' "$release"
+printf 'Installed Orchestrator host at %s\n' "$release"
 
 install_cli_link() {
 	[[ -z "${AO_HOST_INSTALL_DIR:-}" ]] || return 0
@@ -240,8 +262,9 @@ if "$install_only"; then
 	exit 0
 fi
 
-# A daemon launched by a service must see the same harness tools as this shell.
 runner="$host_root/run-daemon.sh"
+if ! "$upgrade"; then
+# A daemon launched by a service must see the same harness tools as this shell.
 service_path="$HOME/.local/bin:$HOME/.ao/bin:$host_root/current/resources/acp-runtime/node/bin:$PATH"
 printf '#!/usr/bin/env bash\nexport PATH=%q\n' "$service_path" > "$runner"
 for name in AO_DATA_DIR AO_RUN_FILE AO_PORT; do
@@ -251,43 +274,47 @@ for name in AO_DATA_DIR AO_RUN_FILE AO_PORT; do
 done
 printf 'exec %q daemon\n' "$host_root/current/resources/daemon/ao" >> "$runner"
 chmod 700 "$runner"
+fi
 
 if [[ "$platform" == Linux ]]; then
+	if ! "$upgrade"; then
 	unit_dir="$HOME/.config/systemd/user"
 	mkdir -p "$unit_dir"
 	escaped_runner="${runner//%/%%}"
 	escaped_runner="${escaped_runner//\\/\\\\}"
 	escaped_runner="${escaped_runner//\"/\\\"}"
 	# Intentional KillMode=process: a cgroup kill would stop sessions the next daemon must adopt.
-	printf '[Unit]\nDescription=AO self-hosted daemon\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart="%s"\nKillMode=process\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n' \
+	printf '[Unit]\nDescription=Orchestrator self-hosted daemon\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart="%s"\nKillMode=process\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n' \
 		"$escaped_runner" > "$unit_dir/ao-self-hosted.service"
 	systemctl --user daemon-reload
 	systemctl --user enable ao-self-hosted.service
+	fi
 	restore_previous_service() {
 		if [[ -z "$previous_target" ]]; then
 			if ! systemctl --user disable --now ao-self-hosted.service; then
-				printf '%s\n' 'Could not stop and disable the failed AO service.' >&2
+				printf '%s\n' 'Could not stop and disable the failed Orchestrator service.' >&2
 			fi
 			rm -- "$host_root/current"
 			return
 		fi
 		ln -sfn "$previous_target" "$host_root/current"
 		if ! systemctl --user restart ao-self-hosted.service; then
-			printf 'Previous AO release restored at %s/current, but its service did not restart.\n' "$host_root" >&2
+			printf 'Previous Orchestrator release restored at %s/current, but its service did not restart.\n' "$host_root" >&2
 		fi
 	}
 	ln -sfn "$release" "$host_root/current"
 	if ! systemctl --user restart ao-self-hosted.service; then
 		restore_previous_service
-		printf '%s\n' 'AO service restart failed; inspect the service logs.' >&2
+		printf '%s\n' 'Orchestrator service restart failed; inspect the service logs.' >&2
 		exit 1
 	fi
 	if command -v loginctl >/dev/null && [[ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" != yes ]]; then
-		printf 'To keep AO running after logout: sudo loginctl enable-linger %s\n' "$(id -un)" >&2
+		printf 'To keep Orchestrator running after logout: sudo loginctl enable-linger %s\n' "$(id -un)" >&2
 	fi
 else
 	plist="$HOME/Library/LaunchAgents/dev.aoagents.self-hosted.plist"
 	mkdir -p "$(dirname "$plist")" "$host_root/logs"
+	if ! "$upgrade"; then
 	AO_HOST_PLIST="$plist" AO_HOST_RUNNER="$runner" AO_HOST_LOG_DIR="$host_root/logs" python3 - <<'PY'
 import os, plistlib
 data = {
@@ -301,6 +328,7 @@ data = {
 with open(os.environ['AO_HOST_PLIST'], 'wb') as f:
     plistlib.dump(data, f)
 PY
+	fi
 	restore_previous_launch_agent() {
 		launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
 		if [[ -z "$previous_target" ]]; then
@@ -309,19 +337,21 @@ PY
 		fi
 		ln -sfn "$previous_target" "$host_root/current"
 		if ! launchctl bootstrap "gui/$(id -u)" "$plist"; then
-			printf 'Previous AO release restored at %s/current, but its LaunchAgent did not start.\n' "$host_root" >&2
+			printf 'Previous Orchestrator release restored at %s/current, but its LaunchAgent did not start.\n' "$host_root" >&2
 		fi
 	}
 	ln -sfn "$release" "$host_root/current"
 	launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
 	if ! launchctl bootstrap "gui/$(id -u)" "$plist"; then
 		restore_previous_launch_agent
-		printf '%s\n' 'AO LaunchAgent start failed; inspect its logs.' >&2
+		printf '%s\n' 'Orchestrator LaunchAgent start failed; inspect its logs.' >&2
 		exit 1
 	fi
 fi
 
-for attempt in {1..20}; do
+ready_attempts=20
+"$upgrade" && ready_attempts=180
+for ((attempt = 1; attempt <= ready_attempts; attempt++)); do
 	status="$("$host_root/current/resources/daemon/ao" status --json)"
 	state="$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))')"
 	[[ "$state" == ready ]] && break
@@ -333,9 +363,15 @@ done
 	else
 		restore_previous_launch_agent
 	fi
-	printf '%s\n' 'AO service did not become ready; inspect the service logs.' >&2
+	printf '%s\n' 'Orchestrator service did not become ready; inspect the service logs.' >&2
 	exit 1
 }
+if "$upgrade"; then
+	install_cli_link
+	prune_old_releases
+	printf 'Updated Orchestrator host to %s\n' "$("$host_root/current/resources/daemon/ao" version)"
+	exit 0
+fi
 
 args=(remote-host enable)
 "$tunnel" && args+=(--tunnel-only)
@@ -346,6 +382,8 @@ while IFS= read -r line; do
 	case "$line" in
 		"Address: "*) addresses+=("$line") ;;
 		"Password: "*) password="${line#Password: }" ;;
+		# A fresh code is printed with the pairing details at the end.
+		"Pairing code: "* | "One device can use it"*) ;;
 		*) printf '%s\n' "$line" ;;
 	esac
 done <<< "$enable_output"
@@ -384,7 +422,7 @@ fi
 # look for a flag only `link` has.
 link_help="$("$host_root/current/resources/daemon/ao" remote-host link --help 2>/dev/null || true)"
 # An upgrade of a linked host keeps its account; its devices already list it.
-if "$tunnel" && [[ "$enable_output" == *"Linked to an AO account"* ]]; then
+if "$tunnel" && [[ "$enable_output" == *"Linked to an Orchestrator account"* || "$enable_output" == *"Linked to an AO account"* ]]; then
 	printf '\n%s\n' "${addresses[@]}"
 	exit 0
 fi
@@ -398,10 +436,23 @@ if "$tunnel" && [[ "$link_help" == *--no-qr* ]]; then
 		trap - INT
 		"$linked" && exit 0
 	fi
-	printf '\nThe host is not linked to an AO account. To link it, run: %s remote-host link\n' "$host_root/current/resources/daemon/ao"
+	printf '\nThe host is not linked to an Orchestrator account. To link it, run: %s remote-host link\n' "$host_root/current/resources/daemon/ao"
 	printf '%s\n' 'Or pair it by hand with these details.'
+fi
+# A one-time pairing code, made now so its 10 minutes start here. A release
+# without `pair` prints its parent's help, and the password is shown instead.
+code=""
+if pair_output="$("$host_root/current/resources/daemon/ao" remote-host pair 2>/dev/null)"; then
+	while IFS= read -r line; do
+		[[ "$line" == "Pairing code: "* ]] && code="${line#Pairing code: }"
+	done <<< "$pair_output"
 fi
 printf '\nPair this host\n\n'
 printf '%s\n' "${addresses[@]}"
-printf '\nPassword: %s\n\n' "$password"
+if [[ -n "$code" ]]; then
+	printf '\nPairing code: %s\n' "$code"
+	printf 'One device can use it, within 10 minutes. For another, run: %s remote-host pair\n\n' "$host_root/current/resources/daemon/ao"
+else
+	printf '\nPassword: %s\n\n' "$password"
+fi
 printf 'On your laptop: Settings → Remote hosts → Add host.\n'

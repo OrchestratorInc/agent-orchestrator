@@ -9,6 +9,8 @@
 
 // Type-only, so erased at runtime: this module stays free of native imports.
 import type { Endpoint } from "./endpoints";
+// Plain classes and copy, with no imports of their own.
+import { CloudError, cloudErrorMessage } from "./cloud/errors";
 import type { FeatherIconName } from "./icons";
 
 export type ConnectionFailure =
@@ -69,6 +71,22 @@ export function isDesktopUnreachable(poll: {
 	errorStatus: number | null;
 }): boolean {
 	return poll.connection === "closed" && poll.error !== null && classifyConnectionFailure(poll.errorStatus ?? undefined) === "unreachable";
+}
+
+/**
+ * Whether the board's last poll was answered with a refusal that stopped it
+ * (see shouldKeepPolling): a rejected pairing (401/403, after a password
+ * change or a removed device), the failed-attempt lockout (429), or a version
+ * the phone cannot use (426). The opposite of isDesktopUnreachable: the
+ * machine answered, so no reconnect clears it, and nothing asks it again
+ * until the phone is paired afresh or the app comes back to the foreground.
+ */
+export function isPollRejected(poll: {
+	connection: string;
+	error: string | null;
+	errorStatus: number | null;
+}): boolean {
+	return poll.connection === "closed" && poll.error !== null && poll.errorStatus !== null && !shouldKeepPolling(poll.errorStatus);
 }
 
 /**
@@ -141,7 +159,8 @@ export type ConnectionErrorCopy = {
  */
 export function describeConnectionFailure(
 	reason: ConnectionFailure,
-	target: { host: string; port: string; platform: "ios" | "android" | string },
+	/** `secure` says the attempt was HTTPS, when the caller knows it. */
+	target: { host: string; port: string; platform: "ios" | "android" | string; secure?: boolean },
 ): ConnectionErrorCopy {
 	// Only surfaced when the phone never reached the host at all, and only on
 	// iOS, where a denied Local Network prompt produces exactly this symptom.
@@ -182,6 +201,24 @@ export function describeConnectionFailure(
 		case "unreachable": {
 			// Build the address string only when we have both host and port
 			const address = target.host && target.port ? `${target.host}:${target.port}` : target.host || "";
+			// A Tailscale name on the Connect Mobile port is plain HTTP, which the
+			// phone does not assume for a qualified name. Android can be told to
+			// type http://; iOS refuses plain HTTP to that name, so it is pointed at
+			// Tailscale's HTTPS address on 443 instead, spelled with https:// and no
+			// port: clearing Port alone keeps a port written into Host, and an
+			// editor would fall back to the saved port.
+			if (target.secure === true && target.port && target.port !== "443" && target.host.trim().toLowerCase().endsWith(".ts.net")) {
+				const name = target.host.trim();
+				return {
+					title: "Your machine is offline",
+					icon: "unplug",
+					hint: target.platform === "ios" ? "Enter https:// and the Tailscale name, with Port empty." : "Type http:// before a Tailscale name.",
+					message: `Nothing answered over HTTPS at ${address}. ` + (target.platform === "ios"
+						? `To use the machine's Tailscale HTTPS address, enter https://${name} in Host and leave Port empty.`
+						: `A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://${name}:${target.port}.`),
+					showLocalNetworkHint: false,
+				};
+			}
 			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Couldn't reach your machine. ";
 			return {
 				title: "Your machine is offline",
@@ -201,21 +238,27 @@ export function describeConnectionFailure(
 			// The connection itself worked, so "disconnected" would be wrong here —
 			// and re-scanning is the actual fix, not retrying the same password.
 			return {
-				title: "Your machine rejected the password",
+				title: "Your machine rejected this phone",
 				icon: "monitor-off",
-				message: "That password was rotated. Re-scan the code on that machine.",
+				message: "It was removed from that machine, or the password changed. Scan a new code there.",
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":
-			// The daemon locks a device out for one minute after 5 failed auths, and
-			// clears it automatically. Saying so stops people from power-cycling
-			// things that were never the problem.
+			// The daemon blocks a source for one minute after 5 wrong passwords from
+			// it, and clears it automatically. Saying so stops people from
+			// power-cycling things that were never the problem. On the LAN and over
+			// Tailscale the source is this phone's own address, so the password it
+			// sent is the cause. Through a tunnel it is the visitor's public IP, which
+			// other devices on the same network share, so this password may be right.
 			return {
 				title: "Too many attempts",
 				icon: "timer",
 				message:
-					"Your machine locked this device out after too many failed attempts. " +
-					"It clears on its own in about a minute — check the password, then try again.",
+					isLocalNetworkHost(target.host) || isTailscaleHost(target.host)
+						? "Your machine paused this phone after too many wrong passwords. " +
+							"Check the password, then try again. It clears on its own in about a minute."
+						: "Your machine is pausing connections from this network after too many wrong passwords, " +
+							"possibly from another device on the same network. It clears on its own in about a minute.",
 				showLocalNetworkHint: false,
 			};
 		case "server-error":
@@ -293,6 +336,7 @@ export const LOCAL_NETWORK_HINT = "If Local Network access is off, turn it on in
  * fetch's platform-specific wording ("Network request failed").
  */
 export class UnreachableError extends Error {
+	readonly code: string = "UNREACHABLE_ERROR";
 	constructor(
 		readonly reason: "timeout" | "offline",
 		options?: { cause?: unknown },
@@ -305,6 +349,13 @@ export class UnreachableError extends Error {
 /** Shown when a request never reached the desktop. */
 export const UNREACHABLE_ACTION_COPY =
 	"Couldn't reach your machine. Make sure Orchestrator is running there, then try again.";
+
+/**
+ * Shown for an action taken while a paired machine's connection is being
+ * re-established: after an app switch, or while its endpoints are raced.
+ */
+export const RECONNECTING_ACTION_COPY =
+	"Still reconnecting to your machine. Try again in a moment.";
 
 /** Shown in place of a missing server config ("No AO server configured"). */
 export const NOT_PAIRED_ACTION_COPY =
@@ -365,14 +416,19 @@ export function daemonDetail(error: unknown): string | undefined {
  *   request ID is kept, for matching against the desktop's logs
  * - an error the app threw itself → its message, which is already user copy
  * - a JS engine error (a code defect) → the fallback, never its text
+ *
+ * Orchestrator Cloud is not a paired machine, so its refusals get Cloud's own
+ * copy (`cloudErrorMessage`): its 429 is a plan's usage limit, not a password
+ * lockout, and its 401 an expired sign-in.
  */
 export function userFacingError(error: unknown, fallback = "Something went wrong. Try again."): string {
+	if (error instanceof CloudError) return cloudErrorMessage(error);
 	if (isUnreachableError(error)) return UNREACHABLE_ACTION_COPY;
 	const failure = answeredFailure(error);
 	if (failure) {
 		const { status } = failure;
 		if (status === 401 || status === 403) return "Your machine rejected this phone's password. Re-scan the pairing code on that machine.";
-		if (status === 429) return "Your machine locked this device out after too many failed attempts. It clears on its own in about a minute.";
+		if (status === 429) return "Your machine is pausing connections from this network after too many wrong passwords. It clears on its own in about a minute.";
 		if (status >= 500) {
 			if (status === 503) return "Your machine is busy or still starting up. Try again in a moment.";
 			const ref = typeof failure.requestId === "string" && failure.requestId ? ` (Reference: ${failure.requestId})` : "";

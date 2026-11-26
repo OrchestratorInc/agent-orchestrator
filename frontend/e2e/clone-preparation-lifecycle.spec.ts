@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { AoBridge } from "../src/preload";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
+import { cloneStream } from "./support/clone-stream";
 import { installFakeAgent } from "./support/fake-bridge";
 
 for (const destinationMode of ["picker", "typed"] as const) {
@@ -16,6 +17,12 @@ for (const destinationMode of ["picker", "typed"] as const) {
 				await route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 				return;
 			}
+			// With tracker intake on, the setup sheet opens after a clone, so there
+			// is a step to back out of. Without it the project is created right away.
+			if (pathname === "/api/v1/settings") {
+				await route.fulfill({ json: { trackerIntakeEnabled: true } });
+				return;
+			}
 			if (pathname === "/api/v1/projects/clone/check") {
 				await route.fulfill({ json: {
 					remoteUrl: "https://example.com/example.git", path: "/repos/example",
@@ -23,15 +30,15 @@ for (const destinationMode of ["picker", "typed"] as const) {
 				} });
 				return;
 			}
-			if (pathname === "/api/v1/projects/clone/prepare") {
+			if (pathname === "/api/v1/projects/clone/prepare/stream") {
 				expect(route.request().postDataJSON()).toEqual({
 					remoteUrl: "https://example.com/example.git", destinationParent: "/repos",
 				});
 				preparation += 1;
-				await route.fulfill({ json: {
+				await route.fulfill(cloneStream({ result: {
 					path: "/repos/example", remoteUrl: "https://example.com/example.git",
 					preparationId: `prep-${preparation}`,
-				} });
+				} }));
 				return;
 			}
 			if (pathname === "/api/v1/projects/clone/cleanup") {

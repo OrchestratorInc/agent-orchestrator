@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { coerceKeybindingOverrides } from "./keybinding-settings";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { coerceKeybindingOverrides, readKeybindingOverrides, writeKeybindingOverrides } from "./keybinding-settings";
 
 describe("coerceKeybindingOverrides", () => {
+	it("loads saved selection bindings, unassignment and reset after restarting", async () => {
+		const parent = path.join(os.homedir(), ".ao", "dev");
+		await mkdir(parent, { recursive: true });
+		const stateDir = await mkdtemp(path.join(parent, "keybinding-settings-"));
+		try {
+			for (const overrides of [{ "add-selection-to-chat": [{ key: "j", ctrl: true, meta: false, shift: true, alt: true }] }, { "add-selection-to-chat": [] }, {}]) {
+				await writeKeybindingOverrides(stateDir, overrides);
+				expect(await readKeybindingOverrides(stateDir)).toEqual(overrides);
+			}
+		} finally {
+			if (path.dirname(stateDir) === parent) await rm(stateDir, { recursive: true, force: true });
+		}
+	});
 	it("keeps valid application bindings and ignores unknown commands", () => {
 		expect(
 			coerceKeybindingOverrides({

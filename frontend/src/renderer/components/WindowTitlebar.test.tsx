@@ -154,12 +154,12 @@ describe("WindowTitlebar", () => {
       name: "Maximize / Restore",
     });
     await waitFor(() =>
-      expect(maximizeButton.querySelector(".lucide-square")).not.toBeNull(),
+      expect(maximizeButton.querySelector(".icon-square")).not.toBeNull(),
     );
 
     reportMaximized?.(true);
     await waitFor(() =>
-      expect(maximizeButton.querySelector(".lucide-copy")).not.toBeNull(),
+      expect(maximizeButton.querySelector(".icon-copy")).not.toBeNull(),
     );
   });
 

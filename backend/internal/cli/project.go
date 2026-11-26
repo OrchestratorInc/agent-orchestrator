@@ -21,6 +21,7 @@ type projectAddOptions struct {
 	name              string
 	workerAgent       string
 	orchestratorAgent string
+	defaultBranch     string
 	asWorkspace       bool
 }
 
@@ -76,10 +77,11 @@ type workspaceRepoDetails struct {
 
 // agentConfig mirrors the daemon's typed domain.AgentConfig for the CLI client.
 type agentConfig struct {
-	Model       string `json:"model,omitempty"`
-	Effort      string `json:"effort,omitempty"`
-	Mode        string `json:"mode,omitempty"`
-	Permissions string `json:"permissions,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	Mode               string `json:"mode,omitempty"`
+	Permissions        string `json:"permissions,omitempty"`
+	TerminateOnPRMerge *bool  `json:"terminateOnPrMerge,omitempty"`
 }
 
 // roleOverride mirrors domain.RoleOverride.
@@ -106,6 +108,11 @@ type containerReapConfig struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
+type attributionConfig struct {
+	DisableCommitTrailer bool `json:"disableCommitTrailer,omitempty"`
+	DisablePRFooter      bool `json:"disablePRFooter,omitempty"`
+}
+
 // projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json. Every domain key must be modeled here, or set-config drops it
@@ -128,10 +135,13 @@ type projectConfig struct {
 	Orchestrator          roleOverride         `json:"orchestrator,omitempty"`
 	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
 	AutoReview            bool                 `json:"autoReview,omitempty"`
+	TerminateOnPRMerge    *bool                `json:"terminateOnPrMerge,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
 	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
+	// Attribution must round-trip too, so a CLI edit keeps a project's opt-out.
+	Attribution *attributionConfig `json:"attribution,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for
@@ -261,7 +271,9 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 		Long: "Register a local git repo as a project so sessions can be spawned in it.\n\n" +
 			"The path must be an existing git repository on disk. With --as-workspace, " +
 			"the path may be a parent folder containing direct child git repositories; " +
-			"AO initializes/adopts the parent as the root repo and gitignores children.",
+			"Orchestrator initializes/adopts the parent as the root repo and gitignores children.\n\n" +
+			"A repository with no remote needs --default-branch: Orchestrator does not " +
+			"take a default from the checked-out branch.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.path == "" {
@@ -274,26 +286,37 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 			if opts.name != "" {
 				req.Name = &opts.name
 			}
-			if opts.workerAgent != "" || opts.orchestratorAgent != "" {
+			if opts.workerAgent != "" || opts.orchestratorAgent != "" || opts.defaultBranch != "" {
 				req.Config = &projectConfig{
-					Worker:       roleOverride{Agent: opts.workerAgent},
-					Orchestrator: roleOverride{Agent: opts.orchestratorAgent},
+					DefaultBranch: opts.defaultBranch,
+					Worker:        roleOverride{Agent: opts.workerAgent},
+					Orchestrator:  roleOverride{Agent: opts.orchestratorAgent},
 				}
 			}
 			var res projectResult
 			if err := ctx.postJSON(cmd.Context(), "projects", req, &res); err != nil {
 				return err
 			}
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "registered project %s at %s\n", res.Project.ID, res.Project.Path)
-			return err
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "registered project %s at %s\n", res.Project.ID, res.Project.Path); err != nil {
+				return err
+			}
+			// "auto" in the reply means local Git metadata names no default
+			// branch. With an origin remote the daemon still resolves one from
+			// the live remote at spawn; without one, nothing can.
+			if res.Project.DefaultBranch == "auto" && res.Project.Repo == "" {
+				_, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: this repository has no origin remote and no default branch could be resolved, so sessions may fail to start; set one with `ao project set-config %s --default-branch <branch>`\n", res.Project.ID)
+				return err
+			}
+			return nil
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&opts.path, "path", "", "Absolute path to the local git repo (required)")
 	f.StringVar(&opts.id, "id", "", "Project id (default: derived by the daemon from the path)")
 	f.StringVar(&opts.name, "name", "", "Display name")
-	f.StringVar(&opts.workerAgent, "worker-agent", "", "Default worker session agent")
-	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Default orchestrator session agent")
+	f.StringVar(&opts.workerAgent, "worker-agent", "", "Default worker session agent (default: the most preferred installed agent)")
+	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Default orchestrator session agent (default: the most preferred installed agent)")
+	f.StringVar(&opts.defaultBranch, "default-branch", "", "Base branch for new worktrees; needed when the repository has no remote")
 	f.BoolVar(&opts.asWorkspace, "as-workspace", false, "Register a parent folder as a workspace project (root-as-repo plus direct child repos)")
 	return cmd
 }

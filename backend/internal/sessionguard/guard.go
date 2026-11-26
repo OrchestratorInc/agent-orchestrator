@@ -11,6 +11,7 @@ package sessionguard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -32,6 +33,11 @@ type SessionReader interface {
 // check-then-write race that a boolean "input allowed" query cannot avoid.
 type InputLease interface {
 	AcquireSessionInput(id domain.SessionID) (release func(), ok bool)
+}
+
+// MessageInputChecker runs under the input lease at the actual paste boundary.
+type MessageInputChecker interface {
+	ValidateSessionMessageInput(context.Context, domain.SessionRecord, string) error
 }
 
 // Outcome reports what a guarded write did. Anything other than Sent means the
@@ -444,6 +450,17 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 			return SuppressedUnknown, fmt.Errorf("guard %s: pre-write check: %w", id, err)
 		}
 	}
+	g.leaseMu.RLock()
+	checker, guarded := g.lease.(MessageInputChecker)
+	g.leaseMu.RUnlock()
+	if guarded {
+		if err := checker.ValidateSessionMessageInput(ctx, rec, msg); err != nil {
+			if errors.Is(err, ports.ErrTerminalMessageNotReady) {
+				return SuppressedAwaitingUser, nil
+			}
+			return SuppressedUnknown, fmt.Errorf("guard %s: terminal input: %w", id, err)
+		}
+	}
 	// Composer-occupancy check runs last, under the held input lease and on the
 	// just-read record: an unsent human draft here must not be concatenated with
 	// the delivered message (#5711). It refuses only on a positively proven draft.
@@ -463,6 +480,12 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	// gone: never let that turn into a write.
 	if err := ctx.Err(); err != nil {
 		return SuppressedUnknown, fmt.Errorf("guard %s: %w", id, err)
+	}
+	// Tau's Textual composer needs a complete paste event: raw chunked
+	// multiline text can submit mid-message and leave a remainder draft.
+	// Frame only admitted nonempty messages; Enter nudges stay unchanged.
+	if rec.Harness == domain.HarnessTau && msg != "" {
+		msg = "\x1b[200~" + msg + "\x1b[201~"
 	}
 	if err := g.messenger.Send(ctx, id, msg); err != nil {
 		return Sent, fmt.Errorf("guard %s: send: %w", id, err)

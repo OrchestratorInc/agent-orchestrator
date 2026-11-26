@@ -1,10 +1,11 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWorkspaceScope } from "../hooks/useWorkspaceQuery";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
+import { apiErrorCode } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import { hasConfiguredOrchestratorAgent, isOrchestratorSession } from "../types/workspace";
 import type { WorkspaceSession } from "../types/workspace";
@@ -37,23 +38,31 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 
 	const recreate = async () => {
 		if (checkingProject) return;
-		if (!hasOrchestratorAgent) {
+		// Cloud sessions keep their agents in Cloud project settings.
+		if (!hasOrchestratorAgent && session.cloud?.orgId) {
 			onOpenChange(false);
-			useUiStore.getState().openProjectSettings(
-				session.workspaceId,
-				session.cloud?.orgId ? { cloudOrgId: session.cloud.orgId } : hostId,
-			);
+			useUiStore.getState().openProjectSettings(session.workspaceId, { cloudOrgId: session.cloud.orgId });
 			return;
 		}
 		setBusy(true);
 		setError(undefined);
 		try {
+			// Deliberately keep clean=false when no orchestrator agent is configured:
+			// clean=true retires any live orchestrator before spawn(), which would
+			// leave the project with none if the daemon rejects with AGENT_REQUIRED
+			// (an older host or a machine with no launchable agent installed). When
+			// no live orchestrator exists, clean=false still starts a new one.
 			const id = hostId
-				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true, "restore_dialog")
-				: await spawnOrchestrator(session.workspaceId, "restore_dialog", true);
+				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, hasOrchestratorAgent, "restore_dialog")
+				: await spawnOrchestrator(session.workspaceId, "restore_dialog", hasOrchestratorAgent);
 			onOpenChange(false);
 			onRecreated(id);
 		} catch (err) {
+			if (apiErrorCode(err) === "AGENT_REQUIRED") {
+				onOpenChange(false);
+				useUiStore.getState().openProjectSettings(session.workspaceId, { hostId, section: "agents" });
+				return;
+			}
 			setError(err instanceof Error ? err.message : t("restoreUnavailable.createFailed"));
 		} finally {
 			setBusy(false);
@@ -80,20 +89,20 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 						</div>
 					) : null}
 					<div className={settingsDialogFooterClass}>
-						<Button type="button" variant="footer" onClick={() => onOpenChange(false)} disabled={busy}>
+						<Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
 							{orchestrator ? t("confirm.cancel") : t("restoreUnavailable.close")}
 						</Button>
 						{orchestrator ? (
 							<Button
 								type="button"
-								variant="footer-primary"
+								variant="primary"
 								onClick={recreate}
 								disabled={busy || checkingProject}
 							>
 								{busy ? <Loader2 className="size-icon-base animate-spin" aria-hidden="true" /> : null}
 								{checkingProject
 									? t("restoreUnavailable.checkingProject")
-									: hasOrchestratorAgent
+									: hasOrchestratorAgent || !session.cloud?.orgId
 										? t("restoreUnavailable.createOrchestrator")
 										: t("restoreUnavailable.configureOrchestrator")}
 							</Button>

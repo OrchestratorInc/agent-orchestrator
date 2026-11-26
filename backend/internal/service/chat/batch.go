@@ -104,7 +104,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 	if err != nil {
 		return ports.ChatUserMessage{}, fmt.Errorf("encode pending messages: %w", err)
 	}
-	combined.Text = "AO pending messages in enqueue order. Each JSON item is one complete message; kind steer identifies active-turn guidance. Content blocks follow the same item order, using contentStart and contentCount indices.\n" + string(encoded)
+	combined.Text = "Orchestrator pending messages in enqueue order. Each JSON item is one complete message; kind steer identifies active-turn guidance. Content blocks follow the same item order, using contentStart and contentCount indices.\n" + string(encoded)
 	return combined, nil
 }
 
@@ -114,4 +114,23 @@ func queuedBatchIDs(batch []domain.QueuedTurn) []string {
 		ids = append(ids, queued.TurnID)
 	}
 	return ids
+}
+
+// drainRun is how many queued messages, from the front, the next turn takes.
+// A message the user typed gets a turn of its own, so the agent answers each
+// one in order. Agent and Orchestrator messages waiting next to each other still
+// go as one input (#6500), stopping before the next message the user typed.
+// Steering is separate and still takes the whole queue.
+func drainRun(queue []domain.QueuedTurn) int {
+	if len(queue) == 0 {
+		return 0
+	}
+	if queue[0].Origin == domain.MessageOriginHuman {
+		return 1
+	}
+	n := 1
+	for n < len(queue) && queue[n].Origin != domain.MessageOriginHuman {
+		n++
+	}
+	return n
 }

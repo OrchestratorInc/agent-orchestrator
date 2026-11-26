@@ -1,11 +1,16 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { afterEach, expect, it, vi } from "vitest";
-import { captureApiErrorToSentry, captureExceptionToSentry } from "./sentry";
+import { captureApiErrorToSentry, captureExceptionToSentry, captureOnboardingFailureToSentry } from "./sentry";
+import { noteOnboardingPagesFinished, resetOnboardingFlowForTests, setOnboardingTourStep, setOnboardingWindowOpen } from "./onboarding-flow";
 import { SAFE_APP_ASSET, safeSentryFunctionName } from "../../shared/sentry-config";
 
 const capture = vi.hoisted(() => vi.fn());
 vi.mock("./bridge", () => ({ aoBridge: { telemetry: { capture } } }));
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+	vi.clearAllMocks();
+	resetOnboardingFlowForTests();
+});
 
 it("keeps real component names and built route assets without accepting arbitrary function text", () => {
 	expect(safeSentryFunctionName("ChatWorkspace", "renderer_frame")).toBe("ChatWorkspace");
@@ -43,7 +48,96 @@ it("sends only safe renderer stack frames and a standard exception type through 
 	captureExceptionToSentry(error, { category: "render_crash" });
 	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
 		kind: "exception",
-		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 26, colno: 3 }, { function: "SessionView", lineno: 13, colno: 4 }, { function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, colno: 7 }] },
+		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 26, colno: 3 }, { function: "renderer_frame", filename: "assets/app-A1B2C3D4.js", lineno: 25, colno: 3 }, { function: "SessionView", lineno: 13, colno: 4 }, { function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, colno: 7 }] },
 	}));
 	expect(JSON.stringify(capture.mock.calls[0]?.[0].exception)).not.toMatch(/private-repo|\/Users\/alice|app:\/\/|localhost/);
+});
+
+it("keeps anonymous minified frames and their chunk debug IDs", () => {
+	const debugId = "8a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
+	(globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds = {
+		"Error\n    at app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js:1:12": debugId,
+		"Error\n    at file:///Users/alice/private.js:1:1": "11111111-1111-4111-8111-111111111111",
+	};
+	try {
+		const error = new TypeError("private");
+		error.stack = [
+			"TypeError: private",
+			"    at app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js:123:45",
+			"    at async privateUserText (app://renderer/assets/index-RzpjvxTk.js:7:8)",
+			"    at file:///Users/alice/private.js:1:1",
+		].join("\n");
+		captureExceptionToSentry(error);
+		expect(capture.mock.calls[0]?.[0].exception.frames).toEqual([
+			{ function: "renderer_frame", filename: "assets/index-RzpjvxTk.js", lineno: 7, colno: 8 },
+			{ function: "renderer_frame", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId },
+		]);
+		expect(JSON.stringify(capture.mock.calls[0]?.[0])).not.toMatch(/privateUserText|alice|11111111/);
+	} finally {
+		delete (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
+	}
+});
+
+it("uses the browser location and error type when no error object or stack is available", () => {
+	const event = new ErrorEvent("error", {
+		message: "Uncaught TypeError: Cannot read properties of undefined (reading 'id')",
+		filename: "app://renderer/assets/index-A1B2C3D4.js?private=query",
+		lineno: 42,
+		colno: 9,
+	});
+	captureExceptionToSentry(undefined, { category: "renderer_exception", code: "WINDOW_ERROR" }, event);
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: event.message,
+		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/index-A1B2C3D4.js", lineno: 42, colno: 9 }] },
+	}));
+});
+
+it("reports a broken onboarding action as an error titled by action and reason", () => {
+	captureOnboardingFailureToSentry("gh_install", "install_failed", "gh");
+	expect(capture).toHaveBeenCalledWith({
+		kind: "message",
+		message: "Onboarding action failed",
+		level: "error",
+		tags: { platform: "desktop", category: "onboarding", code: "gh_install:install_failed", severity: "P1", owner: "ours", flow: "onboarding", target: "gh" },
+	});
+	captureOnboardingFailureToSentry("cloud_sign_in", "request_failed");
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("target");
+});
+
+it("does not report onboarding setup states", () => {
+	for (const reason of ["not_signed_in", "unsupported", "documentation"] as const) captureOnboardingFailureToSentry("agent_sign_in", reason);
+	expect(capture).not.toHaveBeenCalled();
+});
+
+it("tags every capture with the onboarding flow while the first-run window shows, and none once it closes", () => {
+	setOnboardingWindowOpen(true);
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	captureApiErrorToSentry("GET /api/v1/projects", "http_5xx", 500);
+	expect(capture.mock.calls.map((call) => call[0].tags.flow)).toEqual(["onboarding", "onboarding"]);
+	setOnboardingWindowOpen(false);
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+});
+
+it("tags the tour only in the launch whose onboarding pages finished", () => {
+	// A tour restored on a later launch, left showing until dismissed.
+	setOnboardingTourStep("tour_project");
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+	noteOnboardingPagesFinished();
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).toMatchObject({ flow: "onboarding" });
+	setOnboardingTourStep(undefined);
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+});
+
+it("forwards a cause code and drops overlong text at the IPC boundary", () => {
+	captureExceptionToSentry(new Error("x".repeat(4097), {
+		cause: new AoError("WORKSPACE_NO_READY_REPOS", "No resolved repositories"),
+	}), { category: "renderer_exception", code: "WINDOW_ERROR" });
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: "",
+		tags: expect.objectContaining({ error_code: "WORKSPACE_NO_READY_REPOS", code: "WINDOW_ERROR" }),
+	}));
 });

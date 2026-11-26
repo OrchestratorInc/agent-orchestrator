@@ -23,6 +23,10 @@ import (
 // the CLI reads it.
 const EnvComputerUse = "AO_COMPUTER_USE"
 
+// EnvTerminateOnPRMerge sets the daemon-wide default for whether sessions
+// auto-terminate when their PR is merged.
+const EnvTerminateOnPRMerge = "AO_TERMINATE_ON_PR_MERGE"
+
 const (
 	// LoopbackHost is the only host the daemon ever binds. There is deliberately
 	// no AO_HOST env var: the daemon has no auth/CORS/TLS and a stray
@@ -140,7 +144,8 @@ type Config struct {
 	// RequestTimeout bounds REST request handling.
 	RequestTimeout time.Duration
 	// ShutdownTimeout is the hard graceful-shutdown deadline.
-	ShutdownTimeout time.Duration
+	ShutdownTimeout          time.Duration
+	InstallerShutdownTimeout time.Duration
 	// RunFilePath is where the PID + port handshake file (running.json) is
 	// written so the Electron supervisor can discover and reap the daemon.
 	RunFilePath string
@@ -232,6 +237,9 @@ type Config struct {
 	// AgentBrowserToken is the agent browser's own credential
 	// (AO_AGENT_BROWSER_TOKEN). The daemon adds it; clients never see it.
 	AgentBrowserToken string
+	// TerminateOnPRMerge is the daemon-wide default for whether sessions auto-terminate
+	// when their PR is merged (AO_TERMINATE_ON_PR_MERGE). Nil falls back to hardcoded false.
+	TerminateOnPRMerge *bool
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -249,6 +257,7 @@ func (c Config) Addr() string {
 //	AO_PORT              bind port           (default 3001)
 //	AO_REQUEST_TIMEOUT   per-request timeout (Go duration > 0, default 60s)
 //	AO_SHUTDOWN_TIMEOUT  shutdown deadline   (Go duration > 0, default 10s)
+//	AO_INSTALLER_SHUTDOWN_TIMEOUT harness installer drain (Go duration > 0, default systeminstall.DefaultShutdownTimeout)
 //	AO_RUN_FILE          running.json path   (default ~/.ao/running.json)
 //	AO_DATA_DIR          durable state dir   (default ~/.ao/data)
 //	AO_AGENT             compatibility agent id (default claude-code)
@@ -320,6 +329,14 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.ShutdownTimeout = d
+	}
+
+	if raw := os.Getenv("AO_INSTALLER_SHUTDOWN_TIMEOUT"); raw != "" {
+		d, err := parsePositiveDuration("AO_INSTALLER_SHUTDOWN_TIMEOUT", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.InstallerShutdownTimeout = d
 	}
 
 	if raw := os.Getenv("AO_AGENT"); raw != "" {
@@ -414,6 +431,13 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("invalid AO_HARNESS_UPDATE_INTERVAL %q: must be at least %s", raw, MinHarnessUpdateInterval)
 		}
 		cfg.HarnessUpdateInterval = d
+	}
+	if raw, present := os.LookupEnv(EnvTerminateOnPRMerge); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv(EnvTerminateOnPRMerge, raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TerminateOnPRMerge = &v
 	}
 	if raw, present := os.LookupEnv("AO_TELEMETRY_EVENTS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_EVENTS", raw)
@@ -537,22 +561,11 @@ func Load() (Config, error) {
 		}
 	}
 
-	runFile, err := resolveRunFilePath()
+	stateDir, dataDir, runFile, err := ResolvePaths()
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.RunFilePath = runFile
-
-	dataDir, err := resolveDataDir()
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.DataDir = dataDir
-	if raw, ok := os.LookupEnv("AO_DATA_DIR"); ok && raw != "" {
-		cfg.StateDir = dataDir
-	} else {
-		cfg.StateDir = filepath.Dir(dataDir)
-	}
+	cfg.StateDir, cfg.DataDir, cfg.RunFilePath = stateDir, dataDir, runFile
 
 	return cfg, nil
 }
@@ -582,6 +595,11 @@ func ScrubTelemetryEnv() {
 	for _, key := range telemetryEnvKeys {
 		_ = os.Unsetenv(key)
 	}
+}
+
+// ParseToggle parses boolean toggle strings (on/true/1/yes vs off/false/0/no).
+func ParseToggle(name, raw string) (bool, error) {
+	return parseToggleEnv(name, raw)
 }
 
 func parseToggleEnv(name, raw string) (bool, error) {
@@ -759,4 +777,21 @@ func absOverride(name, p string) (string, error) {
 		return "", fmt.Errorf("resolve %s %q: %w", name, p, err)
 	}
 	return abs, nil
+}
+
+// ResolvePaths resolves state paths without parsing unrelated daemon settings.
+func ResolvePaths() (stateDir, dataDir, runFile string, err error) {
+	dataDir, err = resolveDataDir()
+	if err != nil {
+		return
+	}
+	runFile, err = resolveRunFilePath()
+	if err != nil {
+		return
+	}
+	stateDir = filepath.Dir(dataDir)
+	if os.Getenv("AO_DATA_DIR") != "" {
+		stateDir = dataDir
+	}
+	return
 }

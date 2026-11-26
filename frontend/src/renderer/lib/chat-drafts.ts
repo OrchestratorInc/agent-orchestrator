@@ -1,3 +1,4 @@
+import { isExcerptSnapshot, isFlowchartOnlySnapshot, type ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
 import { isCloudAttachmentReference } from "./cloud-attachment-reference";
@@ -27,6 +28,12 @@ export interface ChatDraftScope {
 
 type ChatDraftScopeInput = string | ChatDraftScope;
 
+/** The new chat page's composer draft; one per host, shared by every project on it. */
+export function newChatDraftScope(hostId?: string): ChatDraftScope {
+	const id = `new-chat:${hostId ?? "local"}`;
+	return { sessionId: id, incarnation: id };
+}
+
 type ChatDraftScopeLease = {
 	schemaVersion: typeof CHAT_DRAFT_SCOPE_SCHEMA_VERSION;
 	sessionId: string;
@@ -53,8 +60,6 @@ export interface ChatDraftInlineEdit {
 	turnId: string;
 	text: string;
 	content: ConversationContentSummary[];
-	/** True when the edit replays portable history instead of using a native fork. */
-	reconstructedContext?: boolean;
 }
 
 export interface ChatDraftQueuedEdit {
@@ -107,12 +112,14 @@ export interface ChatComposerDelivery {
 }
 
 export interface ChatDraftExcerptReference {
+ snapshot?: ChatExcerptSnapshot;
 	order?: number;
 	id: string;
 	conversationId: string;
 	messageId: string;
 	revision: number;
 	text: string;
+	comment?: string;
 	role: "user" | "assistant";
 }
 
@@ -750,7 +757,9 @@ function isExcerptReference(value: unknown): value is ChatDraftExcerptReference 
 		typeof excerpt.conversationId === "string" && excerpt.conversationId.length > 0 &&
 		typeof excerpt.messageId === "string" && excerpt.messageId.length > 0 &&
 		typeof excerpt.revision === "number" && Number.isSafeInteger(excerpt.revision) && excerpt.revision >= 0 &&
-		typeof excerpt.text === "string" && excerpt.text.trim().length > 0 &&
+		typeof excerpt.text === "string" && (excerpt.text.trim().length > 0 || isFlowchartOnlySnapshot(excerpt.snapshot)) &&
+		(excerpt.snapshot === undefined || isExcerptSnapshot(excerpt.snapshot)) &&
+		(excerpt.comment === undefined || typeof excerpt.comment === "string") &&
 		(excerpt.role === "user" || excerpt.role === "assistant")
 	);
 }
@@ -764,8 +773,6 @@ function isInlineEdit(value: unknown): value is ChatDraftInlineEdit {
 			typeof edit.turnId === "string" &&
 			edit.turnId.length > 0 &&
 			typeof edit.text === "string" &&
-			(edit.reconstructedContext === undefined ||
-				typeof edit.reconstructedContext === "boolean") &&
 			Array.isArray(edit.content) &&
 			edit.content.every(isContentSummary)
 	);
@@ -1329,7 +1336,6 @@ export function prepareChatInlineEditDelivery(
 	const exact =
 			current?.turnId === input.turnId &&
 			current.text === input.text &&
-			current.reconstructedContext === input.reconstructedContext &&
 			JSON.stringify(current.content) === JSON.stringify(input.content);
 	const inlineEdit: ChatDraftInlineEdit = exact
 		? current
@@ -1337,7 +1343,6 @@ export function prepareChatInlineEditDelivery(
 					turnId: input.turnId,
 					text: input.text,
 					content: input.content,
-					reconstructedContext: input.reconstructedContext,
 					revision: draftEditRevision(),
 			};
 	const mutation: ChatInlineEditDelivery = {
@@ -1509,7 +1514,7 @@ export function writeChatExcerptReferences(
 			...draft,
 			composer: {
 				...draft.composer,
-				revision: draft.composer.revision + 1,
+				revision: draft.composer.delivery && !draft.composer.delivery.draft ? draft.composer.revision : draft.composer.revision + 1,
 				excerpts,
 			},
 		}),
@@ -1660,7 +1665,7 @@ export function clearAcceptedChatComposer(
 				attachments: current.composer.delivery.draft
 					? current.composer.attachments
 					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
-				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id)),
+				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id && sent.comment === ref.comment)),
 				fileReferences: current.composer.fileReferences?.filter(ref => !current.composer.delivery?.fileReferences?.some(sent => sent.id === ref.id)),
 			},
 		};
@@ -1673,13 +1678,14 @@ export function clearAcceptedChatComposer(
 			}
 			: { ok: false, cleared: false, draft: current };
 	}
+	const sent = current.composer.delivery;
 	const next: ChatSessionDraft = {
 		...current,
 		composer: {
 			revision: current.composer.revision + 1,
 			text: "",
 			attachments: [],
-			excerpts: [],
+			excerpts: sent ? current.composer.excerpts?.filter(ref => !sent.excerpts?.some(item => item.id === ref.id && item.comment === ref.comment)) ?? [] : [],
 			fileReferences: [],
 		},
 	};

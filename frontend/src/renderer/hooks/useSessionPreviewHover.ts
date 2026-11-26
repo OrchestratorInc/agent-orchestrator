@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type PointerEvent } from "react";
 
-// The first preview waits out a short hover and fades in. Once one is showing,
-// sweeping across the other rows swaps previews instantly with no animation,
-// until the pointer has been off every row for COOL_DOWN_MS.
-const FIRST_OPEN_DELAY_MS = 150;
+// A preview opens the moment the pointer reaches its row, with no animation,
+// and sweeping across rows swaps previews at once. For COOL_DOWN_MS after the
+// last one closes, scrolling the list under a still pointer keeps previewing.
 const COOL_DOWN_MS = 300;
 // Time to cross the gap from the row to its card (or back) without closing it.
 const LEAVE_GRACE_MS = 60;
@@ -16,7 +15,7 @@ const AIM_APEX_BUFFER_PX = 4;
 // Slack for hand jitter before a move counts as backing away from the card.
 const AIM_BACKOFF_PX = 2;
 
-// Shared by every row: a preview opened on one row warms all of them.
+// Shared by every row: true while a preview shows and for COOL_DOWN_MS after.
 let warm = false;
 let coolTimer: ReturnType<typeof setTimeout> | undefined;
 // The row whose preview is showing, so opening another row's preview replaces
@@ -171,11 +170,17 @@ export function resetSessionPreviewWarmth() {
 
 export type SessionPreviewAnimation = "enter" | "none";
 
+// A portal stays a React child of the row (the archive confirm does), so its
+// focus and pointer events reach the row's handlers. Only the row's own DOM asks
+// for a preview; otherwise the confirm opens the card on top of itself.
+function isFromRow(event: FocusEvent | PointerEvent) {
+	return event.currentTarget.contains(event.target as Node);
+}
+
 /**
  * Open state for one row's hover preview. The row owns its pointer and focus
- * events through `triggerProps`, so leaving a row always cancels a pending
- * open: a controlled Radix card never reports a close for a card that is not
- * open yet, which would leave the delayed open running after the pointer left.
+ * events through `triggerProps`; the preview opens as soon as the pointer
+ * enters the row.
  *
  * The card itself is hoverable (its PR links are clickable), so a showing
  * preview survives a short LEAVE_GRACE_MS off the row and stays open while the
@@ -193,12 +198,10 @@ export function useSessionPreviewHover(suppressed: boolean) {
 		animation: "enter",
 	});
 	const openRef = useRef(false);
-	const openTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const leaveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const cardRef = useRef<HTMLElement | null>(null);
 
 	const hide = useCallback(() => {
-		clearTimeout(openTimerRef.current);
 		clearTimeout(leaveTimerRef.current);
 		if (aim?.owner === hide) endAim();
 		if (activeHide === hide) activeHide = undefined;
@@ -220,19 +223,15 @@ export function useSessionPreviewHover(suppressed: boolean) {
 	);
 
 	const request = useCallback(() => {
-		clearTimeout(openTimerRef.current);
 		clearTimeout(leaveTimerRef.current);
 		if (aim?.owner === hide) endAim();
 		if (openRef.current) return;
-		if (warm) show("none");
-		else openTimerRef.current = setTimeout(() => show("none"), FIRST_OPEN_DELAY_MS);
+		show("none");
 	}, [hide, show]);
 
-	// Off the row or off the card: a pending open is cancelled outright, a
-	// showing preview closes after the grace unless the pointer reaches the
-	// other half (row or card) first.
+	// Off the row or off the card: a showing preview closes after the grace
+	// unless the pointer reaches the other half (row or card) first.
 	const leave = useCallback(() => {
-		clearTimeout(openTimerRef.current);
 		if (!openRef.current) return;
 		clearTimeout(leaveTimerRef.current);
 		leaveTimerRef.current = setTimeout(hide, LEAVE_GRACE_MS);
@@ -252,7 +251,6 @@ export function useSessionPreviewHover(suppressed: boolean) {
 			const triangle = safeTriangle(exit, card);
 			if (!triangle) return false;
 			endAim();
-			clearTimeout(openTimerRef.current);
 			clearTimeout(leaveTimerRef.current);
 			const release = () => {
 				endAim();
@@ -297,9 +295,15 @@ export function useSessionPreviewHover(suppressed: boolean) {
 				if (event.relatedTarget instanceof Element && event.relatedTarget.closest("[data-session-preview-card]")) return;
 				hide();
 			},
-			onFocus: request,
+			// Focus moved here from another control previews the row. Focus from
+			// nowhere is the archive confirm handing it back on close: with the pointer
+			// elsewhere, nothing would ever close the card.
+			onFocus: (event: FocusEvent) => {
+				if (isFromRow(event) && event.relatedTarget) request();
+			},
 			onPointerEnter: (event: PointerEvent) => {
 				claimFromRadix(event);
+				if (!isFromRow(event)) return;
 				hoveredRow = event.currentTarget;
 				if (event.pointerType === "touch") return;
 				// Crossed on the way to another row's card: that card keeps the pointer.

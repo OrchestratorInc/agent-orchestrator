@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { SessionProvisionStep } from "../../types/workspace";
 import { SessionTopbarActions } from "../SessionTopbarActions";
 import type { ConversationSnapshot } from "../../types/conversation";
@@ -13,18 +14,19 @@ export function startingConversationSnapshot(sessionId: string, harness: Convers
 	};
 }
 
-const pendingSnapshot = startingConversationSnapshot("pending-orchestrator", "claude-code");
-
 /**
  * The orchestrator's view while it is being created. A Freestyle cloud
  * orchestrator starts in place, on its conversation with the composer's
  * startup shimmer, as a local one does; other cloud providers (Coder) start
  * behind the startup screen, which shows their steps and workspace link.
  */
-export function OrchestratorStartingChat({ steps, cloud = false, freestyle = false, coderWorkspaceUrl }: { steps?: readonly SessionProvisionStep[]; cloud?: boolean; freestyle?: boolean; coderWorkspaceUrl?: string }) {
+export function OrchestratorStartingChat({ steps, cloud = false, freestyle = false, coderWorkspaceUrl, harness }: { steps?: readonly SessionProvisionStep[]; cloud?: boolean; freestyle?: boolean; coderWorkspaceUrl?: string; harness?: string }) {
+	// The harness being started picks the agent icon; Claude Code only when
+	// the project names none and no orchestrator session exists yet.
+	const snapshot = useMemo(() => startingConversationSnapshot("pending-orchestrator", harness || "claude-code"), [harness]);
 	if (cloud && !freestyle) return <CloudSessionStartupLoader coderWorkspaceUrl={coderWorkspaceUrl} />;
 	return <ChatWorkspace
-		snapshot={pendingSnapshot}
+		snapshot={snapshot}
 		sessionRole="orchestrator"
 		startingSteps={steps}
 		newWorkDisabled

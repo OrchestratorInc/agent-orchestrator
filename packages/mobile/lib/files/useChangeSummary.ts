@@ -1,24 +1,44 @@
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerConfig } from "../config";
-import { getWorkspaceManifest, type WorkspaceManifest } from "./api";
+import { holdFilesBackend, useHeldBackend } from "../heldBackend";
+import type { WorkspaceManifest } from "./api";
+import { daemonFilesBackend, type FilesBackend } from "./backend";
 
 export type ChangeSummary = WorkspaceManifest["summary"];
 
 /**
- * The session's changed-file totals from git, for the composer's changes pill.
+ * A machine session's totals, read from its daemon. The backend is held for
+ * `machine` (see heldBackend), so the pill keeps its totals through an app
+ * switch instead of leaving and coming back.
+ */
+export function useChangeSummary(config: ServerConfig | null, machine: string, sessionId: string, signal: string): ChangeSummary | null {
+	const live = useMemo(() => config ? daemonFilesBackend(config) : null, [config]);
+	const backend = useHeldBackend(live, machine, holdFilesBackend);
+	// The held backend stays the same object when the connection comes back, so
+	// nothing else reads the totals again: count each return in the signal, which
+	// reads them afresh and keeps the ones shown meanwhile.
+	const returns = useRef({ verified: config !== null, count: 0 });
+	if (config && !returns.current.verified) returns.current.count += 1;
+	returns.current.verified = config !== null;
+	return useBackendChangeSummary(backend, sessionId, `${signal}|${returns.current.count}`);
+}
+
+/**
+ * The session's changed-file totals from git, for the composer's changes pill,
+ * from whichever host holds the session (a machine's daemon or Cloud).
  * No timer: it asks when the screen gains focus (coming back from Files, say)
  * and whenever `signal` changes — the caller passes something that moves when a
  * turn reports edits — so an idle conversation costs nothing.
  */
-export function useChangeSummary(config: ServerConfig | null, sessionId: string, signal: string): ChangeSummary | null {
+export function useBackendChangeSummary(backend: FilesBackend | null, sessionId: string, signal: string): ChangeSummary | null {
 	const [summary, setSummary] = useState<ChangeSummary | null>(null);
 	const latest = useRef(0);
 
 	const load = useCallback(() => {
-		if (!config || !sessionId) return;
+		if (!backend || !sessionId) return;
 		const ticket = ++latest.current;
-		getWorkspaceManifest(config, sessionId)
+		backend.manifest(sessionId)
 			.then((manifest) => {
 				if (ticket !== latest.current) return;
 				setSummary((previous) => previous
@@ -28,9 +48,9 @@ export function useChangeSummary(config: ServerConfig | null, sessionId: string,
 			})
 			// A failed read keeps the last answer: the pill is a shortcut, not a status.
 			.catch(() => {});
-	}, [config, sessionId]);
+	}, [backend, sessionId]);
 
-	useEffect(() => { setSummary(null); }, [config, sessionId]);
+	useEffect(() => { setSummary(null); }, [backend, sessionId]);
 	useEffect(() => { load(); }, [load, signal]);
 	useFocusEffect(useCallback(() => { load(); }, [load]));
 	return summary;
