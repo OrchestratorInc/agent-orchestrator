@@ -1893,6 +1893,7 @@ const ProjectItem = memo(function ProjectItem({
 				? [{
 					kind: "item" as const,
 					id: "new-task",
+					telemetryAction: "new_task",
 					icon: <Plus aria-hidden="true" />,
 					label: t("shell.newTask"),
 					disabled: isProjectRestarting,
@@ -1903,6 +1904,7 @@ const ProjectItem = memo(function ProjectItem({
 				? [{
 					kind: "item" as const,
 					id: "orchestrator",
+					telemetryAction: "open_orchestrator",
 					icon: <OrchestratorIcon aria-hidden="true" />,
 					label: orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower"),
 					disabled: isSpawning || isProjectProvisioning || isProjectRestarting,
@@ -2202,6 +2204,7 @@ const ProjectItem = memo(function ProjectItem({
 														)}
 															className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
 															disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+														data-ph-capture-attribute-ao_action="open_orchestrator"
 														onClick={() => void openOrchestrator()}
 														type="button"
 													>
@@ -2478,6 +2481,7 @@ function ScratchpadSection({
 													data-telemetry-id="sidebar.project_new_session"
 													aria-label={t("shell.openNewAgent")}
 													className={ROW_ACTION_BUTTON_CLASS}
+													data-ph-capture-attribute-ao_action="new_task"
 													onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 													type="button"
 												>
@@ -2493,9 +2497,11 @@ function ScratchpadSection({
 					</div>
 				</ContextMenuTrigger>
 				<ContextMenuContent className="min-w-44">
-					<ContextMenuItem onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
-						<Plus aria-hidden="true" />
-						{t("shell.openNewAgent")}
+					<ContextMenuItem asChild data-ph-capture-attribute-ao_action="new_task" onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
+						<button className="w-full" type="button">
+							<Plus aria-hidden="true" />
+							{t("shell.openNewAgent")}
+						</button>
 					</ContextMenuItem>
 					<ContextMenuItem onSelect={selection.goStandaloneBoard}>
 						<Archive aria-hidden="true" />
@@ -2912,6 +2918,7 @@ const SessionRow = memo(function SessionRow({
 						<Pressable
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
+							data-ph-capture-attribute-ao_action={session.kind === "orchestrator" ? "open_orchestrator" : "open_worker_session"}
 							aria-keyshortcuts="F2"
 							data-telemetry-id="sidebar.session_row"
 							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}

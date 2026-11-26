@@ -176,6 +176,7 @@ export function SessionLinkPreviewCard({
 					dismiss();
 					onOpen();
 				} : undefined}
+				data-ph-capture-attribute-ao_card_action={openable ? session.kind === "orchestrator" ? "open_orchestrator" : "open_worker_session" : undefined}
 			>
 				<SessionCardBody session={session} />
 			</HoverCardContent>

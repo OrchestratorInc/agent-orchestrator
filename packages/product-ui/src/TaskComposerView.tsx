@@ -458,6 +458,7 @@ export function TaskComposerView({
 
 				<button
 					type="submit"
+					data-ph-capture-attribute-ao_action="start_task"
 					disabled={submission.isSubmitting || !canSubmit}
 					className="inline-flex h-(--size-composer-toolbar-height) shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:pointer-events-none disabled:opacity-50"
 				>

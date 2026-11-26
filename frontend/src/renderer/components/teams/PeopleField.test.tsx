@@ -60,6 +60,27 @@ describe("PeopleField", () => {
 		];
 	});
 
+	it("cancels the delayed blur update when unmounted", () => {
+		vi.useFakeTimers();
+		const schedule = vi.spyOn(window, "setTimeout");
+		const cancel = vi.spyOn(window, "clearTimeout");
+		const view = renderField();
+		try {
+			fireEvent.blur(screen.getByRole("combobox", { name: "Add people or teams" }));
+			const blurCall = schedule.mock.calls.map(([, delay]) => delay).lastIndexOf(120);
+			const blurTimer = schedule.mock.results[blurCall]!.value;
+			expect(blurTimer).toBeDefined();
+			view.unmount();
+			expect(cancel).toHaveBeenCalledWith(blurTimer);
+		} finally {
+			view.unmount();
+			vi.clearAllTimers();
+			schedule.mockRestore();
+			cancel.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
 	it("suggests teams first with their size and first names, then people", async () => {
 		renderField();
 		const input = screen.getByRole("combobox", { name: "Add people or teams" });

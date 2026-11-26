@@ -718,6 +718,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, placeName, o
 							"flex min-w-0 flex-1 items-center gap-3 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60",
 							selection?.disabledReason && "cursor-not-allowed",
 						)}
+						data-ph-capture-attribute-ao_action={selection ? undefined : "open_artifact"}
 						onClick={selection ? toggle : open}
 						title={selection?.disabledReason ?? `${projectName} · ${row.sessionTitle} · ${row.path}`}
 						{...(selection ? { tabIndex: -1, "aria-hidden": true } : {})}
