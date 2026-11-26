@@ -3,16 +3,10 @@ import { Feather } from "../icons";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { iconSize, space, type } from "../tokens";
+import { isAutomationSteer } from "./timelineModel";
 import type { ActivityDetail } from "./types";
 
-/**
- * Whether another agent sent this steer: an AO session that names itself, or an
- * automation with a label (a Cloud orchestrator's message steered into a busy
- * worker names only its label). As on the desktop's SteerMessage.
- */
-export function isAutomationSteer(detail: ActivityDetail | undefined): boolean {
-	return Boolean(detail?.senderSessionId?.trim()) || (detail?.origin === "automation" && Boolean(detail.senderDisplayName?.trim()));
-}
+export { isAutomationSteer };
 
 export function steerNoteText(detail: ActivityDetail | undefined): string {
 	return detail?.deliveredBeforeDelete ? "Steered: the agent took it before your delete could stop it" : "Steered";

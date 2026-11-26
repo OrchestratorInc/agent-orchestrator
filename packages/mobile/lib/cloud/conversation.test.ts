@@ -154,6 +154,25 @@ describe("cloud conversation projection", () => {
 		expect(groups.map((group) => text(group.items))).toEqual([["Go", "Looking"], ["steer", "Switching to staging."]]);
 	});
 
+	it("splits a turn at the person's steer but keeps an orchestrator's steer in the work", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Looking" }),
+			event("chat.turn_steered", { turnId: "t1", text: "CI is red", origin: "automation", senderLabel: "Orchestrator" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Checking CI" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use staging" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "On staging." }),
+			event("chat.turn_completed", { turnId: "t1" }),
+		]);
+		const text = (items: typeof snapshot.items) => items.map((item) => item.kind === "message" ? item.text : item.kind === "activity" ? item.detail?.text : "");
+		expect(groupConversationByTurn(snapshot).map((group) => text(group.items))).toEqual([
+			["Go", "Looking", "CI is red", "Checking CI"],
+			["Use staging", "On staging."],
+		]);
+	});
+
 	it("shows automation prompts by their display text and drops Codex's stdin notice", () => {
 		sequence = 0;
 		const snapshot = cloudConversationSnapshot(session({ harness: "codex" }), [

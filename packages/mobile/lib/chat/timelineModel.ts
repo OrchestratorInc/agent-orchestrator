@@ -1,4 +1,5 @@
 import type {
+	ActivityDetail,
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
@@ -124,7 +125,7 @@ export function groupConversationByTurn(
  * settles into its own "Worked for" row instead of folding the steer away with
  * it, and the steer starts a fresh Working row and reply. Only the last part
  * carries the real turn's live state, outcome, actions and plan. A steer another
- * session sent stays in the work.
+ * session or a labelled automation sent stays in the work (isAutomationSteer).
  */
 function splitAtSteers(group: ConversationGroup): ConversationGroup[] {
 	const turn = group.turn;
@@ -178,8 +179,19 @@ function segmentTurn(turn: ConversationTurn, last: boolean, startedAt: string | 
 	return view;
 }
 
+/** A steer the person typed: not one another session or a labelled automation sent. */
 function isHumanSteer(item: ConversationItem): boolean {
-	return item.kind === "activity" && isSteerItem(item) && !item.detail?.senderSessionId;
+	return item.kind === "activity" && isSteerItem(item) && !isAutomationSteer(item.detail);
+}
+
+/**
+ * Whether another agent sent this steer: an AO session that names itself, or an
+ * automation with a label (a Cloud orchestrator's message steered into a busy
+ * worker names only its label). As on the desktop's SteerMessage. Such a steer
+ * stays in the work, and its row is drawn as its sender's.
+ */
+export function isAutomationSteer(detail: ActivityDetail | undefined): boolean {
+	return Boolean(detail?.senderSessionId?.trim()) || (detail?.origin === "automation" && Boolean(detail.senderDisplayName?.trim()));
 }
 
 /**
