@@ -101,13 +101,19 @@ $AO_DATA_DIR/bots/<bot-id>/
   - emits a change event.
 - **Secrets: reduce the risk; no guarantee.** AO cannot guarantee that a secret never reaches bot memory. The credential-format check only catches text in recognizable formats, such as provider token prefixes and private-key blocks. A password written as ordinary prose passes it. Phase 0 layers these controls on top:
   - Memory content is always owner-visible. Every write shows up as a diff in the Memory tab.
-  - `ao bot memory purge` is for when a secret slips through. It removes the value from `MEMORY.md`, every `.history/` snapshot, and the `journal/` files. It also clears the local prompt copies:
-    - Each bot session's prompt, including SOUL and MEMORY, is written to `$AO_DATA_DIR/prompts/<session-id>/system.md` by `writeSystemPromptFile`. Some harnesses keep their own files in subfolders of the same directory.
-    - So purge also recycles the bot. It ends the current bot session, whether live or hibernated, after any turn in progress settles.
-    - Ending the session runs the existing `cleanupSystemPromptDir`, which deletes the whole `prompts/<session-id>/` directory.
-    - The next turn starts a fresh session built from the purged files.
-    - Earlier bot sessions are already terminated, and their prompt directories were removed at termination. Purge verifies that none remain for this bot's sessions and deletes any it finds.
-    - Purge succeeds only after all of these steps. It reports any copy it could not remove.
+  - `ao bot memory purge` is for when a secret slips through. Any session that still holds the text could write it back, so purge is fenced and runs in this order:
+    1. **Fence.** The daemon puts the bot into a purge state. Every memory write (`append`, `replace`, `undo`) is refused with `BOT_PURGE_IN_PROGRESS`. No new tidy can start, and incoming messages queue rather than start a session.
+    2. **Stop every session that may hold the text.**
+       - Any active tidy is aborted. Its session is ended, its pending `replace` is discarded, and its watermark does not advance.
+       - The main bot session, live or hibernated, is ended after its in-progress turn settles.
+       - Ending a session runs the existing `cleanupSystemPromptDir`. That deletes the whole `$AO_DATA_DIR/prompts/<session-id>/` directory, where `writeSystemPromptFile` put the prompt (SOUL and MEMORY) and where some harnesses keep their own files.
+    3. **Scrub.** The value is removed from:
+       - `MEMORY.md`, every `.history/` snapshot, and the `journal/` files;
+       - the question, option, and answer text of the bot's asks, since open asks are injected into the prompt;
+       - any remaining prompt directory of the bot's earlier sessions, which normally were removed when those sessions terminated.
+    4. **Invalidate stale writers.** Purge bumps the `MEMORY.md` revision. A `replace` prepared against any pre-purge revision is rejected even after the fence lifts, including a tidy's conflict retry.
+    5. **Restart clean.** The fence lifts, and queued messages are delivered to a fresh session. That session starts from the purged SOUL, MEMORY, and asks with **no handoff note**, because the note is derived from pre-purge conversation turns that may contain the value. The conversation shows a purge marker, and the owner is told the new session has no summary of earlier turns.
+    6. **Verify and report.** Purge succeeds only after re-reading every location in step 3 and finding no match. It reports any copy it could not remove. If any step fails, the fence stays up, and the bot remains stopped until the owner retries or cancels.
   - Purge cannot reach copies outside the bot folder and prompt directories:
     - text in the bot conversation itself (for example, a secret the owner typed in chat);
     - a harness's own transcript store;
@@ -339,7 +345,7 @@ ao bot create --project <p> --handle <h> --name <n> [--purpose ...] [--agent ...
 ao bot ls [--project <p>]
 ao bot get|send|pause|resume|archive|rm <bot> [--project <p>] [<text>]
 ao bot memory show | append <text> | replace --file <f> | history | undo   # agent-facing writes
-ao bot memory purge <bot> <text> [--project <p>]                           # owner only; scrubs memory files, recycles the bot to clear prompt copies
+ao bot memory purge <bot> <text> [--project <p>]                           # owner only; fenced: stops sessions and tidies, scrubs files, asks and prompt copies
 ao bot ask --kind decision|approval|review|info "<question>" [--option ...] [--subject <ref>]
 ao inbox [--bot <bot>] [--project <p>]
 ```
@@ -376,7 +382,7 @@ Ten PRs of about two weeks' total work, each with tests for the boundary it chan
 4. The bot service with create, get, list, pause, resume, archive, and delete; HTTP routes and DTOs (`npm run api`); and the CLI.
 5. The bot folder and memory routes: size cap, best-effort credential check, history and undo, purge, and system-prompt injection.
 6. Crew attribution, permissions inheritance, the worker cap, and report routing to the bot conversation.
-7. Hibernate and wake for bots (regenerating `system.md` on wake), recycle with a handoff note, and purge's recycle step. Tests cover the prompt directory after hibernate, wake, recycle, and purge.
+7. Hibernate and wake for bots (regenerating `system.md` on wake), recycle with a handoff note, and the fenced purge. Tests cover the prompt directory after hibernate, wake, recycle, and purge, plus a purge racing an active tidy and a stale `replace`; neither may restore the purged value.
 8. Automations targeting bots, with bundled templates as bot templates.
 9. The Needs-you projection and APIs, the ask answer route, and push rules.
 10. Renderer: sidebar rows, bot route, inspector tabs, create dialog, and the cross-host inbox. Then the memory tidy, the export bundle with its round-trip test, and the dogfood bots.
