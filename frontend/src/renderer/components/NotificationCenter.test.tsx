@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
@@ -10,6 +10,7 @@ import {
 	type NotificationListStatus,
 } from "../lib/notifications";
 import { useUiStore } from "../stores/ui-store";
+import { useNotificationPreferencesStore } from "../stores/notification-preferences-store";
 import { NotificationCenter, NotificationRuntime } from "./NotificationCenter";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -250,6 +251,7 @@ beforeEach(() => {
 	connectMock.mockReset();
 	paramsMock.mockReset().mockReturnValue({});
 	useUiStore.setState({ visibleTerminalKindBySession: {} });
+	useNotificationPreferencesStore.setState({ enabled: true, filters: { mutedKinds: [], mutedSources: [] }, loaded: true });
 	fetchNextPageMock.mockReset().mockResolvedValue(undefined);
 	markAllMock.mockReset().mockResolvedValue(0);
 	navigateMock.mockReset();
@@ -1174,5 +1176,133 @@ describe("NotificationCenter cloud rows", () => {
 		expect(screen.getByText("acme/cloud#8 is ready to merge.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("NotificationCenter with notification preferences", () => {
+	beforeEach(() => {
+		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult(cloudNotifications));
+	});
+
+	function mute(filters: { mutedKinds?: string[]; mutedSources?: string[] }) {
+		useNotificationPreferencesStore.setState({ filters: { mutedKinds: [], mutedSources: [], ...filters } });
+	}
+
+	it("leaves a muted kind out of the panel, the badge, and the acknowledgement", async () => {
+		mute({ mutedKinds: ["ready_to_merge"] });
+		renderNotificationCenter();
+
+		// ntf_2 and cntf_ready are ready_to_merge; only ntf_1 is left unread.
+		expect(screen.getByRole("button", { name: "1 unread notifications" })).toBeInTheDocument();
+		await clickOpen();
+		expect(screen.queryByLabelText("Fix checkout totals · PR #67")).not.toBeInTheDocument();
+		expect(screen.queryByText("acme/cloud#8 is ready to merge.")).not.toBeInTheDocument();
+		expect(screen.getByText("Checkout flow needs input")).toBeInTheDocument();
+		await waitFor(() => expect(markAllMock).toHaveBeenCalledWith(["ntf_1"]));
+		expect(cloudMarkReadMock).not.toHaveBeenCalled();
+	});
+
+	it("groups review feedback from Cloud with changes requested", async () => {
+		mute({ mutedKinds: ["review_changes"] });
+		renderNotificationCenter();
+		await clickOpen();
+
+		expect(screen.queryByText("acme/cloud#2 has unresolved review feedback.")).not.toBeInTheDocument();
+		expect(screen.getByText("acme/cloud#8 is ready to merge.")).toBeInTheDocument();
+	});
+
+	it("leaves a muted machine out of the panel and the badge", async () => {
+		mute({ mutedSources: ["cloud"] });
+		renderNotificationCenter();
+
+		expect(screen.getByRole("button", { name: `${unreadNotifications.length} unread notifications` })).toBeInTheDocument();
+		await clickOpen();
+		expect(within(screen.getByRole("list")).getAllByRole("listitem").map((row) => row.getAttribute("data-notification-source") ?? "local"))
+			.toEqual(["local", "local", "local", "local"]);
+	});
+
+	it("shows notifications as off, with no badge, while they are turned off", async () => {
+		useNotificationPreferencesStore.setState({ enabled: false });
+		renderNotificationCenter();
+
+		const bell = screen.getByRole("button", { name: "Notifications" });
+		await userEvent.click(bell);
+		await screen.findByRole("dialog", { name: "Notifications" });
+		expect(screen.getByText("Notifications are off. Turn them on in Settings › General.")).toBeInTheDocument();
+		expect(screen.queryByRole("list")).not.toBeInTheDocument();
+		expect(markAllMock).not.toHaveBeenCalled();
+		expect(cloudMarkReadMock).not.toHaveBeenCalled();
+	});
+
+	it("shows notifications as off ahead of a failed or pending history load", async () => {
+		useNotificationPreferencesStore.setState({ enabled: false });
+		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
+			status === "all" ? { ...notificationQueryResult(status, { isError: true }), data: undefined } : notificationQueryResult(status),
+		);
+		renderNotificationCenter();
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		await screen.findByRole("dialog", { name: "Notifications" });
+
+		expect(screen.getByText("Notifications are off. Turn them on in Settings › General.")).toBeInTheDocument();
+		expect(screen.queryByText("Could not load notifications.")).not.toBeInTheDocument();
+	});
+
+	it("keeps Clear all for rows the preferences hide", async () => {
+		mute({ mutedSources: ["local", "cloud"] });
+		renderNotificationCenter();
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		await screen.findByText("No notifications yet.");
+
+		await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+		expect(clearAllMock).toHaveBeenCalledTimes(1);
+		expect(cloudClearAllMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps loading earlier history while every loaded row is hidden", async () => {
+		cloudNotificationsMock.mockReturnValue(emptyCloudResult);
+		mute({ mutedKinds: ["ready_to_merge", "needs_input"] });
+		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
+			notificationQueryResult(status, { hasNextPage: status === "all" }),
+		);
+		renderNotificationCenter();
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		await screen.findByRole("dialog", { name: "Notifications" });
+
+		await waitFor(() => expect(fetchNextPageMock).toHaveBeenCalledTimes(1));
+		expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument();
+		expect(screen.getByRole("list")).toBeInTheDocument();
+	});
+
+	it("raises no OS alert before the saved preferences have loaded", () => {
+		useNotificationPreferencesStore.setState({ loaded: false });
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<NotificationRuntime />
+			</QueryClientProvider>,
+		);
+		const shouldAlert = connectMock.mock.calls[0][2] as (notification: NotificationDTO) => boolean;
+
+		expect(shouldAlert(allNotifications[1])).toBe(false);
+		act(() => useNotificationPreferencesStore.setState({ loaded: true }));
+		expect(shouldAlert(allNotifications[1])).toBe(true);
+	});
+
+	it("only lets allowed local notifications raise an OS alert, as preferences change", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<NotificationRuntime />
+			</QueryClientProvider>,
+		);
+		const shouldAlert = connectMock.mock.calls[0][2] as (notification: NotificationDTO) => boolean;
+		const [ready, needsInput] = allNotifications;
+
+		expect(shouldAlert(ready)).toBe(true);
+		act(() => mute({ mutedKinds: ["ready_to_merge"] }));
+		expect(shouldAlert(ready)).toBe(false);
+		expect(shouldAlert(needsInput)).toBe(true);
+		act(() => mute({ mutedSources: ["local"] }));
+		expect(shouldAlert(needsInput)).toBe(false);
+		expect(connectMock).toHaveBeenCalledTimes(1);
 	});
 });

@@ -64,9 +64,25 @@ describe("ui-settings", () => {
 		await writeUiSettings(dir, { locale: "ja", soundNotificationsEnabled: false });
 		await writeUiSettings(dir, { terminalShell: { kind: "git-bash" } });
 		expect(await readUiSettings(dir)).toEqual({
+			...DEFAULT_UI_SETTINGS,
 			locale: "ja",
 			soundNotificationsEnabled: false,
 			terminalShell: { kind: "git-bash" },
+		});
+	});
+
+	it("merges notification preferences without resetting other UI settings", async () => {
+		await writeUiSettings(dir, { locale: "ja", soundNotificationsEnabled: false });
+		await writeUiSettings(dir, {
+			notificationsEnabled: false,
+			notificationFilters: { mutedKinds: ["ci_failed"], mutedSources: ["cloud"] },
+		});
+		expect(await readUiSettings(dir)).toEqual({
+			...DEFAULT_UI_SETTINGS,
+			locale: "ja",
+			soundNotificationsEnabled: false,
+			notificationsEnabled: false,
+			notificationFilters: { mutedKinds: ["ci_failed"], mutedSources: ["cloud"] },
 		});
 	});
 

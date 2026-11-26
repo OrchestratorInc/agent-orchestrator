@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 import type { NotificationDTO, NotificationsCache } from "../lib/notifications";
+import { useNotificationPreferencesStore } from "../stores/notification-preferences-store";
 import { NotificationRuntime } from "./NotificationCenter";
 
 const notifications: NotificationDTO[] = [
@@ -87,6 +88,10 @@ function renderRuntimeOnly() {
 	);
 }
 
+beforeEach(() => {
+	useNotificationPreferencesStore.setState({ enabled: true, filters: { mutedKinds: [], mutedSources: [] }, loaded: true });
+});
+
 describe("NotificationRuntime badge sync", () => {
 	it("syncs the launcher badge without the notification bell being mounted", async () => {
 		setBadge.mockClear();
@@ -163,6 +168,27 @@ describe("NotificationRuntime Cloud notifications", () => {
 		} finally {
 			cloud.data = undefined;
 			cloud.orgId = "org-1";
+		}
+	});
+
+	it("raises no OS notification for a Cloud row that arrives before the saved preferences load", () => {
+		show.mockClear();
+		useNotificationPreferencesStore.setState({ loaded: false });
+		cloud.data = { items: [cloudNotification("old")], unreadCount: 1 };
+		try {
+			const view = renderRuntimeOnly();
+			cloud.data = { items: [cloudNotification("early"), cloudNotification("old")], unreadCount: 2 };
+			view.rerender(
+				<QueryClientProvider client={new QueryClient()}>
+					<NotificationRuntime />
+				</QueryClientProvider>,
+			);
+			// The saved preferences mute Cloud; the row must not alert in the meantime or after.
+			act(() => useNotificationPreferencesStore.setState({ loaded: true, filters: { mutedKinds: [], mutedSources: ["cloud"] } }));
+			expect(show).not.toHaveBeenCalled();
+			view.unmount();
+		} finally {
+			cloud.data = undefined;
 		}
 	});
 });

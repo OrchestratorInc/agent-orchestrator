@@ -570,6 +570,9 @@ let pendingBounce: { id: number; critical: boolean } | null = null;
 // Live mirror of the persisted `soundNotificationsEnabled` UI setting, kept in sync by the
 // uiSettings:set handler so a toggle flip takes effect without an app restart.
 let soundNotificationsEnabled = DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
+// Live mirror of `notificationsEnabled`. The renderer already drops notifications
+// while it is off; main checks too so no alert, sound or bounce slips through.
+let notificationsEnabled = DEFAULT_UI_SETTINGS.notificationsEnabled;
 
 // Plays the bundled notification sound through the renderer (main has no
 // audio output). `shell.beep()` is only the fallback for when no shell is
@@ -4107,6 +4110,7 @@ ipcMain.handle("uiSettings:get", async (): Promise<UiSettings> => {
 		const runFile = runFilePath();
 	const result = !runFile ? coerceUiSettings(settings) : await writeUiSettings(path.dirname(runFile), settings);
 	trayController?.setLocale(result.locale);
+	notificationsEnabled = result.notificationsEnabled;
 	soundNotificationsEnabled = result.soundNotificationsEnabled;
 	terminalShellPreference = result.terminalShell;
 	shellEnvPromise = null;
@@ -4185,7 +4189,7 @@ function cancelDockBounce(): void {
 ipcMain.handle(
 	"notifications:show",
 	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) => {
-		if (!notification.id || !mainWindow) return;
+		if (!notification.id || !mainWindow || !notificationsEnabled) return;
 		// "Already looking" = the window has focus, or the renderer reports the
 		// prompt itself is on screen (`watched`). Visual signals are skipped then.
 		const looking = mainWindow.isFocused() || notification.watched === true;
@@ -4905,6 +4909,7 @@ app.whenReady().then(async () => {
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))
 		: { ...DEFAULT_UI_SETTINGS };
+	notificationsEnabled = initialUiSettings.notificationsEnabled;
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
