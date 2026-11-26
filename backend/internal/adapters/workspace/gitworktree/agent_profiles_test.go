@@ -222,8 +222,9 @@ func TestDestroyRefusesUnreadableAgentProfile(t *testing.T) {
 }
 
 // Under core.ignoreCase (the macOS and Windows default) git folds case when
-// matching the lowercase AO glob, so a mixed-case user profile is hidden
-// too: teardown must still refuse and the stash must still capture it.
+// matching the lowercase AO glob, so a mixed-case user profile, directory
+// included, is hidden too: teardown must still refuse and the stash must
+// still capture it.
 func TestUserAuthoredAgentProfileProtectedUnderIgnoreCase(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -239,7 +240,13 @@ func TestUserAuthoredAgentProfileProtectedUnderIgnoreCase(t *testing.T) {
 	}
 	outputGit(t, git, repo, "config", "core.ignoreCase", "true")
 	poisonCopilotExclude(t, repo)
-	profile := writeAgentProfile(t, info.Path, "AO-Reviewer.Agent.md", "# my hand-written reviewer agent\n")
+	profile := filepath.Join(info.Path, ".GitHub", "Agents", "AO-Reviewer.Agent.md")
+	if err := os.MkdirAll(filepath.Dir(profile), 0o755); err != nil {
+		t.Fatalf("mkdir agents dir: %v", err)
+	}
+	if err := os.WriteFile(profile, []byte("# my hand-written reviewer agent\n"), 0o600); err != nil {
+		t.Fatalf("write agent profile: %v", err)
+	}
 	if status := strings.TrimSpace(string(outputGit(t, git, info.Path, "status", "--porcelain"))); status != "" {
 		t.Fatalf("precondition: git status should not see the case-folded profile, got %q", status)
 	}
@@ -252,7 +259,7 @@ func TestUserAuthoredAgentProfileProtectedUnderIgnoreCase(t *testing.T) {
 		t.Fatal("StashUncommitted read a worktree holding a case-folded user profile as clean")
 	}
 	tree := string(outputGit(t, git, info.Path, "ls-tree", "-r", "--name-only", ref))
-	if !strings.Contains(tree, ".github/agents/AO-Reviewer.Agent.md") {
+	if !strings.Contains(tree, ".GitHub/Agents/AO-Reviewer.Agent.md") {
 		t.Fatalf("preserve ref does not contain the case-folded profile, tree:\n%s", tree)
 	}
 

@@ -95,9 +95,11 @@ func forceAddTempIndexArgs(worktree string, paths ...string) []string {
 
 // ignoredAgentProfilesArgs lists untracked files under .github/agents/ that
 // exclude rules hide, NUL-separated. User negations in .gitignore are
-// honored, so a profile the user force-included never appears here.
+// honored, so a profile the user force-included never appears here. The
+// pathspec is case-insensitive because under core.ignoreCase AO's glob also
+// hides a mixed-case directory such as .GitHub/Agents/.
 func ignoredAgentProfilesArgs(worktree string) []string {
-	return []string{"-C", worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ".github/agents/"}
+	return []string{"-C", worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ":(icase).github/agents/"}
 }
 
 // writeTreeArgs flushes the temp index into a tree object and prints the SHA.
