@@ -32,7 +32,10 @@ const tailnet = { hostId: "a", host: "100.64.0.20" } as ServerConfig;
 let renderer: ReactTestRenderer | undefined;
 let conversation!: MobileConversation;
 const shown: string[] = [];
+/** Renders of the screen: the component that owns the conversation hook. */
+let renders = 0;
 function Harness({ id, cfg = lan }: { id: string; cfg?: ServerConfig }) {
+	renders++;
 	conversation = useMobileConversation(cfg, "host.a", id);
 	const last = conversation.snapshot?.items.at(-1);
 	// The reply reads its text as the timeline's does: newer text than the
@@ -41,15 +44,10 @@ function Harness({ id, cfg = lan }: { id: string; cfg?: ServerConfig }) {
 		? <LiveRepliesContext.Provider value={conversation.liveReplies}><Reply message={last} /></LiveRepliesContext.Provider>
 		: null;
 }
-let renders = 0;
 function Reply({ message }: { message: ConversationMessage }) {
 	const latest = useLiveReplyText(message);
 	if (shown.at(-1) !== latest) shown.push(latest);
 	return null;
-}
-function Counted({ id }: { id: string }) {
-	renders++;
-	return <Harness id={id} />;
 }
 
 /** The machine's answer: an older settled message and the reply as it stands after `reads` reads. */
@@ -137,14 +135,20 @@ it("on a slow link runs one read at a time and shows every answer", async () => 
 
 it("renders only the reply while nothing but its text grows, and the conversation once more changes", async () => {
 	answerAfter(30);
-	await act(async () => { renderer = create(<Counted id="identity" />); await vi.advanceTimersByTimeAsync(50); });
+	await act(async () => { renderer = create(<Harness id="identity" />); await vi.advanceTimersByTimeAsync(50); });
 	await act(async () => { await vi.advanceTimersByTimeAsync(50); });
 	expect(conversation.snapshot?.items).toHaveLength(2);
 	const opened = conversation.snapshot;
 	const settled = opened?.items[0];
+	// The first streamed read can still render the screen once and bail out: React
+	// re-runs a component on a same-value state update while its fiber holds the
+	// last update's lanes, without rendering anything below it. Counted after it.
+	await stream(300);
+	await act(async () => { await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL_MS * 2); });
 	const screenRenders = renders;
 	await stream(1_000);
-	await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+	// Past the read interval, so the last change's read has answered.
+	await act(async () => { await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL_MS * 2); });
 	// The words still reach the reply, read by read; the screen's conversation stands.
 	expect(shown.at(-1)).toBe(`words ${reads}`);
 	expect(shown.length).toBeGreaterThan(3);
