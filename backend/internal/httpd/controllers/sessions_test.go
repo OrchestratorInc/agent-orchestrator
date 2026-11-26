@@ -5807,3 +5807,36 @@ func TestSessionsAPI_DeleteSessionRefusal(t *testing.T) {
 		t.Fatalf("delete = %d %s, want 409 WORKSPACE_NOT_RELEASED", status, body)
 	}
 }
+
+// An artifact file's response names the file its path resolves to, so the
+// desktop can keep a shared page's files to the page's own folder.
+func TestSessionsAPI_PreviewArtifactNamesResolvedPath(t *testing.T) {
+	artifacts := t.TempDir()
+	for _, dir := range []string{"docs", "private"} {
+		if err := os.MkdirAll(filepath.Join(artifacts, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"docs/a b.png", "private/customer.png"} {
+		if err := os.WriteFile(filepath.Join(artifacts, filepath.FromSlash(name)), []byte("png"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("..", "private", "customer.png"), filepath.Join(artifacts, "docs", "link.png")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata = domain.SessionMetadata{WorkspacePath: t.TempDir(), ArtifactDir: artifacts}
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+	for _, tc := range []struct{ path, want string }{
+		{"docs/a%20b.png", "docs/a%20b.png"},
+		{"docs/link.png", "private/customer.png"},
+	} {
+		_, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/"+tc.path+"?source=artifact&raw=true", "")
+		if status != http.StatusOK || headers.Get(previewutil.ResolvedPathHeader) != tc.want {
+			t.Fatalf("%s: status %d, %s = %q, want %q", tc.path, status, previewutil.ResolvedPathHeader, headers.Get(previewutil.ResolvedPathHeader), tc.want)
+		}
+	}
+}
