@@ -1281,7 +1281,7 @@ export function useConversationCommands(
 			"/api/v1/sessions/{sessionId}/exit-agent",
 			{ params: { path: { sessionId: sessionId as string } } },
 		);
-		if (error) throw apiErrorException(error);
+		if (error && apiErrorCode(error) !== "AGENT_EXITED") throw apiErrorException(error);
 		await resume.mutateAsync();
 	};
 
