@@ -92,6 +92,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/terminaltitle"
+	turnfailuresvc "github.com/aoagents/agent-orchestrator/backend/internal/service/turnfailure"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
@@ -889,10 +890,14 @@ func Run(buildVersion string) (retErr error) {
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
+	failureCoordinator := turnfailuresvc.New(store, turnFailureDelivery{sessions: reportSessions}, log)
+	chatSvc.SetTurnFailureWake(failureCoordinator.Wake)
+	failureDeliveryDone := failureCoordinator.Start(ctx)
 	defer func() {
 		unsubscribeReportActivity()
 		stop()
 		<-reportDeliveryDone
+		<-failureDeliveryDone
 	}()
 	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
 
@@ -1832,6 +1837,37 @@ func (s sessionConversationService) StopTurn(ctx context.Context, id domain.Sess
 		}
 	}
 	return err
+}
+
+// turnFailureDelivery marks the send errors that prove nothing reached the
+// orchestrator, so the failure coordinator may choose another one next time.
+// Every other error keeps the recipient pinned: a terminal session can fail
+// after its prompt was already typed (a cancelled wait, a store read error, the
+// session ending), and that prompt may still be accepted.
+type turnFailureDelivery struct {
+	sessions reportSemanticSession
+}
+
+func (d turnFailureDelivery) SendSemantic(ctx context.Context, id domain.SessionID, message, idempotencyKey string) error {
+	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	if refusedBeforeSending(err) {
+		return fmt.Errorf("%w: %w", turnfailuresvc.ErrRefusedDelivery, err)
+	}
+	return err
+}
+
+// refusedBeforeSending lists the errors SendSemantic returns before writing
+// anything: the session is missing, its composer holds a draft, or it cannot
+// confirm acceptance at all. The acceptance timeout also carries
+// ErrSemanticAcceptanceUnsupported, but it follows a write, so it is excluded.
+func refusedBeforeSending(err error) bool {
+	if err == nil || errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) ||
+		strings.Contains(err.Error(), sessionmanager.ErrPromptSubmissionUnobserved.Error()) {
+		return false
+	}
+	return errors.Is(err, sessionmanager.ErrNotFound) ||
+		errors.Is(err, sessionmanager.ErrComposerBusy) ||
+		errors.Is(err, sessionmanager.ErrSemanticAcceptanceUnsupported)
 }
 
 type reportSemanticDelivery struct {

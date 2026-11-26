@@ -1141,6 +1141,18 @@ type UsageTierRepair struct {
 	UsageSourceID int64
 }
 
+type WorkerTurnFailureDelivery struct {
+	TurnID          string
+	SessionID       string
+	ProjectID       string
+	CreatedAt       time.Time
+	NextAttemptAt   time.Time
+	Attempts        int64
+	TargetSessionID sql.NullString
+	AcceptedAt      sql.NullTime
+	LastError       string
+}
+
 type WorkspaceRepo struct {
 	ProjectID     domain.ProjectID
 	Name          string
