@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
@@ -73,6 +74,9 @@ type remoteGate struct {
 	typed bool
 	// source is what a drag picks up; selector is where it drops.
 	source string
+	// nth picks one of the elements selector matches ("0", "2", "-1" for the
+	// last); empty means the first.
+	nth string
 }
 
 // Commands that read, navigate by URL, or change a field's value without
@@ -136,6 +140,23 @@ func classifyRemoteArgs(args []string) remoteGate {
 		return remoteGate{}
 	case "find":
 		return classifyFind(rest)
+	case "wait":
+		// wait --fn evaluates its expression in the page: it is an eval.
+		if scriptFlag(rest) != "" {
+			return remoteGate{kind: remoteAsk, action: "wait"}
+		}
+		return remoteGate{}
+	case "open", "goto", "navigate":
+		// A javascript: address runs script in the page.
+		for _, word := range rest {
+			if !strings.HasPrefix(word, "-") {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(word)), "javascript:") {
+					return remoteGate{kind: remoteAsk, action: command}
+				}
+				break
+			}
+		}
+		return remoteGate{}
 	case "download":
 		// agent-browser downloads by clicking the element: it is a click.
 		if len(rest) == 0 {
@@ -171,7 +192,9 @@ func classifyRemoteArgs(args []string) remoteGate {
 	return remoteGate{kind: remoteAsk, action: command}
 }
 
-// classifyFind handles `find <locator> <value> <action> [--name N]`.
+// classifyFind handles `find <locator> <value> [action] [text]` (and
+// `find nth <index> <selector> [action]`). The action defaults to click, as
+// agent-browser's does; a shape it does not recognise asks.
 func classifyFind(rest []string) remoteGate {
 	var positional []string
 	name := ""
@@ -186,25 +209,67 @@ func classifyFind(rest []string) remoteGate {
 		}
 		positional = append(positional, rest[i])
 	}
-	if len(positional) < 3 {
-		return remoteGate{}
+	unknown := remoteGate{kind: remoteAsk, action: "find"}
+	if len(positional) < 2 {
+		return unknown
 	}
-	action := strings.ToLower(positional[2])
+	locator := strings.ToLower(positional[0])
+	values := 1
+	if locator == "nth" {
+		values = 2
+	}
+	if len(positional) < 1+values {
+		return unknown
+	}
+	action := "click"
+	if len(positional) > 1+values {
+		action = strings.ToLower(positional[1+values])
+	}
 	gate := remoteGate{kind: remoteDescribe, action: "click"}
 	switch {
 	case action == "click" || action == "dblclick":
-	case action == "type" && slices.ContainsFunc(positional[3:], approval.HasLineBreak):
+	case action == "type" && slices.ContainsFunc(positional[2+values:], approval.HasLineBreak):
 		gate.action, gate.key, gate.typed = "type", "Enter", true
-	default:
+	case action == "fill" || action == "check" || action == "uncheck" || action == "hover" || action == "text" || action == "type":
+		// A value change, a hover, or a read: nothing is submitted.
 		return remoteGate{}
+	default:
+		return unknown
 	}
-	if strings.EqualFold(positional[0], "role") {
-		gate.role = strings.ToLower(positional[1])
-		gate.name = name
-	} else {
-		gate.name = positional[1]
+	value := positional[1]
+	switch locator {
+	case "role":
+		gate.role, gate.name = strings.ToLower(value), name
+	case "text", "label", "placeholder", "alt", "title":
+		gate.name = value
+	case "testid":
+		gate.selector = fmt.Sprintf("[data-testid=%q]", value)
+	case "first":
+		gate.selector, gate.nth = value, "0"
+	case "last":
+		gate.selector, gate.nth = value, "-1"
+	case "nth":
+		if _, err := strconv.Atoi(value); err != nil {
+			return unknown
+		}
+		gate.selector, gate.nth = positional[2], value
+	default:
+		return unknown
 	}
 	return gate
+}
+
+// scriptFlag returns the expression wait --fn evaluates, or "".
+func scriptFlag(rest []string) string {
+	for i, word := range rest {
+		if word == "--fn" && i+1 < len(rest) {
+			return rest[i+1]
+		}
+		if expression, ok := strings.CutPrefix(word, "--fn="); ok {
+			return expression
+		}
+	}
+	return ""
 }
 
 func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionID, args []string) error {
@@ -275,7 +340,7 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		switch {
 		case gate.action == "dialog":
 			reason = "Accepting the page's dialog lets the page carry on with what it asked to confirm."
-		case gate.action != "eval" && gate.action != "js":
+		case !runsScript(gate.action):
 			reason = "Orchestrator cannot tell in advance what this command does on the page, so it asks first."
 		}
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
@@ -328,6 +393,15 @@ func sameRemoteTarget(a, b approval.Target) bool {
 		a.FormHasPassword == b.FormHasPassword && a.FormHasNewPassword == b.FormHasNewPassword && a.SubmitName == b.SubmitName
 }
 
+// runsScript reports the remote commands that evaluate script in the page.
+func runsScript(action string) bool {
+	switch action {
+	case "eval", "js", "wait", "open", "goto", "navigate":
+		return true
+	}
+	return false
+}
+
 func remoteTargetChanged() error {
 	return apierr.Conflict("BROWSER_TARGET_CHANGED",
 		"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.", nil)
@@ -342,12 +416,19 @@ func remoteSummary(gate remoteGate, args []string) string {
 		return "Accept the page's dialog"
 	}
 	if gate.kind == remoteAsk {
-		if gate.action == "eval" || gate.action == "js" {
+		if runsScript(gate.action) {
+			// The script is the action being approved: show it, and say plainly
+			// when it is too long to show whole, since Allow runs all of it.
 			script := strings.Join(remoteCommandArgs(args, gate.action), " ")
-			if len(script) > 160 {
-				script = script[:160] + "…"
+			if gate.action == "wait" {
+				script = "--fn " + scriptFlag(args)
 			}
-			return fmt.Sprintf("Run %q", strings.TrimSpace(gate.action+" "+script))
+			shown, cut := approval.Truncate(strings.TrimSpace(script), 160)
+			text := fmt.Sprintf("Run %q", strings.TrimSpace(gate.action+" "+shown))
+			if cut > 0 {
+				text += fmt.Sprintf(" (script cut: %d more characters not shown; Allow runs all of it)", cut)
+			}
+			return text
 		}
 		return fmt.Sprintf("Run %q", gate.action)
 	}
@@ -356,10 +437,7 @@ func remoteSummary(gate remoteGate, args []string) string {
 	case gate.name != "":
 		target = fmt.Sprintf("%q", gate.name)
 	case gate.selector != "":
-		target = gate.selector
-		if len(target) > 80 {
-			target = target[:80] + "…"
-		}
+		target, _ = approval.Truncate(gate.selector, 80)
 	}
 	switch {
 	case gate.action == "drag":
@@ -376,10 +454,8 @@ func remoteSummary(gate remoteGate, args []string) string {
 
 // remoteSelectorLabel shortens a selector or ref for a prompt.
 func remoteSelectorLabel(selector string) string {
-	if len(selector) > 80 {
-		return selector[:80] + "…"
-	}
-	return selector
+	label, _ := approval.Truncate(selector, 80)
+	return label
 }
 
 // remoteCommandArgs returns what follows the command verb in args.
@@ -454,6 +530,9 @@ func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target app
 		request = map[string]string{"mode": "named", "role": target.Role, "name": target.Name}
 	default:
 		request = map[string]string{"mode": "selector", "selector": gate.selector}
+		if gate.nth != "" {
+			request["nth"] = gate.nth
+		}
 	}
 	named := request["mode"] == "named"
 	if named && target.Role == "" && gate.action != "type" {
@@ -570,7 +649,9 @@ if (req.mode === "named") {
   if (hits.length !== 1) return { partial: true, documentOrigin: performance.timeOrigin };
   el = hits[0];
 } else {
-  el = req.mode === "focused" ? document.activeElement : document.querySelector(req.selector);
+  if (req.mode === "focused") el = document.activeElement;
+  else if (req.nth === undefined) el = document.querySelector(req.selector);
+  else { const all = document.querySelectorAll(req.selector); const i = Number(req.nth); el = all[i < 0 ? all.length + i : i]; }
 }
 if (!el || el === document.body) return null;
 const tag = el.tagName.toLowerCase();

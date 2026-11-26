@@ -603,3 +603,68 @@ func TestRemoteDragIsJudgedByWhereItDrops(t *testing.T) {
 		t.Fatalf("err=%v pending=%d forwarded=%v", err, len(gate2.Pending()), calm.sent())
 	}
 }
+
+func TestClassifyRemoteScriptFlagsAndFindShapes(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want remoteGate
+	}{
+		// wait --fn evaluates its expression in the page, like eval.
+		{[]string{"wait", "--fn", "document.forms[0].submit()"}, remoteGate{kind: remoteAsk, action: "wait"}},
+		{[]string{"wait", "#spinner"}, remoteGate{}},
+		{[]string{"wait", "--text", "Done"}, remoteGate{}},
+		{[]string{"wait", "500"}, remoteGate{}},
+		// A javascript: address runs script in the page.
+		{[]string{"open", "javascript:document.forms[0].submit()"}, remoteGate{kind: remoteAsk, action: "open"}},
+		{[]string{"goto", " JavaScript:alert(1)"}, remoteGate{kind: remoteAsk, action: "goto"}},
+		{[]string{"open", "https://example.com"}, remoteGate{}},
+		// find's action defaults to click.
+		{[]string{"find", "text", "Place order"}, remoteGate{kind: remoteDescribe, action: "click", name: "Place order"}},
+		{[]string{"find", "role", "button", "--name", "Pay now"}, remoteGate{kind: remoteDescribe, action: "click", role: "button", name: "Pay now"}},
+		// nth takes an index and a selector before the action.
+		{[]string{"find", "nth", "2", "button.pay", "click"}, remoteGate{kind: remoteDescribe, action: "click", selector: "button.pay", nth: "2"}},
+		{[]string{"find", "nth", "2", ".card", "hover"}, remoteGate{}},
+		{[]string{"find", "first", "li.item"}, remoteGate{kind: remoteDescribe, action: "click", selector: "li.item", nth: "0"}},
+		{[]string{"find", "last", "li.item", "click"}, remoteGate{kind: remoteDescribe, action: "click", selector: "li.item", nth: "-1"}},
+		{[]string{"find", "testid", "pay-btn"}, remoteGate{kind: remoteDescribe, action: "click", selector: `[data-testid="pay-btn"]`}},
+		{[]string{"find", "role", "heading", "text", "--name", "Welcome"}, remoteGate{}},
+		{[]string{"find", "label", "Email", "fill", "a@b.c"}, remoteGate{}},
+		{[]string{"find", "label", "Agree", "check"}, remoteGate{}},
+		// Shapes it does not recognise ask.
+		{[]string{"find", "text", "Pay", "frobnicate"}, remoteGate{kind: remoteAsk, action: "find"}},
+		{[]string{"find", "text"}, remoteGate{kind: remoteAsk, action: "find"}},
+		{[]string{"find", "nth", "2"}, remoteGate{kind: remoteAsk, action: "find"}},
+		{[]string{"find", "sideways", "x", "click"}, remoteGate{kind: remoteAsk, action: "find"}},
+	} {
+		if got := classifyRemoteArgs(tc.args); got != tc.want {
+			t.Errorf("%q = %+v, want %+v", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestRemoteWaitFnAsksAndShowsTheScript(t *testing.T) {
+	remote := &fakeRemote{}
+	svc, gate, token := remoteService(t, remote)
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"wait", "--fn", "document.forms[0].submit()"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+		t.Fatalf("err=%v forwarded=%v", err, remote.sent())
+	}
+	if p := <-asked; p.Category != approval.CategoryScript || !strings.Contains(p.Action, "document.forms[0].submit()") || !strings.Contains(p.Reason, "JavaScript") {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestRemoteLongScriptPromptSaysItIsCut(t *testing.T) {
+	// A harmless-looking prefix must not hide what runs after it.
+	script := strings.Repeat("/* harmless */ ", 12) + "document.forms.pay.submit()"
+	remote := &fakeRemote{}
+	svc, gate, token := remoteService(t, remote)
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"eval", script}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	p := <-asked
+	if !strings.Contains(p.Action, "more characters not shown; Allow runs all of it") {
+		t.Fatalf("summary does not say the script is cut: %q", p.Action)
+	}
+}

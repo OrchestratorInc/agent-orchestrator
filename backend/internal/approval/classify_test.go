@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 type corpusEntry struct {
@@ -283,5 +284,18 @@ func TestNewPasswordFormAsksEvenBehindASignInLabel(t *testing.T) {
 	signIn.FormHasNewPassword = false
 	if got := Classify(signIn, ModeRisky); got.NeedsApproval {
 		t.Fatalf("plain sign-in asked: %+v", got)
+	}
+}
+
+func TestTruncateCountsCharactersNotBytes(t *testing.T) {
+	shown, cut := Truncate(strings.Repeat("é", 130), 120)
+	if !utf8.ValidString(shown) || cut != 10 || strings.Count(shown, "é") != 120 {
+		t.Fatalf("shown %q cut %d", shown, cut)
+	}
+	if shown, cut := Truncate("short", 120); shown != "short" || cut != 0 {
+		t.Fatalf("shown %q cut %d", shown, cut)
+	}
+	if got := ClassifyDialog("confirm", strings.Repeat("削除", 100), ModeRisky); !utf8.ValidString(got.Summary) {
+		t.Fatalf("dialog summary split a character: %q", got.Summary)
 	}
 }

@@ -449,12 +449,20 @@ func ClassifyDialog(kind, message string, mode Mode) Verdict {
 		verdict.Summary = fmt.Sprintf("Accept the page's %s dialog", strings.ToLower(kind))
 	}
 	if text := strings.TrimSpace(message); text != "" {
-		if len(text) > 120 {
-			text = text[:120] + "…"
-		}
+		text, _ = Truncate(text, 120)
 		verdict.Summary += fmt.Sprintf(" %q", text)
 	}
 	return verdict
+}
+
+// Truncate cuts s to at most max characters (not bytes, so a multi-byte
+// character is never split) and reports how many characters it left out.
+func Truncate(s string, max int) (string, int) {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s, 0
+	}
+	return string(runes[:max]) + "…", len(runes) - max
 }
 
 // HasLineBreak reports whether typed text contains a line break. Runtimes
