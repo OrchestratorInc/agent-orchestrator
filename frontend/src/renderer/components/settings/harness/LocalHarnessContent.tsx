@@ -140,6 +140,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const mountedRef = useRef(true);
 	authWorkflowRef.current = authWorkflow;
 	const activeInstallJobs = useRef(new Set<AgentId>());
+	// Post-job readiness confirmations still running, per harness.
+	const pendingConfirmations = useRef(new Map<AgentId, number>());
 	const expandedFailures = useRef(new Map<AgentId, string>());
 	const pendingActions = useRef(new Set<AgentId>());
 	const authChecksInFlight = useRef(new Map<AgentId, Promise<AgentAuthProbeResult | undefined>>());
@@ -282,9 +284,20 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const checkAuthRef = useRef<(agentId: AgentId) => Promise<unknown>>(async () => undefined);
 	const refreshInstalledAgent = useCallback((agentId: AgentId, { confirmsJob = false }: { confirmsJob?: boolean } = {}) => {
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
-		if (confirmsJob) setConfirmingInstalls((current) => current.includes(agentId) ? current : [...current, agentId]);
+		if (confirmsJob) {
+			pendingConfirmations.current.set(agentId, (pendingConfirmations.current.get(agentId) ?? 0) + 1);
+			setConfirmingInstalls((current) => current.includes(agentId) ? current : [...current, agentId]);
+		}
 		void checkAuthRef.current(agentId).then((confirmed) => {
 			if (!confirmsJob) return;
+			// Checks for one harness queue behind each other: only the last to
+			// settle, holding the newest readiness, ends Verifying.
+			const remaining = (pendingConfirmations.current.get(agentId) ?? 1) - 1;
+			if (remaining > 0) {
+				pendingConfirmations.current.set(agentId, remaining);
+				return;
+			}
+			pendingConfirmations.current.delete(agentId);
 			setConfirmingInstalls((current) => current.filter((id) => id !== agentId));
 			// A failed readiness refresh confirms nothing: no Done, and the row
 			// reports the check so it can be run again. A job that succeeded but
