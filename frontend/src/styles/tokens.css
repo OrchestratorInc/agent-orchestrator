@@ -253,6 +253,8 @@
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);
 	--radius-lg: var(--radius);
+	/* Buttons, inputs and select triggers. */
+	--radius-control: var(--radius-md);
 	--radius-panel: calc(var(--radius) * 1.4);
 	--radius-full: 999px; /* pills, avatars, status dots */
 	--radius-swatch: 2px; /* board lane squares: square-reading, not a dot */

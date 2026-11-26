@@ -834,6 +834,48 @@ paths:
       summary: Ensure launch-fresh readiness for one agent adapter
       tags:
       - agents
+  /api/v1/agents/{agent}/skills:
+    get:
+      operationId: listAgentSkills
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - description: Project whose skill folders are read before the user's. Omitted
+          scans only the user's own skills.
+        in: query
+        name: projectId
+        schema:
+          description: Project whose skill folders are read before the user's. Omitted
+            scans only the user's own skills.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSkillsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List the skills an agent offers in a project, read from its skill folders
+        without a session
+      tags:
+      - agents
   /api/v1/agents/{agent}/update-advisory:
     get:
       operationId: getAgentUpdateAdvisory
