@@ -125,18 +125,21 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 			// would otherwise be cleared by it.
 			const write = turnSettingWrite(fast?.settings(snapshot.settings) ?? snapshot.settings, row, value);
 			held.current = value;
-			const drop = () => {
+			// A failed save also takes Ultracode back to how it was. A save only
+			// slow to be reported drops the pick shown and nothing else: if it
+			// lands, its Ultracode stands; a report of another level turns it off.
+			const drop = (failed: boolean) => {
 				if (saves.current !== save) return;
 				held.current = undefined;
 				if (picked.current !== undefined) return;
 				stopConfirmTimer();
 				slider.setPick(undefined);
-				setUltracode(confirmedUltracode.current);
+				if (failed) setUltracode(confirmedUltracode.current);
 			};
 			// Held until the conversation shows it (the effect below), or dropped
 			// if it never does.
-			confirmTimer.current = setTimeout(drop, EFFORT_CONFIRM_MS);
-			void (write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings)).catch(drop);
+			confirmTimer.current = setTimeout(() => drop(false), EFFORT_CONFIRM_MS);
+			void (write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings)).catch(() => drop(true));
 		};
 	});
 	// Stable, so the slider's memoised host is left alone while the composer
@@ -149,6 +152,14 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 	// The conversation now reports the level picked, or no longer offers it:
 	// show its own again. Not while a finger is still choosing.
 	const offered = useMemo(() => new Set(choices.map((choice) => choice.value)), [choices]);
+	// The conversation reports a level other than Extra High, with Extra High
+	// not on its way: Ultracode, which is Extra High, is off.
+	const lastSaved = useRef(saved);
+	useEffect(() => {
+		const changed = lastSaved.current !== saved;
+		lastSaved.current = saved;
+		if (changed && saved !== undefined && saved !== ULTRACODE_LEVEL && held.current !== ULTRACODE_LEVEL && ultracodeWanted) setUltracode(false);
+	}, [saved, ultracodeWanted, setUltracode]);
 	useEffect(() => {
 		if (held.current !== undefined && (held.current === saved || !row?.choices.some((choice) => choice.value === held.current))) held.current = undefined;
 		const pick = slider.pick();

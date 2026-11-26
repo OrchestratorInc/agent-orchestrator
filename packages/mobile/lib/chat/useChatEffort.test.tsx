@@ -290,6 +290,41 @@ describe("chat effort", () => {
 			expect(effort.ultracode).toBe(true);
 		});
 
+		// A save only slow to be reported must not turn Ultracode off: if it
+		// lands, the chat would run Extra High with Ultracode silently gone.
+		it("keeps Ultracode through a confirm timeout, until a failure or a report of another level", async () => {
+			vi.useFakeTimers();
+			try {
+				const saves: Array<{ reject: (cause: Error) => void }> = [];
+				const { update } = render({ models: claude, snapshot: claudeChat("high"), ultracodeKey: "k", onSettings: () => new Promise<void>((_resolve, reject) => { saves.push({ reject }); }) });
+				await act(async () => {});
+				act(() => slider.toggle());
+				await act(async () => { effort.choose("ultracode"); effort.commit(); });
+				expect(stored.get("k")).toBe("1");
+				await act(async () => { vi.advanceTimersByTime(EFFORT_CONFIRM_MS); });
+				expect(stored.get("k")).toBe("1");
+				// The save lands late.
+				update(claudeChat("xhigh"));
+				expect(effort.ultracode).toBe(true);
+				expect(effort.sendsUltracode()).toBe(true);
+				// Another level reported: off.
+				await act(async () => { update(claudeChat("max")); });
+				expect(effort.ultracode).toBe(false);
+				expect(stored.has("k")).toBe(false);
+				// And a save that fails after its timeout: off.
+				update(claudeChat("high"));
+				await act(async () => { effort.choose("ultracode"); effort.commit(); });
+				await act(async () => { vi.advanceTimersByTime(EFFORT_CONFIRM_MS); });
+				expect(stored.get("k")).toBe("1");
+				await act(async () => saves[1].reject(new Error("no")));
+				expect(stored.has("k")).toBe(false);
+				update(claudeChat("xhigh"));
+				expect(effort.ultracode).toBe(false);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("saves Extra High, and is on once the conversation reports it", () => {
 			const onSettings = vi.fn(() => Promise.resolve());
 			const { update } = render({ models: claude, snapshot: claudeChat(), onSettings });
