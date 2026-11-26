@@ -248,6 +248,8 @@ func TestPrintedLoginURL(t *testing.T) {
 	}{
 		{"stitches a wrapped link", "If not:\n" + wrapped + "\n(1–20 of 29 lines)\n", agyLink},
 		{"stops at a short last line", wrapped + "\nCopy\n", agyLink},
+		{"keeps a complete link", "https://accounts.google.com/o/oauth2/auth?client_id=x\nCopy\n", "https://accounts.google.com/o/oauth2/auth?client_id=x"},
+		{"stitches a link wrapped onto two full lines", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n(1–20 of 29 lines)\n", agyWrappedLink[0] + agyWrappedLink[1]},
 		{"single line", "Open https://accounts.google.com/o/oauth2/auth?client_id=x in your browser\n", "https://accounts.google.com/o/oauth2/auth?client_id=x"},
 		{"rejects other hosts", "https://evil.example.com/o/oauth2/auth?x=1\n", ""},
 		{"rejects other paths", "https://accounts.google.com/signin/v2?x=1\n", ""},

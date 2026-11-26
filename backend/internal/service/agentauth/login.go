@@ -712,9 +712,11 @@ func (s *Service) probeOwnSignIn(ctx context.Context, agentID string) bool {
 var urlTextLine = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$`)
 
 // printedLoginURL returns the last allowed sign-in link in a hidden login's
-// output. A full-screen CLI wraps a long link across full-width lines, so
-// each following URL-only line continues it while the line before it was
-// as wide as the line the link started on.
+// output. A full-screen CLI wraps a long link across full-width lines. The
+// terminal width is not observable here, so wrapping is proven only by a
+// following URL-only line exactly as wide as the line the link started on;
+// once proven, further full-width lines and one shorter tail line continue
+// it. A complete link followed by a short URL-like word stays unchanged.
 func printedLoginURL(agentID, output string) string {
 	lines := strings.Split(terminalui.PlainTerminalText(output), "\n")
 	found := ""
@@ -724,18 +726,25 @@ func printedLoginURL(agentID, output string) string {
 		if start < 0 {
 			continue
 		}
-		link, width, previous := line[start:], len(line), line
+		link, width, wrapped := line[start:], len(line), false
 		if !urlTextLine.MatchString(link) {
 			link = strings.Fields(link)[0]
 		} else {
-			for i+1 < len(lines) && len(previous) == width {
+			for i+1 < len(lines) {
 				next := strings.TrimSpace(lines[i+1])
 				if next == "" || !urlTextLine.MatchString(next) {
 					break
 				}
+				fullWidth := len(next) == width
+				if !fullWidth && !wrapped {
+					break
+				}
 				link += next
-				previous = next
 				i++
+				if !fullWidth {
+					break
+				}
+				wrapped = true
 			}
 		}
 		if safeLoginURL(agentID, link) {
