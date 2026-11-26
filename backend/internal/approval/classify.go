@@ -483,14 +483,14 @@ func ClassifyDialog(kind, message string, mode Mode) Verdict {
 	return verdict
 }
 
-// Truncate cuts s to at most max characters (not bytes, so a multi-byte
+// Truncate cuts s to at most limit characters (not bytes, so a multi-byte
 // character is never split) and reports how many characters it left out.
-func Truncate(s string, max int) (string, int) {
+func Truncate(s string, limit int) (string, int) {
 	runes := []rune(s)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return s, 0
 	}
-	return string(runes[:max]) + "…", len(runes) - max
+	return string(runes[:limit]) + "…", len(runes) - limit
 }
 
 // HasLineBreak reports whether typed text contains a line break. Runtimes
