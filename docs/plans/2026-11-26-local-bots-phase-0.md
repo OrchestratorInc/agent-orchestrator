@@ -232,9 +232,14 @@ The daemon schedules a tidy turn from `memory_tidy`. A tidy runs only when the b
 
 | Setting | Schedule |
 | --- | --- |
-| `nightly` | Each night after 03:00 local time, if the previous day had new turns. |
-| `weekly` | Once a week, on Monday after 03:00 local time, if any day since the last tidy had new turns. |
+| `nightly` | Due each night after 03:00 local time, if there were new turns since the last tidy. |
+| `weekly` | Due once a week, on Monday after 03:00 local time, if there were new turns since the last tidy. |
 | `off` | Never. The owner can still run a tidy from the Memory tab. |
+
+**Catch-up.** The rule checks turns since the last tidy, not just the previous day. So turns from days when the daemon was offline are never skipped.
+
+- When the daemon resumes past a due time it missed, it runs one catch-up tidy covering every journal day since the last tidy. It runs one tidy, not one per missed night. This follows the automation scheduler's catch-up limit.
+- The last tidy time is a durable fact: the newest tidy event in the bot conversation.
 
 The turn runs in a fresh bot session with these instructions:
 
@@ -260,9 +265,18 @@ This is an open question below.
   | --- | --- | --- |
   | `bot.json` | The bot row: handle, display name, purpose, harness, model, effort, permissions, `max_active_workers`, `memory_tidy`, `paused_at` | New bot ID on the target home. The project is matched by repository identity, not the source project ID. `home` is set to the target. The agent config is validated against the target's harnesses; an unknown model falls back to the target default and is reported to the owner. |
   | `asks.json` | Open bot asks (no `answered_at` or `withdrawn_at`), with question, kind, options, subject, and created time | Recreated as open asks, so the moved bot's system prompt and Needs-you inbox have them from its first session. Answered asks are history and live in the conversation. |
-  | `schedules.json` | Every automation with this `bot_id`: RRULE, timezone, prompt, template, enabled flag | Recreated with the same RRULE and timezone, but **disabled**. The owner re-enables them in one confirmation, so a schedule never fires on two homes. |
+  | `schedules.json` | Every automation with this `bot_id`: RRULE, timezone, prompt, template, enabled flag | Recreated with the same RRULE and timezone, but **disabled**. The owner re-enables them in one confirmation. |
   | `conversation.jsonl` | The bot conversation's turns and messages | Imported as the new bot conversation. |
 
+- **Export is a copy; a move is export plus a source-side stop.** Exporting alone, for example as a backup, does not change the source bot. Its schedules keep running. Importing that copy and enabling its schedules would run the same RRULE on both homes. So the import screen warns that the source may still be live, and AO makes no single-home guarantee for a plain copy.
+- **The move flow (Phase 2) guarantees one live home.** It runs in this order:
+  1. Pause the source bot and disable all its schedules.
+  2. Record `moved_to` (the target home) on the source row.
+  3. Export.
+  4. Import on the target, with schedules disabled.
+  5. Only after the source confirms step 1 can the owner enable schedules on the target.
+
+  If the source home is unreachable, the move does not proceed. The owner must either archive the source bot or explicitly accept a copy.
 - **Not in the bundle:**
   - Crew sessions and their worktrees stay on the source home, detached as ordinary sessions, like on Archive.
   - Credentials and sign-ins are never exported. The target home uses its own agent sign-ins.
