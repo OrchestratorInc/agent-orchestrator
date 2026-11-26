@@ -308,7 +308,8 @@ export function AgentModelPicker({
 	// Cursor's command-line ids fold settings into the model; a running Cursor chat reports its own, kept as is.
 	const live = listsModelVariants(currentHarness) && current.efforts.length === 0 && current.thinking === undefined
 		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
-		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) } : current;
+		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) }
+		: nameSharedModels(current);
 	const { settings: hostSettings } = useSettings(hostId);
 	// The agent's list is shared by every session, so it names the saved model at once.
 	// No saved model means the agent's own default, which Claude Code leaves unset.
@@ -869,6 +870,34 @@ export function catalogProblem(catalog: Pick<AgentModelCatalog, "refreshError" |
 	return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
+/**
+ * Two routes to one model read the same once shortened. Their router tells them
+ * apart, and where the router repeats too, only the full ID does.
+ */
+function nameSharedLabels<T extends { id: string; label: string }>(models: T[]): T[] {
+	const routed = (model: T) => {
+		const slash = model.id.indexOf("/");
+		return slash < 0 ? model.label : `${model.label} (${model.id.slice(0, slash)})`;
+	};
+	const uses = new Map<string, number>();
+	const routes = new Map<string, number>();
+	for (const model of models) {
+		uses.set(model.label, (uses.get(model.label) ?? 0) + 1);
+		routes.set(routed(model), (routes.get(routed(model)) ?? 0) + 1);
+	}
+	return models.map((model) => {
+		if (!model.id.includes("/") || (uses.get(model.label) ?? 0) < 2) return model;
+		return { ...model, label: (routes.get(routed(model)) ?? 0) > 1 ? model.id : routed(model) };
+	});
+}
+
+/** The running agent's models told apart, the picker button naming the chosen one the same way. */
+function nameSharedModels(source: PickerSource): PickerSource {
+	const models = nameSharedLabels(source.models);
+	const chosen = source.models.findIndex((model) => model.id === source.modelId);
+	return { ...source, models, modelLabel: source.models[chosen]?.label === source.modelLabel ? models[chosen].label : source.modelLabel };
+}
+
 /** Another agent's models and settings. Nothing changes until the switch runs; each pick is held as pending. */
 function otherAgentSource(
 	harness: string,
@@ -877,7 +906,7 @@ function otherAgentSource(
 	onPick: (next: PendingAgentSwitch) => void,
 	t: TFunction,
 ): PickerSource {
-	const listed = (catalog ?? [])
+	const listed = nameSharedLabels((catalog ?? [])
 		.filter((model) => !/^\[|\s/.test(model.id))
 		.map((model) => ({
 			id: model.id,
@@ -885,12 +914,7 @@ function otherAgentSource(
 			group: modelGroupLabel(model.provider, harness),
 			hint: model.isDefault ? "default" : undefined,
 			unavailableReason: model.unavailableReason,
-		}));
-	// Two routes to one model read the same once shortened; their router tells them apart.
-	const shared = new Set(listed.filter((entry, index) => listed.findIndex((other) => other.label === entry.label) !== index).map((entry) => entry.label));
-	for (const entry of listed) {
-		if (entry.id.includes("/") && shared.has(entry.label)) entry.label = `${entry.label} (${entry.id.slice(0, entry.id.indexOf("/"))})`;
-	}
+		})));
 	if (listsModelVariants(harness)) {
 		// With no model picked, the agent's default is shown as chosen; it is what starts.
 		return variantSource(listed, pending?.model ?? listed.find((model) => model.hint === "default")?.id, agentLabel(harness), (variant, modelLabel) => onPick({

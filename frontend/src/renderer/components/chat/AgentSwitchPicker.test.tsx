@@ -30,7 +30,12 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 				? [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }]
 				: agent === "cursor"
 					? ["claude-opus-4-8-high", "claude-opus-4-8-thinking-high"].map((id) => ({ id, label: id }))
-					: [],
+					: agent === "opencode"
+						? [
+							{ id: "fireworks/accounts/fireworks/models/kimi", label: "kimi" },
+							{ id: "fireworks/accounts/team/models/kimi", label: "team/kimi" },
+						]
+						: [],
 		}),
 	}),
 }));
@@ -88,6 +93,65 @@ describe("AgentModelPicker", () => {
 		expect(current.onPickEffort).toHaveBeenCalledWith("max");
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
+	});
+
+	// A routed catalog offers one model through several providers. The New task
+	// composer's menu lists the running agent's models, browsed and searched.
+	it("names the provider of the running agent's models that share a name", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "crush", {
+			models: [
+				{ id: "deepseek/deepseek-v4-pro", label: "deepseek-v4-pro" },
+				{ id: "fireworks/accounts/fireworks/models/deepseek-v4-pro", label: "deepseek-v4-pro" },
+				{ id: "venice/only-here", label: "only-here" },
+			],
+			modelId: "deepseek/deepseek-v4-pro",
+			modelLabel: "deepseek-v4-pro",
+		});
+		const button = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(button).toHaveTextContent("deepseek-v4-pro (deepseek)");
+		await user.click(button);
+		const names = () => screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+		expect(names()).toEqual([
+			expect.stringContaining("deepseek-v4-pro (deepseek)"),
+			expect.stringContaining("deepseek-v4-pro (fireworks)"),
+			expect.stringMatching(/^only-here(?! \()/),
+		]);
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "deepseek-v4-pro");
+		expect(names()).toEqual([
+			expect.stringContaining("deepseek-v4-pro (deepseek)"),
+			expect.stringContaining("deepseek-v4-pro (fireworks)"),
+		]);
+	});
+
+	it("shows the full ID where models that share a name share a provider too", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "crush", {
+			models: [
+				{ id: "fireworks/kimi", label: "kimi" },
+				{ id: "fireworks/accounts/fireworks/models/kimi", label: "kimi" },
+			],
+			modelId: "fireworks/kimi",
+			modelLabel: "kimi",
+		});
+		const button = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(button).toHaveTextContent("fireworks/kimi");
+		await user.click(button);
+		expect(screen.getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual([
+			expect.stringContaining("fireworks/kimi"),
+			expect.stringContaining("fireworks/accounts/fireworks/models/kimi"),
+		]);
+	});
+
+	// Another agent's names are cut to their last part, so an account's
+	// deployment reads the same as the public model it is named after.
+	it("tells another agent's deployment apart from the public model", async () => {
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "kimi");
+		expect(await screen.findByText("fireworks/accounts/team/models/kimi")).toBeInTheDocument();
+		expect(screen.getByText("fireworks/accounts/fireworks/models/kimi")).toBeInTheDocument();
 	});
 
 	it("lists Claude's newest models first and keeps the older releases below them", async () => {
