@@ -260,3 +260,51 @@ func TestSlowStartKeepsItsComputerUseTarget(t *testing.T) {
 		t.Fatalf("tool server target after a slow start = %q, want host-mac", got)
 	}
 }
+
+// A start that fails after building its prompt and before its tool server
+// leaves a snapshot behind; the next start builds its own prompt and gets the
+// setting as it is then, not the failed start's target.
+func TestFailedStartDoesNotPinTheNextStartsTarget(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(),
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+	enabled := true
+	m.SetComputerUseEnabled(func(context.Context) bool { return enabled })
+	hostID, label := "host-mac", "Studio Mac"
+	m.SetComputerUseRemote(func(context.Context) (string, string) { return hostID, label })
+
+	if _, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", "", true); err != nil {
+		t.Fatal(err)
+	}
+	// That start fails before its tool server; the user picks This computer.
+	hostID, label = "", ""
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", "", true)
+	if err != nil || strings.Contains(sp, `"Studio Mac"`) {
+		t.Fatalf("retry prompt = %v, %q, want this computer", err, sp)
+	}
+	servers := m.aoMCPServers(ctx, domain.HarnessClaudeCode, map[string]string{EnvSessionID: "mer-7"})
+	if got := servers[0].Env[config.EnvComputerUseTarget]; got != "local" {
+		t.Fatalf("retry tool server target = %q, want local", got)
+	}
+
+	// A prompt built without computer use drops a failed start's snapshot too.
+	hostID, label = "host-mac", "Studio Mac"
+	if _, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-8", "", true); err != nil {
+		t.Fatal(err)
+	}
+	enabled = false
+	hostID, label = "host-pc", "Build PC"
+	if _, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-8", "", true); err != nil {
+		t.Fatal(err)
+	}
+	m.computerUseMu.Lock()
+	_, left := m.computerUseSpawns["mer-8"]
+	m.computerUseMu.Unlock()
+	if left {
+		t.Fatal("a prompt without computer use kept the failed start's snapshot")
+	}
+}

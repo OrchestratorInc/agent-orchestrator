@@ -7064,6 +7064,8 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir), m.computerUseRemoteLabel(ctx, sessionID)))
+	} else if chat {
+		m.dropComputerUseTarget(sessionID)
 	}
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)

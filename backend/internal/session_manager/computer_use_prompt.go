@@ -61,7 +61,8 @@ func (m *Manager) computerUseTarget(ctx context.Context) (hostID, label string) 
 // computerUseSnapshotLimit only tidies up a snapshot whose session never
 // reached its tool server (a start that failed between the two). It never
 // changes the target a starting session sees: the tool server consumes the
-// snapshot however long the start took.
+// snapshot however long the start took, and the next start attempt's prompt
+// replaces a failed attempt's snapshot.
 const computerUseSnapshotLimit = 24 * time.Hour
 
 type computerUseSnapshot struct {
@@ -69,19 +70,15 @@ type computerUseSnapshot struct {
 	at            time.Time
 }
 
-// computerUseTargetFor reads "Run computer use on" once for a starting
-// session and keeps that answer for its tool server, so the prompt and the
-// tool server name the same computer even if the user changes the setting
-// while the session starts.
+// computerUseTargetFor reads "Run computer use on" once for a start attempt,
+// while its prompt is built, and keeps that answer for its tool server, so the
+// prompt and the tool server name the same computer even if the user changes
+// the setting while the session starts. Each attempt reads the setting again:
+// a snapshot left by an attempt that failed before its tool server is replaced,
+// never reused.
 func (m *Manager) computerUseTargetFor(ctx context.Context, sessionID domain.SessionID) (hostID, label string) {
 	if sessionID == "" {
 		return m.computerUseTarget(ctx)
-	}
-	m.computerUseMu.Lock()
-	snapshot, ok := m.computerUseSpawns[sessionID]
-	m.computerUseMu.Unlock()
-	if ok {
-		return snapshot.hostID, snapshot.label
 	}
 	hostID, label = m.computerUseTarget(ctx)
 	now := time.Now()
@@ -95,11 +92,16 @@ func (m *Manager) computerUseTargetFor(ctx context.Context, sessionID domain.Ses
 	if m.computerUseSpawns == nil {
 		m.computerUseSpawns = map[domain.SessionID]computerUseSnapshot{}
 	}
-	if existing, raced := m.computerUseSpawns[sessionID]; raced {
-		return existing.hostID, existing.label
-	}
 	m.computerUseSpawns[sessionID] = computerUseSnapshot{hostID: hostID, label: label, at: now}
 	return hostID, label
+}
+
+// dropComputerUseTarget forgets a start attempt's snapshot, for a prompt built
+// without computer use: its tool server then reads the setting itself.
+func (m *Manager) dropComputerUseTarget(sessionID domain.SessionID) {
+	m.computerUseMu.Lock()
+	delete(m.computerUseSpawns, sessionID)
+	m.computerUseMu.Unlock()
 }
 
 // takeComputerUseTarget is the tool server's read: the target the session's
