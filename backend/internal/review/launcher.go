@@ -687,7 +687,7 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 			}
 		}
 		ready, err := l.waitForPromptReadiness(ctx, handle, hints, wait)
-		if err != nil {
+		if err != nil && !(capped && errors.Is(err, errReviewerPromptBlocked)) {
 			return fmt.Errorf("reviewer prompt readiness: %w", err)
 		}
 		if !ready && capped {
@@ -715,6 +715,10 @@ func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingD
 		return
 	}
 	if _, err := l.waitForPromptReadiness(ctx, handle, hints, wait); err != nil {
+		if errors.Is(err, errReviewerPromptBlocked) && l.pending.abandon(handle.ID, delivery) && l.deliveryFailed != nil {
+			slog.Default().WarnContext(ctx, "reviewer review task not delivered", "handle", handle.ID, "launch", launchID, "err", err)
+			l.deliveryFailed(ctx, workerID, launchID, fmt.Errorf("reviewer prompt readiness: %w", err))
+		}
 		return
 	}
 	alive, err := l.Alive(ctx, handle.ID, launchID)
@@ -834,6 +838,18 @@ func (p *pendingDeliveries) deliver(handleID string, delivery *pendingDelivery, 
 	return true, send(delivery.message)
 }
 
+// abandon retires delivery without sending while it is still the handle's
+// current one, and reports whether it held a task the reviewer never got.
+func (p *pendingDeliveries) abandon(handleID string, delivery *pendingDelivery) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.deliveries[handleID] != delivery || delivery.ctx.Err() != nil {
+		return false
+	}
+	delete(p.deliveries, handleID)
+	return delivery.message != ""
+}
+
 func (p *pendingDeliveries) finish(handleID string, delivery *pendingDelivery) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -858,19 +874,58 @@ func (l *agentLauncher) waitForPromptReadiness(ctx context.Context, handle ports
 	defer deadline.Stop()
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+	blocked := false
 	for {
 		output, err := l.readinessOutput(ctx, handle, lines, hints.RenderedScreen)
-		if err == nil && outputContainsAny(output, hints.Patterns) {
-			return true, nil
+		if err == nil {
+			blocked = outputContainsWrapped(output, hints.BlockingPatterns)
+			if !blocked && outputContainsAny(output, hints.Patterns) {
+				return true, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
 		case <-deadline.C:
+			if blocked {
+				// The terminal still shows a state where Enter does not send,
+				// such as OpenCode's connect dialog before a provider loads.
+				// Typing the task there would lose it.
+				return false, errReviewerPromptBlocked
+			}
 			return false, nil
 		case <-ticker.C:
 		}
 	}
+}
+
+// errReviewerPromptBlocked reports that a blocking pattern was still visible
+// when the readiness wait ended, so the task was not typed.
+var errReviewerPromptBlocked = errors.New("reviewer terminal is still blocked by a startup state")
+
+// outputContainsWrapped matches patterns across the line wraps and dialog
+// borders a TUI may draw through them.
+func outputContainsWrapped(output string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	screen := foldReadinessText(readinessOutputEscape.ReplaceAllString(output, ""))
+	for _, pattern := range patterns {
+		if folded := foldReadinessText(pattern); folded != "" && strings.Contains(screen, folded) {
+			return true
+		}
+	}
+	return false
+}
+
+func foldReadinessText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r >= 0x2500 && r <= 0x257f { // Box Drawing block: dialog borders.
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {

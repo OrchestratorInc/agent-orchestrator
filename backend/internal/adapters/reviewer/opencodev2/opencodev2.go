@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,13 +19,16 @@ import (
 const configContentPrefix = "OPENCODE_CONFIG_CONTENT="
 
 // cliConfigEnv carries OpenCode 2's terminal (TUI) settings, merged over the
-// user's global cli.json. The reviewer turns off release highlights: after an
-// OpenCode update, the first TUI to start opens a "What's new" dialog that
-// hides the reviewer agent marker and swallows the typed task, so the review
-// would never start.
+// user's global cli.json. The reviewer turns off release highlights, keeping
+// the user's other keys: after an OpenCode update, the first TUI to start
+// opens a "What's new" dialog that hides the reviewer agent marker and
+// swallows the typed task, so the review would never start.
 const cliConfigEnv = "OPENCODE_CLI_CONFIG_CONTENT"
 
-const reviewerCLIConfig = `{"highlights":false}`
+// noProviderSelected is the TUI footer's model label before any provider has
+// loaded. The footer can already name the reviewer agent then, but Enter opens
+// the connect dialog instead of sending, so the task would be lost.
+const noProviderSelected = "No provider selected"
 
 // Reviewer is the OpenCode 2 code-review adapter.
 type Reviewer struct {
@@ -90,9 +94,13 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
+	env, err := reviewerEnv(content)
+	if err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	return ports.ReviewCommandSpec{
 		Argv:           argv,
-		Env:            reviewerEnv(content),
+		Env:            env,
 		InitialMessage: inv.Prompt,
 	}, nil
 }
@@ -105,11 +113,12 @@ func (r *Reviewer) ReviewPromptReadinessHints(ctx context.Context) (ports.Prompt
 		return ports.PromptReadinessHints{}, err
 	}
 	return ports.PromptReadinessHints{
-		InitialDelay: 500 * time.Millisecond,
-		Patterns:     []string{reviewerAgentMarker},
-		PollInterval: 250 * time.Millisecond,
-		Timeout:      reviewerReadinessTimeout,
-		Lines:        200,
+		InitialDelay:     500 * time.Millisecond,
+		Patterns:         []string{reviewerAgentMarker},
+		BlockingPatterns: []string{noProviderSelected},
+		PollInterval:     250 * time.Millisecond,
+		Timeout:          reviewerReadinessTimeout,
+		Lines:            200,
 		// The marker sits in the TUI footer, which never ends with a newline,
 		// so only the rendered screen shows it.
 		RenderedScreen: true,
@@ -139,15 +148,39 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 	if err != nil {
 		return ports.ReviewCommandSpec{}, false, err
 	}
-	cmd.Env = reviewerEnv(content)
+	cmd.Env, err = reviewerEnv(content)
+	if err != nil {
+		return ports.ReviewCommandSpec{}, false, err
+	}
 	return cmd, true, nil
 }
 
-func reviewerEnv(configContent string) map[string]string {
+func reviewerEnv(configContent string) (map[string]string, error) {
+	cliContent, err := reviewerCLIConfig(os.Getenv(cliConfigEnv))
+	if err != nil {
+		return nil, err
+	}
 	return map[string]string{
 		"OPENCODE_CONFIG_CONTENT": configContent,
-		cliConfigEnv:              reviewerCLIConfig,
+		cliConfigEnv:              cliContent,
+	}, nil
+}
+
+// reviewerCLIConfig turns release highlights off over the user's own
+// OPENCODE_CLI_CONFIG_CONTENT, keeping their other TUI settings.
+func reviewerCLIConfig(existing string) (string, error) {
+	config := map[string]json.RawMessage{}
+	if strings.TrimSpace(existing) != "" {
+		if err := json.Unmarshal([]byte(existing), &config); err != nil || config == nil {
+			return "", fmt.Errorf("opencode-v2 reviewer: %s must be a JSON object", cliConfigEnv)
+		}
 	}
+	config["highlights"] = json.RawMessage("false")
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "", fmt.Errorf("opencode-v2 reviewer: encode %s: %w", cliConfigEnv, err)
+	}
+	return string(data), nil
 }
 
 // ReviewCancel stops the active OpenCode turn while preserving its pane.

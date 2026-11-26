@@ -1195,15 +1195,26 @@ type lateReadyRuntime struct {
 	ready   bool
 	sent    []string
 	sendErr error
+	// blocked shows a footer where the marker is up but Enter does not send.
+	blocked bool
 }
 
 func (f *lateReadyRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.ready && f.blocked {
+		return "READY> │ No provider\n selected", nil
+	}
 	if f.ready {
 		return "READY>", nil
 	}
 	return "starting", nil
+}
+
+func (f *lateReadyRuntime) setBlocked(blocked bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blocked = blocked
 }
 
 func (f *lateReadyRuntime) SendMessage(_ context.Context, _ ports.RuntimeHandle, msg string) error {
@@ -1438,6 +1449,75 @@ func TestLauncherDeferredReplacementReadyBeforeTaskSendsDirectly(t *testing.T) {
 	}
 	if sent := rt.messages(); len(sent) != 1 || !strings.Contains(sent[0], "run-1") {
 		t.Fatalf("sent = %q, want the task delivered directly to a ready reviewer", sent)
+	}
+}
+
+func blockingReviewer(timeout time.Duration) *fakeReviewerWithLaunchSpec {
+	return &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, BlockingPatterns: []string{"No provider selected"},
+			PollInterval: time.Millisecond, Timeout: timeout, Lines: 20,
+		},
+	}
+}
+
+func TestLauncherHoldsTaskWhileBlockingPatternShows(t *testing.T) {
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}, ready: true, blocked: true}
+	l := newTestLauncher(t, blockingReviewer(time.Minute), rt)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		// The marker was up the whole time; only the blocking footer delayed it.
+		if got := rt.messages(); len(got) != 0 {
+			t.Errorf("task typed while the footer still read No provider selected: %q", got)
+		}
+		rt.setBlocked(false)
+	}()
+	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got := rt.messages(); len(got) != 1 || got[0] != "task ref" {
+		t.Fatalf("messages = %q, want the task once the blocking footer cleared", got)
+	}
+}
+
+func TestLauncherFailsLaunchWhenStillBlockedAtTimeout(t *testing.T) {
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}, ready: true, blocked: true}
+	l := newTestLauncher(t, blockingReviewer(20*time.Millisecond), rt)
+	if _, err := l.Spawn(context.Background(), launchSpec()); err == nil {
+		t.Fatal("Spawn succeeded while the reviewer was still blocked; want a launch failure")
+	}
+	if got := rt.messages(); len(got) != 0 {
+		t.Fatalf("task typed into a blocked terminal: %q", got)
+	}
+}
+
+func TestLauncherReportsBackgroundTaskStillBlocked(t *testing.T) {
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true, unsupervisedAlive: true}}
+	l := newTestLauncher(t, blockingReviewer(reviewerReadinessDeadlineReserve+300*time.Millisecond), rt)
+	failures := make(chan string, 1)
+	l.(*agentLauncher).OnDeliveryFailure(func(_ context.Context, _ domain.SessionID, launchID string, _ error) {
+		failures <- launchID
+	})
+	spec := launchSpec()
+	spec.LaunchID = "launch-1"
+	ctx, cancel := context.WithTimeout(context.Background(), reviewerReadinessDeadlineReserve)
+	defer cancel()
+	if _, err := l.Spawn(ctx, spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	rt.setBlocked(true)
+	rt.setReady()
+	select {
+	case got := <-failures:
+		if got != "launch-1" {
+			t.Fatalf("failure reported for launch %q, want launch-1", got)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("a background task abandoned in a blocked terminal was not reported")
+	}
+	if got := rt.messages(); len(got) != 0 {
+		t.Fatalf("task typed into a blocked terminal: %q", got)
 	}
 }
 

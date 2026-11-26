@@ -238,10 +238,38 @@ func TestReviewPromptReadinessWaitsForReviewerAgent(t *testing.T) {
 	if !hints.RenderedScreen {
 		t.Fatalf("hints = %+v, want the rendered screen", hints)
 	}
+	// Before a provider loads, the footer can name the reviewer agent while
+	// Enter opens the connect dialog, so that state holds the task.
+	if !reflect.DeepEqual(hints.BlockingPatterns, []string{"No provider selected"}) {
+		t.Fatalf("blocking patterns = %#v, want the no-provider footer", hints.BlockingPatterns)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := provider.ReviewPromptReadinessHints(ctx); err == nil {
 		t.Fatal("ReviewPromptReadinessHints ignored a cancelled context")
+	}
+}
+
+func TestReviewCommandKeepsUserTUISettings(t *testing.T) {
+	fakeOpenCode(t, "2.0.0")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+	t.Setenv("OPENCODE_CLI_CONFIG_CONTENT", `{"theme":"mine","highlights":true}`)
+	spec, err := opencodev2.New().ReviewCommand(context.Background(), ports.ReviewInvocation{
+		ReviewerID: "review-w1", WorkspacePath: "/worker", Prompt: "Review.", SystemPrompt: "Read only.",
+	})
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	var cli map[string]any
+	if err := json.Unmarshal([]byte(spec.Env["OPENCODE_CLI_CONFIG_CONTENT"]), &cli); err != nil || cli["highlights"] != false || cli["theme"] != "mine" {
+		t.Fatalf("OPENCODE_CLI_CONFIG_CONTENT = %q, want the user's theme kept and highlights off", spec.Env["OPENCODE_CLI_CONFIG_CONTENT"])
+	}
+
+	t.Setenv("OPENCODE_CLI_CONFIG_CONTENT", `[1]`)
+	if _, err := opencodev2.New().ReviewCommand(context.Background(), ports.ReviewInvocation{
+		ReviewerID: "review-w1", WorkspacePath: "/worker", Prompt: "Review.", SystemPrompt: "Read only.",
+	}); err == nil {
+		t.Fatal("ReviewCommand accepted a non-object OPENCODE_CLI_CONFIG_CONTENT")
 	}
 }
 
