@@ -11,7 +11,9 @@ const gestures = vi.hoisted(() => ({
 	race: [] as string[],
 }));
 // Each spring the row starts, finished only when the test says so.
-const springs = vi.hoisted(() => ({ pending: [] as { to: number; done?: (finished: boolean) => void }[] }));
+// \`midway\`, when set, is where a new spring leaves the row for now, as if
+// caught partway; cancellations are recorded.
+const springs = vi.hoisted(() => ({ pending: [] as { to: number; done?: (finished: boolean) => void }[], midway: undefined as number | undefined, cancelled: 0 }));
 const haptics = vi.hoisted(() => ({ armed: vi.fn() }));
 
 vi.mock("react-native", () => ({
@@ -51,10 +53,10 @@ vi.mock("react-native-reanimated", () => ({
 	)),
 	useDerivedValue: (value: () => unknown) => ({ value: value() }),
 	withTiming: (value: unknown) => value,
-	withSpring: (to: number, _config: unknown, done?: (finished: boolean) => void) => { springs.pending.push({ to, done }); return to; },
+	withSpring: (to: number, _config: unknown, done?: (finished: boolean) => void) => { springs.pending.push({ to, done }); return springs.midway ?? to; },
 	Easing: { out: (easing: unknown) => easing, cubic: "cubic" },
 	ReduceMotion: { System: "system" },
-	cancelAnimation: () => {},
+	cancelAnimation: () => { springs.cancelled++; },
 }));
 vi.mock("react-native-worklets", () => ({
 	scheduleOnRN: (fn: (...args: unknown[]) => void, ...args: unknown[]) => fn(...args),
@@ -75,6 +77,8 @@ afterEach(() => {
 	act(() => renderer?.unmount());
 	haptics.armed.mockClear();
 	springs.pending = [];
+	springs.midway = undefined;
+	springs.cancelled = 0;
 });
 const props: WorkerRowInteractionProps = {
 	sessionId: "worker", enabled: true, children: <></>, rightActions: createElement("RailControls"),
@@ -182,12 +186,19 @@ it("releases the rail after a drag that comes back exactly to rest", () => {
 // is, not from where it was heading.
 it("starts a drag from where the row is, not where it was settling", () => {
 	const view = mount();
+	// Let go past half the rail: the row heads for it, and is caught at -30.
+	springs.midway = -30;
+	drag(-60);
+	expect(springs.pending.at(-1)?.to).toBe(-72);
+	springs.midway = undefined;
+	const cancelled = springs.cancelled;
 	begin();
-	move(-30);
-	// A second drag starts before the first one ended.
-	begin();
+	expect(springs.cancelled).toBe(cancelled + 1);
 	move(20);
 	expect(foreground(view).props.style).toContainEqual({ transform: [{ translateX: -10 }] });
+	// Let go at -10, short of half the rail: it settles closed, not open.
+	release(20);
+	expect(springs.pending.at(-1)?.to).toBe(0);
 });
 
 it("follows the drag and opens on a flick shorter than half the rail", () => {
