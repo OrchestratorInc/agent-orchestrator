@@ -142,6 +142,7 @@ function parseRegistry(raw: unknown): BrowserProfileRegistry {
 		defaultProfileId,
 		defaultProfileSeeded: true,
 		...(raw.defaultProfileCreated === true ? { defaultProfileCreated: true as const } : {}),
+		...(raw.defaultProfileChosen === true ? { defaultProfileChosen: true as const } : {}),
 	};
 }
 
@@ -155,6 +156,7 @@ function cloneRegistry(registry: BrowserProfileRegistry): BrowserProfileRegistry
 		defaultProfileId: registry.defaultProfileId,
 		defaultProfileSeeded: true,
 		...(registry.defaultProfileCreated ? { defaultProfileCreated: true as const } : {}),
+		...(registry.defaultProfileChosen ? { defaultProfileChosen: true as const } : {}),
 	};
 }
 
@@ -321,11 +323,12 @@ export class BrowserProfileStore {
 	/**
 	 * A committed import becomes the default: the user imported it to use its
 	 * sign-ins, and a re-import next to an older profile must not be left unused
-	 * while new sessions keep opening the older, signed-out one (#8190).
+	 * while new sessions keep opening the older, signed-out one (#8190). A default
+	 * the user picked (or turned off) in Settings is kept.
 	 */
 	async claimDefaultForImport(profileId: string): Promise<void> {
 		return this.enqueueMutation((current) => {
-			if (current.profiles.some((profile) => profile.id === profileId)) {
+			if (!current.defaultProfileChosen && current.profiles.some((profile) => profile.id === profileId)) {
 				current.defaultProfileId = profileId;
 			}
 			return { registry: current, result: undefined };
@@ -423,9 +426,12 @@ export class BrowserProfileStore {
 				Object.entries(current.bindings).filter(([, binding]) => binding.profileId !== profileId),
 			);
 			const profiles = current.profiles.filter((profile) => profile.id !== profileId);
+			const deletesDefault = current.defaultProfileId === profileId;
+			const { defaultProfileChosen: _chosen, ...rest } = current;
 			return {
 				registry: {
-					...current,
+					// Deleting the chosen default hands the choice back to the app.
+					...(deletesDefault ? rest : current),
 					profiles,
 					bindings,
 					// Deleting the default promotes the oldest remaining profile.
@@ -444,7 +450,7 @@ export class BrowserProfileStore {
 			if (profileId !== null && !current.profiles.some((profile) => profile.id === profileId)) {
 				throw new BrowserProfileStoreError("BROWSER_PROFILE_NOT_FOUND", "Browser profile was not found.");
 			}
-			return { registry: { ...current, defaultProfileId: profileId }, result: undefined };
+			return { registry: { ...current, defaultProfileId: profileId, defaultProfileChosen: true }, result: undefined };
 		});
 	}
 
