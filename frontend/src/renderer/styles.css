@@ -7827,11 +7827,15 @@ html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"]):
 	content: none;
 }
 
-/* The composer's controls share the menus' corner (rounded-lg, 10px), and
- * the composer's padding is whatever keeps them concentric with its own
- * corner: its radius less theirs (20 - 10 = 10px, 12px before). */
+/* The composer: an 18px corner (20px with the flag off) and 10px of padding
+ * (12px). Its controls take its radius less that padding (18 - 10 = 8px), so
+ * their corners run concentric with its own. */
+html[data-new-desktop-ui] {
+	--radius-chat-composer: 18px;
+}
+
 html[data-new-desktop-ui] .cursor-chat-composer {
-	--composer-inset: calc(var(--radius-chat-composer) - var(--radius-lg));
+	--composer-inset: 10px;
 	padding: var(--composer-inset);
 }
 
@@ -7910,9 +7914,9 @@ html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-ov
 	border-radius: var(--radius-control);
 }
 
-/* The composer's add, picker, dictate and send controls: the menus' corner. */
+/* The composer's add, picker, dictate and send controls, one padding inside its corner. */
 html[data-new-desktop-ui] .cursor-chat-composer button:is(.rounded-full, .rounded-lg) {
-	border-radius: var(--radius-lg);
+	border-radius: calc(var(--radius-chat-composer) - var(--composer-inset));
 }
 
 /* Sidebar row actions (project and session rows, section "+") keep their
