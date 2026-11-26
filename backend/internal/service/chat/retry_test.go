@@ -518,7 +518,7 @@ func TestRetryTurnResendsEventPrompt(t *testing.T) {
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: turn.ProviderTurnID,
 		TurnState:      domain.TurnStateFailed,
-		Err:            errors.New("Request timed out."),
+		Err:            errors.New("request timed out"),
 	})
 	failedTurnSnapshot(t, h, turn.ID)
 
