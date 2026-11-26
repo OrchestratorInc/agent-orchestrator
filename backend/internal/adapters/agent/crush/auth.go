@@ -26,6 +26,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// crushAPIKeyEnvVars lists the environment variables Crush accepts as direct
+// provider credentials. Tests share it so their isolation cannot drift from
+// the variables crushLocalAuthStatus actually checks.
 var crushAPIKeyEnvVars = []string{
 	"HYPER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VERCEL_API_KEY",
 	"GEMINI_API_KEY", "ZAI_API_KEY", "MINIMAX_API_KEY", "SYNTHETIC_API_KEY",
