@@ -232,6 +232,9 @@ export function useMobileConversation(
 		turnOptionsCache.delete(cacheKey);
 		setModels([]);
 		setConfigOptions([]);
+		// Its "/" list too, which the New task page reuses (rememberedSkills).
+		skillsCache.delete(cacheKey);
+		setSkills([]);
 	}, [cacheKey, snapshotHarness]);
 
 	const refresh = useCallback(async () => {
@@ -390,8 +393,14 @@ export function useMobileConversation(
 
 	const loadSkills = useCallback(async () => {
 		if (!cfg || unavailable || !hasConversation) return skills;
+		const harness = harnessRef.current;
 		try {
 			const next = await skillsCache.load(cacheKey, () => getConversationSkills(cfg, sessionId));
+			// A list read for the agent the chat has since switched from is not this one's.
+			if (harnessRef.current !== harness) {
+				skillsCache.delete(cacheKey);
+				return [];
+			}
 			if (mounted.current) setSkills(next);
 			return next;
 		} catch {

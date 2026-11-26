@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => ({
 	options: [] as unknown[] | Error,
 	models: [] as unknown[],
 	harness: "claude-code",
+	skills: [] as unknown[],
 	patch: undefined as Promise<unknown[]> | undefined,
 }));
 vi.mock("../api", () => ({ apiRequest: fixture.request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
@@ -39,7 +40,7 @@ async function open(id: string) {
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.controller = "ready"; fixture.capabilities = ["config_options"]; fixture.options = []; fixture.models = [];
-	fixture.harness = "claude-code"; fixture.patch = undefined;
+	fixture.harness = "claude-code"; fixture.patch = undefined; fixture.skills = [];
 	fixture.request.mockReset().mockImplementation(async (_cfg: ServerConfig, path: string) => {
 		if (path.includes("/conversation/config-options/")) return { json: async () => ({ options: await fixture.patch }) };
 		if (path.endsWith("/conversation/config-options")) {
@@ -47,6 +48,7 @@ beforeEach(() => {
 			return { json: async () => ({ options: fixture.options }) };
 		}
 		if (path.endsWith("/conversation/models")) return { json: async () => ({ models: fixture.models }) };
+		if (path.endsWith("/conversation/skills")) return { json: async () => ({ skills: fixture.skills }) };
 		return { json: async () => ({ controller: fixture.controller, capabilities: fixture.capabilities, harness: fixture.harness, messages: [] }) };
 	});
 });
@@ -209,6 +211,36 @@ it("clears the outgoing agent's catalog at a switch, and keeps it clear when the
 	fixture.options = new Error("CHAT_CONTROLLER_NOT_READY");
 	await act(async () => { await expect(conversation.loadTurnOptions({ refresh: true })).rejects.toThrow("CHAT_CONTROLLER_NOT_READY"); });
 	expect(conversation.configOptions).toEqual([]);
+});
+
+// The New task page reuses a chat's "/" list (rememberedSkills), so the outgoing
+// agent's must not stay up as the new agent's.
+it("clears the outgoing agent's skills at a switch", async () => {
+	fixture.skills = [{ name: "compact", displayName: "compact" }];
+	await open("switch-skills");
+	await act(async () => { await conversation.loadSkills(); });
+	expect(conversation.skills.map((skill) => skill.name)).toEqual(["compact"]);
+
+	fixture.harness = "codex";
+	await act(async () => { await conversation.refresh(); });
+	expect(conversation.skills).toEqual([]);
+
+	// Read again for the new agent rather than served from the outgoing one's cache.
+	fixture.skills = [{ name: "review", displayName: "review" }];
+	await act(async () => { await conversation.loadSkills(); });
+	expect(conversation.skills.map((skill) => skill.name)).toEqual(["review"]);
+});
+
+it("drops a skills load that was started for the outgoing agent", async () => {
+	await open("switch-during-skills");
+	let answer!: (skills: unknown[]) => void;
+	fixture.request.mockImplementationOnce(async () => ({ json: async () => ({ skills: await new Promise<unknown[]>((resolve) => { answer = resolve; }) }) }));
+	let load: Promise<unknown> | undefined;
+	await act(async () => { load = conversation.loadSkills(); });
+	fixture.harness = "codex";
+	await act(async () => { await conversation.refresh(); });
+	await act(async () => { answer([{ name: "compact", displayName: "compact" }]); await load; });
+	expect(conversation.skills).toEqual([]);
 });
 
 // A load started for the outgoing agent answers for it, not for the new one.

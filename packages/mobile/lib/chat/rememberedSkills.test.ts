@@ -10,8 +10,15 @@ describe("remembered chat skills", () => {
 		rememberChatSkills("h1", "claude-code", "p1", [skill("compact"), skill("ship")]);
 		rememberChatSkills("h1", "claude-code", undefined, [skill("compact")]);
 		expect(rememberedChatSkills("h1", "claude-code", "p1").map((item) => item.name)).toEqual(["compact", "ship"]);
-		// Another project falls back to the agent's latest list on this machine.
+		// Another project falls back to the list a chat with no project reported.
 		expect(rememberedChatSkills("h1", "claude-code", "p2").map((item) => item.name)).toEqual(["compact"]);
+	});
+
+	it("never offers one project's own skills to another project", () => {
+		rememberChatSkills("h1", "claude-code", "p1", [skill("compact"), skill("ship-a")]);
+		expect(rememberedChatSkills("h1", "claude-code", "p2")).toEqual([]);
+		expect(rememberedChatSkills("h1", "claude-code")).toEqual([]);
+		expect(rememberedChatSkills("h1", "claude-code", "p1").map((item) => item.name)).toEqual(["compact", "ship-a"]);
 		expect(rememberedChatSkills("h1", "codex", "p1")).toEqual([]);
 		expect(rememberedChatSkills("h2", "claude-code", "p1")).toEqual([]);
 	});

@@ -2,8 +2,9 @@ import type { ChatSkill } from "./types";
 
 // The "/" list each agent's chats last reported, per machine, so a new task's
 // list starts from the same skills and built-in commands (`/compact`) the
-// chat's does, as a new chat on the desktop does. Kept per project too: a
-// project's own skills belong to that project's tasks only.
+// chat's does, as a new chat on the desktop does. A project's chat is kept
+// under that project only, since its list holds the project's own skills; the
+// machine-wide list for the agent comes from chats with no project.
 const REMEMBERED_SKILL_LISTS = 32;
 const lists = new Map<string, ChatSkill[]>();
 
@@ -22,11 +23,13 @@ function remember(key: string, skills: ChatSkill[]) {
 
 export function rememberChatSkills(hostId: string | undefined, harness: string | undefined, projectId: string | undefined, skills: ChatSkill[]): void {
 	if (!hostId || !harness || !skills.length) return;
-	remember(keyFor(hostId, harness), skills);
-	if (projectId) remember(keyFor(hostId, harness, projectId), skills);
+	remember(keyFor(hostId, harness, projectId), skills);
 }
 
-/** The project's own last list, else the last any chat of this agent on the machine reported. */
+/**
+ * The project's own last list, else the last a chat of this agent with no
+ * project reported on the machine: never another project's.
+ */
 export function rememberedChatSkills(hostId: string, harness: string, projectId?: string): ChatSkill[] {
 	return (projectId ? lists.get(keyFor(hostId, harness, projectId)) : undefined) ?? lists.get(keyFor(hostId, harness)) ?? [];
 }
