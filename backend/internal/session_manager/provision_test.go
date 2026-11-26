@@ -327,6 +327,7 @@ func TestEffectiveHarnessAndAgentConfig(t *testing.T) {
 	if got.Model != "worker" || got.Effort != "high" || got.Mode != "high" || got.Permissions != domain.PermissionModeAuto {
 		t.Fatalf("merged worker config = %#v, want model=worker mode=high permissions=auto", got)
 	}
+
 	// Orchestrator has no agent-config override, so the base config is used as-is.
 	if got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindOrchestrator, cfg); got.Model != "base" {
 		t.Fatalf("orchestrator config = %#v, want base", got)
@@ -755,6 +756,30 @@ func TestResolveGrokEffortIsAvailableOnlyInChat(t *testing.T) {
 				t.Fatalf("Chat config = %#v, %v; want effort forwarded to ACP", resolved, err)
 			}
 		})
+	}
+}
+
+func TestResolveGrokTUIInheritedReviewerEffortClearsSilently(t *testing.T) {
+	m := &Manager{}
+	// With an explicit effort override, Grok TUI rejects the unsupported effort.
+	_, err := m.resolveAgentConfig(t.Context(), ports.SpawnConfig{
+		Harness: domain.HarnessGrok, Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
+		AgentConfig: ports.AgentConfig{Model: "grok-4.7", Effort: "high"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("explicit Grok TUI effort err = %v, want ErrUnsupportedEffort", err)
+	}
+
+	// When reviewer effort is inherited (EffortOverride = false), Grok TUI clears effort silently.
+	resolved, err := m.resolveAgentConfig(t.Context(), ports.SpawnConfig{
+		Harness: domain.HarnessGrok, Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
+		AgentConfig: ports.AgentConfig{Model: "grok-4.7", Effort: "high"}, EffortOverride: false,
+	}, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatalf("inherited Grok TUI effort err = %v, want nil", err)
+	}
+	if resolved.Effort != "" {
+		t.Fatalf("inherited Grok TUI effort = %q, want empty", resolved.Effort)
 	}
 }
 

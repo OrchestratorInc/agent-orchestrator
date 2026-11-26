@@ -274,6 +274,270 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	}
 }
 
+func TestSpawnReviewSelectsReviewerLaunchSettingsAndDefaultsToWorkerKind(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"codex"},"reviewers":[{"harness":"claude-code","agentConfig":{"model":"sonnet","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("claude-code"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "worker" {
+		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "claude-code" {
+		t.Fatalf("spawnReq.Harness = %q, want claude-code", spawnReq.Harness)
+	}
+	if spawnReq.Model != "sonnet" {
+		t.Fatalf("spawnReq.Model = %q, want sonnet", spawnReq.Model)
+	}
+	if spawnReq.Effort != "high" {
+		t.Fatalf("spawnReq.Effort = %q, want high", spawnReq.Effort)
+	}
+	if spawnReq.EffortOverride == nil || *spawnReq.EffortOverride != false {
+		t.Fatalf("spawnReq.EffortOverride = %v, want false (inherited)", spawnReq.EffortOverride)
+	}
+}
+
+func TestSpawnReviewPreservesExplicitWorkerKind(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"codex"},"reviewers":[{"harness":"claude-code","agentConfig":{"model":"sonnet","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("claude-code"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--kind", "worker", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "worker" {
+		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "claude-code" {
+		t.Fatalf("spawnReq.Harness = %q, want claude-code", spawnReq.Harness)
+	}
+	if spawnReq.Effort != "high" {
+		t.Fatalf("spawnReq.Effort = %q, want high", spawnReq.Effort)
+	}
+	if spawnReq.EffortOverride == nil || *spawnReq.EffortOverride != false {
+		t.Fatalf("spawnReq.EffortOverride = %v, want false (inherited)", spawnReq.EffortOverride)
+	}
+}
+
+func TestSpawnReviewGrokTUIInheritsEffortWithoutExplicitOverride(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"grok"},"reviewers":[{"harness":"grok","agentConfig":{"model":"grok-4.7","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("grok"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--mode", "tui", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "worker" {
+		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "grok" {
+		t.Fatalf("spawnReq.Harness = %q, want grok", spawnReq.Harness)
+	}
+	if spawnReq.Mode != "tui" {
+		t.Fatalf("spawnReq.Mode = %q, want tui", spawnReq.Mode)
+	}
+	if spawnReq.Effort != "high" {
+		t.Fatalf("spawnReq.Effort = %q, want high", spawnReq.Effort)
+	}
+	if spawnReq.EffortOverride == nil || *spawnReq.EffortOverride != false {
+		t.Fatalf("spawnReq.EffortOverride = %v, want false (inherited)", spawnReq.EffortOverride)
+	}
+}
+
+func TestSpawnReviewOpencodeInheritsEffortWithoutExplicitOverride(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"opencode"},"reviewers":[{"harness":"opencode","agentConfig":{"model":"default","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("opencode"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "worker" {
+		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "opencode" {
+		t.Fatalf("spawnReq.Harness = %q, want opencode", spawnReq.Harness)
+	}
+	if spawnReq.Effort != "high" {
+		t.Fatalf("spawnReq.Effort = %q, want high", spawnReq.Effort)
+	}
+	if spawnReq.EffortOverride == nil || *spawnReq.EffortOverride != false {
+		t.Fatalf("spawnReq.EffortOverride = %v, want false (inherited)", spawnReq.EffortOverride)
+	}
+}
+
+func TestSpawnReviewExplicitEffortSentToDaemon(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"opencode"},"reviewers":[{"harness":"opencode","agentConfig":{"model":"default"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("opencode"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--name", "review-pr-42", "--claim-pr", "42", "--review", "--effort", "high")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Effort != "high" {
+		t.Fatalf("spawnReq.Effort = %q, want high", spawnReq.Effort)
+	}
+	if spawnReq.EffortOverride == nil || *spawnReq.EffortOverride != true {
+		t.Fatalf("spawnReq.EffortOverride = %v, want true (explicit)", spawnReq.EffortOverride)
+	}
+}
+
+func TestSpawnReviewDoesNotCopyModelWhenHarnessMismatches(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"codex"},"reviewers":[{"harness":"claude-code","agentConfig":{"model":"sonnet","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "worker" {
+		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "codex" {
+		t.Fatalf("spawnReq.Harness = %q, want codex", spawnReq.Harness)
+	}
+	if spawnReq.Model != "" {
+		t.Fatalf("spawnReq.Model = %q, want empty (not copied from claude-code reviewer)", spawnReq.Model)
+	}
+	if spawnReq.Effort != "" {
+		t.Fatalf("spawnReq.Effort = %q, want empty (not copied from claude-code reviewer)", spawnReq.Effort)
+	}
+}
+
 // TestSpawnClaimPR_Draft covers #4171: `ao spawn --claim-pr` on a draft PR must
 // keep the spawned session instead of rolling it back with PR_NOT_OPEN.
 func TestSpawnClaimPR_Draft(t *testing.T) {
@@ -720,6 +984,7 @@ func TestSpawnOutputRejectsInvalidUse(t *testing.T) {
 	}{
 		{name: "unknown value", args: []string{"--output", "slides"}, want: `--output must be "artifact"`},
 		{name: "orchestrator", args: []string{"--output", "artifact", "--kind", "orchestrator"}, want: "--output is supported for worker sessions only"},
+		{name: "review flag", args: []string{"--output", "artifact", "--review", "--claim-pr", "123"}, want: "--output is supported for worker sessions only"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"spawn", "--project", "demo", "--name", "worker"}, tc.args...)
@@ -1185,6 +1450,53 @@ func TestSpawnCommand_RejectsInvalidKind(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "orch", "--kind", "orchestartor")
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), `--kind must be "worker" or "orchestrator"`) {
 		t.Fatalf("err=%v exit=%d, want --kind validation error", err, ExitCode(err))
+	}
+	_, _, err = executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "rev", "--kind", "reviewer")
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), `--kind must be "worker" or "orchestrator"`) {
+		t.Fatalf("err=%v exit=%d, want --kind validation error for reviewer", err, ExitCode(err))
+	}
+}
+
+// TestResolveSpawnHarness_ReviewerDefault asserts the reviewer role falls back
+// to the project's reviewer agent, falling back to the worker agent if unconfigured.
+func TestResolveSpawnHarness_ReviewerDefault(t *testing.T) {
+	project := projectDetails{
+		ID: "demo",
+		Config: &projectConfig{
+			Worker:    roleOverride{Agent: "codex"},
+			Reviewers: []reviewerConfig{{Harness: "claude-code"}},
+		},
+	}
+	if got := resolveSpawnHarness("", "reviewer", project); got != "claude-code" {
+		t.Fatalf("reviewer default: got %q, want claude-code", got)
+	}
+	if got := resolveSpawnHarness("aider", "reviewer", project); got != "aider" {
+		t.Fatalf("explicit reviewer agent: got %q, want aider", got)
+	}
+	// With no reviewers configured, falls back to worker.agent.
+	noReviewer := projectDetails{
+		ID: "demo",
+		Config: &projectConfig{
+			Worker: roleOverride{Agent: "codex"},
+		},
+	}
+	if got := resolveSpawnHarness("", "reviewer", noReviewer); got != "codex" {
+		t.Fatalf("reviewer fallback to worker: got %q, want codex", got)
+	}
+	// When worker agent is not an unattended-safe reviewer (e.g. aider), falls back to claude-code.
+	unattendedUnsafeWorker := projectDetails{
+		ID: "demo",
+		Config: &projectConfig{
+			Worker: roleOverride{Agent: "aider"},
+		},
+	}
+	if got := resolveSpawnHarness("", "reviewer", unattendedUnsafeWorker); got != "claude-code" {
+		t.Fatalf("reviewer fallback for unsafe worker: got %q, want claude-code", got)
+	}
+	// With no reviewers and no worker agent configured, leaves the harness to the daemon.
+	noAgent := projectDetails{ID: "demo", Config: &projectConfig{}}
+	if got := resolveSpawnHarness("", "reviewer", noAgent); got != "" {
+		t.Fatalf("missing reviewer agent: got %q, want daemon-resolved empty harness", got)
 	}
 }
 

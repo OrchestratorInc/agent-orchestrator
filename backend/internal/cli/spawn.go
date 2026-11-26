@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // maxDisplayNameLen caps the sidebar label set by `--name`. Mirrored by the
@@ -57,6 +59,7 @@ type spawnRequest struct {
 	Prompt              string `json:"prompt,omitempty"`
 	Model               string `json:"model,omitempty"`
 	Effort              string `json:"effort,omitempty"`
+	EffortOverride      *bool  `json:"effortOverride,omitempty"`
 	AccountID           string `json:"accountId,omitempty"`
 	RequestedOutput     string `json:"requestedOutput,omitempty"`
 	DisplayName         string `json:"displayName"`
@@ -118,14 +121,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
 				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
 			}
-			if opts.output != "" && opts.output != "artifact" {
-				return usageError{fmt.Errorf(`--output must be "artifact"`)}
-			}
-			if opts.output != "" && opts.kind == "orchestrator" {
-				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
-			}
 			if opts.standalone {
-				if opts.kind == "orchestrator" {
+				if opts.kind != "" && opts.kind != "worker" {
 					return usageError{fmt.Errorf("standalone sessions must be workers")}
 				}
 				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.baseBranch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
@@ -135,6 +132,15 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 					return usageError{fmt.Errorf("--agent is required with --standalone")}
 				}
 				opts.kind = "worker"
+			}
+			if opts.kind == "" {
+				opts.kind = "worker"
+			}
+			if opts.output != "" && opts.output != "artifact" {
+				return usageError{fmt.Errorf(`--output must be "artifact"`)}
+			}
+			if opts.output != "" && (opts.kind != "worker" || opts.review) {
+				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
 			}
 
 			tp := strings.TrimSpace(opts.trackerProvider)
@@ -156,7 +162,28 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				opts.project = project.ID
 			}
 
-			opts.harness = resolveSpawnHarness(opts.harness, opts.kind, project)
+			role := opts.kind
+			if opts.review && opts.kind == "worker" {
+				role = "reviewer"
+			}
+			opts.harness = resolveSpawnHarness(opts.harness, role, project)
+			reviewerHarnessMatches := false
+			if project.Config != nil && len(project.Config.Reviewers) > 0 {
+				pinned := strings.TrimSpace(project.Config.Reviewers[0].Harness)
+				reviewerHarnessMatches = pinned == "" || pinned == opts.harness
+			}
+			if opts.review && reviewerHarnessMatches && opts.model == "" {
+				if len(project.Config.Reviewers) > 0 && project.Config.Reviewers[0].AgentConfig != nil {
+					opts.model = project.Config.Reviewers[0].AgentConfig.Model
+				}
+			}
+			inheritedEffort := false
+			if opts.review && reviewerHarnessMatches && opts.effort == "" {
+				if len(project.Config.Reviewers) > 0 && project.Config.Reviewers[0].AgentConfig != nil {
+					opts.effort = project.Config.Reviewers[0].AgentConfig.Effort
+					inheritedEffort = opts.effort != ""
+				}
+			}
 
 			if isScratchProject(project) {
 				if strings.TrimSpace(opts.branch) != "" {
@@ -182,6 +209,14 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 					return err
 				}
 			}
+			var effortOverride *bool
+			if inheritedEffort {
+				override := false
+				effortOverride = &override
+			} else if strings.TrimSpace(opts.effort) != "" {
+				override := true
+				effortOverride = &override
+			}
 			req := spawnRequest{
 				ProjectID:           opts.project,
 				IssueID:             opts.issue,
@@ -195,6 +230,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Prompt:              opts.prompt,
 				Model:               strings.TrimSpace(opts.model),
 				Effort:              strings.TrimSpace(opts.effort),
+				EffortOverride:      effortOverride,
 				AccountID:           strings.TrimSpace(opts.account),
 				RequestedOutput:     opts.output,
 				DisplayName:         name,
@@ -270,7 +306,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	})
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
 	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an Orchestrator-managed plain directory (requires --agent)")
-	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, codewhale, mimo-code, deepseek-harness, openhands, command-code, mastra-code, docker-agent, minimax-code, memcode, hermes, stakpak, open-interpreter, tau (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; when the project has none, the daemon selects a default agent)")
+	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, codewhale, mimo-code, deepseek-harness, openhands, command-code, mastra-code, docker-agent, minimax-code, memcode, hermes, stakpak, open-interpreter, tau (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; reviewer spawns default to project reviewer; when the project has none, the daemon selects a default agent)")
 	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: orchestrator/<session-id>/root; unsupported for standalone or Scratch sessions)")
@@ -460,11 +496,22 @@ func resolveSpawnHarness(explicit, kind string, project projectDetails) string {
 		return harness
 	}
 	if project.Config != nil {
-		if kind == "orchestrator" {
+		switch kind {
+		case "orchestrator":
 			if harness := strings.TrimSpace(project.Config.Orchestrator.Agent); harness != "" {
 				return harness
 			}
-		} else {
+		case "reviewer":
+			if len(project.Config.Reviewers) > 0 {
+				if harness := strings.TrimSpace(project.Config.Reviewers[0].Harness); harness != "" {
+					return harness
+				}
+			}
+			if worker := strings.TrimSpace(project.Config.Worker.Agent); worker != "" {
+				cfg := domain.ProjectConfig{}
+				return string(cfg.ResolveReviewerHarness(domain.AgentHarness(worker)))
+			}
+		default:
 			if harness := strings.TrimSpace(project.Config.Worker.Agent); harness != "" {
 				return harness
 			}

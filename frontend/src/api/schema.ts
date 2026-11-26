@@ -9726,6 +9726,7 @@ export interface components {
             displayName?: string;
             displayNameExplicit?: boolean;
             effort?: string;
+            effortOverride?: null | boolean;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;

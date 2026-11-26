@@ -27445,6 +27445,10 @@ components:
         effort:
           maxLength: 32
           type: string
+        effortOverride:
+          type:
+          - "null"
+          - boolean
         harness:
           enum:
           - claude-code

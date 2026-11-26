@@ -16,7 +16,7 @@ ao spawn [flags]
 | `--branch string` | Branch for the session worktree | `orchestrator/<session-id>/root` |
 | `--claim-pr string` | Claim an existing PR. For review-only work, add `--no-takeover --review` | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
-| `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
+| `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; orchestrator spawns default to `orchestrator.agent`; reviewer spawns default to project reviewer; required if the project has none |
 | `--issue string` | Issue id to associate with the session | - |
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--effort string` | Reasoning effort override for this session only (for example `low`, `medium`, `high`); overrides project/role config | - |
