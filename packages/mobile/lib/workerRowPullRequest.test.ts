@@ -11,6 +11,7 @@ describe("workerRowPullRequest", () => {
 
 	it("leads with the open one, then a draft, merged and closed, the newest within each", () => {
 		const lead = (prs: unknown[]) => workerRowPullRequest({ prs } as never)!;
+		expect(lead([pr(12, "closed"), pr(15, "open")]).lead).toEqual(pr(15, "open"));
 		expect(lead([pr(12, "closed"), pr(15, "open")])).toMatchObject({ label: "#15 +1", lifecycle: "open", tone: "success", glyph: "git-pull-request", more: 1 });
 		expect(lead([pr(20, "merged"), pr(18, "open", true)])).toMatchObject({ label: "#18 +1", lifecycle: "draft", tone: "passive", glyph: "git-pull-request-draft" });
 		expect(lead([pr(3, "merged"), pr(7, "merged"), pr(9, "closed")])).toMatchObject({ label: "#7 +2", lifecycle: "merged", tone: "merged", glyph: "git-merge" });
@@ -36,7 +37,7 @@ describe("workerRowAccessibilityLabel", () => {
 		const label = workerRowAccessibilityLabel({
 			...base,
 			indicator: "ready",
-			pr: { label: "#15 +1", number: 15, lifecycle: "open", more: 1, tone: "success", glyph: "git-pull-request" },
+			pr: { label: "#15 +1", lead: { number: 15, state: "open" } as never, number: 15, lifecycle: "open", more: 1, tone: "success", glyph: "git-pull-request" },
 			machine: "Studio",
 			updated: "1h",
 			unreachable: true,

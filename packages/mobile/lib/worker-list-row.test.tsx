@@ -4,7 +4,7 @@ import type { DashboardSession } from "./api";
 import { createContext, createElement, useContext, useImperativeHandle, Fragment } from "react";
 
 const appContext = createContext({ currentHostId: "host-1", notificationsUnread: 0 });
-const counters = vi.hoisted(() => ({ renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
+const counters = vi.hoisted(() => ({ openPage: vi.fn(), renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
 const boardStore = vi.hoisted(() => ({
 	// The board reads each machine's freshness; no live sync time belongs to any here.
 	getPrimaryLastSyncAt: () => undefined,
@@ -99,8 +99,8 @@ function TestList({ ref, ...props }: { ref?: React.Ref<unknown>; data: {key: str
 	useImperativeHandle(ref, () => ({ scrollToOffset: counters.scrollToOffset }), []);
 	return createElement("virtual-list", props, props.data.map(item => <Fragment key={item.key}>{props.renderItem({ item })}</Fragment>));
 }
-vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
-vi.mock("./reviewView", () => ({ reviewRouteForSession: () => undefined }));
+vi.mock("./pageNavigation", () => ({ useOpenPage: () => counters.openPage }));
+vi.mock("./reviewView", () => ({ reviewRouteForPR: (sessionId: string, pr: { number: number }) => ({ pathname: "/review/[sessionId]", params: { sessionId, prNumber: String(pr.number) } }) }));
 
 import { pullRequestLabel, WorkerListRow } from "./worker-list-row";
 import { WorkerBoardList } from "./worker-board-list";
@@ -759,6 +759,15 @@ describe("the pull request pill on a row", () => {
 		const renderer = render({ status: "pr_open", displayStatus: "Merge conflicts", activity: "idle", prs: [{ number: 15, state: "open" }] as never });
 		const label = renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.startsWith("Polish workers."))[0].props.accessibilityLabel as string;
 		expect(label).toMatch(/^Polish workers\. Merge conflicts\. Pull request 15, open\. Agent Orchestrator\. Updated .+\.$/);
+		act(() => renderer.unmount());
+	});
+
+	// The pill names #15; "Open PR" from the row's menu must open #15 too.
+	it("opens the pull request the pill names from the row's Open PR", () => {
+		counters.openPage.mockClear();
+		const renderer = render({ prs: [{ number: 12, state: "closed" }, { number: 15, state: "open" }] as never });
+		act(() => renderer.root.findByType("RowInteraction" as never).props.onAction("openPr"));
+		expect(counters.openPage).toHaveBeenCalledWith({ pathname: "/review/[sessionId]", params: { sessionId: "worker-1", prNumber: "15" } });
 		act(() => renderer.unmount());
 	});
 });

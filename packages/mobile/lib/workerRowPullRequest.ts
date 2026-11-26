@@ -10,6 +10,8 @@ import type { WorkerRowIndicator } from "./workerRowMarker";
 export type WorkerRowPullRequest = {
 	/** `#15`, or `#15 +1` with more than one. */
 	label: string;
+	/** The pull request itself, so the row's "Open PR" opens the one the pill names. */
+	lead: DashboardPR;
 	number: number;
 	lifecycle: PRLifecycle;
 	/** How many more pull requests the worker has. */
@@ -43,6 +45,7 @@ export function workerRowPullRequest(session: DashboardSession): WorkerRowPullRe
 	const more = real.length - 1;
 	return {
 		label: more > 0 ? `#${lead.number} +${more}` : `#${lead.number}`,
+		lead,
 		number: lead.number,
 		lifecycle,
 		more,

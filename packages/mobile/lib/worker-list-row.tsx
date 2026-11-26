@@ -25,7 +25,7 @@ import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { useOpenPage } from "./pageNavigation";
 import { iconSize, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
-import { reviewRouteForSession } from "./reviewView";
+import { reviewRouteForPR } from "./reviewView";
 import { isCloudHost } from "./cloud/mapping";
 import { MachineAvatar } from "./MachineIdentity";
 import type { MachineAppearance } from "./machineAppearance";
@@ -175,7 +175,9 @@ export const WorkerListRow = memo(
 
 	const cloudRow = isCloudHost(sessionHostId(session) ?? hostId);
 	// The PR page reads the worker's own host: its machine's daemon, or Orchestrator Cloud.
-	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? hostId);
+	// The pull request the pill names, not the first one listed: with #12
+	// closed and #15 open, "Open PR" opens #15.
+	const reviewRoute = pr ? reviewRouteForPR(session.id, pr.lead, sessionHostId(session) ?? hostId) : undefined;
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
