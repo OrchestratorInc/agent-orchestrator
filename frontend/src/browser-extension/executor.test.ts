@@ -598,6 +598,19 @@ describe("Executor", () => {
 		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
 	});
 
+	it("describes a drag's drop target for the approval gate", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		// The daemon asks about the drop target (the drag's targetRef) as ref.
+		expect(await run("describe", { action: "drag", ref: buy })).toMatchObject({
+			target: { role: "button", name: "Buy now", pageUrl: "https://shop.test/" },
+			binding: { ref: buy },
+		});
+	});
+
 	it("refuses an approved action once the page, tab, or element is not the one approved", async () => {
 		const { fake, run, approve } = setup();
 		await approve("s1", false);

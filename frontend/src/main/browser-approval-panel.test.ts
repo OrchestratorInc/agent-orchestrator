@@ -36,6 +36,14 @@ describe("describePanelApprovalTarget", () => {
 		expect(out.image).toBe("iVBORw0KGgo=");
 	});
 
+	it("describes a drag's drop target, which decides what the drag does", async () => {
+		const page = fakePage(checkoutFacts);
+		// The daemon asks about the drop target (the drag's targetRef) as ref.
+		const out = await describePanelApprovalTarget({ action: "drag", ref: "@e4", snapshot: async () => ({ refs }), page });
+		expect(out.target).toMatchObject({ role: "button", name: "Place order", pageUrl: "https://shop.example/checkout" });
+		expect(page.evaluate.mock.calls[0][0]).toContain('"mode":"match","role":"button","name":"Place order"');
+	});
+
 	it("resolves act instructions with the same matcher act uses", async () => {
 		const page = fakePage(checkoutFacts);
 		const out = await describePanelApprovalTarget({

@@ -87,7 +87,19 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	if typesLineBreak(action, args) {
 		target = approval.TypedEnter(target)
 	}
-	verdict := approval.Classify(target, mode)
+	judged := target
+	if action == "drag" {
+		// The drop lands on the target as a click would.
+		judged.Action = "click"
+	}
+	verdict := approval.Classify(judged, mode)
+	if action == "drag" && verdict.NeedsApproval {
+		source, _ := args["ref"].(string)
+		verdict.Summary = fmt.Sprintf("Drag %s onto %q", strings.TrimSpace(source), target.Name)
+		if host := approval.Host(target.PageURL); host != "" {
+			verdict.Summary += " on " + host
+		}
+	}
 	if !verdict.NeedsApproval && (!described.identified || described.partial) {
 		// The element (or its form) could not be read: ask rather than guess.
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
@@ -233,6 +245,10 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 	case "type":
 		ref, _ := args["ref"].(string)
 		text = fmt.Sprintf("Type a line break into element %s", strings.TrimSpace(ref))
+	case "drag":
+		source, _ := args["ref"].(string)
+		target, _ := args["targetRef"].(string)
+		text = fmt.Sprintf("Drag %s onto element %s", strings.TrimSpace(source), strings.TrimSpace(target))
 	default:
 		ref, _ := args["ref"].(string)
 		verb := "Click"
@@ -250,7 +266,8 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 // mayActConsequentially filters out actions that can never need approval
 // before paying for a describe round trip.
 func mayActConsequentially(action string, args map[string]interface{}) bool {
-	if typesLineBreak(action, args) {
+	if typesLineBreak(action, args) || action == "drag" {
+		// A drag is judged by where it drops ("Delete forever", "Trash").
 		return true
 	}
 	if _, ok := approval.GatedActions[action]; !ok {
@@ -312,6 +329,10 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 		if value, ok := args[key]; ok {
 			describeArgs[key] = value
 		}
+	}
+	if action == "drag" {
+		// What a drag does is decided where it drops: describe the target.
+		describeArgs["ref"] = args["targetRef"]
 	}
 	fallback.Instruction, _ = args["instruction"].(string)
 	fallback.Key, _ = args["key"].(string)
