@@ -242,11 +242,21 @@ func (*Antigravity) Limits(context.Context, string) (domain.AgentAccountLimits, 
 // Prepare shares the computer's own agy folder with home, except what names a
 // login and the private parts of agy's storage folders. Conversations, brain
 // files, skills, settings and MCP config follow every account, so a
-// conversation resumes under any of them.
+// conversation resumes under any of them. Any failure is
+// ErrAgentAccountUnshared: the folder would keep history of its own, so no
+// launch runs there until a later Prepare links it.
 func (a *Antigravity) Prepare(home string) error {
 	if home == "" {
 		return nil
 	}
+	err := a.prepare(home)
+	if err == nil || errors.Is(err, ports.ErrAgentAccountUnshared) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ports.ErrAgentAccountUnshared, err)
+}
+
+func (a *Antigravity) prepare(home string) error {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return err
 	}

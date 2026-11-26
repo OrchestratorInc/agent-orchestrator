@@ -95,6 +95,19 @@ func TestAntigravityPrepareNeedsTheComputersFolder(t *testing.T) {
 	}
 }
 
+// TestAntigravityPrepareRefusesAFolderItCannotSetUp: a folder Prepare could
+// not finish would keep history of its own, so any failure is unshared and no
+// launch runs there.
+func TestAntigravityPrepareRefusesAFolderItCannotSetUp(t *testing.T) {
+	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
+	// A file where agy's storage folder belongs: the folder cannot be made.
+	write(t, filepath.Join(home, "antigravity-cli"), "")
+	err := (&Antigravity{DeviceHome: device}).Prepare(home)
+	if !errors.Is(err, ports.ErrAgentAccountUnshared) {
+		t.Fatalf("Prepare = %v, want ErrAgentAccountUnshared", err)
+	}
+}
+
 func jwt(t *testing.T, claims string) string {
 	t.Helper()
 	return "h." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".s"
