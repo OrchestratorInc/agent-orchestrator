@@ -3390,6 +3390,8 @@
 	"files.error.loadWorkspaceFile": "Çalışma alanı dosyası yüklenemiyor",
 	"files.error.emptyResponse": "Çalışma alanı dosyası yanıtı boştu",
 	"files.binaryUnavailable": "İkili dosya önizlemesi kullanılamıyor.",
+	"files.previewUnavailableType": "{{type}} dosyaları için önizleme kullanılamıyor.",
+	"files.previewUnavailable": "Bu dosya türü için önizleme kullanılamıyor.",
 	"files.imageBefore": "Önce",
 	"files.imageAfter": "Sonra",
 	"files.imageDimensions": "{{width}} × {{height}}",
