@@ -55,15 +55,17 @@ const (
 // device account, whose folder is the CLI's own default. Name and KeyHint (the
 // key's last four characters) are set only on an API key account.
 type AgentAccount struct {
-	ID        string
-	Provider  AgentAccountProvider
-	Home      string
-	Email     string
-	Plan      string
-	Kind      AgentAccountKind
-	Name      string
-	KeyHint   string
-	CreatedAt time.Time
+	ID       string
+	Provider AgentAccountProvider
+	Home     string
+	Email    string
+	Plan     string
+	Kind     AgentAccountKind
+	Name     string
+	KeyHint  string
+	// WorkspaceID pins a saved Codex login to the workspace it was added with.
+	WorkspaceID string
+	CreatedAt   time.Time
 }
 
 // Device reports the "This computer" account.
@@ -142,6 +144,8 @@ type AgentAccountLimits struct {
 	AutoResumeResetsAt *time.Time `json:"-"`
 	// ReachedScopes are the meter scopes the provider reports as exhausted.
 	ReachedScopes []string `json:"-"`
+	// ReportedPlan is a fallback when identity did not report the subscription.
+	ReportedPlan string `json:"-"`
 	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
 	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
 	// ResetCredits counts Codex usage-limit resets the account can spend.

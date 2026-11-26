@@ -31,7 +31,7 @@ type MenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" |
 export type AccountLoginMode = {
 	/** Runs method for the account and returns its sign-in. One that finished
 	 * at once (an API key or setup token) has no id: nothing is left to follow. */
-	start: (method: string, secret: string, name: string) => Promise<AgentLoginSnapshot>;
+	start: (method: string, secret: string, name: string, workspaceId?: string) => Promise<AgentLoginSnapshot>;
 	/** A new account takes a name for a key or token; a saved one keeps its own. */
 	named: boolean;
 };
@@ -52,7 +52,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	/** Closes the panel; signedIn when a verified sign-in closed it. */
 	onClose: (signedIn?: boolean) => void;
 	/** Hands the sign-in to a terminal; without it the panel offers none. */
-	onTerminal?: () => Promise<unknown>;
+	onTerminal?: (workspaceId?: string) => Promise<unknown>;
 }) {
 	const { t } = useTranslation();
 	const titleId = useId();
@@ -63,6 +63,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const [secret, setSecret] = useState("");
 	// The label of a new account added with a key or token.
 	const [accountName, setAccountName] = useState("");
+	const [workspaceId, setWorkspaceId] = useState("");
+	const canChooseWorkspace = agentId === "codex" && account?.named && (onTerminal || availableMethods.some((item) => item.id === "browser" || item.id === "device_code"));
+	const requestedWorkspace = workspaceId.trim();
+	const validWorkspace = !requestedWorkspace || /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(requestedWorkspace);
 	const [model, setModel] = useState("");
 	const [device, setDevice] = useState(false);
 	const [models, setModels] = useState<string[]>([]);
@@ -230,6 +234,11 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		const targetNeedsModel = providerKeyNeedsModel(agentId, target?.id);
 		const targetKey = providerKeyFor(target?.id);
 		const targetCatalog = target?.id === CATALOG_METHOD;
+		const oauthWorkspace = canChooseWorkspace && (target?.id === "browser" || target?.id === "device_code") ? requestedWorkspace : "";
+		if (oauthWorkspace && !validWorkspace) {
+			setError(t("settings.agentAccounts.workspaceInvalid"));
+			return;
+		}
 		if (pending.current || locked || !target || keyStateUnknown(target.id) || (target.secret && !secret.trim() && !targetKey?.configured) || (targetNeedsModel && !model.trim()) || (targetCatalog && !catalogProvider)) return;
 		pending.current = true;
 		setBusy(true);
@@ -265,7 +274,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				// The device choice is sent only where it is shown; otherwise the
 				// key keeps its current setting.
 				const next = account
-					? await account.start(target.id, credential, accountName.trim())
+					? await (oauthWorkspace ? account.start(target.id, credential, accountName.trim(), oauthWorkspace) : account.start(target.id, credential, accountName.trim()))
 					: targetCatalog
 					? await startCatalogKeyLogin(agentId, catalogProvider, credential, hostId)
 					: targetKey?.deviceAvailable
@@ -333,7 +342,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 			if (current?.id) await runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId));
 			if (!mounted.current) return false;
 			operationRef.current = undefined;
-			if (terminal && onTerminal) await onTerminal(); else onClose(signedIn);
+			if (terminal && onTerminal) {
+				if (requestedWorkspace) await onTerminal(requestedWorkspace);
+				else await onTerminal();
+			} else onClose(signedIn);
 			return true;
 		} catch (err) {
 			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
@@ -552,6 +564,13 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 			{!connected && !locked && (availableMethods.length === 0 || methodGroups.length < 2) && <p className="text-xs leading-4 text-settings-muted">{availableMethods.length ? t("settings.harness.loginUi.method") : t("settings.harness.loginUi.nativeInteractive")}</p>}
 			{remote && !connected && <p className="max-w-prose text-xs leading-4 text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>
+		{canChooseWorkspace && !connected && !running && !verifying && <div className="max-w-lg space-y-1.5">
+			<label className="block space-y-1.5">
+				<span className={fieldLabelClass}>{t("settings.agentAccounts.workspaceIdOptional")}</span>
+				<Input value={workspaceId} disabled={busy} maxLength={36} spellCheck={false} autoComplete="off" aria-invalid={!validWorkspace} onChange={(event) => { setWorkspaceId(event.target.value); setError(""); }} />
+			</label>
+			<p className="text-xs leading-4 text-settings-muted">{t("settings.agentAccounts.workspaceLoginHelp")}</p>
+		</div>}
 		{availableMethods.length > 0 && !connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-3" onSubmit={(event) => { event.preventDefault(); void start(); }}>
 			<fieldset disabled={locked} className="space-y-3">
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
@@ -696,7 +715,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		{/* The panel's own actions sit together at the trailing edge, as outline
 		    buttons like Log in again and Log out on the Account card. */}
 		<div className="flex flex-wrap items-center justify-end gap-2">
-			{onTerminal && !connected && (availableMethods.length === 0 || !needsTerminal) && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+			{onTerminal && !connected && (availableMethods.length === 0 || !needsTerminal) && <Button variant="outline" size="sm" disabled={busy || verifying || !validWorkspace} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
 			<div className="flex flex-wrap items-center justify-end gap-2">
 				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 				{running && operation?.method === "native" && operation.nativePrompt !== "terminal_required" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}

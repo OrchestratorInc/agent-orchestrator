@@ -76,6 +76,7 @@ type fakeClaude struct {
 	failing    map[string]bool // folders whose check fails (a timeout)
 	pending    map[string]bool // folders whose login waits on its token's renewal
 	windows    []domain.AgentAccountLimitWindow
+	limitsPlan string
 	limitsErr  error
 	orgOf      map[string]string
 	orgNameOf  map[string]string
@@ -159,7 +160,7 @@ func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits,
 	if f.limitsErr != nil {
 		return domain.AgentAccountLimits{}, f.limitsErr
 	}
-	return domain.AgentAccountLimits{Windows: f.windows}, nil
+	return domain.AgentAccountLimits{Windows: f.windows, ReportedPlan: f.limitsPlan}, nil
 }
 func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
 	return []string{"claude", "auth", "login"}, nil

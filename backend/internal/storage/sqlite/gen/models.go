@@ -13,15 +13,16 @@ import (
 )
 
 type AgentAccount struct {
-	ID        string
-	Provider  string
-	Home      string
-	Email     string
-	Plan      string
-	CreatedAt time.Time
-	Kind      string
-	Name      string
-	KeyHint   string
+	ID          string
+	Provider    string
+	Home        string
+	Email       string
+	Plan        string
+	CreatedAt   time.Time
+	Kind        string
+	Name        string
+	KeyHint     string
+	WorkspaceID string
 }
 
 type AgentAccountDefault struct {

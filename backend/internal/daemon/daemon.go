@@ -2071,8 +2071,8 @@ func stabilizeWorkingDirectory(dataDir string) error {
 // code field as signing the CLI in, instead of a terminal.
 type accountUILogin struct{ auth *agentauth.Service }
 
-func (l accountUILogin) StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret string, env map[string]string) (string, error) {
-	snapshot, err := l.auth.StartAccountLogin(ctx, string(harness), method, secret, env)
+func (l accountUILogin) StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret, workspaceID string, env map[string]string) (string, error) {
+	snapshot, err := l.auth.StartLoginWithOptions(ctx, string(harness), method, secret, agentauth.LoginOptions{AccountEnv: env, CodexWorkspaceID: workspaceID})
 	return snapshot.ID, err
 }
 

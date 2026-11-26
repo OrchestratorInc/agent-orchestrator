@@ -432,6 +432,22 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
 	});
 
+	it("requires a valid workspace ID when targeting a Codex browser login", async () => {
+		const user = userEvent.setup();
+		const start = vi.fn().mockResolvedValue({ ...snapshot, method: "browser" });
+		render(<HarnessLoginPanel agentId="codex" methods={methods} account={{ start, named: true }} onVerify={vi.fn()} onClose={vi.fn()} />);
+		const field = screen.getByRole("textbox", { name: "ChatGPT workspace ID (optional)" });
+		await user.type(field, "not-a-workspace");
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
+		expect(screen.getByRole("alert")).toHaveTextContent("Enter a valid ChatGPT workspace ID.");
+		expect(start).not.toHaveBeenCalled();
+		await user.clear(field);
+		const workspace = "a997ab10-022e-4f11-a773-2b4a5f84fd5e";
+		await user.type(field, workspace);
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
+		expect(start).toHaveBeenCalledWith("browser", "", "", workspace);
+	});
+
 	it("uses device-code or credentials on a remote host instead of a localhost browser callback", async () => {
 		const { user } = setup("remote-1");
 		expect(screen.queryByRole("button", { name: "ChatGPT in browser" })).toBeNull();

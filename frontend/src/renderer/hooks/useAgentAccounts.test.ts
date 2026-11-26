@@ -44,6 +44,13 @@ describe("agentAccountLabel", () => {
 		expect(agentAccountLabel(acme, [acme, other], t)).toBe("a@example.com");
 	});
 
+	it("shows the active Codex workspace even when there is only one login", () => {
+		const codex = { ...acme, provider: "codex" as const, orgId: "ab12cd34-0000-4000-8000-000000000001" };
+		expect(agentAccountLabel(codex, [codex], t)).toBe("a@example.com · Acme");
+		const unnamed = { ...codex, orgName: undefined };
+		expect(agentAccountLabel(unnamed, [unnamed], t)).toBe("a@example.com · ab12cd34");
+	});
+
 	it("adds the organization when the same email is in another organization", () => {
 		expect(agentAccountLabel(acme, [acme, personal], t)).toBe("a@example.com · Acme");
 		expect(agentAccountLabel(personal, [acme, personal], t)).toBe("A@example.com · Personal");

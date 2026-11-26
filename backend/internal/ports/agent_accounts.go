@@ -35,6 +35,8 @@ var (
 	ErrAgentAccountKindMismatch      = errors.New("the account's kind does not support this")
 	ErrAgentAccountNoLimits          = errors.New("a per-token account has no usage limits")
 	ErrAgentAccountMethodInvalid     = errors.New("the sign-in method cannot add an account of this provider")
+	ErrAgentAccountWorkspaceInvalid  = errors.New("invalid ChatGPT workspace ID or sign-in method")
+	ErrAgentAccountWorkspaceMismatch = errors.New("Codex did not confirm the requested ChatGPT workspace")
 	ErrAgentAccountSignInUnavailable = errors.New("the in-app sign-in is unavailable")
 )
 
@@ -43,8 +45,8 @@ var (
 var ErrAgentAccountNeedsDeveloperMode = errors.New("the account's links need Windows Developer Mode")
 
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
-// folders. home is empty for the computer's own folder. Implementations ask the
-// CLI itself; none of them reads a token.
+// folders. home is empty for the computer's own folder. Sign-in and credentials
+// are owned by the provider's CLI.
 type AgentAccountProviderCLI interface {
 	Provider() domain.AgentAccountProvider
 	// Identity reports who home is signed in to.

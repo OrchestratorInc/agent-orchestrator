@@ -4864,6 +4864,8 @@ type StartAgentAccountLoginRequest struct {
 	Secret string `json:"secret,omitempty"`
 	// Name labels a new account that has no email of its own.
 	Name string `json:"name,omitempty"`
+	// WorkspaceID restricts Codex browser or device-code login to this ChatGPT workspace.
+	WorkspaceID string `json:"workspaceId,omitempty" format:"uuid"`
 }
 
 // SignInAgentAccountAgainRequest picks how a saved account signs in again,

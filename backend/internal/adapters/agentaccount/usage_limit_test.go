@@ -66,6 +66,11 @@ func (f *limitsAccountFactory) Open(_ context.Context, account ports.CodexAccoun
 type limitsAccountClient struct {
 	ports.CodexAccountClient
 	capacity ports.CodexCapacityObservation
+	identity ports.CodexAccountObservation
+}
+
+func (c *limitsAccountClient) Read(context.Context, bool) (ports.CodexAccountObservation, error) {
+	return c.identity, nil
 }
 
 func (c *limitsAccountClient) ReadCapacity(context.Context) (ports.CodexCapacityObservation, error) {
@@ -77,6 +82,23 @@ func (*limitsAccountClient) ReadUsage(context.Context) (ports.CodexUsageObservat
 }
 
 func (*limitsAccountClient) Close() error { return nil }
+
+func TestCodexReadsWorkspaceNameAndOnlyReportedPlans(t *testing.T) {
+	unknown, business, name := "unknown", "business", "Workspace A"
+	client := &limitsAccountClient{
+		identity: ports.CodexAccountObservation{Authentication: domain.AgentAuthenticationAuthorized, Method: domain.CodexAuthMethodChatGPT, WorkspaceName: &name, Plan: &unknown},
+		capacity: ports.CodexCapacityObservation{Plan: &business},
+	}
+	cli := &Codex{Accounts: &limitsAccountFactory{client: client}, DeviceHome: t.TempDir()}
+	identity, err := cli.Identity(t.Context(), "")
+	if err != nil || !identity.SignedIn || identity.Plan != "" || identity.OrgName != name {
+		t.Fatalf("identity = %+v, err = %v", identity, err)
+	}
+	limits, err := cli.Limits(t.Context(), "")
+	if err != nil || limits.ReportedPlan != business {
+		t.Fatalf("limits plan = %q, err = %v", limits.ReportedPlan, err)
+	}
+}
 
 func TestCodexLimitsPreservesPrivateSafeReset(t *testing.T) {
 	reset := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)

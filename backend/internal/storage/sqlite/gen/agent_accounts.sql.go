@@ -167,20 +167,21 @@ func (q *Queries) CancelSessionTurnAutoResume(ctx context.Context, arg CancelSes
 }
 
 const createAgentAccount = `-- name: CreateAgentAccount :exec
-INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, created_at, workspace_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateAgentAccountParams struct {
-	ID        string
-	Provider  string
-	Home      string
-	Email     string
-	Plan      string
-	Kind      string
-	Name      string
-	KeyHint   string
-	CreatedAt time.Time
+	ID          string
+	Provider    string
+	Home        string
+	Email       string
+	Plan        string
+	Kind        string
+	Name        string
+	KeyHint     string
+	CreatedAt   time.Time
+	WorkspaceID string
 }
 
 func (q *Queries) CreateAgentAccount(ctx context.Context, arg CreateAgentAccountParams) error {
@@ -194,6 +195,7 @@ func (q *Queries) CreateAgentAccount(ctx context.Context, arg CreateAgentAccount
 		arg.Name,
 		arg.KeyHint,
 		arg.CreatedAt,
+		arg.WorkspaceID,
 	)
 	return err
 }
@@ -286,7 +288,7 @@ func (q *Queries) GetSessionAgentAccount(ctx context.Context, arg GetSessionAgen
 
 const listAgentAccounts = `-- name: ListAgentAccounts :many
 
-SELECT id, provider, home, email, "plan", created_at, kind, name, key_hint FROM agent_accounts ORDER BY provider, created_at, id
+SELECT id, provider, home, email, "plan", created_at, kind, name, key_hint, workspace_id FROM agent_accounts ORDER BY provider, created_at, id
 `
 
 // Subscription and API key accounts AO launches Claude Code and Codex with.
@@ -309,6 +311,7 @@ func (q *Queries) ListAgentAccounts(ctx context.Context) ([]AgentAccount, error)
 			&i.Kind,
 			&i.Name,
 			&i.KeyHint,
+			&i.WorkspaceID,
 		); err != nil {
 			return nil, err
 		}

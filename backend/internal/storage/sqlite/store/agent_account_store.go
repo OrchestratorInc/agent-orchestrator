@@ -25,7 +25,8 @@ func (s *Store) ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, e
 		out = append(out, domain.AgentAccount{
 			ID: row.ID, Provider: domain.AgentAccountProvider(row.Provider), Home: row.Home,
 			Email: row.Email, Plan: row.Plan, Kind: domain.AgentAccountKind(row.Kind), Name: row.Name, KeyHint: row.KeyHint,
-			CreatedAt: row.CreatedAt,
+			WorkspaceID: row.WorkspaceID,
+			CreatedAt:   row.CreatedAt,
 		})
 	}
 	return out, nil
@@ -42,6 +43,7 @@ func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) e
 	if err := s.qw.CreateAgentAccount(ctx, gen.CreateAgentAccountParams{
 		ID: a.ID, Provider: string(a.Provider), Home: a.Home, Email: a.Email, Plan: a.Plan,
 		Kind: string(kind), Name: a.Name, KeyHint: a.KeyHint, CreatedAt: a.CreatedAt.UTC(),
+		WorkspaceID: a.WorkspaceID,
 	}); err != nil {
 		return fmt.Errorf("create agent account %s: %w", a.ID, err)
 	}

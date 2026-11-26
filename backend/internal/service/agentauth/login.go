@@ -168,6 +168,8 @@ type LoginOptions struct {
 	// Only the CLI's own sign-in methods take it, and a success leaves the
 	// computer's own login and AO's saved keys as they were.
 	AccountEnv map[string]string
+	// CodexWorkspaceID is a validated workspace UUID from the saved account service.
+	CodexWorkspaceID string
 }
 
 func (o LoginOptions) sharesDevice() bool { return o.Device != nil && *o.Device }
@@ -234,6 +236,13 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 	args, needsSecret, err := loginArgs(agentID, method)
 	if err != nil {
 		return LoginSnapshot{}, err
+	}
+	if opts.CodexWorkspaceID != "" {
+		workspaceID, err := uuid.Parse(opts.CodexWorkspaceID)
+		if !account || agentID != "codex" || (method != "browser" && method != "device_code") || err != nil || workspaceID == uuid.Nil {
+			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This sign-in method cannot select a ChatGPT workspace.", nil)
+		}
+		args = append(args, "-c", fmt.Sprintf("forced_chatgpt_workspace_id=%q", workspaceID.String()))
 	}
 	secret = strings.TrimSpace(secret)
 	if (needsSecret && (secret == "" || len(secret) > 16*1024 || strings.ContainsAny(secret, "\r\n\x00"))) || (!needsSecret && secret != "") {
