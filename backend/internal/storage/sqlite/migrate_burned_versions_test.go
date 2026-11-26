@@ -248,7 +248,6 @@ var shippedMigrations = map[int64]string{
 	20261031173315209: "20261031173315209_usage_event_provider_message_id.sql",
 	20261031173316629: "20261031173316629_usage_long_context_reprice.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
-	20261101115405806: "20261101115405806_conversation_turn_lineage_indexes.sql",
 	20261101145613011: "20261101145613011_repository_renames.sql",
 	20261101192928401: "20261101192928401_add_shell_terminal_command_owner.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
@@ -294,6 +293,7 @@ var shippedMigrations = map[int64]string{
 	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
+	20261126084920915: "20261126084920915_conversation_turn_lineage_indexes.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -317,7 +317,10 @@ func burnedVersion(v int64) bool {
 		v == 216 || v == 20261114174124485 ||
 		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
 		// numbers before its migration moved above main's latest version.
-		v == 207 || v == 20261023182047274 || v == 20261114174310512
+		v == 207 || v == 20261023182047274 || v == 20261114174310512 ||
+		// 20261101115405806 was the turn lineage indexes' draft number before
+		// the migration moved above main's latest version.
+		v == 20261101115405806
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
