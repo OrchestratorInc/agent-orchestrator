@@ -94,6 +94,14 @@ describe("ApprovalPrompt", () => {
 		expect(onOpenSession).toHaveBeenCalled();
 	});
 
+	it("offers no Always allow for the catch-all script category", () => {
+		// "script" covers eval, unknown commands and unreadable targets: a
+		// site rule for it would let any later script run unasked.
+		render(<ApprovalPrompt request={{ ...request, category: "script" }} onDecide={vi.fn()} />);
+		expect(screen.queryByRole("button", { name: /Always allow/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+	});
+
 	it("offers no site-wide allow when the site is unknown", () => {
 		render(<ApprovalPrompt request={{ ...request, site: "" }} onDecide={vi.fn()} />);
 		expect(screen.queryByRole("button", { name: /Always allow/ })).not.toBeInTheDocument();
