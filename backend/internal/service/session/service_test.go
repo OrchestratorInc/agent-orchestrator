@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,8 +21,11 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -61,14 +67,15 @@ func (f *fakeAgentReadiness) RecheckAgent(agentID string) {
 }
 
 type fakeStore struct {
+	artifacts           map[domain.SessionID][]string
+	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
-	activeSwitches      map[domain.SessionID]domain.AgentSwitch
-	activeSwitchGetErr  error
-	activeSwitchListErr error
 	pr                  map[domain.SessionID]domain.PRFacts
 	prFacts             map[domain.SessionID][]domain.PRFacts
 	prs                 map[domain.SessionID][]domain.PullRequest
+	reportedPRURLs      map[domain.SessionID][]string
+	repositoryRenames   []domain.RepositoryRename
 	projects            map[string]domain.ProjectRecord
 	worktrees           map[domain.SessionID][]domain.SessionWorktreeRecord
 	checks              map[string][]domain.PullRequestCheck
@@ -78,18 +85,28 @@ type fakeStore struct {
 	comments            map[string][]domain.PullRequestComment
 	commentsErr         error
 	reviewRuns          map[domain.SessionID][]domain.CurrentHeadReviewRun
+	interrupted         map[domain.SessionID]bool
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+	conversations       map[domain.SessionID]domain.ConversationRecord
+	activities          []domain.ConversationActivity
+	runningTurns        map[string][]string
+
+	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
+	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
+	getCleanupFactsCalls  int
+	listCleanupFactsCalls int
+	cleanupFactsRequested []domain.SessionID
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		sessions:       map[domain.SessionID]domain.SessionRecord{},
-		activeSwitches: map[domain.SessionID]domain.AgentSwitch{},
 		pr:             map[domain.SessionID]domain.PRFacts{},
 		prFacts:        map[domain.SessionID][]domain.PRFacts{},
 		prs:            map[domain.SessionID][]domain.PullRequest{},
+		reportedPRURLs: map[domain.SessionID][]string{},
 		projects:       map[string]domain.ProjectRecord{},
 		worktrees:      map[domain.SessionID][]domain.SessionWorktreeRecord{},
 		checks:         map[string][]domain.PullRequestCheck{},
@@ -102,6 +119,73 @@ func newFakeStore() *fakeStore {
 
 func (f *fakeStore) ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
+	conversation, ok := f.conversations[id]
+	if !ok {
+		return domain.ConversationRecord{}, domain.ErrNoConversation
+	}
+	return conversation, nil
+}
+
+func (f *fakeStore) SessionForActivityProviderItem(_ context.Context, providerItemID string) (domain.SessionID, bool, error) {
+	for _, activity := range f.activities {
+		if activity.ProviderItemID != providerItemID {
+			continue
+		}
+		for sessionID, conversation := range f.conversations {
+			if conversation.ID == activity.ConversationID {
+				return sessionID, true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	for _, existing := range f.activities {
+		if existing.ConversationID == conversationID && existing.ProviderItemID == providerItemID {
+			return existing.Status, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) ListVisibleRunningTurnProviderIDs(_ context.Context, conversationID string) ([]string, error) {
+	return f.runningTurns[conversationID], nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error {
+	if activity.ProviderItemID != "" {
+		for i, existing := range f.activities {
+			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
+				if activity.Kind == domain.ActivityKindAOAction &&
+					activity.Status == domain.ActivityStatusRunning &&
+					(existing.Status == domain.ActivityStatusCompleted ||
+						existing.Status == domain.ActivityStatusFailed ||
+						existing.Status == domain.ActivityStatusCancelled ||
+						existing.Status == domain.ActivityStatusResolved) {
+					return nil
+				}
+				activity.ID = existing.ID
+				activity.ConversationID = conversationID
+				activity.Sequence = existing.Sequence
+				activity.Revision = existing.Revision + 1
+				activity.UpdatedAt = now
+				f.activities[i] = activity
+				return nil
+			}
+		}
+	}
+	activity.ConversationID = conversationID
+	activity.TurnID = providerTurnID
+	activity.Sequence = int64(len(f.activities) + 1)
+	activity.Revision = 1
+	activity.CreatedAt = now
+	activity.UpdatedAt = now
+	f.activities = append(f.activities, activity)
+	return nil
 }
 
 func TestListBatchesKanbanReads(t *testing.T) {
@@ -128,26 +212,80 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	}
 }
 
-func (f *fakeStore) GetActiveAgentSwitch(_ context.Context, id domain.SessionID) (domain.AgentSwitch, bool, error) {
-	if f.activeSwitchGetErr != nil {
-		return domain.AgentSwitch{}, false, f.activeSwitchGetErr
+func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
 	}
-	sw, ok := f.activeSwitches[id]
-	return sw, ok, nil
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.interrupted = map[domain.SessionID]bool{"mer-1": true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Idle"}
+	for _, sess := range list {
+		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
+			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
+		}
+	}
+	sess, err := svc.Get(context.Background(), "mer-1")
+	if err != nil || sess.DisplayStatus != "Interrupted" {
+		t.Fatalf("get displayStatus = %q, %v; want Interrupted", sess.DisplayStatus, err)
+	}
 }
 
-func (f *fakeStore) ListActiveAgentSwitches(context.Context) ([]domain.AgentSwitch, error) {
-	if f.activeSwitchListErr != nil {
-		return nil, f.activeSwitchListErr
+func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	out := make([]domain.AgentSwitch, 0, len(f.activeSwitches))
-	for _, sw := range f.activeSwitches {
-		out = append(out, sw)
+	if len(list) != 0 {
+		t.Fatalf("list = %+v, want no preparations", list)
 	}
-	return out, nil
+	_, err = svc.Get(context.Background(), "mer-1")
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+		t.Fatalf("get preparation error = %v", err)
+	}
+	if first, err := svc.isFirstSession(context.Background()); err != nil || !first {
+		t.Fatalf("isFirstSession = %v, %v", first, err)
+	}
 }
 
-func newWorkspaceRepo(t *testing.T) string {
+func TestGetRecordReadsOnlyTheStoredRow(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Metadata: domain.SessionMetadata{PreviewURL: "http://localhost:5173/"}}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
+
+	rec, err := svc.GetRecord(context.Background(), "mer-1")
+	if err != nil || rec.Metadata.PreviewURL != "http://localhost:5173/" {
+		t.Fatalf("GetRecord = %+v, %v", rec, err)
+	}
+	if st.listPRFactsCalls != 0 || st.listReviewRunsCalls != 0 {
+		t.Fatalf("GetRecord read PR facts %d times and review runs %d times, want none", st.listPRFactsCalls, st.listReviewRunsCalls)
+	}
+	for _, id := range []domain.SessionID{"mer-2", "missing"} {
+		_, err = svc.GetRecord(context.Background(), id)
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+			t.Fatalf("GetRecord(%s) error = %v, want SESSION_NOT_FOUND", id, err)
+		}
+	}
+}
+
+func newWorkspaceRepo(t testing.TB) string {
 	t.Helper()
 	dir := t.TempDir()
 	runGit(t, dir, "init")
@@ -161,7 +299,7 @@ func newWorkspaceRepo(t *testing.T) string {
 	return dir
 }
 
-func runGit(t *testing.T, dir string, args ...string) string {
+func runGit(t testing.TB, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
@@ -171,7 +309,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-func writeWorkspaceFile(t *testing.T, root, rel, content string) {
+func writeWorkspaceFile(t testing.TB, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -180,6 +318,40 @@ func writeWorkspaceFile(t *testing.T, root, rel, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// fixtureCommit is one commit for importCommits: its message and the files it
+// writes.
+type fixtureCommit struct {
+	message string
+	files   map[string]string
+}
+
+// importCommits appends commits to branch on top of parent in one git
+// fast-import, far faster than a git commit per commit for the hundreds a
+// capped commit list needs, and returns their SHAs oldest first.
+func importCommits(t *testing.T, repo, branch, parent string, commits []fixtureCommit) []string {
+	t.Helper()
+	var stream strings.Builder
+	for i, commit := range commits {
+		fmt.Fprintf(&stream, "commit refs/heads/%s\ncommitter AO Tests <ao@example.com> %d +0000\ndata %d\n%s\n", branch, 1700000000+i, len(commit.message), commit.message)
+		if i == 0 {
+			fmt.Fprintf(&stream, "from %s\n", parent)
+		}
+		for path, content := range commit.files {
+			fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+		}
+	}
+	cmd := exec.Command("git", "-C", repo, "fast-import", "--quiet")
+	cmd.Stdin = strings.NewReader(stream.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git fast-import: %v\n%s", err, out)
+	}
+	shas := strings.Fields(runGit(t, repo, "rev-list", "--reverse", parent+".."+branch))
+	if len(shas) != len(commits) {
+		t.Fatalf("imported %d commits, want %d", len(shas), len(commits))
+	}
+	return shas
 }
 
 func linkWorkspaceDir(t *testing.T, target, link string) {
@@ -209,6 +381,56 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	}
 	r, ok := f.sessions[id]
 	return r, ok, nil
+}
+
+func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, _ time.Time) ([]string, bool, error) {
+	if _, ok := f.sessions[id]; !ok {
+		return nil, false, nil
+	}
+	if f.artifacts == nil {
+		f.artifacts = map[domain.SessionID][]string{}
+	}
+	for _, registration := range registrations {
+		path := registration.Path
+		if !slices.Contains(f.artifacts[id], path) {
+			f.artifacts[id] = append(f.artifacts[id], path)
+		}
+	}
+	return f.artifacts[id], true, nil
+}
+
+func (f *fakeStore) ListSessionArtifactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error) {
+	out := make(map[domain.SessionID][]domain.SessionArtifactRecord, len(ids))
+	registeredAt := time.Unix(0, 0)
+	for _, id := range ids {
+		paths, ok := f.artifacts[id]
+		if !ok {
+			continue
+		}
+		for _, path := range paths {
+			out[id] = append(out[id], domain.SessionArtifactRecord{ID: "artifact:" + path, SessionID: id, Path: path, RegisteredAt: &registeredAt})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RemoveSessionArtifact(_ context.Context, id domain.SessionID, path string) error {
+	f.artifacts[id] = slices.DeleteFunc(f.artifacts[id], func(p string) bool { return p == path })
+	return nil
+}
+
+func (f *fakeStore) ClearSessionArtifacts(_ context.Context, id domain.SessionID) error {
+	delete(f.artifacts, id)
+	return nil
+}
+
+func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
+	for _, rec := range f.sessions {
+		if id != "" && rec.ClientRequestID == id {
+			return rec, true, nil
+		}
+	}
+	return domain.SessionRecord{}, false, nil
 }
 
 func (f *fakeStore) ListSessions(_ context.Context, p domain.ProjectID) ([]domain.SessionRecord, error) {
@@ -346,6 +568,14 @@ func (f *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]
 	return []domain.PullRequest{{URL: pr.URL, SessionID: id, Number: pr.Number, Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability, UpdatedAt: pr.UpdatedAt, TargetBranch: pr.TargetBranch}}, nil
 }
 
+func (f *fakeStore) ListReportedPRURLs(_ context.Context, id domain.SessionID) ([]string, error) {
+	return append([]string(nil), f.reportedPRURLs[id]...), nil
+}
+
+func (f *fakeStore) ListRepositoryRenames(context.Context) ([]domain.RepositoryRename, error) {
+	return append([]domain.RepositoryRename(nil), f.repositoryRenames...), nil
+}
+
 func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID) ([]domain.PRFacts, error) {
 	f.listPRFactsCalls++
 	if prs, ok := f.prFacts[id]; ok {
@@ -356,6 +586,48 @@ func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID
 		return nil, nil
 	}
 	return []domain.PRFacts{pr}, nil
+}
+
+// ListPRStateTimes answers from the same PR facts the fake serves to
+// ListPRFactsForSessions, so a test seeds one place.
+func (f *fakeStore) ListPRStateTimes(_ context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error) {
+	out := map[domain.SessionID]time.Time{}
+	add := func(id domain.SessionID, pr domain.PRFacts) {
+		if fakePRFactsState(pr) != state {
+			return
+		}
+		at := pr.StateChangedAt
+		if at.IsZero() {
+			at = pr.UpdatedAt
+		}
+		if prev, seen := out[id]; !seen || at.After(prev) {
+			out[id] = at
+		}
+	}
+	for id, prs := range f.prFacts {
+		for _, pr := range prs {
+			add(id, pr)
+		}
+	}
+	for id, pr := range f.pr {
+		if _, listed := f.prFacts[id]; !listed {
+			add(id, pr)
+		}
+	}
+	return out, nil
+}
+
+func fakePRFactsState(pr domain.PRFacts) domain.PRState {
+	switch {
+	case pr.Merged:
+		return domain.PRStateMerged
+	case pr.Closed:
+		return domain.PRStateClosed
+	case pr.Draft:
+		return domain.PRStateDraft
+	default:
+		return domain.PRStateOpen
+	}
 }
 
 func (f *fakeStore) ListPRFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error) {
@@ -386,6 +658,16 @@ func (f *fakeStore) ListCurrentHeadReviewRunsForSessions(_ context.Context, ids 
 	out := make(map[domain.SessionID][]domain.CurrentHeadReviewRun, len(ids))
 	for _, id := range ids {
 		out[id] = append([]domain.CurrentHeadReviewRun(nil), f.reviewRuns[id]...)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListInterruptedSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error) {
+	out := make(map[domain.SessionID]bool, len(ids))
+	for _, id := range ids {
+		if f.interrupted[id] {
+			out[id] = true
+		}
 	}
 	return out, nil
 }
@@ -446,43 +728,6 @@ func TestSessionListAppliesActivityBeforePRFacts(t *testing.T) {
 	}
 }
 
-func TestSessionListProjectsActiveAgentSwitch(t *testing.T) {
-	st := newFakeStore()
-	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Activity: domain.Activity{State: domain.ActivityExited}}
-	st.sessions["other-1"] = domain.SessionRecord{ID: "other-1", ProjectID: "other", Activity: domain.Activity{State: domain.ActivityIdle}}
-	st.activeSwitches["mer-1"] = domain.AgentSwitch{
-		ID: "switch-1", SessionID: "mer-1", FromHarness: domain.HarnessClaudeCode,
-		TargetHarness: domain.HarnessCodex, State: domain.AgentSwitchPreparingHandoff,
-	}
-	st.activeSwitches["other-1"] = domain.AgentSwitch{ID: "switch-other", SessionID: "other-1", State: domain.AgentSwitchPreparingHandoff}
-
-	list, err := (&Service{store: st}).List(context.Background(), ListFilter{ProjectID: "mer"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(list) != 1 || list[0].ActiveAgentSwitch == nil || list[0].ActiveAgentSwitch.ID != "switch-1" {
-		t.Fatalf("list active switch projection = %+v", list)
-	}
-	if list[0].Status != domain.StatusExited {
-		t.Fatalf("session status = %q, want durable activity-derived exited", list[0].Status)
-	}
-	got, err := (&Service{store: st}).Get(context.Background(), "mer-1")
-	if err != nil || got.ActiveAgentSwitch == nil || got.ActiveAgentSwitch.ID != "switch-1" {
-		t.Fatalf("get active switch projection = %+v, err=%v", got.ActiveAgentSwitch, err)
-	}
-
-	st.activeSwitchListErr = errors.New("active switch read failed")
-	if _, err := (&Service{store: st}).List(context.Background(), ListFilter{ProjectID: "mer"}); err == nil || !strings.Contains(err.Error(), "active switch") {
-		t.Fatalf("active switch list error = %v", err)
-	}
-
-	st.activeSwitchListErr = nil
-	st.activeSwitchGetErr = errors.New("active switch read failed")
-	if _, err := (&Service{store: st}).Get(context.Background(), "mer-1"); err == nil || !strings.Contains(err.Error(), "active switch") {
-		t.Fatalf("active switch get error = %v", err)
-	}
-}
-
 func TestSessionRenameUpdatesDisplayName(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer"}
@@ -493,6 +738,22 @@ func TestSessionRenameUpdatesDisplayName(t *testing.T) {
 	}
 	if got := st.sessions["mer-1"].DisplayName; got != "Fix issue #90" {
 		t.Fatalf("display name = %q, want trimmed rename", got)
+	}
+}
+
+func TestSessionRenameRejectsOrchestrator(t *testing.T) {
+	for _, terminated := range []bool{false, true} {
+		st := newFakeStore()
+		st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: terminated}
+
+		err := (&Service{store: st}).Rename(context.Background(), "mer-1", "My orchestrator")
+		var e *apierr.Error
+		if !errors.As(err, &e) || e.Kind != apierr.KindInvalid || e.Code != "ORCHESTRATOR_RENAME_UNSUPPORTED" {
+			t.Fatalf("terminated=%v: err = %v, want apierr Invalid ORCHESTRATOR_RENAME_UNSUPPORTED", terminated, err)
+		}
+		if got := st.sessions["mer-1"].DisplayName; got != "" {
+			t.Fatalf("terminated=%v: display name = %q, want unchanged", terminated, got)
+		}
 	}
 }
 
@@ -577,12 +838,21 @@ func TestSessionSetTerminateOnPRMergePersistsPolicy(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
 
-	sess, err := (&Service{store: st}).SetTerminateOnPRMerge(context.Background(), "mer-1", true)
+	svc := &Service{store: st}
+	sess, err := svc.SetTerminateOnPRMerge(context.Background(), "mer-1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sess.TerminateOnPRMerge || !st.sessions["mer-1"].TerminateOnPRMerge {
 		t.Fatalf("terminate-on-merge policy was not persisted: session=%+v stored=%+v", sess, st.sessions["mer-1"])
+	}
+
+	sess, err = svc.SetTerminateOnPRMerge(context.Background(), "mer-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.TerminateOnPRMerge || st.sessions["mer-1"].TerminateOnPRMerge {
+		t.Fatalf("terminate-on-merge policy was not toggled off: session=%+v stored=%+v", sess, st.sessions["mer-1"])
 	}
 }
 
@@ -752,6 +1022,92 @@ func TestListWorkspaceFilesRepoUnavailableWrapsSentinel(t *testing.T) {
 	}
 	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
 		t.Fatalf("error = %v, want errors.Is(ErrWorkspaceRepoUnavailable)", err)
+	}
+}
+
+func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "worktree with spaces")
+	gitdir := filepath.Join(parent, "metadata with spaces", "worktrees", "session")
+	common := filepath.Join(parent, "owning repo", ".git")
+	for _, dir := range []string{root, gitdir, common} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backpointer, err := filepath.Rel(root, gitdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+backpointer+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commonPointer, err := filepath.Rel(gitdir, common)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(commonPointer+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceRepoUnavailable(root) {
+		t.Fatal("existing common repository classified as missing")
+	}
+	if err := os.RemoveAll(common); err != nil {
+		t.Fatal(err)
+	}
+	if !workspaceRepoUnavailable(root) {
+		t.Fatal("missing common repository was not detected")
+	}
+	_, err = gitWorkspaceOutput(context.Background(), root, "status", "--porcelain=v1")
+	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		t.Fatalf("Git error = %v, want missing repository", err)
+	}
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{
+		ID:       "ao-1",
+		Metadata: domain.SessionMetadata{WorkspacePath: root},
+	}
+	svc := NewWithDeps(Deps{Store: st})
+	_, err = svc.ReconcileWorkspaceManifest(context.Background(), "ao-1")
+	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		t.Fatalf("stream startup reconciliation = %v, want missing repository", err)
+	}
+}
+
+func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
+	busy := classifyWorkspaceGitError(context.Background(), "/repo", "status", errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	var apiErr *apierr.Error
+	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
+		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
+	}
+	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", "status", errors.New("git exit"), "fatal: bad object")
+	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
+	}
+}
+
+func TestListWorkspaceFilesClassifiesGitReadFailure(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".git", "index"), []byte("not a git index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{
+		ID:       "ao-1",
+		Metadata: domain.SessionMetadata{WorkspacePath: repo},
+		Activity: domain.Activity{State: domain.ActivityActive},
+	}
+
+	_, err := (&Service{store: st}).ListWorkspaceFiles(context.Background(), "ao-1")
+	if err == nil {
+		t.Fatal("ListWorkspaceFiles succeeded with a corrupt Git index")
+	}
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %v, want typed API error", err)
+	}
+	if apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+		t.Fatalf("error code = %q, want WORKSPACE_GIT_READ_FAILED", apiErr.Code)
 	}
 }
 
@@ -2435,35 +2791,40 @@ func TestSessionRenameMissingSessionReturnsNotFound(t *testing.T) {
 // fakeCommander records Kill/Spawn calls so a test can assert the
 // clean-orchestrator ordering without wiring a real session engine.
 type fakeCommander struct {
-	killed           []domain.SessionID
-	retired          []domain.SessionID
-	exited           []domain.SessionID
-	resumed          []domain.SessionID
-	ready            []domain.SessionID
-	sent             []domain.SessionID
-	sentMessages     []string
-	cleanupProjects  []domain.ProjectID
-	killErr          error
-	retireErr        error
-	sendErr          error
-	sendFunc         func(domain.SessionID, string) error
-	cleanupErr       error
-	spawnErr         error
-	spawnRecord      domain.SessionRecord
-	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
-	spawnCalls       int
-	spawned          bool
-	spawnedCfg       ports.SpawnConfig
-	killsAtSpawn     int
-	restoreErr       error
-	restoreResult    sessionmanager.RestoreResult
-	readyErr         error
-	backgroundResult string
-	backgroundErr    error
-	backgroundFunc   func(backgroundTaskCall) (string, error)
-	backgroundCalls  []backgroundTaskCall
-	killFunc         func(domain.SessionID)
-	killMu           sync.Mutex
+	killed            []domain.SessionID
+	retired           []domain.SessionID
+	exited            []domain.SessionID
+	resumed           []domain.SessionID
+	ready             []domain.SessionID
+	sent              []domain.SessionID
+	sentMessages      []string
+	cleanupProjects   []domain.ProjectID
+	killErr           error
+	retireErr         error
+	retireFunc        func(context.Context, domain.SessionID) error
+	sendErr           error
+	sendFunc          func(domain.SessionID, string) error
+	cleanupErr        error
+	spawnErr          error
+	spawnWaitsForCtx  bool
+	spawnHook         func(context.Context)
+	spawnRecord       domain.SessionRecord
+	requestKillResult *sessionmanager.KillResult
+	spawnFunc         func(ports.SpawnConfig) domain.SessionRecord
+	spawnCalls        int
+	spawned           bool
+	spawnedCfg        ports.SpawnConfig
+	spawnCtx          context.Context
+	killsAtSpawn      int
+	restoreErr        error
+	restoreResult     sessionmanager.RestoreResult
+	readyErr          error
+	backgroundResult  string
+	backgroundErr     error
+	backgroundFunc    func(backgroundTaskCall) (string, error)
+	backgroundCalls   []backgroundTaskCall
+	killFunc          func(domain.SessionID)
+	killMu            sync.Mutex
 }
 
 type backgroundTaskCall struct {
@@ -2473,7 +2834,15 @@ type backgroundTaskCall struct {
 	prompt       string
 }
 
-func (f *fakeCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+func (f *fakeCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	f.spawnCtx = ctx
+	if f.spawnHook != nil {
+		f.spawnHook(ctx)
+	}
+	if f.spawnWaitsForCtx {
+		<-ctx.Done()
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ctx.Err())
+	}
 	if f.spawnErr != nil {
 		return domain.SessionRecord{}, 0, 0, f.spawnErr
 	}
@@ -2489,18 +2858,11 @@ func (f *fakeCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.
 	}
 	return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}, len(cfg.Prompt), 0, nil
 }
-func (*fakeCommander) SwitchAgent(context.Context, domain.SessionID, sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
+func (*fakeCommander) PrepareTaskWorkspace(context.Context, domain.ProjectRecord) (domain.TaskPreparationToken, error) {
+	return "", nil
 }
-
-func (*fakeCommander) RecoverAgentSwitch(context.Context, domain.SessionID, domain.AgentSwitchID) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
-}
-func (*fakeCommander) ListAgentSwitches(context.Context, domain.SessionID) ([]domain.AgentSwitch, error) {
-	return nil, nil
-}
-func (*fakeCommander) SubmitAgentHandoff(context.Context, domain.SessionID, domain.AgentSwitchID, domain.AgentGenerationID, json.RawMessage) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
+func (*fakeCommander) CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error {
+	return nil
 }
 func (f *fakeCommander) RestoreWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error) {
 	if f.restoreErr != nil {
@@ -2536,7 +2898,10 @@ func (f *fakeCommander) Kill(_ context.Context, id domain.SessionID) (bool, erro
 	}
 	return true, nil
 }
-func (f *fakeCommander) RetireForReplacement(_ context.Context, id domain.SessionID) error {
+func (f *fakeCommander) RetireForReplacement(ctx context.Context, id domain.SessionID) error {
+	if f.retireFunc != nil {
+		return f.retireFunc(ctx, id)
+	}
 	if f.retireErr != nil {
 		return f.retireErr
 	}
@@ -2557,6 +2922,9 @@ func (f *fakeCommander) Send(_ context.Context, id domain.SessionID, message str
 	f.sent = append(f.sent, id)
 	f.sentMessages = append(f.sentMessages, message)
 	return nil
+}
+func (f *fakeCommander) SendWithOptions(_ context.Context, id domain.SessionID, message string, _ *ports.SpawnAttachment, _ ports.MessageDeliveryOptions) error {
+	return f.Send(context.Background(), id, message, nil)
 }
 func (f *fakeCommander) RunBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error) {
 	call := backgroundTaskCall{
@@ -2755,6 +3123,77 @@ func TestSpawnOrchestratorCleanContinuesWhenRetireNoticeFails(t *testing.T) {
 	}
 }
 
+func TestSpawnOrchestratorCleanPreservesCancellationForReplacement(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fc := &fakeCommander{retireFunc: func(retireCtx context.Context, _ domain.SessionID) error {
+		cancel()
+		if err := retireCtx.Err(); err != nil {
+			t.Fatalf("retirement must finish after request cancellation: %v", err)
+		}
+		return nil
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if fc.spawnCtx == nil || !errors.Is(fc.spawnCtx.Err(), context.Canceled) {
+		t.Fatal("replacement spawn must receive the cancelled request context")
+	}
+}
+
+// A clean replacement runs the retired orchestrator's Cleanup before the
+// spawn extends the request's budget; the request used to die at its base
+// budget while the Cleanup ran.
+func TestSpawnOrchestratorCleanBudgetCoversTheRetiredOrchestratorsCleanup(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{PreRemove: []string{"make clean"}}}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{
+		retireFunc: func(context.Context, domain.SessionID) error {
+			time.Sleep(80 * time.Millisecond)
+			return nil
+		},
+		spawnHook: func(ctx context.Context) { spawnErr = ctx.Err() },
+	}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("replacement spawn context Err() = %v, want live after the retirement's Cleanup", spawnErr)
+	}
+}
+
+// The spawn's own extension, from its own start, is not capped by the
+// orchestrator start's earlier one.
+func TestSpawnOrchestratorLeavesTheSpawnsOwnBudgetExtensionUncapped(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{spawnHook: func(ctx context.Context) {
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 300*time.Millisecond)
+		defer cancel()
+		time.Sleep(100 * time.Millisecond)
+		spawnErr = ctx.Err()
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("spawn context Err() = %v, want live within the spawn's own extension", spawnErr)
+	}
+}
+
 func TestSpawnOrchestratorCleanPreservesPersistedMode(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
@@ -2799,6 +3238,9 @@ func TestSpawnOrchestratorUsesExplicitModeForNewProjectOrchestrator(t *testing.T
 
 	if _, err := svc.SpawnOrchestrator(context.Background(), "mer", false, domain.SessionModeChat, ""); err != nil {
 		t.Fatalf("SpawnOrchestrator: %v", err)
+	}
+	if !fc.spawnedCfg.Async {
+		t.Fatal("orchestrator startup must publish a session before Chat launches")
 	}
 	if fc.spawnedCfg.RequestedMode != domain.SessionModeChat {
 		t.Fatalf("requested mode = %q, want chat", fc.spawnedCfg.RequestedMode)
@@ -2920,21 +3362,79 @@ func TestSpawnBlocksDefinitelyMissingHarnessBeforeManager(t *testing.T) {
 	}
 }
 
-func TestSpawnTreatsUnauthorizedReadinessAsAdvisory(t *testing.T) {
+func TestSpawnProjectClaudeGatewayTreatsGlobalUnauthorizedAsAdvisory(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{
+		ID: "mer",
+		Config: domain.ProjectConfig{Env: map[string]string{
+			"ANTHROPIC_BASE_URL": "https://gateway.example",
+			"ANTHROPIC_API_KEY":  "project-fixture-key",
+		}},
+	}
+	fc := &fakeCommander{}
+	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
+		ID: "claude-code", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if fc.spawnCalls != 1 {
+		t.Fatalf("manager.Spawn calls = %d, want project-aware launch to remain authoritative", fc.spawnCalls)
+	}
+}
+
+func TestSpawnStillRejectsFreshUnauthorizedCodexAccount(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
 	fc := &fakeCommander{}
 	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
 		ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
-		Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationUnauthorized},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
 	}}
 	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
 
-	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: "codex"}); err != nil {
+	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "CODEX_ACCOUNT_AUTH_UNVERIFIED" {
+		t.Fatalf("Spawn error = %v, want CODEX_ACCOUNT_AUTH_UNVERIFIED", err)
+	}
+	if fc.spawnCalls != 0 {
+		t.Fatalf("manager.Spawn calls = %d, want fresh unauthorized Codex account blocked", fc.spawnCalls)
+	}
+}
+
+// The readiness gate reads the computer's own Codex login. A task that will run
+// on a saved account does not use that login, so its state is not a reason to
+// refuse; the launch checks the account it runs on.
+func TestSpawnOnASavedCodexAccountIgnoresTheComputersLogin(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	fc := &fakeCommander{}
+	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
+		ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
+	var asked []string
+	svc.SetComputerLoginCheck(func(_ context.Context, harness domain.AgentHarness, accountID string) bool {
+		asked = append(asked, string(harness)+":"+accountID)
+		return false
+	})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if fc.spawnCalls != 1 {
-		t.Fatalf("manager.Spawn calls = %d, want unauthorized readiness to remain advisory", fc.spawnCalls)
+	if fc.spawnCalls != 1 || len(asked) != 1 || asked[0] != "codex:" {
+		t.Fatalf("spawn calls = %d, asked %v; want the saved default to launch", fc.spawnCalls, asked)
 	}
 }
 
@@ -2991,7 +3491,7 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want spawned + first_session", sink.events)
 	}
-	if sink.events[0].Name != "ao.session.spawned" || sink.events[1].Name != "ao.onboarding.first_session_spawned" {
+	if sink.events[0].Name != "ao.sessions.spawned" || sink.events[1].Name != "ao.sessions.first_spawned" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	if got := sink.events[0].Payload["duration_ms"]; got != int64(0) {
@@ -2999,6 +3499,29 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	}
 	if got := sink.events[1].Payload["since_first_project_ms"]; got != int64(2000) {
 		t.Fatalf("since_first_project_ms = %#v, want 2000", got)
+	}
+}
+
+func TestStandaloneSessionTelemetryKind(t *testing.T) {
+	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	st := newFakeStore()
+	st.sessions[rec.ID] = rec
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
+	svc.emitSpawned(rec, 1, 1, false, false, spawnFacts{createdBy: domain.SessionCreatedByUser})
+	svc.emitSpawnFailed(spawnFailure{kind: domain.KindWorker, harness: domain.HarnessCodex}, errors.New("launch failed"), 1, 1)
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	cause := &sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("launch failed")}
+	svc.emitRelaunchFailed(context.Background(), "resume_agent", rec.ID, cause, apierr.Conflict("AGENT_RESUME_FAILED", "Agent resume failed", nil))
+	if len(sink.events) != 3 {
+		t.Fatalf("events = %d, want three session outcomes", len(sink.events))
+	}
+	for _, ev := range sink.events {
+		if got := ev.Payload["kind"]; got != "standalone" {
+			t.Fatalf("%s kind = %#v, want standalone", ev.Name, got)
+		}
 	}
 }
 
@@ -3272,7 +3795,7 @@ func TestSpawnFailedEmitsDuration(t *testing.T) {
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err == nil {
 		t.Fatal("Spawn should fail")
 	}
-	if len(sink.events) != 1 || sink.events[0].Name != "ao.session.spawn_failed" {
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.sessions.spawn_failed" {
 		t.Fatalf("events = %#v, want one spawn_failed", sink.events)
 	}
 	if got := sink.events[0].Payload["duration_ms"]; got != int64(1500) {
@@ -3315,7 +3838,7 @@ func TestSpawnEmitsTelemetryOnSuccess(t *testing.T) {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
 	}
 	ev := ts.events[0]
-	if ev.Name != "ao.session.spawned" || ev.Source != "session_service" {
+	if ev.Name != "ao.sessions.spawned" || ev.Source != "session_service" {
 		t.Fatalf("event = %+v", ev)
 	}
 	if ev.ProjectID == nil || *ev.ProjectID != "mer" || ev.SessionID == nil || *ev.SessionID != "mer-9" {
@@ -3347,7 +3870,7 @@ func TestSpawnEmitsTelemetryOnFailure(t *testing.T) {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
 	}
 	ev := ts.events[0]
-	if ev.Name != "ao.session.spawn_failed" || ev.Source != "session_service" || ev.Level != ports.TelemetryLevelError {
+	if ev.Name != "ao.sessions.spawn_failed" || ev.Source != "session_service" || ev.Level != ports.TelemetryLevelError {
 		t.Fatalf("event = %+v", ev)
 	}
 	if ev.ProjectID == nil || *ev.ProjectID != "mer" || ev.SessionID != nil {
@@ -3400,6 +3923,22 @@ func TestSpawnEmitsTypedErrorCodeOnFailure(t *testing.T) {
 	}
 }
 
+// A spawn whose request budget runs out before it extends it (its project's
+// Setup steps) timed out; it is not a cancellation by the client.
+func TestSpawnReportsTimeoutWhenTheBaseRequestBudgetRunsOut(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{spawnWaitsForCtx: true}, Store: st, Clock: func() time.Time { return time.Unix(1700000000, 0).UTC() }})
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 20*time.Millisecond)
+	defer release()
+
+	_, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
+	var e *apierr.Error
+	if !errors.As(err, &e) || e.Code != "SPAWN_TIMEOUT" {
+		t.Fatalf("Spawn error = %v, want SPAWN_TIMEOUT", err)
+	}
+}
+
 // TestSpawnOrchestratorUnknownProjectReturns404 is the orchestrator-side guard
 // for Bug 1: same pre-validation, same typed envelope.
 func TestSpawnOrchestratorUnknownProjectReturns404(t *testing.T) {
@@ -3428,6 +3967,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		wantCode string
 	}{
 		{"checked out elsewhere", fmt.Errorf("spawn mer-1: workspace: %w: \"x\" is checked out at \"/tmp\"", ports.ErrWorkspaceBranchCheckedOutElsewhere), apierr.KindConflict, "BRANCH_CHECKED_OUT_ELSEWHERE"},
+		{"branch already exists", fmt.Errorf("spawn mer-1: %w", ports.ErrWorkspaceBranchAlreadyExists), apierr.KindConflict, "BRANCH_ALREADY_EXISTS"},
 		{"default branch unresolved", fmt.Errorf("spawn mer-1: %w: configure defaultBranch", ports.ErrWorkspaceDefaultBranchUnresolved), apierr.KindInvalid, "DEFAULT_BRANCH_UNRESOLVED"},
 		{"not fetched", fmt.Errorf("spawn mer-1: workspace: %w: \"x\" has no local head", ports.ErrWorkspaceBranchNotFetched), apierr.KindInvalid, "BRANCH_NOT_FETCHED"},
 		{"invalid branch", fmt.Errorf("spawn mer-1: workspace: %w: \"bad!!\" (exit 1)", ports.ErrWorkspaceBranchInvalid), apierr.KindInvalid, "INVALID_BRANCH"},
@@ -3436,31 +3976,39 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"Windows command line too long", fmt.Errorf("spawn: %w: escaped command line is 32769 UTF-16 code units", ports.ErrRuntimeCommandLineTooLong), apierr.KindInvalid, "WINDOWS_COMMAND_LINE_TOO_LONG"},
 		{"runtime workspace cwd mismatch", fmt.Errorf("spawn mer-1: runtime: %w: session mer-1 started in \"/deleted/shipit\", want \"/tmp/ws\"", ports.ErrRuntimeWorkspaceCwdMismatch), apierr.KindConflict, "WORKSPACE_CWD_MISMATCH"},
 		{"workspace locked", fmt.Errorf("restore mer-1: %w: \"/tmp/ws\" (branch \"ao/mer-1\") is registered but its directory is missing", ports.ErrWorkspaceLocked), apierr.KindConflict, "WORKSPACE_LOCKED"},
+		{"workspace path occupied", fmt.Errorf("spawn todo-app-orchestrator: %w: \"/tmp/ws\" exists but is not a worktree of \"/tmp/repo\"", ports.ErrWorkspacePathOccupied), apierr.KindConflict, "WORKSPACE_PATH_OCCUPIED"},
+		{"project not a repo", fmt.Errorf("spawn mer-1: workspace: gitworktree: worktree list: %w", ports.ErrWorkspaceNotARepo), apierr.KindInvalid, "PROJECT_NOT_A_REPO"},
+		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
+		{"delete live session", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrSessionNotTerminated), apierr.KindConflict, "SESSION_NOT_TERMINATED"},
+		{"delete unreleased workspace", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrWorkspaceNotReleased), apierr.KindConflict, "WORKSPACE_NOT_RELEASED"},
+		{"delete shared history", fmt.Errorf("delete mer-1: %w", domain.ErrSessionHistoryShared), apierr.KindConflict, "SESSION_HISTORY_SHARED"},
+		{"delete cleanup refused", fmt.Errorf("delete mer-1: %w", &sessionmanager.CleanupRefusedError{Code: domain.CleanupSkipDirty, Reason: "workspace has uncommitted changes"}), apierr.KindConflict, "WORKSPACE_CLEANUP_REFUSED"},
 		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
+		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
+		{"delivery unconfirmed", fmt.Errorf("send mer-1: %w", sessionmanager.ErrDeliveryUnconfirmed), apierr.KindConflict, "SESSION_DELIVERY_UNCONFIRMED"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
+		{"composer busy", fmt.Errorf("send mer-1: %w", sessionmanager.ErrComposerBusy), apierr.KindConflict, "SESSION_COMPOSER_BUSY"},
 		{"agent exited", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAgentExited), apierr.KindConflict, "AGENT_EXITED"},
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
-		{"target agent unauthorized", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrTargetAgentUnauthorized), apierr.KindInvalid, "TARGET_AGENT_UNAUTHORIZED"},
-		{"worker session required", fmt.Errorf("switch agent mer-orchestrator: %w", sessionmanager.ErrUnsupportedSwitchKind), apierr.KindInvalid, "WORKER_SESSION_REQUIRED"},
-		{"unsupported switch harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrUnsupportedSwitchHarness), apierr.KindInvalid, "UNSUPPORTED_SWITCH_HARNESS"},
-		{"already using harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrAlreadyUsingHarness), apierr.KindConflict, "ALREADY_USING_HARNESS"},
-		{"switch not found", fmt.Errorf("get switch: %w", sessionmanager.ErrSwitchNotFound), apierr.KindNotFound, "AGENT_SWITCH_NOT_FOUND"},
-		{"stale handoff", fmt.Errorf("submit handoff: %w", sessionmanager.ErrStaleHandoff), apierr.KindConflict, "STALE_AGENT_HANDOFF"},
-		{"invalid handoff", fmt.Errorf("submit handoff: %w", sessionmanager.ErrInvalidAgentHandoff), apierr.KindInvalid, "INVALID_AGENT_HANDOFF"},
-		{"switch delivery unconfirmed", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchDeliveryUnconfirmed), apierr.KindConflict, "AGENT_SWITCH_DELIVERY_UNCONFIRMED"},
-		{"manager switch in progress", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchInProgress), apierr.KindConflict, "AGENT_SWITCH_IN_PROGRESS"},
-		{"manager switch shutting down", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchShuttingDown), apierr.KindConflict, "AGENT_SWITCH_UNAVAILABLE"},
-		{"manager switch unavailable", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchUnavailable), apierr.KindConflict, "AGENT_SWITCH_UNAVAILABLE"},
-		{"switch in progress", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchInProgress), apierr.KindConflict, "AGENT_SWITCH_IN_PROGRESS"},
-		{"switch idempotency conflict", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchIdempotencyConflict), apierr.KindConflict, "AGENT_SWITCH_IDEMPOTENCY_CONFLICT"},
+		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
+		{"chat permission unsupported", fmt.Errorf("spawn: %w", ports.ErrChatPermissionModeUnsupported), apierr.KindInvalid, "CHAT_PERMISSION_MODE_UNSUPPORTED"},
 		{"chat mode unsupported", fmt.Errorf("spawn: %w", ports.ErrChatUnsupported), apierr.KindConflict, "SESSION_MODE_UNSUPPORTED"},
+		{"chat recovery inconclusive with deadline", fmt.Errorf("resume agent mer-1: resume chat: %w: persistent ACP host: %w",
+			ports.ErrChatRecoveryInconclusive, fmt.Errorf("chat host ownership is inconclusive: %w", context.DeadlineExceeded)),
+			apierr.KindConflict, "CHAT_RECOVERY_INCONCLUSIVE"},
 		{"chat driver unavailable", fmt.Errorf("spawn: %w", ports.ErrChatDriverUnavailable), apierr.KindConflict, "CHAT_DRIVER_UNAVAILABLE"},
 		{"chat driver incompatible", fmt.Errorf("spawn: %w", ports.ErrChatDriverIncompatible), apierr.KindConflict, "CHAT_DRIVER_INCOMPATIBLE"},
 		{"chat auth required", fmt.Errorf("spawn: %w", ports.ErrChatAuthRequired), apierr.KindConflict, "CHAT_AUTH_REQUIRED"},
+		{"agent auth required", fmt.Errorf("spawn: %w", ports.ErrAgentAuthRequired), apierr.KindConflict, "AGENT_AUTH_REQUIRED"},
+		{"chat resume refused its login", &sessionmanager.RelaunchError{Step: "chat start", Err: fmt.Errorf(
+			"resume agent mer-1: resume chat: %w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired)},
+			apierr.KindConflict, "AGENT_AUTH_REQUIRED"},
+		{"chat spawn refused its login", fmt.Errorf("spawn: %w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired),
+			apierr.KindConflict, "CHAT_DRIVER_UNAVAILABLE"},
 		{"interface notice not acknowledgeable", fmt.Errorf("acknowledge interface notice: %w", sessionmanager.ErrInterfaceTransitionNoticeNotAcknowledgeable), apierr.KindConflict, "INTERFACE_TRANSITION_NOTICE_NOT_ACKNOWLEDGEABLE"},
 		{"provider history recovery unavailable", fmt.Errorf("recover interface: %w", sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable), apierr.KindConflict, "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"},
 		{"native conversation missing", fmt.Errorf("switch interface: %w", sessionmanager.ErrNativeConversationMissing), apierr.KindConflict, "NATIVE_SESSION_MISSING"},
@@ -3475,7 +4023,36 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 			if !errors.As(mapped, &e) || e.Kind != tc.wantKind || e.Code != tc.wantCode {
 				t.Fatalf("mapped = %v, want %s %s", mapped, tc.wantCode, e)
 			}
+			if strings.Contains(e.Message, "secret output") {
+				t.Fatalf("mapped message leaked script output: %q", e.Message)
+			}
 		})
+	}
+}
+
+// TestToSpawnAPIErrorMapsProjectNotARepo covers #8905: a registered project
+// (or workspace root) whose .git was deleted surfaces a typed error naming the
+// folder and how to recover, not git's raw exit 128.
+func TestToSpawnAPIErrorMapsProjectNotARepo(t *testing.T) {
+	raw := fmt.Errorf("spawn ws-1: %w: gitworktree: worktree list: %w", sessionmanager.ErrWorkspaceCreate, &ports.WorkspaceNotARepoError{
+		Path: "/work/ws",
+		Err:  errors.New("git -C /work/ws worktree list --porcelain: exit status 128: fatal: not a git repository (or any of the parent directories): .git"),
+	})
+	var e *apierr.Error
+	if !errors.As(toSpawnAPIError(raw), &e) {
+		t.Fatalf("mapped = %v, want *apierr.Error", toSpawnAPIError(raw))
+	}
+	if e.Kind != apierr.KindInvalid || e.Code != "PROJECT_NOT_A_REPO" {
+		t.Fatalf("mapped = %v %s, want invalid PROJECT_NOT_A_REPO", e.Kind, e.Code)
+	}
+	if strings.Contains(e.Message, "exit status 128") {
+		t.Fatalf("message leaked raw git failure: %q", e.Message)
+	}
+	if !strings.Contains(e.Message, "/work/ws") || !strings.Contains(e.Message, "git init") {
+		t.Fatalf("message = %q, want folder and recovery guidance", e.Message)
+	}
+	if e.Details["path"] != "/work/ws" || e.Details["suggestedFix"] == "" {
+		t.Fatalf("details = %v, want path and suggestedFix", e.Details)
 	}
 }
 
@@ -3535,6 +4112,12 @@ func TestToSpawnAPIErrorMapsSpawnStageSentinels(t *testing.T) {
 			"BRANCH_NOT_FETCHED",
 		},
 		{
+			"artifact output without a data dir",
+			fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable),
+			apierr.KindInvalid,
+			"ARTIFACT_OUTPUT_UNAVAILABLE",
+		},
+		{
 			"unclassified fallback",
 			errors.New("boom"),
 			apierr.KindInternal,
@@ -3592,11 +4175,11 @@ func TestEmitSpawnFailedClassifiesRawStageSentinel(t *testing.T) {
 	})
 
 	raw := fmt.Errorf("spawn mer-1: %w: tmux runtime: create session mer-1: boom", sessionmanager.ErrRuntimeCreate)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{
-		ProjectID: "mer",
-		Kind:      domain.KindWorker,
-		Harness:   domain.HarnessCodex,
-	}, raw, 42)
+	svc.emitSpawnFailed(spawnFailure{
+		projectID: "mer",
+		kind:      domain.KindWorker,
+		harness:   domain.HarnessCodex,
+	}, raw, 42, 42)
 
 	if len(ts.events) != 1 {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
@@ -3620,43 +4203,6 @@ func TestToSpawnAPIErrorIsIdempotentForMappedErrors(t *testing.T) {
 	}
 	if firstErr.Code != "RUNTIME_CREATE_FAILED" || secondErr.Code != "RUNTIME_CREATE_FAILED" {
 		t.Fatalf("codes = %q / %q, want RUNTIME_CREATE_FAILED", firstErr.Code, secondErr.Code)
-	}
-}
-
-func TestToAPIErrorSwitchDeliveryUnconfirmedMessage(t *testing.T) {
-	err := fmt.Errorf("switch agent mer-1: confirm continuation: %w", sessionmanager.ErrSwitchDeliveryUnconfirmed)
-	mapped := toAPIError(err)
-
-	var apiError *apierr.Error
-	if !errors.As(mapped, &apiError) {
-		t.Fatalf("mapped = %v, want *apierr.Error", mapped)
-	}
-	if apiError.Kind != apierr.KindConflict {
-		t.Fatalf("kind = %v, want %v", apiError.Kind, apierr.KindConflict)
-	}
-	if apiError.Code != "AGENT_SWITCH_DELIVERY_UNCONFIRMED" {
-		t.Fatalf("code = %q, want AGENT_SWITCH_DELIVERY_UNCONFIRMED", apiError.Code)
-	}
-	const wantMessage = "The target agent started, but AO could not confirm that it accepted the continuation"
-	if apiError.Message != wantMessage {
-		t.Fatalf("message = %q, want %q", apiError.Message, wantMessage)
-	}
-}
-
-func TestToAPIErrorPreservesReportingOwnerAcrossMapping(t *testing.T) {
-	raw := ownership.Own(
-		fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchInProgress),
-		ownership.OwnerAgentSwitchSaga,
-	)
-
-	mapped := toAPIError(raw)
-
-	if got := ownership.OwnerOf(mapped); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf(mapped) = %q, want %q", got, ownership.OwnerAgentSwitchSaga)
-	}
-	var apiError *apierr.Error
-	if !errors.As(mapped, &apiError) || apiError.Code != "AGENT_SWITCH_IN_PROGRESS" {
-		t.Fatalf("mapped = %v, want AGENT_SWITCH_IN_PROGRESS", mapped)
 	}
 }
 
@@ -3699,6 +4245,34 @@ func TestToAPIError_NotResumable(t *testing.T) {
 	var e *apierr.Error
 	if !errors.As(mapped, &e) || e.Kind != apierr.KindConflict || e.Code != "SESSION_NOT_RESUMABLE" {
 		t.Fatalf("mapped = %v, want Conflict SESSION_NOT_RESUMABLE", mapped)
+	}
+}
+
+// A send to a chat session with no live controller (it stopped, or never
+// started because provisioning failed) must answer the same 409
+// CHAT_CONTROLLER_NOT_READY that steer-or-send gives, not a bare 500.
+func TestSendWithoutChatControllerIsControllerNotReady(t *testing.T) {
+	for _, sentinel := range []error{chatsvc.ErrNoController, chatsvc.ErrNotProvisioning} {
+		svc := &Service{manager: &fakeCommander{sendErr: fmt.Errorf("send mer-1: %w", sentinel)}}
+		for name, send := range map[string]func() error{
+			"send": func() error { return svc.Send(context.Background(), "mer-1", "hello", nil) },
+			"send with options": func() error {
+				return svc.SendWithOptions(context.Background(), "mer-1", "hello", nil, ports.MessageDeliveryOptions{AuthoredByUser: true})
+			},
+		} {
+			t.Run(sentinel.Error()+"/"+name, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				envelope.WriteError(rec, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/mer-1/send", nil), send())
+				var body envelope.APIError
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != http.StatusConflict || body.Code != "CHAT_CONTROLLER_NOT_READY" ||
+					body.Message != "the agent controller for this session is not running" {
+					t.Fatalf("status=%d body=%s, want 409 CHAT_CONTROLLER_NOT_READY", rec.Code, rec.Body)
+				}
+			})
+		}
 	}
 }
 
@@ -3811,6 +4385,26 @@ func TestSpawnGenericOrchestratorReturnsExistingActiveSession(t *testing.T) {
 	}
 	if fc.spawned {
 		t.Fatal("manager.Spawn must not be called when an active orchestrator already exists")
+	}
+}
+
+// A scheduled orchestrator must never be falsely linked to an unrelated
+// interactive orchestrator. It stays retryable until the active one exits.
+func TestSpawnAutomationOrchestratorConflictsWithUnrelatedActiveSession(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-orch"] = domain.SessionRecord{ID: "mer-orch", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+	runID := domain.AutomationRunID("run-1")
+
+	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, AutomationRunID: &runID})
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Kind != apierr.KindConflict || apiError.Code != "ORCHESTRATOR_ALREADY_ACTIVE" {
+		t.Fatalf("Spawn error = %v, want ORCHESTRATOR_ALREADY_ACTIVE conflict", err)
+	}
+	if fc.spawned {
+		t.Fatal("manager.Spawn must not run while another orchestrator is active")
 	}
 }
 
@@ -4251,6 +4845,245 @@ func TestClaimPRAllowsDraftPR(t *testing.T) {
 	}
 }
 
+type fakeOutputTypeReconciler struct {
+	reconciled []domain.SessionID
+	err        error
+}
+
+func (f *fakeOutputTypeReconciler) ReconcileSessionOutputType(_ context.Context, id domain.SessionID) error {
+	f.reconciled = append(f.reconciled, id)
+	return f.err
+}
+
+// A session that already produced artifacts must flip to pr OutputType as
+// soon as a PR is claimed, not on the next artifact-output poll tick — the
+// same immediacy claiming a PR always had before OutputType was persisted.
+func TestClaimPRReconcilesOutputTypeImmediately(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		Metadata:   domain.SessionMetadata{WorkspacePath: "/ws"},
+		OutputType: domain.SessionOutputArtifact,
+	}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/repo"}
+	st.pr["mer-1"] = domain.PRFacts{URL: "https://github.com/acme/repo/pull/7", Number: 7, CI: domain.CIPending}
+
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{
+		Store:     st,
+		PRClaimer: &fakePRClaimer{out: errorFreeClaimOutcome{ports.ClaimOutcome{}}},
+		SCM: fakeSCM{obs: ports.SCMObservation{
+			Fetched: true, Provider: "github", Host: "github.com", Repo: "acme/repo",
+			PR: ports.SCMPRObservation{URL: "https://github.com/acme/repo/pull/7", Number: 7},
+		}},
+		OutputTypeReconciler: reconciler,
+	})
+
+	if _, err := svc.ClaimPR(context.Background(), "mer-1", "7", ClaimPROptions{}); err != nil {
+		t.Fatalf("claim PR: %v", err)
+	}
+	if len(reconciler.reconciled) != 1 || reconciler.reconciled[0] != "mer-1" {
+		t.Fatalf("reconciled = %v, want [mer-1]", reconciler.reconciled)
+	}
+}
+
+// TestGetBackfillsEmptyArtifactDirOnRead covers the review-flagged gap: a
+// session row created before artifact_dir existed carries it as ” (the
+// migration's default), even though session_manager always prompts the
+// agent to write into the deterministic dataDir/artifacts/<id> path. Get
+// must fall back to that derived path immediately, rather than showing no
+// artifacts (and a broken preview root) until the artifact poller's next
+// tick persists the backfill.
+func TestGetBackfillsEmptyArtifactDirOnRead(t *testing.T) {
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "report.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws", ArtifactDir: ""},
+	}
+
+	got, err := (&Service{store: st, dataDir: dataDir}).Get(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata.ArtifactDir != artifactDir {
+		t.Fatalf("ArtifactDir = %q, want backfilled %q", got.Metadata.ArtifactDir, artifactDir)
+	}
+	if len(got.ArtifactFiles) != 1 || got.ArtifactFiles[0].Name != "report.html" {
+		t.Fatalf("ArtifactFiles = %+v, want [report.html]", got.ArtifactFiles)
+	}
+	if got.OutputType != domain.SessionOutputArtifact {
+		t.Fatalf("OutputType = %q, want %q reflected in this same response, not just a future one", got.OutputType, domain.SessionOutputArtifact)
+	}
+}
+
+// TestGetBackfillsArtifactDirAndReconcilesEvenForTerminatedSessions is the
+// review regression for a gap in the read-triggered backfill above: the
+// artifact-output poller (observe/artifacts.Observer) explicitly skips
+// terminated sessions, so a terminated legacy row (ArtifactDir == "" from
+// before that column existed) could never get its durable OutputType
+// repaired through the poller alone, leaving its real artifact files hidden
+// from anything that filters on OutputType. Get must trigger the durable
+// reconcile unconditionally of IsTerminated.
+func TestGetBackfillsArtifactDirAndReconcilesEvenForTerminatedSessions(t *testing.T) {
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "report.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		IsTerminated: true,
+		Metadata:     domain.SessionMetadata{WorkspacePath: "/ws", ArtifactDir: ""},
+	}
+
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, OutputTypeReconciler: reconciler})
+
+	got, err := svc.Get(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata.ArtifactDir != artifactDir {
+		t.Fatalf("ArtifactDir = %q, want backfilled %q even though the session is terminated", got.Metadata.ArtifactDir, artifactDir)
+	}
+	if got.OutputType != domain.SessionOutputArtifact {
+		t.Fatalf("OutputType = %q, want %q", got.OutputType, domain.SessionOutputArtifact)
+	}
+	if len(reconciler.reconciled) != 1 || reconciler.reconciled[0] != "mer-1" {
+		t.Fatalf("reconciled = %v, want the durable reconcile triggered for the terminated session too", reconciler.reconciled)
+	}
+}
+
+// A terminated session whose agent wrote an artifact before any reconcile ran
+// keeps a persisted ArtifactDir but a stale OutputType of none, and the
+// artifact poller skips terminated sessions. Get must repair it durably.
+func TestGetReconcilesTerminatedSessionWithPersistedDirAndUnreconciledArtifact(t *testing.T) {
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "notes.md"), []byte("# notes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		IsTerminated: true,
+		OutputType:   domain.SessionOutputNone,
+		Metadata:     domain.SessionMetadata{WorkspacePath: "/ws", ArtifactDir: artifactDir},
+	}
+
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, OutputTypeReconciler: reconciler})
+
+	got, err := svc.Get(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OutputType != domain.SessionOutputArtifact {
+		t.Fatalf("OutputType = %q, want %q", got.OutputType, domain.SessionOutputArtifact)
+	}
+	if len(reconciler.reconciled) != 1 || reconciler.reconciled[0] != "mer-1" {
+		t.Fatalf("reconciled = %v, want the durable reconcile triggered on read", reconciler.reconciled)
+	}
+}
+
+func TestGetToleratesUnwalkableArtifactRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod permissions are not enforced on Windows")
+	}
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(artifactDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(artifactDir, 0o755) })
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws", ArtifactDir: artifactDir},
+	}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir})
+
+	got, err := svc.Get(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("Get failed on an unwalkable artifact root: %v", err)
+	}
+	if len(got.ArtifactFiles) != 0 {
+		t.Fatalf("ArtifactFiles = %+v, want empty", got.ArtifactFiles)
+	}
+}
+
+func TestGetDoesNotReconcileWhenPersistedOutputTypeAlreadyHasArtifact(t *testing.T) {
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "notes.md"), []byte("# notes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		OutputType: domain.SessionOutputArtifact,
+		Metadata:   domain.SessionMetadata{WorkspacePath: "/ws", ArtifactDir: artifactDir},
+	}
+
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, OutputTypeReconciler: reconciler})
+	if _, err := svc.Get(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(reconciler.reconciled) != 0 {
+		t.Fatalf("reconciled = %v, want none for an already-reconciled session", reconciler.reconciled)
+	}
+}
+
+// A reconcile failure must not fail an otherwise-successful claim: the
+// artifact-output poller still corrects OutputType on its next tick.
+func TestClaimPRSucceedsWhenOutputTypeReconcileFails(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: "/ws"}}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/repo"}
+	st.pr["mer-1"] = domain.PRFacts{URL: "https://github.com/acme/repo/pull/7", Number: 7, CI: domain.CIPending}
+
+	svc := NewWithDeps(Deps{
+		Store:     st,
+		PRClaimer: &fakePRClaimer{out: errorFreeClaimOutcome{ports.ClaimOutcome{}}},
+		SCM: fakeSCM{obs: ports.SCMObservation{
+			Fetched: true, Provider: "github", Host: "github.com", Repo: "acme/repo",
+			PR: ports.SCMPRObservation{URL: "https://github.com/acme/repo/pull/7", Number: 7},
+		}},
+		OutputTypeReconciler: &fakeOutputTypeReconciler{err: errors.New("boom")},
+	})
+
+	if _, err := svc.ClaimPR(context.Background(), "mer-1", "7", ClaimPROptions{}); err != nil {
+		t.Fatalf("claim PR should succeed despite reconcile failure: %v", err)
+	}
+}
+
 func TestClaimPRGitLabMR(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["gl-1"] = domain.SessionRecord{ID: "gl-1", ProjectID: "gl", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: "/ws"}}
@@ -4484,6 +5317,51 @@ func TestListPRsOrdersActiveBeforeClosedThenUpdatedDesc(t *testing.T) {
 	}
 	if len(got) != 3 || got[0].URL != "open-new" || got[1].URL != "open-old" || got[2].URL != "closed-new" {
 		t.Fatalf("order = %+v", got)
+	}
+}
+
+func TestListPRListingKeepsExternalReportsLinkedAndDedupesTracked(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	st.prs["mer-1"] = []domain.PullRequest{{
+		URL: "https://github.com/acme/app/pull/7", SessionID: "mer-1", Number: 7,
+		CI: domain.CIUnknown, Review: domain.ReviewNone, Mergeability: domain.MergeUnknown,
+		UpdatedAt: time.Now().UTC(),
+	}}
+	st.reportedPRURLs["mer-1"] = []string{
+		"https://www.github.com/ACME/App/pull/007", // tracked through existing SCM facts
+		"https://gitlab.com/release/notes/-/merge_requests/9",
+		"https://gitlab.com/release/notes/-/merge_requests/9", // report retry
+	}
+	got, err := (&Service{store: st}).ListPRListing(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tracked) != 1 || len(got.Linked) != 1 || got.Linked[0].URL != "https://gitlab.com/release/notes/-/merge_requests/9" {
+		t.Fatalf("listing = %+v", got)
+	}
+}
+
+func TestListPRListingDedupesReportsUnderARenamedRepositorysOldName(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	st.prs["mer-1"] = []domain.PullRequest{{
+		URL: "https://github.com/New-Owner/example/pull/31", SessionID: "mer-1", Number: 31,
+		CI: domain.CIUnknown, Review: domain.ReviewNone, Mergeability: domain.MergeUnknown,
+		UpdatedAt: time.Now().UTC(),
+	}}
+	st.repositoryRenames = []domain.RepositoryRename{{Host: "github.com", OldName: "old-owner/example", Name: "new-owner/example"}}
+	st.reportedPRURLs["mer-1"] = []string{
+		"https://github.com/old-owner/example/pull/31",
+		"http://www.github.com/Old-Owner/example/pull/31/",
+		"https://github.com/other/example/pull/31", // same number, another repository
+	}
+	got, err := (&Service{store: st}).ListPRListing(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Linked) != 1 || got.Linked[0].URL != "https://github.com/other/example/pull/31" {
+		t.Fatalf("linked = %+v, want only the other repository's PR", got.Linked)
 	}
 }
 
@@ -4807,6 +5685,48 @@ func TestListPRSummariesSuppressesFailingChecksUnlessCIFailing(t *testing.T) {
 	}
 }
 
+func TestListPRSummariesListsCurrentCancelledChecksWhenCIFailing(t *testing.T) {
+	cases := []struct {
+		name string
+		ci   domain.CIState
+		want []string
+	}{
+		{name: "failing lists failures and cancellations", ci: domain.CIFailing, want: []string{"build", "lint"}},
+		{name: "unknown lists nothing", ci: domain.CIUnknown},
+		{name: "pending lists nothing", ci: domain.CIPending},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+			prURL := "https://github.com/acme/repo/pull/8"
+			stList := &multiPRFakeStore{fakeStore: st, prs: []domain.PullRequest{{
+				URL:       prURL,
+				SessionID: "mer-1",
+				Number:    8,
+				CI:        tc.ci,
+				HeadSHA:   "new-sha",
+				UpdatedAt: time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC),
+			}}}
+			stList.checks[prURL] = []domain.PullRequestCheck{
+				{Name: "build", CommitHash: "new-sha", Status: domain.PRCheckFailed, Conclusion: "failure"},
+				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled", URL: "https://github.com/acme/repo/actions/runs/2"},
+			}
+
+			got, err := (&Service{store: stList}).ListPRSummaries(context.Background(), "mer-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if names := failingCheckNames(got[0].CI.FailingChecks); !sameStrings(names, tc.want) {
+				t.Fatalf("listed checks = %v, want %v", names, tc.want)
+			}
+			if tc.ci == domain.CIFailing && got[0].CI.FailingChecks[1].URL != "https://github.com/acme/repo/actions/runs/2" {
+				t.Fatalf("cancelled check link = %q", got[0].CI.FailingChecks[1].URL)
+			}
+		})
+	}
+}
+
 func TestListPRSummariesExposesPerPRAutoInjectCIPolicy(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
@@ -5016,6 +5936,33 @@ func TestDeduplicatePRFactsKeepsSameNumberAcrossDifferentRepos(t *testing.T) {
 	}
 }
 
+func TestDeduplicatePRFactsCarriesStackParentOnlyForTheSameBase(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	stale := domain.PRFacts{URL: "https://github.com/acme/app/pull/9", Number: 9, TargetBranch: "feat/base", StackParent: 8, UpdatedAt: now}
+
+	// Retargeted onto main since: the old base's parent no longer applies.
+	got := deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "main", UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "main" || got[0].StackParent != 0 {
+		t.Fatalf("retargeted alias = %+v, want main with no stack parent", got)
+	}
+
+	// An alias with no target inherits the base and its parent together.
+	got = deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "feat/base" || got[0].StackParent != 8 {
+		t.Fatalf("alias without a target = %+v, want feat/base waiting on #8", got)
+	}
+
+	// Branch names are case-sensitive: feat/Base is a different base, in
+	// either input order.
+	recased := domain.PRFacts{URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "feat/Base", UpdatedAt: now.Add(time.Minute)}
+	for _, in := range [][]domain.PRFacts{{stale, recased}, {recased, stale}} {
+		got = deduplicatePRFacts(in)
+		if len(got) != 1 || got[0].TargetBranch != "feat/Base" || got[0].StackParent != 0 {
+			t.Fatalf("alias retargeted to feat/Base = %+v, want no stack parent", got)
+		}
+	}
+}
+
 func TestDeduplicatePRFactsKeepsSameBasenameAcrossDifferentOwners(t *testing.T) {
 	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
 	got := deduplicatePRFacts([]domain.PRFacts{
@@ -5118,7 +6065,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5171,20 +6118,20 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 		{
 			SessionID: rec.ID, Harness: "claude-code", PRURL: newURL,
-			Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+			Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved,
 			ID: "run-new", CreatedAt: rec.UpdatedAt.Add(time.Minute),
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sess.KanbanColumn != "needs_review" {
 		t.Fatalf("column = %q, want needs_review", sess.KanbanColumn)
 	}
-	if sess.DisplayStatus != "Needs human review" {
-		t.Fatalf("displayStatus = %q, want Needs human review", sess.DisplayStatus)
+	if sess.DisplayStatus != "Awaiting review" {
+		t.Fatalf("displayStatus = %q, want Awaiting review", sess.DisplayStatus)
 	}
 }
 
@@ -5281,5 +6228,626 @@ func TestSpawnTelemetryCarriesRequestID(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetReconcilesWhenPersistedArtifactOutputHasNoFilesLeft(t *testing.T) {
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		OutputType: domain.SessionOutputArtifact,
+		Metadata:   domain.SessionMetadata{WorkspacePath: "/ws", ArtifactDir: artifactDir},
+	}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, OutputTypeReconciler: reconciler})
+
+	got, err := svc.Get(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OutputType.HasArtifact() {
+		t.Fatalf("OutputType = %q, want no artifact once the directory is empty", got.OutputType)
+	}
+	if len(reconciler.reconciled) != 1 {
+		t.Fatalf("reconciled = %v, want the removal persisted", reconciler.reconciled)
+	}
+}
+
+func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.getCleanupFactsCalls++
+	rec, ok := f.cleanupFacts[id]
+	return rec, ok, nil
+}
+
+func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
+	f.listCleanupFactsCalls++
+	f.cleanupFactsRequested = append(f.cleanupFactsRequested, ids...)
+	out := make(map[domain.SessionID]domain.SessionCleanupRecord, len(ids))
+	for _, id := range ids {
+		if rec, ok := f.cleanupFacts[id]; ok {
+			out[id] = rec
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	if f.requestKillResult != nil {
+		return *f.requestKillResult, nil
+	}
+	freed, err := f.Kill(ctx, id)
+	return sessionmanager.KillResult{Freed: freed}, err
+}
+
+func TestArchiveFlushesPendingUsageSummary(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st})
+	flushed := 0
+	svc.SetUsageArchiveFlush(func(context.Context) { flushed++ })
+	if _, err := svc.RequestKill(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if flushed != 1 {
+		t.Fatalf("usage flushes = %d, want 1 after archive", flushed)
+	}
+}
+
+func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}
+	st.cleanupFacts = map[domain.SessionID]domain.SessionCleanupRecord{
+		"mer-1": {SessionID: "mer-1", SessionGeneration: 2, WorkspaceDisposition: domain.DispositionFailed, ReportOnly: true},
+	}
+	svc := &Service{store: st}
+	for _, tc := range []struct {
+		terminated bool
+		generation int64
+		want       domain.WorkspaceDisposition
+	}{
+		{true, 2, domain.DispositionFailed}, {false, 2, ""}, {true, 3, ""},
+	} {
+		wantReportOnly := tc.want != ""
+		rec := st.sessions["mer-1"]
+		rec.IsTerminated, rec.CleanupGeneration = tc.terminated, tc.generation
+		st.sessions[rec.ID] = rec
+		got, err := svc.Get(context.Background(), rec.ID)
+		if err != nil || got.WorkspaceCleanup != tc.want || got.WorkspaceCleanupReportOnly != wantReportOnly {
+			t.Fatalf("cleanup=%q reportOnly=%v want=%q err=%v", got.WorkspaceCleanup, got.WorkspaceCleanupReportOnly, tc.want, err)
+		}
+		list, err := svc.List(context.Background(), ListFilter{})
+		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want || list[0].WorkspaceCleanupReportOnly != wantReportOnly {
+			t.Fatalf("list=%+v err=%v", list, err)
+		}
+	}
+}
+
+type fakeArtifactDeleter struct {
+	deleted []domain.SessionID
+	err     error
+}
+
+func (f *fakeArtifactDeleter) DeleteSession(_ context.Context, id domain.SessionID) error {
+	f.deleted = append(f.deleted, id)
+	return f.err
+}
+
+func TestDeleteArtifactsDeletesThroughTheDeleterAndReconciles(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		OutputType: domain.SessionOutputArtifact,
+	}
+	deleter := &fakeArtifactDeleter{}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 || deleter.deleted[0] != "mer-1" {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+	if len(reconciler.reconciled) != 1 || reconciler.reconciled[0] != "mer-1" {
+		t.Fatalf("reconciled = %v, want [mer-1]", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsReconcilesAndReportsAFailedDelete(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true}
+	deleter := &fakeArtifactDeleter{err: errors.New("file in use")}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want the deleter's error")
+	}
+	if len(reconciler.reconciled) != 1 {
+		t.Fatalf("reconciled = %v, want a reconcile after the failure too", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsRefusesLiveSession(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	err := svc.DeleteArtifacts(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_NOT_TERMINATED" {
+		t.Fatalf("err = %v, want SESSION_NOT_TERMINATED", err)
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v for a live session, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsRefusesAnArtifactDirOutsideTheDataDir(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(t.TempDir(), "old-data", "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want a refusal")
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
+	dataDir := t.TempDir()
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(dataDir, "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+}
+
+func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
+	var sentryErrs []error
+	var sentryTags []map[string]string
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(_ context.Context, err error, tags map[string]string, _ string) {
+		sentryErrs = append(sentryErrs, err)
+		sentryTags = append(sentryTags, tags)
+	}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	cause := sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("tmux: secret-token failed")}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: sink})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Kind != apierr.KindConflict || apiErr.Code != "AGENT_RESUME_FAILED" {
+		t.Fatalf("err = %#v, want conflict AGENT_RESUME_FAILED", err)
+	}
+	if apiErr.Details["step"] != "runtime" || strings.Contains(apiErr.Message, "secret-token") {
+		t.Fatalf("details/message = %v / %q", apiErr.Details, apiErr.Message)
+	}
+	// Restore relaunches the same way and answers the same 409.
+	if _, err := svc.Restore(context.Background(), "mer-1"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
+		t.Fatalf("restore err = %#v, want AGENT_RESUME_FAILED", err)
+	}
+	// The failures left ao.http.5xx, so each must still be counted on its own event.
+	if len(sink.events) != 2 {
+		t.Fatalf("events = %#v, want one relaunch_failed per operation", sink.events)
+	}
+	for i, operation := range []string{"resume_agent", "restore_session"} {
+		ev := sink.events[i]
+		if ev.Name != "ao.session.relaunch_failed" || ev.Payload["operation"] != operation ||
+			ev.Payload["step"] != "runtime" || ev.Payload["cause_type"] != "*errors.errorString" {
+			t.Fatalf("event %d = %#v, want relaunch_failed for %s step runtime", i, ev, operation)
+		}
+		if strings.Contains(fmt.Sprint(ev.Payload), "secret-token") {
+			t.Fatalf("telemetry payload leaked the raw error: %v", ev.Payload)
+		}
+	}
+
+	fc.restoreErr = fmt.Errorf("resume agent mer-1: %w", &sessionmanager.RelaunchError{Step: "runtime", Err: context.DeadlineExceeded})
+	_, err = svc.ResumeAgent(context.Background(), "mer-1")
+	if errors.As(err, &apiErr) {
+		t.Fatalf("deadline must stay unmapped for the 503 path, got %v", err)
+	}
+	if len(sink.events) != 2 {
+		t.Fatalf("a deadline is already counted as ao.http.5xx; events = %#v", sink.events)
+	}
+	fc.restoreErr = fmt.Errorf("resume agent mer-1: %w", &sessionmanager.RelaunchError{Step: "runtime", Err: context.Canceled})
+	_, _ = svc.ResumeAgent(context.Background(), "mer-1")
+	if len(sink.events) != 2 {
+		t.Fatalf("a client that left mid-relaunch is not a failure to count; events = %#v", sink.events)
+	}
+	// The capture boundary receives the error, then removes its text before send.
+	if len(sentryErrs) != 2 || !strings.Contains(sentryErrs[0].Error(), "secret-token") ||
+		sentryTags[1]["operation"] != "restore_session" || sentryTags[1]["step"] != "runtime" {
+		t.Fatalf("sentry captures = %v / %v, want the raw error for both operations", sentryErrs, sentryTags)
+	}
+}
+
+// memMilestones is an in-memory ports.InstallMilestones.
+type memMilestones map[string]bool
+
+func (m memMilestones) Claim(name string) (bool, bool) {
+	if m[name] {
+		return false, true
+	}
+	m[name] = true
+	return true, true
+}
+
+func spawnedFirstForInstall(t *testing.T, sink *fakeTelemetrySink) (any, bool) {
+	t.Helper()
+	for i := len(sink.events) - 1; i >= 0; i-- {
+		if sink.events[i].Name == "ao.sessions.spawned" {
+			v, ok := sink.events[i].Payload["first_for_install"]
+			return v, ok
+		}
+	}
+	t.Fatalf("no ao.sessions.spawned in %#v", sink.events)
+	return nil, false
+}
+
+func TestSpawnFirstForInstallIsDurableNotTableEmpty(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink, Milestones: memMilestones{}})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != true {
+		t.Fatalf("first spawn first_for_install = %#v, want true", got)
+	}
+	// The fake store stays empty, so the legacy table-empty event fires again;
+	// the durable flag must not.
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn again: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != false {
+		t.Fatalf("second spawn first_for_install = %#v, want false", got)
+	}
+	var legacy int
+	for _, ev := range sink.events {
+		if ev.Name == "ao.sessions.first_spawned" {
+			legacy++
+		}
+	}
+	if legacy != 2 {
+		t.Fatalf("legacy first_session_spawned count = %d, want 2 (kept for continuity)", legacy)
+	}
+}
+
+func TestSpawnFirstForInstallFalseForUpgradedInstallWithSessions(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["old"] = domain.SessionRecord{ID: "old", ProjectID: "mer"}
+	sink := &fakeTelemetrySink{}
+	milestones := memMilestones{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink, Milestones: milestones})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != false {
+		t.Fatalf("first_for_install = %#v, want false for an install with prior sessions", got)
+	}
+	if !milestones["session_spawned"] {
+		t.Fatal("marker not claimed; a later empty table would report a false first")
+	}
+}
+
+func TestSpawnOmitsFirstForInstallWithoutMilestones(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, ok := spawnedFirstForInstall(t, sink); ok {
+		t.Fatalf("first_for_install = %#v, want absent", got)
+	}
+}
+
+// seedingStore guards the session map so a held spawn can write its seed row
+// while another spawn lists sessions.
+type seedingStore struct {
+	*fakeStore
+	mu *sync.Mutex
+}
+
+func (s seedingStore) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fakeStore.ListAllSessions(ctx)
+}
+
+// seedingCommander persists a seed row before "provisioning", like the real
+// manager, and can hold a spawn after that row exists.
+type seedingCommander struct {
+	*fakeCommander
+	store *seedingStore
+	hold  map[domain.SessionID]chan struct{}
+	ready map[domain.SessionID]chan struct{}
+}
+
+func (c *seedingCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	id := domain.SessionID(cfg.DisplayName)
+	rec := domain.SessionRecord{ID: id, ProjectID: cfg.ProjectID}
+	c.store.mu.Lock()
+	c.store.sessions[id] = rec
+	c.store.mu.Unlock()
+	if ready := c.ready[id]; ready != nil {
+		close(ready)
+	}
+	if hold := c.hold[id]; hold != nil {
+		<-hold
+	}
+	return rec, 0, 0, nil
+}
+
+type lockedTelemetrySink struct {
+	mu     sync.Mutex
+	events []ports.TelemetryEvent
+}
+
+func (f *lockedTelemetrySink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, ev)
+}
+func (f *lockedTelemetrySink) Close(context.Context) error { return nil }
+
+func TestSpawnFirstForInstallSurvivesALaterSpawnFinishingFirst(t *testing.T) {
+	st := &seedingStore{fakeStore: newFakeStore(), mu: &sync.Mutex{}}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	holdA, readyA := make(chan struct{}), make(chan struct{})
+	cmd := &seedingCommander{
+		fakeCommander: &fakeCommander{},
+		store:         st,
+		hold:          map[domain.SessionID]chan struct{}{"a": holdA},
+		ready:         map[domain.SessionID]chan struct{}{"a": readyA},
+	}
+	sink := &lockedTelemetrySink{}
+	milestones := memMilestones{}
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink, Milestones: milestones})
+	project := domain.ProjectRecord{ID: "mer"}
+
+	errA := make(chan error, 1)
+	go func() {
+		_, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer", DisplayName: "a"}, project)
+		errA <- err
+	}()
+	<-readyA // A's seed row exists; A is still provisioning.
+	if _, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer", DisplayName: "b"}, project); err != nil {
+		t.Fatalf("spawn B: %v", err)
+	}
+	if milestones["session_spawned"] {
+		t.Fatal("ineligible spawn B claimed the marker while eligible spawn A was in flight")
+	}
+	close(holdA)
+	if err := <-errA; err != nil {
+		t.Fatalf("spawn A: %v", err)
+	}
+
+	got := map[domain.SessionID]any{}
+	sink.mu.Lock()
+	for _, ev := range sink.events {
+		if ev.Name == "ao.sessions.spawned" {
+			got[*ev.SessionID] = ev.Payload["first_for_install"]
+		}
+	}
+	sink.mu.Unlock()
+	if got["a"] != true || got["b"] != false {
+		t.Fatalf("first_for_install = %#v, want a=true b=false", got)
+	}
+	if !milestones["session_spawned"] {
+		t.Fatal("marker not claimed after A finished")
+	}
+}
+
+func TestSpawnFirstForInstallFailedEligibleSpawnReleasesTheClaim(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	milestones := memMilestones{}
+	fc := &fakeCommander{spawnErr: errors.New("boom")}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, Telemetry: sink, Milestones: milestones})
+
+	if _, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer"}, domain.ProjectRecord{ID: "mer"}); err == nil {
+		t.Fatal("want spawn error")
+	}
+	if milestones["session_spawned"] || svc.firstSession.eligibleInFlight != 0 {
+		t.Fatalf("failed spawn claimed=%t inFlight=%d", milestones["session_spawned"], svc.firstSession.eligibleInFlight)
+	}
+	fc.spawnErr = nil
+	if _, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer"}, domain.ProjectRecord{ID: "mer"}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != true {
+		t.Fatalf("retry first_for_install = %#v, want true", got)
+	}
+}
+
+type expiringStore struct {
+	*fakeStore
+	archived []domain.ArchivedSession
+}
+
+func (s *expiringStore) ListReleasedArchivedSessions(context.Context) ([]domain.ArchivedSession, error) {
+	return s.archived, nil
+}
+
+type deletingCommander struct {
+	*fakeCommander
+	deleted []domain.SessionID
+	refuse  map[domain.SessionID]error
+}
+
+func (c *deletingCommander) DeleteSession(_ context.Context, id domain.SessionID, _ bool) error {
+	if err := c.refuse[id]; err != nil {
+		return err
+	}
+	c.deleted = append(c.deleted, id)
+	return nil
+}
+
+// Retention deletes only sessions archived longer than the setting, passes over
+// one a delete refuses, and reports a delete that failed for another reason.
+func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	store := &expiringStore{fakeStore: newFakeStore(), archived: []domain.ArchivedSession{
+		{ID: "mer-old", ArchivedAt: now.AddDate(0, 0, -31)},
+		{ID: "mer-shared", ArchivedAt: now.AddDate(0, 0, -40)},
+		{ID: "mer-recent", ArchivedAt: now.AddDate(0, 0, -29)},
+	}}
+	mgr := &deletingCommander{fakeCommander: &fakeCommander{}, refuse: map[domain.SessionID]error{
+		"mer-shared": fmt.Errorf("delete mer-shared: %w", domain.ErrSessionHistoryShared),
+	}}
+	svc := NewWithDeps(Deps{Manager: mgr, Store: store})
+	svc.clock = func() time.Time { return now }
+
+	if err := svc.DeleteExpired(ctx, 0); err != nil || len(mgr.deleted) != 0 {
+		t.Fatalf("retention off: deleted=%v err=%v", mgr.deleted, err)
+	}
+	if err := svc.DeleteExpired(ctx, 30); err != nil || !slices.Equal(mgr.deleted, []domain.SessionID{"mer-old"}) {
+		t.Fatalf("30 days: deleted=%v err=%v, want only mer-old", mgr.deleted, err)
+	}
+	mgr.refuse["mer-old"] = errors.New("disk I/O error")
+	if err := svc.DeleteExpired(ctx, 30); err == nil || !strings.Contains(err.Error(), "mer-old") {
+		t.Fatalf("failed delete err = %v, want it reported", err)
+	}
+}
+
+// A polled read against a repository stuck in one broken state reports to
+// Sentry once per state change, not once per poll (AO-DAEMON-9).
+func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "w-1")
+	read := func(detail string) error {
+		return classifyWorkspaceGitError(context.Background(), root, "status", errors.New("git exit"), detail)
+	}
+	steps := []struct {
+		name   string
+		run    func() error
+		repeat bool
+	}{
+		{"first failure", func() error { return read("fatal: bad object HEAD") }, false},
+		{"same failure on the next poll", func() error { return read("fatal: bad object HEAD") }, true},
+		{"and the poll after", func() error { return read("fatal: bad object HEAD") }, true},
+		{"a different failure", func() error { return read("fatal: your current branch appears to be broken") }, false},
+		{"after a successful read", func() error {
+			noteWorkspaceGitReadOK(root, "status")
+			return read("fatal: your current branch appears to be broken")
+		}, false},
+	}
+	for _, step := range steps {
+		err := step.run()
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+			t.Fatalf("%s: client sees %v, want WORKSPACE_GIT_READ_FAILED", step.name, err)
+		}
+		if got := sentryobs.IsRepeat(err); got != step.repeat {
+			t.Errorf("%s: skipped by Sentry = %v, want %v", step.name, got, step.repeat)
+		}
+	}
+	other := classifyWorkspaceGitError(context.Background(), filepath.Join(t.TempDir(), "w-2"), "status", errors.New("git exit"), "fatal: bad object HEAD")
+	if sentryobs.IsRepeat(other) {
+		t.Error("a second workspace's first failure was skipped")
+	}
+}
+
+func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	read := func(op string) error {
+		return classifyWorkspaceGitError(t.Context(), root, op, errors.New("git exit"), "fatal: bad object HEAD")
+	}
+	read("diff")
+	for _, capped := range []bool{false, true} {
+		read("status")
+		if capped {
+			if _, _, err := gitWorkspaceOutputCapped(t.Context(), root, 1, "status"); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err := gitWorkspaceOutput(t.Context(), root, "status"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if sentryobs.IsRepeat(read("status")) {
+			t.Error("recovered status was still suppressed")
+		}
+		if !sentryobs.IsRepeat(read("diff")) {
+			t.Error("successful status rearmed unrelated diff")
+		}
+	}
+}
+
+type renewingCommander struct {
+	*fakeCommander
+	renewed []domain.TaskPreparationToken
+}
+
+func (c *renewingCommander) RenewTaskPreparation(token domain.TaskPreparationToken) {
+	c.renewed = append(c.renewed, token)
+}
+
+func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
+	st := newFakeStore()
+	// Still being created: no worktree yet, which the page polls through.
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", IsTaskPreparation: true}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2"}
+	commander := &renewingCommander{fakeCommander: &fakeCommander{}}
+	svc := &Service{store: st, manager: commander}
+
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-1"); err == nil {
+		t.Fatal("listed files of a preparation with no worktree yet")
+	}
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-2"); err == nil {
+		t.Fatal("listed files of a session with no worktree")
+	}
+	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
+		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
+	}
+}
+
+// An imported chat whose agent CLI changed between import and first open shows
+// the adapter's version message, not the generic "check the daemon log".
+func TestResumeAgentShowsImportVersionMessage(t *testing.T) {
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	versionErr := &ports.ImportRefusedError{Message: "droid: session import supports only verified version 0.251.0"}
+	cause := sessionmanager.RelaunchError{Step: "prepare_import", Err: fmt.Errorf("prepare imported session: %w", versionErr)}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: &fakeTelemetrySink{}})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_IMPORT_RESUME_FAILED" || apiErr.Message != versionErr.Message {
+		t.Fatalf("err = %#v, want SESSION_IMPORT_RESUME_FAILED with the version message", err)
 	}
 }

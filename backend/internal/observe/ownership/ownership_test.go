@@ -9,24 +9,24 @@ import (
 )
 
 func TestOwnedErrorSurvivesMultipleWraps(t *testing.T) {
-	err := fmt.Errorf("outer: %w", fmt.Errorf("middle: %w", ownership.Own(errors.New("boom"), ownership.OwnerAgentSwitchSaga)))
-	if got := ownership.OwnerOf(err); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf() = %q, want %q", got, ownership.OwnerAgentSwitchSaga)
+	err := fmt.Errorf("outer: %w", fmt.Errorf("middle: %w", ownership.Own(errors.New("boom"), ownership.OwnerHTTP)))
+	if got := ownership.OwnerOf(err); got != ownership.OwnerHTTP {
+		t.Fatalf("OwnerOf() = %q, want %q", got, ownership.OwnerHTTP)
 	}
 }
 
 func TestOwnedErrorSurvivesErrorsJoin(t *testing.T) {
-	err := errors.Join(errors.New("secondary"), ownership.Own(errors.New("boom"), ownership.OwnerAgentSwitchSaga))
-	if got := ownership.OwnerOf(err); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf() = %q, want %q", got, ownership.OwnerAgentSwitchSaga)
+	err := errors.Join(errors.New("secondary"), ownership.Own(errors.New("boom"), ownership.OwnerHTTP))
+	if got := ownership.OwnerOf(err); got != ownership.OwnerHTTP {
+		t.Fatalf("OwnerOf() = %q, want %q", got, ownership.OwnerHTTP)
 	}
 }
 
 func TestOwnDoesNotReplaceExistingOwner(t *testing.T) {
-	err := ownership.Own(errors.New("boom"), ownership.OwnerAgentSwitchSaga)
+	err := ownership.Own(errors.New("boom"), ownership.OwnerHTTP)
 	err = ownership.Own(err, ownership.OwnerHTTP)
-	if got := ownership.OwnerOf(err); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf() = %q, want original owner %q", got, ownership.OwnerAgentSwitchSaga)
+	if got := ownership.OwnerOf(err); got != ownership.OwnerHTTP {
+		t.Fatalf("OwnerOf() = %q, want original owner %q", got, ownership.OwnerHTTP)
 	}
 }
 
@@ -45,21 +45,21 @@ func TestOwnRejectsNilAndUnknownOwners(t *testing.T) {
 
 func TestInvalidOuterOwnerDoesNotHideValidInnerOwner(t *testing.T) {
 	err := invalidOwnedError{
-		err: ownership.Own(errors.New("boom"), ownership.OwnerAgentSwitchSaga),
+		err: ownership.Own(errors.New("boom"), ownership.OwnerHTTP),
 	}
-	if got := ownership.OwnerOf(err); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf() = %q, want inner owner %q", got, ownership.OwnerAgentSwitchSaga)
+	if got := ownership.OwnerOf(err); got != ownership.OwnerHTTP {
+		t.Fatalf("OwnerOf() = %q, want inner owner %q", got, ownership.OwnerHTTP)
 	}
 }
 
 func TestPreserveMovesOnlyOwnerToMappedError(t *testing.T) {
 	originalCause := errors.New("private cause")
-	original := ownership.Own(originalCause, ownership.OwnerAgentSwitchSaga)
+	original := ownership.Own(originalCause, ownership.OwnerHTTP)
 	mappedCause := errors.New("public error")
 	mapped := ownership.Preserve(original, mappedCause)
 
-	if got := ownership.OwnerOf(mapped); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf(mapped) = %q, want %q", got, ownership.OwnerAgentSwitchSaga)
+	if got := ownership.OwnerOf(mapped); got != ownership.OwnerHTTP {
+		t.Fatalf("OwnerOf(mapped) = %q, want %q", got, ownership.OwnerHTTP)
 	}
 	if !errors.Is(mapped, mappedCause) {
 		t.Fatal("mapped error is no longer discoverable through errors.Is")

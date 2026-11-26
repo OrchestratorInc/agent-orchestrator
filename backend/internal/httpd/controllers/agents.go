@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +13,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
 // AgentCatalog is the controller-facing contract for local agent inventory.
@@ -22,12 +25,16 @@ type AgentCatalog interface {
 	Refresh(ctx context.Context) (agentsvc.Inventory, error)
 	Probe(ctx context.Context, agentID string) (agentsvc.ProbeResult, error)
 	Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
+	ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
 	RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error)
 }
 
 // AgentsController owns the /agents routes.
 type AgentsController struct {
 	Catalog AgentCatalog
+	// Projects resolves the project a skills read scans. Nil scans only the
+	// user's own folders.
+	Projects projectsvc.Manager
 }
 
 // Register mounts the agent inventory routes on the supplied router.
@@ -39,6 +46,28 @@ func (c *AgentsController) Register(r chi.Router) {
 	r.Post("/agents/{agent}/probe", c.probe)
 	r.Get("/agents/{agent}/models", c.models)
 	r.Post("/agents/{agent}/models/refresh", c.refreshModels)
+	r.Get("/agents/{agent}/skills", c.skills)
+}
+
+// skills lists the skills an agent would offer in a project before any session
+// of it runs, read from the folders the agent loads them from. The new chat
+// page's "/" menu uses it; a running session asks its agent instead.
+func (c *AgentsController) skills(w http.ResponseWriter, r *http.Request) {
+	agentID := strings.TrimSpace(chi.URLParam(r, "agent"))
+	if agentID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "AGENT_REQUIRED", "agent is required", nil)
+		return
+	}
+	// A project this host cannot resolve (Scratchpad, a standalone agent, one just
+	// removed) still has the user's own skills, so it scans those rather than failing.
+	workspace := ""
+	if projectID := strings.TrimSpace(r.URL.Query().Get("projectId")); projectID != "" && c.Projects != nil {
+		if result, err := c.Projects.Get(r.Context(), domain.ProjectID(projectID)); err == nil && result.Project != nil && !result.Project.FolderMissing {
+			workspace = result.Project.Path
+		}
+	}
+	home, _ := os.UserHomeDir()
+	envelope.WriteJSON(w, http.StatusOK, conversationSkillsResponse(chatsvc.ScanSkills(agentID, workspace, home)))
 }
 
 func (c *AgentsController) readiness(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +126,9 @@ func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, r
 	projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
 	var catalog ports.AgentModelCatalog
 	var err error
-	if revalidate {
+	if r.URL.Query().Get("catalogOnly") == "true" {
+		catalog, err = c.Catalog.ModelCatalog(r.Context(), agentID, projectID, refresh)
+	} else if revalidate {
 		catalog, err = c.Catalog.RevalidateModels(r.Context(), agentID, projectID)
 	} else {
 		catalog, err = c.Catalog.Models(r.Context(), agentID, projectID, refresh)

@@ -10,97 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
 const reviewMaxNudge = 3
-
-// ReviewDeliveryOutcome reports what ApplyReviewBatch did with completed
-// AO-internal review passes.
-type ReviewDeliveryOutcome string
-
-const (
-	// ReviewDeliveryNoop means lifecycle did not send or confirm a review nudge
-	// because the result was not relevant for delivery.
-	ReviewDeliveryNoop ReviewDeliveryOutcome = "no_op"
-	// ReviewDeliverySent means the worker nudge was sent or was already covered
-	// by sendOnce dedup state and may be stamped delivered.
-	ReviewDeliverySent ReviewDeliveryOutcome = "sent"
-)
-
-// ReviewResult is the already-persisted result of an AO-internal review pass.
-// Lifecycle treats it as input to the reaction reducer; it does not write the
-// review_run row.
-type ReviewResult struct {
-	RunID          string
-	BatchID        string
-	WorkerID       domain.SessionID
-	PRURL          string
-	TargetSHA      string
-	Verdict        domain.ReviewVerdict
-	Body           string
-	GithubReviewID string
-	DeliveredAt    *time.Time
-}
-
-// ApplyReviewBatch reacts to one reviewer CLI submission after the review
-// service has decided which current-head changes-requested results are
-// deliverable.
-func (m *Manager) ApplyReviewBatch(ctx context.Context, workerID domain.SessionID, batchID string, results []ReviewResult) (ReviewDeliveryOutcome, error) {
-	if batchID == "" || len(results) == 0 {
-		return ReviewDeliveryNoop, nil
-	}
-	rec, ok, err := m.store.GetSession(ctx, workerID)
-	if err != nil || !ok {
-		return ReviewDeliveryNoop, err
-	}
-	if cannotNudge(rec) {
-		return ReviewDeliveryNoop, nil
-	}
-	if m.guard == nil {
-		return ReviewDeliveryNoop, nil
-	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].PRURL != results[j].PRURL {
-			return results[i].PRURL < results[j].PRURL
-		}
-		return results[i].RunID < results[j].RunID
-	})
-	var msg strings.Builder
-	fmt.Fprintf(&msg, "[AO reviewer] AO's internal code reviewer submitted %d review(s) requesting changes.\n", len(results))
-	var sigParts []string
-	for i, r := range results {
-		fmt.Fprintf(&msg, "\nReview %d\nPR: %s\nVerdict: %s", i+1, domain.SanitizeControlChars(r.PRURL), domain.SanitizeControlChars(string(r.Verdict)))
-		if r.TargetSHA != "" {
-			fmt.Fprintf(&msg, "\nHead commit: %s", domain.SanitizeControlChars(r.TargetSHA))
-		}
-		if r.GithubReviewID != "" {
-			safeReviewID := domain.SanitizeControlChars(r.GithubReviewID)
-			fmt.Fprintf(&msg, "\nGitHub review: %s", safeReviewID)
-			fmt.Fprintf(&msg, "\nOnce you have addressed it, reply on GitHub review %s with how you addressed it, then resolve the review comment threads you addressed.", safeReviewID)
-		}
-		if r.Body != "" {
-			fmt.Fprintf(&msg, "\n\nReview body:\n%s\n", domain.SanitizeControlChars(r.Body))
-		}
-		sigParts = append(sigParts, strings.Join([]string{r.RunID, r.PRURL, r.TargetSHA, r.GithubReviewID, r.Body}, "\x00"))
-	}
-	anchorPR := results[0].PRURL
-	key := "review-batch:" + anchorPR + ":" + batchID
-	sig := strings.Join(sigParts, "\x01")
-	outcome, err := m.sendOnce(ctx, workerID, anchorPR, key, sig, msg.String(), reviewMaxNudge, false)
-	if err != nil {
-		return ReviewDeliveryNoop, err
-	}
-	if outcome == sendOnceSuppressed {
-		// The worker went terminated/exited/needs-input between the entry guard and the
-		// paste: nothing reached it, so do NOT let the caller stamp the run
-		// delivered — it must re-fire once the session is workable again.
-		return ReviewDeliveryNoop, nil
-	}
-	return ReviewDeliverySent, nil
-}
 
 type reactionState struct {
 	mu       sync.Mutex
@@ -156,6 +72,13 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	if !o.Fetched {
 		return nil
 	}
+	// A PR observation is this session's earliest opportunity to durably record
+	// "this session produced a PR" — reconcile immediately rather than waiting
+	// for the artifact-output poller's next tick. A failure here must not
+	// swallow the nudge delivery below, so it is logged, not returned.
+	if err := m.ReconcileSessionOutputType(ctx, id); err != nil {
+		slog.Default().Warn("lifecycle: reconcile session output type", "session", id, "err", err)
+	}
 	// A PR reaching a terminal state (merged or closed) no longer ends the
 	// session on its own: a session may own several PRs. Terminate only when no
 	// open PR remains and at least one of them merged. The observer persists the
@@ -167,6 +90,22 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			return err
 		}
 		if rec.IsTerminated || !rec.TerminateOnPRMerge {
+			return nil
+		}
+		// A merge must not race the still-working agent (#2879). A session whose
+		// agent is still ActivityActive is genuinely mid-climb: with one PR merged
+		// it is very likely raising the next PR in the same session, and
+		// flag-terminating it now (#2811's flag-only lane) would drop it from the
+		// SCM observer roster — the follow-up PR would never be attributed,
+		// enriched, or nudged alert. Defer the completed-session teardown until the
+		// agent has actually quiesced: the observer keeps polling this live session
+		// regardless because it is still observed, so the next observation of the
+		// still-merged PR re-runs this reaction after the agent exits and lands the
+		// termination then. The is_terminated / needs-input dead-session gates that
+		// the rest of reactions.go consults (see ApplyRuntimeObservation) still
+		// bound this lane at each poll; only the "sessionComplete reads PR rows"
+		// bar must additionally wait on genuine agent quiescence.
+		if rec.Activity.State == domain.ActivityActive {
 			return nil
 		}
 		done, err := m.sessionComplete(ctx, id)
@@ -237,7 +176,14 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		if err != nil {
 			return fmt.Errorf("list persisted comments for %s: %w", o.URL, err)
 		}
-		o.Comments = prCommentObservations(comments)
+		// The worker posts with the PR author's account, so its own replies
+		// ("Fixed in abc123") come back as review comments; never inject them.
+		// Unknown author (no PR row yet): nothing is filtered.
+		var prAuthor string
+		if pr, ok, err := m.store.GetPR(ctx, o.URL); err == nil && ok {
+			prAuthor = pr.Author
+		}
+		o.Comments = prCommentObservations(withoutPRAuthorReplies(comments, prAuthor))
 
 		if o.CI == domain.CIFailing {
 			pr, ok, err := m.store.GetPR(ctx, o.URL)
@@ -279,7 +225,9 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 				if sig == "" {
 					sig = string(o.Review)
 				}
-				nudges = append(nudges, pendingNudge{key: "comment:" + o.URL, sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
+				// Per comment, like the review loop below: a shared key is a
+				// shared signature slot and a shared attempt budget.
+				nudges = append(nudges, pendingNudge{key: commentNudgeKey(o.URL, comment), sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
 			}
 		}
 
@@ -309,16 +257,33 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// and re-polls.
 	var blockedCheckErr error
 	if o.Mergeability == domain.MergeConflicting {
-		// Only the bottom of a stack is eligible for the rebase nudge. A PR
-		// stacked on an open parent is expected to report conflicts against its
-		// parent branch until the parent merges and it retargets, so nudging the
-		// agent to rebase it now would be noise. Mergeability UNKNOWN (the brief
-		// post-retarget recompute window) never reaches here.
-		blocked, err := m.prBlockedByOpenParent(ctx, id, o.URL)
+		// The session's "Automatically fix CI failures" switch also covers merge
+		// conflicts, so a session reviewing someone else's PR with the switch off
+		// is never told to rebase it. Fail closed: an unreadable policy skips
+		// this nudge and is surfaced below, like the parent-stack check.
+		pr, prFound, prErr := m.store.GetPR(ctx, o.URL)
+		var skip bool
+		var err error
+		switch {
+		case prErr != nil:
+			err = fmt.Errorf("load CI injection policy for %s: %w", o.URL, prErr)
+		case !prFound:
+			err = fmt.Errorf("load CI injection policy for %s: PR not found", o.URL)
+		case !pr.AutoInjectCI:
+			skip = true
+		default:
+			// Only the bottom of a stack is eligible for the rebase nudge. A PR
+			// stacked on an open parent is expected to report conflicts against
+			// its parent branch until the parent merges and it retargets, so
+			// nudging the agent to rebase it now would be noise. Mergeability
+			// UNKNOWN (the brief post-retarget recompute window) never reaches
+			// here.
+			skip, err = m.prBlockedByOpenParent(ctx, id, o.URL)
+		}
 		switch {
 		case err != nil:
 			blockedCheckErr = err
-		case !blocked:
+		case !skip:
 			msg := "There are merge conflicts on " + ident + ". Rebase onto the base branch and resolve them."
 			if o.URL != "" {
 				msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
@@ -335,6 +300,12 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		if _, err := m.sendOnce(ctx, id, o.URL, n.key, n.sig, n.msg, n.maxAttempts, n.urgent); err != nil {
 			return err
 		}
+	}
+	// After the review-feedback nudges above, so a "review done" notice
+	// follows the inline comments of the review it reports. A failure is left
+	// to the notice sweep rather than replaying this observation.
+	if err := m.DeliverReviewDoneNotices(ctx, id); err != nil {
+		slog.Default().WarnContext(ctx, "lifecycle: deliver review done notices", "session", id, "err", err)
 	}
 	// Surface deferred policy/parent-stack read errors only after independent
 	// nudges have been sent, so one failed lookup cannot hide another reaction.
@@ -357,7 +328,12 @@ func (m *Manager) terminateCompletedSession(ctx context.Context, id domain.Sessi
 	if terminator == nil {
 		return fmt.Errorf("terminate completed session %s: session terminator is not configured", id)
 	}
-	if _, err := terminator.Kill(ctx, id); err != nil {
+	before, live := m.liveBeforeEnd(ctx, id)
+	_, err := terminator.Kill(ctx, id)
+	// Cleanup can fail after the terminal write; the row decides whether the
+	// session ended (the report is claimed once per termination).
+	m.reportEndIfTerminated(ctx, before, live, err, deliverytelemetry.EndPRMerged)
+	if err != nil {
 		return fmt.Errorf("terminate completed session %s: %w", id, err)
 	}
 	return nil
@@ -381,6 +357,20 @@ func (m *Manager) sessionComplete(ctx context.Context, id domain.SessionID) (boo
 		}
 	}
 	return merged, nil
+}
+
+// commentNudgeKey identifies one review comment's nudge. It must be unique per
+// comment, not per thread: the observer expands a thread into one comment row
+// each (observer.go), all sharing the thread id, so keying on the thread would
+// put several comments with several signatures back in one dedup slot -- the
+// rotation this key exists to prevent. A comment with no id falls back to its
+// thread, which is still better than colliding with every other comment.
+func commentNudgeKey(prURL string, comment ports.PRCommentObservation) string {
+	id := strings.TrimSpace(comment.ID)
+	if id == "" {
+		id = strings.TrimSpace(comment.ThreadID)
+	}
+	return "comment:" + prURL + ":" + id
 }
 
 // mergeConflictKey is the reaction-dedup key for a PR's merge-conflict nudge.
@@ -549,12 +539,18 @@ func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCM
 		Provider:           o.Provider,
 		Repo:               o.Repo,
 	}
+	// A merge or close happened at a known provider time, which can be well
+	// before AO polled it (slow cadence, daemon down). Show that time, not the
+	// poll's. Ready-to-merge stays on the observation time: it is a state AO
+	// derived from several facts, with no single provider event behind it.
 	if o.PR.Merged {
 		base.Type = domain.NotificationPRMerged
+		base.CreatedAt = timeOr(o.PR.MergedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if o.PR.Closed {
 		base.Type = domain.NotificationPRClosedUnmerged
+		base.CreatedAt = timeOr(o.PR.ClosedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if rec.IsTerminated || rec.Activity.State.NeedsInput() || !ready {
@@ -650,6 +646,40 @@ func scmToPRObservation(o ports.SCMObservation) ports.PRObservation {
 	return pr
 }
 
+// withoutPRAuthorReplies drops the PR author's replies in review threads.
+// The worker uses the author's account, so a reply by the author is the
+// worker answering feedback (or the author answering it), not feedback for
+// the worker. A thread the author starts is kept: that is the author
+// reviewing their own PR, which the worker should act on. Comments arrive
+// oldest first, so a thread's first comment is its root.
+func withoutPRAuthorReplies(comments []domain.PullRequestComment, prAuthor string) []domain.PullRequestComment {
+	author := normalizeCommentAuthor(prAuthor)
+	if author == "" {
+		return comments
+	}
+	seenThread := make(map[string]bool, len(comments))
+	out := make([]domain.PullRequestComment, 0, len(comments))
+	for _, comment := range comments {
+		thread := strings.TrimSpace(comment.ThreadID)
+		reply := thread != "" && seenThread[thread]
+		if thread != "" {
+			seenThread[thread] = true
+		}
+		if reply && normalizeCommentAuthor(comment.Author) == author {
+			continue
+		}
+		out = append(out, comment)
+	}
+	return out
+}
+
+// normalizeCommentAuthor compares logins as GitHub does: case-insensitive,
+// with a leading "@" ignored. "[bot]" stays, so an app named after the
+// author is still a different author.
+func normalizeCommentAuthor(login string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(login), "@"))
+}
+
 func prCommentObservations(comments []domain.PullRequestComment) []ports.PRCommentObservation {
 	out := make([]ports.PRCommentObservation, 0, len(comments))
 	for _, comment := range comments {
@@ -667,6 +697,7 @@ func prCommentObservations(comments []domain.PullRequestComment) []ports.PRComme
 			URL:              comment.URL,
 			Resolved:         comment.Resolved,
 			AutoInjectReview: comment.AutoInjectReview,
+			CreatedAt:        comment.CreatedAt,
 		})
 	}
 	return out
@@ -696,7 +727,10 @@ func (m *Manager) ApplyTrackerFacts(ctx context.Context, id domain.SessionID, o 
 		if m.sessionMutationInProgress(id) {
 			return nil
 		}
-		return m.MarkTerminated(ctx, id)
+		before, live := m.liveBeforeEnd(ctx, id)
+		err := m.MarkTerminated(ctx, id)
+		m.reportEndIfTerminated(ctx, before, live, err, deliverytelemetry.EndIssueClosed)
+		return err
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil || !ok {
@@ -735,7 +769,7 @@ func (m *Manager) ApplyTrackerFacts(ctx context.Context, id domain.SessionID, o 
 // carve-out so the merge-conflict nudge alone can bypass the needs-input
 // condition below (see its needsInput comment), so it inlines the
 // terminated/exited half of this check and evaluates needs-input separately.
-// Every other nudge path in this package (ApplyReviewBatch, ApplyTrackerFacts)
+// Every other nudge path in this package (ApplyTrackerFacts)
 // still gates on the full condition here, unchanged.
 func cannotNudge(rec domain.SessionRecord) bool {
 	return rec.IsTerminated || rec.Activity.State.NeedsInput() || rec.Activity.State == domain.ActivityExited
@@ -801,6 +835,12 @@ func hasUnresolvedComments(comments []ports.PRCommentObservation) bool {
 	return false
 }
 
+// failedPRChecks selects the checks the CI nudge sends to the agent. Only real
+// failures qualify. A current cancelled check still makes CI failing and is
+// listed with its link for people (UI-actionable), but it is deliberately not
+// agent-actionable: a cancellation, whether by hand or by the system, is not a
+// code failure, so the agent has nothing to fix. A cancelled-only failure
+// therefore queues no nudge.
 func failedPRChecks(checks []ports.PRCheckObservation) []ports.PRCheckObservation {
 	failed := make([]ports.PRCheckObservation, 0, len(checks))
 	for _, ch := range checks {
@@ -887,6 +927,13 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 		author = "unknown reviewer"
 	}
 	fmt.Fprintf(&msg, "A changes-requested review from @%s is on your PR.", author)
+	// When the reviewer submitted it, not when AO delivered it: a nudge held
+	// while the session waited on the user can arrive long after. The chat
+	// shows this time on the event row. It ends the first line, which older
+	// chat clients read only for the PR identity, so they still parse the rest.
+	if !review.SubmittedAt.IsZero() {
+		fmt.Fprintf(&msg, " Submitted at %s.", providerEventTime(review.SubmittedAt))
+	}
 	if body := domain.SanitizeControlChars(review.Body); strings.TrimSpace(body) != "" {
 		fmt.Fprintf(&msg, "\n\nReview body:\n%s", body)
 	}
@@ -896,16 +943,23 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 	if review.ID != "" {
 		fmt.Fprintf(&msg, "\nReview ID: %s", domain.SanitizeControlChars(review.ID))
 	}
-	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what AO has provided here.")
+	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what Orchestrator has provided here.")
 	return msg.String()
 }
 
 func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 	if len(comments) == 0 {
-		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what AO has provided here."
+		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what Orchestrator has provided here."
 	}
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
+	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.", len(comments))
+	// When the newest comment was written, not when AO delivered it; the chat
+	// shows this time on the event row. Like the changes-requested nudge, it
+	// ends the first line so older chat clients still parse the message.
+	if newest := newestCommentTime(comments); !newest.IsZero() {
+		fmt.Fprintf(&msg, " Newest comment posted at %s.", providerEventTime(newest))
+	}
+	msg.WriteString("\n")
 	for i, c := range comments {
 		location := "(general)"
 		if c.File != "" {
@@ -933,6 +987,22 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 	}
 	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
 	return msg.String()
+}
+
+func newestCommentTime(comments []ports.PRCommentObservation) time.Time {
+	var newest time.Time
+	for _, c := range comments {
+		if c.CreatedAt.After(newest) {
+			newest = c.CreatedAt
+		}
+	}
+	return newest
+}
+
+// providerEventTime renders a provider timestamp for nudge text: UTC RFC 3339
+// to the second, which both agents and the chat's parser read unambiguously.
+func providerEventTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
 }
 
 func markdownCodeFence(s string) string {
@@ -984,6 +1054,15 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 			return sendOnceAccounted, err
 		}
 		m.react.loaded[prURL] = true
+	}
+	if chat, ok := m.store.(reviewNoticeChatStore); ok && strings.HasPrefix(key, "comment:") {
+		rec, found, err := m.store.GetSession(ctx, id)
+		if err != nil {
+			return sendOnceSuppressed, err
+		}
+		if found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+			return m.sendChatReviewFeedbackLocked(ctx, chat, id, prURL, key, sig, msg, maxAttempts)
+		}
 	}
 
 	if m.react.seen[key] == sig {

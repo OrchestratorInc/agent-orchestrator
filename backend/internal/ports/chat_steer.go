@@ -15,8 +15,9 @@ import (
 // they asked for the wrong thing, that difference is the whole feature.
 //
 // Optional, like every other capability that not all providers have: a driver that
-// cannot do it simply does not implement ChatSteerer, and AO hides the affordance
-// rather than offering a control that fails.
+// cannot do it does not implement ChatSteerer or does not report
+// ChatCapabilitySteer, and AO hides the affordance rather than offering a control
+// that fails.
 
 // ChatSteerer is implemented by drivers whose provider accepts guidance into a
 // running turn.
@@ -32,6 +33,31 @@ import (
 // steer to the wrong one.
 type ChatSteerer interface {
 	Steer(ctx context.Context, providerTurnID string, msg ChatUserMessage) (ChatTurnRef, error)
+}
+
+// ChatSteerWithdrawer is implemented by drivers whose Steer can wait for the
+// agent to collect guidance. A Steer holds the Chat controller's dispatch lock,
+// so Stop calls WithdrawPendingSteers first, and a waiting Steer returns
+// ErrChatTurnNotSteerable at once instead of holding Stop back. Guidance the
+// agent has already taken is not affected.
+//
+// A driver may also refuse later steers for the running turn until Stop ends
+// it. The returned restore then gives steering back to the turn this call
+// withdrew it from, and Stop calls it when it did not stop the turn after all.
+// Restoring is bound to that turn: a late restore never lifts a later turn's
+// Stop. restore may be nil, and calling it more than once has no further
+// effect.
+type ChatSteerWithdrawer interface {
+	WithdrawPendingSteers() (restore func())
+}
+
+// ChatTurnSteerWithdrawer withdraws steers only while providerTurnID is still
+// the running turn, checked and withdrawn in one step. A Stop aimed at a named
+// turn uses it: if that turn already ended and the next one started, the next
+// turn's waiting steers are left alone, since settling them cannot be undone.
+// restore is nil when nothing was withdrawn.
+type ChatTurnSteerWithdrawer interface {
+	WithdrawPendingSteersFor(providerTurnID string) (restore func())
 }
 
 // Errors a ChatSteerer returns. Both are ordinary outcomes rather than failures,

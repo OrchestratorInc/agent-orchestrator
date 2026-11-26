@@ -1,14 +1,19 @@
-import { RadioGroup } from "radix-ui";
-import { Check, Copy, XCircle } from "lucide-react";
+import { ArrowUpRight, Check, Copy, LoaderCircle } from "@/components/app-icons";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import type { MessageKey } from "../i18n";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import { aoBridge } from "../lib/bridge";
+import { installerProgress } from "../lib/installer-progress";
+import type { OnboardingStep } from "../lib/onboarding-steps";
+import type { OnboardingAction } from "../lib/onboarding-telemetry-schema";
+import { apiErrorCode, finishOnboardingAction, installJobOutcome, startOnboardingAction } from "../lib/onboarding-telemetry";
 import { cn } from "../lib/utils";
-import { requirementDetailText, requirementDisplayLabel, type SystemRequirement } from "./SystemRequirementsChecklist";
+import type { SystemRequirement } from "./SystemRequirementsChecklist";
+import { Button } from "./ui/button";
 import {
 	Dialog,
 	DialogContent,
@@ -21,7 +26,11 @@ import {
 } from "./ui/dialog";
 
 type InstallJob = components["schemas"]["InstallJob"];
-type InstallTarget = "tmux" | "gh" | "claude" | "codex" | "opencode" | "copilot";
+// `notice` is emitted by the daemon's OpenCode 2 install plan. Keep this
+// narrow compatibility extension while older generated clients are in use;
+// it becomes part of InstallJob when the accompanying API schema regenerates.
+type InstallJobWithNotice = InstallJob & { notice?: string };
+type InstallTarget = "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot";
 type AgentInstallTarget = Exclude<InstallTarget, "tmux" | "gh">;
 
 // Labels are the CLIs' own product names — not translated, same treatment as
@@ -31,6 +40,7 @@ const AGENT_INSTALL_OPTIONS: Array<{ target: AgentInstallTarget; label: string }
 	{ target: "claude", label: "Claude Code" },
 	{ target: "codex", label: "Codex" },
 	{ target: "opencode", label: "opencode" },
+	{ target: "opencode-v2", label: "OpenCode 2" },
 	{ target: "copilot", label: "Copilot CLI" },
 ];
 
@@ -38,10 +48,12 @@ const AGENT_INSTALL_DESCRIPTION_KEYS: Record<AgentInstallTarget, MessageKey> = {
 	claude: "startup.agentDescClaude",
 	codex: "startup.agentDescCodex",
 	opencode: "startup.agentDescOpencode",
+	"opencode-v2": "startup.agentDescOpencode",
 	copilot: "startup.agentDescCopilot",
 };
 
 const POLL_INTERVAL_MS = 1_000;
+const GIT_DOWNLOAD_URL = "https://git-scm.com/downloads";
 
 export function isActiveInstallJob(job: InstallJob | undefined): boolean {
 	return job?.status === "running" || job?.status === "installing" || job?.status === "verifying";
@@ -52,25 +64,50 @@ export function isActiveInstallJob(job: InstallJob | undefined): boolean {
 // identity-sensitive adapters can perform their bounded validation probe.
 export async function checkRequirementsAgain(onRefetchRequirements: () => Promise<unknown> | void): Promise<void> {
 	const { error } = await apiClient.POST("/api/v1/agents/refresh");
-	if (error) throw new Error(apiErrorMessage(error, "Could not refresh agent inventory."));
+	if (error) throw apiErrorException(error, "Could not refresh agent inventory.");
 	await onRefetchRequirements();
 }
+
+/** How an install reports to the onboarding funnel, or undefined to report nothing. */
+export type InstallTelemetry = { action: Extract<OnboardingAction, "dependency_install" | "gh_install">; step: OnboardingStep };
 
 /** Sequential single-target install job runner: POST to start, GET on an
  *  interval while running. One target is ever in flight at a time — this
  *  gate only ever needs one, and serializing keeps the UI unambiguous about
- *  which command is running. */
-function useInstallRunner(onSucceeded: () => void) {
+ *  which command is running. `telemetry` is read as each install starts. */
+export function useInstallRunner(onSucceeded: () => void, telemetry?: () => InstallTelemetry | undefined) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
-	const [job, setJob] = useState<InstallJob | undefined>(undefined);
-	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJob>>>({});
+	const [job, setJob] = useState<InstallJobWithNotice | undefined>(undefined);
+	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJobWithNotice>>>({});
 	const [inspectedTargets, setInspectedTargets] = useState<Partial<Record<InstallTarget, boolean>>>({});
 	const [isStarting, setIsStarting] = useState(false);
 	const [startError, setStartError] = useState<string | undefined>(undefined);
+	const [succeededTargets, setSucceededTargets] = useState<ReadonlySet<InstallTarget>>(new Set());
 	const pollRef = useRef<number | null>(null);
+	// Bumped on every install start: a poll answer from an earlier attempt,
+	// still in flight, must not settle (or stop polling for) the new one.
+	const generationRef = useRef(0);
 	const inspectedRef = useRef(new Set<InstallTarget>());
 	const onSucceededRef = useRef(onSucceeded);
 	onSucceededRef.current = onSucceeded;
+	const telemetryRef = useRef(telemetry);
+	telemetryRef.current = telemetry;
+	// The action the install in flight reports as; undefined when it reports nothing.
+	const reportingRef = useRef<InstallTelemetry | undefined>(undefined);
+	const settleTelemetry = (doneTarget: InstallTarget, status: string | undefined, startFailed?: { errorCode?: string }) => {
+		const reporting = reportingRef.current;
+		if (!reporting) return;
+		if (startFailed) {
+			finishOnboardingAction(reporting.action, "failed", { target: doneTarget, reason: "start_failed", errorCode: startFailed.errorCode });
+			return;
+		}
+		const end = installJobOutcome(status);
+		if (end) finishOnboardingAction(reporting.action, end.outcome, { target: doneTarget, reason: end.reason });
+	};
+	const markSucceeded = (doneTarget: InstallTarget) => {
+		setSucceededTargets((current) => new Set(current).add(doneTarget));
+		onSucceededRef.current();
+	};
 
 	const stopPolling = () => {
 		if (pollRef.current !== null) {
@@ -82,16 +119,19 @@ function useInstallRunner(onSucceeded: () => void) {
 
 	const poll = (polledTarget: InstallTarget) => {
 		stopPolling();
+		const generation = generationRef.current;
 		pollRef.current = window.setInterval(() => {
 			void (async () => {
 				const { data, error } = await apiClient.GET("/api/v1/system/install/{target}", {
 					params: { path: { target: polledTarget } },
 				});
+				if (generation !== generationRef.current) return;
 				if (error || !data) return; // transient — try again next tick
-				setJob(data);
+				setJob(data as InstallJobWithNotice);
 				if (isActiveInstallJob(data)) return;
 				stopPolling();
-				if (data.status === "succeeded") onSucceededRef.current();
+				settleTelemetry(polledTarget, data.status);
+				if (data.status === "succeeded") markSucceeded(polledTarget);
 			})();
 		}, POLL_INTERVAL_MS);
 	};
@@ -107,7 +147,7 @@ function useInstallRunner(onSucceeded: () => void) {
 				params: { path: { target: nextTarget } },
 			});
 			if (error || !data) return;
-			setPreviews((current) => ({ ...current, [nextTarget]: data }));
+			setPreviews((current) => ({ ...current, [nextTarget]: data as InstallJobWithNotice }));
 		} catch {
 			// The requirements gate remains usable if plan inspection fails. The
 			// POST action will still surface its own concrete error when selected.
@@ -116,23 +156,40 @@ function useInstallRunner(onSucceeded: () => void) {
 		}
 	}, []);
 
+	const startingRef = useRef(false);
 	const start = async (nextTarget: InstallTarget) => {
+		// One install request at a time: a second click before the daemon answers does nothing.
+		if (startingRef.current) return;
+		startingRef.current = true;
+		generationRef.current += 1;
 		stopPolling();
 		setTarget(nextTarget);
 		setJob(undefined);
 		setStartError(undefined);
 		setIsStarting(true);
+		const reporting = telemetryRef.current?.();
+		reportingRef.current = reporting;
+		if (reporting) startOnboardingAction(reporting.action, { target: nextTarget, step: reporting.step });
 		try {
 			const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", {
 				params: { path: { target: nextTarget } },
 			});
-			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start the install."));
-			setJob(data);
+			if (error || !data) {
+				settleTelemetry(nextTarget, undefined, { errorCode: apiErrorCode(error) });
+				throw apiErrorException(error, "Could not start the install.");
+			}
+			setJob(data as InstallJobWithNotice);
 			if (isActiveInstallJob(data)) poll(nextTarget);
-			else if (data.status === "succeeded") onSucceededRef.current();
+			else {
+				settleTelemetry(nextTarget, data.status);
+				if (data.status === "succeeded") markSucceeded(nextTarget);
+			}
 		} catch (err) {
+			// A request that never answered (the refusal above already reported).
+			if (reporting) finishOnboardingAction(reporting.action, "failed", { target: nextTarget, reason: "request_failed" });
 			setStartError(err instanceof Error ? err.message : "Could not start the install.");
 		} finally {
+			startingRef.current = false;
 			setIsStarting(false);
 		}
 	};
@@ -140,44 +197,47 @@ function useInstallRunner(onSucceeded: () => void) {
 	const running = isStarting || isActiveInstallJob(job);
 	const jobFor = (nextTarget: InstallTarget) => (target === nextTarget ? job : previews[nextTarget]);
 	const inspectionFinished = (nextTarget: InstallTarget) => inspectedTargets[nextTarget] === true;
-	return { target, startError, running, start, inspect, jobFor, inspectionFinished };
+	const succeeded = (nextTarget: InstallTarget) => succeededTargets.has(nextTarget);
+	return { target, startError, running, isStarting, start, inspect, jobFor, inspectionFinished, succeeded };
 }
+
+const DEPENDENCY_INSTALL_TELEMETRY: InstallTelemetry = { action: "dependency_install", step: "dependencies" };
 
 export function InstallDependencyDialog({
 	requirements,
 	onRefetchRequirements,
+	reportToOnboarding = false,
 }: {
 	requirements: SystemRequirement[];
 	onRefetchRequirements: () => Promise<unknown> | void;
+	/** Onboarding is still pending, so installs count toward its funnel. */
+	reportToOnboarding?: boolean;
 }) {
 	const { t } = useTranslation();
-	const [selectedAgent, setSelectedAgent] = useState<AgentInstallTarget | null>(null);
-	const [ghDismissed, setGhDismissed] = useState(false);
 	const [isCheckingAgain, setIsCheckingAgain] = useState(false);
 	const [checkAgainError, setCheckAgainError] = useState<string | undefined>();
-	const install = useInstallRunner(() => void onRefetchRequirements());
+	const install = useInstallRunner(
+		() => void onRefetchRequirements(),
+		() => (reportToOnboarding ? DEPENDENCY_INSTALL_TELEMETRY : undefined),
+	);
 
 	const byId = new Map(requirements.map((requirement) => [requirement.id, requirement]));
 	const git = byId.get("git");
 	const tmux = byId.get("tmux");
 	const harness = byId.get("harness");
-	const gh = byId.get("gh");
 	const gitBlocking = Boolean(git && git.required && !git.satisfied);
 	const tmuxBlocking = Boolean(tmux && tmux.required && !tmux.satisfied);
 	const harnessBlocking = Boolean(harness && harness.required && !harness.satisfied);
-	const ghAdvisory = Boolean(gh && !gh.satisfied);
+	const { inspect } = install;
 
 	useEffect(() => {
-		if (tmuxBlocking) void install.inspect("tmux");
-	}, [install.inspect, tmuxBlocking]);
+		if (tmuxBlocking) void inspect("tmux");
+	}, [inspect, tmuxBlocking]);
 
 	useEffect(() => {
-		if (ghAdvisory) void install.inspect("gh");
-	}, [ghAdvisory, install.inspect]);
-
-	useEffect(() => {
-		if (selectedAgent) void install.inspect(selectedAgent);
-	}, [install.inspect, selectedAgent]);
+		if (!harnessBlocking) return;
+		for (const option of AGENT_INSTALL_OPTIONS) void inspect(option.target);
+	}, [inspect, harnessBlocking]);
 
 	const checkAgain = async () => {
 		setIsCheckingAgain(true);
@@ -193,7 +253,23 @@ export function InstallDependencyDialog({
 		}
 	};
 
-	const title = harnessBlocking ? t("startup.blockedTitleAgent") : t("startup.blockedTitleDependency");
+	const title = harnessBlocking && !gitBlocking && !tmuxBlocking ? t("startup.blockedTitleAgent") : t("startup.blockedTitleDependency");
+	const installRow = (target: InstallTarget, label: string, purpose: string, notice?: string) => (
+		<InstallRow
+			key={target}
+			label={label}
+			purpose={purpose}
+			notice={notice}
+			job={install.jobFor(target)}
+			planChecked={install.inspectionFinished(target)}
+			succeeded={install.succeeded(target)}
+			starting={install.isStarting && install.target === target}
+			disabled={install.running && install.target !== target}
+			error={install.target === target ? install.startError : undefined}
+			onInstall={() => void install.start(target)}
+			t={t}
+		/>
+	);
 
 	return (
 		<Dialog open onOpenChange={() => {}}>
@@ -205,101 +281,48 @@ export function InstallDependencyDialog({
 			>
 				<div className={settingsDialogHeaderClass}>
 					<DialogTitle className="settings-dialog-title">{title}</DialogTitle>
-					<DialogDescription asChild>
-						<div className="text-control leading-4 text-settings-muted">{t("startup.blockedBody")}</div>
+					<DialogDescription className="text-control leading-4 text-settings-muted">
+						{t("startup.blockedBodyShort")}
 					</DialogDescription>
 				</div>
 
-				<div className={cn(settingsDialogBodyClass, "gap-5")}>
-					{gitBlocking && git ? (
-						<IssueSection label={requirementDisplayLabel(git, t)} detail={requirementDetailText(git, t)}>
-							<p className="text-caption leading-snug text-settings-muted">{t("startup.installGitInstructions")}</p>
-						</IssueSection>
-					) : null}
-
-					{tmuxBlocking && tmux ? (
-						<IssueSection label={requirementDisplayLabel(tmux, t)} detail={requirementDetailText(tmux, t)}>
-							<InstallAction
-								primaryLabel={t("startup.installTmux")}
-								disabled={install.running && install.target !== "tmux"}
-								job={install.jobFor("tmux")}
-								planChecked={install.inspectionFinished("tmux")}
-								error={install.target === "tmux" ? install.startError : undefined}
-								onInstall={() => void install.start("tmux")}
-								t={t}
-							/>
-						</IssueSection>
-					) : null}
-
-					{harnessBlocking && harness ? (
-						<IssueSection label={requirementDisplayLabel(harness, t)} detail={requirementDetailText(harness, t)}>
-							<RadioGroup.Root
-								aria-label={t("startup.chooseAgentAriaLabel")}
-								className="mt-2 flex flex-col gap-1.5"
-								value={selectedAgent ?? ""}
-								onValueChange={(value) => setSelectedAgent(value as AgentInstallTarget)}
-							>
-								{AGENT_INSTALL_OPTIONS.map((option) => (
-									<RadioGroup.Item
-										key={option.target}
-										value={option.target}
-										disabled={install.running}
-										className="group flex items-start gap-2.5 rounded-md border border-border px-3 py-2 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent-weak"
+				<div className={cn(settingsDialogBodyClass, "gap-4")}>
+					{gitBlocking || tmuxBlocking ? (
+						<div className="settings-grouped-rows">
+							{gitBlocking ? (
+								<RequirementRow label="git" purpose={t("startup.gitPurpose")}>
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										onClick={() => void aoBridge.app.openExternal(GIT_DOWNLOAD_URL)}
 									>
-										<span
-											aria-hidden="true"
-											className="mt-0.5 grid size-icon-sm shrink-0 place-items-center rounded-full border border-border-strong group-data-[state=checked]:border-accent"
-										>
-											<RadioGroup.Indicator className="size-1.5 rounded-full bg-accent" />
-										</span>
-										<span className="min-w-0">
-											<span className="block text-control font-medium text-settings-title">{option.label}</span>
-											<span className="block text-caption text-settings-muted">
-												{t(AGENT_INSTALL_DESCRIPTION_KEYS[option.target])}
-											</span>
-										</span>
-									</RadioGroup.Item>
-								))}
-							</RadioGroup.Root>
-							<div className="mt-2">
-								<InstallAction
-									primaryLabel={t("startup.installSelected")}
-									disabled={
-										!selectedAgent || (install.running && install.target !== selectedAgent)
-									}
-									job={selectedAgent ? install.jobFor(selectedAgent) : undefined}
-									planChecked={selectedAgent ? install.inspectionFinished(selectedAgent) : true}
-									error={selectedAgent && install.target === selectedAgent ? install.startError : undefined}
-									onInstall={() => selectedAgent && void install.start(selectedAgent)}
-									t={t}
-								/>
-							</div>
-						</IssueSection>
+										{t("startup.getGit")}
+										<ArrowUpRight className="size-icon-sm text-settings-muted" aria-hidden="true" />
+									</Button>
+								</RequirementRow>
+							) : null}
+							{tmuxBlocking ? installRow("tmux", "tmux", t("startup.tmuxPurpose")) : null}
+						</div>
 					) : null}
 
-					{ghAdvisory && gh && !ghDismissed ? (
-						<div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs leading-body-md">
-							<p className="font-medium text-settings-title">{t("startup.recommendedInstallGh")}</p>
-							<p className="mt-0.5 text-settings-muted">{requirementDetailText(gh, t)}</p>
-							<div className="mt-2">
-								<InstallAction
-									primaryLabel={t("startup.installGh")}
-									disabled={install.running && install.target !== "gh"}
-									job={install.jobFor("gh")}
-									planChecked={install.inspectionFinished("gh")}
-									error={install.target === "gh" ? install.startError : undefined}
-									onInstall={() => void install.start("gh")}
-									t={t}
-								/>
+					{harnessBlocking ? (
+						<section className="flex flex-col gap-1.5" aria-label={t("startup.chooseAgentAriaLabel")}>
+							<div className="px-(--settings-row-inset)">
+								<p className="text-control font-medium text-settings-title">{t("startup.codingAgentLabel")}</p>
+								<p className="text-caption text-settings-muted">{t("startup.agentPurpose")}</p>
 							</div>
-							<button
-								type="button"
-								className="mt-2 text-caption text-settings-muted underline-offset-2 hover:underline"
-								onClick={() => setGhDismissed(true)}
-							>
-								{t("startup.dismissGhSession")}
-							</button>
-						</div>
+							<div className="settings-grouped-rows">
+								{AGENT_INSTALL_OPTIONS.map((option) =>
+									installRow(
+										option.target,
+										option.label,
+										t(AGENT_INSTALL_DESCRIPTION_KEYS[option.target]),
+										option.target === "opencode-v2" ? install.jobFor("opencode-v2")?.notice : undefined,
+									),
+								)}
+							</div>
+						</section>
 					) : null}
 				</div>
 
@@ -309,51 +332,142 @@ export function InstallDependencyDialog({
 							{checkAgainError}
 						</p>
 					) : null}
-					<button
+					<Button
 						type="button"
-						className="settings-footer-button"
+						variant="secondary"
 						onClick={() => void window.ao?.menu?.action("app.quit")}
 					>
 						{t("startup.quit")}
-					</button>
-					<button
+					</Button>
+					<Button
 						type="button"
-						className="settings-footer-button settings-footer-button-primary"
+						variant="primary"
 						disabled={isCheckingAgain || install.running}
 						onClick={() => void checkAgain()}
 					>
 						{isCheckingAgain ? t("startup.checkingAgain") : t("startup.checkAgain")}
-					</button>
+					</Button>
 				</div>
 			</DialogContent>
 		</Dialog>
 	);
 }
 
-function IssueSection({
+/** One item in the shared list: name and why it is needed on the left, a
+ * single compact action on the right, and any progress or failure below. */
+function RequirementRow({
 	label,
-	detail,
+	purpose,
 	children,
+	detail,
 }: {
 	label: string;
-	detail?: string;
+	purpose: string;
 	children?: React.ReactNode;
+	detail?: React.ReactNode;
 }) {
 	return (
-		<div className="flex flex-col gap-1">
-			<div className="flex items-start gap-2">
-				<XCircle className="mt-0.5 size-icon-sm shrink-0 text-destructive" aria-hidden="true" />
+		<div>
+			<div className="settings-row-bar">
 				<div className="min-w-0">
 					<p className="text-control font-medium text-settings-title">{label}</p>
-					{detail ? <p className="text-caption text-settings-muted">{detail}</p> : null}
+					<p className="text-caption text-settings-muted">{purpose}</p>
 				</div>
+				<div className="flex shrink-0 items-center">{children}</div>
 			</div>
-			{children ? <div className="pl-[calc(var(--size-icon-sm)+0.625rem)]">{children}</div> : null}
+			{detail ? <div className="settings-content-row flex flex-col gap-1.5 pt-0">{detail}</div> : null}
 		</div>
 	);
 }
 
-function InstallAction({
+function InstallRow({
+	label,
+	purpose,
+	notice,
+	job,
+	planChecked,
+	succeeded,
+	starting,
+	disabled,
+	error,
+	onInstall,
+	t,
+}: {
+	label: string;
+	purpose: string;
+	notice?: string;
+	job: InstallJobWithNotice | undefined;
+	planChecked: boolean;
+	succeeded: boolean;
+	/** The install request is out; the daemon hasn't answered yet. */
+	starting: boolean;
+	disabled: boolean;
+	error: string | undefined;
+	onInstall: () => void;
+	t: TFunction;
+}) {
+	const running = starting || isActiveInstallJob(job);
+	const failed = job?.status === "failed";
+	const unsupported = job?.status === "unsupported";
+	// Download attempts and retry backoff first; otherwise what is running on this machine (brew, sudo, npm…), in full.
+	const runningDetail =
+		installerProgress(job?.progress, t) ??
+		(job?.command ? t("startup.installingCommand", { command: job.command }) : undefined);
+
+	let action: React.ReactNode;
+	if (succeeded) action = <span className="text-caption text-settings-muted">{t("settings.harness.installed")}</span>;
+	else if (running || !planChecked) {
+		action = (
+			<span className="flex items-center gap-1.5 text-caption text-settings-muted">
+				<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+				{running ? t("startup.installingEllipsis") : null}
+			</span>
+		);
+	} else if (!unsupported) {
+		action = (
+			<Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={onInstall}>
+				{failed ? t("startup.installTryAgain") : t("firstRun.install")}
+			</Button>
+		);
+	}
+
+	const detail = succeeded ? null : (
+		<>
+			{notice && !running ? <p className="text-caption text-warning" role="status">{notice}</p> : null}
+			{running && runningDetail ? (
+				<p className="break-all text-caption text-settings-muted" role="status">{runningDetail}</p>
+			) : null}
+			{running ? (
+				<div className="ao-install-progress" aria-hidden="true">
+					<div className="ao-install-progress__bar" />
+				</div>
+			) : null}
+			{unsupported ? (
+				<>
+					{job.error ? <p className="text-caption text-settings-muted">{job.error}</p> : null}
+					{job.command ? <ManualCommand command={job.command} t={t} /> : null}
+				</>
+			) : null}
+			{error ? <p className="text-caption text-error">{error}</p> : null}
+			{failed && job?.error ? <p className="text-caption text-error">{job.error}</p> : null}
+			{failed && job?.output ? (
+				<pre className="max-h-daemon-failure-details-max overflow-auto rounded-md bg-[var(--color-bg-settings-input)] px-2 py-1.5 font-mono text-caption leading-relaxed text-settings-muted">
+					{job.output}
+				</pre>
+			) : null}
+		</>
+	);
+	const hasDetail = !succeeded && Boolean((notice && !running) || running || unsupported || error || failed);
+
+	return (
+		<RequirementRow label={label} purpose={purpose} detail={hasDetail ? detail : undefined}>
+			{action}
+		</RequirementRow>
+	);
+}
+
+/** One install's action and its progress, for callers outside this dialog (FirstRunSteps' GitHub CLI install). */
+export function InstallAction({
 	primaryLabel,
 	disabled,
 	job,
@@ -381,8 +495,8 @@ function InstallAction({
 	if (running) {
 		return (
 			<div className="flex flex-col gap-1.5">
-				<p className="text-caption text-settings-muted">
-					{job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis")}
+				<p className="text-caption text-settings-muted" role="status">
+					{installerProgress(job?.progress, t) ?? (job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis"))}
 				</p>
 				<div className="ao-install-progress" aria-hidden="true">
 					<div className="ao-install-progress__bar" />
@@ -402,20 +516,21 @@ function InstallAction({
 
 	return (
 		<div className="flex flex-col gap-1.5">
-			<button
+			<Button
 				type="button"
-				className="settings-footer-button settings-footer-button-primary self-start"
+				variant="primary"
+				className="self-start"
 				disabled={disabled}
 				onClick={onInstall}
 			>
 				{failed ? t("startup.retryPrefix", { label: primaryLabel }) : primaryLabel}
-			</button>
+			</Button>
 			{error ? <p className="text-caption text-error">{error}</p> : null}
 			{failed ? (
 				<>
 					{job?.error ? <p className="text-caption text-error">{job.error}</p> : null}
 					{job?.output ? (
-						<pre className="max-h-daemon-failure-details-max overflow-auto rounded-md border border-[var(--color-border-settings-dialog)] bg-[var(--color-bg-settings-input)] px-2 py-1.5 font-mono text-caption leading-relaxed text-settings-muted">
+						<pre className="max-h-daemon-failure-details-max overflow-auto rounded-md border border-(--color-border-settings-input) bg-[var(--color-bg-settings-input)] px-2 py-1.5 font-mono text-caption leading-relaxed text-settings-muted">
 							{job.output}
 						</pre>
 					) : null}
@@ -425,7 +540,7 @@ function InstallAction({
 	);
 }
 
-function ManualCommand({ command, t }: { command: string; t: TFunction }) {
+export function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 	const [copied, setCopied] = useState(false);
 	const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -443,19 +558,20 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 	};
 
 	return (
-		<div className="flex items-center gap-2 rounded-md border border-[var(--color-border-settings-dialog)] bg-[var(--color-bg-settings-input)] px-2 py-1.5">
+		<div className="flex items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-[var(--color-bg-settings-input)] px-2 py-1.5">
 			<code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-caption text-settings-title">
 				{command}
 			</code>
-			<button
+			<Button
 				type="button"
-				className="settings-footer-button shrink-0"
+				variant="secondary"
+				className="shrink-0"
 				aria-label={copied ? t("startup.commandCopied") : t("startup.copyCommand")}
 				onClick={copy}
 			>
 				{copied ? <Check className="size-icon-sm" aria-hidden="true" /> : <Copy className="size-icon-sm" aria-hidden="true" />}
 				{copied ? t("startup.commandCopied") : t("startup.copyCommand")}
-			</button>
+			</Button>
 		</div>
 	);
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/opencode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -61,6 +62,7 @@ func Constructors() []Adapter {
 		kimi.New(),
 		muse.New(),
 		opencode.New(),
+		opencodev2.New(),
 		pi.New(),
 	}
 }
@@ -99,4 +101,12 @@ func NewResolver() (*Resolver, error) {
 func (r *Resolver) Reviewer(harness domain.ReviewerHarness) (ports.Reviewer, bool) {
 	rv, ok := r.reviewers[harness]
 	return rv, ok
+}
+
+// InvalidateBinaryResolution makes harness's reviewer resolve its executable
+// again, after an install changed which one should run.
+func (r *Resolver) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if invalidator, ok := r.reviewers[domain.ReviewerHarness(harness)].(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
 }

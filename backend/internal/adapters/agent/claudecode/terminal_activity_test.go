@@ -10,8 +10,8 @@ import (
 // claudeAbortedTurnScreen reproduces the live pane of a Claude Code session
 // whose turn died on an expired OAuth login: the turn's Stop hook never fired,
 // the composer holds an unsent user draft, and the CLI sits idle at the
-// prompt. Captured plain (tmux capture-pane without -e), which is exactly what
-// the activity observer's GetOutput provides.
+// prompt. The base fixture is plain; styled cases preserve the same visible
+// text while adding terminal formatting around the login prompt.
 func claudeAbortedTurnScreen(draft string) string {
 	rule := strings.Repeat("─", 48)
 	return "⏺ Stopped watching Artifact: \"scm-observer.md\" (connection lost)\n" +
@@ -28,7 +28,7 @@ func claudeAbortedTurnScreen(draft string) string {
 		"  ⧉  scm-observer"
 }
 
-func TestDetectTerminalActivityAuthoritativeIdleAfterAbortedTurn(t *testing.T) {
+func TestDetectTerminalActivityWaitsForLoginAfterAbortedTurn(t *testing.T) {
 	plugin := &Plugin{}
 	tests := []struct {
 		name   string
@@ -43,12 +43,17 @@ func TestDetectTerminalActivityAuthoritativeIdleAfterAbortedTurn(t *testing.T) {
 			name:   "login expired with empty composer",
 			output: claudeAbortedTurnScreen("❯\n"),
 		},
+		{
+			name: "styled login prompt with staged draft",
+			output: strings.Replace(claudeAbortedTurnScreen("❯ continue\n"),
+				"Login expired · Please run /login", "Login \x1b[31mexpired\x1b[0m · Please run \x1b[1m/login\x1b[0m", 1),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state, ok := plugin.DetectTerminalActivity(tt.output)
-			if !ok || state != domain.ActivityIdle {
-				t.Fatalf("DetectTerminalActivity = (%q, %v), want (idle, true)", state, ok)
+			if !ok || state != domain.ActivityWaitingInput {
+				t.Fatalf("DetectTerminalActivity = (%q, %v), want (waiting_input, true)", state, ok)
 			}
 		})
 	}

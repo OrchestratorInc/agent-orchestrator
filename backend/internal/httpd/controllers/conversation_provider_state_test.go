@@ -21,6 +21,24 @@ import (
 // client actually receives, because the daemon's snapshot is where this work ends:
 // a field that is correct in the store and absent from the body is not shipped.
 
+func TestSnapshotExposesTypedFailureBesideTechnicalError(t *testing.T) {
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		SessionID: domain.SessionID("p1-1"), Mode: domain.SessionModeChat,
+		Turns: []domain.ConversationTurn{{
+			ID: "turn-1", State: domain.TurnStateFailed, RequestedAt: time.Now().UTC(),
+			ErrorMessage: "ACP internal detail", FailureCode: domain.ConversationFailureProviderKeyMissing,
+		}},
+	})
+	turns, ok := body["turns"].([]any)
+	if !ok || len(turns) != 1 {
+		t.Fatalf("turns = %#v", body["turns"])
+	}
+	turn := turns[0].(map[string]any)
+	if turn["failureCode"] != "provider_key_missing" || turn["errorMessage"] != "ACP internal detail" {
+		t.Fatalf("turn = %#v", turn)
+	}
+}
+
 func TestSnapshotExposesTurnPlanAsStructuredSteps(t *testing.T) {
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
 		SessionID: domain.SessionID("p1-1"),
@@ -154,6 +172,26 @@ func TestSnapshotExposesAccountAndReauthDemand(t *testing.T) {
 	if account["reauthReason"] != "unauthorized" {
 		t.Errorf("reauthReason = %#v", account["reauthReason"])
 	}
+	if account["authenticationState"] != "required" {
+		t.Fatalf("legacy demand state = %#v", account)
+	}
+}
+
+func TestSnapshotSeparatesVerifiedAuthenticationFromFailureHistory(t *testing.T) {
+	failed := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	verified := failed.Add(time.Minute)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{Conversation: domain.ConversationRecord{
+		Account: &domain.ConversationAccount{AuthenticationState: "authenticated", AuthVerifiedAt: &verified,
+			LastAuthFailureAt: &failed, LastAuthFailureReason: "expired", AuthFailureID: "failure-1"},
+	}})
+	account := body["account"].(map[string]any)
+	if account["authenticationState"] != "authenticated" || account["authVerifiedAt"] != "2026-08-02T12:01:00Z" ||
+		account["lastAuthFailureAt"] != "2026-08-02T12:00:00Z" || account["lastAuthFailureReason"] != "expired" || account["authFailureId"] != "failure-1" {
+		t.Fatalf("recovered auth facts = %#v", account)
+	}
+	if _, ok := account["reauthRequiredAt"]; ok {
+		t.Fatalf("recovered account still demands credentials: %#v", account)
+	}
 }
 
 // Thread state is the provider's view, and it is not the session's status. Both can
@@ -162,6 +200,7 @@ func TestSnapshotExposesThreadState(t *testing.T) {
 	archived := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
 		SessionID: domain.SessionID("p1-1"),
+		Harness:   domain.HarnessCodex,
 		Mode:      domain.SessionModeChat,
 		Conversation: domain.ConversationRecord{
 			ThreadState: &domain.ConversationThreadState{
@@ -188,6 +227,50 @@ func TestSnapshotExposesThreadState(t *testing.T) {
 	}
 	if _, present := state["closedAt"]; present {
 		t.Error("a thread that was never closed reported a closedAt")
+	}
+}
+
+// A conversation outlives its provider thread. After an agent switch, what the
+// previous agent said about its own thread must not be served as the new
+// agent's state: a Codex system_error would otherwise sit over a working
+// claude-code chat as "the agent's thread hit an internal error".
+func TestSnapshotNeverServesAnotherThreadsState(t *testing.T) {
+	broken := func(harness domain.AgentHarness, thread string) *domain.ConversationThreadState {
+		return &domain.ConversationThreadState{
+			Status: domain.ThreadStatusSystemError, Harness: harness, ProviderConversationID: thread,
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		harness domain.AgentHarness
+		active  string
+		state   *domain.ConversationThreadState
+		served  bool
+	}{
+		{"unstamped state after switching away from Codex", domain.HarnessClaudeCode, "claude-1", broken("", ""), false},
+		{"Codex state under claude-code", domain.HarnessClaudeCode, "claude-1", broken(domain.HarnessCodex, "thread-1"), false},
+		{"an earlier Codex thread", domain.HarnessCodex, "thread-2", broken(domain.HarnessCodex, "thread-1"), false},
+		{"the current Codex thread", domain.HarnessCodex, "thread-1", broken(domain.HarnessCodex, "thread-1"), true},
+		{"unstamped state on Codex", domain.HarnessCodex, "thread-1", broken("", ""), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := conversationSnapshotBody(t, chatsvc.Snapshot{
+				SessionID:    domain.SessionID("p1-1"),
+				Harness:      tc.harness,
+				Mode:         domain.SessionModeChat,
+				ActiveBranch: domain.ConversationBranch{ProviderConversationID: tc.active},
+				Conversation: domain.ConversationRecord{ThreadState: tc.state},
+			})
+			state, served := body["threadState"].(map[string]any)
+			if served != tc.served {
+				t.Fatalf("threadState = %#v, want served=%v", body["threadState"], tc.served)
+			}
+			if served {
+				if _, leaked := state["harness"]; leaked {
+					t.Errorf("thread scope leaked onto the wire: %#v", state)
+				}
+			}
+		})
 	}
 }
 

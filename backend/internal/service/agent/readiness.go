@@ -28,7 +28,7 @@ type ProbeResult struct {
 type Info struct {
 	ID         string                `json:"id"`
 	Label      string                `json:"label"`
-	AuthStatus ports.AgentAuthStatus `json:"authStatus,omitempty" enum:"authorized,unauthorized,unknown" description:"Advisory local auth probe result. authorized means a recent local probe passed; spawn remains the authoritative validation point."`
+	AuthStatus ports.AgentAuthStatus `json:"authStatus,omitempty" enum:"authorized,unauthorized,unknown,configured" description:"Auth probe result. authorized means a provider round-trip accepted the credential; configured means a credential exists locally but was never validated, and must not be presented as ready; spawn remains the authoritative validation point."`
 	UsageCount int                   `json:"usageCount,omitempty" description:"Number of retained sessions currently attributed to this agent."`
 	LastUsedAt *time.Time            `json:"lastUsedAt,omitempty" format:"date-time" description:"Creation time of the newest retained session currently attributed to this agent."`
 }
@@ -70,6 +70,18 @@ func (s *Service) EnsureReadiness(ctx context.Context, agentIDs []string, purpos
 	return s.withReadinessUsage(ctx, items)
 }
 
+// EnsureInstallationReadiness refreshes installation observations older than
+// the display policy, without authentication checks, and returns every
+// snapshot. Periodic work uses it so a harness installed outside AO since the
+// last observation is seen without anyone opening a page.
+func (s *Service) EnsureInstallationReadiness(ctx context.Context) (Readiness, error) {
+	items, err := s.readiness.EnsureInstallation(ctx, nil, domain.AgentReadinessPurposeDisplay)
+	if err != nil {
+		return Readiness{}, err
+	}
+	return s.withReadinessUsage(ctx, items)
+}
+
 // EnsureAgentReadiness is the narrow service boundary used by launch paths.
 func (s *Service) EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	result, err := s.EnsureReadiness(ctx, []string{agentID}, purpose)
@@ -92,6 +104,11 @@ func (s *Service) InvalidateAgentInstallation(agentID string) {
 
 // InvalidateAgentAuthentication marks an agent's authentication observation stale.
 func (s *Service) InvalidateAgentAuthentication(agentID string) {
+	if item, ok := s.agent(agentID); ok {
+		if cache, ok := item.Agent.(ports.AgentAuthCacheInvalidator); ok {
+			cache.InvalidateAuthCache()
+		}
+	}
 	s.readiness.Invalidate(agentID, readinessInvalidateAuthentication)
 	s.InvalidateModelCatalogs(agentID)
 	if agentID == string(domain.HarnessCodex) && s.codexAccounts != nil {
@@ -104,12 +121,28 @@ func (s *Service) InvalidateAgentAuthentication(agentID string) {
 // RecheckAgent schedules a non-blocking display readiness ensure.
 func (s *Service) RecheckAgent(agentID string) {
 	go func() {
-		_, _ = s.readiness.Ensure(s.readiness.ctx, []string{agentID}, domain.AgentReadinessPurposeDisplay)
+		if _, err := s.readiness.Ensure(s.readiness.ctx, []string{agentID}, domain.AgentReadinessPurposeDisplay); err != nil {
+			s.logger.Warn("agent readiness recheck failed", "agent", agentID, "err", err)
+		}
 	}()
 }
 
-// WarmReadiness starts the coordinator's bounded asynchronous warm-up.
-func (s *Service) WarmReadiness() { s.readiness.Warm() }
+// WarmReadiness starts the coordinator's bounded asynchronous warm-up and
+// signals after its installation and authentication passes finish. Model
+// catalog updates wait for the first pass; the saved catalog is served before it.
+func (s *Service) WarmReadiness() <-chan struct{} {
+	done := s.readiness.Warm()
+	if s.readinessWarm == nil {
+		return done
+	}
+	out := make(chan struct{})
+	go func() {
+		<-done
+		s.readinessWarmOnce.Do(func() { close(s.readinessWarm) })
+		close(out)
+	}()
+	return out
+}
 
 func (s *Service) withReadinessUsage(ctx context.Context, snapshots []domain.AgentReadinessSnapshot) (Readiness, error) {
 	if s.sessions == nil {
@@ -170,20 +203,35 @@ func (s *Service) RefreshFresh(ctx context.Context) (Inventory, error) {
 	return s.Refresh(ctx)
 }
 
+// Presence says how a startup search for an installed agent CLI ended.
+type Presence uint8
+
+const (
+	// PresenceFound means a supported agent CLI is installed.
+	PresenceFound Presence = iota + 1
+	// PresenceMissing means every installation check finished and none found an
+	// agent CLI. Only this result proves that the machine has no agent.
+	PresenceMissing
+	// PresenceUnconfirmed means no agent was confirmed, but at least one check
+	// timed out, failed, or was still running when the wait ended, so the
+	// absence of an agent is not proven.
+	PresenceUnconfirmed
+)
+
 // FindInstalledBinary returns one installed agent CLI without running any
 // agent process or authentication probe. It is used by the desktop's startup
 // prerequisite gate.
-func (s *Service) FindInstalledBinary(ctx context.Context) (Info, bool) {
+func (s *Service) FindInstalledBinary(ctx context.Context) (Info, Presence) {
 	if ctx.Err() != nil {
-		return Info{}, false
+		return Info{}, PresenceUnconfirmed
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, startupBinaryProbeTimeout)
 	defer cancel()
-	snapshot, ok := s.readiness.FindInstalled(waitCtx, domain.AgentReadinessPurposeLaunch)
-	if !ok {
-		return Info{}, false
+	snapshot, search := s.readiness.FindInstalled(waitCtx, domain.AgentReadinessPurposeLaunch)
+	if search != PresenceFound {
+		return Info{}, search
 	}
-	return readinessInfo(snapshot), true
+	return readinessInfo(snapshot), PresenceFound
 }
 
 type sessionUsage struct {
@@ -200,6 +248,9 @@ func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error
 	}
 	if _, ok := s.agent(agentID); !ok {
 		return ProbeResult{Agent: Info{ID: agentID}, Supported: false, Installed: false}, nil
+	}
+	if agentID == string(domain.HarnessCodex) {
+		s.reconcileCodexDeviceCredentialForRecheck(ctx)
 	}
 	s.InvalidateAgentAuthentication(agentID)
 	readiness, err := s.EnsureReadiness(ctx, []string{agentID}, domain.AgentReadinessPurposeLaunch)
@@ -260,6 +311,8 @@ func readinessInfo(snapshot domain.AgentReadinessSnapshot) Info {
 	switch snapshot.Authentication.State {
 	case domain.AgentAuthenticationAuthorized, domain.AgentAuthenticationNotApplicable:
 		status = ports.AgentAuthStatusAuthorized
+	case domain.AgentAuthenticationConfigured:
+		status = ports.AgentAuthStatusConfigured
 	case domain.AgentAuthenticationUnauthorized:
 		status = ports.AgentAuthStatusUnauthorized
 	}

@@ -1,0 +1,491 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toKanbanColumn } from "@aoagents/product-ui";
+import {
+	STANDALONE_PROJECT_KIND,
+	STANDALONE_WORKSPACE_ID,
+	type WorkspaceSession,
+	type WorkspaceSummary,
+} from "../types/workspace";
+
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
+const {
+	navigateMock,
+	postMock,
+	deleteMock,
+	workspaceQueryMock,
+	usageQueryMock,
+	notificationShowMock,
+} = vi.hoisted(() => ({
+	navigateMock: vi.fn(),
+	postMock: vi.fn(),
+	deleteMock: vi.fn(),
+	workspaceQueryMock: vi.fn(),
+	usageQueryMock: vi.fn(),
+	notificationShowMock: vi.fn(),
+}));
+
+vi.mock("@tanstack/react-router", () => ({
+	useNavigate: () => navigateMock,
+}));
+
+vi.mock("../hooks/useWorkspaceQuery", () => ({
+	workspaceQueryKey: ["workspaces"],
+	workspaceQueryKeyForHost: () => ["workspaces"],
+	cloudSessionsQueryKey: ["cloud-sessions"],
+	useWorkspaceQuery: workspaceQueryMock,
+}));
+
+vi.mock("../hooks/useSessionUsageSummaries", () => ({
+	useSessionUsageSummaries: usageQueryMock,
+}));
+
+vi.mock("../lib/api-client", () => ({
+	apiClient: {
+		GET: vi.fn().mockResolvedValue({ data: { prs: [] } }),
+		POST: (...args: unknown[]) => postMock(...args),
+		DELETE: (...args: unknown[]) => deleteMock(...args),
+	},
+	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+}));
+
+vi.mock("../lib/platform", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/platform")>();
+	return {
+		...actual,
+	};
+});
+
+vi.mock("../lib/bridge", () => ({
+	aoBridge: {
+		clipboard: { writeText: vi.fn() },
+		notifications: {
+			show: (...args: unknown[]) => notificationShowMock(...args),
+		},
+	},
+}));
+
+import { appI18n } from "../i18n";
+import { aoBridge } from "../lib/bridge";
+import { StandaloneArchiveView } from "./StandaloneArchiveView";
+import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
+import { TooltipProvider } from "./ui/tooltip";
+
+function renderArchive() {
+	const queryClient = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>
+				<StandaloneArchiveView />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+	return queryClient;
+}
+
+beforeEach(() => {
+	navigateMock.mockReset();
+	postMock.mockReset().mockResolvedValue({ data: {} });
+	deleteMock.mockReset().mockResolvedValue({ data: { ok: true, sessionId: "standalone-dead" } });
+	workspaceQueryMock
+		.mockReset()
+		.mockReturnValue({ data: [], isError: false, isSuccess: true });
+	usageQueryMock.mockReset().mockReturnValue({ data: new Map() });
+	notificationShowMock.mockReset().mockResolvedValue(undefined);
+});
+
+describe("StandaloneArchiveView", () => {
+	it("shows archived standalone sessions as a list without kanban lanes", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					terminatedSession({ id: "project-dead", title: "project archived" }),
+				]),
+				standaloneWorkspaceWithSessions([
+					standaloneSession({
+						id: "standalone-live",
+						title: "active ad hoc",
+						status: "idle",
+					}),
+					terminatedSession({
+						id: "standalone-dead",
+						title: "archived ad hoc",
+						workspaceId: STANDALONE_WORKSPACE_ID,
+						workspaceName: "Scratchpad",
+						branch: undefined,
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderArchive();
+
+		expect(screen.getByTestId("standalone-archive-view")).toBeInTheDocument();
+		expect(screen.getByTestId("standalone-archive-title")).toHaveTextContent("1 Archived Session");
+		expect(screen.getByRole("button", { name: "New agent" }).closest(".workspace-topbar-actions")).not.toBeNull();
+		expect(screen.queryByText("1 archived")).not.toBeInTheDocument();
+		expect(screen.queryByText("Terminated")).not.toBeInTheDocument();
+		const list = screen.getByRole("list", { name: "Archived sessions" });
+		expect(list).toHaveClass("standalone-archive-grid");
+		expect(within(list).getByText("archived ad hoc")).toBeInTheDocument();
+		expect(screen.queryByText("active ad hoc")).not.toBeInTheDocument();
+		expect(screen.queryByText("project archived")).not.toBeInTheDocument();
+		expect(screen.queryByText("Building")).not.toBeInTheDocument();
+		expect(screen.queryByText("Validating")).not.toBeInTheDocument();
+	});
+
+	it("restores a standalone archived session to the projectless session route", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				standaloneWorkspaceWithSessions([
+					terminatedSession({
+						id: "standalone-dead",
+						title: "archived ad hoc",
+						workspaceId: STANDALONE_WORKSPACE_ID,
+						workspaceName: "Scratchpad",
+						branch: undefined,
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderArchive();
+		await userEvent.click(
+			screen.getByRole("button", { name: "Restore archived ad hoc" }),
+		);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/restore",
+				{
+					params: { path: { sessionId: "standalone-dead" } },
+				},
+			),
+		);
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
+			to: "/sessions/$sessionId",
+			params: { sessionId: "standalone-dead" },
+		}));
+	});
+});
+
+describe("StandaloneArchiveView with Cloud standalone agents", () => {
+	it("lists the person's archived Cloud agent and restores it on its project's route", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{
+				id: "agent-1",
+				name: "Fix the flake",
+				kind: "cloud",
+				cloudOrgId: "org-1",
+				standaloneAgent: true,
+				path: "",
+				sessions: [terminatedSession({
+					id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake",
+					branch: undefined, cloud: { orgId: "org-1" },
+				})],
+			}],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderArchive();
+		const list = screen.getByRole("list", { name: "Archived sessions" });
+		expect(within(list).getByText("Fix the flake")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Restore Fix the flake" }));
+
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "agent-1", sessionId: "cloud-agent" },
+		}));
+	});
+});
+
+describe("archived session card accessible labels", () => {
+	const branchSession = () =>
+		standaloneWorkspaceWithSessions([
+			terminatedSession({
+				id: "standalone-dead",
+				title: "archived ad hoc",
+				workspaceId: STANDALONE_WORKSPACE_ID,
+				workspaceName: "Scratchpad",
+				branch: "ao/bcd",
+			}),
+		]);
+
+	afterEach(async () => {
+		vi.useRealTimers();
+		await act(() => appI18n.changeLanguage("en"));
+	});
+
+	it("names the restore and branch copy controls in English with title and branch interpolated", () => {
+		workspaceQueryMock.mockReturnValue({ data: [branchSession()], isError: false, isSuccess: true });
+
+		renderArchive();
+
+		expect(screen.getByRole("button", { name: "Restore archived ad hoc" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Copy branch ao/bcd" })).toBeInTheDocument();
+	});
+
+	it("names the restore and branch copy controls in German while the headings are German", async () => {
+		await act(() => appI18n.changeLanguage("de"));
+		workspaceQueryMock.mockReturnValue({ data: [branchSession()], isError: false, isSuccess: true });
+
+		renderArchive();
+
+		expect(screen.getByRole("list", { name: "Archivierte Sitzungen" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "archived ad hoc wiederherstellen" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Branch ao/bcd kopieren" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Restore archived ad hoc" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Copy branch ao/bcd" })).not.toBeInTheDocument();
+	});
+
+	it("updates the card's accessible labels when the language changes without remounting", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [branchSession()], isError: false, isSuccess: true });
+
+		renderArchive();
+		const restore = screen.getByRole("button", { name: "Restore archived ad hoc" });
+
+		await act(() => appI18n.changeLanguage("de"));
+
+		expect(screen.getByRole("button", { name: "archived ad hoc wiederherstellen" })).toBe(restore);
+		expect(screen.getByRole("button", { name: "Branch ao/bcd kopieren" })).toBeInTheDocument();
+	});
+
+	it("announces the copied branch and reverts the label after the copied timeout", async () => {
+		vi.useFakeTimers();
+		workspaceQueryMock.mockReturnValue({ data: [branchSession()], isError: false, isSuccess: true });
+		renderArchive();
+
+		await act(async () => {
+			screen.getByRole("button", { name: "Copy branch ao/bcd" }).click();
+		});
+
+		expect(aoBridge.clipboard.writeText).toHaveBeenCalledWith("ao/bcd");
+		expect(screen.getByRole("button", { name: "Copied branch ao/bcd" })).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(1_499));
+		expect(screen.getByRole("button", { name: "Copied branch ao/bcd" })).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.getByRole("button", { name: "Copy branch ao/bcd" })).toBeInTheDocument();
+	});
+
+	it("clears a pending copied timeout when the card unmounts", async () => {
+		vi.useFakeTimers();
+		workspaceQueryMock.mockReturnValue({ data: [branchSession()], isError: false, isSuccess: true });
+		const { unmount } = render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<TooltipProvider>
+					<StandaloneArchiveView />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+
+		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+		const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+		await act(async () => {
+			screen.getByRole("button", { name: "Copy branch ao/bcd" }).click();
+		});
+		const copiedCall = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1_500);
+		const copiedTimer = setTimeoutSpy.mock.results[copiedCall]?.value;
+		expect(copiedTimer).toBeDefined();
+		unmount();
+
+		expect(clearTimeoutSpy).toHaveBeenCalledWith(copiedTimer);
+	});
+});
+
+describe("archived session delete", () => {
+	const archived = (overrides: Partial<WorkspaceSession> = {}) => standaloneWorkspaceWithSessions([
+		terminatedSession({
+			id: "standalone-dead",
+			title: "archived ad hoc",
+			workspaceId: STANDALONE_WORKSPACE_ID,
+			workspaceName: "Scratchpad",
+			...overrides,
+		}),
+	]);
+
+	// An empty list may be stale or a failed read, so files still on disk are kept.
+	it("deletes a released session permanently once confirmed, keeping files the list did not show", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [archived({ workspaceCleanup: "removed" })], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		expect(dialog).toHaveTextContent("Its conversation and attachments are deleted for good.");
+		expect(dialog).not.toHaveTextContent("worktree");
+		expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+		expect(deleteMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true, keepArtifacts: true } },
+		}));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	const withArtifacts = () => archived({
+		workspaceCleanup: "removed",
+		outputType: "artifact",
+		artifactFiles: [
+			{ kind: "html", name: "report.html", path: "report.html", size: 1, updatedAt: "2026-11-16T00:00:00Z", registered: true },
+			{ kind: "markdown", name: "notes.md", path: "notes.md", size: 1, updatedAt: "2026-11-16T00:00:00Z", registered: true },
+		],
+	});
+
+	it("keeps a deleted session's artifacts unless the person also deletes them", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [withArtifacts()], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		const box = within(dialog).getByRole("checkbox", { name: "Also delete its 2 artifacts" });
+		expect(box).not.toBeChecked();
+		expect(dialog).toHaveTextContent("Otherwise they stay on the Artifacts page, view only.");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true, keepArtifacts: true } },
+		}));
+	});
+
+	it("deletes the artifacts with the session when the box is checked", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [withArtifacts()], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		await userEvent.click(within(dialog).getByRole("checkbox", { name: "Also delete its 2 artifacts" }));
+		expect(dialog).toHaveTextContent("They are deleted for good.");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true } },
+		}));
+	});
+
+	it("warns that a worktree still on disk is cleaned up first, and keeps the dialog open when the delete is refused", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [archived()], isError: false, isSuccess: true });
+		deleteMock.mockResolvedValue({ error: { code: "WORKSPACE_CLEANUP_REFUSED" } });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		expect(dialog).toHaveTextContent("Its worktree is cleaned up first; uncommitted changes stop the delete.");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Unable to delete the session");
+		expect(screen.getByRole("dialog")).toBeInTheDocument();
+	});
+
+	it("offers no delete for a cloud session, whose record this daemon does not own", () => {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<ArchivedSessionCardAdapter
+						isRestoreDisabled={false}
+						isRestoring={false}
+						restoreAction={vi.fn()}
+						session={terminatedSession({ title: "cloud worker", cloud: { orgId: "org-1" } })}
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("button", { name: "Restore cloud worker" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Delete cloud worker permanently" })).not.toBeInTheDocument();
+	});
+
+	it("offers no restore for a cloud session refused for its data retention, and says why", () => {
+		const session = terminatedSession({ title: "cloud worker", cloud: { orgId: "org-1" } });
+		useContentExpiredSessionsStore.getState().mark(session.id);
+		try {
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<TooltipProvider>
+						<ArchivedSessionCardAdapter
+							isRestoreDisabled={false}
+							isRestoring={false}
+							restoreAction={vi.fn()}
+							session={session}
+						/>
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+			expect(screen.queryByRole("button", { name: "Restore cloud worker" })).not.toBeInTheDocument();
+			expect(screen.getByRole("alert")).toHaveTextContent(
+				"This session is past its data retention period, so its content is being removed. It can't be restored.",
+			);
+		} finally {
+			useContentExpiredSessionsStore.setState({ ids: {} });
+		}
+	});
+});
+
+function workspaceWithSessions(sessions: WorkspaceSession[]): WorkspaceSummary {
+	return {
+		id: "p1",
+		name: "radic",
+		kind: "single_repo",
+		path: "/repo",
+		sessions,
+	};
+}
+
+function standaloneWorkspaceWithSessions(
+	sessions: WorkspaceSession[],
+): WorkspaceSummary {
+	return {
+		id: STANDALONE_WORKSPACE_ID,
+		name: "Scratchpad",
+		kind: STANDALONE_PROJECT_KIND,
+		path: "Not attached to a project",
+		sessions,
+	};
+}
+
+function standaloneSession(
+	overrides: Pick<WorkspaceSession, "id" | "title" | "status"> &
+		Partial<WorkspaceSession>,
+): WorkspaceSession {
+	return {
+		workspaceId: STANDALONE_WORKSPACE_ID,
+		workspaceName: "Scratchpad",
+		provider: "claude-code",
+		branch: undefined,
+		kanbanColumn: toKanbanColumn(undefined, overrides.status),
+		updatedAt: "2026-01-01T00:00:00Z",
+		prs: [],
+		...overrides,
+	};
+}
+
+function terminatedSession(
+	overrides: Partial<WorkspaceSession> = {},
+): WorkspaceSession {
+	return {
+		id: "s-dead",
+		workspaceId: "p1",
+		workspaceName: "radic",
+		title: "dead worker",
+		issueId: "github:INT-17",
+		provider: "claude-code",
+		kind: "worker",
+		branch: "ao/dead-worker",
+		status: "terminated",
+		kanbanColumn: "archive",
+		isTerminated: true,
+		updatedAt: "2026-01-01T00:00:00Z",
+		prs: [],
+		...overrides,
+	};
+}

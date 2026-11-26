@@ -1,229 +1,293 @@
 import { Host } from "@expo/ui";
-import { Asset } from "expo-asset";
-import { Button, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
+import { Button, Divider, HStack, Image, Label, Menu, RNHostView, Section, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
-	aspectRatio,
-	backgroundOverlay,
+	accessibilityLabel,
 	buttonStyle,
-	clipShape,
-	containerRelativeFrame,
+	contentShape,
 	font,
 	frame,
-	labelStyle,
-	opacity,
+	lineLimit,
+	menuOrder,
 	padding,
-	resizable,
+	shapes,
 	tint,
+	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
-import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text as RNText, View } from "react-native";
-import { chipColorFor } from "./harnessLogo";
-import { logoFor } from "./harnessLogoAssets";
-import { glassPanel } from "./glass";
-import { haptics } from "./haptics";
+import { useEffect, useState, type ReactNode } from "react";
+import { StyleSheet, View } from "react-native";
+import { logoKey } from "./harnessLogo";
+import { hasMenuIcon } from "./harnessMenuIcons";
+import { EffortGaugeButton } from "./effort-gauge";
+import { EffortSliderOverlay } from "./effort-slider";
+import { useEffortSliderOpen } from "./useEffortSlider";
+import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
+import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
+import { defaultModelChoice, listedModels } from "./spawnModel";
+import { approvalSymbol } from "./approvalSymbol";
+import type { IOSSymbol } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { iconSize, press, space, type } from "./tokens";
+import { space, touchTarget } from "./tokens";
 
+/**
+ * Spawn's selectors and composer. The selectors are SwiftUI menus whose options
+ * are the system's checkable items, so the current choice carries a real
+ * checkmark and selected state rather than a drawn one. The triggers keep their
+ * icon and name, size to their content and scale with Dynamic Type. The
+ * composer below them is the chat's, its controls row holding who runs the
+ * task and how freely as the chat's holds the turn settings.
+ */
 export function SpawnComposerControls({
+	hosts,
+	hostId,
+	onSelectHost,
 	projects,
 	projectId,
 	onSelectProject,
+	accounts = [],
+	accountId,
+	onSelectAccount,
 	agents,
 	harness,
 	onSelectHarness,
-	models,
+	agentModels,
 	modelSelection,
 	modelLabel,
-	onSelectModel,
-	onAttach,
+	usesDefaultModel,
+	onSelectAgentModel,
+	onBrowseModels,
+	approvalModes,
+	approvalMode,
+	onSelectApprovalMode,
+	effortChoices,
+	onSelectEffort,
+	onChoosePhoto,
+	onChooseFile,
+	onPasteImages,
+	voice,
+	prompt,
+	onChangePrompt,
+	placeholder,
+	attachments,
 	onSpawn,
 	busy,
 	disabled,
 }: SpawnComposerControlsProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const logoUris = useHarnessLogoUris(agents);
-	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
+	const effortSlider = useEffortSliderOpen(effortChoices, busy);
+	const [composerHeight, setComposerHeight] = useState(0);
+	// Typing is a tap outside the slider that the keyboard, not the app, hears.
+	useEffect(() => { effortSlider.close(); }, [prompt, effortSlider.close]);
+	const selectedProject = projects.find((project) => project.id === projectId);
+	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
+	const projectLabel = selectedProject?.label ?? "Choose project";
+	const accountLabel = accounts.find((account) => account.id === accountId)?.label ?? "Default account";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
+	// The model the task runs: the one picked or pinned, else the catalog's own
+	// default by name, and the agent's name only when the catalog names none.
+	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
+	// An agent's models as menu choices: the default first, named when the
+	// catalog says which it is; then the newest of each family, older versions
+	// one level down as in chat; then the whole catalog.
+	const modelChoice = (agentId: string) => (model: { id: string; label: string }) => (
+		<Choice
+			key={model.id}
+			label={model.label}
+			selected={agentId === harness && model.id === modelSelection}
+			onChoose={() => onSelectAgentModel(agentId, model.id)}
+		/>
+	);
+	const modelChoices = (agentId: string) => (
+		<>
+			{[{ id: "__auto__", label: defaultModelChoice(agentModels[agentId]?.defaultLabel) }, ...(agentModels[agentId]?.models ?? [])].map(modelChoice(agentId))}
+			{agentModels[agentId]?.older?.length ? (
+				<Menu label="Older models" systemImage="clock.arrow.circlepath">
+					{agentModels[agentId]!.older!.map(modelChoice(agentId))}
+				</Menu>
+			) : null}
+			{(agentModels[agentId]?.total ?? 0) > listedModels(agentModels[agentId]) ? (
+				<Button label={`All models (${agentModels[agentId]!.total.toLocaleString()})`} systemImage="magnifyingglass" onPress={() => onBrowseModels(agentId)} />
+			) : null}
+		</>
+	);
 
 	return (
 		<View style={styles.stack}>
-			<Host style={styles.controlsHost} colorScheme={scheme} seedColor={t.accent}>
-				<VStack alignment="leading" spacing={10} modifiers={[frame({ height: 104, maxWidth: 1000 })]}>
-				<Menu
-					label={
-						<HStack spacing={7}>
-							<Image systemName="folder" size={iconSize.sm} />
-							<Text modifiers={[font({ size: 14, weight: "medium" })]}>{projectLabel}</Text>
-							<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
+			{/* Where the task runs as plain rows above the composer, one line
+			    each, as a new conversation lists them: the machine, then the
+			    project. Every
+			    trigger's touch target carries its own air above and below the
+			    text, so the rows need no gap. Compact and left-anchored: a
+			    max-width frame would make a Menu fill the row, which centers its
+			    popup over the whole screen. The dock rises over the keyboard by a
+			    transform, so SwiftUI places this host under the keyboard and
+			    would lift its rows by the overlap, over whatever the page shows
+			    above them (a notice, a button); it keeps out of the safe area. */}
+			<Host matchContents={{ vertical: true }} ignoreSafeArea="all" colorScheme={scheme} style={styles.host}>
+				<VStack alignment="leading" spacing={space.none} modifiers={[padding({ horizontal: space.xs })]}>
+					<HStack>
+						<Menu
+							label={<SelectorLabel icon={<SelectorGlyph name={hostSystemImage(hosts.find((host) => host.id === hostId))} />} title={hostLabel} />}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Run on ${hostLabel}`), accessibilityIdentifier("spawn-host")]}
+						>
+							{/* Each machine with its glyph, as each project has its folder: a computer, or Cloud's cloud. */}
+							{hosts.map((host) => <Choice key={host.id} label={host.label} systemImage={hostSystemImage(host)} selected={host.id === hostId} onChoose={() => onSelectHost(host.id)} />)}
+						</Menu>
+						<Spacer minLength={0} />
+					</HStack>
+
+					<HStack>
+						<Menu
+							label={<SelectorLabel icon={<SelectorGlyph name={projectSystemImage(selectedProject)} />} title={projectLabel} />}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-project")]}
+						>
+							{projects.flatMap((project) => [
+								project.sectionBreakBefore ? <Divider key={`${project.id}-break`} /> : null,
+								<Choice key={project.id} label={project.label} systemImage={projectSystemImage(project)} selected={project.id === projectId} onChoose={() => onSelectProject(project.id)} />,
+							])}
+						</Menu>
+						<Spacer minLength={0} />
+					</HStack>
+
+					{accounts.length > 1 && onSelectAccount ? (
+						<HStack>
+							<Menu
+								label={<SelectorLabel icon={<SelectorGlyph name="person.crop.circle" />} title={accountLabel} />}
+								modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Account, ${accountLabel}`), accessibilityIdentifier("spawn-account")]}
+							>
+								{accounts.map((account) => <Choice key={account.id} label={account.label} selected={account.id === accountId} onChoose={() => onSelectAccount?.(account.id)} />)}
+							</Menu>
+							<Spacer minLength={0} />
 						</HStack>
-					}
-					modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 4 }), accessibilityIdentifier("spawn-project")]}
-				>
-					{projects.map((project) => (
-						<Button
-							key={project.id}
-							label={project.label}
-							systemImage={project.id === projectId ? "checkmark" : "folder"}
-							onPress={() => { haptics.select(); onSelectProject(project.id); }}
-						/>
-					))}
-				</Menu>
-
-				<HStack
-					spacing={6}
-					modifiers={[
-						padding({ horizontal: 8 }),
-						containerRelativeFrame({ axes: "horizontal" }),
-						frame({ height: 54 }),
-						glassPanel(),
-					]}
-				>
-					<Button
-						label="Attach file"
-						systemImage="paperclip"
-						onPress={() => { haptics.tap(); onAttach(); }}
-						modifiers={[
-							buttonStyle("plain"),
-							labelStyle("iconOnly"),
-							frame({ width: 38, height: 38 }),
-							tint(t.textPrimary),
-							accessibilityIdentifier("spawn-attachment"),
-						]}
-					/>
-
-					<Menu
-						label={
-							<HStack spacing={6}>
-								<HarnessImage uri={logoUris[harness]} harness={harness} />
-								<Text modifiers={[font({ size: 14, weight: "medium" })]}>{harnessLabel}</Text>
-								<Image systemName="chevron.down" size={iconSize.xs} />
-							</HStack>
-						}
-						modifiers={[buttonStyle("plain"), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
-					>
-						{agents.map((agent) => (
-							<Button key={agent.id} onPress={() => { haptics.select(); onSelectHarness(agent.id); }}>
-								<HStack spacing={9}>
-									<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />
-									<Text>{agent.label}</Text>
-									<Spacer />
-									{agent.id === harness ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
-								</HStack>
-							</Button>
-						))}
-					</Menu>
-
-					<Menu
-						label={
-							<HStack spacing={5} modifiers={[frame({ maxWidth: 1000, alignment: "leading" })]}>
-								<Text modifiers={[font({ size: 14, weight: "medium" })]}>{modelLabel}</Text>
-								<Spacer />
-								<Image systemName="chevron.down" size={iconSize.xs} />
-							</HStack>
-						}
-						modifiers={[
-							buttonStyle("plain"),
-							frame({ maxWidth: 1000, alignment: "leading" }),
-							tint(t.textSecondary),
-							opacity(models.length || modelSelection === "__auto__" ? 1 : 0.45),
-							accessibilityIdentifier("spawn-model"),
-						]}
-					>
-						<Button
-							label="Automatic"
-							systemImage={modelSelection === "__auto__" ? "checkmark" : "wand.and.stars"}
-							onPress={() => { haptics.select(); onSelectModel("__auto__"); }}
-						/>
-						{models.map((model) => (
-							<Button
-								key={model.id}
-								label={model.label}
-								systemImage={model.id === modelSelection ? "checkmark" : "cpu"}
-								onPress={() => { haptics.select(); onSelectModel(model.id); }}
-							/>
-						))}
-					</Menu>
-				</HStack>
-
+					) : null}
 				</VStack>
 			</Host>
 
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={busy ? "Starting task" : "Start task"}
-				accessibilityState={{ disabled }}
-				testID="spawn-submit"
-				disabled={disabled}
-				onPress={() => { haptics.tap(); onSpawn(); }}
-				style={({ pressed }) => [
-					styles.spawnButton,
-					{ backgroundColor: disabled ? t.bgElevatedHover : t.accent },
-					pressed && !disabled && styles.spawnButtonPressed,
-				]}
-			>
-				<RNText style={[styles.spawnLabel, { color: disabled ? t.textFaint : t.onAccent }]}>
-					{busy ? "Starting…" : "Start task"}
-				</RNText>
-			</Pressable>
+			{/* The effort slider floats just above the composer, over the rows. */}
+			{effortSlider.open ? <EffortSliderOverlay choices={effortChoices} onChoose={onSelectEffort} bottom={composerHeight} /> : null}
+
+			<View onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}>
+				<SpawnComposer
+					prompt={prompt}
+					attachments={attachments}
+					onChangePrompt={onChangePrompt}
+					placeholder={placeholder}
+					onChoosePhoto={onChoosePhoto}
+					onChooseFile={onChooseFile}
+					onPasteImages={onPasteImages}
+					voice={voice}
+					onSpawn={onSpawn}
+					busy={busy}
+					disabled={disabled}
+					settings={
+						// The chat's controls row (see model-controls): who runs the task
+						// and its effort at the start beside attach, how freely at the
+						// end beside the round button; the space between gives way first.
+						<Host ignoreSafeArea="all" colorScheme={scheme} style={styles.settingsHost}>
+							<HStack spacing={space.none} modifiers={[controlsRowTypeSize()]}>
+								{/* The harness's mark and the model it runs (the harness's
+								    name only when the catalog names no default). Each agent in
+								    its menu opens one level down onto its models, so this is
+								    also where the task's agent is switched. */}
+								<Menu
+									label={<ModelCapsuleLabel mark={<HarnessImage harness={harness} />} title={agentTitle} />}
+									modifiers={useTriggerModifiers({ label: agentTitle === harnessLabel ? harnessLabel : `${harnessLabel}, ${agentTitle}`, id: "spawn-harness", disabled: busy })}
+								>
+									{/* The task's own agent's models at the top, the current one
+									    checked, so changing just the model is one tap; the other
+									    agents below, each opening one level down. */}
+									<Section title={harnessLabel}>
+										{modelChoices(harness)}
+									</Section>
+									{agents.some((agent) => agent.id !== harness) ? (
+										<Section title="Other agents">
+											{agents.filter((agent) => agent.id !== harness).map((agent) => (
+												<Menu
+													key={agent.id}
+													label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}
+													modifiers={[accessibilityIdentifier(`spawn-model-${agent.id}`)]}
+												>
+													{modelChoices(agent.id)}
+												</Menu>
+											))}
+										</Section>
+									) : null}
+								</Menu>
+								{/* The effort as a speedometer lit to the chosen level; a tap
+								    opens the effort slider above the composer. */}
+								{effortChoices.length ? (
+									<RNHostView matchContents>
+										<EffortGaugeButton choices={effortChoices} open={effortSlider.open} onPress={effortSlider.toggle} disabled={busy} testID="spawn-effort" />
+									</RNHostView>
+								) : null}
+								<Spacer minLength={0} />
+								<ApprovalMenu
+									choices={approvalModes.map((mode) => ({ value: mode.id, label: mode.label, symbol: approvalSymbol(mode.id, harness), selected: mode.id === approvalMode }))}
+									onChoose={onSelectApprovalMode}
+									disabled={busy}
+									id="spawn-approval"
+								/>
+							</HStack>
+						</Host>
+					}
+				/>
+			</View>
 		</View>
 	);
 }
 
+/**
+ * A row's face: its glyph, the current choice and the disclosure arrow. A
+ * plain-style Menu answers taps only inside its label, so the label itself is
+ * a full touch target, gaps included.
+ */
+function SelectorLabel({ icon, title }: { icon: ReactNode; title: string }) {
+	return (
+		<HStack spacing={space.sm} modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
+			{icon}
+			<Text modifiers={[font({ textStyle: "body" }), lineLimit(1), truncationMode("tail")]}>{title}</Text>
+			<SelectorGlyph name="chevron.up.chevron.down" indicator />
+		</HStack>
+	);
+}
+
+/** A symbol that scales with the label beside it; the disclosure arrow sits a step smaller. */
+function SelectorGlyph({ name, indicator = false }: { name: IOSSymbol; indicator?: boolean }) {
+	return <Image systemName={name} modifiers={[font(indicator ? { textStyle: "caption2", weight: "semibold" } : { textStyle: "body" })]} />;
+}
+
+function hostSystemImage(host?: SpawnComposerOption): "cloud" | "laptopcomputer" {
+	return host?.icon === "cloud" ? "cloud" : "laptopcomputer";
+}
+
+function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder.badge.plus" | "folder" {
+	return project?.icon === "message-square-plus" ? "plus.bubble" : project?.icon === "folder-plus" ? "folder.badge.plus" : "folder";
+}
+
 const styles = StyleSheet.create({
-	stack: { width: "100%", height: 150, gap: space.hair },
-	controlsHost: { width: "100%", height: 104 },
-	spawnButton: {
-		height: 44,
-		borderRadius: 16,
-		borderCurve: "continuous",
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	spawnButtonPressed: { opacity: press.opacity, transform: [{ scale: press.scale }] },
-	spawnLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	stack: { gap: space.xs },
+	host: { width: "100%" },
+	// The chat's turn-settings host: the controls row's height, filling it.
+	settingsHost: { alignSelf: "stretch", height: touchTarget },
 });
 
-// The mark's box, and the chip it sits on when it needs one to stay visible.
-// Same arithmetic as `AgentLogo`: a 16% inset and a 28% corner radius, so a
-// chipped mark here and a chipped mark in a row are the same size and shape.
-const MARK_SIZE = 20;
-const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
-const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
-
-function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
-	if (!uri) return <Image systemName="terminal" size={iconSize.sm} />;
-	const mark = [resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE - CHIP_INSET * 2, height: MARK_SIZE - CHIP_INSET * 2 })];
-	const chip = chipColorFor(harness);
-	// opencode's mark is pure white and cursor's likewise, so on the light theme
-	// they disappeared entirely — this menu drew the raw asset, where the rest of
-	// the app asks `chipColorFor` first. Most marks are colourful and render bare.
-	return chip
-		? (
-			<Group modifiers={[frame({ width: MARK_SIZE, height: MARK_SIZE }), backgroundOverlay({ color: chip }), clipShape("roundedRectangle", CHIP_RADIUS)]}>
-				<Image uiImage={uri} modifiers={mark} />
-			</Group>
-		)
-		: <Image uiImage={uri} modifiers={[resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE, height: MARK_SIZE })]} />;
+/**
+ * A harness's mark in its own colours, from the app's asset catalog: a 20pt
+ * image set whose dark appearance is the brand's dark mark, where it ships one
+ * (see scripts/sync-harness-logos.mjs). Drawn by name, it keeps its size
+ * wherever SwiftUI puts it, an open submenu's header included, which ignores
+ * any frame. Only marks the installed binary's catalog has are drawn by name
+ * (see harnessMenuIcons.ts); a missing asset would draw an empty slot.
+ */
+export function HarnessImage({ harness }: { harness: string }) {
+	// One slot for every harness, so switching to one without a mark (drawn as
+	// the terminal symbol) never resizes the row it sits in.
+	const slot = frame({ width: HARNESS_MARK, height: HARNESS_MARK });
+	if (!hasMenuIcon(harness)) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" }), slot]} />;
+	return <Image assetName={`HarnessLogo-${logoKey(harness)}`} modifiers={[slot]} />;
 }
 
-function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
-	const ids = useMemo(() => agents.map((agent) => agent.id), [agents]);
-	const [uris, setUris] = useState<Record<string, string>>({});
-	useEffect(() => {
-		let cancelled = false;
-		void Promise.all(ids.map(async (id) => {
-			const source = logoFor(id);
-			if (!source) return [id, ""] as const;
-			const asset = Asset.fromModule(source);
-			await asset.downloadAsync();
-			return [id, asset.localUri ?? asset.uri] as const;
-		})).then((entries) => {
-			if (!cancelled) setUris(Object.fromEntries(entries.filter(([, uri]) => Boolean(uri))));
-		});
-		return () => { cancelled = true; };
-	}, [ids]);
-	return uris;
-}
+/** The marks' image sets are drawn at this many points. */
+const HARNESS_MARK = 20;

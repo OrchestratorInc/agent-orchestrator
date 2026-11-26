@@ -69,7 +69,6 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 				selectionMode: "catalog",
 			},
 			fetching: false,
-			loading: false,
 			onModelChange: vi.fn(),
 			onModeChange: vi.fn(),
 		},
@@ -375,5 +374,24 @@ describe("TaskComposerView", () => {
 		expect(screen.queryByText("Hidden while the submission error is visible")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Create as Terminal UI" }));
 		expect(onFallbackAction).toHaveBeenCalledOnce();
+	});
+
+	it("renders a host-provided model notice in place of plain warning text", () => {
+		render(
+			<TaskComposerView
+				{...viewProps({
+					submission: {
+						showFallbackAction: false,
+						isSubmitting: false,
+						modelWarning: <div data-testid="host-notice"><button type="button">Log in</button></div>,
+						onFallbackAction: vi.fn(),
+						onSubmit: vi.fn(),
+					},
+				})}
+			/>,
+		);
+
+		expect(screen.getByTestId("host-notice")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
 	});
 });

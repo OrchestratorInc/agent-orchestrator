@@ -1,4 +1,15 @@
-import type { SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
+
+export type AppIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
+export function BrowserIcon(props: SVGProps<SVGSVGElement>) {
+	// Myna UI "globe", matching the app icon set (components/app-icons).
+	return (
+		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="1.2 1.2 21.6 21.6" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" {...props}>
+			<path d="M12 21a9 9 0 1 0 0-18m0 18a9 9 0 1 1 0-18m0 18c2.761 0 3.941-5.163 3.941-9S14.761 3 12 3m0 18c-2.761 0-3.941-5.163-3.941-9S9.239 3 12 3M3.5 9h17m-17 6h17" />
+		</svg>
+	);
+}
 
 // Codex mark: a rounded terminal tile holding a `<` prompt and a caret bar,
 // drawn monochrome in lucide's 24x24 stroke style so it inherits color/size
@@ -54,6 +65,52 @@ export function OrchestratorIcon({ className, ...props }: SVGProps<SVGSVGElement
 			<path d="M5 11h14" />
 			<path d="M5 11v7" />
 			<path d="M19 11v7" />
+		</svg>
+	);
+}
+
+// Subagents mark: IconOven's "Agent robot" (https://iconoven.com/icons/agent-robot),
+// a 24x24 stroke glyph that drops into the same slots as the lucide icons. The eyes
+// are drawn at 4/3 of the stroke, as in the original.
+//
+// MIT License. Copyright (c) 2026 Appic Marketing LLC (IconOven)
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the "Software"), to deal in the
+// Software without restriction, including without limitation the rights to use,
+// copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+// Software, and to permit persons to whom the Software is furnished to do so,
+// subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+// FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+// AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+export function SubagentIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
+	return (
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			width="24"
+			height="24"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="1.5"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			{...props}
+		>
+			<path d="M12 2.85Q12.24 4.61 14 4.85Q12.24 5.09 12 6.85Q11.76 5.09 10 4.85Q11.76 4.61 12 2.85Z" />
+			<rect x="3.75" y="8.75" width="16.5" height="12.5" rx="4.5" />
+			<rect x="7" y="12.25" width="10" height="4.5" rx="2.25" />
+			<path d="M9.75 14.5h.01" strokeWidth="2" />
+			<path d="M14.25 14.5h.01" strokeWidth="2" />
 		</svg>
 	);
 }
@@ -151,9 +208,41 @@ export function AndroidStudioIcon(props: SVGProps<SVGSVGElement>) {
 	return <BrandGlyph d={ANDROID_STUDIO_PATH} {...props} />;
 }
 
+// Simple Icons (CC0): the platform marks on the Device tab's iOS and Android choices.
+const APPLE_PATH =
+	"M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701";
+
+const ANDROID_PATH =
+	"M18.4395 5.5586c-.675 1.1664-1.352 2.3318-2.0274 3.498-.0366-.0155-.0742-.0286-.1113-.043-1.8249-.6957-3.484-.8-4.42-.787-1.8551.0185-3.3544.4643-4.2597.8203-.084-.1494-1.7526-3.021-2.0215-3.4864a1.1451 1.1451 0 0 0-.1406-.1914c-.3312-.364-.9054-.4859-1.379-.203-.475.282-.7136.9361-.3886 1.5019 1.9466 3.3696-.0966-.2158 1.9473 3.3593.0172.031-.4946.2642-1.3926 1.0177C2.8987 12.176.452 14.772 0 18.9902h24c-.119-1.1108-.3686-2.099-.7461-3.0683-.7438-1.9118-1.8435-3.2928-2.7402-4.1836a12.1048 12.1048 0 0 0-2.1309-1.6875c.6594-1.122 1.312-2.2559 1.9649-3.3848.2077-.3615.1886-.7956-.0254-1.1191a1.1001 1.1001 0 0 0-.9844-.4785 1.1062 1.1062 0 0 0-.8984.4902zm-.0567 8.2754c.5493.0029.9945.4508.9942 1.0002-.0003.5493-.4449.9969-.9942 1.0002-.5523.0024-1.0019-.4458-1.0019-.998 0-.5523.4496-1.0004 1.002-.998zm-12.7695.0049c.5493-.0029.9961.4447.9961.9945 0 .5498-.4468.9974-.9961.9964-.5493.0033-.9947-.4422-.9942-.9963.0005-.5541.4449-.9938.9942-.9946z";
+
+export function AppleIcon(props: SVGProps<SVGSVGElement>) {
+	return <BrandGlyph d={APPLE_PATH} {...props} />;
+}
+
+export function AndroidIcon(props: SVGProps<SVGSVGElement>) {
+	return <BrandGlyph d={ANDROID_PATH} {...props} />;
+}
+
 const ANTIGRAVITY_PATH =
 	"M144.248 149.062c7.5 5.626 18.75 1.876 8.437-8.437-30.937-30-24.375-112.5-62.812-112.5-38.438 0-31.875 82.5-62.813 112.5-11.25 11.25.938 14.063 8.438 8.437 29.062-19.687 27.187-54.375 54.375-54.375 27.187 0 25.312 34.688 54.375 54.375Z";
 
 export function AntigravityIcon(props: SVGProps<SVGSVGElement>) {
 	return <BrandGlyph d={ANTIGRAVITY_PATH} viewBox="0 0 180 180" {...props} />;
+}
+
+// Compact Finder face, kept as SVG so it sizes exactly like the other menu icons.
+export function FinderIcon(props: SVGProps<SVGSVGElement>) {
+	return (
+		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" {...props}>
+			<rect x="2" y="2" width="20" height="20" rx="3" fill="#58B9F5" />
+			<path d="M13 2h6a3 3 0 0 1 3 3v14a3 3 0 0 1-3 3h-6v-9h-3l3-11Z" fill="#DDEFFD" />
+			<path d="M7 7v3m10-3v3M6 15c3 3 9 3 12 0" stroke="#183D64" strokeWidth="1.5" strokeLinecap="round" />
+		</svg>
+	);
+}
+
+// Ghostty mark from Simple Icons (CC0). Always use this mark: macOS can return
+// a generic application placeholder as a valid native icon for Ghostty.
+export function GhosttyIcon(props: SVGProps<SVGSVGElement>) {
+	return <BrandGlyph d="M12 0C6.7 0 2.4 4.3 2.4 9.6v11.146c0 1.772 1.45 3.267 3.222 3.254a3.18 3.18 0 0 0 1.955-.686 1.96 1.96 0 0 1 2.444 0 3.18 3.18 0 0 0 1.976.686c.75 0 1.436-.257 1.98-.686.715-.563 1.71-.587 2.419-.018.59.476 1.355.743 2.182.699 1.705-.094 3.022-1.537 3.022-3.244V9.601C21.6 4.3 17.302 0 12 0M6.069 6.562a1 1 0 0 1 .46.131l3.578 2.065v.002a.974.974 0 0 1 0 1.687L6.53 12.512a.975.975 0 0 1-.976-1.687L7.67 9.602 5.553 8.38a.975.975 0 0 1 .515-1.818m7.438 2.063h4.7a.975.975 0 1 1 0 1.95h-4.7a.975.975 0 0 1 0-1.95" {...props} />;
 }

@@ -1,14 +1,20 @@
-import { render as rtlRender, screen } from "@testing-library/react";
+import { render as rtlRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
-import { ActivityRow, TurnChangedFiles } from "./ChatTimelineItems";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActivityRow, TurnChangedFiles, TurnResults } from "./ChatTimelineItems";
+import { ChatImageSourceProvider } from "./chat-image-source";
 import { ActivityRun } from "./ActivityRun";
 import type { ConversationActivity, TurnDiff } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+}
+
+function expectCardPath(path: string) {
+	expect(screen.getAllByRole("listitem").some((row) => row.textContent?.includes(path))).toBe(true);
 }
 
 // These cover the two signal rules this surface exists to keep: a changed-file
@@ -46,11 +52,56 @@ describe("TurnChangedFiles", () => {
 	it("shows the bordered summary with files visible", () => {
 		render(<TurnChangedFiles diff={diff()} />);
 		expect(screen.getByText("2 Files Changed")).toBeInTheDocument();
-		expect(screen.getByText("a.ts")).toBeInTheDocument();
-		expect(screen.getByText("new.ts")).toBeInTheDocument();
+		expectCardPath("src/a.ts");
+		expectCardPath("src/new.ts");
 		expect(screen.getByText("+12")).toBeInTheDocument();
 		expect(screen.getByText("+40")).toBeInTheDocument();
 		expect(screen.getByText("−3")).toBeInTheDocument();
+	});
+
+	it.each([true, false])("shows distinct repository paths for changed, created, and renamed files (openable: %s)", async (openable) => {
+		const onOpenFile = vi.fn();
+		render(<TurnChangedFiles diff={{ files: [
+			{ path: "alpha/workspace-test.txt", additions: 1, deletions: 1, status: "modified" },
+			{ path: "beta/workspace-test.txt", additions: 1, deletions: 0, status: "added" },
+			{ path: "alpha/new-name.txt", oldPath: "alpha/old-name.txt", additions: 0, deletions: 0, status: "renamed" },
+		] }} onOpenFile={openable ? onOpenFile : undefined} />);
+		for (const path of ["alpha/workspace-test.txt", "beta/workspace-test.txt", "alpha/new-name.txt"]) {
+			expectCardPath(path);
+			if (openable) {
+				await userEvent.click(screen.getByRole("button", { name: `Open ${path} in Files` }));
+				expect(onOpenFile).toHaveBeenLastCalledWith(path);
+			}
+		}
+	});
+
+	it.each([true, false])("keeps the repository and filename visible around long directories (openable: %s)", async (openable) => {
+		const path = "packages/product-ui/src/components/forms/Button.tsx";
+		render(<TurnChangedFiles diff={{ files: [{ path, additions: 1, deletions: 0, status: "added" }] }} onOpenFile={openable ? vi.fn() : undefined} />);
+		const row = within(screen.getByRole("listitem"));
+		expectCardPath(path);
+		expect(row.getByText("packages/")).toHaveClass("shrink-0");
+		expect(row.getByText("product-ui/src/components/forms/")).toHaveClass("shrink-[100]", "truncate");
+		expect(row.getByText("Button.tsx")).toHaveClass("flex-auto", "truncate");
+		await userEvent.hover(row.getByText("Button.tsx"));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(path);
+	});
+
+	it("shows the repository from the turn's file change when the diff reports only a basename", async () => {
+		const cwd = "/Users/me/.ao/data/worktrees/demo/demo-1";
+		const path = `${cwd}/alpha/workspace-test.txt`;
+		const onOpenFile = vi.fn();
+		render(<TurnChangedFiles
+			diff={{ files: [{ path: "workspace-test.txt", additions: 1, deletions: 0, status: "added" }] }}
+			items={[
+				commandActivity({ cwd, command: "ls" }),
+				{ ...commandActivity({ files: [{ path, status: "added", additions: 1, deletions: 0 }] }), id: "act-2", activityKind: "file_change" },
+			]}
+			onOpenFile={onOpenFile}
+		/>);
+		expectCardPath("alpha/workspace-test.txt");
+		await userEvent.click(screen.getByRole("button", { name: "Open alpha/workspace-test.txt in Files" }));
+		expect(onOpenFile).toHaveBeenCalledWith(path);
 	});
 
 	it("offers Review when a handler is provided", async () => {
@@ -91,7 +142,7 @@ describe("TurnChangedFiles", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Open notes\.txt in Files/ }));
-		expect(onOpenFile).toHaveBeenCalledWith("notes.txt");
+		expect(onOpenFile).toHaveBeenCalledWith("/Users/me/.ao/dev/data/worktrees/demo/demo-1/notes.txt");
 	});
 
 	it("preserves duplicate-disambiguating suffixes for absolute turn diff paths", async () => {
@@ -122,12 +173,20 @@ describe("TurnChangedFiles", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Open frontend\/index\.ts in Files/ }));
-		expect(onOpenFile).toHaveBeenCalledWith("frontend/index.ts");
+		expect(onOpenFile).toHaveBeenCalledWith(`${cwd}/frontend/index.ts`);
 		await userEvent.click(screen.getByRole("button", { name: /Open backend\/index\.ts in Files/ }));
-		expect(onOpenFile).toHaveBeenCalledWith("backend/index.ts");
+		expect(onOpenFile).toHaveBeenCalledWith(`${cwd}/backend/index.ts`);
 	});
 
-	it("shows the full path on basename hover", async () => {
+	it("preserves an absolute turn diff path when no cwd activity was reported", async () => {
+		const onOpenFile = vi.fn();
+		const path = "/home/ao/.ao/data/worktrees/demo/demo-1/src/index.ts";
+		render(<TurnChangedFiles diff={diff({ files: [{ path, additions: 1, deletions: 0, status: "added" }] })} onOpenFile={onOpenFile} />);
+		await userEvent.click(screen.getByRole("button", { name: /Open src\/index\.ts in Files/ }));
+		expect(onOpenFile).toHaveBeenCalledWith(path);
+	});
+
+	it("shows the full path on card label hover", async () => {
 		const user = userEvent.setup();
 		render(<TurnChangedFiles diff={diff()} />);
 		await user.hover(screen.getByText("a.ts"));
@@ -211,14 +270,14 @@ describe("TurnChangedFiles", () => {
 			/>,
 		);
 		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
-		expect(screen.getByText("new.ts")).toBeInTheDocument();
+		expectCardPath("src/new.ts");
 		await user.hover(screen.getByText("new.ts"));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/old.ts → src/new.ts");
 	});
 
 	it("says the list was cut rather than presenting it as the whole change", () => {
 		render(<TurnChangedFiles diff={diff({ truncated: true })} onReview={() => {}} />);
-		expect(screen.getByText(/changed more files than AO lists/i)).toBeInTheDocument();
+		expect(screen.getByText(/changed more files than Orchestrator lists/i)).toBeInTheDocument();
 		expect(screen.getByText(/Use Review for the whole change/i)).toBeInTheDocument();
 	});
 
@@ -232,10 +291,27 @@ describe("TurnChangedFiles", () => {
 			})),
 		};
 		render(<TurnChangedFiles diff={many} />);
-		expect(screen.getByText("file-0.ts")).toBeInTheDocument();
+		expectCardPath("src/file-0.ts");
 		expect(screen.queryByText("file-5.ts")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
-		expect(screen.getByText("file-5.ts")).toBeInTheDocument();
+		expectCardPath("src/file-5.ts");
+	});
+
+	it("marks each row with its file type's icon, like the Files panel", () => {
+		render(
+			<TurnChangedFiles
+				diff={diff({
+					files: [
+						{ path: "src/Button.tsx", additions: 1, deletions: 0, status: "modified" },
+						{ path: "notes.md", additions: 1, deletions: 0, status: "modified" },
+					],
+				})}
+			/>,
+		);
+		const [tsx, markdown] = screen.getAllByRole("listitem").map((row) => row.querySelector("svg"));
+		expect(tsx).not.toBeNull();
+		expect(markdown).not.toBeNull();
+		expect(tsx!.innerHTML).not.toBe(markdown!.innerHTML);
 	});
 
 	it("marks a running turn's diff as still growing", () => {
@@ -252,7 +328,36 @@ describe("TurnChangedFiles", () => {
 });
 
 describe("ActivityRow command output", () => {
-	it("opens itself while a command is still printing", () => {
+	it("bounds a multi-megabyte log preview while preserving its latest output", async () => {
+		const output = "BEGIN_OVERSIZE\n" + "Oversized output integrity check.\n".repeat(160_000) + "END_OVERSIZE";
+		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
+		const shown = container.querySelector("pre")!.textContent!;
+		expect(shown.split("\n").length).toBeLessThanOrEqual(400);
+		expect(shown.length).toBeLessThanOrEqual(64 * 1024);
+		expect(shown).toContain("END_OVERSIZE");
+		expect(shown).not.toContain("BEGIN_OVERSIZE");
+		expect(screen.getByText("Showing the end of this large output.")).toBeInTheDocument();
+		expect(screen.queryByText(/printed more than Orchestrator stores/i)).not.toBeInTheDocument();
+	});
+
+	it("bounds single-line output without splitting a surrogate pair", async () => {
+		const output = "head" + "😀" + "x".repeat(64 * 1024 - 1);
+		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
+		expect(container.querySelector("pre")?.textContent).toBe("x".repeat(64 * 1024 - 1));
+	});
+
+	it("updates the bounded preview as a running command prints more", async () => {
+		const output = "start\n".repeat(1_000);
+		const { container, rerender } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
+		rerender(<TooltipProvider><ActivityRow activity={commandActivity({ output: output + "latest failure" }, "running")} /></TooltipProvider>);
+		expect(container.querySelector("pre")?.textContent).toMatch(/latest failure$/);
+		expect(container.querySelector("pre")!.textContent!.split("\n").length).toBeLessThanOrEqual(400);
+	});
+
+	it("stays one line while a command is still printing, until the reader opens it", async () => {
 		const { container } = render(
 			<ActivityRow
 				activity={commandActivity(
@@ -261,14 +366,17 @@ describe("ActivityRow command output", () => {
 				)}
 			/>,
 		);
-		// No click: live output that needs a click is not live. Read off the <pre>
-		// rather than via getByText, which normalizes the runs of whitespace that
-		// real command output is full of.
-		const pre = container.querySelector("pre");
-		expect(pre?.textContent).toBe("ok  pkg/a\n");
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+		expect(container.querySelector("pre")).toBeNull();
+
+		await userEvent.click(screen.getByRole("button"));
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+		// Read off the <pre> rather than via getByText, which normalizes the runs of
+		// whitespace that real command output is full of.
+		expect(container.querySelector("pre")?.textContent).toBe("ok  pkg/a\n");
 	});
 
-	it("does not add provider provenance below streamed output", () => {
+	it("does not add provider provenance below streamed output", async () => {
 		render(
 			<ActivityRow
 				activity={commandActivity(
@@ -277,6 +385,7 @@ describe("ActivityRow command output", () => {
 				)}
 			/>,
 		);
+		await userEvent.click(screen.getByRole("button"));
 		expect(screen.getByText("tick-2")).toBeInTheDocument();
 		expect(screen.queryByText(/Streamed live as the command runs/i)).not.toBeInTheDocument();
 	});
@@ -308,7 +417,7 @@ describe("ActivityRow command output", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByText(/printed more than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/printed more than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	it("keeps a finished command collapsed so the timeline stays readable", () => {
@@ -333,8 +442,8 @@ describe("ActivityRow command output", () => {
 	});
 });
 
-// A run collapses consecutive tool calls to one line. Without the same auto-open
-// rule, a command streaming output inside a run is live to nobody.
+// A run collapses consecutive tool calls to one line, and a command printing
+// inside it does not open it: the reader decides.
 describe("ActivityRun with a streaming command", () => {
 	function plan(id: string): ConversationActivity {
 		return {
@@ -349,7 +458,7 @@ describe("ActivityRun with a streaming command", () => {
 		};
 	}
 
-	it("opens itself so live output inside it is visible", () => {
+	it("stays folded while a command inside it prints", () => {
 		render(
 			<ActivityRun
 				activities={[
@@ -361,10 +470,10 @@ describe("ActivityRun with a streaming command", () => {
 				]}
 			/>,
 		);
-		expect(screen.getByText("compiling…")).toBeInTheDocument();
+		expect(screen.queryByText("compiling…")).not.toBeInTheDocument();
 	});
 
-	it("opens the matching subgroup when a grouped command is streaming", () => {
+	it("keeps the subgroup of a streaming command folded when the reader opens the run", async () => {
 		const completedCommand = commandActivity({ command: "pwd" }, "completed");
 		completedCommand.id = "act-2";
 		completedCommand.sequence = 2;
@@ -382,7 +491,9 @@ describe("ActivityRun with a streaming command", () => {
 			/>,
 		);
 
-		expect(screen.getByText("compiling…")).toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button")[0]!);
+		expect(screen.getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByText("compiling…")).not.toBeInTheDocument();
 	});
 
 	it("stays collapsed when nothing inside it is printing", () => {
@@ -451,7 +562,8 @@ describe("ActivityRow command labels", () => {
 				)}
 			/>,
 		);
-		expect(screen.getByText("Read files")).toBeInTheDocument();
+		expect(screen.getByText("Read 2 files")).toBeInTheDocument();
+		expect(screen.getByText("SKILL.md, SKILL.md")).toBeInTheDocument();
 		expect(screen.queryByText(/sed -n/)).not.toBeInTheDocument();
 	});
 
@@ -462,10 +574,10 @@ describe("ActivityRow command labels", () => {
 				activity={commandActivity({ command: "go test ./...", output: "ok" }, "completed")}
 			/>,
 		);
-		expect(screen.getByText("Ran command")).toBeInTheDocument();
+		expect(screen.getByText("Ran tests")).toBeInTheDocument();
 		expect(screen.queryByText("go test ./...")).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: /Ran command/ }));
+		await user.click(screen.getByRole("button", { name: /Ran tests/ }));
 		expect(screen.getByText("go test ./...")).toBeInTheDocument();
 		expect(screen.getByText("ok")).toBeInTheDocument();
 	});
@@ -478,7 +590,7 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 
-		const row = screen.getByRole("button", { name: /Ran command/ });
+		const row = screen.getByRole("button", { name: /Ran printf/ });
 		expect(row).toBeEnabled();
 		expect(screen.queryByText(`printf "%s" "hello world"`)).not.toBeInTheDocument();
 
@@ -496,17 +608,31 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 		const row = screen.getByRole("button");
-		expect(row).toHaveClass("py-0.5", "gap-1.5", "select-none");
-		expect(screen.getByText("Checked repository")).toHaveClass(
-			"text-[11.5px]",
+		expect(row).toHaveClass("py-0.5", "gap-2", "select-none");
+		expect(screen.getByText("Checked git status")).toHaveClass(
+			"text-xs",
 			"font-normal",
 			"text-muted-foreground",
 		);
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
-		expect(container.querySelector(".lucide-square-terminal")).toBeNull();
+		// One small mark for what the step did, not the bordered rows' icon column.
+		expect(container.querySelector(".icon-git-branch")).toHaveClass("size-3", "text-muted-foreground/70");
+		expect(container.querySelector(".icon-square-terminal")).toBeNull();
 		expect(row.querySelector(".flex-1")).toBeNull();
-		expect(row.textContent).toMatch(/^Checked repositoryexit 1/);
+		expect(row.textContent).toMatch(/^Checked git statusexit 1/);
+	});
+
+	it("does not claim the result of a step that failed", () => {
+		const { unmount } = render(
+			<ActivityRow activity={commandActivity({ command: "git push", output: "rejected", exitCode: 1 }, "failed")} />,
+		);
+		expect(screen.getByRole("button").textContent).toMatch(/^Pushing changesexit 1/);
+		unmount();
+
+		// A test run that fails did run.
+		render(<ActivityRow activity={commandActivity({ command: "npm test", output: "1 failed", exitCode: 1 }, "failed")} />);
+		expect(screen.getByRole("button").textContent).toMatch(/^Ran testsexit 1/);
 	});
 
 	it("keeps command failures without exit metadata destructive", () => {
@@ -528,5 +654,81 @@ describe("ActivityRow command labels", () => {
 		);
 		expect(screen.getByText("stopped")).toBeInTheDocument();
 		expect(screen.queryByLabelText("running")).not.toBeInTheDocument();
+	});
+});
+
+describe("TurnResults", () => {
+	beforeEach(() => {
+		// Thumbnails stay unloaded until seen, so nothing here fetches file bytes.
+		vi.stubGlobal("IntersectionObserver", class {
+			observe() {}
+			disconnect() {}
+		});
+		vi.stubGlobal("ResizeObserver", class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		});
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	const root = "/Users/me/.ao/data/artifacts/session-1";
+	const artifacts = [
+		{ kind: "markdown" as const, name: "guide.md", path: "guide.md", size: 10, updatedAt: "2026-11-10T10:00:00Z" },
+	];
+	const resultsDiff: TurnDiff = {
+		files: [
+			{ path: `${root}/guide.md`, additions: 26, deletions: 0, status: "added" },
+			{ path: "src/a.ts", additions: 1, deletions: 0, status: "modified" },
+		],
+	};
+
+	function renderResults(onOpenArtifact = vi.fn(), onOpenFile = vi.fn()) {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="session-1" artifacts={artifacts}>
+					<TurnResults diff={resultsDiff} onOpenArtifact={onOpenArtifact} onOpenFile={onOpenFile} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		return { onOpenArtifact, onOpenFile };
+	}
+
+	it("shows a created artifact as a card instead of a changed file", async () => {
+		const { onOpenArtifact, onOpenFile } = renderResults();
+		expect(screen.getByText("1 Artifact")).toBeInTheDocument();
+		expect(screen.getByText("Created")).toBeInTheDocument();
+		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
+		expectCardPath("src/a.ts");
+		await userEvent.click(screen.getByRole("button", { name: "Open guide.md, created in this turn" }));
+		// By artifact path, never through the workspace-file opener.
+		expect(onOpenArtifact).toHaveBeenCalledWith({ path: "guide.md" });
+		expect(onOpenFile).not.toHaveBeenCalled();
+	});
+
+	it("shows cards for artifacts a shell command wrote, with no turn diff", () => {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="session-1" artifacts={artifacts}>
+					<TurnResults reportedArtifacts={[{ path: "guide.md", status: "added" }]} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("1 Artifact")).toBeInTheDocument();
+		expect(screen.getByText("guide.md")).toBeInTheDocument();
+		expect(screen.getByText("Created")).toBeInTheDocument();
+		expect(screen.queryByText(/Files? Changed/)).not.toBeInTheDocument();
+	});
+
+	it("drops the changed-files card when the turn only made artifacts", () => {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="session-1" artifacts={artifacts}>
+					<TurnResults diff={{ files: [resultsDiff.files[0]!] }} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("guide.md")).toBeInTheDocument();
+		expect(screen.queryByText(/Files? Changed/)).not.toBeInTheDocument();
 	});
 });

@@ -1,53 +1,40 @@
-import { Feather } from "./icons";
-import { Pressable, StyleSheet } from "react-native";
-import { useTheme } from "./ThemeProvider";
-import type { NativeHeaderButtonIcon } from "./native-header-button";
-import { iconSize, type } from "./tokens";
+import { Badge, BadgedBox, Host, Icon, IconButton } from "@expo/ui/jetpack-compose";
+import { testID } from "@expo/ui/jetpack-compose/modifiers";
+import { nativeHeaderGlyphs, type NativeHeaderButtonProps } from "./native-header-button.types";
+import { useTheme, useThemeState } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
+import { iconSize } from "./tokens";
 
-const icons: Record<NativeHeaderButtonIcon, keyof typeof Feather.glyphMap> = {
-	menu: "menu",
-	bell: "bell",
-	close: "x",
-	check: "check",
-	back: "chevron-left",
-	more: "more-horizontal",
-};
+export type { NativeHeaderButtonIcon, NativeHeaderButtonProps } from "./native-header-button.types";
 
-export function NativeHeaderButton({
-	icon,
-	label,
-	onPress,
-}: {
-	icon: NativeHeaderButtonIcon;
-	label: string;
-	onPress: () => void;
-}) {
+/**
+ * Material 3's icon button: a 48dp target with the system's ripple around a
+ * 24dp Material Symbol, and M3's badge for an unread dot. Compose owns the
+ * touch, so a press lands even while the header is moving with the page.
+ */
+export function NativeHeaderButton({ icon, label, onPress, badge = 0 }: NativeHeaderButtonProps) {
 	const t = useTheme();
+	const { scheme } = useThemeState();
+	const glyph = (
+		<Icon
+			source={materialDrawable(nativeHeaderGlyphs[icon].android)}
+			size={iconSize.xl}
+			tint={t.textSecondary}
+			contentDescription={label}
+		/>
+	);
 	return (
-		<Pressable
-			testID={`header-${icon}`}
-			accessibilityRole="button"
-			accessibilityLabel={label}
-			android_ripple={{ color: t.accentTint, borderless: true, radius: 22 }}
-			onPress={onPress}
-			style={({ pressed }) => [
-				styles.button,
-				{ backgroundColor: pressed ? t.accentTint : t.bgElevated, borderColor: t.borderDefault },
-			]}
-		>
-			<Feather name={icons[icon]} size={iconSize.lg} color={t.textSecondary} />
-		</Pressable>
+		<Host matchContents colorScheme={scheme}>
+			<IconButton onClick={onPress} modifiers={[testID(`header-${icon}`)]}>
+				{badge > 0 ? (
+					<BadgedBox>
+						{glyph}
+						<BadgedBox.Badge>
+							<Badge containerColor={t.red} />
+						</BadgedBox.Badge>
+					</BadgedBox>
+				) : glyph}
+			</IconButton>
+		</Host>
 	);
 }
-
-const styles = StyleSheet.create({
-	button: {
-		width: 44,
-		height: 44,
-		borderRadius: 20, borderCurve: "continuous",
-		borderWidth: StyleSheet.hairlineWidth,
-		alignItems: "center",
-		justifyContent: "center",
-		overflow: "hidden",
-	},
-});

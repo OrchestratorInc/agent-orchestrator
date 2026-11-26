@@ -15,25 +15,46 @@ import (
 
 // Use the production lifecycle and reopen SQLite: the fake lifecycle copies
 // metadata wholesale and cannot catch fields dropped by the real reducer.
-func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
+func TestSessionModelSurvivesRestore(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessCommandCode, domain.HarnessHermes} {
+		t.Run(string(harness), func(t *testing.T) {
+			testSessionModelSurvivesRestore(t, harness)
+		})
+	}
+}
+
+func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) {
+	t.Helper()
 	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
 		for _, selection := range []struct {
-			name         string
-			projectModel string
-			roleModel    string
-			spawnModel   string
-			wantModel    string
-			legacy       bool
+			name          string
+			projectModel  string
+			projectEffort string
+			roleModel     string
+			roleEffort    string
+			spawnModel    string
+			spawnEffort   string
+			wantModel     string
+			wantEffort    string
+			legacy        bool
 		}{
-			{name: "spawn_override", projectModel: "opus", roleModel: "sonnet", spawnModel: "haiku", wantModel: "haiku"},
-			{name: "role_default", projectModel: "opus", roleModel: "sonnet", wantModel: "sonnet"},
-			{name: "project_default", projectModel: "opus", wantModel: "opus"},
+			{name: "spawn_override", projectModel: "opus", projectEffort: "low", roleModel: "sonnet", roleEffort: "medium", spawnModel: "haiku", spawnEffort: "high", wantModel: "haiku", wantEffort: "high"},
+			{name: "role_default", projectModel: "opus", projectEffort: "low", roleModel: "sonnet", roleEffort: "high", wantModel: "sonnet", wantEffort: "high"},
+			{name: "project_default", projectModel: "opus", projectEffort: "medium", wantModel: "opus", wantEffort: "medium"},
 			{name: "custom_provider_model", projectModel: "opus", spawnModel: "provider/model-vNext", wantModel: "provider/model-vNext"},
 			{name: "agent_default"},
+			{name: "extra_high", spawnModel: "haiku", spawnEffort: "xhigh", wantModel: "haiku", wantEffort: "xhigh"},
 			{name: "legacy_unknown", spawnModel: "haiku", wantModel: "haiku", legacy: true},
 		} {
+			if selection.spawnEffort == "xhigh" && harness != domain.HarnessCodex {
+				continue
+			}
 			for _, operation := range []string{"restore", "native_resume", "restore_all", "saved_prompt", "chat_restore", "chat_resume"} {
 				t.Run(string(kind)+"/"+selection.name+"/"+operation, func(t *testing.T) {
+					// Each case owns its store, fakes and manager. Run serially, the
+					// ~300 cases spend ~0.55s each mostly waiting, 2.5 minutes in all.
+					t.Parallel()
+					selection := selection // the legacy case rewrites wantEffort below
 					ctx := context.Background()
 					dataDir := t.TempDir()
 					store, err := sqlitetest.Open(dataDir)
@@ -50,12 +71,12 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 					project := domain.ProjectRecord{
 						ID: "mer", Path: t.TempDir(), RegisteredAt: time.Now().UTC(),
 						Config: domain.ProjectConfig{
-							AgentConfig: domain.AgentConfig{Model: selection.projectModel},
+							AgentConfig: domain.AgentConfig{Model: selection.projectModel, Effort: selection.projectEffort},
 							Worker: domain.RoleOverride{
-								Harness: domain.HarnessClaudeCode, AgentConfig: domain.AgentConfig{Model: selection.roleModel},
+								Harness: harness, AgentConfig: domain.AgentConfig{Model: selection.roleModel, Effort: selection.roleEffort},
 							},
 							Orchestrator: domain.RoleOverride{
-								Harness: domain.HarnessClaudeCode, AgentConfig: domain.AgentConfig{Model: selection.roleModel},
+								Harness: harness, AgentConfig: domain.AgentConfig{Model: selection.roleModel, Effort: selection.roleEffort},
 							},
 						},
 					}
@@ -68,12 +89,19 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 					launcher := &recordingLauncher{}
 					newManager := func() *Manager {
 						messenger := &fakeMessenger{}
-						return New(Deps{
+						manager := New(Deps{
 							Runtime: runtime, Agents: singleAgent{agent: agent}, Workspace: workspace,
 							Store: store, Messenger: messenger, Lifecycle: lifecycle.New(store, messenger),
 							Chat: launcher, DataDir: dataDir,
 							LookPath: func(string) (string, error) { return "/bin/true", nil },
 						})
+						manager.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+							{ID: "opus", Efforts: []string{"low", "medium", "high"}},
+							{ID: "sonnet", Efforts: []string{"low", "medium", "high"}},
+							{ID: "haiku", Efforts: []string{"low", "medium", "high", "xhigh"}},
+							{ID: "provider/model-vNext"},
+						}}})
+						return manager
 					}
 					chat := strings.HasPrefix(operation, "chat_")
 					mode := domain.SessionModeTUI
@@ -83,7 +111,7 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 					manager := newManager()
 					rec, _, _, err := manager.Spawn(ctx, ports.SpawnConfig{
 						ProjectID: domain.ProjectID(project.ID), Kind: kind, Prompt: "continue the task", RequestedMode: mode,
-						AgentConfig: ports.AgentConfig{Model: selection.spawnModel},
+						AgentConfig: ports.AgentConfig{Model: selection.spawnModel, Effort: selection.spawnEffort},
 					})
 					if err != nil {
 						t.Fatalf("spawn: %v", err)
@@ -91,11 +119,15 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 					if rec.Metadata.Model != selection.wantModel {
 						t.Fatalf("spawn model = %q, want %q", rec.Metadata.Model, selection.wantModel)
 					}
+					if rec.Metadata.Effort != selection.wantEffort {
+						t.Fatalf("spawn effort = %q, want %q", rec.Metadata.Effort, selection.wantEffort)
+					}
 
 					// Emulate an exited provider or a terminated session, preserving the
 					// native conversation id independently of its selected model.
 					rec.IsTerminated = operation != "native_resume" && operation != "chat_resume"
 					rec.Activity.State = domain.ActivityExited
+					runtime.exitedLaunches = map[string]bool{rec.Metadata.RuntimeLaunchID: true}
 					rec.Metadata.AgentSessionID = "native-model-test"
 					if operation == "saved_prompt" {
 						rec.Metadata.AgentSessionID = ""
@@ -105,7 +137,9 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 						// Older rows have no selection snapshot, even if a model was
 						// explicitly chosen. Do not infer it from current defaults.
 						rec.Metadata.Model = ""
+						rec.Metadata.Effort = ""
 						wantModel = ""
+						selection.wantEffort = ""
 					}
 					if err := store.UpdateSession(ctx, rec); err != nil {
 						t.Fatal(err)
@@ -119,8 +153,12 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 						}
 					}
 					project.Config.AgentConfig.Model = "changed-project-model"
+					project.Config.AgentConfig.Effort = "changed-project-effort"
+					project.Config.AgentConfig.Permissions = domain.PermissionModeBypassPermissions
 					project.Config.Worker.AgentConfig.Model = "changed-worker-model"
+					project.Config.Worker.AgentConfig.Effort = "changed-worker-effort"
 					project.Config.Orchestrator.AgentConfig.Model = "changed-orchestrator-model"
+					project.Config.Orchestrator.AgentConfig.Effort = "changed-orchestrator-effort"
 					if err := store.UpsertProject(ctx, project); err != nil {
 						t.Fatal(err)
 					}
@@ -155,6 +193,12 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 						if got := launcher.started[0].Model; got != wantModel {
 							t.Fatalf("Chat model = %q, want %q", got, wantModel)
 						}
+						if got := launcher.started[0].Effort; got != selection.wantEffort {
+							t.Fatalf("Chat effort = %q, want %q", got, selection.wantEffort)
+						}
+						if got := launcher.started[0].Permissions; got != rec.Metadata.Permissions {
+							t.Fatalf("Chat permissions = %q, want saved %q", got, rec.Metadata.Permissions)
+						}
 						if got := launcher.started[0].ProviderConversationID; got != rec.Metadata.ProviderConversationID {
 							t.Fatalf("Chat conversation = %q, want %q", got, rec.Metadata.ProviderConversationID)
 						}
@@ -164,6 +208,12 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 						}
 						if agent.lastConfig.Model != wantModel {
 							t.Fatalf("continued model = %q, want %q", agent.lastConfig.Model, wantModel)
+						}
+						if agent.lastConfig.Effort != selection.wantEffort {
+							t.Fatalf("continued effort = %q, want %q", agent.lastConfig.Effort, selection.wantEffort)
+						}
+						if agent.lastConfig.Permissions != rec.Metadata.Permissions {
+							t.Fatalf("continued permissions = %q, want saved %q", agent.lastConfig.Permissions, rec.Metadata.Permissions)
 						}
 						if operation == "saved_prompt" {
 							if agent.launchCalls != 1 {
@@ -177,8 +227,8 @@ func TestClaudeSessionModelSurvivesRestore(t *testing.T) {
 					if err != nil || !ok {
 						t.Fatalf("read restored session: found=%t err=%v", ok, err)
 					}
-					if stored.IsTerminated || stored.Metadata.Model != wantModel {
-						t.Fatalf("restored session: terminated=%t model=%q, want live model=%q", stored.IsTerminated, stored.Metadata.Model, wantModel)
+					if stored.IsTerminated || stored.Metadata.Model != wantModel || stored.Metadata.Effort != selection.wantEffort {
+						t.Fatalf("restored session: terminated=%t model=%q effort=%q, want live model=%q effort=%q", stored.IsTerminated, stored.Metadata.Model, stored.Metadata.Effort, wantModel, selection.wantEffort)
 					}
 				})
 			}

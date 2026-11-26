@@ -2,13 +2,16 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { settingsQueryKey } from "./useSettings";
+import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 
-const { createCloudClientMock, deleteSessionMock, postMock } = vi.hoisted(() => ({
+const { createCloudClientMock, deleteSessionMock, postMock, remotePostMock } = vi.hoisted(() => ({
 	createCloudClientMock: vi.fn(),
 	deleteSessionMock: vi.fn(),
 	postMock: vi.fn(),
+	remotePostMock: vi.fn(),
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -19,11 +22,14 @@ vi.mock("../lib/api-client", () => ({
 vi.mock("./useCloudCp", () => ({
 	createRendererCloudCpClient: createCloudClientMock,
 }));
+vi.mock("../lib/host-clients", () => ({
+	clientForHost: (hostId: string) => ({ POST: (...args: unknown[]) => remotePostMock(hostId, ...args) }),
+}));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 
-import { useTerminateSession } from "./useTerminateSession";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { useProjectTerminateSessionStates, useTerminateSession, useTerminateSessionState } from "./useTerminateSession";
+import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 const localSession: WorkspaceSession = {
 	id: "session-1",
@@ -75,9 +81,83 @@ beforeEach(() => {
 	deleteSessionMock.mockReset().mockResolvedValue({ session: { id: "session-1", desiredState: "deleted" } });
 	createCloudClientMock.mockReturnValue({ deleteSession: deleteSessionMock });
 	postMock.mockReset().mockResolvedValue({ data: { ok: true }, error: undefined });
+	remotePostMock.mockReset().mockResolvedValue({ data: { ok: true }, error: undefined });
 });
 
 describe("useTerminateSession", () => {
+	it.each([true, false])("clears review state only after a successful cloud termination (success=%s)", async (succeeds) => {
+		useUiStore.setState({ inspectorSessions: {} });
+		useUiStore.getState().setCloudReviewSelection(localSession.id, "sibling", { scope: "committed", commitSha: "abc123" });
+		useUiStore.getState().setCloudReviewRepository(localSession.id, "sibling");
+		useUiStore.getState().setCloudReviewUi(localSession.id, "sibling", { filter: "src" });
+		const before = useUiStore.getState().inspectorSessions[localSession.id];
+		if (!succeeds) deleteSessionMock.mockRejectedValue(new Error("delete failed"));
+		const queryClient = newQueryClient();
+		queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => {
+			await result.current.mutateAsync({ ...localSession, cloud: { orgId: "org-1" } }).catch(() => undefined);
+		});
+		const after = useUiStore.getState().inspectorSessions[localSession.id];
+		if (succeeds) {
+			expect(after.cloudReviewSelection).toBeUndefined();
+			expect(after.cloudReviewRepository).toBeUndefined();
+			expect(after.cloudReviewUi).toBeUndefined();
+		} else {
+			expect(after).toBe(before);
+		}
+	});
+
+	describe("published links of deleted artifacts", () => {
+		const published = {
+			...localSession,
+			outputType: "artifact",
+			artifactFiles: [{ id: "art-1", kind: "markdown", name: "a.md", path: "a.md", size: 1, updatedAt: "2026-09-01T00:00:00Z", shareUrl: "https://l/a" }],
+		} satisfies WorkspaceSession;
+		const archive = async (request: WorkspaceSession & { deleteArtifacts?: boolean }) => {
+			const queryClient = newQueryClient();
+			queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+			const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+			await act(async () => { await result.current.mutateAsync(request); });
+		};
+		const order: string[] = [];
+		beforeEach(() => {
+			order.length = 0;
+			useUiStore.setState({ globalToasts: [] });
+			vi.spyOn(aoBridge.cloudShare, "inspect").mockImplementation(async () => {
+				order.push("inspect");
+				return { name: "a.md", unsupported: false, fingerprint: "f", shareId: "share-1" };
+			});
+			vi.spyOn(aoBridge.cloudShare, "unpublish").mockImplementation(async () => { order.push("unpublish"); });
+			vi.mocked(aoBridge.cloudShare.inspect).mockClear();
+			vi.mocked(aoBridge.cloudShare.unpublish).mockClear();
+			postMock.mockImplementation(async () => {
+				order.push("kill");
+				return { data: { ok: true, artifactsDeleted: true }, error: undefined };
+			});
+		});
+
+		it("looks the links up, archives, then unpublishes them once the files are deleted", async () => {
+			await archive({ ...published, deleteArtifacts: true });
+			expect(order).toEqual(["inspect", "kill", "unpublish"]);
+			expect(aoBridge.cloudShare.inspect).toHaveBeenCalledWith({ sessionId: "session-1", path: "a.md", projectId: "project-1", artifactId: "art-1", baseUrl: "https://cp.example.com" });
+			expect(aoBridge.cloudShare.unpublish).toHaveBeenCalledWith("https://cp.example.com", "share-1");
+		});
+
+		it("keeps the links of files the archive kept", async () => {
+			await archive(published);
+			postMock.mockResolvedValue({ data: { ok: true, artifactsDeleted: false }, error: undefined });
+			await archive({ ...published, deleteArtifacts: true });
+			expect(aoBridge.cloudShare.unpublish).not.toHaveBeenCalled();
+		});
+
+		it("warns that a link still works when it could not be unpublished", async () => {
+			vi.mocked(aoBridge.cloudShare.unpublish).mockRejectedValue(new Error("signed out"));
+			await archive({ ...published, deleteArtifacts: true });
+			expect(useUiStore.getState().globalToasts.map((toast) => toast.title)).toContain("1 public link still works");
+		});
+	});
+
 	it("routes local sessions to the local daemon", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
 		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
@@ -88,6 +168,38 @@ describe("useTerminateSession", () => {
 			params: { path: { sessionId: "session-1" } },
 		});
 		expect(createCloudClientMock).not.toHaveBeenCalled();
+	});
+
+	it("isolates a pending remote kill from matching local and other-host session IDs", async () => {
+		let finishKill: (() => void) | undefined;
+		remotePostMock.mockImplementation(() => new Promise((resolve) => {
+			finishKill = () => resolve({ data: { ok: true }, error: undefined });
+		}));
+		const queryClient = newQueryClient();
+		for (const hostId of ["box-a", "box-b"]) {
+			queryClient.setQueryData(remoteWorkspaceQueryKey(hostId), [{
+				...workspaces[0], hostId, sessions: [{ ...session, hostId }],
+			}]);
+		}
+		const remoteSession = { ...session, hostId: "box-b" };
+		const { result } = renderHook(() => ({
+			terminate: useTerminateSession(),
+			local: useTerminateSessionState(session.id),
+			boxA: useTerminateSessionState(session.id, "box-a"),
+			boxB: useTerminateSessionState(session.id, "box-b"),
+		}), { wrapper: wrapper(queryClient) });
+		act(() => result.current.terminate.mutate(remoteSession));
+		await waitFor(() => expect(result.current.boxB.isPending).toBe(true));
+		expect(result.current.boxA.isPending).toBe(false);
+		expect(result.current.local.isPending).toBe(false);
+		expect(queryClient.getQueryData<WorkspaceSummary[]>(remoteWorkspaceQueryKey("box-b"))?.[0]?.sessions[0]?.isTerminated).toBe(true);
+		expect(queryClient.getQueryData<WorkspaceSummary[]>(remoteWorkspaceQueryKey("box-a"))?.[0]?.sessions[0]?.isTerminated).toBeUndefined();
+		expect(queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0]?.sessions[0]?.isTerminated).toBeUndefined();
+		expect(remotePostMock).toHaveBeenCalledWith("box-b", "/api/v1/sessions/{sessionId}/kill", {
+			params: { path: { sessionId: session.id } },
+		});
+		expect(postMock).not.toHaveBeenCalled();
+		await act(async () => finishKill?.());
 	});
 
 	it("routes cloud sessions to their control-plane organization", async () => {
@@ -101,6 +213,23 @@ describe("useTerminateSession", () => {
 		expect(createCloudClientMock).toHaveBeenCalledWith("https://cp.example.com");
 		expect(deleteSessionMock).toHaveBeenCalledWith("org-1", "session-1");
 		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[true, []],
+		[false, [expect.objectContaining({ title: "Session archived, artifacts kept", tone: "error" })]],
+	])("asks the control plane to delete a cloud session's artifacts (confirmed=%s)", async (confirmed, toasts) => {
+		useUiStore.setState({ globalToasts: [] });
+		deleteSessionMock.mockResolvedValue({ session: { id: "session-1", desiredState: "deleted" }, artifactsDeleted: confirmed });
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+		queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+		const cloudSession = { ...localSession, cloud: { orgId: "org-1" }, deleteArtifacts: true };
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+
+		await act(async () => result.current.mutateAsync(cloudSession));
+
+		expect(deleteSessionMock).toHaveBeenCalledWith("org-1", "session-1", { deleteArtifacts: true });
+		expect(useUiStore.getState().globalToasts).toEqual(toasts);
 	});
 
 	it("fails closed when a cloud session has no configured control plane", async () => {
@@ -218,5 +347,183 @@ describe("useTerminateSession", () => {
 		await waitFor(() => expect(result.current.isError).toBe(true));
 		const cached = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey);
 		expect(cached?.[0]?.sessions[0]?.isTerminated).toBeUndefined();
+	});
+});
+
+describe("durable workspace cleanup feedback", () => {
+	const setCleanup = (queryClient: QueryClient, workspaceCleanup: WorkspaceSession["workspaceCleanup"], workspaceCleanupReportOnly?: boolean) =>
+		queryClient.setQueryData(workspaceQueryKey, [{
+			...workspaces[0], sessions: [{ ...session, isTerminated: true, workspaceCleanup, workspaceCleanupReportOnly }],
+		}]);
+	const toasts = () => useUiStore.getState().globalToasts;
+	const dirtyTitle = "Worktree has uncommitted changes. Retry cleanup after you save them.";
+	const archive = async (queryClient: QueryClient) => {
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync(session); });
+	};
+
+	beforeEach(() => {
+		useUiStore.getState().clearGlobalToast();
+	});
+
+	it("tracks pending cleanup and leaves settled outcomes out of the page state", async () => {
+		const queryClient = new QueryClient();
+		const queryFn = vi.fn().mockResolvedValue(workspaces);
+		queryClient.setQueryDefaults(workspaceQueryKey, { queryFn });
+		setCleanup(queryClient, "pending");
+		const { result } = renderHook(() => ({
+			session: useTerminateSessionState(session.id),
+			project: useProjectTerminateSessionStates(workspaces[0].id),
+		}), { wrapper: wrapper(queryClient) });
+		expect(queryClient.getQueryCache().find({ queryKey: workspaceQueryKey })?.options.queryFn).toBe(queryFn);
+		expect(queryFn).not.toHaveBeenCalled();
+		expect(result.current.session.isPending).toBe(true);
+		expect(result.current.project).toMatchObject([{ cleanupPending: true, error: null }]);
+		for (const settled of ["failed", "preserved_dirty"] as const) {
+			await act(async () => { setCleanup(queryClient, settled); });
+			await waitFor(() => expect(result.current.session).toEqual({ error: null, isPending: false }));
+			expect(result.current.project).toEqual([]);
+		}
+		expect(toasts()).toEqual([]);
+	});
+
+	it("reports a kept worktree once, when the archive that started the cleanup settles", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "pending");
+		expect(toasts()).toEqual([]);
+
+		setCleanup(queryClient, "preserved_dirty");
+		setCleanup(queryClient, "preserved_dirty");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		expect(toasts()[0]).toMatchObject({ title: dirtyTitle, body: "do the thing", tone: "info", action: { label: "Retry cleanup" } });
+	});
+
+	it("reports a failed teardown in the error tone", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+
+		setCleanup(queryClient, "failed");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		expect(toasts()[0]).toMatchObject({ title: "Workspace cleanup failed. Retry cleanup in project Scripts settings.", tone: "error" });
+	});
+
+	it("says nothing when the cleanup succeeds or a sweep recorded it", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "preserved_dirty", true);
+		setCleanup(queryClient, "removed");
+		setCleanup(queryClient, "preserved_dirty");
+		expect(toasts()).toEqual([]);
+	});
+
+	it("retries from the notice, repeating it while the worktree stays dirty", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "preserved_dirty");
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		const first = toasts()[0];
+		postMock.mockResolvedValueOnce({
+			data: { ok: true, cleaned: [], alreadyGone: [], skipped: [{ sessionId: session.id, code: "dirty", reason: "workspace has uncommitted changes" }] },
+			error: undefined,
+		});
+
+		await act(async () => { first.action?.run(); });
+
+		await waitFor(() => expect(toasts()[0]?.nonce).not.toBe(first.nonce));
+		expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/cleanup", { params: { query: { project: "proj-1" } } });
+		expect(toasts()).toHaveLength(1);
+		expect(toasts()[0]).toMatchObject({ title: dirtyTitle });
+
+		postMock.mockResolvedValueOnce({ data: { ok: true, cleaned: [session.id], alreadyGone: [], skipped: [] }, error: undefined });
+		await act(async () => { toasts()[0].action?.run(); });
+
+		await waitFor(() => expect(toasts().at(-1)).toMatchObject({ title: "Cleaned 1; skipped 0.", tone: "success" }));
+	});
+
+	it("says so when the retry itself fails", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "failed");
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		postMock.mockResolvedValueOnce({ data: undefined, error: { message: "nope" } });
+
+		await act(async () => { toasts()[0].action?.run(); });
+
+		await waitFor(() => expect(toasts().at(-1)).toMatchObject({ title: "Could not retry cleanup.", tone: "error" }));
+	});
+
+	it("reports why the retry was refused, not why the archive was", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "preserved_dirty");
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		postMock.mockResolvedValueOnce({
+			data: { ok: true, cleaned: [], alreadyGone: [], skipped: [{ sessionId: session.id, code: "cleanup_script_failed", reason: "script failed" }] },
+			error: undefined,
+		});
+
+		await act(async () => { toasts()[0].action?.run(); });
+
+		await waitFor(() => expect(toasts()[0]).toMatchObject({ title: "Workspace cleanup failed. Retry cleanup in project Scripts settings.", tone: "error" }));
+	});
+
+	it("follows a remote archive through the host's session list and retries on that host", async () => {
+		const queryClient = newQueryClient();
+		const remoteSessions = [...remoteWorkspaceQueryKey("box-a"), "sessions"];
+		const setRemoteCleanup = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) =>
+			queryClient.setQueryData(remoteSessions, [{ id: session.id, isTerminated: true, workspaceCleanup }]);
+		setRemoteCleanup("pending");
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, hostId: "box-a" }); });
+
+		setRemoteCleanup("preserved_dirty");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		remotePostMock.mockResolvedValueOnce({ data: { ok: true, cleaned: [session.id], alreadyGone: [], skipped: [] }, error: undefined });
+		await act(async () => { toasts()[0].action?.run(); });
+		await waitFor(() => expect(remotePostMock).toHaveBeenLastCalledWith("box-a", "/api/v1/sessions/cleanup", { params: { query: { project: "proj-1" } } }));
+	});
+
+	it("offers no retry for a standalone session, which has no project to sweep", async () => {
+		const queryClient = newQueryClient();
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+
+		setCleanup(queryClient, "failed");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		expect(toasts()[0].action).toBeUndefined();
+	});
+
+	it("says nothing when a standalone agent's folder is kept, its only copy of the work", async () => {
+		const queryClient = newQueryClient();
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+		setCleanup(queryClient, "pending");
+
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+
+		expect(toasts()).toEqual([]);
+	});
+
+	it("raises nothing for a cleanup a sweep recorded", async () => {
+		const queryClient = new QueryClient();
+		const sweep = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) => queryClient.setQueryData(workspaceQueryKey, [{
+			...workspaces[0], sessions: [{ ...session, isTerminated: true, workspaceCleanup, workspaceCleanupReportOnly: true }],
+		}]);
+		sweep("preserved_dirty");
+		const { result } = renderHook(() => ({
+			session: useTerminateSessionState(session.id),
+			project: useProjectTerminateSessionStates(workspaces[0].id),
+		}), { wrapper: wrapper(queryClient) });
+		expect(result.current.session).toEqual({ error: null, isPending: false });
+		expect(result.current.project).toEqual([]);
+		await act(async () => { sweep("pending"); });
+		expect(result.current.session.isPending).toBe(false);
+		expect(result.current.project).toEqual([]);
 	});
 });

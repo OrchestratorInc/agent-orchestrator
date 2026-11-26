@@ -3,6 +3,7 @@
 // the same split as orchestratorView.ts / projectFilter.ts.
 import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
+import { hostRouteMatches, machineState } from "../hostRoute";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
@@ -19,11 +20,26 @@ export type KeyedSessionLookup = { key: string; lookup: SessionLookup };
 export type SessionRouteView =
 	| { kind: "screen"; session: RouteSession }
 	| { kind: "loading" }
+	| { kind: "wrongHost" }
 	| { kind: "unpaired" }
 	| { kind: "offline" }
+	| { kind: "rejected" }
 	| { kind: "ended" }
 	| { kind: "missing" }
 	| { kind: "failed" };
+
+/**
+ * Whether a session's runtime is gone, so its terminal screen should offer
+ * Restore instead of attaching.
+ *
+ * Decided on the runtime, not the outcome: a merged (or errored) session whose
+ * agent is still running keeps a live terminal. Same rule as the board's
+ * archive and the chat screen.
+ */
+export function isRuntimeGone(session: RouteSession): boolean {
+	if ("projectName" in session) return session.isTerminal === true || session.hasRuntime === false;
+	return session.isTerminated === true || session.status === "terminated";
+}
 
 const pending: SessionLookup = { state: "pending" };
 
@@ -72,13 +88,13 @@ export function sessionLookupSettled(lookup: SessionLookup): boolean {
  */
 export function sessionLookupDue(args: {
 	listed: boolean;
-	configured: boolean | null;
+	paired: boolean | null;
 	connection: ConnStatus;
 	appActive: boolean;
 	machineChanged: boolean;
 	lookup: SessionLookup;
 }): boolean {
-	if (args.listed || args.configured !== true) return false;
+	if (args.listed || args.paired !== true) return false;
 	if (!args.appActive || args.machineChanged || args.connection !== "open") return false;
 	return !sessionLookupSettled(args.lookup);
 }
@@ -93,46 +109,76 @@ export function sessionLookupDue(args: {
  * notification from one of those still routes here. So a miss is only a
  * question — the daemon answers it, and only a 404/410 is "not found".
  *
- * An unlisted session that has ended is reported as ended, not opened. Workers
- * are listed whether or not they have ended, so what reaches this is an
- * orchestrator the list dropped — and the session screens offer Restore on an
- * ended session. A restored old orchestrator would be the first live one in
+ * An unlisted orchestrator that has ended is reported as ended, not opened: it
+ * is one the list dropped, and the session screens offer Restore on an ended
+ * session. A restored old orchestrator would be the first live one in
  * session-number order, which is the one `bestByProject` keeps for the phone and
  * the one the daemon names as orchestrator in new workers' prompts
  * (`activeOrchestratorSessionID`), displacing the orchestrator that replaced it.
+ * An unlisted ended worker opens: a machine that pages its archive leaves
+ * archived workers out of the poll, and Restore is the way back for one of them.
  *
  * While the board is not connected, the route does not diagnose the link itself.
  * Telling a rotated tunnel from a rejected password from an unreachable machine
- * is the board's rule: `app/(tabs)/index.tsx` composes `describeConnectionFailure`
+ * is the board's rule: `app/(tabs)/(workers)/index.tsx` composes `describeConnectionFailure`
  * (`connectionError.ts`) with `tunnelMayHaveRotated` (`staleTunnel.ts`) over the
  * store's `errorStatus` and `activeEndpoints`, which this route does not hold, and
  * a second copy would drift. A rejected lookup (401/403/429) goes to that same
  * state instead of offering a retry: retrying a rejected password is what arms
  * the daemon's lockout, and retrying under one cannot succeed (`shouldKeepPolling`).
  *
- * `configured` is `null` until the store has resolved the saved machine's
- * endpoint; it is checked before the lists, which still hold a forgotten machine's
- * sessions. `loading` is the store's: true from each start of its poll until that
- * poll's first tick.
+ * `paired` is the store's: whether a machine is paired at all, `null` only until
+ * the first resolution has said. It is checked before the lists, which still
+ * hold a forgotten machine's sessions. It deliberately does not follow the
+ * verified connection: that drops on every app switch and endpoint race, and a
+ * route that read it as "unknown" swapped a listed chat for this loader and
+ * then remounted it, which was the resume flicker. `loading` is the store's:
+ * true from each start of its poll until that poll's first tick.
+ *
+ * Nor is a closed connection read as offline: the app closes it on purpose every
+ * time it goes to the background, so a session the lists do not hold (opened
+ * from a notification, say) flashed "offline" during every reconnect. The
+ * machine is offline, or has refused this phone, only by the shared rule
+ * (`machineState`, over the store's `unreachable` and the poll's `error` and
+ * `errorStatus`); until then the route waits. A refused poll (a rejected
+ * pairing, the lockout) stops for good, so waiting on it would spin forever:
+ * the route shows the board's own copy for it instead (`rejected`).
  */
 export function sessionRouteView(args: {
 	listed: RouteSession | undefined;
-	configured: boolean | null;
+	paired: boolean | null;
+	unreachable: boolean;
 	connection: ConnStatus;
+	/** The board poll's last failure and its HTTP status (the store's). */
+	error: string | null;
+	errorStatus: number | null;
 	loading: boolean;
 	lookup: SessionLookup;
+	routeHostId: string | undefined;
+	currentHostId: string | undefined;
 }): SessionRouteView {
-	if (args.configured === null) return { kind: "loading" };
-	if (!args.configured) return { kind: "unpaired" };
+	if (args.paired === null && args.loading) return { kind: "loading" };
+	if (!hostRouteMatches(args.routeHostId, args.currentHostId)) return { kind: "wrongHost" };
+	const machine = machineState(args);
+	if (args.paired === null) return machine === "ok" ? { kind: "loading" } : { kind: machine };
+	if (!args.paired) return { kind: "unpaired" };
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;
 	if (lookup.state === "found") {
-		return lookup.session.isTerminated ? { kind: "ended" } : { kind: "screen", session: lookup.session };
+		return lookup.session.isTerminated && lookup.session.kind === "orchestrator"
+			? { kind: "ended" }
+			: { kind: "screen", session: lookup.session };
 	}
 	if (lookup.state === "failed" && isSessionGone(lookup.status)) return { kind: "missing" };
-	if (args.connection !== "open") {
-		return args.loading || args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
-	}
+	// The board's own poll was refused (a rejected pairing, the lockout), so it
+	// has stopped and no reconnect is coming: say so, as the board does.
+	if (machine === "rejected") return { kind: "rejected" };
+	// A rejected lookup (401/403/429) is the daemon's own answer, not an app
+	// switch: it is handed to the board, with no Retry, connected or not. Waiting
+	// instead would spin for good, since the board's poll stops on the same
+	// rejection and nothing asks again until it is open.
+	if (lookup.state === "failed" && !shouldKeepPolling(lookup.status)) return { kind: "offline" };
+	if (args.connection !== "open") return machine === "offline" ? { kind: "offline" } : { kind: "loading" };
 	if (lookup.state === "pending") return { kind: "loading" };
-	return shouldKeepPolling(lookup.status) ? { kind: "failed" } : { kind: "offline" };
+	return { kind: "failed" };
 }

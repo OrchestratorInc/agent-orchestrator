@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as snapshotModule from "./snapshot";
 
-const { cachedConversationState, createConversationPageCache, discardHistoricalPages, mergeConversationPages } = snapshotModule;
+const { cacheConversationPages, cachedConversationState, createConversationPageCache, discardHistoricalPages, mergeConversationPages, olderPageFits, withLivePage } = snapshotModule;
 type ConversationPage = snapshotModule.ConversationPage;
 
 function page(overrides: Partial<ConversationPage> = {}): ConversationPage {
@@ -46,6 +46,54 @@ describe("mobile conversation pagination", () => {
 	});
 });
 
+describe("live page and branch changes", () => {
+	const message = (id: string, sequence: number) => ({ kind: "message" as const, id, sequence, revision: 1, role: "user" as const, origin: "human" as const, text: id, streaming: false, createdAt: "2026-01-01" });
+
+	it("keeps loaded history across refreshes of the same branch", () => {
+		const live = page({ activeBranchId: "root", items: [message("new", 5)] });
+		const older = page({ activeBranchId: "root", items: [message("old", 1)] });
+		const refreshed = page({ activeBranchId: "root", items: [message("new", 5)] });
+		expect(withLivePage([live, older], refreshed)).toEqual([refreshed, older]);
+	});
+
+	it("drops source-branch history once an edit, even an uncertain one, activates another branch", () => {
+		const live = page({ activeBranchId: "root", items: [message("source-new", 5)] });
+		const older = page({ activeBranchId: "root", items: [message("source-old", 1)] });
+		const replacement = page({ activeBranchId: "child", items: [message("replacement", 6)] });
+		const pages = withLivePage([live, older], replacement);
+		expect(mergeConversationPages(pages)?.items.map((item) => item.id)).toEqual(["replacement"]);
+	});
+
+	it("starts over for another conversation and keeps history when an older host omits the branch", () => {
+		const older = page({ items: [message("old", 1)] });
+		expect(withLivePage([page(), older], page({ conversationId: "conv-2" }))).toHaveLength(1);
+		expect(withLivePage([page(), older], page())).toHaveLength(2);
+	});
+
+	it("keeps every unchanged row as the same object, so its view skips a render", () => {
+		const settled = message("settled", 1);
+		const live = page({ items: [settled, { ...message("reply", 2), text: "hel" }] });
+		const refreshed = page({ items: [message("settled", 1), { ...message("reply", 2), revision: 2, text: "hello" }] });
+		const [next] = withLivePage([live], refreshed);
+		expect(next.items[0]).toBe(settled);
+		expect(next.items[1]).toBe(refreshed.items[1]);
+	});
+
+	it("returns the same pages when a refresh changed nothing, so the screen does not render", () => {
+		const live = page({ items: [message("a", 1)], turns: [{ id: "t", state: "completed", requestedAt: "2026-01-01" }] });
+		const older = page({ items: [message("old", 0)] });
+		const pages = [live, older];
+		expect(withLivePage(pages, page({ items: [message("a", 1)], turns: [{ id: "t", state: "completed", requestedAt: "2026-01-01" }] }))).toBe(pages);
+		expect(withLivePage(pages, page({ items: [message("a", 1)], controller: { state: "busy" } }))).not.toBe(pages);
+	});
+
+	it("refuses an older page that loaded for a branch no longer active", () => {
+		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "root" }))).toBe(false);
+		expect(olderPageFits([page({ activeBranchId: "child" })], page({ activeBranchId: "child" }))).toBe(true);
+		expect(olderPageFits([], page())).toBe(false);
+	});
+});
+
 describe("mobile conversation reopen cache", () => {
 	it("retains multiple lightweight sessions within the mobile memory budget", () => {
 		const createMobileCache = (
@@ -81,6 +129,34 @@ describe("mobile conversation reopen cache", () => {
 		cache.set("server/session-1", [live, history]);
 
 		expect(cache.get("server/session-1")).toEqual([live]);
+	});
+
+	it("puts a conversation back in the cache on an unchanged refresh once another evicted it", () => {
+		const cache = createConversationPageCache(1);
+		const pages = [page({ sessionId: "session-1" })];
+		cache.set("session-1", pages);
+		cache.set("session-2", [page({ sessionId: "session-2" })]);
+		expect(cache.get("session-1")).toBeUndefined();
+
+		// The refresh found nothing new: the same pages are shown again.
+		cacheConversationPages(cache, "session-1", pages, pages);
+
+		expect(cache.get("session-1")?.[0]).toBe(pages[0]);
+	});
+
+	it("skips the write when nothing changed and the cache still holds the conversation", () => {
+		const inner = createConversationPageCache(2);
+		let writes = 0;
+		const cache = { get: inner.get, set: (key: string, value: ConversationPage[]) => { writes += 1; inner.set(key, value); } };
+		const pages = [page({ sessionId: "session-1" })];
+		cacheConversationPages(cache, "session-1", [], pages);
+		cacheConversationPages(cache, "session-1", pages, pages);
+		expect(writes).toBe(1);
+
+		const changed = [page({ sessionId: "session-1", latestSequence: 9 })];
+		cacheConversationPages(cache, "session-1", pages, changed);
+		expect(writes).toBe(2);
+		expect(inner.get("session-1")?.[0]).toBe(changed[0]);
 	});
 
 	it("evicts the least recently used session when bounded", () => {

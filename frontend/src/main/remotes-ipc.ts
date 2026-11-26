@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { probeRemote, type RemoteHealth } from "./remote-request";
 import {
 	applyRemoteChanges,
@@ -10,17 +11,18 @@ import {
 
 // What the renderer is allowed to see. The password stays in the main process.
 export type RemoteHostView = {
+	hostId: string;
 	label: string;
 	url: string;
 };
 
 export function toHostViews(entries: RemoteEntry[]): RemoteHostView[] {
-	return entries.map(({ label, url }) => ({ label, url }));
+	return entries.map(({ hostId, label, url }) => ({ hostId: hostId ?? "", label, url }));
 }
 
-export async function findRemote(path: string, url: string): Promise<RemoteEntry> {
-	const entry = (await readRemotes(path)).find((candidate) => candidate.url === url);
-	if (!entry) throw new Error(`no saved host for ${url}`);
+export async function findRemote(path: string, url: string, hostId?: string): Promise<RemoteEntry> {
+	const entry = (await readRemotes(path)).find((candidate) => candidate.url === url && (!hostId || candidate.hostId === hostId));
+	if (!entry) throw new AoError("SAVED_REMOTE_NOT_FOUND", `no saved host for ${url}`);
 	return entry;
 }
 

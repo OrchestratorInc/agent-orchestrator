@@ -1,0 +1,26 @@
+{
+	"title": "Docs",
+	"pages": [
+		"---Getting Started---",
+		"index",
+		"installation",
+		"agent-setup",
+		"quickstart",
+		"platforms",
+		"---Using Orchestrator---",
+		"dashboard",
+		"examples",
+		"guides",
+		"---Built-in capabilities---",
+		"plugins",
+		"---Reference---",
+		"cli",
+		"configuration",
+		"architecture",
+		"---Help---",
+		"troubleshooting",
+		"faq",
+		"migration",
+		"changelog"
+	]
+}

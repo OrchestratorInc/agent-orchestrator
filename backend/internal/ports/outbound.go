@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -74,6 +75,27 @@ type ClaimOutcome struct {
 type AgentMessenger interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
 }
+
+type clientMessageIDKey struct{}
+
+// WithClientMessageID asks the AgentMessenger that receives ctx to deliver its
+// message under clientMessageID, a stable id a Chat session records with the
+// message. A caller uses it to find out later whether that exact message
+// reached the agent. Messengers that cannot carry an id ignore it.
+func WithClientMessageID(ctx context.Context, clientMessageID string) context.Context {
+	return context.WithValue(ctx, clientMessageIDKey{}, clientMessageID)
+}
+
+// ClientMessageIDFromContext returns the id set by WithClientMessageID, or "".
+func ClientMessageIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(clientMessageIDKey{}).(string)
+	return id
+}
+
+// ErrDeliveryUnconfirmed is returned by an AgentMessenger that wrote the
+// message to the agent but could not confirm the agent accepted it. The
+// message is not lost; callers must not resend it as if it never arrived.
+var ErrDeliveryUnconfirmed = errors.New("session: message delivery was not acknowledged")
 
 // ---- runtime / agent / workspace plugin ports ----
 
@@ -221,6 +243,26 @@ type RuntimeConfig struct {
 	// not determine whether a terminal survives an app launch. Agent runtimes
 	// leave it disabled to retain scrollback and manual recovery.
 	ExitOnCommandCompletion bool
+	// StartOnAttach defers starting Argv until a viewer first attaches with its
+	// grid, so the process starts at the size that viewer shows. A shell started
+	// at a guessed grid lays its first prompt out for the wrong width (zsh's
+	// partial-line marker then leaks as a stray "%"). Only for terminals a user
+	// opened to look at: agents and scripted command terminals must start
+	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
+	StartOnAttach bool
+	// InitialCols and InitialRows, when both are set, start Argv immediately at
+	// that grid. They take precedence over StartOnAttach: a client that already
+	// knows the grid it will show need not wait for its own attach. Runtimes
+	// that cannot size at spawn ignore them.
+	InitialCols, InitialRows uint16
+	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
+	// GetStyledOutput is first called for this terminal. Rendering every byte
+	// costs CPU on heavy output; terminals nothing probes for styled output
+	// (user and command shells, not agents) need not pay it continuously.
+	// Runtimes that always render ignore it.
+	LazyStyledOutput bool
+	ReplayFile       string
+	OutputLines      int
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -246,6 +288,31 @@ type SupervisedProcessInspector interface {
 	IsSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
 }
 
+// RuntimeProcessRootInspector exposes the operating-system pids at the root of
+// a runtime's process tree (a tmux pane leader, a PTY host). Memory accounting
+// walks their descendants. It is an optional capability: a runtime without it
+// simply reports no memory reading rather than zero.
+type RuntimeProcessRootInspector interface {
+	ProcessRootPIDs(ctx context.Context, handle RuntimeHandle) ([]int, error)
+}
+
+// ProcessRoot is a root of a runtime's process tree together with the latest
+// moment that root process can have started. A process found at that pid that
+// started later is not the runtime's: the pid was reused after the runtime's
+// process exited. A zero StartedBy means the runtime has just observed the
+// root alive, so it cannot have been reused.
+type ProcessRoot struct {
+	PID       int
+	StartedBy time.Time
+}
+
+// RuntimeProcessRootBoundInspector is ProcessRootPIDs with evidence that each
+// root is still the runtime's own process. A force-stop that kills a tree must
+// not walk down from a pid another process now holds.
+type RuntimeProcessRootBoundInspector interface {
+	BoundedProcessRoots(ctx context.Context, handle RuntimeHandle) ([]ProcessRoot, error)
+}
+
 // ExactSupervisedProcessInspector is the strict launch-generation probe used
 // at agent-switch ownership boundaries. Unlike SupervisedProcessInspector it
 // must never treat an arbitrary child of a preserved shell as the requested
@@ -253,6 +320,24 @@ type SupervisedProcessInspector interface {
 // supervisor's managed agent child are both alive.
 type ExactSupervisedProcessInspector interface {
 	IsExactSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
+}
+
+// WorkloadCommandInspector counts the commands an agent is running in its
+// terminal: shells under the exact supervised agent of ref, and whatever runs
+// in them. A tool call, test run or dev server shows up here; an agent's own
+// helper processes (MCP servers, for example) do not. Restarting the agent
+// would kill those commands, so a restart waits while any run. An error means
+// the count could not be proved.
+type WorkloadCommandInspector interface {
+	RunningWorkloadCommands(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (int, error)
+}
+
+// SupervisedProcessRecordInspector reports whether a runtime handle contains
+// any AO supervisor. Review liveness uses this to keep pre-supervisor reviewer
+// launches working while still requiring an exact launch match for supervised
+// processes.
+type SupervisedProcessRecordInspector interface {
+	HasSupervisedProcessRecord(ctx context.Context, handle RuntimeHandle) (bool, error)
 }
 
 // ContainerReaper removes Docker containers a worker session owns, identified
@@ -312,6 +397,13 @@ type WorkspaceReclaimer interface {
 	DestroyReclaim(ctx context.Context, info WorkspaceInfo) (WorkspaceReclaim, error)
 }
 
+// WorkspacePreparationBranchCleaner removes a discarded speculative branch
+// only when it has no commits beyond its recorded base. Ordinary session
+// teardown must keep its branch for later restoration.
+type WorkspacePreparationBranchCleaner interface {
+	DeletePreparedBranch(ctx context.Context, info WorkspaceInfo) error
+}
+
 // Workspace is the isolated checkout an agent works in (a git worktree or clone).
 type Workspace interface {
 	Create(ctx context.Context, cfg WorkspaceConfig) (WorkspaceInfo, error)
@@ -344,11 +436,21 @@ type Workspace interface {
 }
 
 // WorkspaceDefaultBranchRefresher is an optional capability for Git-backed
-// workspaces. Resolution is local-only so callers can retain the canonical ref
-// even when the subsequent best-effort network refresh fails.
+// workspaces. Resolution names the canonical ref even when the subsequent
+// best-effort network refresh fails. An automatic default asks the remote for
+// its HEAD at most once per recheck window, within a bounded time, and
+// otherwise reads the HEAD Git cached locally.
 type WorkspaceDefaultBranchRefresher interface {
 	ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (WorkspaceDefaultBranch, error)
 	FetchDefaultBranch(ctx context.Context, repoPath string, target WorkspaceDefaultBranch) error
+}
+
+// WorkspaceDefaultBranchBudgetedResolver resolves a default branch with its
+// network work bounded by remoteCtx instead of a budget of its own, so the
+// repositories of one start share a single deadline. ctx still bounds the
+// local Git reads, which keep working after remoteCtx expires.
+type WorkspaceDefaultBranchBudgetedResolver interface {
+	ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (WorkspaceDefaultBranch, error)
 }
 
 // WorkspaceDefaultBranch is a locally resolved default-branch target. BaseRef
@@ -358,6 +460,9 @@ type WorkspaceDefaultBranch struct {
 	Remote  string
 	Branch  string
 	BaseRef string
+	// Fetched reports that resolving the target already fetched BaseRef from
+	// the remote, so the caller's own refresh would fetch it a second time.
+	Fetched bool
 }
 
 // WorkspaceObserver is an optional read-only capability implemented by
@@ -414,6 +519,7 @@ var (
 	// ErrWorkspaceBranchCheckedOutElsewhere reports the requested branch is
 	// already checked out in another worktree of the same repo.
 	ErrWorkspaceBranchCheckedOutElsewhere = errors.New("workspace: branch is already checked out in another worktree")
+	ErrWorkspaceBranchAlreadyExists       = errors.New("workspace: branch name already exists")
 	// ErrWorkspaceBranchNotFetched reports the requested branch exists nowhere
 	// reachable (no local head, no remote-tracking branch, no tag).
 	ErrWorkspaceBranchNotFetched = errors.New("workspace: branch is not fetched")
@@ -435,19 +541,37 @@ var (
 	// session the user deleted must leave the sidebar whether or not its
 	// worktree could be reclaimed.
 	ErrWorkspaceRepoUnavailable = errors.New("workspace: project repository is unavailable")
+	// ErrWorkspaceNotARepo reports that a registered project repository folder
+	// (a project, a workspace root, or a workspace child repository) is no
+	// longer a Git repository, for example because its .git was deleted.
+	// Adapters return it inside *WorkspaceNotARepoError only for those
+	// registered folders, never for a session worktree, so callers can surface
+	// recovery guidance instead of git's raw "not a git repository" exit 128.
+	ErrWorkspaceNotARepo = errors.New("workspace: project folder is not a git repository")
 	// ErrWorkspaceStale reports an AO-managed workspace path no longer points
 	// at a registered git worktree. Replacement paths may skip preservation for
 	// this state after path-safety checks, while real preserve failures remain
 	// fatal.
 	ErrWorkspaceStale = errors.New("workspace: stale managed worktree")
-	// ErrWorkspaceLocked reports a registered git worktree whose directory is
-	// missing but whose registration is locked (`git worktree lock`). `git
-	// worktree prune` deliberately leaves a locked registration in place even
-	// when its directory is gone, and `git worktree add`/`remove` at the same
-	// path then fail with an opaque git error. Callers must not treat this as
+	// ErrWorkspaceLocked reports a registered git worktree whose registration
+	// is locked (`git worktree lock`): one whose directory is missing on
+	// restore, or one that Destroy cannot remove. `git worktree prune`
+	// deliberately leaves a locked registration in place even when its
+	// directory is gone, and `git worktree add`/`remove` at the same path then
+	// fail with an opaque git error. Callers must not treat this as
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")
+	// ErrWorkspacePathOccupied reports that the path a new worktree must be
+	// created at is already taken by something git does not track as a
+	// worktree of the project's repository and that is not a recoverable
+	// leftover of one. The adapter never moves or deletes such a path; the
+	// user has to clear it before the workspace can be created.
+	ErrWorkspacePathOccupied = errors.New("workspace: worktree path is occupied")
+	// ErrWorkspaceUnsafePath reports a workspace path that is not a clean
+	// absolute path inside the adapter's managed root. Adapters never create,
+	// move or remove such a path, so teardown leaves it for the user.
+	ErrWorkspaceUnsafePath = errors.New("workspace: unsafe workspace path")
 	// ErrWorkspaceDeferred reports that a recognized transient handle-release
 	// failure survived the workspace removal retry budget, even though git has
 	// already unregistered the worktree so nothing is being reconciled. Session
@@ -485,6 +609,33 @@ var (
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
 
+// WorkspaceNotARepoError names the registered project repository folder that
+// git no longer recognizes as a repository. It matches ErrWorkspaceNotARepo via
+// errors.Is and keeps the underlying git failure in its chain for logs and
+// telemetry.
+type WorkspaceNotARepoError struct {
+	Path string
+	Err  error
+}
+
+func (e *WorkspaceNotARepoError) Error() string {
+	return fmt.Sprintf("%v: %q: %v", ErrWorkspaceNotARepo, e.Path, e.Err)
+}
+
+func (e *WorkspaceNotARepoError) Unwrap() []error {
+	return []error{ErrWorkspaceNotARepo, e.Err}
+}
+
+// WorkspaceTaskNamer renames a launched task's temporary branch. The checkout
+// never moves, so the returned info differs only in branch names, and on error
+// it still describes the branches Git holds, which may differ per repository.
+// RevertTaskBranch exactly undoes a rename the caller could not record, with
+// the same result contract.
+type WorkspaceTaskNamer interface {
+	RenameTaskBranch(ctx context.Context, info WorkspaceProjectInfo, branch string) (WorkspaceProjectInfo, error)
+	RevertTaskBranch(ctx context.Context, renamed, original WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
+}
+
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
 type WorkspaceConfig struct {
 	ProjectID domain.ProjectID
@@ -494,6 +645,11 @@ type WorkspaceConfig struct {
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
 	Branch        string
+	LastBranch    string
+	// FreshBranch never checks out a leftover local branch for a new
+	// speculative task; a collision gets a new suffixed branch instead.
+	FreshBranch      bool
+	RequireNewBranch bool
 	// BaseBranch is the explicitly configured branch new session branches are
 	// created from. Empty asks the workspace adapter to resolve an authoritative
 	// repository default; it must never infer from the checked-out branch.
@@ -501,16 +657,25 @@ type WorkspaceConfig struct {
 	// BaseRef is the exact canonical ref selected before any best-effort fetch.
 	// Restore carries it forward without re-resolving repository defaults.
 	BaseRef string
+	// StartRef starts a FreshBranch at exactly this commit instead of the
+	// repository default. Only session import sets it.
+	StartRef string
 	// RepoPath optionally overrides ProjectID-based repo resolution.
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.
 	Path string
+	// StartPoint creates a fresh branch at this commit instead of the base
+	// branch. Session forks use it to start at the source's HEAD.
+	StartPoint string
 }
 
 // WorkspaceInfo describes a created workspace — where it lives and its branch.
 type WorkspaceInfo struct {
 	Path   string
 	Branch string
+	// BaseSHA pins the branch tip when this worktree was created. Speculative
+	// cleanup uses it to avoid deleting any later user commit.
+	BaseSHA string
 	// BaseRef is the repository-default ref selected for session comparisons.
 	// It can differ from the remote session ref used to seed the worktree.
 	BaseRef   string
@@ -525,25 +690,22 @@ type WorkspaceInfo struct {
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath
 // and child RepoPath values are absolute paths to the canonical repositories.
 type WorkspaceProjectConfig struct {
-	ProjectID     domain.ProjectID
-	SessionID     domain.SessionID
-	Kind          domain.SessionKind
-	SessionPrefix string
-	Branch        string
-	RootRepoPath  string
+	ProjectID        domain.ProjectID
+	SessionID        domain.SessionID
+	Kind             domain.SessionKind
+	SessionPrefix    string
+	Branch           string
+	FreshBranch      bool
+	RequireNewBranch bool
+	RootRepoPath     string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
 	BaseBranch string
 	BaseRef    string
-	Repos      []WorkspaceProjectRepoConfig
-	Assets     []WorkspaceProjectAssetConfig
-}
-
-// WorkspaceProjectAssetConfig describes a non-repository child directory that
-// is copied from the canonical workspace into each session workspace.
-type WorkspaceProjectAssetConfig struct {
-	RelativePath string
-	SourcePath   string
+	// StartRef starts the root worktree at exactly this commit. Only session
+	// import sets it; child repositories already start from their BaseRef.
+	StartRef string
+	Repos    []WorkspaceProjectRepoConfig
 }
 
 // WorkspaceProjectRepoConfig describes one registered child repo in a
@@ -573,6 +735,9 @@ type WorkspaceRepoInfo struct {
 	Path     string
 	Branch   string
 	BaseSHA  string
+	// CreationSHA pins a speculative branch's initial tip for safe cleanup.
+	// BaseSHA stays the comparison base and may be a different commit.
+	CreationSHA string
 	// BaseRef is the repository-default ref persisted with BaseSHA so comparisons
 	// can recompute a merge base after that default advances or the session is
 	// rebased. It can differ from the remote session ref used to seed the worktree.

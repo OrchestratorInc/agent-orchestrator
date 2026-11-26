@@ -49,6 +49,8 @@ func TestLastPromptComposerState(t *testing.T) {
 		{name: "dim placeholder", output: "❯ \x1b[2mAsk a question\x1b[0m", want: ComposerEmpty},
 		{name: "draft", output: "❯ keep this draft", want: ComposerDraft},
 		{name: "wrapped draft", output: "❯\nkeep this draft", want: ComposerDraft},
+		{name: "truecolor draft", output: "❯ \x1b[38;2;246;226;183mkeep this draft", want: ComposerDraft},
+		{name: "colon truecolor draft", output: "❯ \x1b[38:2::246:226:183mkeep this draft", want: ComposerDraft},
 		{
 			// A rule below the prompt ends the composer's content region;
 			// provider status chrome below that rule is not human input.
@@ -178,5 +180,42 @@ func TestPromptChromeLabelsAreExemptOnContinuationRows(t *testing.T) {
 	mixed := rule + "\n❯ Claude Code review please\n" + rule + "\n⏵⏵ auto mode on"
 	if got := LastBorderedPromptComposerState(mixed, "❯", "Claude Code"); got != ComposerDraft {
 		t.Fatalf("label-prefixed human text = %v, want draft", got)
+	}
+}
+
+// Claude Code draws its prompt suggestion with its own cursor, a reverse-video
+// cell, on the first letter and the rest dim while it believes its terminal has
+// focus (#7523). That is an empty composer: sends must go through. A typed
+// draft under the same cursor still blocks them, since its other letters are
+// normal text.
+func TestLastBorderedPromptComposerStateReadsTheCursorOverASuggestionAsEmpty(t *testing.T) {
+	rule := strings.Repeat("─", 48)
+	tests := []struct {
+		name string
+		row  string
+		want ComposerState
+	}{
+		// The row the conpty host renders for a focused Claude Code 2.1.314.
+		{name: "suggestion under the cursor", row: "❯ \x1b[7mg\x1b[27;2mo TD 2s fix\x1b[m", want: ComposerEmpty},
+		{name: "suggestion without focus", row: "❯ \x1b[2mgo TD 2s fix\x1b[22m", want: ComposerEmpty},
+		{name: "cursor alone", row: "❯ \x1b[7m \x1b[27m", want: ComposerEmpty},
+		{name: "draft, cursor after it", row: "❯ go fix\x1b[7m \x1b[27m", want: ComposerDraft},
+		{name: "draft, cursor on its first letter", row: "❯ \x1b[7mg\x1b[27mo fix", want: ComposerDraft},
+		{name: "draft, cursor inside it", row: "❯ go \x1b[7mf\x1b[27mix", want: ComposerDraft},
+		{name: "reset ends the cursor", row: "❯ \x1b[7mg\x1b[0mo fix", want: ComposerDraft},
+		// No dim suggestion follows the reversed letter, so it is typed text.
+		{name: "one-letter draft under the cursor", row: "❯ \x1b[7mg\x1b[27m", want: ComposerDraft},
+		{name: "one-letter draft, cursor and padding", row: "❯ \x1b[7mg\x1b[27m   ", want: ComposerDraft},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := rule + "\n" + tt.row + "\n" + rule + "\n\x1b[2m? for shortcuts\x1b[22m"
+			if got := LastBorderedPromptComposerState(output, "❯"); got != tt.want {
+				t.Fatalf("LastBorderedPromptComposerState(%q) = %v, want %v", tt.row, got, tt.want)
+			}
+			if got := LastPromptComposerState(tt.row, "❯"); got != tt.want {
+				t.Fatalf("LastPromptComposerState(%q) = %v, want %v", tt.row, got, tt.want)
+			}
+		})
 	}
 }

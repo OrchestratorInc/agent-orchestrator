@@ -1,4 +1,4 @@
-# Development Guide
+# Development guide
 
 How to set up, build, run, and test Agent Orchestrator locally.
 
@@ -6,18 +6,22 @@ How to set up, build, run, and test Agent Orchestrator locally.
 
 | Tool       | Minimum version | Notes                                                                  |
 | ---------- | --------------- | ---------------------------------------------------------------------- |
-| Go         | 1.25.7          | `go version` to check; install via [go.dev](https://go.dev/dl/)        |
-| Node.js    | 20.19.0         | `node --version`; install via [nodejs.org](https://nodejs.org/)        |
+| Go         | 1.27.4          | `go version` to check; install via [go.dev](https://go.dev/dl/)        |
+| Node.js    | 24         | `node --version`; install via [nodejs.org](https://nodejs.org/)        |
 | npm        | 10              | Ships with Node.js                                                     |
 | Nix (opt.) | -               | `nix develop` drops you into a shell with all deps; see `../flake.nix` |
 
 Additional runtime dependencies for the daemon:
 
 - **git** (for worktree creation and agent integration)
-- **A running agent CLI** (Claude Code, Codex, Aider, etc.) - see
-  [the installation guide](https://orchestrator.inc/docs/installation)
+- **A running agent CLI** (Claude Code, Codex, Aider, etc.). See [the installation
+  guide](https://docs.orchestrator.inc/installation).
 
-## Project Layout
+For source terminal runs on macOS, install/configure tmux; packaged builds
+bundle it. New macOS/Linux sessions use detached native PTY hosts, while old
+handles and host-start fallback use tmux. `ao doctor` still checks tmux on both.
+
+## Project layout
 
 ```text
 agent-orchestrator/
@@ -43,7 +47,7 @@ agent-orchestrator/
 ## Getting the code
 
 ```bash
-git clone https://github.com/AgentWrapper/agent-orchestrator.git
+git clone https://github.com/OrchestratorInc/agent-orchestrator.git
 cd agent-orchestrator
 npm ci
 ```
@@ -51,7 +55,7 @@ npm ci
 ### Branching
 
 ```bash
-git checkout -b my-feature-branch
+git checkout -b ao/my-feature-branch origin/main
 ```
 
 Keep your branch up to date by rebasing on main:
@@ -63,7 +67,8 @@ git rebase origin/main
 
 ### Committing
 
-Keep commits atomic - one logical change per commit. Stage related changes and commit with a conventional message:
+Keep commits atomic. Use one logical change per commit. Stage related changes and
+commit with a conventional message:
 
 ```bash
 git add <files>
@@ -106,7 +111,7 @@ go build ./...
 ```bash
 cd backend
 # Start the daemon (loopback HTTP server on 127.0.0.1)
-go run .
+go run ./cmd/ao daemon
 ```
 
 The CLI is built with Cobra. From `backend/`, run `go run ./cmd/ao --help` for
@@ -129,6 +134,17 @@ npm run lint
 
 ### Code generation
 
+Create new SQLite migrations from the repository root:
+
+```bash
+npm run migration:create -- add_reports
+```
+
+The command creates a Goose SQL template with a UTC `YYYYMMDDHHMMSSsss` ID.
+Fill in its SQL and append the generated ID and filename to `shippedMigrations`
+in `backend/internal/storage/sqlite/migrate_burned_versions_test.go`.
+Keep existing migration IDs, filenames, and SQL unchanged.
+
 ```bash
 # Regenerate sqlc code after editing queries or schema
 npm run sqlc
@@ -143,8 +159,14 @@ npm run api
 
 ```bash
 cd frontend
-npm install
+npm ci                 # or: npm run dev:warm
 ```
+
+`npm run dev:warm` makes a fresh checkout launchable quickly. When another
+checkout already ran `npm ci` against the same `package-lock.json`, it clones
+that install (copy-on-write) instead of downloading again, then runs the
+`predev` build steps. Its caches live under `~/.ao/warm` and
+`~/.ao/build-cache`. See `AGENTS.md` for its flags.
 
 ### Run in development mode
 
@@ -196,10 +218,10 @@ npm run frontend:typecheck
 
 ## Mobile companion app
 
-The mobile companion app is still being wired into the contributor docs. Do not
-assume `packages/mobile/README.md` is a complete setup guide on this branch.
-Until a tracked guide lands, use the desktop/backend workflow above and check
-open issues/PRs for current mobile-specific setup notes.
+The Expo app lives in `packages/mobile/`. Its
+[README](../packages/mobile/README.md) covers prerequisites, turning on Connect
+Mobile on the desktop, building the dev client for a device or simulator,
+pairing, over-the-air updates, and store releases.
 
 ## Running end-to-end
 
@@ -209,14 +231,14 @@ open issues/PRs for current mobile-specific setup notes.
 
 For CLI-only usage, open two terminals:
 
-**Terminal 1 -- start the daemon:**
+**Terminal 1: start the daemon.**
 
 ```bash
 cd backend
-go run .
+go run ./cmd/ao daemon
 ```
 
-**Terminal 2 -- interact while the daemon is running:**
+**Terminal 2: interact while the daemon is running.**
 
 ```bash
 cd backend
@@ -228,8 +250,8 @@ go run ./cmd/ao --help
 
 ### Backend
 
-- Backend tests use `httptest.Server` and injected fakes - no real daemon
-  required.
+- Backend tests use `httptest.Server` and injected fakes. They do not require a
+  real daemon.
 - Run the narrowest relevant test suite first (e.g. `go test ./internal/cli/`),
   then the full suite.
 
@@ -247,10 +269,10 @@ go run ./cmd/ao --help
 
 | Symptom                              | Likely cause                               | Fix                                                                                                                                                                                                                                                                               |
 | ------------------------------------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `go: go.mod requires go >= 1.25`     | Wrong Go version                           | `go version`; install Go 1.25.7+ from [go.dev]                                                                                                                                                                                                                                    |
+| `go: go.mod requires go >= 1.27`     | Wrong Go version                           | `go version`; install Go 1.27.4+ from [go.dev](https://go.dev/dl/)                                                                                                                                                                                                                                    |
 | `sqlc generate` produces errors      | Query SQL syntax or schema migration issue | Check `backend/internal/storage/sqlite/queries/` for SQL syntax, placeholder counts, and referenced columns/tables; if you changed the schema, add a new migration in `backend/internal/storage/sqlite/migrations/` instead of editing an existing one, then rerun `npm run sqlc` |
 | `openapi.yaml` is stale              | Changed DTOs without regenerating          | Run `npm run api` from repo root                                                                                                                                                                                                                                                  |
-| `golangci-lint` failures             | Linter version mismatch                    | Install v2.12.2 or use `npm run lint` from root                                                                                                                                                                                                                                   |
+| `golangci-lint` failures             | Linter version mismatch                    | Install v2.14.0 or use `npm run lint` from root                                                                                                                                                                                                                                   |
 | Tests fail with "connection refused" | Test tries real daemon                     | Tests should use `httptest`; check for `go test ./...` without a live daemon                                                                                                                                                                                                      |
 
 ### Frontend build / test failures
@@ -259,12 +281,12 @@ go run ./cmd/ao --help
 | ------------------------------------- | ----------------------- | ------------------------------------------------------------ |
 | `npm run typecheck` has type errors   | API types out of sync   | Run `npm run api` from repo root to regenerate               |
 | `npm run dev` fails on native modules | Missing build tools     | Install Python + C++ build tools for `node-gyp`              |
-| `npm install` or `npm ci` fails       | Node.js version too old | `node --version`; must be 20.19.0+ (see prerequisites above) |
+| `npm install` or `npm ci` fails       | Node.js version too old | `node --version`; must be 24+ (see prerequisites above) |
 | Blank window or crash on Linux        | Broken GPU driver stack | Start with `AO_DISABLE_GPU=1` to skip hardware acceleration  |
 
 ### Code generation drift
 
-If CI fails on `sqlc-drift`, run the pinned generator from the repository root
+If CI fails on the storage drift step of `codegen-drift`, run the pinned generator from the repository root
 and commit the generated storage changes together with their SQL/config source:
 
 ```bash
@@ -276,16 +298,15 @@ The diff check should pass after committing the regenerated files. Do not edit
 `gen/` by hand or use a different sqlc version; the version in `package.json` is
 authoritative. Review any unexpected query or generated type changes before
 committing. The storage tests also check that the config is valid YAML and keeps
-the boolean overrides for `agent_switch_failure_policy.enabled` and
-`app_settings.cloud_offering`.
+the boolean override for `app_settings.cloud_offering`.
 
-If CI fails on the `api-drift` check, the OpenAPI-generated files are out of sync with source. Regenerate them locally and commit the updated files:
+If CI fails on the schema.ts drift step of `codegen-drift`, the OpenAPI-generated files are out of sync with source. Regenerate them locally and commit the updated files:
 
 ```bash
 npm run api
 ```
 
-If regeneration introduces unexpected diffs beyond your changes, check that your local tool versions match CI (Go 1.25.7+, Node 20.19.0+, npm 10+).
+If regeneration introduces unexpected diffs beyond your changes, check that your local tool versions match CI (Go 1.27.4+, Node 24, npm 10+).
 
 ## OpenAPI spec and generated types
 

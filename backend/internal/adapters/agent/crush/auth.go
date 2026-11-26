@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -25,32 +26,45 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// crushAPIKeyEnvVars lists the environment variables Crush accepts as direct
+// provider credentials. Tests share it so their isolation cannot drift from
+// the variables crushLocalAuthStatus actually checks.
+var crushAPIKeyEnvVars = []string{
+	"HYPER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VERCEL_API_KEY",
+	"GEMINI_API_KEY", "ZAI_API_KEY", "MINIMAX_API_KEY", "SYNTHETIC_API_KEY",
+	"HF_TOKEN", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY", "IONET_API_KEY",
+	"ALIBABA_SINGAPORE_API_KEY", "ALIBABA_US_API_KEY", "GROQ_API_KEY",
+	"AVIAN_API_KEY", "OPENCODE_API_KEY", "AZURE_OPENAI_API_KEY", "MOONSHOT_API_KEY",
+	"AWS_BEARER_TOKEN_BEDROCK",
+}
+
 func crushLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	for _, name := range []string{
-		"HYPER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VERCEL_API_KEY",
-		"GEMINI_API_KEY", "ZAI_API_KEY", "MINIMAX_API_KEY", "SYNTHETIC_API_KEY",
-		"HF_TOKEN", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY", "IONET_API_KEY",
-		"ALIBABA_SINGAPORE_API_KEY", "ALIBABA_US_API_KEY", "GROQ_API_KEY",
-		"AVIAN_API_KEY", "OPENCODE_API_KEY", "AZURE_OPENAI_API_KEY", "MOONSHOT_API_KEY",
-		"AWS_BEARER_TOKEN_BEDROCK",
-	} {
+	for _, name := range crushAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			method := domain.AgentAccountMethodAPIKey
+			if strings.HasSuffix(name, "_TOKEN") || strings.HasPrefix(name, "AWS_BEARER_TOKEN") {
+				method = domain.AgentAccountMethodToken
+			}
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
 	if strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID")) != "" &&
 		strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AWS_ACCESS_KEY_ID").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	if strings.TrimSpace(os.Getenv("AWS_PROFILE")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AWS_PROFILE").WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	if strings.TrimSpace(os.Getenv("VERTEXAI_PROJECT")) != "" &&
 		strings.TrimSpace(os.Getenv("VERTEXAI_LOCATION")) != "" &&
 		crushGoogleCredentialConfigured() {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("VERTEXAI_PROJECT").WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	// providers.json is Crush's downloaded model/provider catalog, not a

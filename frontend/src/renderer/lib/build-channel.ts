@@ -2,7 +2,36 @@ export function isNightlyBuild(version?: string): boolean {
 	return version?.includes("-nightly.") ?? false;
 }
 
+/**
+ * Whether this is the Vite dev server (`npm run dev`), whose daemon and
+ * credentials live under ~/.ao/dev (selected in main by !app.isPackaged).
+ * Tests (mode "test") and packaged builds (mode "production") are not
+ * development builds: their account links are real and may be published.
+ * In the renderer, Vite sets import.meta.env.MODE to "development" only
+ * when running the unpackaged dev server.
+ */
+export function isDevelopmentBuild(mode: string = import.meta.env.MODE): boolean {
+	return mode === "development";
+}
+
 export function isCommandPaletteEnabled(version?: string, isDev: boolean = import.meta.env.DEV): boolean {
+	return isDev || isNightlyBuild(version);
+}
+
+/**
+ * Whether this build has Teams (sharing with people and teams, the Teams
+ * settings page, shared-with-you notices, access tags). VITE_AO_TEAMS decides
+ * when the build set it ("on" or "off"); otherwise dev and nightly builds have
+ * Teams and stable ones don't. Without Teams, Share makes links only, as
+ * before Teams. See src/shared/teams-flag.ts.
+ */
+export function isTeamsEnabled(
+	version?: string,
+	isDev: boolean = import.meta.env.DEV,
+	flag: string | undefined = import.meta.env.VITE_AO_TEAMS,
+): boolean {
+	if (flag === "on") return true;
+	if (flag === "off") return false;
 	return isDev || isNightlyBuild(version);
 }
 

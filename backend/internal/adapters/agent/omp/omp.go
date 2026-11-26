@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -32,10 +33,16 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// EmitsSemanticMessageAcceptance reports that AO's OMP plugin includes the
+// accepted prompt text in its user-prompt-submit callback.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
+var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
@@ -72,6 +79,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	if prompt := strings.TrimSpace(cfg.Prompt); prompt != "" {
 		cmd = append(cmd, prompt)
 	}
@@ -101,6 +111,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	cmd = append(cmd, "--resume", agentSessionID)
 	return cmd, true, nil
 }
@@ -112,6 +125,26 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	}
 	info, ok := agentbase.StandardSessionInfo(session)
 	return info, ok, nil
+}
+
+// NativeConversationID bridges OMP's terminal and ACP session ids: the ACP
+// session/new id and the id `omp --resume` accepts are the same session UUID
+// that names ~/.omp/agent/sessions/<cwd slug>/<timestamp>_<id>.jsonl.
+func (p *Plugin) NativeConversationID(
+	ctx context.Context,
+	session ports.SessionRef,
+	currentMode domain.SessionMode,
+	providerConversationID string,
+) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if currentMode == domain.SessionModeChat {
+		id := strings.TrimSpace(providerConversationID)
+		return id, id != "", nil
+	}
+	id := strings.TrimSpace(session.Metadata[ports.MetadataKeyAgentSessionID])
+	return id, id != "", nil
 }
 
 // NativeConversationExists reports whether OMP has a persisted session file for id.
@@ -214,4 +247,12 @@ func (p *Plugin) ompBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

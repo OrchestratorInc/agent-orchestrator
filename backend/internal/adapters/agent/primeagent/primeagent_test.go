@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -40,7 +42,7 @@ func TestGetConfigSpecReportsModel(t *testing.T) {
 
 func TestGetLaunchCommandOrdersFlagsAndProtectsPrompt(t *testing.T) {
 	dataDir := t.TempDir()
-	p := &Plugin{resolvedBinary: "/bin/prime-agent"}
+	p := &Plugin{resolvedBinary: "/bin/prime-agent", extensionFlag: map[string]bool{"/bin/prime-agent": true}, daemonSocketFlag: map[string]bool{"/bin/prime-agent": true}}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
 		Config:       ports.AgentConfig{Model: "  prime/model  "},
 		DataDir:      dataDir,
@@ -54,6 +56,7 @@ func TestGetLaunchCommandOrdersFlagsAndProtectsPrompt(t *testing.T) {
 	want := []string{
 		"/bin/prime-agent",
 		"--session-dir", filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
+		"--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"),
 		"--extension", filepath.Join(dataDir, "agent-runtime", "prime-agent", "ao-activity.ts"),
 		"--append-system-prompt", "follow repository rules",
 		"--model", "prime/model",
@@ -66,7 +69,7 @@ func TestGetLaunchCommandOrdersFlagsAndProtectsPrompt(t *testing.T) {
 
 func TestGetLaunchCommandOmitsBlankOptionalArguments(t *testing.T) {
 	dataDir := t.TempDir()
-	p := &Plugin{resolvedBinary: "prime-agent"}
+	p := &Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}, daemonSocketFlag: map[string]bool{"prime-agent": true}}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
 		Config:       ports.AgentConfig{Model: " \t "},
 		DataDir:      dataDir,
@@ -79,6 +82,7 @@ func TestGetLaunchCommandOmitsBlankOptionalArguments(t *testing.T) {
 	want := []string{
 		"prime-agent",
 		"--session-dir", filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
+		"--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"),
 		"--extension", filepath.Join(dataDir, "agent-runtime", "prime-agent", "ao-activity.ts"),
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -91,7 +95,7 @@ func TestGetLaunchCommandReadsSystemPromptFileAndPrefersInline(t *testing.T) {
 	if err := os.WriteFile(file, []byte("instructions from file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := &Plugin{resolvedBinary: "prime-agent"}
+	p := &Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}, daemonSocketFlag: map[string]bool{"prime-agent": true}}
 
 	fromFile, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
 		DataDir:          t.TempDir(),
@@ -122,18 +126,18 @@ func TestGetLaunchCommandOmitsWhitespaceSystemPromptFile(t *testing.T) {
 	if err := os.WriteFile(file, []byte(" \n\t "), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := &Plugin{resolvedBinary: "prime-agent"}
+	p := &Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}, daemonSocketFlag: map[string]bool{"prime-agent": true}}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: t.TempDir(), SystemPromptFile: file})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cmd) != 5 {
+	if len(cmd) != 7 {
 		t.Fatalf("command = %#v, want only required arguments", cmd)
 	}
 }
 
 func TestGetLaunchCommandReportsSystemPromptFileError(t *testing.T) {
-	p := &Plugin{resolvedBinary: "prime-agent"}
+	p := &Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}, daemonSocketFlag: map[string]bool{"prime-agent": true}}
 	missing := filepath.Join(t.TempDir(), "missing.md")
 	_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: t.TempDir(), SystemPromptFile: missing})
 	if err == nil {
@@ -154,12 +158,12 @@ func TestGetLaunchCommandIgnoresEveryPermissionMode(t *testing.T) {
 	}
 	for _, mode := range modes {
 		t.Run(string(mode), func(t *testing.T) {
-			p := &Plugin{resolvedBinary: "prime-agent"}
+			p := &Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}, daemonSocketFlag: map[string]bool{"prime-agent": true}}
 			cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: t.TempDir(), Permissions: mode})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(cmd) != 5 {
+			if len(cmd) != 7 {
 				t.Fatalf("command = %#v, want no permission argument", cmd)
 			}
 		})
@@ -181,7 +185,7 @@ func TestCapabilities(t *testing.T) {
 
 func TestGetRestoreCommandUsesNativeSessionAndRoleConfig(t *testing.T) {
 	dataDir := t.TempDir()
-	p := &Plugin{resolvedBinary: "/bin/prime-agent"}
+	p := &Plugin{resolvedBinary: "/bin/prime-agent", extensionFlag: map[string]bool{"/bin/prime-agent": true}, daemonSocketFlag: map[string]bool{"/bin/prime-agent": true}}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		DataDir:      dataDir,
 		SystemPrompt: "coordinate workers only",
@@ -199,6 +203,7 @@ func TestGetRestoreCommandUsesNativeSessionAndRoleConfig(t *testing.T) {
 	want := []string{
 		"/bin/prime-agent",
 		"--session-dir", filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
+		"--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"),
 		"--extension", filepath.Join(dataDir, "agent-runtime", "prime-agent", "ao-activity.ts"),
 		"--append-system-prompt", "coordinate workers only",
 		"--model", "anthropic/claude-opus-4-8",
@@ -214,7 +219,7 @@ func TestGetRestoreCommandReadsSystemPromptFile(t *testing.T) {
 	if err := os.WriteFile(file, []byte("restored role instructions"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := &Plugin{resolvedBinary: "prime-agent"}
+	p := &Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}, daemonSocketFlag: map[string]bool{"prime-agent": true}}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		DataDir:          t.TempDir(),
 		SystemPromptFile: file,
@@ -326,5 +331,25 @@ func TestResolvePrimeAgentBinaryNotFound(t *testing.T) {
 	_, err := ResolvePrimeAgentBinary(context.Background())
 	if !errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		t.Fatalf("ResolvePrimeAgentBinary error = %v, want ports.ErrAgentBinaryNotFound", err)
+	}
+}
+
+func TestGetLaunchCommandLeavesOutExtensionForABuildWithoutIt(t *testing.T) {
+	var asked []string
+	p := &Plugin{resolvedBinary: "prime-agent", daemonSocketFlag: map[string]bool{"prime-agent": false}, runCommand: func(_ context.Context, _, _ string, _ map[string]string, args ...string) ([]byte, error) {
+		asked = append(asked, strings.Join(args, " "))
+		return []byte("  --session-dir <dir>  Use a custom session directory\n"), nil
+	}}
+	for range 2 {
+		cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(cmd, "--extension") {
+			t.Fatalf("command = %q, want no --extension for prime-agent 0.10", cmd)
+		}
+	}
+	if len(asked) != 1 || asked[0] != "--help" {
+		t.Fatalf("help probes = %q, want one cached --help", asked)
 	}
 }

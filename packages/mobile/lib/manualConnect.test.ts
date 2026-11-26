@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
-import { adoptManualConnection } from "./manualConnect";
+import {
+	AccountManagedHostError,
+	adoptManualConnection,
+	DifferentMachineError,
+	editedManualHost,
+	persistManualHostEdit,
+} from "./manualConnect";
 
 // A literal rather than DEFAULT_CONFIG: config.ts reaches native storage at
 // import time, and this is pure logic that needs none of it.
@@ -25,10 +31,18 @@ function deps(over: Partial<Parameters<typeof adoptManualConnection>[1]> = {}) {
 // list exists, migration skips and resolution reconnects the active host — so a
 // manual connection was silently replaced by the previous machine on reload.
 describe("adopting a manual connection", () => {
+	it("rejects a blank machine name before persisting", async () => {
+		const d = deps();
+
+		await expect(adoptManualConnection(cfg, d, "   ")).rejects.toThrow("Machine name is required");
+		expect(d.saveHost).not.toHaveBeenCalled();
+		expect(d.setActiveHost).not.toHaveBeenCalled();
+	});
+
 	it("stores the machine so it survives a reload", async () => {
 		const d = deps();
 
-		await adoptManualConnection(cfg, d);
+		await adoptManualConnection(cfg, d, "Studio Mac");
 
 		expect(d.saveHost).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -41,19 +55,34 @@ describe("adopting a manual connection", () => {
 
 	it("makes it the active machine, not merely another entry", async () => {
 		const d = deps();
-		await adoptManualConnection(cfg, d);
+		await adoptManualConnection(cfg, d, "Studio Mac");
 		expect(d.setActiveHost).toHaveBeenCalledWith("h_manual");
 	});
 
-	// A TLS address entered by hand is the tailnet path; plain is the LAN.
-	it("records a secure address as a tailscale endpoint", async () => {
+	// The kind decides how the race ranks the route and how often a tunnel is
+	// polled, so it follows the name, not whether the route speaks TLS.
+	it.each([
+		["a quick tunnel", "abc.trycloudflare.com", true, "tunnel"],
+		["a fixed address", "h-0123456789abcdef0123.useao.dev", true, "tunnel"],
+		["a tailnet name", "my-pc.tail1234.ts.net", true, "tailscale"],
+		["a tailnet address", "100.101.102.103", false, "tailscale"],
+		["a private address behind TLS", "192.168.1.42", true, "lan"],
+		["a custom domain", "ao.example.com", true, "lan"],
+	])("records %s as a %s endpoint", async (_name, host, secure, kind) => {
 		const d = deps();
-		await adoptManualConnection({ ...cfg, secure: true, httpPort: "443" }, d);
-		expect(d.saveHost).toHaveBeenCalledWith(
-			expect.objectContaining({
-				endpoints: [{ kind: "tailscale", host: "192.168.1.42", port: 443, secure: true }],
-			}),
-		);
+		await adoptManualConnection({ ...cfg, host, secure, httpPort: secure ? "443" : "3011" }, d, "Studio Mac");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({
+			endpoints: [{ kind, host, port: secure ? 443 : 3011, secure }],
+		}));
+	});
+
+	it("uses a chosen name and stores a hostname rather than a pasted URL", async () => {
+		const d = deps();
+		await adoptManualConnection({ ...cfg, host: "https://example.trycloudflare.com/", secure: true, httpPort: "443" }, d, " AzureLinux ");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({
+			name: "AzureLinux",
+			endpoints: [{ kind: "tunnel", host: "example.trycloudflare.com", port: 443, secure: true }],
+		}));
 	});
 
 	// An older daemon has no identity probe. The machine is still worth storing
@@ -62,9 +91,228 @@ describe("adopting a manual connection", () => {
 	it("stores the machine even when it reports no identity", async () => {
 		const d = deps({ identity: vi.fn(async () => "") });
 
-		const id = await adoptManualConnection(cfg, d);
+		const id = await adoptManualConnection(cfg, d, "Studio Mac");
 
 		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "" }));
 		expect(id).toBe("");
+	});
+});
+
+it("edits one saved address and password without dropping other addresses or identity", () => {
+	const host = {
+		id: "h_manual", name: "Old", platform: "linux", token: "old", lastConnected: 42,
+		endpoints: [
+			{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false },
+			{ kind: "tunnel" as const, host: "old.trycloudflare.com", port: 443, secure: true },
+		],
+	};
+	const edited = editedManualHost(host, { ...cfg, host: "new.trycloudflare.com", httpPort: "443", secure: true, password: "new" }, " AzureLinux ", 1);
+	expect(edited).toEqual({ ...host, name: "AzureLinux", token: "new", endpoints: [host.endpoints[0], { kind: "tunnel", host: "new.trycloudflare.com", port: 443, secure: true }] });
+});
+
+describe("persisting an inline machine edit", () => {
+	const host = {
+		id: "h_manual", name: "Old", platform: "linux", token: "old", lastConnected: 42,
+		endpoints: [
+			{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false },
+			{ kind: "tunnel" as const, host: "old.trycloudflare.com", port: 443, secure: true },
+		],
+	};
+
+	function editDeps(overrides: Partial<Parameters<typeof persistManualHostEdit>[4]> = {}) {
+		return {
+			probe: vi.fn(async () => ({ hostId: "h_manual" })),
+			ping: vi.fn(async () => {}),
+			saveHost: vi.fn(async () => {}),
+			renameHost: vi.fn(async () => {}),
+			...overrides,
+		};
+	}
+
+	it("refuses route or password edits on an account-synced machine but still renames it", async () => {
+		const managed = { ...host, accountUserId: "user-a" };
+		for (const edit of [{ host: "10.0.0.9", password: "old" }, { host: "192.168.1.42", password: "new" }]) {
+			const d = editDeps();
+			await expect(persistManualHostEdit(managed, { ...cfg, ...edit }, "Studio Mac", 0, d)).rejects.toBeInstanceOf(AccountManagedHostError);
+			expect(d.probe).not.toHaveBeenCalled();
+			expect(d.ping).not.toHaveBeenCalled();
+			expect(d.saveHost).not.toHaveBeenCalled();
+		}
+		const d = editDeps();
+		await persistManualHostEdit(managed, { ...cfg, host: "192.168.1.42", password: "old" }, "Studio Mac", 0, d);
+		expect(d.renameHost).toHaveBeenCalledWith("h_manual", "Studio Mac");
+	});
+
+	it("renames locally without probing an unchanged connection", async () => {
+		const d = editDeps();
+
+		await persistManualHostEdit(
+			host,
+			{ ...cfg, host: "192.168.1.42", password: "old" },
+			" Studio Mac ",
+			0,
+			d,
+		);
+
+		expect(d.renameHost).toHaveBeenCalledWith("h_manual", "Studio Mac");
+		expect(d.probe).not.toHaveBeenCalled();
+		expect(d.ping).not.toHaveBeenCalled();
+		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+
+	it("verifies a changed route before authenticating and saving it", async () => {
+		const order: string[] = [];
+		const d = editDeps({
+			probe: vi.fn(async () => { order.push("probe"); return { hostId: "h_manual" }; }),
+			ping: vi.fn(async () => { order.push("ping"); }),
+			saveHost: vi.fn(async () => { order.push("save"); }),
+		});
+
+		const saved = await persistManualHostEdit(
+			host,
+			{ ...cfg, host: " https://new.trycloudflare.com/ ", httpPort: "443", secure: true, password: "new" },
+			"AzureLinux",
+			1,
+			d,
+		);
+
+		expect(order).toEqual(["probe", "ping", "save"]);
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({
+			host: "new.trycloudflare.com",
+			httpPort: "443",
+			password: "new",
+			hostId: "h_manual",
+		}));
+		expect(saved.endpoints[1]).toEqual({ kind: "tunnel", host: "new.trycloudflare.com", port: 443, secure: true });
+	});
+
+	it("splits a pasted host:port instead of saving host:443 with another port on top (#7981)", async () => {
+		const d = editDeps();
+
+		const saved = await persistManualHostEdit(
+			host,
+			{ ...cfg, host: "https://new.trycloudflare.com:443", httpPort: "", secure: true, password: "old" },
+			"Old",
+			1,
+			d,
+		);
+
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "new.trycloudflare.com", httpPort: "443" }));
+		expect(saved.endpoints[1]).toEqual({ kind: "tunnel", host: "new.trycloudflare.com", port: 443, secure: true });
+	});
+
+	it("refuses a host and Port that name different ports before probing", async () => {
+		const d = editDeps();
+
+		await expect(persistManualHostEdit(
+			host,
+			{ ...cfg, host: "new.trycloudflare.com:443", httpPort: "3011", secure: true },
+			"Old",
+			1,
+			d,
+		)).rejects.toThrow("The host says port 443 but Port is 3011");
+
+		expect(d.probe).not.toHaveBeenCalled();
+	});
+
+	it("does not send a credential when the changed address belongs to another machine", async () => {
+		const d = editDeps({ probe: vi.fn(async () => ({ hostId: "someone-else" })) });
+
+		await expect(persistManualHostEdit(
+			host,
+			{ ...cfg, host: "10.0.0.9", password: "new" },
+			"Old",
+			0,
+			d,
+		)).rejects.toBeInstanceOf(DifferentMachineError);
+
+		expect(d.ping).not.toHaveBeenCalled();
+		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+
+	// A plain-HTTP fallback for a public name would let whoever blocks TLS on
+	// the path collect the password the ping carries.
+	it("moves a route to a public name over TLS only, whatever the draft said", async () => {
+		const d = editDeps();
+
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "ao.example.com", httpPort: "8080", secure: false, password: "old" }, "Old", 0, d);
+
+		expect(d.probe).toHaveBeenCalledWith({ kind: "lan", host: "ao.example.com", port: 8080, secure: true });
+		expect(d.probe).toHaveBeenCalledOnce();
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "ao.example.com", httpPort: "8080", secure: true }));
+		expect(saved.endpoints[0]).toEqual({ kind: "lan", host: "ao.example.com", port: 8080, secure: true });
+	});
+
+	it("keeps plain HTTP for a private address", async () => {
+		const d = editDeps();
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "10.0.0.9", httpPort: "", secure: true, password: "old" }, "Old", 0, d);
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "10.0.0.9", httpPort: "3011", secure: false }));
+		expect(saved.endpoints[0]).toEqual({ kind: "lan", host: "10.0.0.9", port: 3011, secure: false });
+	});
+
+	it("keeps a saved route's TLS when only the password changes", async () => {
+		const d = editDeps();
+
+		// The draft carries no TLS choice of its own any more.
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "old.trycloudflare.com", httpPort: "443", secure: false, password: "new" }, "Old", 1, d);
+
+		expect(d.probe).toHaveBeenCalledWith({ kind: "tunnel", host: "old.trycloudflare.com", port: 443, secure: true });
+		expect(saved.endpoints[1]).toEqual(host.endpoints[1]);
+	});
+
+	it("renames a machine whose saved address predates the Host checks, without probing it", async () => {
+		const legacy = { ...host, endpoints: [{ kind: "lan" as const, host: "box/ao", port: 3011, secure: false }] };
+		const d = editDeps();
+		await persistManualHostEdit(legacy, { ...cfg, host: "box/ao", httpPort: "3011", password: "old" }, "Box", 0, d);
+		expect(d.renameHost).toHaveBeenCalledWith("h_manual", "Box");
+		expect(d.probe).not.toHaveBeenCalled();
+	});
+
+	it("labels a changed address by its new name rather than the one it replaced", async () => {
+		const d = editDeps();
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "my-pc.tail1234.ts.net", httpPort: "", password: "old" }, "Old", 1, d);
+		expect(saved.endpoints[1]).toEqual({ kind: "tailscale", host: "my-pc.tail1234.ts.net", port: 443, secure: true });
+	});
+});
+
+describe("a newly typed code or password on a saved machine", () => {
+	const host = { id: "h_manual", name: "Old", platform: "linux", token: "old", fallbackToken: "older", lastConnected: 42, endpoints: [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }] };
+	const token = "aod_" + "a".repeat(64);
+	const editDeps = (pair: NonNullable<Parameters<typeof persistManualHostEdit>[4]["pair"]>) => ({
+		probe: vi.fn(async () => ({ hostId: "h_manual" })),
+		ping: vi.fn(async () => {}),
+		saveHost: vi.fn(async () => {}),
+		renameHost: vi.fn(async () => {}),
+		pair: vi.fn(pair),
+	});
+
+	it.each([
+		["a one-time code", "pairing-code" as const, undefined],
+		["the pairing password", "password" as const, "typed"],
+	])("swaps %s for this phone's own token after the identity probe", async (_name, credential, fallbackToken) => {
+		const d = editDeps(async () => ({ kind: "paired", token, credential }));
+		const saved = await persistManualHostEdit(host, { ...cfg, password: "typed" }, "Old", 0, d);
+
+		expect(d.probe.mock.invocationCallOrder[0]).toBeLessThan(d.pair.mock.invocationCallOrder[0]);
+		expect(d.pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "typed", hostId: "h_manual" }));
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		expect(saved.token).toBe(token);
+		expect(saved.fallbackToken).toBe(fallbackToken);
+		expect(d.saveHost).toHaveBeenCalledWith(saved);
+	});
+
+	it("saves the typed password, and drops the old fallback, on a machine without device tokens", async () => {
+		const d = editDeps(async () => ({ kind: "unsupported" }));
+		const saved = await persistManualHostEdit(host, { ...cfg, password: "typed" }, "Old", 0, d);
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ password: "typed" }));
+		expect(saved.token).toBe("typed");
+		expect(saved.fallbackToken).toBeUndefined();
+	});
+
+	it("pairs nothing when only the address changes, and keeps the fallback", async () => {
+		const d = editDeps(async () => ({ kind: "unsupported" }));
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "192.168.1.50", password: "old" }, "Old", 0, d);
+		expect(d.pair).not.toHaveBeenCalled();
+		expect(saved.fallbackToken).toBe("older");
 	});
 });

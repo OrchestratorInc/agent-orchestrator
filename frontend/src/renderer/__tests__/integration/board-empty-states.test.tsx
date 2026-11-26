@@ -17,7 +17,7 @@ function render(ui: ReactNode) {
 // first-run states, mocking only the HTTP client, the router, and the native
 // folder picker: an empty daemon shows the import chooser (no column shells), a
 // fresh project shows the task invitation, and any session brings the columns back.
-const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipboardWriteMock, spawnOrchestratorMock, terminalPanePropsMock, paramsMock, boardActionsInPanelMock } = vi.hoisted(() => ({
+const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipboardWriteMock, spawnOrchestratorMock, terminalPanePropsMock, paramsMock } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	postMock: vi.fn(),
 	deleteMock: vi.fn(),
@@ -27,15 +27,14 @@ const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipbo
 	spawnOrchestratorMock: vi.fn(),
 	terminalPanePropsMock: vi.fn(),
 	paramsMock: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
-	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
 vi.mock("../../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../../lib/platform")>(),
-	usesBoardActionsInPanel: () => boardActionsInPanelMock(),
 }));
 
 vi.mock("../../lib/spawn-orchestrator", () => ({
+	isChatPreflightCode: (code?: string) => code === "CHAT_DRIVER_UNAVAILABLE",
 	isChatPreflightError: (error: unknown) =>
 		error instanceof Error && (error as Error & { code?: string }).code === "CHAT_DRIVER_UNAVAILABLE",
 	spawnOrchestrator: spawnOrchestratorMock,
@@ -46,6 +45,8 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorCode: () => undefined,
 	apiErrorMessage: (e: unknown) => (e instanceof Error ? e.message : "error"),
 	hasTrustedApiBaseUrl: () => true,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../../components/TerminalPane", () => ({
@@ -57,7 +58,17 @@ vi.mock("../../components/TerminalPane", () => ({
 
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
-		app: { chooseDirectory: chooseDirectoryMock, openExternal: vi.fn() },
+		app: {
+			chooseDirectory: chooseDirectoryMock,
+			openExternal: vi.fn(),
+			// The starting orchestrator's chat mounts ChatWorkspace in place of the board.
+			onCloseShellTerminalShortcut: () => () => undefined,
+			setCloseShellTerminalShortcutEnabled: vi.fn(),
+			onPreviousTabShortcut: () => () => undefined,
+			onNextTabShortcut: () => () => undefined,
+			// The board and session actions subscribe to the open-orchestrator shortcut.
+			onShortcut: () => () => undefined,
+		},
 		clipboard: { writeText: clipboardWriteMock },
 		// CreateProjectFlow reads the cloud session (Local | Cloud gating);
 		// signed-out keeps these tests on the local-only flow.
@@ -72,12 +83,18 @@ vi.mock("../../lib/bridge", () => ({
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
-	return { ...actual, useNavigate: () => navigateMock, useParams: () => paramsMock };
+	return {
+		...actual,
+		useNavigate: () => navigateMock,
+		useParams: () => paramsMock,
+		useLocation: () => ({ pathname: paramsMock.projectId ? `/projects/${paramsMock.projectId}` : "/" }),
+	};
 });
 
 import { SessionsBoard } from "../../components/SessionsBoard";
-import { ShellTopbar } from "../../components/ShellTopbar";
+import { GitHubSetupPanel } from "../../components/FirstRunSteps";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import { shellTerminalsQueryKey } from "../../hooks/useShellTerminals";
 import type { WorkspaceSummary } from "../../types/workspace";
 import { ShellProvider, type ShellContextValue } from "../../lib/shell-context";
 import { useUiStore } from "../../stores/ui-store";
@@ -174,6 +191,7 @@ function renderBoard(ui: ReactNode) {
 		cloneProject: cloneProjectMock,
 		createProject: createProjectMock,
 		initializeProjectRepository: initializeProjectRepositoryMock,
+		openRemoteProjectSettings: vi.fn(),
 	};
 	return render(
 		<QueryClientProvider client={lastQueryClient}>
@@ -189,7 +207,6 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	paramsMock.projectId = undefined;
 	paramsMock.sessionId = undefined;
-	boardActionsInPanelMock.mockReturnValue(false);
 	cloneProjectMock.mockResolvedValue(undefined);
 	createProjectMock.mockResolvedValue(undefined);
 	initializeProjectRepositoryMock.mockResolvedValue(undefined);
@@ -224,7 +241,7 @@ describe("global board first launch", () => {
 			expect(getMock.mock.calls.some(([url]) => url === "/api/v1/projects")).toBe(true);
 			expect(getMock.mock.calls.some(([url]) => url === "/api/v1/sessions")).toBe(true);
 		});
-		expect(await screen.findByText("Add a project")).toBeInTheDocument();
+		expect(await screen.findByText("New project")).toBeInTheDocument();
 		expect(getMock.mock.calls.some(([url]) => url === "/api/v1/system/requirements")).toBe(true);
 	});
 
@@ -237,6 +254,7 @@ describe("global board first launch", () => {
 			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
+			openRemoteProjectSettings: vi.fn(),
 		};
 		render(
 			<QueryClientProvider client={lastQueryClient}>
@@ -254,139 +272,152 @@ describe("global board first launch", () => {
 		respondWith([], []);
 		renderBoard(<SessionsBoard />);
 
-		expect(await screen.findByText("Add a project")).toBeInTheDocument();
-		expect(screen.getByText("Choose how you want to add code to Agent Orchestrator")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Clone from Git" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Import a workspace folder" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Import an existing project" })).toBeInTheDocument();
+		expect(await screen.findByText("New project")).toBeInTheDocument();
+		expect(screen.getByText("How do you want to start?")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Clone a repo" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open a workspace" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 		// The welcome carries its own orientation — no dangling "Board" header.
 		expect(screen.queryByText("Board")).not.toBeInTheDocument();
 	});
 
-	it("automatically opens GitHub sign-in without requesting focus when gh is signed out", async () => {
+	it("keeps GitHub sign-in user initiated when the board loads signed out", async () => {
 		respondWith([], [], false);
-		renderBoard(
-			<StrictMode>
-				<SessionsBoard />
-			</StrictMode>,
-		);
+		renderBoard(<StrictMode><SessionsBoard /></StrictMode>);
 
-		expect(await screen.findByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-		expect(postMock).toHaveBeenCalledWith("/api/v1/system/github-auth/terminal");
-		expect(await screen.findByTestId("github-auth-terminal")).toBeInTheDocument();
-		expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "false");
-		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
-		expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
-		expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "false");
-	});
-
-	it("adopts a daemon-owned login after renderer state is lost", async () => {
-		respondWith([], [], false);
-		const originalGet = getMock.getMockImplementation()!;
-		getMock.mockImplementation(async (url: string) => url === "/api/v1/shell-terminals"
-			? { data: { shellTerminals: [{ handleId: "surviving-login", title: "Connect GitHub", workingDir: "/tmp/auth", createdAt: "2026-07-04T10:00:00Z" }] } }
-			: originalGet(url));
-		const first = renderBoard(<SessionsBoard />);
-		await waitFor(() => expect(terminalPanePropsMock).toHaveBeenCalledWith(expect.objectContaining({ terminalTarget: expect.objectContaining({ handleId: "surviving-login" }) })));
-		first.unmount();
-		terminalPanePropsMock.mockClear();
-		renderBoard(<SessionsBoard />);
-		await waitFor(() => expect(terminalPanePropsMock).toHaveBeenCalledWith(expect.objectContaining({ terminalTarget: expect.objectContaining({ handleId: "surviving-login" }) })));
-		expect(postMock).not.toHaveBeenCalled();
-	});
-
-	it("does not spawn when daemon terminal reconciliation fails", async () => {
-		respondWith([], [], false);
-		const originalGet = getMock.getMockImplementation()!;
-		getMock.mockImplementation(async (url: string) => url === "/api/v1/shell-terminals"
-			? { error: new Error("Terminal list unavailable") }
-			: originalGet(url));
-		renderBoard(<SessionsBoard />);
-		expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent("Terminal list unavailable");
-		expect(postMock).not.toHaveBeenCalled();
+		expect(await screen.findByText("New project")).toBeInTheDocument();
+		expect(screen.queryByTestId("github-auth-terminal")).not.toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalledWith("/api/v1/system/github-auth/terminal");
 	});
 
 	it("does not open GitHub sign-in when the initial auth check succeeds", async () => {
 		respondWith([], []);
 		renderBoard(<SessionsBoard />);
 
-		expect(await screen.findByText("Add a project")).toBeInTheDocument();
+		expect(await screen.findByText("New project")).toBeInTheDocument();
 		expect(postMock).not.toHaveBeenCalledWith("/api/v1/system/github-auth/terminal");
 	});
 
-	it("respects a dismissed automatic login after the notice remounts", async () => {
-		respondWith([], [], false);
-		const view = renderBoard(<SessionsBoard />);
-		await screen.findByTestId("github-auth-terminal");
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+	describe("explicit GitHub setup", () => {
+		it("starts sign-in once on user action and focuses the attached terminal", async () => {
+			respondWith([], [], false);
+			renderBoard(<StrictMode><GitHubSetupPanel onReady={vi.fn()} /></StrictMode>);
 
-		await userEvent.click(screen.getByRole("button", { name: "Close" }));
-		await waitFor(() => expect(screen.queryByTestId("github-auth-terminal")).not.toBeInTheDocument());
-		view.unmount();
-		render(
-			<QueryClientProvider client={lastQueryClient!}>
-				<ShellProvider value={lastShell!}><SessionsBoard /></ShellProvider>
-			</QueryClientProvider>,
-		);
-
-		expect(await screen.findByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		expect(postMock).toHaveBeenCalledTimes(1);
-	});
-
-	it.each(["Close", "Try again"])("retains the login handle when %s cannot close its PTY", async (action) => {
-		respondWith([], [], false);
-		renderBoard(<SessionsBoard />);
-		await screen.findByTestId("github-auth-terminal");
-		if (action === "Try again") {
-			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("exited"));
-		}
-		deleteMock.mockResolvedValue({ error: new Error("Close failed") });
-		await userEvent.click(await screen.findByRole("button", { name: action }));
-		await waitFor(() => {
-			expect(deleteMock).toHaveBeenCalledTimes(1);
-			expect(lastQueryClient!.isMutating()).toBe(0);
+			expect(postMock).not.toHaveBeenCalled();
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await screen.findByTestId("github-auth-terminal");
+			expect(postMock).toHaveBeenCalledExactlyOnceWith("/api/v1/system/github-auth/terminal");
+			expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "false");
+			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
+			expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "true");
 		});
-		expect(screen.getByTestId("github-auth-terminal")).toBeInTheDocument();
-		expect(postMock).toHaveBeenCalledTimes(1);
-	});
 
-	it("offers recovery instead of treating an exited login terminal as active", async () => {
-		respondWith([], [], false);
-		renderBoard(<SessionsBoard />);
-		await screen.findByTestId("github-auth-terminal");
+		it("adopts a daemon-owned login after renderer state is lost", async () => {
+			respondWith([], [], false);
+			const originalGet = getMock.getMockImplementation()!;
+			getMock.mockImplementation(async (url: string) => url === "/api/v1/shell-terminals"
+				? { data: { shellTerminals: [{ handleId: "surviving-login", title: "Connect GitHub", workingDir: "/tmp/auth", createdAt: "2026-07-04T10:00:00Z" }] } }
+				: originalGet(url));
+			const first = renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await waitFor(() => expect(terminalPanePropsMock).toHaveBeenCalledWith(expect.objectContaining({ terminalTarget: expect.objectContaining({ handleId: "surviving-login" }) })));
+			first.unmount();
+			terminalPanePropsMock.mockClear();
+			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await waitFor(() => expect(terminalPanePropsMock).toHaveBeenCalledWith(expect.objectContaining({ terminalTarget: expect.objectContaining({ handleId: "surviving-login" }) })));
+			expect(postMock).not.toHaveBeenCalled();
+		});
 
-		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
-		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("exited"));
+		it("does not spawn when daemon terminal reconciliation fails", async () => {
+			respondWith([], [], false);
+			const originalGet = getMock.getMockImplementation()!;
+			getMock.mockImplementation(async (url: string) => url === "/api/v1/shell-terminals"
+				? { error: new Error("Terminal list unavailable") }
+				: originalGet(url));
+			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
+			// Keep the retry, without racing its default one-second delay against findByRole.
+			lastQueryClient!.setQueryDefaults(shellTerminalsQueryKey, { retryDelay: 0 });
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			expect(await screen.findByRole("alert")).toHaveTextContent("Terminal list unavailable");
+			expect(getMock.mock.calls.filter(([url]) => url === "/api/v1/shell-terminals")).toHaveLength(2);
+			expect(postMock).not.toHaveBeenCalled();
+		});
 
-		expect(await screen.findByText("Sign-in stopped before GitHub was connected")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
-		expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+		it("preserves the app-owned login across skipping setup and remounting", async () => {
+			respondWith([], [], false);
+			const onSkip = vi.fn();
+			const view = renderBoard(<GitHubSetupPanel onReady={vi.fn()} onSkip={onSkip} />);
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await screen.findByTestId("github-auth-terminal");
+			await userEvent.click(screen.getByRole("button", { name: "Continue without it" }));
+			expect(onSkip).toHaveBeenCalledOnce();
+			view.unmount();
+			render(<QueryClientProvider client={lastQueryClient!}><ShellProvider value={lastShell!}><GitHubSetupPanel onReady={vi.fn()} /></ShellProvider></QueryClientProvider>);
+			await screen.findByTestId("github-auth-terminal");
+			expect(postMock).toHaveBeenCalledOnce();
+			expect(deleteMock).not.toHaveBeenCalled();
+		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
-			params: { path: { handleId: "shellterm-github" } },
-		}));
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
-		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
-		expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "true");
-	});
+		it("retains the login handle when retry cannot close its PTY", async () => {
+			respondWith([], [], false);
+			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await screen.findByTestId("github-auth-terminal");
+			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("exited"));
+			deleteMock.mockResolvedValue({ error: new Error("Close failed") });
+			await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+			await waitFor(() => {
+				expect(deleteMock).toHaveBeenCalledOnce();
+				expect(lastQueryClient!.isMutating()).toBe(0);
+			});
+			expect(screen.getByTestId("github-auth-terminal")).toBeInTheDocument();
+			expect(postMock).toHaveBeenCalledOnce();
+		});
 
-	it("keeps sign-in available when GitHub CLI readiness is unknown", async () => {
-		respondWith([], [], false, null);
-		renderBoard(<SessionsBoard />);
+		it("retains the login handle when cleanup after sign-in fails", async () => {
+			respondWith([], [], false);
+			const onReady = vi.fn();
+			renderBoard(<GitHubSetupPanel onReady={onReady} />);
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await screen.findByTestId("github-auth-terminal");
+			deleteMock.mockResolvedValue({ error: new Error("Close failed") });
+			respondWith([], [], true);
+			await act(async () => { await lastQueryClient!.invalidateQueries({ queryKey: ["github-auth-requirement"] }); });
+			await waitFor(() => {
+				expect(deleteMock).toHaveBeenCalledOnce();
+				expect(lastQueryClient!.isMutating()).toBe(0);
+			});
+			expect(onReady).toHaveBeenCalledOnce();
+			expect(screen.getByTestId("github-auth-terminal")).toBeInTheDocument();
+			expect(postMock).toHaveBeenCalledOnce();
+		});
 
-		expect(await screen.findByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Check again" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Get GitHub CLI" })).not.toBeInTheDocument();
-		expect(postMock).not.toHaveBeenCalledWith("/api/v1/system/github-auth/terminal");
+		it("retries an exited login after closing its previous terminal", async () => {
+			respondWith([], [], false);
+			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await screen.findByTestId("github-auth-terminal");
+			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
+			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("exited"));
+			await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+			await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", { params: { path: { handleId: "shellterm-github" } } }));
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
+			expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "true");
+		});
 
-		await userEvent.click(screen.getByRole("button", { name: "Sign in with GitHub" }));
-		await screen.findByTestId("github-auth-terminal");
-		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
-		expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "true");
+		it("keeps explicit sign-in available when GitHub CLI readiness is unknown", async () => {
+			respondWith([], [], false, null);
+			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
+			expect(postMock).not.toHaveBeenCalled();
+			expect(screen.queryByRole("button", { name: "Get GitHub CLI" })).not.toBeInTheDocument();
+			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+			await screen.findByTestId("github-auth-terminal");
+			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
+			expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "true");
+		});
 	});
 
 	it("opens the native folder picker from the Project card", async () => {
@@ -394,7 +425,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import an existing project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a project repository");
 	});
@@ -404,7 +435,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import a workspace folder" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a workspace" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a workspace folder");
 	});
@@ -414,7 +445,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockRejectedValue(new Error("dialog unavailable"));
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Import an existing project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
 		const messages = await screen.findAllByText("dialog unavailable");
 		expect(messages.some((el) => !el.classList.contains("sr-only"))).toBe(true);
 	});
@@ -424,7 +455,7 @@ describe("global board first launch", () => {
 		renderBoard(<SessionsBoard />);
 
 		expect(await screen.findByText("fix the bug")).toBeInTheDocument();
-		expect(screen.queryByText("Add a project")).not.toBeInTheDocument();
+		expect(screen.queryByText("New project")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(4);
 	});
 
@@ -437,6 +468,7 @@ describe("global board first launch", () => {
 			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
+			openRemoteProjectSettings: vi.fn(),
 		};
 		render(
 			<QueryClientProvider client={lastQueryClient}>
@@ -459,9 +491,9 @@ describe("project board with no sessions", () => {
 
 		expect(await screen.findByText("No worker sessions yet")).toBeInTheDocument();
 		// Both launchers remain reachable from the empty-state invitation.
-		expect(screen.getAllByRole("button", { name: "Spawn Orchestrator" }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: "Spawn orchestrator agent" }).length).toBeGreaterThan(0);
 		expect(screen.getAllByRole("button", { name: "New task" }).length).toBeGreaterThan(0);
-		expect(screen.queryByText("Add a project")).not.toBeInTheDocument();
+		expect(screen.queryByText("New project")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 	});
 
@@ -471,7 +503,7 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 
 		expect(await screen.findByText(/branch is already checked out/)).toBeInTheDocument();
@@ -486,7 +518,7 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 		await userEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
 
@@ -494,18 +526,17 @@ describe("project board with no sessions", () => {
 		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(2, "proj-1", "board", false, "tui");
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
 		const unconfiguredProject = { ...project, orchestratorAgent: undefined };
 		respondWith([unconfiguredProject], []);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnOrchestratorMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledWith("proj-1", "board", false, undefined));
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("shows the project creation startup error after navigating to the project board", async () => {
@@ -518,21 +549,24 @@ describe("project board with no sessions", () => {
 			);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
+		// The header copy yields to the center invitation once the empty board resolves.
+		await screen.findByTestId("project-board-empty");
 		expect(await screen.findByText(/Project added, but orchestrator did not start/)).toBeInTheDocument();
 		expect(screen.getByText(/branch is already checked out/)).toBeInTheDocument();
 	});
 
-	it("shows a provisioning banner and gates actions while the orchestrator starts in the background", async () => {
+	it("shows the starting orchestrator chat in place of the board while it starts in the background", async () => {
 		respondWith([project], []);
 		useUiStore.getState().setProjectProvisioning("proj-1", true);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
-		expect(await screen.findByRole("status")).toHaveTextContent(/Setting up the project/);
-		for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) {
-			expect(button).toBeDisabled();
-		}
-		useUiStore.getState().setProjectProvisioning("proj-1", false);
-		await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
+		expect(screen.getByLabelText("Message the agent").closest("form")).toHaveAttribute("data-starting", "true");
+		expect(screen.queryByTestId("board")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Spawn orchestrator agent" })).not.toBeInTheDocument();
+		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
+		expect(await screen.findByTestId("project-board-empty")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
 	});
 
 	it("clears the project creation startup error when retrying orchestrator spawn", async () => {
@@ -547,7 +581,7 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText(/Project added, but orchestrator did not start/);
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 
 		await waitFor(() =>
@@ -603,7 +637,7 @@ describe("project board with no sessions", () => {
 		const { rerender } = renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 		await screen.findByText(/branch is already checked out/);
 
@@ -630,10 +664,10 @@ describe("project board with no sessions", () => {
 
 // Mount the actual header and board together. Separate component tests cannot
 // catch divergent emptiness decisions or independent in-flight launch state.
-describe.each([false, true])("shared project board actions, in-panel header=%s", (inPanel) => {
+describe("shared project board actions", () => {
 	function board(projectId = "proj-1") {
 		paramsMock.projectId = projectId;
-		return <><ShellTopbar /><SessionsBoard projectId={projectId} /></>;
+		return <SessionsBoard projectId={projectId} />;
 	}
 
 	function updateWorkers(sessions: WorkspaceSummary["sessions"]) {
@@ -642,20 +676,18 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		));
 	}
 
-	beforeEach(() => boardActionsInPanelMock.mockReturnValue(inPanel));
-
-	it("keeps quiet header copies only while the center invitation is visible", async () => {
+	it("keeps header action styling consistent as the center invitation appears and disappears", async () => {
 		respondWith([project], []);
 		renderBoard(board());
 		const empty = await screen.findByTestId("project-board-empty");
 		const headerTask = screen.getAllByRole("button", { name: "New task" }).find((button) => !empty.contains(button))!;
-		const headerOrchestrator = screen.getAllByRole("button", { name: "Spawn Orchestrator" }).find((button) => !empty.contains(button))!;
-		expect(headerTask).toHaveClass("topbar-control--secondary", "topbar-control--labeled");
-		expect(headerOrchestrator).toHaveClass("topbar-control--secondary", "topbar-control--labeled");
+		const headerOrchestrator = screen.getAllByRole("button", { name: "Spawn orchestrator agent" }).find((button) => !empty.contains(button))!;
+		expect(headerTask).toHaveClass("[--button-color:var(--primary)]");
+		expect(headerOrchestrator).toHaveClass("before:bg-interactive-hover");
 		expect(headerTask).toHaveAttribute("data-priority", "primary");
 		expect(headerTask.querySelector("[data-compact-label]")).not.toBeNull();
-		expect(within(empty).getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
-		expect(within(empty).getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
+		expect(within(empty).getByRole("button", { name: "Spawn orchestrator agent" })).toHaveClass("[--button-color:var(--primary)]");
+		expect(within(empty).getByRole("button", { name: "New task" })).toHaveClass("[--button-color:var(--secondary)]");
 
 		for (const button of screen.getAllByRole("button", { name: "New task" })) {
 			useUiStore.setState({ newTaskRequest: null });
@@ -670,32 +702,31 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		for (const session of [worker, { ...worker, status: "terminated" as const, isTerminated: true }]) {
 			updateWorkers([session]);
 			await waitFor(() => expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument());
-			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
-			expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
+			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("[--button-color:var(--primary)]");
+			expect(screen.getByRole("button", { name: "Spawn orchestrator agent" })).toHaveClass("before:bg-interactive-hover");
 		}
 		updateWorkers([]);
 		await screen.findByTestId("project-board-empty");
-		expect(headerTask).toHaveClass("topbar-control--secondary");
+		expect(headerTask).toHaveClass("[--button-color:var(--primary)]");
 	});
 
-	it("shares pending state and Terminal UI recovery after either copy starts a request", async () => {
+	it("shows the starting chat while a request is pending, then restores the board with Terminal UI recovery", async () => {
 		respondWith([project], []);
 		let rejectSpawn!: (error: Error) => void;
 		spawnOrchestratorMock.mockImplementationOnce(() => new Promise<string>((_resolve, reject) => { rejectSpawn = reject; }));
 		spawnOrchestratorMock.mockResolvedValueOnce("orch-retry");
 		renderBoard(board());
 		await screen.findByTestId("project-board-empty");
-		const buttons = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const buttons = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		expect(buttons).toHaveLength(2);
 		act(() => { buttons[0].click(); buttons[1].click(); });
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
-		for (const button of buttons) {
-			expect(button).toBeDisabled();
-			expect(button).toHaveAttribute("aria-busy", "true");
-		}
+		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
+		// The header actions live inside the board, so they leave with it.
+		expect(screen.queryByRole("button", { name: "Spawn orchestrator agent" })).not.toBeInTheDocument();
 		act(() => rejectSpawn(Object.assign(new Error("Chat driver unavailable"), { code: "CHAT_DRIVER_UNAVAILABLE" })));
 		expect(await screen.findByText("Chat driver unavailable")).toBeInTheDocument();
-		for (const button of buttons) expect(button).toBeEnabled();
+		for (const button of screen.getAllByRole("button", { name: "Spawn orchestrator agent" })) expect(button).toBeEnabled();
 		await userEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(2));
 		expect(spawnOrchestratorMock).toHaveBeenLastCalledWith("proj-1", "board", false, "tui");
@@ -713,11 +744,12 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		}));
 		const view = renderBoard(board());
 		await screen.findByTestId("project-board-empty");
-		await userEvent.click(screen.getAllByRole("button", { name: "Spawn Orchestrator" })[0]);
+		await userEvent.click(screen.getAllByRole("button", { name: "Spawn orchestrator agent" })[0]);
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
+		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
 		view.rerender(<QueryClientProvider client={lastQueryClient!}><ShellProvider value={lastShell!}>{board("proj-2")}</ShellProvider></QueryClientProvider>);
 		await waitFor(() => {
-			for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) expect(button).toBeEnabled();
+			for (const button of screen.getAllByRole("button", { name: "Spawn orchestrator agent" })) expect(button).toBeEnabled();
 		});
 		act(() => outcome === "success" ? resolveSpawn("old-project-orchestrator") : rejectSpawn(new Error("Old project failed")));
 		await waitFor(() => expect(lastQueryClient!.isMutating()).toBe(0));
@@ -732,7 +764,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		renderBoard(board());
 		if (state === "missing") await waitFor(() => expect(lastQueryClient!.getQueryState(workspaceQueryKey)?.status).toBe("success"));
 		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
-		expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("[--button-color:var(--primary)]");
+		expect(screen.getByRole("button", { name: "Spawn orchestrator agent" })).toHaveClass("before:bg-interactive-hover");
 	});
 });

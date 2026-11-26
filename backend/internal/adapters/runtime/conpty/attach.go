@@ -33,8 +33,8 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 		return nil, fmt.Errorf("conpty: dial host for %q: %w", handle.ID, err)
 	}
 
-	pr, pw := io.Pipe()
-	s := &loopbackStream{conn: conn, pr: pr, pw: pw}
+	pipe := newBytePipe()
+	s := &loopbackStream{conn: conn, pr: pipe, pw: pipe}
 
 	// Pump host frames: MsgTerminalData payloads go into the pipe that Read
 	// drains. The first such frame is the scrollback snapshot, so the replay
@@ -66,12 +66,13 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 }
 
 // loopbackStream is a ports.Stream backed by a single loopback connection to the
-// pty-host. The pump goroutine reframes host output into an io.Pipe so Read
-// presents a plain byte stream; Write/Resize encode client frames onto the conn.
+// pty-host. The pump goroutine reframes host output into a bytePipe so Read
+// presents a plain byte stream (all buffered output per Read); Write/Resize
+// encode client frames onto the conn.
 type loopbackStream struct {
 	conn io.ReadWriteCloser
-	pr   *io.PipeReader
-	pw   *io.PipeWriter
+	pr   *bytePipe
+	pw   *bytePipe
 
 	closeOnce sync.Once
 }
@@ -83,7 +84,7 @@ func (s *loopbackStream) pump() {
 	parser := NewMessageParser(func(msgType byte, payload []byte) {
 		switch msgType {
 		case MsgTerminalData:
-			// Write blocks until Read drains, preserving back-pressure and order.
+			// Write blocks once the pipe is full, preserving back-pressure and order.
 			_, _ = s.pw.Write(payload)
 		case MsgStatusRes:
 			var status StatusPayload
@@ -92,7 +93,7 @@ func (s *loopbackStream) pump() {
 			}
 		}
 	})
-	buf := make([]byte, 4096)
+	buf := make([]byte, 32*1024)
 	for {
 		n, err := s.conn.Read(buf)
 		if n > 0 {

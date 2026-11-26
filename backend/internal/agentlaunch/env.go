@@ -2,17 +2,80 @@ package agentlaunch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 )
 
 const aoBinaryName = "ao"
+
+// MergeEnv overlays child-specific values on project values. The AO_ namespace
+// belongs to AO, including when a child has no value for a particular key.
+// A new process receives its own map so a launch cannot mutate saved config.
+func MergeEnv(project, child map[string]string) map[string]string {
+	env := make(map[string]string, len(project)+len(child))
+	for i, source := range []map[string]string{project, child} {
+		for key, value := range source {
+			if i == 0 && strings.HasPrefix(strings.ToUpper(key), "AO_") {
+				continue
+			}
+			if runtime.GOOS == "windows" {
+				for existing := range env {
+					if strings.EqualFold(existing, key) {
+						delete(env, existing)
+					}
+				}
+			}
+			env[key] = value
+		}
+	}
+	return env
+}
+
+// RedactValues removes configured values before command output reaches a
+// user-visible error or log. Longer values go first to cover shared prefixes.
+func RedactValues(output string, configured map[string]string) string {
+	values := make([]string, 0, len(configured))
+	for _, value := range configured {
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
+	for _, value := range values {
+		output = strings.ReplaceAll(output, value, "[REDACTED]")
+	}
+	return output
+}
+
+// RedactError hides the original error when it contains a sensitive value so
+// unwrapping and telemetry cannot expose that value; errors.Is still matches it.
+func RedactError(err error, configured map[string]string) error {
+	if err == nil {
+		return nil
+	}
+	message := RedactValues(err.Error(), configured)
+	if message == err.Error() {
+		return err
+	}
+	return redactedError{message: message, cause: err}
+}
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e redactedError) Error() string { return e.message }
+
+func (e redactedError) Is(target error) bool { return errors.Is(e.cause, target) }
 
 // PinnedPATH prepends an AO-only directory to the supplied
 // PATH. It rejects executables not named ao because their directory cannot
@@ -106,6 +169,24 @@ func AugmentRuntimePATHForLaunchBinary(ctx context.Context, env map[string]strin
 	env["PATH"] = strings.Join(parts, string(os.PathListSeparator))
 }
 
+// ProcessEnvForLaunchBinary returns this process's environment with PATH
+// augmented for bin exactly as session launches are, for direct children such
+// as native login flows and auth-status probes. Without it an npm launcher
+// resolved outside PATH fails with `env: node: No such file or directory`.
+func ProcessEnvForLaunchBinary(ctx context.Context, bin string) []string {
+	overlay := map[string]string{"PATH": os.Getenv("PATH")}
+	AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, "")
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(key, "PATH")) {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "PATH="+overlay["PATH"])
+}
+
 func restorePinnedDir(parts []string, dir string) []string {
 	if dir == "" || len(parts) == 0 || parts[0] == dir {
 		return parts
@@ -122,7 +203,21 @@ func restorePinnedDir(parts []string, dir string) []string {
 	return parts
 }
 
+// ProviderEnvMarker is the $0 of the POSIX wrapper that reapplies explicit
+// provider env after login-shell startup: sh -c <script> ao-provider-env <argv>.
+const ProviderEnvMarker = "ao-provider-env"
+
+// UnwrapProviderEnv returns the agent argv inside a provider-env wrapper, so
+// binary validation and PATH augmentation see the agent rather than sh.
+func UnwrapProviderEnv(argv []string) []string {
+	if len(argv) >= 5 && filepath.Base(argv[0]) == "sh" && argv[1] == "-c" && argv[3] == ProviderEnvMarker {
+		return argv[4:]
+	}
+	return argv
+}
+
 func launchBinary(argv []string) (string, bool) {
+	argv = UnwrapProviderEnv(argv)
 	if len(argv) == 0 {
 		return "", false
 	}

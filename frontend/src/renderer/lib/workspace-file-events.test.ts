@@ -1,3 +1,4 @@
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
@@ -9,16 +10,28 @@ const { getApiBaseUrlMock, hasTrustedApiBaseUrlMock, subscribeApiBaseUrlMock, un
 		unsubscribeBaseUrlMock: vi.fn(),
 	}),
 );
+const { baseUrlForHostMock, subscribeConnectedHostsMock } = vi.hoisted(() => ({
+	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
+	subscribeConnectedHostsMock: vi.fn(),
+}));
 
 vi.mock("./api-client", () => ({
+	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
+	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	getApiBaseUrl: getApiBaseUrlMock,
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,
+}));
+vi.mock("./host-clients", () => ({
+	baseUrlForHost: baseUrlForHostMock,
+	subscribeConnectedHosts: subscribeConnectedHostsMock,
 }));
 
 import { getWorkspaceFileConnectionState, subscribeWorkspaceFileChanges } from "./workspace-file-events";
 
 let baseUrlListener: (() => void) | undefined;
+const INVALIDATE_TEST_WINDOW_MS = 150;
+let hostListeners: Array<() => void> = [];
 
 class EventSourceStub {
 	static instances: EventSourceStub[] = [];
@@ -28,7 +41,7 @@ class EventSourceStub {
 	readyState = 0;
 	onopen: (() => void) | null = null;
 	onerror: (() => void) | null = null;
-	listeners = new Map<string, Set<() => void>>();
+	listeners = new Map<string, Set<(event: MessageEvent<string>) => void>>();
 
 	constructor(url: string) {
 		if (EventSourceStub.throwNext) {
@@ -39,14 +52,14 @@ class EventSourceStub {
 		EventSourceStub.instances.push(this);
 	}
 
-	addEventListener(type: string, listener: () => void) {
+	addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
 		const listeners = this.listeners.get(type) ?? new Set();
 		listeners.add(listener);
 		this.listeners.set(type, listeners);
 	}
 
-	dispatch(type: string) {
-		for (const listener of this.listeners.get(type) ?? []) listener();
+	dispatch(type: string, data = "") {
+		for (const listener of this.listeners.get(type) ?? []) listener({ data } as MessageEvent<string>);
 	}
 
 	close() {
@@ -56,13 +69,15 @@ class EventSourceStub {
 }
 
 function fakeQueryClient() {
-	return { invalidateQueries: vi.fn() } as unknown as Parameters<typeof subscribeWorkspaceFileChanges>[1];
+	const queryCache = { findAll: vi.fn(() => []) };
+	return { getQueryData: vi.fn(), invalidateQueries: vi.fn(), isFetching: vi.fn(() => 0), getQueryCache: () => queryCache } as unknown as Parameters<typeof subscribeWorkspaceFileChanges>[1];
 }
 
 beforeEach(() => {
 	EventSourceStub.instances = [];
 	EventSourceStub.throwNext = false;
 	baseUrlListener = undefined;
+	hostListeners = [];
 	getApiBaseUrlMock.mockReset().mockReturnValue("http://127.0.0.1:3001");
 	hasTrustedApiBaseUrlMock.mockReset().mockReturnValue(true);
 	subscribeApiBaseUrlMock.mockReset().mockImplementation((listener: () => void) => {
@@ -70,6 +85,11 @@ beforeEach(() => {
 		return unsubscribeBaseUrlMock;
 	});
 	unsubscribeBaseUrlMock.mockReset();
+	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
+	subscribeConnectedHostsMock.mockReset().mockImplementation((listener: () => void) => {
+		hostListeners.push(listener);
+		return () => { hostListeners = hostListeners.filter((candidate) => candidate !== listener); };
+	});
 	(globalThis as unknown as { EventSource: unknown }).EventSource = EventSourceStub;
 });
 
@@ -80,6 +100,190 @@ afterEach(() => {
 });
 
 describe("subscribeWorkspaceFileChanges", () => {
+	it("rechecks once after an initial preview request that predates the file event", async () => {
+		vi.useFakeTimers();
+		const client=fakeQueryClient();
+		vi.mocked(client.isFetching).mockReturnValueOnce(1).mockReturnValue(0);
+		const stop=subscribeWorkspaceFileChanges("initial-annotation",client);
+		EventSourceStub.instances[0].dispatch("workspace_changed");
+		await vi.advanceTimersByTimeAsync(6000);
+		const calls=vi.mocked(client.invalidateQueries).mock.calls.filter(([filters])=>filters?.queryKey?.[0]==="file-annotation-source");
+		expect(calls).toHaveLength(2);
+		expect(calls[0][1]).toEqual({cancelRefetch:false});
+		stop();
+	});
+	it("shares a two-second annotation throttle without delaying the file viewer", async () => {
+		vi.useFakeTimers();
+		const client=fakeQueryClient();
+		const stop=subscribeWorkspaceFileChanges("annotation-throttle",client);
+		const stopSecond=subscribeWorkspaceFileChanges("annotation-throttle",client);
+		expect(EventSourceStub.instances).toHaveLength(1);
+		const source=EventSourceStub.instances[0];
+		for(let i=0;i<20;i++) {source.dispatch("workspace_changed");await vi.advanceTimersByTimeAsync(100);}
+		const calls=vi.mocked(client.invalidateQueries).mock.calls;
+		expect(calls.filter(([filters])=>filters?.queryKey?.[0]==="file-annotation-source")).toHaveLength(1);
+		expect(calls.filter(([filters])=>filters?.queryKey?.[0]==="session-workspace-file").length).toBeGreaterThan(5);
+		stop();stopSecond();
+	});
+	it("queues one follow-up for writes during a slow annotation check and cancels scheduled work on disposal", async () => {
+		vi.useFakeTimers();
+		const client=fakeQueryClient();
+		let release!:()=>void;
+		vi.mocked(client.isFetching).mockReturnValueOnce(1).mockReturnValue(0);
+		vi.mocked(client.invalidateQueries).mockImplementation((filters)=>filters?.queryKey?.[0]==="file-annotation-source" ? new Promise<void>(resolve=>{release=resolve}) : Promise.resolve());
+		const stop=subscribeWorkspaceFileChanges("slow-annotation",client);
+		const source=EventSourceStub.instances[0];
+		source.dispatch("workspace_changed");await vi.advanceTimersByTimeAsync(2000);
+		for(let i=0;i<30;i++){source.dispatch("workspace_changed");await vi.advanceTimersByTimeAsync(100);}
+		const count=()=>vi.mocked(client.invalidateQueries).mock.calls.filter(([filters])=>filters?.queryKey?.[0]==="file-annotation-source").length;
+		expect(count()).toBe(1);
+		release();await Promise.resolve();await vi.advanceTimersByTimeAsync(2000);
+		expect(count()).toBe(2);
+		source.dispatch("workspace_changed");stop();release();
+		await vi.advanceTimersByTimeAsync(4000);
+		expect(count()).toBe(2);
+	});
+	it("refreshes during continuous writes instead of waiting for the final event", () => {
+		vi.useFakeTimers();
+		const queryClient = fakeQueryClient();
+		const stop = subscribeWorkspaceFileChanges("continuous", queryClient);
+		const source = EventSourceStub.instances[0]!;
+		source.dispatch("ready");
+		vi.advanceTimersByTime(150);
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(100);
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(50);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "continuous"] });
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(150);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "continuous"] });
+		stop();
+	});
+
+	it("polls while probing, then uses SSE after a delivered frame", () => {
+		vi.useFakeTimers();
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		const queryClient = fakeQueryClient();
+		const stop = subscribeWorkspaceFileChanges("session-a", queryClient, "host-a");
+		expect(EventSourceStub.instances).toHaveLength(1);
+		expect(getWorkspaceFileConnectionState("session-a", "host-a")).toBe("connected");
+		vi.advanceTimersByTime(2_150);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["session-workspace-files", "host-a", "session-a"] }), { cancelRefetch: false });
+		EventSourceStub.instances[0].dispatch("ready");
+		vi.advanceTimersByTime(150);
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		vi.advanceTimersByTime(2_150);
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
+		stop();
+		expect(EventSourceStub.instances[0].closed).toBe(true);
+	});
+
+	it("stops polling a remote host whose stream fails and reopens it with backoff", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		const queryClient = fakeQueryClient();
+		const stop = subscribeWorkspaceFileChanges("failing", queryClient, "host-a");
+		const paths = () => vi.mocked(queryClient.invalidateQueries).mock.calls.filter(([filters]) => filters?.queryKey?.[0] === "remote-workspace-file-paths").length;
+		await vi.advanceTimersByTimeAsync(4_150);
+		expect(paths()).toBeGreaterThanOrEqual(3);
+		EventSourceStub.instances[0].onerror?.();
+		await vi.advanceTimersByTimeAsync(150);
+		const afterFailure = paths();
+		const retryMs = computeSseRetryDelayMs(1, () => 0.5);
+		await vi.advanceTimersByTimeAsync(retryMs - 151);
+		expect(paths()).toBe(afterFailure);
+		expect(EventSourceStub.instances).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(EventSourceStub.instances).toHaveLength(2);
+		EventSourceStub.instances[1].dispatch("ready");
+		await vi.advanceTimersByTimeAsync(150);
+		const afterReady = paths();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(paths()).toBe(afterReady);
+		expect(EventSourceStub.instances).toHaveLength(2);
+		expect(getWorkspaceFileConnectionState("failing", "host-a")).toBe("connected");
+		stop();
+	});
+
+	it("never restarts a slow remote read while polling", async () => {
+		vi.useFakeTimers();
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const reads: Array<() => void> = [];
+		const unobserve = new QueryObserver(queryClient, {
+			queryKey: ["remote-workspace-file-paths", "host-a", "slow-host"],
+			queryFn: () => new Promise<string[]>((resolve) => { reads.push(() => resolve([])); }),
+		}).subscribe(() => {});
+		const stop = subscribeWorkspaceFileChanges("slow-host", queryClient, "host-a");
+		await vi.advanceTimersByTimeAsync(14_000);
+		expect(reads).toHaveLength(1);
+		reads[0]();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(reads).toHaveLength(2);
+		stop();
+		unobserve();
+		queryClient.clear();
+	});
+
+	it("refreshes an open remote file without waiting for another file's slow unobserved read", async () => {
+		vi.useFakeTimers();
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const fileKey = (path: string) => ["session-workspace-file", "host-a", "split", path];
+		let readsA = 0;
+		let finishA!: () => void;
+		void queryClient.fetchQuery({ queryKey: fileKey("a.ts"), queryFn: () => {
+			readsA += 1;
+			return new Promise<string>((resolve) => { finishA = () => resolve("a"); });
+		} });
+		let readsB = 0;
+		const unobserve = new QueryObserver(queryClient, { queryKey: fileKey("b.ts"), queryFn: async () => { readsB += 1; return "b"; } }).subscribe(() => {});
+		await vi.advanceTimersByTimeAsync(0);
+		const stop = subscribeWorkspaceFileChanges("split", queryClient, "host-a");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(readsB).toBe(2);
+		expect(readsA).toBe(1);
+		finishA();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(readsA).toBe(1);
+		expect(queryClient.getQueryState(fileKey("a.ts"))?.isInvalidated).toBe(true);
+		stop();
+		unobserve();
+		queryClient.clear();
+	});
+
+	it("isolates equal session IDs on remote A and B and closes only the disconnected host", async () => {
+		vi.useFakeTimers();
+		baseUrlForHostMock.mockImplementation((hostId: string) => `http://127.0.0.1:4000/${hostId}`);
+		const queryClient = fakeQueryClient();
+		const stopA = subscribeWorkspaceFileChanges("same", queryClient, "host-a");
+		const stopB = subscribeWorkspaceFileChanges("same", queryClient, "host-b");
+		expect(EventSourceStub.instances.map((source) => source.url)).toEqual([
+			"http://127.0.0.1:4000/host-a/api/v1/sessions/same/workspace/events",
+			"http://127.0.0.1:4000/host-b/api/v1/sessions/same/workspace/events",
+		]);
+		await vi.advanceTimersByTimeAsync(150);
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		EventSourceStub.instances[0].dispatch("workspace_changed");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["session-workspace-files", "host-a", "same"] }), { cancelRefetch: false });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["remote-workspace-file-paths", "host-a", "same"] }), { cancelRefetch: false });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["session-workspace-files", "host-b", "same"] }), { cancelRefetch: false });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["remote-workspace-file-paths", "host-b", "same"] }), { cancelRefetch: false });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "same"] });
+		baseUrlForHostMock.mockImplementation((hostId: string) => hostId === "host-a" ? undefined : `http://127.0.0.1:4000/${hostId}`);
+		for (const listener of hostListeners) listener();
+		expect(EventSourceStub.instances[0].closed).toBe(true);
+		expect(EventSourceStub.instances[1].closed).toBe(false);
+		expect(getWorkspaceFileConnectionState("same", "host-a")).toBe("degraded");
+		stopA();
+		stopB();
+	});
+
 	it("shares one daemon stream until the final Files view unmounts", () => {
 		const queryClient = fakeQueryClient();
 		const unsubscribeRail = subscribeWorkspaceFileChanges("session/a", queryClient);
@@ -109,14 +313,76 @@ describe("subscribeWorkspaceFileChanges", () => {
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
 		vi.advanceTimersByTime(1);
 
-		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(7);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(11);
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspace-file-paths", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-1"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-history", "sess-1"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-branches", "sess-1"] });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["file-annotation-source", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file-revision", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "sess-1"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["files-review-end-of-file", "sess-1"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["files-preview-end-of-file", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-search", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-tree", "sess-1"] });
+		unsubscribe();
+	});
+
+	it("always refreshes content while deduplicating manifest inventory versions", () => {
+		vi.useFakeTimers();
+		const queryClient = fakeQueryClient();
+		const unsubscribe = subscribeWorkspaceFileChanges("sess-version", queryClient);
+		const source = EventSourceStub.instances[0];
+
+		source.dispatch("workspace_changed", JSON.stringify({ kind: "dirty", refreshing: true }));
+		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(7);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "sess-version"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["files-review-end-of-file", "sess-version"] });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-version"] });
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+
+		const completed = JSON.stringify({ kind: "version", workspaceVersion: "v2" });
+		source.dispatch("workspace_changed", completed);
+		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(11);
+
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		source.dispatch("workspace_changed", completed);
+		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(7);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file", "sess-version"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "sess-version"] });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-version"] });
+		unsubscribe();
+	});
+
+	it("does not refetch a manifest version already in the shared cache", () => {
+		vi.useFakeTimers();
+		const queryClient = fakeQueryClient();
+		vi.mocked(queryClient.getQueryData).mockReturnValue({ workspaceVersion: "v2" });
+		const unsubscribe = subscribeWorkspaceFileChanges("sess-current", queryClient);
+		EventSourceStub.instances[0].dispatch("workspace_changed", JSON.stringify({ kind: "version", workspaceVersion: "v2" }));
+		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(7);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file-revision", "sess-current"] });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-current"] });
+		unsubscribe();
+	});
+
+	it("does not postpone invalidation while workspace events continue", () => {
+		vi.useFakeTimers();
+		const queryClient = fakeQueryClient();
+		const unsubscribe = subscribeWorkspaceFileChanges("sess-continuous", queryClient);
+		const source = EventSourceStub.instances[0];
+
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(100);
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(50);
+
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(11);
 		unsubscribe();
 	});
 

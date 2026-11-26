@@ -10,10 +10,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// mergePRRequest mirrors the daemon merge action request.
+type mergePRRequest struct {
+	PRURL           string `json:"prUrl"`
+	ExpectedHeadSHA string `json:"expectedHeadSha"`
+}
+
 type mergePRResponse struct {
 	OK       bool   `json:"ok"`
 	PRNumber int    `json:"prNumber"`
 	Method   string `json:"method"`
+	// Queue is set when the base branch requires a merge queue: the daemon
+	// added the PR to the queue instead of merging it.
+	Queue *mergePRQueueEntry `json:"queue,omitempty"`
+}
+
+type mergePRQueueEntry struct {
+	State    string `json:"state"`
+	Position int    `json:"position"`
 }
 
 type resolveCommentsRequest struct {
@@ -36,17 +50,36 @@ func newPRCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newPRMergeCommand(ctx *commandContext) *cobra.Command {
-	return &cobra.Command{
+	var prURL, expectedHeadSHA string
+	cmd := &cobra.Command{
 		Use:   "merge <pr-number>",
 		Short: "Merge a pull request",
-		Args:  usageArgs(cobra.ExactArgs(1)),
+		Long: "Merge a tracked pull request at the exact head you reviewed. Both --url and " +
+			"--expected-head-sha are required; the daemon rechecks merge readiness and rejects a changed head. " +
+			"Where the base branch requires a merge queue, the pull request is added to the queue instead.",
+		Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prNumber, err := normalizePRNumber(args[0])
 			if err != nil {
 				return err
 			}
+			req := mergePRRequest{
+				PRURL:           strings.TrimSpace(prURL),
+				ExpectedHeadSHA: strings.TrimSpace(expectedHeadSHA),
+			}
+			if req.PRURL == "" || req.ExpectedHeadSHA == "" {
+				return usageError{errors.New("usage: --url and --expected-head-sha are required")}
+			}
 			var res mergePRResponse
-			if err := ctx.postJSON(cmd.Context(), "prs/"+url.PathEscape(prNumber)+"/merge", struct{}{}, &res); err != nil {
+			if err := ctx.postJSON(cmd.Context(), "prs/"+url.PathEscape(prNumber)+"/merge", req, &res); err != nil {
+				return err
+			}
+			if res.Queue != nil {
+				if res.Queue.Position > 0 {
+					_, err = fmt.Fprintf(cmd.OutOrStdout(), "added PR #%d to the merge queue at position %d\n", res.PRNumber, res.Queue.Position)
+					return err
+				}
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "added PR #%d to the merge queue\n", res.PRNumber)
 				return err
 			}
 			if method := strings.TrimSpace(res.Method); method != "" {
@@ -57,6 +90,9 @@ func newPRMergeCommand(ctx *commandContext) *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().StringVar(&prURL, "url", "", "Full URL of the tracked pull request (required)")
+	cmd.Flags().StringVar(&expectedHeadSHA, "expected-head-sha", "", "Head commit SHA reviewed and approved for merge (required)")
+	return cmd
 }
 
 func newPRResolveCommentsCommand(ctx *commandContext) *cobra.Command {

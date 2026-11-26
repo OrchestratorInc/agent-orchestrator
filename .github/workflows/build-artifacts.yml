@@ -3,7 +3,8 @@ name: Desktop build artifacts
 
 # Dispatchable unsigned desktop build for an external release conductor.
 # Builds the Electron app for all four platforms at a pinned ref with a
-# caller-supplied version, uploads each installer as a short-lived run
+# caller-supplied version, plus the headless Linux arm64 host package
+# (linux-arm64-host.yml), uploads each as a short-lived run
 # artifact, and emits a digests.json artifact (a flat JSON object mapping
 # each artifact filename to its sha256 hex string) that the conductor reads
 # to verify hashes before signing. Creates no release, references no secrets.
@@ -28,6 +29,10 @@ permissions:
 
 env:
   VITE_WORKOS_CLIENT_ID: ${{ vars.VITE_WORKOS_CLIENT_ID }}
+  # Teams: unset (the default) gives it to nightly builds only; the repository
+  # variable set to "on" gives it to stable builds too, "off" to none. Any other
+  # value stops the build (frontend/src/shared/teams-flag.ts).
+  VITE_AO_TEAMS: ${{ vars.VITE_AO_TEAMS }}
 
 jobs:
   build:
@@ -63,7 +68,7 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
@@ -93,6 +98,18 @@ jobs:
           BUILD_VERSION: ${{ inputs.version }}
         run: |
           node -e "const v=process.env.BUILD_VERSION.split('+')[0]; const fs=require('fs'); const p=require('./package.json'); p.version=v; fs.writeFileSync('./package.json', JSON.stringify(p,null,'\t')+'\n');"
+      # Electron 44's V8 headers put [[deprecated]] before __attribute__ in a
+      # class head, which Ubuntu 22.04's GCC 11 rejects when node-gyp rebuilds
+      # better-sqlite3, and need std::source_location, which 22.04's libstdc++
+      # offers only to a compiler with __builtin_source_location (clang 15+;
+      # the runner's default clang is 14). Only C++ changes, so tmux and every
+      # C build keep GCC, and the 22.04 libstdc++ and glibc baseline stays.
+      - name: Use clang++-15 for native modules
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          command -v clang++-15
+          echo "CXX=clang++-15" >> "$GITHUB_ENV"
       - name: Build (unsigned, no publish)
         shell: bash
         env:
@@ -102,6 +119,10 @@ jobs:
           # left every published build pointing its updater at the old owner,
           # alive only through GitHub's rename redirect (#3523).
           AO_RELEASE_REPO: ${{ github.repository }}
+          # Marks a published build: Electron main may initialize Sentry, and
+          # Vite emits hidden source maps with Sentry debug IDs (vite.sentry.ts).
+          # The maps are left out of the package and uploaded below.
+          AO_PUBLISHED_BUILD: "1"
         run: npm run make
       - name: Verify baked update feed repo
         # app-update.yml is what electron-updater reads at runtime to build the
@@ -217,6 +238,20 @@ jobs:
           path: frontend/dist-artifact/agent-orchestrator-${{ matrix.platform }}.*
           retention-days: 1
           if-no-files-found: error
+      # The conductor uploads these to the ao-electron Sentry project with
+      # `sentry-cli sourcemaps upload`; debug IDs match them to the shipped
+      # bundles. This workflow holds no Sentry token.
+      - name: Upload Sentry source maps
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentry-sourcemaps-${{ matrix.platform }}
+          path: |
+            frontend/.vite/build/*.js
+            frontend/.vite/build/*.js.map
+            frontend/.vite/renderer/main_window/assets/*.js
+            frontend/.vite/renderer/main_window/assets/*.js.map
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
@@ -225,10 +260,17 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Not in the matrix: Linux arm64 has no desktop app, only the headless host package.
+  host-linux-arm64:
+    uses: ./.github/workflows/linux-arm64-host.yml
+    with:
+      ref: ${{ inputs.ref }}
+      version: ${{ inputs.version }}
+
   # Merge the per-platform digest fragments into one digests.json artifact so
   # a downstream consumer reads every expected hash from a single file.
   digests:
-    needs: build
+    needs: [build, host-linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

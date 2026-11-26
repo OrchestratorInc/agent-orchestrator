@@ -10,9 +10,10 @@ import { apiClient } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { CreateProjectAgentSheet } from "./CreateProjectAgentSheet";
-import { NewTaskDialog } from "./NewTaskDialog";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsDialog } from "./SettingsPageTestHarness";
 import { TooltipProvider } from "./ui/tooltip";
+
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 // Routing and daemon requests are external boundaries; every modal, settings
 // form, selector, and recovery action in these tests is the real component.
@@ -27,18 +28,17 @@ const project = {
 };
 let catalog = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")] };
 
-function RecoveryDialogs({ origin }: { origin?: "create-project" | "new-task" }) {
+function RecoveryDialogs({ origin }: { origin?: "create-project" }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<>
-			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
-			{origin === "new-task" && <NewTaskDialog open={open} onOpenChange={setOpen} projectId="proj-1" onCreated={() => undefined} />}
+			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} intakeVisible isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
 			<SettingsDialog />
 		</>
 	);
 }
 
-function renderDialogs(origin?: "create-project" | "new-task") {
+function renderDialogs(origin?: "create-project") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
 	client.setQueryData(agentReadinessQueryKey, catalog);
 	client.setQueryData(workspaceQueryKey, []);
@@ -48,7 +48,7 @@ function renderDialogs(origin?: "create-project" | "new-task") {
 
 async function openAgentManagement(label: string) {
 	await userEvent.click(await screen.findByLabelText(label));
-	const action = screen.queryByRole("menuitem", { name: "Manage agents…" }) ?? screen.getByRole("option", { name: "Manage agents…" });
+	const action = screen.queryByRole("menuitem", { name: /^Manage agents(?:…)?$/ }) ?? screen.getByRole("option", { name: /^Manage agents(?:…)?$/ });
 	await userEvent.click(action);
 	await screen.findByRole("textbox", { name: "Search harnesses" });
 }
@@ -67,34 +67,83 @@ beforeEach(() => {
 		if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
 		if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal" }] } } as never;
+		if (path === "/api/v1/agents/accounts") return { data: { accounts: [] } } as never;
+		if (path === "/api/v1/agents/accounts/usage") return { data: { usage: [] } } as never;
 		if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "codex", models: [], selectionMode: "text", allowCustom: true, source: "manual", fetchedAt: "2026-09-19T00:00:00Z", stale: false } } as never;
-		if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: [], cloudEnabled: false, localEnabled: true } } as never;
+		if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: [], cloudEnabled: false, localEnabled: true, trackerIntakeEnabled: true } } as never;
 		throw new Error(`Unexpected GET ${path}`);
 	});
 	vi.spyOn(apiClient, "POST").mockImplementation(async (path) => {
 		if (path === "/api/v1/agents/readiness/ensure") return { data: catalog } as never;
-		if (path === "/api/v1/agents/codex/accounts/ensure") return { data: { accountRevision: 0, accounts: [], capabilities: {}, deviceReconciliation: { status: "verified", activeAccountVerified: false, reasonCode: "verified", retryable: false } } } as never;
 		throw new Error(`Unexpected POST ${path}`);
 	});
+	vi.spyOn(apiClient, "PUT").mockResolvedValue({ data: { project } } as never);
 });
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("Settings recovery modal integration", () => {
+	it("closes clean project settings without writing", async () => {
+		const put = vi.spyOn(apiClient, "PUT");
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		await screen.findByRole("button", { name: "Edit Project name" });
+		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+		expect(put).not.toHaveBeenCalled();
+	});
+
+	it.each(["close button", "Escape"])("saves edited project settings on %s", async (dismiss) => {
+		const put = vi.spyOn(apiClient, "PUT").mockResolvedValue({ data: { status: "ok" } } as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		await userEvent.click(await screen.findByRole("button", { name: "Edit Project name" }));
+		const name = screen.getByRole("textbox", { name: "Project name" });
+		await userEvent.clear(name);
+		await userEvent.type(name, "Renamed project");
+
+		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");
+		else await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+
+		await waitFor(() => expect(put).toHaveBeenCalledWith(
+			"/api/v1/projects/{id}",
+			expect.objectContaining({ body: expect.objectContaining({ displayName: "Renamed project" }) }),
+		));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it("keeps edited project settings open when saving fails", async () => {
+		vi.spyOn(apiClient, "PUT").mockResolvedValue({ error: { message: "Save rejected" } } as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		await userEvent.click(await screen.findByRole("button", { name: "Edit Project name" }));
+		const name = screen.getByRole("textbox", { name: "Project name" });
+		await userEvent.clear(name);
+		await userEvent.type(name, "Renamed project");
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Save rejected");
+		expect(name).toHaveValue("Renamed project");
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
+	});
+
 	it("leaves focus on the targeted Harness action when readiness is already cached", async () => {
-		requireCodexLogin();
+		// Cursor has no subscription accounts, so Login is its Account tab's primary action.
+		catalog = { agents: [...catalog.agents, agentReadiness("cursor", "Cursor", { authentication: "unauthorized" })] };
 		const client = renderDialogs();
 		act(() => {
 			client.setQueryData(agentReadinessQueryKey, catalog);
 			client.setQueryData(["agent-installers"], []);
 			client.setQueryData(["agent-install-jobs"], []);
 			client.setQueryData(agentAuthPlansQueryKey, [
-				{ agentId: "codex", action: "login", available: true, launchMode: "terminal" },
+				{ agentId: "cursor", action: "login", available: true, launchMode: "terminal" },
 			]);
-			useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex" });
+			useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "cursor" });
 		});
 
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = (await screen.findByText("Cursor")).closest('[data-agent="cursor"]') as HTMLElement;
 		const login = await within(row).findByRole("button", { name: "Login" });
 		await waitFor(() => expect(document.activeElement).toBe(login));
 	});
@@ -104,66 +153,49 @@ describe("Settings recovery modal integration", () => {
 		useUiStore.getState().openProjectSettings("proj-1");
 		const client = renderDialogs();
 		await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
-		const projectDialog = screen.getByRole("dialog");
-		const trigger = await screen.findByLabelText("Default worker agent");
-		await openAgentManagement("Default worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		const trigger = await screen.findByLabelText("Worker agent");
+		await openAgentManagement("Worker agent");
+		await screen.findByRole("tab", { name: "Account" });
 
 		act(() => client.setQueryData(agentReadinessQueryKey, {
 			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
 		}));
 		await waitFor(() => expect(trigger).not.toHaveTextContent("Needs setup"));
-		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-		await waitFor(() => {
-			expect(document.activeElement?.isConnected).toBe(true);
-			expect(projectDialog).toContainElement(document.activeElement as HTMLElement);
-			expect(trigger).toHaveFocus();
-		});
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1", section: undefined }));
 		await userEvent.click(trigger);
 		expect(await screen.findByRole("menuitem", { name: /Codex/ })).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
-		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
 		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 
-	it("allows pointer interaction above create-project and restores its selections and intake draft on close", async () => {
+	it("allows pointer interaction above create-project and restores its intake draft on close", async () => {
 		const client = renderDialogs("create-project");
-		await userEvent.click(screen.getByRole("combobox", { name: "Worker agent" }));
-		await userEvent.click(await screen.findByRole("option", { name: /Codex/i }));
-		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
+		await userEvent.click(await screen.findByLabelText("Automatically work on assigned issues"));
 		await userEvent.type(screen.getByLabelText("Assignee"), "octocat");
 		requireCodexLogin(client);
-		await openAgentManagement("Worker agent");
+		// The create sheet has no agent fields; Settings opens above it from the
+		// rest of the app, the same way agent management opens it.
+		act(() => useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", preserveProject: true }));
+		await screen.findByRole("textbox", { name: "Search harnesses" });
 
+		await userEvent.click(await screen.findByRole("button", { name: "All harnesses" }));
 		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
 		await userEvent.type(search, "Claude");
 		expect(search).toHaveValue("Claude");
-		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-		expect(await screen.findByRole("combobox", { name: "Worker agent" })).toHaveTextContent("Codex");
-		expect(screen.getByLabelText("Assignee")).toHaveValue("octocat");
+		expect(await screen.findByLabelText("Assignee")).toHaveValue("octocat");
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-	});
-
-	it("Escape dismisses only recovery settings above a new-task dialog and preserves its typed task", async () => {
-		requireCodexLogin();
-		renderDialogs("new-task");
-		await userEvent.type(screen.getByRole("textbox", { name: "Task" }), "Keep the task draft");
-		await openAgentManagement("Agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
-		await userEvent.keyboard("{Escape}");
-
-		expect(await screen.findByRole("textbox", { name: "Task" })).toHaveValue("Keep the task draft");
-		expect(useUiStore.getState().settingsModal).toBeNull();
-		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 
 	it.each(["close button", "Escape"])("keeps the real project form mounted beneath recovery and returns to its draft via %s", async (dismiss) => {
+		const put = vi.spyOn(apiClient, "PUT").mockResolvedValue({ data: { status: "ok" } } as never);
 		requireCodexLogin();
 		useUiStore.getState().openProjectSettings("proj-1");
 		renderDialogs();
@@ -173,20 +205,24 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.type(name, "Unsaved project name");
 		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 		const form = document.getElementById("project-settings-form");
-		await openAgentManagement("Default worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await openAgentManagement("Worker agent");
+		await screen.findByRole("tab", { name: "Account" });
 
-		expect(form).toBeInTheDocument();
+		expect(form).not.toBeNull();
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");
-		else await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		else await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-		expect(await screen.findByRole("button", { name: "Default worker agent" })).toHaveTextContent("Codex");
-		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Codex");
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
 		expect(document.getElementById("project-settings-form")).toBe(form);
-		await userEvent.click(screen.getByRole("button", { name: "Identity" }));
+		await userEvent.click(screen.getByRole("button", { name: "General" }));
 		expect(await screen.findByRole("button", { name: "Edit Project name" })).toHaveTextContent("Unsaved project name");
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close settings" }));
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await waitFor(() => expect(put).toHaveBeenCalledWith(
+			"/api/v1/projects/{id}",
+			expect.objectContaining({ body: expect.objectContaining({ displayName: "Unsaved project name" }) }),
+		));
+		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 });

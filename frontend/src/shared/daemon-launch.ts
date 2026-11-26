@@ -14,6 +14,16 @@ export function bundledDaemonBinaryName(platform: NodeJS.Platform): string {
 	return platform === "win32" ? "ao.exe" : "ao";
 }
 
+/**
+ * What a user sees when the packaged app's daemon executable is not on disk.
+ * It points at reinstalling, not at rebuilding: only installed apps get here.
+ */
+export function bundledDaemonMissingMessage(command: string, platform: NodeJS.Platform): string {
+	const base = `Orchestrator's background service is missing from this install (expected at ${command}). Reinstall Orchestrator to restore it.`;
+	if (platform !== "win32") return base;
+	return `${base} If antivirus software quarantined ${bundledDaemonBinaryName(platform)}, restore it or allow it, then choose Retry.`;
+}
+
 export function resolveDaemonLaunch(
 	env: Record<string, string | undefined>,
 	isPackaged: boolean,
@@ -34,19 +44,13 @@ export function resolveDaemonLaunch(
 	}
 
 	if (!isPackaged) {
-		if (platform === "win32") {
-			return {
-				command: env.AO_DEV_DAEMON_BINARY?.trim() || joinPath(appPath, "daemon", bundledDaemonBinaryName(platform)),
-				args: ["daemon"],
-				cwd: appPath,
-				shell: false,
-				source: "dev",
-			};
-		}
+		// Run the daemon predev already built rather than `go run`, so the daemon's
+		// parent is Electron itself, as in the packaged app; the diagnostics view
+		// counts the daemon's parent tree as the rest of AO.
 		return {
-			command: "go",
-			args: ["run", "./cmd/ao", "daemon"],
-			cwd: joinPath(appPath, "..", "backend"),
+			command: env.AO_DEV_DAEMON_BINARY?.trim() || joinPath(appPath, "daemon", bundledDaemonBinaryName(platform)),
+			args: ["daemon"],
+			cwd: appPath,
 			shell: false,
 			source: "dev",
 		};
@@ -84,18 +88,18 @@ export function bundledDaemonIdentityError(
 ): string | null {
 	if (appImagePath) {
 		if (!probe.appImagePath) {
-			return "An older AO daemon is already running, but it does not report its install identity. Stop it and restart this app.";
+			return "An older Orchestrator daemon is already running, but it does not report its install identity. Stop it and restart this app.";
 		}
 		if (!samePath(probe.appImagePath, appImagePath)) {
-			return `Another AO daemon is already running from ${probe.appImagePath}; expected ${appImagePath}. Stop the other daemon before using this app.`;
+			return `Another Orchestrator daemon is already running from ${probe.appImagePath}; expected ${appImagePath}. Stop the other daemon before using this app.`;
 		}
 		return null;
 	}
 	if (!probe.executablePath) {
-		return "An older AO daemon is already running, but it does not report its binary path. Stop it and restart this app.";
+		return "An older Orchestrator daemon is already running, but it does not report its binary path. Stop it and restart this app.";
 	}
 	if (!samePath(probe.executablePath, expectedCommand)) {
-		return `Another AO daemon is already running from ${probe.executablePath}; expected ${expectedCommand}. Stop the other daemon before using this app.`;
+		return `Another Orchestrator daemon is already running from ${probe.executablePath}; expected ${expectedCommand}. Stop the other daemon before using this app.`;
 	}
 	return null;
 }

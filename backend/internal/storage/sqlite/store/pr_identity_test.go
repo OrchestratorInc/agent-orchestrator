@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -243,6 +244,21 @@ func TestLegacyPRWriteResolvesStoredURLAlias(t *testing.T) {
 	}
 }
 
+func TestRepositoryRenameKeepsLatestName(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, name := range []string{"middle-owner/example", "new-owner/example"} {
+		if err := s.RecordRepositoryRename(ctx, domain.RepositoryRename{Host: "github.com", OldName: "old-owner/example", Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListRepositoryRenames(ctx)
+	want := []domain.RepositoryRename{{Host: "github.com", OldName: "old-owner/example", Name: "new-owner/example"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("renames = %#v, err=%v; want %#v", got, err, want)
+	}
+}
+
 func TestClaimPRResolvesStoredURLAliasBeforeOwnerGuard(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -303,8 +319,8 @@ func TestPRReconciliationRepointsNotificationAndReviewHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, run := range []domain.ReviewRun{
-		{ID: "old-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: oldURL, TargetSHA: "old-head", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now},
-		{ID: "current-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: currentURL, TargetSHA: "current-head", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now.Add(time.Minute)},
+		{ID: "old-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: oldURL, TargetSHA: "old-head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now},
+		{ID: "current-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: currentURL, TargetSHA: "current-head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now.Add(time.Minute)},
 	} {
 		if err := s.InsertReviewRun(ctx, run); err != nil {
 			t.Fatal(err)

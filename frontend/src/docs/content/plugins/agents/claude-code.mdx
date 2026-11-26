@@ -1,0 +1,26 @@
+---
+title: Claude Code
+description: Run Claude Code in Chat or Terminal UI, or import and continue an existing terminal session.
+---
+
+Orchestrator resolves the `claude` executable from your machine and reuses its existing authentication. Install and sign in with Claude Code before refreshing the Orchestrator catalog.
+
+```bash
+ao agent ls --refresh
+ao spawn --project my-app --name claude-task --agent claude-code --mode chat
+```
+
+## Import an existing session
+
+You can continue an existing Claude Code terminal conversation in Orchestrator. Import is available under **Settings → Agents → Claude Code → Import**. Close the conversation in the original terminal before opening the imported session.
+
+See [Import existing sessions](/guides/import-sessions) for the import steps, history limits, and troubleshooting.
+
+## Interfaces
+
+- **Terminal UI:** runs the native Claude Code CLI in the session worktree.
+- **Chat:** uses Orchestrator's ACP transport with `claude-agent-acp`, pointed at your Claude executable.
+
+Claude Code is one of the harnesses that can move between Chat and Terminal UI without changing the Orchestrator session or worktree. Idle sessions can switch directly; the desktop shows the supported finish/stop policy for a busy controller. Follow the switch dialog, including any draft or queued-message warning.
+
+Orchestrator installs its supported activity hook during workspace setup. Use `ao agent ls --refresh --json` for install/auth diagnostics rather than editing a plugin block.

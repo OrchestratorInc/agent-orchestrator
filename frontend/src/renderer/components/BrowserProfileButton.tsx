@@ -1,4 +1,4 @@
-import { ChevronDown, UserRound } from "lucide-react";
+import { ChevronDown, UserRound } from "@/components/app-icons";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
@@ -34,11 +34,6 @@ export function BrowserProfileButton({
 				labels: {
 					temporary: t("browser.profile.temporary"),
 					manage: t("browser.profile.manage"),
-					switchTitle: t("browser.profile.switchTitle"),
-					switchMessage: t("browser.profile.switchMessage"),
-					switchDetail: t("browser.profile.switchDetail"),
-					cancel: t("common.no"),
-					confirm: t("common.yes"),
 				},
 			})
 			.catch(() => undefined);
@@ -48,7 +43,7 @@ export function BrowserProfileButton({
 		<Button
 			aria-haspopup="menu"
 			aria-label={t("browser.profile.select", { profile: label })}
-			className="browser-profile-button max-w-36 min-w-0 gap-1 px-1.5 text-xs"
+			className="browser-profile-button max-w-36 min-w-0 gap-1 px-1.5"
 			onClick={openMenu}
 			ref={buttonRef}
 			size="sm"

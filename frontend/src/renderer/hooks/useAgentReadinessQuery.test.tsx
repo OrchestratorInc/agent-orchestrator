@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -17,6 +17,7 @@ vi.mock("../lib/api-client", () => ({
 import {
 	agentReadinessQueryOptions,
 	agentReadinessQueryKey,
+	loadProjectAgentDefaults,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
 	useEnsureAgentReadiness,
@@ -42,6 +43,7 @@ beforeEach(() => {
 describe("agent readiness query", () => {
 	it("leaves freshness policy to the daemon", () => {
 		expect(agentReadinessQueryOptions.staleTime).toBe(Number.POSITIVE_INFINITY);
+		expect(agentReadinessQueryOptions.gcTime).toBe(Number.POSITIVE_INFINITY);
 	});
 
 	it("reads the cached daemon snapshot without invoking ensure", async () => {
@@ -78,5 +80,81 @@ describe("agent readiness query", () => {
 		expect(mergeAgentReadiness({ agents: [claude, staleCodex] }, { agents: [freshCodex] })).toEqual({
 			agents: [claude, freshCodex],
 		});
+	});
+
+	it("does not let a previous enabled period complete a newer ensure", async () => {
+		const resolvers: Array<(value: unknown) => void> = [];
+		postMock.mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)));
+		const queryClient = new QueryClient();
+		const { result, rerender, unmount } = renderHook(
+			({ enabled }) => useEnsureAgentReadiness({ enabled }),
+			{ initialProps: { enabled: true }, wrapper: wrapper(queryClient) },
+		);
+		expect(result.current).toBe(false);
+		rerender({ enabled: false });
+		rerender({ enabled: true });
+		const response = { data: { agents: [agentReadiness("codex")] } };
+		await act(async () => resolvers[0](response));
+		expect(result.current).toBe(false);
+		expect(queryClient.getQueryData(agentReadinessQueryKey)).toBeUndefined();
+		await act(async () => resolvers[1](response));
+		expect(result.current).toBe(true);
+		rerender({ enabled: false });
+		expect(result.current).toBe(false);
+		unmount();
+	});
+
+	it("retries failed startup readiness without reporting completion early", async () => {
+		vi.useFakeTimers();
+		try {
+			postMock.mockRejectedValueOnce(new Error("offline"));
+			const { result, unmount } = renderHook(() => useEnsureAgentReadiness({ retryOnError: true }), { wrapper: wrapper(new QueryClient()) });
+			await act(async () => { await Promise.resolve(); });
+			expect(result.current).toBe(false);
+			await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+			expect(postMock).toHaveBeenCalledTimes(2);
+			expect(result.current).toBe(true);
+			unmount();
+		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("project agent defaults", () => {
+	it("forces a daemon refresh before falling back when cached agents are not installed", async () => {
+		const none = { data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined };
+		getMock.mockResolvedValue(none);
+		postMock.mockResolvedValue({ data: {}, error: undefined });
+
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/refresh");
+	});
+
+	it("forces a daemon refresh on a cached not_installed snapshot and ranks a newly installed agent", async () => {
+		getMock
+			.mockResolvedValueOnce({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined })
+			.mockResolvedValueOnce({ data: { agents: [agentReadiness("codex", "Codex")] }, error: undefined });
+		postMock.mockResolvedValueOnce({ data: {}, error: undefined });
+
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/refresh");
+	});
+
+	it("ranks the daemon's latest snapshot when the checks outlast the limit", async () => {
+		vi.useFakeTimers();
+		try {
+			const unchecked = { installation: "unknown", authentication: "unknown" } as const;
+			getMock
+				.mockResolvedValueOnce({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", unchecked)] }, error: undefined })
+				.mockResolvedValue({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", { authentication: "unknown" })] }, error: undefined });
+			postMock.mockReturnValue(new Promise(() => {}));
+
+			const defaults = loadProjectAgentDefaults(new QueryClient());
+			await vi.advanceTimersByTimeAsync(5000);
+
+			// Claude Code was never checked; the daemon found Codex installed by now.
+			await expect(defaults).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

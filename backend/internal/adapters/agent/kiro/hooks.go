@@ -61,14 +61,26 @@ type kiroHookSpec struct {
 //
 //	agentSpawn       -> session-start       (ActivityActive)
 //	userPromptSubmit -> user-prompt-submit  (ActivityActive)
-//	preToolUse       -> permission-request  (ActivityWaitingInput)
+//	preToolUse       -> pre-tool-use        (ActivityActive: tool traffic is work)
 //	stop             -> stop                (ActivityIdle)
+//
+// PreToolUse maps to pre-tool-use (active), NOT permission-request: it fires
+// for every tool invocation including auto-approved/trusted tools, so treating
+// it as waiting_input pins ordinary tool use to sticky Input needed. Genuine
+// approval dialogs carry no hook of their own and are observed via
+// DetectTerminalActivity instead (see activity.go).
 var kiroManagedHooks = []kiroHookSpec{
 	{Event: "agentSpawn", Command: kiroHookCommandPrefix + "session-start"},
 	{Event: "userPromptSubmit", Command: kiroHookCommandPrefix + "user-prompt-submit"},
-	{Event: "preToolUse", Command: kiroHookCommandPrefix + "permission-request"},
+	{Event: "preToolUse", Command: kiroHookCommandPrefix + "pre-tool-use"},
 	{Event: "stop", Command: kiroHookCommandPrefix + "stop"},
 }
+
+// kiroLegacyPreToolUseCommand is the pre-fix sub-command installed for the
+// preToolUse event. Install strips it so upgraded workspaces stop emitting
+// sticky waiting_input; DeriveActivityState also maps it to active as a
+// safety net for workspaces that have not been reinstalled yet.
+const kiroLegacyPreToolUseCommand = kiroHookCommandPrefix + "permission-request"
 
 // GetAgentHooks installs AO's Kiro hooks into the worktree-local
 // .kiro/agents/ao.json file. Existing hook entries are preserved and duplicate
@@ -92,6 +104,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		if err := parseKiroHookEvent(rawHooks, event, &existing); err != nil {
 			return fmt.Errorf("kiro.GetAgentHooks: %w", err)
 		}
+		existing = removeKiroLegacyPreToolUse(existing, event)
 		for _, spec := range specs {
 			if !kiroHookCommandExists(existing, spec.Command) {
 				existing = append(existing, kiroHookEntry{Command: spec.Command})
@@ -313,6 +326,24 @@ func kiroManagedEvents() []string {
 
 func isKiroManagedHook(command string) bool {
 	return strings.HasPrefix(command, kiroHookCommandPrefix)
+}
+
+// removeKiroLegacyPreToolUse drops the pre-fix permission-request entry from
+// the preToolUse event so upgraded workspaces stop emitting sticky
+// waiting_input. Other events are untouched, and user-authored entries are
+// never touched (the legacy command carries the AO prefix by construction).
+func removeKiroLegacyPreToolUse(entries []kiroHookEntry, event string) []kiroHookEntry {
+	if event != "preToolUse" {
+		return entries
+	}
+	kept := make([]kiroHookEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Command == kiroLegacyPreToolUseCommand {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 // removeKiroManagedHooks strips AO hook entries from an event's array.

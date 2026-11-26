@@ -1,56 +1,92 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../../stores/ui-store";
+import { TooltipProvider } from "../ui/tooltip";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchChip } from "./ChatStatusBanners";
+
+const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
+vi.mock("../../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { versionRefresh: versionRefreshSetting.enabled }, isLoading: false, error: undefined }),
+}));
+const sessionAccounts = vi.hoisted(() => ({ bound: {} as Record<string, string> | undefined }));
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
+	useSessionAgentAccounts: (sessionId?: string) => ({ data: sessionId ? sessionAccounts.bound : undefined, isPending: Boolean(sessionId) && !sessionAccounts.bound }),
+}));
+vi.mock("../../lib/host-clients", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/host-clients")>()),
+	labelForHost: (hostId: string) => (hostId === "host-air" ? "Macbook Air M1" : undefined),
+}));
 
 // Each of these answers a question the timeline structurally cannot, so the tests are
 // about what is said and when it is withheld — a banner for an ordinary state is noise
 // that teaches readers to ignore the row.
 
 describe("ReauthBanner", () => {
-	it.each(["Unauthorized (401)", "Authentication failed", "OAuth token has been revoked"])(
-		"offers sign-in based on account state for %s",
-		(reason) => {
-			render(<ReauthBanner account={{ reauthRequiredAt: "2026-09-14T00:00:00Z", reauthReason: reason }} harness="claude-code" />);
-			expect(screen.getByRole("alert")).toHaveTextContent(reason);
-			expect(screen.getByText("claude auth login")).toBeInTheDocument();
-		},
-	);
-	it("names the command, because re-authenticating is not something AO can do", () => {
-		render(
-			<ReauthBanner
-				account={{
-					reauthRequiredAt: "2026-08-03T00:00:00Z",
-					reauthReason: "The stored session expired.",
-				}}
-				harness="codex"
-			/>,
-		);
-		expect(screen.getByRole("alert")).toBeInTheDocument();
-		expect(screen.getByText("codex login")).toBeInTheDocument();
-		expect(screen.getByText(/The stored session expired/)).toBeInTheDocument();
+	const failed = { authenticationState: "required" as const, authFailureId: "f1", reauthReason: "OAuth token has been revoked" };
+	const openGlobalSettings = vi.fn();
+	const original = useUiStore.getState().openGlobalSettings;
+	beforeEach(() => useUiStore.setState({ openGlobalSettings }));
+	afterEach(() => {
+		useUiStore.setState({ openGlobalSettings: original });
+		openGlobalSettings.mockReset();
+		sessionAccounts.bound = {};
 	});
 
-	it("says the worktree is untouched, since nothing else about the session works", () => {
-		render(
-			<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="codex" />,
-		);
-		expect(screen.getByText(/worktree is untouched/i)).toBeInTheDocument();
+	it("says the login expired in plain words, without the provider's error", () => {
+		render(<ReauthBanner account={failed} harness="claude-code" />);
+		expect(screen.getByRole("status")).toHaveTextContent("Your Claude Code login has expired. Log in again to keep using this chat.");
+		expect(screen.queryByText(/revoked/)).not.toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("names Claude Code's non-interactive authentication command", () => {
-		render(
-			<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="claude-code" />,
-		);
-		expect(screen.getByText("claude auth login")).toBeInTheDocument();
+	it("opens the Harness page, which starts the login", async () => {
+		render(<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="codex" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "codex", harnessView: "local", startLogin: true, preserveProject: true,
+		});
 	});
 
-	it("falls back to generic wording rather than guessing a command", () => {
-		render(
-			<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="opencode" />,
-		);
-		expect(screen.queryByText(/login$/)).not.toBeInTheDocument();
-		expect(screen.getByText(/agent’s own CLI/)).toBeInTheDocument();
+	it("signs in the saved account the session runs on", async () => {
+		sessionAccounts.bound = { claude: "acct-b" };
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", harnessView: "local", loginAccountId: "acct-b", preserveProject: true,
+		});
+	});
+
+	it("signs in this computer's login when the session runs on it", async () => {
+		sessionAccounts.bound = { claude: "device-claude" };
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", harnessView: "local", loginAccountId: "device-claude", preserveProject: true,
+		});
+	});
+
+	it("waits to learn the session's account before it signs in", () => {
+		sessionAccounts.bound = undefined;
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeDisabled();
+	});
+
+	// A remote session runs on its host, so that host's login is the one to fix.
+	it("names a remote host and logs in on it", async () => {
+		render(<ReauthBanner account={failed} harness="claude-code" hostId="host-air" />);
+		expect(screen.getByRole("status")).toHaveTextContent("Your Claude Code login on Macbook Air M1 has expired.");
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", hostId: "host-air", harnessView: "local", startLogin: true, preserveProject: true,
+		});
+	});
+
+	it("logs a cloud session in on the cloud connection", async () => {
+		render(<ReauthBanner account={failed} harness="codex" cloud />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ focusAgentId: "codex", harnessView: "cloud" }));
 	});
 
 	it("stays silent for an account with no credential demand", () => {
@@ -59,13 +95,26 @@ describe("ReauthBanner", () => {
 		);
 		expect(container).toBeEmptyDOMElement();
 	});
+
+	it("stays until the login works, with sign-in as its only action", () => {
+		const account = { authenticationState: "required" as const, authFailureId: "first", reauthRequiredAt: "2026-08-03T00:00:00Z" };
+		const { rerender } = render(<ReauthBanner account={account} harness="codex" />);
+		expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Log in again"]);
+		rerender(<ReauthBanner account={{ ...account, authenticationState: "authenticated" }} harness="codex" />);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("uses current authentication state even when historical failure evidence exists", () => {
+		render(<ReauthBanner account={{ authenticationState: "authenticated", reauthRequiredAt: "2026-08-03T00:00:00Z", lastAuthFailureReason: "expired" }} harness="codex" />);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
 });
 
 describe("ThreadStateBanner", () => {
 	it("reports a provider-side fault as the provider's, not AO's connection", () => {
 		render(<ThreadStateBanner threadState={{ status: "system_error" }} />);
 		expect(screen.getByText(/thread hit an internal error/i)).toBeInTheDocument();
-		expect(screen.getByText(/not in AO's connection to it/)).toBeInTheDocument();
+		expect(screen.getByText(/not in Orchestrator's connection to it/)).toBeInTheDocument();
 	});
 
 	it("reports a closed thread as history AO kept and the agent did not", () => {
@@ -88,6 +137,11 @@ describe("ThreadStateBanner", () => {
 });
 
 describe("McpServerBanner", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		window.localStorage.clear();
+	});
+
 	const broken = [
 		{
 			name: "playwright",
@@ -97,52 +151,177 @@ describe("McpServerBanner", () => {
 		},
 	];
 
-	it("says the agent will work around the missing tools silently", () => {
-		render(<McpServerBanner servers={broken} />);
-		expect(screen.getByText("A tool server did not start")).toBeInTheDocument();
-		expect(screen.getByText(/works around them\s+silently/)).toBeInTheDocument();
-	});
-
-	it("names the server, its classification and the provider's own text", () => {
-		render(<McpServerBanner servers={broken} />);
-		expect(screen.getByText("playwright")).toBeInTheDocument();
-		expect(screen.getByText(/startup_timeout/)).toBeInTheDocument();
-		expect(screen.getByText(/did not report ready within 30s/)).toBeInTheDocument();
-	});
-
-	it("offers a reload", async () => {
-		const onReload = vi.fn();
-		render(<McpServerBanner servers={broken} onReload={onReload} />);
-		await userEvent.click(screen.getByRole("button", { name: /Reload/ }));
-		expect(onReload).toHaveBeenCalledOnce();
-	});
-
-	// The daemon refuses a reload mid-turn, so the control explains itself rather than
-	// being allowed to fail.
-	it("disables the reload mid-turn and says why", () => {
-		render(<McpServerBanner servers={broken} onReload={vi.fn()} turnInFlight />);
-		const button = screen.getByRole("button", { name: /Reload/ });
-		expect(button).toBeDisabled();
-		expect(button).toHaveAttribute(
-			"title",
-			expect.stringContaining("Finish or stop the current turn"),
-		);
-	});
-
-	it("draws no control at all when the harness cannot reload", () => {
-		render(<McpServerBanner servers={broken} />);
+	it("names the missing tools in one quiet line, without diagnostics or controls", () => {
+		render(<McpServerBanner sessionId="mcp-line" servers={broken} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
+		expect(screen.queryByText(/startup_timeout|did not report ready/)).not.toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		// It overlays the end of the timeline for a few seconds; clicks must pass through.
+		expect(screen.getByRole("status")).toHaveClass("pointer-events-none");
 	});
 
-	it("surfaces a failed reload", () => {
-		render(<McpServerBanner servers={broken} onReload={vi.fn()} error="controller not ready" />);
-		expect(screen.getByText("controller not ready")).toBeInTheDocument();
+	it("lists several servers together", () => {
+		render(<McpServerBanner sessionId="mcp-several" servers={[...broken, { name: "notion", status: "failed" }]} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright, Notion didn’t start. Continuing without them.");
+	});
+
+	it("goes away on its own after a few seconds", () => {
+		vi.useFakeTimers();
+		render(<McpServerBanner sessionId="mcp-timeout" servers={broken} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(3_000));
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(200));
+		expect(screen.queryByText("Playwright didn’t start. Continuing without it.")).not.toBeInTheDocument();
+	});
+
+	it("shows once per session, even when the chat remounts", () => {
+		const first = render(<McpServerBanner sessionId="mcp-once" servers={broken} />);
+		expect(screen.getByText("Playwright didn’t start. Continuing without it.")).toBeInTheDocument();
+		first.unmount();
+
+		render(<McpServerBanner sessionId="mcp-once" servers={broken} />);
+		expect(screen.queryByText("Playwright didn’t start. Continuing without it.")).not.toBeInTheDocument();
+		expect(window.localStorage.getItem("ao:mcp-notice-shown:mcp-once")).toBe("1");
+	});
+
+	it("tells a restarted session again", () => {
+		const first = render(<McpServerBanner sessionId="mcp-restart" incarnation="run-1" servers={broken} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+		first.unmount();
+
+		render(<McpServerBanner sessionId="mcp-restart" incarnation="run-2" servers={broken} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
+	});
+
+	it("does not replay for a session that already showed it before a reload", () => {
+		window.localStorage.setItem("ao:mcp-notice-shown:mcp-restored", "1");
+		const { container } = render(<McpServerBanner sessionId="mcp-restored" servers={broken} />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("waits until the chat panel is visible before using up the note", () => {
+		const { rerender } = render(<McpServerBanner sessionId="mcp-hidden" servers={broken} active={false} />);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		expect(window.localStorage.getItem("ao:mcp-notice-shown:mcp-hidden")).toBeNull();
+
+		rerender(<McpServerBanner sessionId="mcp-hidden" servers={broken} active />);
+		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
 	});
 
 	// A healthy server is not news. The caller filters, and an empty list must not
-	// leave a permanent bar above the conversation saying nothing is wrong.
+	// draw anything or use up the session's one note.
 	it("says nothing when no server is broken", () => {
-		const { container } = render(<McpServerBanner servers={[]} />);
+		const { container, rerender } = render(<McpServerBanner sessionId="mcp-healthy" servers={[]} />);
 		expect(container).toBeEmptyDOMElement();
+		rerender(<McpServerBanner sessionId="mcp-healthy" servers={broken} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+	});
+});
+
+describe("VersionSwitchChip", () => {
+	afterEach(() => { versionRefreshSetting.enabled = true; });
+	const stale = { version: "2.1.300", since: "2026-10-15T00:00:00Z" };
+
+	it("says nothing for a session on the installed release", () => {
+		render(<VersionSwitchChip harness="claude-code" />);
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
+	});
+
+	it("announces the chip when an update arrives mid-session", () => {
+		const { rerender } = render(<VersionSwitchChip harness="claude-code" />);
+		const status = screen.getByRole("status");
+		rerender(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
+		// The same polite region carries the news, so a screen reader hears it.
+		expect(screen.getByRole("status")).toBe(status);
+		expect(status).toHaveTextContent("Update ready: Claude Code v2.1.300 is installed");
+	});
+
+	it("is one chip whose popover says what was installed and when the chat moves to it", async () => {
+		const user = userEvent.setup();
+		render(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
+		const chip = screen.getByRole("button", { name: /^Update ready/ });
+		expect(chip).toHaveTextContent("Update ready");
+		// The detail waits behind the chip rather than spreading across the chat.
+		expect(screen.queryByText(/still runs the previous version/)).not.toBeInTheDocument();
+
+		await user.click(chip);
+		const details = screen.getByRole("dialog", { name: "Claude Code v2.1.300 is installed" });
+		expect(details).toHaveTextContent("It moves to the new one when the agent is idle, or with your next message.");
+		expect(details).toHaveTextContent("a restart clears the agent's cached context");
+	});
+
+	it("asks for a resume instead of promising a switch when the agent stopped", async () => {
+		const user = userEvent.setup();
+		render(<VersionSwitchChip staleBinary={{ version: "2.1.308", since: "2026-10-20T00:00:00Z" }} harness="claude-code" agentStopped />);
+		await user.click(screen.getByRole("button", { name: /^Update ready/ }));
+		const details = screen.getByRole("dialog", { name: "Claude Code v2.1.308 is installed" });
+		expect(details).toHaveTextContent("Resume the agent to start it on the new version.");
+		expect(details).not.toHaveTextContent("with your next message");
+	});
+
+	it("stays quiet when moving sessions is turned off", () => {
+		versionRefreshSetting.enabled = false;
+		render(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
+	});
+
+});
+
+describe("VersionSwitchChip after a failed switch", () => {
+	afterEach(() => { versionRefreshSetting.enabled = true; });
+	const failed = { version: "2.1.300", since: "2026-10-15T00:00:00Z", switchFailedAt: "2026-10-15T00:10:00Z" };
+	const renderChip = (props: Partial<Parameters<typeof VersionSwitchChip>[0]> = {}) =>
+		render(<TooltipProvider><VersionSwitchChip staleBinary={failed} harness="claude-code" {...props} /></TooltipProvider>);
+
+	it("is one Retry update chip in place of a banner, announced once", () => {
+		renderChip({ onResume: vi.fn() });
+		expect(screen.getByRole("button", { name: /^Retry update/ })).toHaveTextContent("Retry update");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent("Couldn't switch to v2.1.300");
+	});
+
+	it("says why on hover, without a delay", async () => {
+		const user = userEvent.setup();
+		renderChip({ onResume: vi.fn() });
+		await user.hover(screen.getByRole("button", { name: /^Retry update/ }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(
+			"Couldn't switch to v2.1.300. Queued messages are kept; click to resume the agent on it.",
+		);
+	});
+
+	it("resumes the agent when clicked", async () => {
+		const user = userEvent.setup();
+		const onResume = vi.fn();
+		renderChip({ onResume });
+		await user.click(screen.getByRole("button", { name: /^Retry update/ }));
+		expect(onResume).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not resume twice while a resume is under way", async () => {
+		const user = userEvent.setup();
+		const onResume = vi.fn();
+		renderChip({ onResume, resuming: true });
+		await user.click(screen.getByRole("button", { name: /^Retry update/ }));
+		expect(onResume).not.toHaveBeenCalled();
+	});
+
+	it("promises no click when the agent cannot be resumed from here", async () => {
+		const user = userEvent.setup();
+		renderChip();
+		const chip = screen.getByRole("button", { name: /^Retry update/ });
+		expect(chip).toHaveAttribute("aria-disabled", "true");
+		await user.hover(chip);
+		const tooltip = await screen.findByRole("tooltip");
+		expect(tooltip).toHaveTextContent("Couldn't switch to v2.1.300");
+		expect(tooltip).not.toHaveTextContent("click");
+	});
+
+	it("shows even when moving sessions is turned off", () => {
+		versionRefreshSetting.enabled = false;
+		renderChip({ onResume: vi.fn() });
+		expect(screen.getByRole("button", { name: /^Retry update/ })).toBeInTheDocument();
 	});
 });

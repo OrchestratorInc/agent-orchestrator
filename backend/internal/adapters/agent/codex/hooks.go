@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
 )
@@ -63,6 +64,7 @@ type codexHookEntry struct {
 type codexHookSpec struct {
 	Event   string
 	Command string
+	Matcher string
 }
 
 // codexManagedHooks is the source of truth for the hooks AO delivers. Event
@@ -72,6 +74,12 @@ var codexManagedHooks = []codexHookSpec{
 	{Event: "SessionStart", Command: codexHookCommandPrefix + "session-start"},
 	{Event: "UserPromptSubmit", Command: codexHookCommandPrefix + "user-prompt-submit"},
 	{Event: "PermissionRequest", Command: codexHookCommandPrefix + "permission-request"},
+	// Current Codex emits the canonical `spawn_agent` tool name. Keep the
+	// historical collaboration alias while older installed Codex builds drain
+	// their sessions, so both payloads reach the parser.
+	{Event: "PostToolUse", Command: codexHookCommandPrefix + "post-tool-use", Matcher: "^(spawn_agent|collaborationspawn_agent)$"},
+	{Event: "SubagentStart", Command: codexHookCommandPrefix + "subagent-start"},
+	{Event: "SubagentStop", Command: codexHookCommandPrefix + "subagent-stop"},
 	{Event: "Stop", Command: codexHookCommandPrefix + "stop"},
 }
 
@@ -80,14 +88,14 @@ var codexManagedHooks = []codexHookSpec{
 // hooks through a login shell, which may replace PATH, so every hook invokes
 // this exact AO executable instead of relying on a bare `ao` lookup.
 func appendSessionHookFlags(cmd *[]string) error {
-	executable, err := os.Executable()
+	executable, err := agentlaunch.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve AO hook executable: %w", err)
+		return fmt.Errorf("resolve Orchestrator hook executable: %w", err)
 	}
 	if !filepath.IsAbs(executable) {
 		executable, err = filepath.Abs(executable)
 		if err != nil {
-			return fmt.Errorf("make AO hook executable absolute: %w", err)
+			return fmt.Errorf("make Orchestrator hook executable absolute: %w", err)
 		}
 	}
 	appendSessionHookFlagsForExecutable(cmd, executable)
@@ -98,8 +106,12 @@ func appendSessionHookFlagsForExecutable(cmd *[]string, executable string) {
 	prefix := shellQuoteHookExecutable(executable) + " hooks codex "
 	for _, spec := range codexManagedHooks {
 		action := strings.TrimPrefix(spec.Command, codexHookCommandPrefix)
-		flag := fmt.Sprintf(`hooks.%s=[{hooks=[{type="command",command=%s,timeout=%d}]}]`,
-			spec.Event, codexTOMLBasicString(prefix+action), codexHookTimeout)
+		matcher := ""
+		if spec.Matcher != "" {
+			matcher = "matcher=" + codexTOMLBasicString(spec.Matcher) + ","
+		}
+		flag := fmt.Sprintf(`hooks.%s=[{%shooks=[{type="command",command=%s,timeout=%d}]}]`,
+			spec.Event, matcher, codexTOMLBasicString(prefix+action), codexHookTimeout)
 		*cmd = append(*cmd, "-c", flag)
 	}
 }

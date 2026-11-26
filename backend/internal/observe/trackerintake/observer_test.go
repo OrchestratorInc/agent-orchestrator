@@ -48,6 +48,11 @@ func TestPollSpawnsWorkerForEligibleIssue(t *testing.T) {
 	if call.IssueID != "github:acme/demo#12" {
 		t.Fatalf("IssueID = %q, want canonical github id", call.IssueID)
 	}
+	// Intake spawns have no parent and no schedule, so only an explicit
+	// creator keeps telemetry from counting them as user-started.
+	if call.CreatedBy != domain.SessionCreatedByAutomation {
+		t.Fatalf("CreatedBy = %q, want automation", call.CreatedBy)
+	}
 	if !strings.Contains(call.Prompt, "Fix login") || !strings.Contains(call.Prompt, "The login form submits twice.") {
 		t.Fatalf("prompt missing issue context:\n%s", call.Prompt)
 	}

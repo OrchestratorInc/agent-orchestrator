@@ -1,3 +1,5 @@
+import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
+
 export type SessionFileTabState = {
 	openPaths: string[];
 	activePath: string | null;
@@ -27,3 +29,8 @@ export function closeSessionFile(state: SessionFileTabState, path: string): Sess
 }
 
 export const closeAllSessionFiles = (): SessionFileTabState => emptySessionFileTabs();
+
+/** Live paths keep their old identities; read-only revisions coexist with them. */
+export function sessionFileTabKey(path: string, source?: FilesSource): string {
+	return source?.kind === "snapshot" ? JSON.stringify(["snapshot", source, path]) : path;
+}

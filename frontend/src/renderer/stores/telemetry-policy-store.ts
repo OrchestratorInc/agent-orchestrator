@@ -22,13 +22,10 @@ export const useTelemetryPolicyStore = create<TelemetryPolicyState>((set, get) =
 		pendingLoad = (async () => {
 			if (!subscribed) {
 				subscribed = true;
-				aoBridge.telemetry.onPolicy((view) => {
-					if (!view.eventsEnabled && typeof localStorage !== "undefined") {
-						localStorage.removeItem("ao.telemetry.activeSlotsByDate");
-						localStorage.removeItem("ao.telemetry.routeViewsByDate");
-					}
-					set({ view, loaded: true, saving: false });
-				});
+				// This policy is the failure-reporting consent. PostHog product
+				// analytics keep their own once-a-day gates in localStorage and
+				// are not governed by it (see applyRendererTelemetryPolicy).
+				aoBridge.telemetry.onPolicy((view) => set({ view, loaded: true, saving: false }));
 			}
 			try { set({ view: await aoBridge.telemetry.getPolicy(), loaded: true }); }
 			catch { set({ loaded: true, saveError: true }); }

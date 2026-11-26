@@ -1,0 +1,124 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useRestoreSession } from "../hooks/useRestoreSession";
+import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useUiStore } from "../stores/ui-store";
+import type { WorkspaceSummary } from "../types/workspace";
+import { LOCAL_HOST } from "./hosts";
+import { useNavigateToSession } from "./navigate-to-session";
+import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
+
+export type SessionLinkSource = {
+	ready: boolean;
+	isLoading: boolean;
+	isError: boolean;
+	workspaces: WorkspaceSummary[];
+};
+
+function useLocalLinkSource(_hostId: string): SessionLinkSource {
+	const query = useWorkspaceQuery({ includeCloud: false });
+	return { ready: query.isSuccess, isLoading: query.isLoading, isError: query.isError, workspaces: query.data ?? [] };
+}
+
+function useCloudLinkSource(_hostId: string): SessionLinkSource {
+	const projects = useCloudProjectsQuery();
+	const sessions = useCloudSessionsQuery();
+	const { org, ready: orgReady } = useCloudOrg();
+	const workspaces = useMemo(() => {
+		if (!org?.id) return [];
+		return (projects.data ?? []).map((project) => toCloudWorkspace(project, sessions.data ?? [], org.id));
+	}, [org?.id, projects.data, sessions.data]);
+	return {
+		ready: orgReady && Boolean(org?.id) && projects.isSuccess && sessions.isSuccess,
+		// Signed out means the source is absent, not that it is on its way.
+		isLoading: orgReady && (projects.isLoading || sessions.isLoading),
+		isError: projects.isError || sessions.isError,
+		workspaces,
+	};
+}
+
+function useRemoteLinkSource(hostId: string): SessionLinkSource {
+	const queryClient = useQueryClient();
+	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
+	const state = useSyncExternalStore(
+		subscribe,
+		() => queryClient.getQueryState<WorkspaceSummary[]>(remoteWorkspaceQueryKey(hostId)),
+	);
+	return {
+		ready: state?.status === "success",
+		// A host with no running query never settles on its own, so only a live fetch counts as loading.
+		isLoading: state?.status === "pending" && state.fetchStatus !== "idle",
+		isError: state?.status === "error",
+		workspaces: state?.data ?? [],
+	};
+}
+
+export function useSessionLinkSource(sourceHostId?: string, sourceKind?: "cloud"): SessionLinkSource {
+	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
+	const useSource = remoteHostId ? useRemoteLinkSource : sourceKind === "cloud" ? useCloudLinkSource : useLocalLinkSource;
+	return useSource(remoteHostId ?? "");
+}
+
+export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cloud"): (url: string) => boolean {
+	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
+	const source = useSessionLinkSource(sourceHostId, sourceKind);
+	const navigateToSession = useNavigateToSession();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
+	const restoreSession = useRestoreSession();
+	const queryClient = useQueryClient();
+	return useCallback((url: string) => {
+		const artifact = parseArtifactLink(url);
+		const target = parseSessionLink(url) ?? artifact;
+		if (!target) {
+			showGlobalToast("This Orchestrator-managed session link is malformed or unsupported.", undefined, {
+				tone: "error",
+				placement: "top-center",
+				dismissible: true,
+				dedupeKey: "session-link:error",
+			});
+			return false;
+		}
+		if (!source.ready) {
+			showGlobalToast(`Orchestrator could not verify that session. Check the ${remoteHostId ? "host" : sourceKind === "cloud" ? "Cloud" : "daemon"} connection and try again.`, undefined, {
+				tone: "error",
+				placement: "top-center",
+				dismissible: true,
+				dedupeKey: "session-link:error",
+			});
+			return false;
+		}
+		const resolved = resolveSessionLink(url, source.workspaces);
+		if (!resolved) {
+			showGlobalToast("That session is missing or is not accessible in this Orchestrator workspace.", undefined, {
+				tone: "error",
+				placement: "top-center",
+				dismissible: true,
+				dedupeKey: "session-link:error",
+			});
+			return false;
+		}
+		const mutationKey = ["resume-agent", remoteHostId ?? "local", resolved.sessionId];
+		if (resolved.isTerminated && !artifact && queryClient.isMutating({ mutationKey }) === 0) {
+			void queryClient.getMutationCache().build(queryClient, {
+				mutationKey,
+				mutationFn: async () => {
+					const result = await restoreSession(resolved.sessionId, remoteHostId);
+					if (result.status !== "success") throw new Error(result.message);
+				},
+			}).execute(undefined).catch((error: unknown) => {
+				showGlobalToast(error instanceof Error ? error.message : "Unable to restore session", undefined, {
+					tone: "error",
+					placement: "top-center",
+					dismissible: true,
+					dedupeKey: `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`,
+				});
+			});
+		}
+		if (artifact) requestWorkspaceFileOpen(resolved.sessionId, artifact.path, remoteHostId, "artifact");
+		if (remoteHostId) navigateToSession(resolved.projectId, resolved.sessionId, remoteHostId);
+		else navigateToSession(resolved.projectId, resolved.sessionId);
+		return true;
+	}, [navigateToSession, queryClient, remoteHostId, requestWorkspaceFileOpen, restoreSession, showGlobalToast, source, sourceKind]);
+}

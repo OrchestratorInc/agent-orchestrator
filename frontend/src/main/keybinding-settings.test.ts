@@ -1,15 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { coerceKeybindingOverrides } from "./keybinding-settings";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { coerceKeybindingOverrides, readKeybindingOverrides, writeKeybindingOverrides } from "./keybinding-settings";
 
 describe("coerceKeybindingOverrides", () => {
+	it("loads saved selection bindings, unassignment and reset after restarting", async () => {
+		const parent = path.join(os.homedir(), ".ao", "dev");
+		await mkdir(parent, { recursive: true });
+		const stateDir = await mkdtemp(path.join(parent, "keybinding-settings-"));
+		try {
+			for (const overrides of [{ "add-selection-to-chat": [{ key: "j", ctrl: true, meta: false, shift: true, alt: true }] }, { "add-selection-to-chat": [] }, {}]) {
+				await writeKeybindingOverrides(stateDir, overrides);
+				expect(await readKeybindingOverrides(stateDir)).toEqual(overrides);
+			}
+		} finally {
+			if (path.dirname(stateDir) === parent) await rm(stateDir, { recursive: true, force: true });
+		}
+	});
 	it("keeps valid application bindings and ignores unknown commands", () => {
 		expect(
 			coerceKeybindingOverrides({
-				"focus-terminal": [{ key: "j", ctrl: true }],
+				"toggle-terminal": [{ key: "j", ctrl: true }],
 				"unknown-command": [{ key: "q", ctrl: true }],
 			}),
 		).toEqual({
-			"focus-terminal": [
+			"toggle-terminal": [
 				{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
 			],
 		});
@@ -29,7 +45,7 @@ describe("coerceKeybindingOverrides", () => {
 	it("rejects standalone function keys and terminal-critical chords", () => {
 		expect(
 			coerceKeybindingOverrides({
-				"focus-terminal": [{ key: "F6" }],
+				"toggle-terminal": [{ key: "F6" }],
 				"open-settings": [{ key: "c", ctrl: true }],
 			}),
 		).toEqual({});
@@ -38,15 +54,15 @@ describe("coerceKeybindingOverrides", () => {
 	it("does not accept overrides for the fixed indexed project shortcut", () => {
 		expect(
 			coerceKeybindingOverrides({
-				"open-project": [{ key: "p", ctrl: true }],
+				"jump-to-session": [{ key: "p", ctrl: true }],
 			}),
 		).toEqual({});
 	});
 
 	it("applies platform-aware reserved shortcut validation", () => {
-		expect(coerceKeybindingOverrides({ "focus-terminal": [{ key: "q", meta: true }] }, true)).toEqual({});
-		expect(coerceKeybindingOverrides({ "focus-terminal": [{ key: "q", meta: true }] }, false)).toEqual({
-			"focus-terminal": [{ key: "q", ctrl: false, meta: true, shift: false, alt: false }],
+		expect(coerceKeybindingOverrides({ "toggle-terminal": [{ key: "q", meta: true }] }, true)).toEqual({});
+		expect(coerceKeybindingOverrides({ "toggle-terminal": [{ key: "q", meta: true }] }, false)).toEqual({
+			"toggle-terminal": [{ key: "q", ctrl: false, meta: true, shift: false, alt: false }],
 		});
 	});
 });

@@ -1,7 +1,9 @@
 import { createHashHistory, createRouter, useRouterState } from "@tanstack/react-router";
 import type { QueryClient } from "@tanstack/react-query";
 import { DaemonStartupLoader } from "./components/DaemonStartupLoader";
+import { dismissHoverCards } from "./components/ui/hover-card";
 import { routeTree } from "./routeTree.gen";
+import { reportRouteError } from "./components/RouteErrorCapture";
 
 export function AppPendingFallback() {
 	const isInitialLoad = useRouterState({ select: (state) => state.resolvedLocation === undefined });
@@ -11,10 +13,11 @@ export function AppPendingFallback() {
 // Hash history is required for Electron's file:// renderer origin — browser
 // history would break on hard reload since there is no server to serve paths.
 export function createAppRouter(queryClient: QueryClient) {
-	return createRouter({
+	const router = createRouter({
 		history: createHashHistory(),
 		routeTree,
 		context: { queryClient },
+		defaultOnCatch: reportRouteError,
 		defaultPreload: "intent",
 		// Parent route loaders probe the daemon before ShellLayout can mount.
 		// Render the same viewport-wide startup screen during that gap so the
@@ -23,9 +26,19 @@ export function createAppRouter(queryClient: QueryClient) {
 		// branding back over an already-running app.
 		defaultPendingComponent: AppPendingFallback,
 		defaultPendingMs: 0,
+		// The router's default keeps a shown pending component up for at least
+		// 500ms. With pendingMs 0 it always shows, so every launch and reload
+		// held the startup screen for half a second after the data had arrived.
+		defaultPendingMinMs: 0,
 		// Always re-run loaders when a route is preloaded or visited so React
 		// Query's cache is the single source of truth for staleness.
 		defaultPreloadStaleTime: 0,
 		scrollRestoration: true,
 	});
+	// A hover card describes something on the page being left. A chat kept alive
+	// for switching back stays mounted, so its cards would otherwise stay up.
+	router.subscribe("onBeforeNavigate", ({ pathChanged }) => {
+		if (pathChanged) dismissHoverCards();
+	});
+	return router;
 }

@@ -12,11 +12,6 @@ type Handler = (event: { sender: object }, ...args: unknown[]) => unknown;
 const labels = {
 	temporary: "Temporary",
 	manage: "Manage profiles",
-	switchTitle: "Switch profile?",
-	switchMessage: "Pages reload.",
-	switchDetail: "Unsaved state may be lost.",
-	cancel: "No",
-	confirm: "Yes",
 };
 
 const tempDirectories: string[] = [];
@@ -25,13 +20,13 @@ afterEach(async () => {
 	await Promise.all(tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function setup(confirmSwitch = vi.fn(async () => true)) {
+async function setup() {
 	const stateDir = await mkdtemp(path.join(os.tmpdir(), "ao-browser-profile-ipc-"));
 	tempDirectories.push(stateDir);
 	const store = new BrowserProfileStore({ stateDir });
 	await store.load();
 	const shell = { send: vi.fn() };
-	const renderer = { getZoomFactor: vi.fn(() => 1) };
+	const renderer = { getZoomFactor: vi.fn(() => 1), send: vi.fn(), isDestroyed: vi.fn(() => false) };
 	const handlers = new Map<string, Handler>();
 	const menuPopup = vi.fn();
 	let menuItems: BrowserProfileMenuItem[] = [];
@@ -45,6 +40,8 @@ async function setup(confirmSwitch = vi.fn(async () => true)) {
 			state = { viewId: state.viewId, profileId, temporary: profileId === null };
 			return state;
 		}),
+		getProfileUsage: vi.fn((profileId: string) => state.profileId === profileId ? [{ viewId: state.viewId, sessionId: "worker-1", blocker: null }] : []),
+		detachProfile: vi.fn(async (_profileId: string) => { state = { ...state, profileId: null, temporary: true }; }),
 		isProfileLive: vi.fn((profileId: string) => state.profileId === profileId),
 		clearProfileData: vi.fn(async () => undefined),
 	};
@@ -70,7 +67,6 @@ async function setup(confirmSwitch = vi.fn(async () => true)) {
 			menuItems = items;
 			return { popup: menuPopup };
 		},
-		confirmSwitch,
 	});
 	const invoke = (channel: string, sender: object, ...args: unknown[]) => handlers.get(channel)!({ sender }, ...args);
 	return { host, importer, invoke, ipc, menuItems: () => menuItems, menuPopup, renderer, shell, state: () => state, store };
@@ -80,7 +76,7 @@ describe("browser profile IPC", () => {
 	it("rejects untrusted profile management and invalid renderer ownership", async () => {
 		const { invoke, renderer, host } = await setup();
 
-		expect(await invoke("browserProfiles:list", renderer)).toEqual({ profiles: [] });
+		expect(await invoke("browserProfiles:list", renderer)).toEqual({ profiles: [], defaultProfileId: null });
 		await expect(invoke("browserProfiles:create", renderer, { name: "Work" })).rejects.toMatchObject({
 			code: "INVALID_ARGUMENT",
 		});
@@ -132,15 +128,80 @@ describe("browser profile IPC", () => {
 		await invoke("browser:profile:select", renderer, {
 			viewId: "1:worker-1",
 			profileId: profile.id,
-			labels,
 		});
 
 		expect(host.switchProfile).toHaveBeenCalledWith("1:worker-1", profile.id);
+		expect(renderer.send).not.toHaveBeenCalled();
+	});
+
+	it("reports a failed switch instead of silently leaving the worker temporary", async () => {
+		const { invoke, renderer, store, host, state } = await setup();
+		const profile = await store.createProfile("Work");
+		host.switchProfile.mockRejectedValueOnce(new Error("Profile storage is unavailable."));
+
+		await invoke("browser:profile:select", renderer, {
+			viewId: "1:worker-1",
+			profileId: profile.id,
+		});
+
+		expect(state()).toMatchObject({ profileId: null, temporary: true });
+		// The shell shows the failure in the app; there is no native error dialog.
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchFailed", {
+			viewId: "1:worker-1",
+			message: "Profile storage is unavailable.",
+		});
+	});
+
+	it("asks the shell to confirm a switch on a loaded page and switches only once confirmed", async () => {
+		const { invoke, renderer, store, host, state } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: false });
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id });
+		expect(host.switchProfile).not.toHaveBeenCalled();
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchConfirm", {
+			viewId: "1:worker-1",
+			profileId: profile.id,
+		});
+
+		// Only a literal `true` counts as the user's confirmation.
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id, confirmed: "yes" });
+		expect(host.switchProfile).not.toHaveBeenCalled();
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id, confirmed: true });
+		expect(host.switchProfile).toHaveBeenCalledWith("1:worker-1", profile.id);
+		expect(state()).toMatchObject({ profileId: profile.id, temporary: false });
+	});
+
+	it("refuses a confirmed switch once an agent is using the browser, and says why", async () => {
+		const { invoke, renderer, store, host } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: true });
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id, confirmed: true });
+
+		expect(host.switchProfile).not.toHaveBeenCalled();
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchFailed", {
+			viewId: "1:worker-1",
+			message: "An agent is using this browser.",
+			reason: "agent-active",
+		});
+	});
+
+	it("stays quiet for an unconfirmed selection while an agent is using the browser", async () => {
+		const { invoke, renderer, store, host } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: true });
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id });
+
+		// The menus already show switching as disabled; nothing was confirmed.
+		expect(host.switchProfile).not.toHaveBeenCalled();
+		expect(renderer.send).not.toHaveBeenCalled();
 	});
 
 	it("requires confirmation for a loaded page and refuses switching during agent activity", async () => {
-		const confirmSwitch = vi.fn(async () => false);
-		const { invoke, renderer, store, host, menuItems: getMenuItems } = await setup(confirmSwitch);
+		const { invoke, renderer, store, host, menuItems: getMenuItems } = await setup();
 		const profile = await store.createProfile("Work");
 		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: false });
 		await invoke("browser:profile:menu", renderer, {
@@ -150,7 +211,10 @@ describe("browser profile IPC", () => {
 		});
 		await getMenuItems().find((item) => item.label === profile.name)!.click?.();
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(confirmSwitch).toHaveBeenCalledWith(labels);
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchConfirm", {
+			viewId: "1:worker-1",
+			profileId: profile.id,
+		});
 		expect(host.switchProfile).not.toHaveBeenCalled();
 
 		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: false, agentActive: true });
@@ -165,25 +229,71 @@ describe("browser profile IPC", () => {
 		expect(host.switchProfile).not.toHaveBeenCalled();
 	});
 
-	it("refuses clear/delete while live and cleans storage before deleting an idle profile", async () => {
+	it("drops a switch prompt for a renderer that has gone away", async () => {
+		const { invoke, renderer, store, host, menuItems: getMenuItems } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: false });
+		await invoke("browser:profile:menu", renderer, {
+			viewId: "1:worker-1",
+			bounds: { x: 1, y: 1, width: 40, height: 20 },
+			labels,
+		});
+		renderer.isDestroyed.mockReturnValue(true);
+
+		await getMenuItems().find((item) => item.label === profile.name)!.click?.();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		expect(renderer.send).not.toHaveBeenCalled();
+		expect(host.switchProfile).not.toHaveBeenCalled();
+	});
+
+	it("keeps clear guarded but switches live browsers before deleting on confirmation", async () => {
 		const { invoke, shell, store, host, state } = await setup();
 		const profile = await store.createProfile("Work");
 		state().profileId = profile.id;
-		state().temporary = false;
-
-		await expect(invoke("browserProfiles:clear", shell, { id: profile.id })).rejects.toMatchObject({
-			code: "BROWSER_PROFILE_ACTIVE",
-		});
-		await expect(invoke("browserProfiles:delete", shell, { id: profile.id })).rejects.toMatchObject({
-			code: "BROWSER_PROFILE_ACTIVE",
-		});
-		expect(host.clearProfileData).not.toHaveBeenCalled();
-
-		state().profileId = null;
-		state().temporary = true;
-		await invoke("browserProfiles:delete", shell, { id: profile.id });
+		await expect(invoke("browserProfiles:clear", shell, { id: profile.id })).rejects.toMatchObject({ code: "BROWSER_PROFILE_ACTIVE" });
+		expect(await invoke("browserProfiles:usage", shell, { id: profile.id })).toEqual({ sessions: [{ viewId: state().viewId, sessionId: "worker-1", blocker: null }] });
+		expect(await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [state().viewId] })).toEqual({});
+		expect(host.detachProfile).toHaveBeenCalledWith(profile.id);
 		expect(host.clearProfileData).toHaveBeenCalledWith(profile.id);
+		expect(host.detachProfile.mock.invocationCallOrder[0]).toBeLessThan(host.clearProfileData.mock.invocationCallOrder[0]!);
 		expect(store.getProfile(profile.id)).toBeUndefined();
+	});
+
+	it("requires fresh confirmation when another browser joins and rejects untrusted deletion", async () => {
+		const { invoke, shell, renderer, store, host, state } = await setup();
+		const profile = await store.createProfile("Work");
+		state().profileId = profile.id;
+		expect(await invoke("browserProfiles:delete", renderer, { id: profile.id, confirmedViewIds: [] })).toMatchObject({ error: expect.stringContaining("denied") });
+		expect(await invoke("browserProfiles:usage", renderer, { id: profile.id })).toMatchObject({ sessions: [], error: expect.any(String) });
+		expect(await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [] })).toMatchObject({ error: expect.stringContaining("sessions changed") });
+		expect(host.detachProfile).not.toHaveBeenCalled();
+		expect(host.clearProfileData).not.toHaveBeenCalled();
+		expect(store.getProfile(profile.id)).toBeDefined();
+	});
+
+	it("reserves the profile during switching and retains it when switching fails", async () => {
+		const { invoke, shell, store, host, state } = await setup();
+		const profile = await store.createProfile("Work");
+		state().profileId = profile.id;
+		host.detachProfile.mockImplementationOnce(async () => {
+			expect(store.isProfileOperationInProgress(profile.id)).toBe(true);
+			throw Object.assign(new Error("Wait for browser activity in worker-1."), { code: "BROWSER_PROFILE_ACTIVE" });
+		});
+		expect(await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [state().viewId] })).toEqual({ error: "Wait for browser activity in worker-1." });
+		expect(host.clearProfileData).not.toHaveBeenCalled();
+		expect(store.getProfile(profile.id)).toBeDefined();
+		expect(store.isProfileOperationInProgress(profile.id)).toBe(false);
+	});
+
+	it("does not expose raw storage errors or delete the registry after cleanup fails", async () => {
+		const { invoke, shell, store, host } = await setup();
+		const profile = await store.createProfile("Work");
+		host.clearProfileData.mockRejectedValueOnce(new Error("secret/path: disk error"));
+		const result = await invoke("browserProfiles:delete", shell, { id: profile.id, confirmedViewIds: [] });
+		expect(result).toMatchObject({ error: expect.stringContaining("Could not finish deleting") });
+		expect(JSON.stringify(result)).not.toContain("secret/path");
+		expect(store.getProfile(profile.id)).toBeDefined();
 	});
 
 	it("allows import only from the trusted shell and forwards scoped progress", async () => {

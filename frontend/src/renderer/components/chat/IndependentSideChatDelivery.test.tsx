@@ -1,0 +1,977 @@
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
+import userEvent from "@testing-library/user-event";
+import { TooltipProvider } from "../ui/tooltip";
+import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { useIndependentSideChats } from "./IndependentSideChats";
+import { resetOptimisticRenamesForTest } from "../../hooks/optimistic-renames";
+import { useUiStore } from "../../stores/ui-store";
+import { aoBridge } from "../../lib/bridge";
+import type { SideCloseRequest } from "../../../shared/side-close";
+
+const { get, post, put, remove, patch, closeProtocol } = vi.hoisted(() => ({
+	get: vi.fn(),
+	post: vi.fn(),
+	put: vi.fn(),
+	remove: vi.fn(),
+	patch: vi.fn(),
+	closeProtocol: { status: "closed" as import("../../../shared/side-close").SideCloseStatus },
+}));
+vi.mock("../../lib/api-client", () => ({
+	apiClient: { GET: get, POST: post, PUT: put, DELETE: remove, PATCH: patch },
+	apiErrorMessage: () => "Send failed",
+	getApiBaseUrl: () => "",
+	subscribeApiBaseUrl: () => () => {},
+}));
+vi.mock("../../lib/bridge", () => ({
+	aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: {
+		protocolVersion: 1, mode: "desktop", capture: async () => {},
+		requestClose: async (request: SideCloseRequest) => ({
+			protocolVersion: 1, epoch: "test-daemon", revision: 1, recovery: "ready", sessionId: request.sessionId,
+			sides: [{ id: request.sideId, sessionId: request.sessionId, label: request.sideId, operationId: request.requestId, version: request.expectedVersion + 2, status: closeProtocol.status }],
+		}),
+		getCloseState: async (sessionId: string) => ({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [] }),
+		onCloseStateChanged: () => () => {},
+	} },
+}));
+
+beforeEach(() => {
+	closeProtocol.status = "closed";
+	resetOptimisticRenamesForTest();
+});
+
+describe("side delivery draft ownership", () => {
+	let accept: (value: { error?: object }) => void;
+	let reject: (error: Error) => void;
+	beforeEach(() => {
+		vi.clearAllMocks();
+ HTMLElement.prototype.scrollTo = vi.fn();
+		get.mockImplementation(async (path: string) => {
+			if (path.endsWith("/side-chats"))
+				return {
+					data: {
+						sides: [{ id: "side", sessionId: "session", state: "ready" }],
+					},
+				};
+			if (path.endsWith("/draft")) return { data: { contentJson: "" } };
+			return {
+				data: {
+					snapshot: {
+						side: { id: "side", state: "ready" },
+						messages: [],
+						turns: [],
+						activities: [],
+					},
+				},
+			};
+		});
+		post.mockImplementation(
+			() =>
+				new Promise((resolve, fail) => {
+					accept = resolve;
+					reject = fail;
+				}),
+		);
+		put.mockResolvedValue({});
+		remove.mockResolvedValue({});
+	});
+
+	async function beginSend(text = "first") {
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		act(() => hook.result.current.setQuestionDraft("side", text));
+		let sending!: Promise<void>;
+		act(() => {
+			sending = hook.result.current.send("side", text);
+		});
+		await waitFor(() => expect(post).toHaveBeenCalledOnce());
+		return { ...hook, sending };
+	}
+
+	it.each([70 * 1024, 128 * 1024])("accepts a local plain side question of %i bytes", async (bytes) => {
+		const text = "q".repeat(bytes);
+		const hook = await beginSend(text);
+		expect(post.mock.calls[0][1].body.text).toBe(text);
+		await act(async () => { accept({}); await hook.sending; });
+	});
+
+	it("rejects a local side question above 128 KiB without losing the draft", async () => {
+		const text = "q".repeat(128 * 1024 + 1);
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		act(() => hook.result.current.setQuestionDraft("side", text));
+		await act(async () => { await hook.result.current.send("side", text); });
+		expect(post).not.toHaveBeenCalled();
+		expect(hook.result.current.error).toBeDefined();
+		await waitFor(() => expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === text)).toBe(true));
+	});
+
+	it("refreshes the accepted title without switching the active sidechat", async () => {
+		let label = "Side Chat";
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return { data: { sides: [
+				{ id: "other", sessionId: "session", state: "ready", label: "Other topic" },
+				{ id: "side", sessionId: "session", state: "ready", label },
+			] } };
+			return originalGet(path, ...args);
+		});
+		const hook = await beginSend("Explain this code");
+		expect(hook.result.current.sides.find((side) => side.id === "side")?.label).toBe("Side Chat");
+		act(() => hook.result.current.show("other"));
+		label = "Explain this code";
+		await act(async () => { accept({}); await hook.sending; });
+		await waitFor(() => expect(hook.result.current.sides.find((side) => side.id === "side")?.label).toBe(label));
+		expect(hook.result.current.activeId).toBe("other");
+		expect(post).toHaveBeenCalledOnce();
+	});
+
+	it("does not fail an accepted send when refreshing its title fails", async () => {
+		const hook = await beginSend();
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) throw new Error("List unavailable");
+			return originalGet(path, ...args);
+		});
+		await act(async () => { accept({}); await hook.sending; });
+		expect(hook.result.current.error).toBeUndefined();
+		expect(post).toHaveBeenCalledOnce();
+	});
+
+	it("keeps existing sides accessible while creation is unsupported", async () => {
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false, true, undefined, undefined, false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await expect(hook.result.current.create()).rejects.toThrow("does not support resumable side chats");
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	it("preserves a reference added while acceptance is pending", async () => {
+		const hook = await beginSend();
+		await act(async () =>
+			hook.result.current.addReference("side", {
+				id: "chip",
+				conversationId: "main",
+				messageId: "message",
+				revision: 1,
+				text: "sun",
+				role: "assistant",
+			}),
+		);
+		await act(async () => {
+			accept({});
+			await hook.sending;
+		});
+		await waitFor(() =>
+			expect(
+				put.mock.calls.some(([, options]) => {
+					const draft = JSON.parse(options.body.contentJson);
+					return draft.text === "first" && draft.references[0]?.text === "sun";
+				}),
+			).toBe(true),
+		);
+	});
+
+	it("clears only an unchanged submitted draft", async () => {
+		const hook = await beginSend();
+		await act(async () => {
+			accept({});
+			await hook.sending;
+		});
+		await waitFor(() =>
+			expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === "")).toBe(true),
+		);
+	});
+
+	it("keeps the draft on failure", async () => {
+		const hook = await beginSend();
+		await act(async () => {
+			accept({ error: {} });
+			await hook.sending;
+		});
+		await waitFor(() =>
+			expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === "first")).toBe(true),
+		);
+	});
+
+	it("/btw opens a fresh side", async () => {
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		post.mockResolvedValue({ data: { side: { id: "new-side", state: "ready" } } });
+		await act(async () => {
+			await hook.result.current.send("side", "/btw first");
+		});
+		const creates = post.mock.calls.filter(([path]) => path.endsWith("/side-chats"));
+		expect(creates).toHaveLength(1);
+		expect(creates[0][1].body.forceNew).toBe(true);
+		const delivery = post.mock.calls.find(([path]) => path.endsWith("/messages"));
+		expect(delivery?.[1].params.path.sideId).toBe("new-side");
+		expect(delivery?.[1].body.text).toBe("first");
+	});
+	it("reuses an uncertain receipt and preserves a newer draft", async () => {
+		const hook = await beginSend("original");
+		const original = post.mock.calls[0][1].body;
+		await act(async () => {
+			reject(new Error("response lost"));
+			await hook.sending;
+		});
+		act(() => hook.result.current.setQuestionDraft("side", "next question"));
+		let retry!: Promise<void>;
+		act(() => {
+			retry = hook.result.current.send("side", "");
+		});
+		await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+		expect(post.mock.calls[1][1].body).toEqual(original);
+		await act(async () => {
+			accept({});
+			await retry;
+		});
+		await waitFor(() =>
+			expect(
+				put.mock.calls.some(([, options]) => {
+					const draft = JSON.parse(options.body.contentJson);
+					return draft.text === "next question" && !draft.pendingDelivery;
+				}),
+			).toBe(true),
+		);
+	});
+
+	it("saves the exact receipt before dispatch and restores it on remount", async () => {
+		const hook = await beginSend("original");
+		const frozen = post.mock.calls[0][1].body;
+		const saved = put.mock.calls.find(([, options]) => JSON.parse(options.body.contentJson).pendingDelivery)?.[1].body
+			.contentJson;
+		expect(saved).toBeDefined();
+		expect(put.mock.invocationCallOrder[0]).toBeLessThan(post.mock.invocationCallOrder[0]);
+		await act(async () => {
+			reject(new Error("lost"));
+			await hook.sending;
+		});
+		hook.unmount();
+		const oldGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path: string) =>
+			path.endsWith("/draft") ? { data: { contentJson: saved } } : oldGet(path),
+		);
+		const recovered = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(recovered.result.current.activeId).toBe("side"));
+		await waitFor(() => expect(get.mock.calls.filter(([path]) => path.endsWith("/draft")).length).toBeGreaterThan(1));
+		let retry!: Promise<void>;
+		act(() => {
+			retry = recovered.result.current.send("side", "");
+		});
+		await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+		expect(post.mock.calls[1][1].body).toEqual(frozen);
+		await act(async () => {
+			accept({});
+			await retry;
+		});
+	});
+
+	it("retries image delivery without restaging its attachment", async () => {
+		const stage = vi.fn(async () => ["/scratch/image.png"]);
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], stage, true));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		act(() => hook.result.current.setQuestionDraft("side", "image question"));
+		let sending!: Promise<void>;
+		act(() => {
+			sending = hook.result.current.send("side", "image question", [{ mimeType: "image/png", data: "cGl4ZWxz" }]);
+		});
+		await waitFor(() => expect(post).toHaveBeenCalledOnce());
+		const original = post.mock.calls[0][1].body;
+		expect(original.attachments).toEqual([{ mimeType: "image/png", data: "cGl4ZWxz" }]);
+		await act(async () => {
+			reject(new Error("response lost"));
+			await sending;
+		});
+		let retry!: Promise<void>;
+		act(() => {
+			retry = hook.result.current.send("side", "");
+		});
+		await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+		expect(post.mock.calls[1][1].body).toEqual(original);
+		expect(stage).toHaveBeenCalledOnce();
+		await act(async () => {
+			accept({});
+			await retry;
+		});
+	});
+
+	it("propagates a rejected main-to-side handoff so the main composer retains its draft", async () => {
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		post.mockResolvedValue({ error: {}, response: { status: 409 } });
+		await act(async () => {
+			await expect(hook.result.current.send("side", "original main request", [], [], true)).rejects.toEqual({});
+		});
+	});
+
+	it("does not recreate a closed draft after late acceptance", async () => {
+		const hook = await beginSend("original");
+		await act(async () => {
+			await hook.result.current.close("side");
+		});
+		const savedCount = put.mock.calls.length;
+		await act(async () => {
+			accept({});
+			await hook.sending;
+		});
+		expect(hook.result.current.sides).toEqual([]);
+		expect(put.mock.calls.length).toBe(savedCount);
+	});
+
+	/** Holds each side list GET until the test answers it; refresh() starts another one the way a close-state change does. */
+	function holdSideLists() {
+		let notifyCloseState!: Parameters<typeof aoBridge.sideChats.onCloseStateChanged>[0];
+		const listen = vi.spyOn(aoBridge.sideChats, "onCloseStateChanged").mockImplementation((listener) => {
+			notifyCloseState = listener;
+			return () => {};
+		});
+		onTestFinished(() => listen.mockRestore());
+		const lists: ((sides: object[]) => void)[] = [];
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation((path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return new Promise((resolve) => lists.push((sides) => resolve({ data: { sides } })));
+			return originalGet(path, ...args);
+		});
+		const refresh = () => notifyCloseState({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId: "session", sides: [] });
+		return { lists, refresh };
+	}
+
+	it("ignores an older empty side list that lands after a newer one", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[1]([{ id: "side", sessionId: "session", state: "ready" }]));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await act(async () => lists[0]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+		expect(hook.result.current.activeId).toBe("side");
+	});
+
+	it("applies a slow side list even after the next poll has started", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[0]([{ id: "side", sessionId: "session", state: "ready" }]));
+		expect(hook.result.current.loaded).toBe(true);
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+	});
+
+	it("keeps a side created while an empty list from before it is in flight", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		await act(async () => lists[0]([]));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		post.mockResolvedValue({ data: { side: { id: "new-side", sessionId: "session", state: "ready" } } });
+		await act(async () => { await hook.result.current.create(undefined, true); });
+		await act(async () => lists[1]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["new-side"]);
+	});
+});
+
+const panelSides = ["side", "other"].map((id, index) => ({
+	id,
+	sessionId: "session",
+	mainConversationId: "main",
+	state: "ready",
+	contextMode: "native",
+	label: index === 0 ? "First question" : "Second question",
+	createdAt: "2026-01-01T00:00:00Z",
+	updatedAt: "2026-01-01T00:00:00Z",
+}));
+
+function SidePanelHarness() {
+	const chat = useIndependentSideChats("session", [], [], async () => [], false);
+	useEffect(() => {
+		chat.show("side");
+	}, []);
+	return (
+		<TooltipProvider>
+			<button onClick={() => chat.show("side")}>Reopen side chat</button>
+			<button onClick={() => chat.hide()}>Hide inspector</button>
+			{chat.panel}
+		</TooltipProvider>
+	);
+}
+
+describe("side panel navigation and recovery", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+ HTMLElement.prototype.scrollTo = vi.fn();
+		get.mockImplementation(async (path: string, options?: { params?: { path?: { sideId?: string } } }) => {
+			if (path.endsWith("/side-chats")) return { data: { sides: panelSides } };
+			const side = panelSides.find((item) => item.id === options?.params?.path?.sideId) ?? panelSides[0];
+			if (path.endsWith("/draft"))
+				return {
+					data: {
+						contentJson: JSON.stringify({
+							version: 1,
+							text: side.id === "side" ? "First draft" : "Second draft",
+							attachments: [],
+							references: [],
+						}),
+					},
+				};
+			return {
+				data: {
+					snapshot: {
+						side,
+						messages: [],
+						turns: [],
+						activities: [],
+						hasMore: false,
+					},
+				},
+			};
+		});
+		put.mockResolvedValue({});
+		post.mockResolvedValue({ data: { side: panelSides[0] } });
+		remove.mockResolvedValue({});
+	});
+
+	it("ignores older-page results from a tab that is no longer active", async () => {
+		const normalGet = get.getMockImplementation()!;
+		const pending = new Map<string, (value: object) => void>();
+		const page = (id: string, older = false) => ({
+			data: {
+				snapshot: {
+					side: panelSides.find((side) => side.id === id),
+					turns: [{ id: `${id}-${older ? "old" : "latest"}`, state: "completed", createdAt: "2026-01-01T00:00:00Z" }],
+					messages: older
+						? [
+								{
+									id: `${id}-message`,
+									turnId: `${id}-old`,
+									role: "assistant",
+									text: `Old answer ${id}`,
+									revision: 1,
+									sequence: 1,
+									createdAt: "2026-01-01T00:00:00Z",
+								},
+							]
+						: [
+								// A newest page always carries its turn's messages.
+								{
+									id: `${id}-latest-message`,
+									turnId: `${id}-latest`,
+									role: "assistant",
+									text: `Latest answer ${id}`,
+									revision: 1,
+									sequence: 2,
+									createdAt: "2026-01-01T00:00:01Z",
+								},
+							],
+					activities: [],
+					hasMore: !older,
+				},
+			},
+		});
+		get.mockImplementation((path, options) => {
+			if (!path.endsWith("/{sideId}")) return normalGet(path, options);
+			const id = options.params.path.sideId;
+			if (options.params.query?.before) return new Promise((resolve) => pending.set(id, resolve));
+			return Promise.resolve(page(id));
+		});
+		await act(async () => { render(<SidePanelHarness />); });
+		await screen.findByRole("button", { name: "Load earlier messages" });
+		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+		await waitFor(() => expect(pending.has("side")).toBe(true));
+		await userEvent.click(screen.getByRole("tab", { name: "Second question" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+		await waitFor(() => expect(pending.has("other")).toBe(true));
+		await act(async () => pending.get("side")!(page("side", true)));
+		expect(screen.queryByText("Old answer side")).not.toBeInTheDocument();
+		const count = get.mock.calls.filter(([, opts]) => opts?.params?.query?.before).length;
+		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+		expect(get.mock.calls.filter(([, opts]) => opts?.params?.query?.before)).toHaveLength(count);
+		await act(async () => pending.get("other")!(page("other", true)));
+		expect(await screen.findByText("Old answer other")).toBeInTheDocument();
+	});
+	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
+		// The side transcript renders through the main chat's virtualized Timeline.
+		// A viewport taller than every row keeps the whole history mounted, so the
+		// assertions below can read it all. The content is taller still: a history
+		// that fits the view loads older pages on its own, and this one waits for
+		// the reader's click.
+		const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+		const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
+		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const tall = [
+			vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+				return this.getAttribute("role") === "log" ? 1_000_000 : clientHeight.call(this);
+			}),
+			vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+				return this.getAttribute("role") === "log" ? 2_000_000 : scrollHeight.call(this);
+			}),
+			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+				return this.getAttribute("role") === "log" ? 1_000_000 : offsetHeight.call(this);
+			}),
+			vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+				return this.getAttribute("role") === "log"
+					? ({ ...bounds.call(this), top: 0, height: 1_000_000, bottom: 1_000_000, width: 768 } as DOMRect)
+					: bounds.call(this);
+			}),
+		];
+		onTestFinished(() => tall.forEach((spy) => spy.mockRestore()));
+		const normalGet = get.getMockImplementation()!;
+		let latest = 100;
+		const timestamp = (number: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, number)).toISOString();
+		get.mockImplementation(async (path, options) => {
+			if (!path.endsWith("/{sideId}")) return normalGet(path, options);
+			const older = Boolean(options?.params?.query?.before);
+			const numbers = Array.from({ length: 50 }, (_, index) => older ? index + 1 : latest - 49 + index);
+			return { data: { snapshot: {
+				side: panelSides[0],
+				turns: numbers.map((number) => ({ id: `turn-${number}`, state: "completed", createdAt: timestamp(number) })),
+				messages: numbers.map((number) => ({
+					id: `message-${number}`, turnId: `turn-${number}`, role: "assistant", sequence: number,
+					text: number === 100 && latest > 100 ? "Updated answer 100" : `Answer ${number}`,
+					revision: latest, streaming: false, createdAt: timestamp(number),
+				})),
+				activities: [], hasMore: !older,
+			} } };
+		});
+		render(<SidePanelHarness />);
+		await screen.findByText("Answer 51");
+		if (loadBeforeRefresh) {
+			await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+			// The virtualized Timeline keeps the newest rows mounted; the row just
+			// before the page boundary proves the older page joined it.
+			await screen.findByText("Answer 50");
+		}
+		latest = 101;
+		await screen.findByText("Answer 101", {}, { timeout: 3000 });
+		await screen.findByText("Updated answer 100");
+		expect(screen.getByText("Answer 51")).toBeInTheDocument();
+		expect(screen.getAllByText("Answer 52")).toHaveLength(1);
+		expect(screen.getAllByText("Updated answer 100")).toHaveLength(1);
+		expect(screen.queryByText("Answer 100")).not.toBeInTheDocument();
+		if (!loadBeforeRefresh) {
+			await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+			await screen.findByText("Answer 50");
+		}
+		expect(get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+			params: expect.objectContaining({ query: { before: timestamp(51), limit: 50 } }),
+		}));
+		expect(screen.getByText("Answer 50")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
+	});
+
+	it.each([undefined, "", "   "])("renders a fallback for an absent or blank side label (%s)", async (label) => {
+		const normalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path, options) => {
+			const result = await normalGet(path, options);
+			if (path.endsWith("/side-chats"))
+				return {
+					data: {
+						sides: panelSides.map((side) => ({
+							...side,
+							label: side.id === "side" ? label : side.label,
+						})),
+					},
+				};
+			if (result.data?.snapshot?.side.id === "side")
+				result.data.snapshot.side = { ...result.data.snapshot.side, label };
+			return result;
+		});
+		render(<SidePanelHarness />);
+		expect(await screen.findByRole("tab", { name: "Side chat" })).toHaveAttribute("aria-selected", "true");
+		await screen.findByLabelText("Side chat question");
+	});
+
+	it("hides and reopens without closing the conversation or losing its draft", async () => {
+		render(<SidePanelHarness />);
+		const field = await screen.findByLabelText("Side chat question");
+		await waitFor(() => expect(lexicalEditorText(field)).toBe("First draft"));
+		await typeInLexicalEditor(field, " with an unsent follow-up");
+		await userEvent.click(screen.getByRole("button", { name: "Hide inspector" }));
+		expect(screen.queryByRole("complementary", { name: "Side chats" })).not.toBeInTheDocument();
+		expect(remove).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Reopen side chat" }));
+		await waitFor(() =>
+			expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe(
+				"First draft with an unsent follow-up",
+			),
+		);
+	});
+
+	describe("renaming a tab", () => {
+		/** Labels the fake daemon stored, read back by the list. */
+		let storedLabels: Record<string, string>;
+		/** While set, list reads wait; each one answers with the labels stored when it began. */
+		let holdLists = false;
+		let heldLists: Array<() => void> = [];
+		const listNow = () => ({ data: { sides: panelSides.map((side) => ({ ...side, label: storedLabels[side.id] ?? side.label })) } });
+		beforeEach(() => {
+			useUiStore.getState().clearGlobalToast();
+			storedLabels = {};
+			holdLists = false;
+			heldLists = [];
+			const normalGet = get.getMockImplementation()!;
+			get.mockImplementation(async (path, options) => {
+				if (path.endsWith("/side-chats")) {
+					const answer = listNow();
+					if (holdLists) return new Promise((resolve) => heldLists.push(() => resolve(answer)));
+					return answer;
+				}
+				return normalGet(path, options);
+			});
+		});
+		const renameFirstTab = async (label: string) => {
+			// A tab takes a rename once its close state has loaded, which can land
+			// after the tab shows; a double-click before then is ignored, so retry.
+			const input = await waitFor(() => {
+				fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
+				return screen.getByRole("textbox", { name: "Rename side chat" });
+			});
+			// Typing and Enter stay synchronous, so the first-frame check below is exact.
+			input.focus();
+			fireEvent.change(input, { target: { value: label } });
+			fireEvent.keyDown(input, { key: "Enter" });
+		};
+
+		it("shows the new label as the editor closes and keeps it through a slow answer and a stale read", async () => {
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation((_path: string, request: { params: { path: { sideId: string } }; body: { label: string } }) => {
+				storedLabels[request.params.path.sideId] = request.body.label;
+				return new Promise((resolve) => (answer = resolve));
+			});
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			await renameFirstTab("Pricing notes");
+			// Same commit as the editor closing: no waiting.
+			expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument();
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+
+			// The 2 s poll reads the list while the rename is in flight. The daemon
+			// has not stored the label yet, so that read has the old one.
+			const stored = storedLabels.side;
+			delete storedLabels.side;
+			holdLists = true;
+			await waitFor(() => expect(heldLists).toHaveLength(1), { timeout: 3_000 });
+			storedLabels.side = stored;
+			// The answer arrives; the read it triggers waits too.
+			await act(async () => answer({}));
+			await waitFor(() => expect(heldLists).toHaveLength(2));
+			// The stale read lands first, then the fresh one.
+			await act(async () => heldLists[0]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "First question" })).not.toBeInTheDocument();
+			await act(async () => heldLists[1]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+		});
+
+		it("rolls a failed rename back to the old label and says so", async () => {
+			// The answer waits until the new label has been checked.
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			await renameFirstTab("Pricing notes");
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			await act(async () => answer({ error: { message: "nope" } }));
+			expect(await screen.findByRole("tab", { name: "First question" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "Pricing notes" })).not.toBeInTheDocument();
+			// Said in a toast too, which shows even after the user moves to another side.
+			expect(useUiStore.getState().globalToasts).toEqual([
+				expect.objectContaining({ title: "Couldn't rename to Pricing notes", tone: "error" }),
+			]);
+		});
+	});
+
+	it("keeps the no-open-side-chat state to one message", async () => {
+		get.mockResolvedValue({ data: { sides: [] } });
+		render(<SidePanelHarness />);
+		await screen.findByText("No side chat opened.");
+		expect(screen.queryByText("Explore a quick question without interrupting the main chat."))
+			.not.toBeInTheDocument();
+	});
+
+	it("shows the quick-question description without info or collapse controls", async () => {
+        render(<SidePanelHarness />);
+        await screen.findByLabelText("Side chat question");
+        expect(screen.getByText("Explore a quick question without interrupting the main chat.")).toBeVisible();
+        expect(screen.queryByRole("button", { name: "About side-chat isolation" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Hide side chat" })).not.toBeInTheDocument();
+    });
+
+	it("offers a new side for an unverifiable legacy boundary without removing its transcript", async () => {
+		const normalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path, options) => {
+			const result = await normalGet(path, options);
+			if (result.data?.snapshot) result.data.snapshot.side = { ...result.data.snapshot.side, state: "failed", recreateRequired: true, errorMessage: "side-chat safety boundary cannot be verified; close this side and create a new one" };
+			return result;
+		});
+		render(<SidePanelHarness />);
+		await screen.findByText(/side-chat safety boundary cannot be verified/);
+		expect(screen.queryByRole("button", { name: "Retry connection" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: "New side chat" }).at(-1)!);
+		await waitFor(() => expect(post).toHaveBeenCalled());
+		expect(remove).not.toHaveBeenCalled();
+	});
+
+	it("switches tabs by keyboard without losing independent drafts", async () => {
+		const user = userEvent.setup();
+		render(<SidePanelHarness />);
+		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft"));
+		const first = await screen.findByRole("tab", { name: "First question" });
+		act(() => first.focus());
+		await user.keyboard("{ArrowRight}");
+		expect(screen.getByRole("tab", { name: "Second question" })).toHaveAttribute("aria-selected", "true");
+		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("Second draft"));
+		expect(screen.getByRole("tab", { name: "Second question" })).toHaveFocus();
+		await user.keyboard("{Home}");
+		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft"));
+	});
+
+	it("selects completed side text into its own annotated draft", async () => {
+		const normalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path, options) => {
+			const result = await normalGet(path, options);
+			if (result.data?.snapshot) {
+				result.data.snapshot.turns = [{ id: "source-turn", state: "completed", createdAt: "2026-01-01T00:00:00Z" }];
+				result.data.snapshot.messages = [
+					{
+						id: "self-source",
+						turnId: "source-turn",
+						sequence: 1,
+						revision: 2,
+						role: "assistant",
+						text: "Juniper",
+						streaming: false,
+						createdAt: "2026-01-01T00:00:00Z",
+					},
+				];
+			}
+			return result;
+		});
+		render(<SidePanelHarness />);
+		const text = await screen.findByText("Juniper");
+		const log = text.closest('[role="log"]')!;
+		expect(log).toHaveClass("select-text");
+		const range = document.createRange();
+		range.selectNodeContents(text);
+		const selection = window.getSelection()!;
+		selection.removeAllRanges();
+		selection.addRange(range);
+		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([
+			new DOMRect(40, 150, 100, 20),
+		] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
+		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
+		fireEvent.pointerUp(log);
+		fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+		await waitFor(() =>
+			expect(
+				put.mock.calls.some(([, options]) => {
+					const draft = JSON.parse(options.body.contentJson);
+					return (
+						draft.references?.[0]?.conversationId === "side" &&
+						draft.references[0].messageId === "self-source" &&
+						draft.references[0].revision === 2
+					);
+				}),
+			).toBe(true),
+		);
+		selection.removeAllRanges();
+		const scrollTo = vi.fn();
+		Object.defineProperty(log, "scrollTo", { configurable: true, value: scrollTo });
+		const rangeBounds = vi
+			.spyOn(Range.prototype, "getBoundingClientRect")
+			.mockReturnValue(new DOMRect(40, 150, 100, 20));
+		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Juniper" }));
+		expect(text.closest("[data-chat-message-body]")).not.toHaveClass("chat-annotation-target");
+		expect(scrollTo).not.toHaveBeenCalled();
+		rangeBounds.mockReturnValue(new DOMRect(40, 800, 100, 20));
+		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Juniper" }));
+		await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 560, behavior: "smooth" }));
+		vi.restoreAllMocks();
+	});
+
+	it("shows no conversation tab and creates nothing until + is clicked", async () => {
+		get.mockResolvedValue({ data: { sides: [] } });
+		render(<SidePanelHarness />);
+		await screen.findByText("No side chat opened.");
+		expect(screen.queryAllByRole("tab")).toHaveLength(0);
+		expect(post).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "New side chat" }));
+		await waitFor(() =>
+			expect(post).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/conversation/side-chats",
+				expect.objectContaining({ body: expect.objectContaining({ forceNew: true }) }),
+			),
+		);
+	});
+	it("renames with F2 and Enter and cancels with Escape", async () => {
+		patch.mockResolvedValue({});
+		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
+		const tab = await screen.findByRole("tab", { name: "First question" });
+		fireEvent.keyDown(tab, { key: "F2" });
+		const input = screen.getByRole("textbox", { name: "Rename side chat" });
+		await userEvent.clear(input);
+		await userEvent.type(input, "Side Chat 99");
+		fireEvent.keyDown(input, { key: "Enter" });
+		await waitFor(() =>
+			expect(patch).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
+				expect.objectContaining({
+					params: { path: { sessionId: "session", sideId: "side" } },
+					body: { label: "Side Chat 99" },
+				}),
+			),
+		);
+		await waitFor(() => expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument());
+		fireEvent.doubleClick(screen.getByRole("tab", { name: "Second question" }));
+		fireEvent.keyDown(screen.getByRole("textbox", { name: "Rename side chat" }), { key: "Escape" });
+		expect(patch).toHaveBeenCalledOnce();
+	});
+	it("offers only Rename on a tab's right-click menu", async () => {
+		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
+		const tab = await screen.findByRole("tab", { name: "Second question" });
+		fireEvent.contextMenu(tab, { button: 2 });
+		expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeVisible();
+		expect(screen.queryByRole("menuitem", { name: "Close" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+		expect(screen.getByRole("textbox", { name: "Rename side chat" })).toHaveValue("Second question");
+	});
+	it("selects the existing name and commits on blur, discarding empty or unchanged names", async () => {
+		patch.mockResolvedValue({});
+		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
+		const tab = await screen.findByRole("tab", { name: "First question" });
+		fireEvent.doubleClick(tab);
+		const input = screen.getByRole("textbox", { name: "Rename side chat" }) as HTMLInputElement;
+		expect(input.selectionStart).toBe(0);
+		expect(input.selectionEnd).toBe("First question".length);
+		await userEvent.clear(input);
+		await userEvent.type(input, "  Notes  ");
+		fireEvent.blur(input);
+		await waitFor(() => expect(patch).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
+			expect.objectContaining({ body: { label: "Notes" } }),
+		));
+		for (const value of ["", "First question"]) {
+			fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
+			const edit = screen.getByRole("textbox", { name: "Rename side chat" });
+			fireEvent.change(edit, { target: { value } });
+			fireEvent.blur(edit);
+			expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument();
+		}
+		expect(patch).toHaveBeenCalledOnce();
+	});
+	it("confirms closing an inactive tab without changing the active draft", async () => {
+		render(<SidePanelHarness />);
+		await screen.findByLabelText("Side chat question");
+		await userEvent.click(screen.getByRole("button", { name: "Close Second question" }));
+		expect(await screen.findByRole("dialog", { name: "Delete side chat?" })).toBeInTheDocument();
+		expect(remove).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(remove).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Close Second question" }));
+		await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+		await waitFor(() => expect(screen.queryByRole("tab", { name: "Second question" })).not.toBeInTheDocument());
+		expect(screen.getByRole("tab", { name: "First question" })).toHaveAttribute("aria-selected", "true");
+		expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft");
+	});
+	it("dismisses confirmation and retains a read-only warning tab when shutdown is unconfirmed", async () => {
+		closeProtocol.status = "unconfirmed";
+		render(<SidePanelHarness />);
+		await screen.findByLabelText("Side chat question");
+		await userEvent.click(screen.getByRole("button", { name: "Close First question" }));
+		await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not confirm shutdown");
+		expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry close" })).not.toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "First question" })).toBeInTheDocument();
+	});
+
+	it("retries a failed initial snapshot GET without sending or recovering the provider", async () => {
+		const normalGet = get.getMockImplementation()!;
+		let unavailable = true;
+		get.mockImplementation(async (path, options) =>
+			path.endsWith("/{sideId}") && unavailable ? { error: {} } : normalGet(path, options),
+		);
+		render(<SidePanelHarness />);
+		const retry = await screen.findByRole("button", { name: "Retry loading" });
+		expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
+		get.mockClear();
+		unavailable = false;
+		await userEvent.click(retry);
+		await screen.findByLabelText("Side chat question");
+		expect(get).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}", {
+			params: { path: { sessionId: "session", sideId: "side" } },
+		});
+		expect(post).not.toHaveBeenCalled();
+		expect(remove).not.toHaveBeenCalled();
+	});
+
+	it("does not offer loading recovery for a draft save error on a loaded thread", async () => {
+		put.mockResolvedValue({ error: {} });
+		render(<SidePanelHarness />);
+		await screen.findByLabelText("Side chat question");
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Send failed"));
+		expect(screen.queryByRole("button", { name: "Retry loading" })).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Side chat question")).toBeInTheDocument();
+	});
+
+	it("only shows uncertain delivery after a pending send fails", async () => {
+		let fail!: (error: Error) => void;
+		post.mockImplementation(
+			() =>
+				new Promise((_, reject) => {
+					fail = reject;
+				}),
+		);
+		render(<SidePanelHarness />);
+		const field = await screen.findByLabelText("Side chat question");
+		await waitFor(() => expect(lexicalEditorText(field)).toBe("First draft"));
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(post).toHaveBeenCalledOnce());
+		expect(screen.queryByText(/Delivery is unconfirmed/)).not.toBeInTheDocument();
+		await act(async () => fail(new Error("Connection lost")));
+		expect(await screen.findByText(/Delivery is unconfirmed/)).toBeInTheDocument();
+	});
+
+	it("explicit New requests a separate side chat", async () => {
+		render(<SidePanelHarness />);
+		await screen.findByLabelText("Side chat question");
+		await userEvent.click(screen.getByRole("button", { name: "New side chat" }));
+		await waitFor(() =>
+			expect(post).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/conversation/side-chats",
+				expect.objectContaining({
+					params: { path: { sessionId: "session" } },
+					body: expect.objectContaining({ forceNew: true }),
+				}),
+			),
+		);
+		expect(screen.getAllByRole("tab")).toHaveLength(2);
+		expect(remove).not.toHaveBeenCalled();
+	});
+});
+
+it("does not call the local daemon for a remote session", async () => {
+	vi.clearAllMocks();
+ HTMLElement.prototype.scrollTo = vi.fn();
+	const hook = renderHook(() => useIndependentSideChats("remote-session", [], [], async () => [], false, false));
+	await act(async () => {
+		await Promise.resolve();
+	});
+	expect(get).not.toHaveBeenCalled();
+	await expect(hook.result.current.create()).rejects.toThrow("only for local Orchestrator-managed sessions");
+	expect(post).not.toHaveBeenCalled();
+});

@@ -1,8 +1,12 @@
-import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
+import { apiErrorException } from "./api-error-exception";
+import { apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
 import { appI18n } from "../i18n";
 import { aoBridge } from "./bridge";
+import { resumeOnce } from "../hooks/useCanResumeAgent";
 import type { OrchestratorSpawnSource } from "./orchestrator-spawn-sources";
 import { captureRendererEvent } from "./telemetry";
+import { clientForSessionHost } from "./host-clients";
+import { sessionUiKey } from "./hosts";
 import type { SessionMode } from "../types/conversation";
 
 // Every UI entry point that spawns an orchestrator: the board CTA, the topbar
@@ -21,6 +25,7 @@ const CHAT_PREFLIGHT_CODES = new Set([
 
 /** A rejected orchestrator spawn without flattening the daemon's error envelope. */
 export class OrchestratorSpawnError extends Error {
+	readonly telemetryCode: string = "ORCHESTRATOR_SPAWN_ERROR";
 	constructor(
 		message: string,
 		readonly code?: string,
@@ -61,10 +66,10 @@ export async function spawnOrchestrator(
 	clean = false,
 	mode?: SessionMode,
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
+	hostId?: string,
 ): Promise<string> {
-	void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", { project_id: projectId, source });
 	try {
-		const { data, error, response } = await apiClient.POST("/api/v1/orchestrators", {
+		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
 			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
 		});
 
@@ -81,10 +86,13 @@ export async function spawnOrchestrator(
 			);
 		}
 
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", { project_id: projectId, source });
+		void captureRendererEvent("ao.orchestrators.spawned", { project_id: projectId, source });
 		return data.orchestrator.id;
 	} catch (err) {
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", { project_id: projectId, source });
+		void captureRendererEvent("ao.orchestrators.spawn_failed", {
+			project_id: projectId, source,
+			...(err instanceof OrchestratorSpawnError ? { error_code: err.code, http_status: err.status } : {}),
+		});
 		throw err;
 	}
 }
@@ -102,12 +110,19 @@ export async function spawnOrchestrator(
  * A 409 AGENT_NOT_EXITED means it is already running — the caller asked for a
  * working orchestrator and that is this one, so it resolves rather than throws.
  */
-export async function resumeOrchestrator(sessionId: string): Promise<void> {
-	const { data, error, response } = await apiClient.POST("/api/v1/sessions/{sessionId}/resume-agent", {
+export function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
+	// A resume joins the one SessionView starts when it opens the session.
+	return resumeOnce(sessionUiKey(sessionId, hostId), () => requestOrchestratorResume(sessionId, hostId)).catch((error: unknown) => {
+		if (apiErrorCode(error) !== "AGENT_NOT_EXITED") throw error;
+	});
+}
+
+async function requestOrchestratorResume(sessionId: string, hostId?: string): Promise<void> {
+	const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 		params: { path: { sessionId } },
 	});
 	if (error && apiErrorCode(error) !== "AGENT_NOT_EXITED") {
-		throw new Error(apiErrorMessage(error, `Could not resume the orchestrator (${response.status})`));
+		throw apiErrorException(error, `Could not resume the orchestrator (${response.status})`);
 	}
 	if (data?.resumeMode === "saved_prompt") {
 		void aoBridge.notifications

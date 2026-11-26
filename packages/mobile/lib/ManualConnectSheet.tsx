@@ -1,229 +1,111 @@
-import { Feather } from "./icons";
-import { useEffect, useState } from "react";
-import { Linking, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
-import { ApiError, pingServer } from "./api";
-import { DEFAULT_CONFIG, loadConfig, saveConfig, type ServerConfig } from "./config";
-import { saveHost, setActiveHost } from "./hosts";
-import { adoptManualConnection } from "./manualConnect";
-import { probeIdentity } from "./connectRuntime";
-import {
-	classifyConnectionFailure,
-	describeConnectionFailure,
-	LOCAL_NETWORK_HINT,
-	type ConnectionErrorCopy,
-} from "./connectionError";
-import type { Theme } from "./theme";
-import { haptics } from "./haptics";
-import { Button, SHEET_SCROLL_CONTENT, SheetHeader, SheetScreen } from "./ui";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { MOBILE_EVENTS } from "./telemetry/events";
-import { mobileTelemetry } from "./telemetry/runtime";
-import { iconSize, space, type } from "./tokens";
+import { Host } from "@expo/ui";
+import { Button, Form, Section } from "@expo/ui/swift-ui";
+import { disabled } from "@expo/ui/swift-ui/modifiers";
+import { Stack } from "expo-router";
+import { useMemo, useRef } from "react";
+import { Linking } from "react-native";
+import { LOCAL_NETWORK_HINT } from "./connectionError";
+import { FormFooter, formModifiers, FormPasswordField, FormSection, FormTextField, FormTextFieldRow, sectionModifiers } from "./formFields";
+import { Spinner } from "./Spinner";
+import { useTheme, useThemeState } from "./ThemeProvider";
+import { useManualConnect, type ManualConnectProps } from "./useManualConnect";
 
-// The typing fallback behind the QR scanner: Tailscale users and anyone whose
-// desktop isn't in front of them. Deliberately narrower than the Settings form —
-// it omits the legacy "TERMINAL PORT" (`muxPort`), which is unused against the
-// Go daemon, and it collapses Settings' three buttons ("Scan QR", "Test
-// connection", "Save & connect") into one: during onboarding there is no reason
-// to make someone test and save as separate acts.
-export function ManualConnectSheet({ onConnected }: { onConnected: () => void }) {
+// iOS: a SwiftUI Form on a pushed page. app/connect.tsx titles the bar, which
+// holds the stack's back; Connect (or Save) is the bar's trailing item.
+export function ManualConnectSheet(props: ManualConnectProps) {
 	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
-	const [busy, setBusy] = useState(false);
-	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
+	const { scheme } = useThemeState();
+	const form = useManualConnect(props);
+	const { cfg, failure, busy, canConnect, editing } = form;
+	// Memoized on what the item shows, so typing does not register the header
+	// again on every key; the item calls the latest connect. Semibold rather
+	// than the done style, which iOS 26 fills with the tint, near white in the
+	// dark theme.
+	const connectRef = useRef(form.connect);
+	connectRef.current = form.connect;
+	const headerItems = useMemo(() => (
+		<Stack.Toolbar placement="right">
+			{busy ? (
+				<Stack.Toolbar.View hidesSharedBackground>
+					<Spinner accessibilityLabel={editing ? "Saving changes" : "Connecting"} />
+				</Stack.Toolbar.View>
+			) : (
+				<Stack.Toolbar.Button accessibilityLabel={editing ? "Save changes" : "Connect"} disabled={!canConnect} style={{ fontWeight: "600" }} onPress={() => void connectRef.current()}>
+					{editing ? "Save" : "Connect"}
+				</Stack.Toolbar.Button>
+			)}
+		</Stack.Toolbar>
+	), [busy, canConnect, editing]);
 
-	// Load whatever is already saved when the sheet opens, so a user who closes it
-	// to re-try the scanner doesn't lose what they typed. Mount is the open now
-	// that this is a route rather than an always-rendered component.
-	useEffect(() => {
-		loadConfig().then(setCfg);
-	}, []);
-
-	const set = (k: keyof ServerConfig) => (v: string) => setCfg((prev) => ({ ...prev, [k]: v }));
-
-	async function connect() {
-		setBusy(true);
-		setFailure(null);
-		const target = { ...cfg, host: cfg.host.trim() };
-		try {
-			// Verify BEFORE persisting. pingServer takes the config it is handed, so
-			// nothing needs to be saved to test it — and saving first would leave
-			// known-bad credentials on disk. The background poller retries every 8s,
-			// and the daemon locks a device out for a minute after 5 failed auths,
-			// so a persisted wrong password locks the user out on its own in ~40s,
-			// with no further input from them.
-			await pingServer(target);
-			await saveConfig(target);
-			// Store it as a machine and select it. Writing only the legacy config
-			// left resolution reconnecting the previously active machine on the
-			// next launch, so a manual connection silently did not stick.
-			await adoptManualConnection(target, {
-				identity: async (c) => {
-					try {
-						return await probeIdentity(c);
-					} catch {
-						return ""; // Older daemon, or an endpoint that cannot say: still worth storing.
-					}
-				},
-				saveHost,
-				setActiveHost,
-			});
-			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual" });
-			haptics.success();
-			onConnected();
-		} catch (e) {
-			haptics.warning();
-			const status = e instanceof ApiError ? e.status : undefined;
-			setFailure(
-				describeConnectionFailure(classifyConnectionFailure(status), {
-					host: target.host,
-					port: target.httpPort,
-					platform: Platform.OS,
-				}),
-			);
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	const form = (
+	// iOS has no per-field error, so the connection section's footer says what
+	// is wrong, in the error colour, under the fields it is about. Otherwise it
+	// says what the disabled Connect is waiting for.
+	const connectionError = failure?.message ?? form.portError;
+	return (
 		<>
-			<Field
-				label="HOST"
-				value={cfg.host}
-				onChangeText={set("host")}
-				placeholder="192.168.x.x  or  my-pc.tailXXXX.ts.net"
-				autoCapitalize="none"
-				autoCorrect={false}
-				keyboardType="url"
-			/>
-			<Field label="API PORT" value={cfg.httpPort} onChangeText={set("httpPort")} keyboardType="number-pad" />
-			<Field
-				label="PASSWORD"
-				value={cfg.password}
-				onChangeText={set("password")}
-				placeholder="Connection password"
-				autoCapitalize="none"
-				secureTextEntry
-			/>
-
-			<View style={styles.toggleRow}>
-				<Text style={styles.toggleLabel}>Use TLS (https / wss)</Text>
-				<Switch
-					value={!!cfg.secure}
-					onValueChange={(v) => setCfg((prev) => ({ ...prev, secure: v }))}
-					trackColor={{ true: t.green, false: t.borderStrong }}
-				/>
-			</View>
-
-			{failure ? (
-				<View style={styles.errorBox}>
-					<Feather name="alert-circle" size={iconSize.sm} color={t.red} />
-					<View style={{ flex: 1 }}>
-						<Text style={styles.errorText}>{failure.message}</Text>
-						{failure.showLocalNetworkHint ? (
-							<>
-								<Text style={[styles.errorText, { marginTop: space.xs }]}>{LOCAL_NETWORK_HINT}</Text>
-								<Button
-									title="Open settings"
-									variant="ghost"
-									icon="settings"
-									onPress={() => Linking.openSettings()}
-									style={{ marginTop: space.sm }}
-								/>
-							</>
-						) : null}
-					</View>
-				</View>
-			) : null}
-
-			<Button
-				title="Connect"
-				icon="link"
-				loading={busy}
-				disabled={!cfg.host.trim()}
-				onPress={connect}
-				style={{ marginTop: space.lg }}
-			/>
+			{headerItems}
+			<Host style={{ flex: 1 }} colorScheme={scheme}>
+				<Form modifiers={formModifiers(t)}>
+					<Section modifiers={sectionModifiers(t)}>
+						<FormTextField
+							label="Name"
+							value={form.machineName}
+							onChangeText={form.setMachineName}
+							// Not an example name: right-aligned and grey, a Form row's
+							// placeholder reads as a filled value, as in Settings.
+							placeholder="Required"
+							maxLength={48}
+							returnKeyType="next"
+							testID="manual-connect-name"
+						/>
+					</Section>
+					<FormSection title="Connection" error={connectionError} hint={form.connectHint} modifiers={sectionModifiers(t)}>
+						{/* The port is a few digits: it shares the host's row, at its end. */}
+						<FormTextFieldRow
+							label="Host"
+							fields={[
+								{
+									label: "Host",
+									value: cfg.host,
+									onChangeText: form.setField("host"),
+									placeholder: "192.168.x.x",
+									autoCapitalize: "none",
+									autoCorrect: false,
+									keyboardType: "url",
+									width: "grow",
+									testID: "manual-connect-host",
+								},
+								{
+									label: "Port",
+									value: cfg.httpPort,
+									onChangeText: form.setField("httpPort"),
+									placeholder: "Port",
+									keyboardType: "number-pad",
+									width: 56,
+									testID: "manual-connect-port",
+								},
+							]}
+						/>
+						<FormPasswordField
+							label="Password"
+							value={cfg.password}
+							onChangeText={form.setField("password")}
+							placeholder="Pairing code or password"
+							testID="manual-connect-password"
+						/>
+					</FormSection>
+					{props.onScanInstead ? (
+						<Section modifiers={sectionModifiers(t)}>
+							<Button label="Connect with QR code" systemImage="qrcode.viewfinder" onPress={props.onScanInstead} modifiers={busy ? [disabled(true)] : undefined} />
+						</Section>
+					) : null}
+					{failure?.showLocalNetworkHint ? (
+						<Section footer={<FormFooter>{LOCAL_NETWORK_HINT}</FormFooter>} modifiers={sectionModifiers(t)}>
+							<Button label="Open settings" systemImage="gearshape" onPress={() => void Linking.openSettings()} />
+						</Section>
+					) : null}
+				</Form>
+			</Host>
 		</>
 	);
-
-	// Android's sheet is sized by detents rather than by its content (see
-	// CONNECT_SHEET_OPTIONS — two detents are what lets the OS expand it for the
-	// keyboard). A detent gives the content a definite height, so the form scrolls
-	// within it and the Connect button stays reachable once the sheet expands.
-	if (Platform.OS !== "ios") {
-		return (
-			<ScrollView
-				style={styles.screen}
-				contentContainerStyle={SHEET_SCROLL_CONTENT}
-				keyboardShouldPersistTaps="handled"
-			>
-				<SheetHeader
-					title="Connect manually"
-					subtitle="Enter your computer's address from AO → Settings → Connect Mobile."
-				/>
-				{form}
-			</ScrollView>
-		);
-	}
-
-	// iOS lifts a presented form sheet over the keyboard by itself.
-	return (
-		<SheetScreen title="Connect manually" subtitle="Enter your computer's address from AO → Settings → Connect Mobile.">
-			{form}
-		</SheetScreen>
-	);
 }
-
-function Field({ label, ...input }: { label: string } & React.ComponentProps<typeof TextInput>) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<View style={styles.field}>
-			<Text style={styles.fieldLabel}>{label}</Text>
-			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} selectionColor={t.accent} />
-		</View>
-	);
-}
-
-const makeStyles = (t: Theme) =>
-	StyleSheet.create({
-		screen: { flex: 1, backgroundColor: t.bgSurface },
-		field: { marginTop: space.lg },
-		fieldLabel: { fontFamily: "Geist_600SemiBold",
-			color: t.textTertiary,
-			fontSize: type.caption2.fontSize,
-			fontWeight: "600",
-			letterSpacing: 1.1,
-			marginBottom: space.xs,
-		},
-		input: { fontFamily: "Geist_400Regular",
-			backgroundColor: t.bgElevated,
-			borderWidth: 1,
-			borderColor: t.borderDefault,
-			borderRadius: 8, borderCurve: "continuous",
-			paddingHorizontal: space.md,
-			paddingVertical: space.md,
-			color: t.textPrimary,
-			fontSize: type.subheadline.fontSize,
-		},
-		toggleRow: {
-			flexDirection: "row",
-			alignItems: "center",
-			justifyContent: "space-between",
-			marginTop: space.lg,
-		},
-		toggleLabel: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, flex: 1 },
-		errorBox: {
-			flexDirection: "row",
-			gap: space.sm,
-			alignItems: "flex-start",
-			backgroundColor: t.tintRed,
-			borderRadius: 8, borderCurve: "continuous",
-			padding: space.md,
-			marginTop: space.lg,
-		},
-		errorText: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	});

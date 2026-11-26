@@ -1,9 +1,14 @@
+import { sessionBrowserUnavailable } from "../lib/artifact-preview";
+import { BrowserIcon } from "./icons";
+import { BrowserSiteBlockRow, continueLabel, useUserBrowser } from "./BrowserContinueElsewhere";
+import { canOpenInUserBrowser } from "../../shared/browser-site-block";
 import {
 	memo,
 	useCallback,
 	useEffect,
 	useId,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 	type FocusEvent,
@@ -12,6 +17,7 @@ import {
 	type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
+import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -38,15 +44,17 @@ import {
 	Bug,
 	Camera,
 	Check,
+	ChevronDown,
 	ChevronRight,
+	ChevronUp,
 	Copy,
 	Download,
 	Eye,
 	ExternalLink,
-	Globe2,
 	Maximize2,
 	Minimize2,
 	RotateCcw,
+	Search,
 	Monitor,
 	MoreVertical,
 	MousePointer2,
@@ -58,14 +66,17 @@ import {
 	Trash2,
 	UserRound,
 	X,
-} from "lucide-react";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+} from "@/components/app-icons";
+import { apiErrorMessage } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
+import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import type { BrowserProfile } from "../../shared/browser-profiles";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -74,6 +85,8 @@ import {
 } from "./ui/dropdown-menu";
 import { SETTINGS_MENU_ROW, SETTINGS_MENU_SURFACE } from "./settings/SettingsMenuTrigger";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
+import { TabCloseButton, TerminalTabFrame } from "./TerminalTabFrame";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "../lib/utils";
@@ -86,6 +99,7 @@ import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
+import { isHostLocalWebLink } from "../lib/loopback";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -130,21 +144,21 @@ const MAX_HISTORY_SUGGESTIONS = 4;
 const MIN_DEVICE_FRAME_WIDTH = 240;
 const MAX_DEVICE_FRAME_WIDTH = 2560;
 
-const restrictBrowserTopTabDragToHorizontalAxis: Modifier = ({
+export const restrictBrowserTopTabDragToTabStrip: Modifier = ({
 	activeNodeRect,
+	containerNodeRect,
 	transform,
-	windowRect,
 }) => {
-	if (!activeNodeRect || !windowRect) return { ...transform, y: 0 };
-	const minX = windowRect.left - activeNodeRect.left;
-	const maxX = windowRect.right - activeNodeRect.right;
+	if (!activeNodeRect || !containerNodeRect) return { ...transform, y: 0 };
+	const minX = containerNodeRect.left - activeNodeRect.left;
+	const maxX = containerNodeRect.right - activeNodeRect.right;
 	return {
 		...transform,
 		x: Math.min(maxX, Math.max(minX, transform.x)),
 		y: 0,
 	};
 };
-const browserTopTabDragModifiers = [restrictBrowserTopTabDragToHorizontalAxis];
+const browserTopTabDragModifiers = [restrictBrowserTopTabDragToTabStrip];
 
 function clampDeviceFrameWidth(width: number): number | undefined {
 	if (!Number.isFinite(width)) return undefined;
@@ -152,7 +166,7 @@ function clampDeviceFrameWidth(width: number): number | undefined {
 }
 
 type BrowserPanelProps = {
-	session: WorkspaceSession;
+	session?: WorkspaceSession;
 	active: boolean;
 	poppedOut: boolean;
 	onTogglePopOut: (next: boolean) => void;
@@ -174,9 +188,13 @@ export type BrowserAnnotationQueueModel = {
 
 export function useBrowserAnnotationQueue({
 	sessionId,
+	hostId,
+	sourcePreviewUrl,
 	navUrl,
 }: {
 	sessionId?: string;
+	hostId?: string;
+	sourcePreviewUrl?: string;
 	navUrl?: string;
 }): BrowserAnnotationQueueModel {
 	const [state, setState] = useState<{ status: AnnotationStatus; error: string; queuedCount: number }>({
@@ -188,6 +206,8 @@ export function useBrowserAnnotationQueue({
 	const stagedScreenshotPathsRef = useRef(new Map<BrowserAnnotationSubmitPayload, string[]>());
 	const annotationSendingRef = useRef(false);
 	const sessionIdRef = useRef(sessionId ?? "");
+	const hostIdRef = useRef(hostId);
+	const sourcePreviewUrlRef = useRef(sourcePreviewUrl);
 	const generationRef = useRef(0);
 	const sentTimerRef = useRef<number | null>(null);
 
@@ -213,6 +233,7 @@ export function useBrowserAnnotationQueue({
 		annotationSendingRef.current = true;
 		const sendGeneration = generationRef.current;
 		const sendSessionId = sessionIdRef.current;
+		const client = clientForSessionHost(hostIdRef.current);
 		setState({ status: "sending", error: "", queuedCount: annotationQueueRef.current.length });
 
 		void (async () => {
@@ -226,7 +247,7 @@ export function useBrowserAnnotationQueue({
 						...(payload.snapshot ? [payload.snapshot] : []),
 					];
 					if (attachments.length > 0) {
-						const staged = await apiClient.POST("/api/v1/sessions/{sessionId}/attachments", {
+						const staged = await client.POST("/api/v1/sessions/{sessionId}/attachments", {
 							params: { path: { sessionId: sendSessionId } },
 							body: { attachments },
 						});
@@ -240,10 +261,18 @@ export function useBrowserAnnotationQueue({
 						screenshotPaths = [];
 					}
 				}
-				const message = formatBrowserAnnotationMessage(payload, { screenshotPaths });
-				const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/send", {
+				let sendPayload = payload;
+				if (hostIdRef.current && sourcePreviewUrlRef.current) {
+					let pageUrl = "";
+					try {
+						pageUrl = await aoBridge.remotes.resolvePreviewUrl(hostIdRef.current, sendSessionId, payload.session.page.url);
+					} catch { /* A disconnected host cannot resolve a preview capability. */ }
+					sendPayload = { ...payload, session: { ...payload.session, page: { ...payload.session.page, url: pageUrl } } };
+				}
+				const message = formatBrowserAnnotationMessage(sendPayload, { screenshotPaths });
+				const { error } = await client.POST("/api/v1/sessions/{sessionId}/send", {
 					params: { path: { sessionId: sendSessionId } },
-					body: { message },
+					body: { message, userAuthored: true },
 				});
 				if (error) {
 					failureMessage = apiErrorMessage(error, appI18n.t("browser.unableSendAnnotation"));
@@ -292,8 +321,10 @@ export function useBrowserAnnotationQueue({
 
 	useEffect(() => {
 		sessionIdRef.current = sessionId ?? "";
+		hostIdRef.current = hostId;
+		sourcePreviewUrlRef.current = sourcePreviewUrl;
 		resetQueue();
-	}, [resetQueue, sessionId]);
+	}, [hostId, resetQueue, sessionId, sourcePreviewUrl]);
 
 	useEffect(() => {
 		if (navUrl) return;
@@ -338,16 +369,19 @@ export function useBrowserAnnotationQueue({
 		drainAnnotationQueue();
 	}, [drainAnnotationQueue]);
 
-	return {
-		status: state.status,
-		error: state.error,
-		queuedCount: state.queuedCount,
-		beginPicking,
-		cancelPicking,
-		enqueue,
-		failPicking,
-		retryQueued,
-	};
+	return useMemo(
+		() => ({
+			status: state.status,
+			error: state.error,
+			queuedCount: state.queuedCount,
+			beginPicking,
+			cancelPicking,
+			enqueue,
+			failPicking,
+			retryQueued,
+		}),
+		[state.status, state.error, state.queuedCount, beginPicking, cancelPicking, enqueue, failPicking, retryQueued],
+	);
 }
 
 export function BrowserPanel({
@@ -356,13 +390,15 @@ export function BrowserPanel({
 	poppedOut,
 	onTogglePopOut,
 	topbarHost,
-}: BrowserPanelProps) {
+}: BrowserPanelProps & { session: WorkspaceSession }) {
 	const browserView = useBrowserView({
 		sessionId: session.id,
 		active,
 		poppedOut,
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
+		terminated: sessionBrowserUnavailable(session),
+		sessionEnded: session.isTerminated,
 	});
 	const annotationQueue = useBrowserAnnotationQueue({
 		sessionId: session.id,
@@ -381,7 +417,12 @@ export function BrowserPanel({
 	);
 }
 
-export function BrowserPanelView({
+// Memoized: SessionView renders several times per session switch for reasons
+// that never reach this panel, and each pass re-rendered every toolbar
+// tooltip and tab. Its props (the browser model included) are stable objects
+// that change only when what the panel shows changes.
+export const BrowserPanelView = memo(function BrowserPanelView({
+	session,
 	active,
 	poppedOut,
 	onTogglePopOut,
@@ -391,6 +432,7 @@ export function BrowserPanelView({
 }: BrowserPanelProps & { annotationQueue: BrowserAnnotationQueueModel; browserView: BrowserViewModel }) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
+	const browserUnavailable = sessionBrowserUnavailable(session);
 	const {
 		viewId,
 		navState,
@@ -400,6 +442,10 @@ export function BrowserPanelView({
 		goForward,
 		reload,
 		stop,
+		findState = { viewId: "", tabId: "", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
+		findOpenRequest = 0,
+		findInPage = async () => undefined,
+		stopFindInPage = async () => undefined,
 		tabs,
 		activeTabId,
 		tabNotice,
@@ -420,7 +466,11 @@ export function BrowserPanelView({
 		setAnnotationMode,
 		annotationAction = async () => undefined,
 	} = browserView;
+	const userBrowser = useUserBrowser();
 	const [urlInput, setUrlInput] = useState(navState.url);
+	// A popped-out panel is portaled outside #root; the popout flag covers that
+	// case, so this one marks only a live page docked inside the shell.
+	useDocumentFlag("data-browser-native-live", Boolean(navState.url) && !poppedOut);
 	const [urlCopied, setUrlCopied] = useState(false);
 	const [historySuggestions, setHistorySuggestions] = useState<Array<{ url: string; title?: string }>>([]);
 	const historyMenuId = useId();
@@ -430,12 +480,21 @@ export function BrowserPanelView({
 		annotationQueue;
 	const hasNativeBrowser = Boolean(window.ao?.browser);
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
-	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url);
+	// Not on an agent tab: its page is its viewer's picture of the agent's page.
+	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
+	const canAnnotate = Boolean(session && window.ao?.browser && viewId && navState.url && !onAgentTab);
+	// An agent tab's localhost page is the host's: opened here it would be this
+	// computer's own. Before the viewer's first report the tab shows the viewer
+	// itself, an ao-preview-….localhost address, so that is held back too.
+	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
+	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { agentTab: onAgentTab }) && !browserUnavailable;
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
+	const customWidthInputRef = useRef<HTMLInputElement>(null);
 	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
+	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
 	const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
 	const [profilesLoading, setProfilesLoading] = useState(false);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -444,6 +503,14 @@ export function BrowserPanelView({
 			? clampDeviceFrameWidth(Number(customDeviceWidth))
 			: DEVICE_PRESETS.find((preset) => preset.id === devicePreset)?.width;
 	const urlInputRef = useRef<HTMLInputElement>(null);
+	const findInputRef = useRef<HTMLInputElement>(null);
+	const findComposingRef = useRef(false);
+	const findStateRef = useRef(findState);
+	findStateRef.current = findState;
+	const [findOpen, setFindOpen] = useState(false);
+	const findOpenRef = useRef(findOpen);
+	findOpenRef.current = findOpen;
+	const [findQuery, setFindQuery] = useState("");
 	const historyMenuRef = useRef<HTMLDivElement>(null);
 	const historyRequestGenerationRef = useRef(0);
 	const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -452,24 +519,8 @@ export function BrowserPanelView({
 	const {
 		scrollRef: tabScrollRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade: showTabsLeftFade,
-		showRightFade: showTabsRightFade,
 	} = useTabScrollEdges([tabs.length]);
 	const previousTabCountRef = useRef(tabs.length);
-	// Vertical wheel scrolls the horizontal tab strip when it overflows — same
-	// affordance as the session terminal tabs (CenterPane.tsx).
-	useEffect(() => {
-		const element = tabScrollRef.current;
-		if (!element) return;
-		const handleWheel = (event: WheelEvent) => {
-			if (event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-			if (event.deltaY === 0 || element.scrollWidth <= element.clientWidth) return;
-			event.preventDefault();
-			element.scrollBy({ left: event.deltaY });
-		};
-		element.addEventListener("wheel", handleWheel, { passive: false });
-		return () => element.removeEventListener("wheel", handleWheel);
-	}, [tabScrollRef]);
 
 	// Opening a tab (or a popup adding one) appends it, so reveal the newest.
 	useEffect(() => {
@@ -517,24 +568,35 @@ export function BrowserPanelView({
 	}, [controlsView]);
 
 	const selectBrowserProfile = useCallback(
-		(profileId: string | null) => {
+		(profileId: string | null, confirmed = false) => {
 			if (!viewId || !window.ao?.browser) return;
-			void window.ao.browser.selectProfile({
-				viewId,
-				profileId,
-				labels: {
-					temporary: t("browser.profile.temporary"),
-					manage: t("browser.profile.manage"),
-					switchTitle: t("browser.profile.switchTitle"),
-					switchMessage: t("browser.profile.switchMessage"),
-					switchDetail: t("browser.profile.switchDetail"),
-					cancel: t("common.no"),
-					confirm: t("common.yes"),
-				},
-			});
+			void window.ao.browser.selectProfile({ viewId, profileId, confirmed }).catch(() => undefined);
 		},
-		[t, viewId],
+		[viewId],
 	);
+
+	// The main process decides whether a switch needs confirming (the page has
+	// navigated) and reports failures; both are shown here, inside the app,
+	// rather than as native dialogs detached from the window.
+	const [pendingProfileSwitch, setPendingProfileSwitch] = useState<{ profileId: string | null } | null>(null);
+	const showProfileSwitchFailure = useUiStore((state) => state.showGlobalToast);
+	useEffect(() => {
+		if (!viewId || !window.ao?.browser) return;
+		const offConfirm = window.ao.browser.onProfileSwitchConfirm((request) => {
+			if (request.viewId === viewId) setPendingProfileSwitch({ profileId: request.profileId });
+		});
+		const offFailed = window.ao.browser.onProfileSwitchFailed((failure) => {
+			if (failure.viewId !== viewId) return;
+			const body = failure.reason === "agent-active" ? t("browser.profile.switchAgentActive") : failure.message;
+			showProfileSwitchFailure(t("browser.profile.switchFailed"), body, "error");
+		});
+		return () => {
+			offConfirm();
+			offFailed();
+		};
+	}, [showProfileSwitchFailure, t, viewId]);
+	// A different session's browser has its own view; never carry a prompt over.
+	useEffect(() => setPendingProfileSwitch(null), [viewId]);
 
 	useEffect(() => {
 		if (!viewId) return;
@@ -560,6 +622,49 @@ export function BrowserPanelView({
 				urlInputRef.current?.select();
 			}),
 		[viewId],
+	);
+	useEffect(() => {
+		if (findOpenRequest <= 0) return;
+		if (findOpenRef.current) {
+			setFindOpen(false);
+			setFindQuery("");
+			void stopFindInPage(true);
+			return;
+		}
+		setFindOpen(true);
+		setFindQuery(findStateRef.current.query);
+		requestAnimationFrame(() => {
+			findInputRef.current?.focus();
+			findInputRef.current?.select();
+		});
+	}, [findOpenRequest, stopFindInPage]);
+	useEffect(() => {
+		if (!findOpen || findState.tabId !== activeTabId) return;
+		setFindQuery(findState.query);
+	}, [activeTabId, findOpen, findState.query, findState.tabId]);
+	const closeFind = useCallback(() => {
+		setFindOpen(false);
+		setFindQuery("");
+		void stopFindInPage(true);
+	}, [stopFindInPage]);
+	const runFind = useCallback(
+		(query: string, forward = true, newSession = true) => {
+			void findInPage(query, forward, newSession);
+		},
+		[findInPage],
+	);
+	const handleFindKeyDown = useCallback(
+		(event: KeyboardEvent<HTMLInputElement>) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				closeFind();
+				return;
+			}
+			if (event.key !== "Enter" || findComposingRef.current || !findQuery) return;
+			event.preventDefault();
+			runFind(findQuery, !event.shiftKey, false);
+		},
+		[closeFind, findQuery, runFind],
 	);
 	useEffect(
 		() =>
@@ -596,14 +701,26 @@ export function BrowserPanelView({
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const browserDownloads = useBrowserDownloads();
 	const [downloadsOpen, setDownloadsOpen] = useState(false);
-	const previousDownloadCount = useRef(0);
+	const knownDownloadIds = useRef<Set<string> | null>(null);
+	const observedInitialDownloads = useRef(false);
 	const hasActiveDownload = browserDownloads.downloads.some(
-		(download) => download.status === "progressing" || download.status === "paused",
+		(download) => download.status === "progressing" || download.status === "paused" || download.status === "blocked",
 	);
 	useEffect(() => {
-		if (browserDownloads.downloads.length > previousDownloadCount.current) setDownloadsOpen(true);
-		previousDownloadCount.current = browserDownloads.downloads.length;
-	}, [browserDownloads.downloads.length]);
+		if (!browserDownloads.initialized) return;
+		const nextIds = new Set(browserDownloads.downloads.map((download) => download.id));
+		if (!observedInitialDownloads.current) {
+			observedInitialDownloads.current = true;
+			knownDownloadIds.current = nextIds;
+			return;
+		}
+		const previousIds = knownDownloadIds.current;
+		const hasNewDownload = previousIds
+			? browserDownloads.downloads.some((download) => !previousIds.has(download.id))
+			: false;
+		if (active && hasNewDownload) setDownloadsOpen(true);
+		knownDownloadIds.current = nextIds;
+	}, [active, browserDownloads.downloads, browserDownloads.initialized]);
 
 	const takeScreenshot = useCallback(async () => {
 		if (!viewId || !window.ao?.browser) return;
@@ -612,6 +729,20 @@ export function BrowserPanelView({
 			showGlobalToast(t("browser.screenshotCopied"), undefined, "top-center");
 		} catch {
 			showGlobalToast(t("browser.screenshotFailed"), undefined, "top-center");
+		}
+	}, [showGlobalToast, t, viewId]);
+
+	// The browser menu's way out, for any page detection did not catch.
+	const openPageElsewhere = useCallback(async () => {
+		try {
+			const used = await window.ao?.browser.openInUserBrowser(viewId);
+			showGlobalToast(
+				used?.name ? t("browser.continueElsewhere.openedIn", { browser: used.name }) : t("browser.continueElsewhere.openedInYourBrowser"),
+				undefined,
+				"top-center",
+			);
+		} catch {
+			showGlobalToast(t("browser.continueElsewhere.failed"), undefined, "top-center");
 		}
 	}, [showGlobalToast, t, viewId]);
 
@@ -765,15 +896,23 @@ export function BrowserPanelView({
 		setUrlEditing(true);
 	};
 
-	const openCurrentPageExternally = () => {
-		if (!isWebLink(navState.url)) return;
-		void openLinkInSystemBrowser(navState.url);
+	// A remote preview's address works only in this panel, which trusts its
+	// certificate: outside AO it goes by its plain-http address.
+	const externalURL = async (url: string): Promise<string> => {
+		if (!session?.hostId) return url;
+		// A disconnected host has no other address for it: keep the one shown.
+		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
+	};
+
+	const openCurrentPageExternally = async () => {
+		if (!isWebLink(navState.url) || agentPageOnHost) return;
+		await openLinkInSystemBrowser(await externalURL(navState.url));
 	};
 
 	const copyCurrentURL = async () => {
 		if (!navState.url) return;
 		try {
-			await aoBridge.clipboard.writeText(navState.url);
+			await aoBridge.clipboard.writeText(await externalURL(navState.url));
 			setUrlCopied(true);
 			clearTimeout(copyFeedbackTimeoutRef.current);
 			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
@@ -841,6 +980,20 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
+	const runtimeState = useBrowserRuntimeState();
+	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
+	// not a disconnect yet; alarming then would flash the alert on every relink.
+	const runtimeDisconnected =
+		hasNativeBrowser && runtimeState !== null && !runtimeState.connected && !runtimeState.connecting;
+	const runtimeRejectedMessage = runtimeState?.rejected ? t(browserRuntimeRejectedKey(runtimeState.rejectionCode)) : null;
+	const reconnectRuntime = useCallback(async () => {
+		setRuntimeReconnectPending(true);
+		try {
+			await window.ao?.browser.reconnectRuntime();
+		} finally {
+			setRuntimeReconnectPending(false);
+		}
+	}, []);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
 	const currentURLIsWeb = isWebLink(navState.url);
 	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
@@ -878,6 +1031,7 @@ export function BrowserPanelView({
 							aria-haspopup="listbox"
 							aria-label={t("browser.url")}
 							className="browser-panel__url-input h-browser-url text-xs"
+							disabled={browserUnavailable}
 							onBlur={endUrlEditing}
 							onChange={(event) => handleURLChange(event.target.value)}
 							onClick={() => urlInputRef.current?.select()}
@@ -898,7 +1052,7 @@ export function BrowserPanelView({
 									onClick={() => void copyCurrentURL()}
 									size="icon-sm"
 									type="button"
-									variant="ghost"
+									variant="quiet"
 								>
 									<span className="relative size-icon-base">
 										<Copy
@@ -919,17 +1073,20 @@ export function BrowserPanelView({
 								</Button>
 							</BrowserControlTooltip>
 						) : null}
+						{/* On an agent's host page, aria-disabled rather than disabled: a
+						    disabled button would lose the tooltip that says why. */}
 						{currentURLIsWeb ? (
-							<BrowserControlTooltip label={t("inspector.openInSystemBrowser")}>
+							<BrowserControlTooltip label={agentPageOnHost ? t("browser.agentPageOnHost") : t("inspector.openInSystemBrowser")}>
 									<Button
+										aria-disabled={agentPageOnHost || undefined}
 										aria-label={t("inspector.openInSystemBrowser")}
 										className="browser-panel__url-external"
-										onClick={openCurrentPageExternally}
+										onClick={() => void openCurrentPageExternally()}
 										size="icon-sm"
 										type="button"
-										variant="ghost"
+										variant="quiet"
 									>
-										<ExternalLink aria-hidden="true" className="size-icon-base" />
+										<ExternalLink aria-hidden="true" className={cn("size-icon-base", agentPageOnHost && "opacity-50")} />
 									</Button>
 							</BrowserControlTooltip>
 						) : null}
@@ -950,11 +1107,11 @@ export function BrowserPanelView({
 					sideOffset={4}
 				>
 					{historySuggestions.map((suggestion, index) => (
-						<button
+						<Pressable
 							aria-selected={index === activeHistorySuggestion}
 							className={cn(
 								SETTINGS_MENU_ROW,
-								"flex w-full items-center gap-2.5 px-2.5 py-2 text-left",
+								"flex w-full items-center gap-2.5 px-2.5 py-2",
 								index === activeHistorySuggestion && "bg-settings-menu-selected text-settings-title",
 							)}
 							id={`${historyMenuId}-${index}`}
@@ -976,7 +1133,7 @@ export function BrowserPanelView({
 								) : null}
 								<span className="block truncate text-caption text-settings-muted">{suggestion.url}</span>
 							</span>
-						</button>
+						</Pressable>
 					))}
 				</PopoverContent>
 			</Popover>
@@ -996,7 +1153,8 @@ export function BrowserPanelView({
 					<div className="browser-panel__tab-region">
 						<div
 							aria-label={t("browser.tabs")}
-							className="browser-panel__tab-strip"
+							className="browser-panel__tab-strip edge-fade edge-fade-x"
+							data-tab-strip
 							onKeyDown={draggedTopTabId ? undefined : handleTabListKeyDown}
 							ref={tabScrollRef}
 							role="tablist"
@@ -1006,34 +1164,36 @@ export function BrowserPanelView({
 									key={tab.id}
 									onClose={handleCloseTab}
 									onSelect={handleSelectTab}
-									onlyTab={tabs.length === 1}
 									selected={tab.id === activeTabId}
 									tab={tab}
 								/>
 							))}
 						</div>
-						{showTabsLeftFade ? (
-							<div aria-hidden="true" className="browser-panel__tab-fade browser-panel__tab-fade--left" />
-						) : null}
-						{showTabsRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 					</div>
 				</SortableContext>
 				<DragOverlay adjustScale={false} dropAnimation={null} modifiers={browserTopTabDragModifiers}>
-					{draggedTopTab ? <BrowserTopTabDragOverlay onlyTab={tabs.length === 1} tab={draggedTopTab} /> : null}
+					{draggedTopTab ? <BrowserTopTabDragOverlay tab={draggedTopTab} /> : null}
 				</DragOverlay>
 			</DndContext>
+			{/* The session strip's New terminal button, in its action slot. */}
+			<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-tab-strip-action>
 				<BrowserControlTooltip label={t("browser.openNewTab")}>
-					<button
+					<Button
 						aria-label={t("browser.openNewTab")}
-						className={cn("browser-panel__tab-new", draggedTopTabId && "browser-panel__tab-new--dragging")}
+						className={cn(draggedTopTabId && "browser-panel__tab-new--dragging")}
+						disabled={browserUnavailable}
 						onClick={() => void handleOpenTab()}
+						size="icon-sm"
 						type="button"
+						variant="quiet"
 					>
-						<Plus aria-hidden="true" className="size-icon-base" />
-					</button>
+						<Plus aria-hidden="true" className="size-icon-md" />
+					</Button>
 				</BrowserControlTooltip>
+			</div>
 		</div>
 	);
+	const annotationIdle = annotationState.count === 0 && !annotationState.hasDraft;
 	const annotationToolbar = (
 		<div className="browser-panel__toolbar browser-panel__toolbar--annotation">
 			<div className="browser-panel__annotation-actions browser-panel__annotation-actions--leading">
@@ -1041,11 +1201,12 @@ export function BrowserPanelView({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label={t("browser.annotationDiscardAllComments")}
-							className="browser-panel__annotation-discard"
+							className="browser-panel__annotation-discard hover:before:opacity-0"
+							disabled={annotationIdle && annotationState.screenshotCount === 0}
 							onClick={() => void annotationAction("discard-all")}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="destructive-ghost"
 						>
 							<Trash2 aria-hidden="true" className="size-icon-base" />
 						</Button>
@@ -1056,10 +1217,18 @@ export function BrowserPanelView({
 				</Tooltip>
 			</div>
 			<div className="browser-panel__annotation-context">
-				<span aria-hidden="true" className="browser-panel__annotation-status-dot" />
-				<span className="browser-panel__annotation-count">
-					{t("browser.annotationCount", { count: annotationState.count })}
-				</span>
+				{annotationIdle ? (
+					<span className="browser-panel__annotation-hint">{t("browser.annotationEmptyHint")}</span>
+				) : (
+					<>
+						{annotationState.count > 0 ? (
+							<span aria-hidden="true" className="browser-panel__annotation-status-dot" />
+						) : null}
+						<span className="browser-panel__annotation-count">
+							{t("browser.annotationCount", { count: annotationState.count })}
+						</span>
+					</>
+				)}
 			</div>
 			<div className="browser-panel__annotation-actions browser-panel__annotation-actions--trailing">
 				<Tooltip>
@@ -1069,7 +1238,7 @@ export function BrowserPanelView({
 							onClick={() => void annotationAction("capture")}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="quiet"
 						>
 							<Camera aria-hidden="true" className="size-icon-base" />
 							{annotationState.screenshotCount > 0 ? (
@@ -1085,14 +1254,24 @@ export function BrowserPanelView({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label={t("browser.annotationOriginalPage")}
+							disabled={annotationIdle}
 							onBlur={() => void annotationAction("restore-preview")}
+							onKeyDown={(event) => {
+								if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
+								event.preventDefault();
+								void annotationAction("preview-original");
+							}}
+							onKeyUp={(event) => {
+								if (event.key !== "Enter" && event.key !== " ") return;
+								void annotationAction("restore-preview");
+							}}
 							onPointerCancel={() => void annotationAction("restore-preview")}
 							onPointerDown={() => void annotationAction("preview-original")}
 							onPointerLeave={() => void annotationAction("restore-preview")}
 							onPointerUp={() => void annotationAction("restore-preview")}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="quiet"
 						>
 							<Eye aria-hidden="true" className="size-icon-base" />
 						</Button>
@@ -1105,11 +1284,11 @@ export function BrowserPanelView({
 				<Button
 					aria-label={t("browser.annotationSendAll")}
 					className="browser-panel__annotation-send"
-					disabled={annotationState.count === 0 && !annotationState.hasDraft}
+					disabled={annotationIdle}
 					onClick={() => void annotationAction("submit")}
 					size="sm"
 					type="button"
-					variant="primary"
+					variant={annotationIdle ? "ghost" : "primary"}
 				>
 					{t("browser.annotationSend")}
 					{annotationState.count > 0 ? (
@@ -1164,16 +1343,36 @@ export function BrowserPanelView({
 			>
 				{browserTabBar}
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
+							{runtimeDisconnected ? (
+								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
+									<span className="truncate" title={runtimeRejectedMessage ?? undefined}>
+										{runtimeRejectedMessage ?? t("browser.runtimeDisconnected")}
+									</span>
+									{/* Reconnecting sends the same token, which the daemon would refuse again. */}
+									{runtimeState.rejected ? null : (
+										<Button
+											className="shrink-0"
+											disabled={runtimeReconnectPending}
+											onClick={() => void reconnectRuntime()}
+											size="sm"
+											type="button"
+											variant="secondary"
+										>
+											{t("browser.reconnectRuntime")}
+										</Button>
+									)}
+								</div>
+							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>
 								<span className="browser-panel__navigation-control inline-flex">
 							<Button
 								aria-label={t("browser.back")}
 								className="browser-panel__navigation-btn"
-								disabled={!navState.canGoBack}
+								disabled={!navState.canGoBack || browserUnavailable}
 								onClick={() => void goBack()}
 								size="icon-sm"
 								type="button"
-								variant="ghost"
+								variant="quiet"
 							>
 								<ArrowLeft aria-hidden="true" className="size-icon-base" />
 							</Button>
@@ -1184,11 +1383,11 @@ export function BrowserPanelView({
 							<Button
 								aria-label={t("browser.forward")}
 								className="browser-panel__navigation-btn"
-								disabled={!navState.canGoForward}
+								disabled={!navState.canGoForward || browserUnavailable}
 								onClick={() => void goForward()}
 								size="icon-sm"
 								type="button"
-								variant="ghost"
+								variant="quiet"
 							>
 								<ArrowRight aria-hidden="true" className="size-icon-base" />
 							</Button>
@@ -1197,11 +1396,12 @@ export function BrowserPanelView({
 				<BrowserControlTooltip label={navState.isLoading ? t("browser.stop") : t("browser.reload")}>
 					<Button
 							aria-label={navState.isLoading ? t("browser.stop") : t("browser.reload")}
+							disabled={browserUnavailable}
 							className="browser-panel__navigation-btn"
 							onClick={() => void (navState.isLoading ? stop() : reload())}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="quiet"
 						>
 							{navState.isLoading ? (
 								<X aria-hidden="true" className="size-icon-base" />
@@ -1225,7 +1425,15 @@ export function BrowserPanelView({
 					</span>
 				) : null}
 				<BrowserControlTooltip
-					label={annotationStatusLabel || agentStatusLabel || (canRetryAnnotation ? t("browser.retryAnnotation") : t("browser.annotate"))}
+					label={
+						annotationStatusLabel ||
+						agentStatusLabel ||
+						(canRetryAnnotation
+							? t("browser.retryAnnotation")
+							: onAgentTab
+								? t("browser.annotateAgentTab")
+								: t("browser.annotate"))
+					}
 				>
 					<span className="inline-flex">
 							<Button
@@ -1237,12 +1445,12 @@ export function BrowserPanelView({
 											: t("browser.annotate")
 								}
 								aria-pressed={annotationMode || status === "picking"}
-								className="browser-panel__annotate-btn relative"
+								className="browser-panel__annotate-btn relative aria-pressed:before:opacity-0"
 								disabled={!canAnnotate || status === "sending"}
 								onClick={() => void toggleAnnotationMode()}
 								size="icon-sm"
 								type="button"
-								variant="ghost"
+								variant="quiet"
 							>
 								<MousePointer2 aria-hidden="true" className="size-icon-base" />
 								{annotationStatusLabel ? (
@@ -1273,7 +1481,7 @@ export function BrowserPanelView({
 									className={cn("relative", hasActiveDownload && "text-accent")}
 										size="icon-sm"
 										type="button"
-										variant="ghost"
+										variant="quiet"
 									>
 										<Download aria-hidden="true" className="size-icon-base" />
 										{hasActiveDownload ? <span aria-hidden="true" className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-accent" /> : null}
@@ -1300,6 +1508,17 @@ export function BrowserPanelView({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
+				<BrowserControlTooltip label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}>
+					<Button
+						aria-label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}
+						onClick={() => onTogglePopOut(!poppedOut)}
+						size="icon-sm"
+						type="button"
+						variant="quiet"
+					>
+						{poppedOut ? <Minimize2 aria-hidden="true" className="size-icon-base" /> : <Maximize2 aria-hidden="true" className="size-icon-base" />}
+					</Button>
+				</BrowserControlTooltip>
 				<DropdownMenu
 					onOpenChange={(open) => {
 						setControlsOpen(open);
@@ -1312,7 +1531,7 @@ export function BrowserPanelView({
 									aria-label={t("browser.controls")}
 									size="icon-sm"
 									type="button"
-									variant="ghost"
+									variant="quiet"
 								>
 									<MoreVertical aria-hidden="true" className="size-icon-base" />
 								</Button>
@@ -1365,12 +1584,24 @@ export function BrowserPanelView({
 							})}
 						</div>
 						<div className="my-1 h-px bg-border" role="separator" />
-						<label className="flex items-center gap-1.5 px-2 py-1.5 text-body">
+						<DropdownMenuItem
+							className="gap-1.5"
+							// Radix re-focuses an item on pointer move/leave, which would pull focus
+							// out of the width field while the mouse drifts over the row.
+							onPointerMove={(event) => event.preventDefault()}
+							onPointerLeave={(event) => event.preventDefault()}
+							onSelect={(event) => {
+								event.preventDefault();
+								customWidthInputRef.current?.focus();
+							}}
+						>
 							<span className="flex size-4 shrink-0 items-center justify-center">
 								{devicePreset === CUSTOM_DEVICE_PRESET_ID ? <Check aria-hidden="true" className="text-accent" /> : null}
 							</span>
 							<span className="flex-1">{t("browser.deviceCustomWidth")}</span>
 							<Input
+								aria-label={t("browser.deviceCustomWidth")}
+								ref={customWidthInputRef}
 								className="h-6 w-16 shrink-0 px-1.5 text-right font-mono text-caption"
 								inputMode="numeric"
 								max={MAX_DEVICE_FRAME_WIDTH}
@@ -1380,10 +1611,14 @@ export function BrowserPanelView({
 									setDevicePreset(CUSTOM_DEVICE_PRESET_ID);
 								}}
 								onClick={(event) => event.stopPropagation()}
+								onKeyDown={(event) => {
+									// Escape still closes the menu; everything else is typing.
+									if (event.key !== "Escape") event.stopPropagation();
+								}}
 								type="number"
 								value={customDeviceWidth}
 							/>
-						</label>
+						</DropdownMenuItem>
 							</>
 						) : controlsView === "profiles" ? (
 							<>
@@ -1431,20 +1666,6 @@ export function BrowserPanelView({
 							<>
 								<DropdownMenuItem
 									className="gap-2"
-									onSelect={() => onTogglePopOut(!poppedOut)}
-								>
-									{poppedOut ? (
-										<Minimize2 aria-hidden="true" className="size-icon-base shrink-0" />
-									) : (
-										<Maximize2 aria-hidden="true" className="size-icon-base shrink-0" />
-									)}
-									<span className="flex-1">
-										{poppedOut ? t("browser.returnToPanel") : t("browser.popOut")}
-									</span>
-								</DropdownMenuItem>
-								<div className="my-1 h-px bg-border" role="separator" />
-								<DropdownMenuItem
-									className="gap-2"
 									onSelect={(event) => {
 										event.preventDefault();
 										setControlsView("devices");
@@ -1482,6 +1703,10 @@ export function BrowserPanelView({
 									<Camera aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t("browser.takeScreenshot")}</span>
 								</DropdownMenuItem>
+								<DropdownMenuItem className="gap-2" disabled={!canOpenElsewhere} onSelect={() => void openPageElsewhere()}>
+									<ExternalLink aria-hidden="true" className="size-icon-base shrink-0" />
+									<span className="flex-1">{continueLabel(t, userBrowser, "open")}</span>
+								</DropdownMenuItem>
 								<DropdownMenuItem className="gap-2" onSelect={() => openGlobalSettings("browserProfiles")}>
 									<Download aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t("browser.downloads.title")}</span>
@@ -1498,6 +1723,7 @@ export function BrowserPanelView({
 				</DropdownMenu>
 				</div>
 			</div>
+			<BrowserSiteBlockRow siteBlock={navState.siteBlock} viewId={viewId} />
 			<AnimatePresence initial={false}>
 				{annotationMode ? (
 					<motion.div
@@ -1517,6 +1743,68 @@ export function BrowserPanelView({
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			{findOpen ? (
+				<div className="browser-panel__find-row" role="search" data-testid="browser-find-row">
+					<Search aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
+					<input
+						ref={findInputRef}
+						className="browser-panel__find-input"
+						value={findQuery}
+						placeholder={t("browser.find.placeholder")}
+						aria-label={t("browser.find.placeholder")}
+						onChange={(event) => {
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							if (!findComposingRef.current) runFind(query);
+						}}
+						onCompositionStart={() => {
+							findComposingRef.current = true;
+						}}
+						onCompositionEnd={(event) => {
+							findComposingRef.current = false;
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							runFind(query);
+						}}
+						onKeyDown={handleFindKeyDown}
+					/>
+					<span className="browser-panel__find-status" aria-live="polite" aria-atomic="true">
+						{findQuery
+							? findState.matches > 0
+								? t("browser.find.matchCount", {
+									active: findState.activeMatchOrdinal,
+									total: findState.matches,
+								})
+								: findState.finalUpdate
+									? t("browser.find.noResults")
+									: ""
+							: ""}
+					</span>
+					<Pressable
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.previous")}
+						onClick={() => runFind(findQuery, false, false)}
+					>
+						<ChevronUp aria-hidden="true" />
+					</Pressable>
+					<Pressable
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.next")}
+						onClick={() => runFind(findQuery, true, false)}
+					>
+						<ChevronDown aria-hidden="true" />
+					</Pressable>
+					<Pressable
+						className="browser-panel__find-button"
+						aria-label={t("browser.find.close")}
+						onClick={closeFind}
+					>
+						<X aria-hidden="true" />
+					</Pressable>
+				</div>
+			) : null}
 			<div className="browser-panel__body flex min-h-0 flex-1 overflow-hidden">
 				<div
 					className="browser-panel__viewport relative min-h-0 flex-1 overflow-hidden"
@@ -1550,8 +1838,8 @@ export function BrowserPanelView({
 					</div>
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
 					{navState.url === "" ? (
-						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center font-mono text-xs text-passive">
-							<p>{t("browser.emptyUrl")}</p>
+						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center text-xs text-muted-foreground">
+							<p>{browserUnavailable ? t("browser.sessionEnded") : t("browser.emptyUrl")}</p>
 						</div>
 					) : null}
 					{navState.error ? (
@@ -1567,9 +1855,26 @@ export function BrowserPanelView({
 					) : null}
 				</div>
 			</div>
+			<ConfirmDialog
+				open={pendingProfileSwitch !== null}
+				title={t("browser.profile.switchTitle")}
+				description={`${t("browser.profile.switchMessage")} ${t("browser.profile.switchDetail")}`}
+				confirmLabel={t("browser.profile.switchConfirm")}
+				// The old native alert defaulted to No: a repeated Enter from the
+				// profile menu must not reload away unsaved page state.
+				initialFocus="cancel"
+				onConfirm={() => {
+					if (!pendingProfileSwitch) return;
+					setPendingProfileSwitch(null);
+					selectBrowserProfile(pendingProfileSwitch.profileId, true);
+				}}
+				onOpenChange={(open) => {
+					if (!open) setPendingProfileSwitch(null);
+				}}
+			/>
 		</div>
 	);
-}
+});
 
 function BrowserControlTooltip({
 	children,
@@ -1594,95 +1899,89 @@ function BrowserControlTooltip({
 	);
 }
 
+// A page's tab: the shared tab frame, with the page's favicon in the icon
+// slot and the ghost close button always showing at its right end. The slot
+// around it is what the strip sorts; the frame's button carries the drag
+// listeners.
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
-	onlyTab,
 	onSelect,
 	onClose,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 	selected: boolean;
-	onlyTab: boolean;
 	onSelect: (tabId: string) => void;
 	onClose: (tabId: string) => void;
 }) {
 	const { t } = useTranslation();
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
 	const label = browserTabLabel(tab.title, tab.url);
-	const closeLabel = t("browser.closeTab", { title: label.title });
+	const close = useCallback(() => onClose(tab.id), [onClose, tab.id]);
 	return (
 		<div
-			className={cn(
-				"browser-panel__tab",
-				selected && "browser-panel__tab--active",
-				isDragging && "browser-panel__tab--drag-placeholder",
-			)}
+			className={cn("browser-panel__tab", isDragging && "browser-panel__tab--drag-placeholder")}
 			data-browser-tab-id={tab.id}
 			ref={setNodeRef}
 			style={{ transform: CSS.Transform.toString(transform), transition }}
 		>
-			<BrowserControlTooltip label={label.title}>
-				<button
-					{...attributes}
-					{...listeners}
-					aria-selected={selected}
-					className="browser-panel__tab-select"
-					onClick={() => void onSelect(tab.id)}
-					role="tab"
-					tabIndex={selected ? 0 : -1}
-					type="button"
-				>
-					{tab.favicon ? (
-						<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
-					) : (
-						<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
-					)}
-					<span className="browser-panel__tab-title">{label.title}</span>
-				</button>
-			</BrowserControlTooltip>
-			<BrowserControlTooltip label={onlyTab ? t("browser.onlyTab") : closeLabel}>
-				<button
-					aria-label={closeLabel}
-					className="browser-panel__tab-close"
-					disabled={onlyTab}
-					onClick={() => onClose(tab.id)}
-					type="button"
-				>
-					<X aria-hidden="true" className="size-icon-base" />
-				</button>
-			</BrowserControlTooltip>
+			<TerminalTabFrame
+				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
+				actionPinned
+				active={selected}
+				buttonProps={{
+					...attributes,
+					...listeners,
+					"aria-selected": selected,
+					onClick: () => void onSelect(tab.id),
+					role: "tab",
+					tabIndex: selected ? 0 : -1,
+					title: label.title,
+					type: "button",
+				}}
+				icon={<BrowserTabIcon favicon={tab.favicon} />}
+				label={label.title}
+				onClose={close}
+			/>
 		</div>
 	);
 });
 
+function BrowserTabIcon({ favicon }: { favicon?: string }) {
+	return favicon ? (
+		<img alt="" className="size-icon-sm object-cover" src={favicon} />
+	) : (
+		<BrowserIcon aria-hidden="true" className="size-icon-sm" />
+	);
+}
+
+const noop = () => undefined;
+
+// The tab under the pointer while it is dragged: the same frame in its
+// dragging look, as a dragged session tab shows.
 export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 	tab,
-	onlyTab,
 }: {
 	tab: BrowserViewModel["tabs"][number];
-	onlyTab: boolean;
 }) {
+	const { t } = useTranslation();
 	const label = browserTabLabel(tab.title, tab.url);
 	return (
 		<div
 			aria-hidden="true"
 			className="browser-panel__tab browser-panel__tab--drag-overlay"
+			data-dragging=""
 			data-testid="browser-tab-drag-overlay"
+			inert
 		>
-			<div className="browser-panel__tab-select">
-				{tab.favicon ? (
-					<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
-				) : (
-					<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
-				)}
-				<span className="browser-panel__tab-title">{label.title}</span>
-			</div>
-			{onlyTab ? null : (
-				<span className="browser-panel__tab-close">
-					<X aria-hidden="true" className="size-icon-base" />
-				</span>
-			)}
+			<TerminalTabFrame
+				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={noop} />}
+				actionPinned
+				active={tab.active}
+				buttonProps={{ tabIndex: -1, type: "button" }}
+				icon={<BrowserTabIcon favicon={tab.favicon} />}
+				label={label.title}
+			/>
 		</div>
 	);
 });
@@ -1692,6 +1991,19 @@ function agentActivityLabel(activity: BrowserViewModel["agentBrowserActivity"], 
 	const action = activity?.active ? activity.action : "";
 	if (!action) return appI18n.t("browser.agentUsing");
 	return appI18n.t("browser.agentAction", { verb: browserActionVerb(action) });
+}
+
+// The daemon's refusal codes (backend/internal/browserruntime/broker.go). Name a
+// cause only for a code that identifies one; any other refusal stays generic.
+function browserRuntimeRejectedKey(code: string | undefined): MessageKey {
+	switch (code) {
+		case "BROWSER_RUNTIME_TOKEN_REJECTED":
+			return "browser.runtimeRejectedToken";
+		case "BROWSER_RUNTIME_PROTOCOL_MISMATCH":
+			return "browser.runtimeRejectedVersion";
+		default:
+			return "browser.runtimeRejected";
+	}
 }
 
 function browserActionVerb(action: string): string {
@@ -1746,6 +2058,7 @@ function getDisplayUrl(url: string): string {
 	}
 }
 
+
 function webOrigin(url: string): string | undefined {
 	try {
 		const parsed = new URL(url);
@@ -1782,7 +2095,7 @@ function BrowserSuggestionIcon({ cachedFavicon, url, viewId }: { cachedFavicon?:
 		};
 	}, [cachedFavicon, directFavicon, nativeCompositionEnabled, url, viewId]);
 	if (!favicon) {
-		return <Globe2 aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
+		return <BrowserIcon aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
 	}
 	return (
 		<img
@@ -1798,7 +2111,7 @@ function StaticPreview({ url }: { url: string }) {
 	return (
 		<div className="absolute inset-0 overflow-auto bg-background text-foreground">
 			<div className="border-b border-border bg-surface px-4 py-3">
-				<div className="text-caption font-semibold uppercase tracking-wide-md text-muted-foreground">AO Preview</div>
+				<div className="text-caption font-semibold uppercase tracking-wide-md text-muted-foreground">Orchestrator Preview</div>
 				<div className="mt-1 truncate font-mono text-xs text-accent">{url}</div>
 			</div>
 			<div className="mx-auto max-w-preview-max px-5 py-6">

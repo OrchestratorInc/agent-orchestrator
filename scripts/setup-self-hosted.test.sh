@@ -1,0 +1,595 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script="$(cd "$(dirname "$0")" && pwd)/setup-self-hosted.sh"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/pkg/resources/daemon" "$tmp/pkg/resources/acp-runtime/node/bin" \
+	"$tmp/pkg/resources/acp-runtime/node_modules/@agentclientprotocol/claude-agent-acp/dist" \
+	"$tmp/pkg/resources/tmux/bin"
+
+# Keep systemctl absent even when the test runner has it installed.
+for tool in chmod cp date dirname git gzip ln mkdir mktemp python3 readlink rm rmdir sleep tar; do
+	ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+done
+printf '%s\n' '#!/bin/sh' 'case "$1" in' \
+	'  -u) echo 1000 ;;' '  -un) echo ao ;;' 'esac' > "$tmp/bin/id"
+printf '%s\n' '#!/bin/sh' 'case "$1" in' \
+	'  -s) echo Linux ;;' '  -m) echo "${TEST_UNAME_M:-x86_64}" ;;' 'esac' > "$tmp/bin/uname"
+printf '%s\n' '#!/bin/sh' '[ "${TEST_GLIBC:-2.35}" = none ] && exit 1' 'echo "glibc ${TEST_GLIBC:-2.35}"' > "$tmp/bin/getconf"
+chmod +x "$tmp/bin/getconf"
+printf '%s\n' '#!/bin/sh' 'case "$1" in' \
+	'  status)' \
+	'    if [ -n "${TEST_AO_BLOCK_FILE:-}" ]; then' \
+	'      : > "${TEST_AO_BLOCK_FILE}.ready"' \
+	'      while [ ! -e "${TEST_AO_BLOCK_FILE}.go" ]; do /bin/sleep 0.02; done' \
+	'    fi' \
+	'    if [ "${TEST_AO_READY_AFTER_INSTALL:-}" = 1 ] && [ -L "$TEST_AO_HOST_ROOT/current" ]; then' \
+	'      TEST_AO_STATE=ready TEST_AO_EXE="$TEST_AO_HOST_ROOT/current/resources/daemon/ao"' \
+	'    fi' \
+	'    if [ -n "${TEST_AO_READY_FOR_TARGET:-}" ] && [ "$(readlink "$TEST_AO_HOST_ROOT/current")" = "$TEST_AO_READY_FOR_TARGET" ]; then' \
+	'      TEST_AO_STATE=ready TEST_AO_EXE="$TEST_AO_HOST_ROOT/current/resources/daemon/ao"' \
+	'    fi' \
+	'    printf '\''{"state":"%s","executablePath":"%s"}\n'\'' "${TEST_AO_STATE:-stopped}" "${TEST_AO_EXE:-}" ;;' \
+	'  remote-host)' \
+	'    if [ -n "${TEST_AO_TUNNEL_PAIRING:-}" ]; then' \
+	'      case "$2" in' \
+	'        enable) if [ "$TEST_AO_TUNNEL_PAIRING" = unavailable ]; then' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel unavailable: cloudflared missing\nPassword: test-secret\n"' \
+	'                elif [ "$TEST_AO_TUNNEL_PAIRING" = code ]; then' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel: starting; run status for the HTTPS address\nPairing code: stale-code\nOne device can use it, within 10 minutes.\n"' \
+	'                elif [ "$TEST_AO_TUNNEL_PAIRING" = linked ]; then' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nLinked to an Orchestrator account: its signed-in devices list this machine.\nAddress: https://h-test.useao.dev:443\nPassword: test-secret\n"' \
+	'                else' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel: starting; run status for the HTTPS address\nPassword: test-secret\n"' \
+	'                fi ;;' \
+	'        status) printf "Remote host enabled\nHost ID: h_test\nAddress: https://example.trycloudflare.com:443\nPassword: test-secret\n" ;;' \
+	'        link) [ "$3" = --help ] && echo "  --no-qr   Do not print a QR code" ;;' \
+	'        pair) [ "$TEST_AO_TUNNEL_PAIRING" = code ] && printf "Address: https://example.trycloudflare.com:443\nPairing code: fresh-code\nOne device can use it, within 10 minutes.\n" ;;' \
+	'      esac' \
+	'    fi ;;' \
+	'  daemon) printf "%s\n" "$PATH" > "$TEST_SERVICE_PATH_CAPTURE" ;;' \
+	'  version) exit 0 ;;' 'esac' > "$tmp/pkg/resources/daemon/ao"
+printf '%s\n' '#!/bin/sh' 'echo v22.0.0' > "$tmp/pkg/resources/acp-runtime/node/bin/node"
+printf '%s\n' '#!/bin/sh' 'echo tmux' > "$tmp/pkg/resources/tmux/bin/tmux"
+: > "$tmp/pkg/resources/acp-runtime/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+chmod +x "$tmp/bin/id" "$tmp/bin/uname" "$tmp/pkg/resources/daemon/ao" \
+	"$tmp/pkg/resources/acp-runtime/node/bin/node" "$tmp/pkg/resources/tmux/bin/tmux"
+
+bundle="$tmp/host.tar.gz"
+case "${1:-}" in
+	release-channels)
+		for tool in awk find shasum; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		printf '%s\n' '#!/bin/sh' 'cp -R "$TEST_RELEASE_PACKAGE" squashfs-root' > "$tmp/app.AppImage"
+		digest="$(shasum -a 256 "$tmp/app.AppImage" | awk '{print $1}')"
+		python3 - "$tmp" "$digest" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+asset = {"name": "agent-orchestrator-linux-x64.AppImage", "browser_download_url": "https://example.test/stable", "digest": "sha256:" + sys.argv[2]}
+stable = {"tag_name": "v1.0.0", "prerelease": False, "draft": False, "published_at": "2026-10-10T00:00:00Z", "assets": [asset]}
+def nightly(tag, date, url):
+    return dict(stable, tag_name=tag, prerelease=True, published_at=date, assets=[dict(asset, browser_download_url=url)])
+old = nightly("v1.0.0-nightly.old", "2026-10-07T00:00:00Z", "https://example.test/old")
+new = nightly("v1.0.0-nightly.new", "2026-10-08T00:00:00Z", "https://example.test/new")
+draft = dict(new, draft=True, published_at="2026-10-11T00:00:00Z")
+beta = dict(new, tag_name="v1.0.0-beta.1", published_at="2026-10-12T00:00:00Z")
+fixtures = {"stable": stable, "nightly": [old, stable, draft, beta, new], "empty": [stable, draft, beta],
+            "missing-asset": [dict(new, assets=[])], "missing-digest": [dict(new, assets=[dict(asset, digest=None)])],
+            "bad-digest": [dict(new, assets=[dict(asset, digest="sha256:" + "0" * 64)])]}
+for name, data in fixtures.items():
+    (root / (name + ".json")).write_text(json.dumps(data))
+PY
+		printf '%s\n' '#!/bin/sh' \
+			'while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; https://*) url="$1"; shift ;; --retry) shift 2 ;; *) shift ;; esac; done' \
+			'echo "$url" >> "$TEST_CURL_LOG"' \
+			'case "$url" in' \
+			'  */releases/latest) cp "$TEST_RELEASE_FIXTURES/stable.json" "$out" ;;' \
+			'  */releases\?per_page=100) cp "$TEST_RELEASE_FIXTURES/$TEST_RELEASE_CASE.json" "$out" ;;' \
+			'  https://example.test/*) cp "$TEST_RELEASE_FIXTURES/app.AppImage" "$out" ;;' \
+			'  *) exit 1 ;;' 'esac' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for fixture in stable nightly empty missing-asset missing-digest bad-digest; do
+			args=()
+			[[ "$fixture" == stable ]] || args+=(--nightly)
+			result=0
+			env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host-$fixture" TEST_RELEASE_PACKAGE="$tmp/pkg" \
+				TEST_RELEASE_FIXTURES="$tmp" TEST_RELEASE_CASE="$fixture" TEST_CURL_LOG="$tmp/$fixture.urls" \
+				/bin/bash "$script" "${args[@]}" --install-only > "$tmp/out" 2>&1 || result=$?
+			case "$fixture" in
+				stable|nightly)
+					[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+					[[ -d "$(readlink "$tmp/host-$fixture/current")" ]]
+					expected=stable
+					[[ "$fixture" == stable ]] || expected=new
+					grep -Fxq "https://example.test/$expected" "$tmp/$fixture.urls"
+					;;
+				*)
+					[[ "$result" != 0 && ! -e "$tmp/host-$fixture/current" ]]
+					case "$fixture" in
+						empty) grep -q 'No published nightly release' "$tmp/out" ;;
+						missing-asset|missing-digest) grep -q 'No verified release asset' "$tmp/out" ;;
+						bad-digest) grep -q 'Release SHA-256 mismatch' "$tmp/out" ;;
+					esac
+					;;
+			esac
+		done
+		;;
+	bootstrap-nightly)
+		bootstrap="${script%/*}/bootstrap-self-hosted.sh"
+		ln -s /bin/bash "$tmp/bin/bash"
+		for tool in apt-get sudo systemctl cloudflared; do
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/$tool"
+			chmod +x "$tmp/bin/$tool"
+		done
+		printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$TEST_INSTALL_ARGS"' > "$tmp/installer"
+		printf '%s\n' '#!/bin/sh' 'cp "$TEST_INSTALLER" "$4"' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for mode in stable nightly nightly-lan; do
+			args=()
+			[[ "$mode" == stable ]] || args+=(--nightly)
+			[[ "$mode" != nightly-lan ]] || args+=(--lan)
+			env PATH="$tmp/bin" TEST_INSTALLER="$tmp/installer" TEST_INSTALL_ARGS="$tmp/args" \
+				/bin/bash "$bootstrap" "${args[@]}" > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+			if [[ "$mode" == stable ]]; then
+				if grep -q -- '--nightly' "$tmp/args"; then exit 1; fi
+			else
+				grep -Fxq -- '--nightly' "$tmp/args"
+			fi
+			if [[ "$mode" == nightly-lan ]]; then
+				if grep -q -- '--tunnel' "$tmp/args"; then exit 1; fi
+			else
+				grep -Fxq -- '--tunnel' "$tmp/args"
+			fi
+		done
+		for entry in "$script" "$bootstrap"; do
+			option=--bundle
+			[[ "$entry" == "$script" ]] || option=--source-ref
+			result=0
+			/bin/bash "$entry" --nightly "$option" main > "$tmp/out" 2>&1 || result=$?
+			[[ "$result" == 2 ]]
+			grep -q 'cannot be combined' "$tmp/out"
+		done
+		;;
+	release-arm64)
+		for tool in awk find shasum; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		COPYFILE_DISABLE=1 tar -czf "$tmp/host-package.tar.gz" -C "$tmp/pkg" resources
+		digest="$(shasum -a 256 "$tmp/host-package.tar.gz" | awk '{print $1}')"
+		python3 - "$tmp" "$digest" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+appimage = {"name": "agent-orchestrator-linux-x64.AppImage", "browser_download_url": "https://example.test/x64", "digest": "sha256:" + "1" * 64}
+host = {"name": "ao-host-linux-arm64.tar.gz", "browser_download_url": "https://example.test/arm64", "digest": "sha256:" + sys.argv[2]}
+release = {"tag_name": "v1.0.0", "prerelease": False, "draft": False, "published_at": "2026-10-10T00:00:00Z"}
+(root / "arm64.json").write_text(json.dumps(dict(release, assets=[appimage, host])))
+(root / "arm64-missing.json").write_text(json.dumps(dict(release, assets=[appimage])))
+PY
+		printf '%s\n' '#!/bin/sh' \
+			'while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; https://*) url="$1"; shift ;; --retry) shift 2 ;; *) shift ;; esac; done' \
+			'echo "$url" >> "$TEST_CURL_LOG"' \
+			'case "$url" in' \
+			'  */releases/latest) cp "$TEST_RELEASE_FIXTURES/$TEST_RELEASE_CASE.json" "$out" ;;' \
+			'  https://example.test/arm64) cp "$TEST_RELEASE_FIXTURES/host-package.tar.gz" "$out" ;;' \
+			'  *) exit 1 ;;' 'esac' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for fixture in arm64 arm64-missing; do
+			result=0
+			env PATH="$tmp/bin" TEST_UNAME_M=aarch64 AO_HOST_INSTALL_DIR="$tmp/host-$fixture" \
+				TEST_RELEASE_FIXTURES="$tmp" TEST_RELEASE_CASE="$fixture" TEST_CURL_LOG="$tmp/$fixture.urls" \
+				/bin/bash "$script" --install-only > "$tmp/out" 2>&1 || result=$?
+			if [[ "$fixture" == arm64 ]]; then
+				[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+				[[ -x "$(readlink "$tmp/host-$fixture/current")/resources/daemon/ao" ]]
+				grep -Fxq https://example.test/arm64 "$tmp/$fixture.urls"
+			else
+				[[ "$result" != 0 && ! -e "$tmp/host-$fixture/current" ]]
+				grep -q 'No verified release asset: ao-host-linux-arm64.tar.gz; this release predates Linux arm64 support' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			fi
+		done
+		result=0
+		env PATH="$tmp/bin" TEST_UNAME_M=riscv64 AO_HOST_INSTALL_DIR="$tmp/host-riscv64" \
+			/bin/bash "$script" --install-only > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" == 1 ]] && grep -q 'Unsupported host platform: Linux/riscv64' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		;;
+	bootstrap-arch)
+		bootstrap="${script%/*}/bootstrap-self-hosted.sh"
+		ln -s /bin/bash "$tmp/bin/bash"
+		for tool in head sort; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		for tool in apt-get sudo systemctl cloudflared; do
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/$tool"
+			chmod +x "$tmp/bin/$tool"
+		done
+		printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$TEST_INSTALL_ARGS"' > "$tmp/installer"
+		# The installer download succeeds; a branch build stops at its first toolchain download.
+		printf '%s\n' '#!/bin/sh' 'echo "$2" >> "$TEST_CURL_LOG"' \
+			'case "$2" in https://go.dev/*|https://nodejs.org/*) exit 1 ;; esac' \
+			'cp "$TEST_INSTALLER" "$4"' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for machine in x86_64 aarch64 riscv64; do
+			run_bootstrap() {
+				env PATH="$tmp/bin" HOME="$tmp/home-$machine" TEST_UNAME_M="$machine" TEST_INSTALLER="$tmp/installer" \
+					TEST_INSTALL_ARGS="$tmp/args-$machine" TEST_CURL_LOG="$tmp/curl-$machine" \
+					/bin/bash "$bootstrap" "$@" > "$tmp/out" 2>&1
+			}
+			result=0
+			run_bootstrap || result=$?
+			if [[ "$machine" == riscv64 ]]; then
+				[[ "$result" == 1 ]] && grep -q 'supports Linux on x64 or arm64 only' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+				[[ ! -e "$tmp/args-$machine" ]]
+				continue
+			fi
+			[[ "$result" == 0 && -f "$tmp/args-$machine" ]] || { cat "$tmp/out" >&2; exit 1; }
+			go_arch=amd64
+			[[ "$machine" == aarch64 ]] && go_arch=arm64
+			result=0
+			run_bootstrap --source-ref main || result=$?
+			[[ "$result" != 0 ]]
+			grep -q "^https://go.dev/dl/go[0-9.]*\.linux-$go_arch\.tar\.gz$" "$tmp/curl-$machine" || {
+				cat "$tmp/out" "$tmp/curl-$machine" >&2; exit 1;
+			}
+		done
+		;;
+	bootstrap-dnf)
+		bootstrap="${script%/*}/bootstrap-self-hosted.sh"
+		ln -s /bin/bash "$tmp/bin/bash"
+		for tool in head sort; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		for tool in dnf systemctl; do
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/$tool"
+			chmod +x "$tmp/bin/$tool"
+		done
+		# Reads stdin for `tee`, so the piped curl mock never writes to a closed pipe.
+		printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$TEST_SUDO_LOG"' \
+			'if [ "$1" = tee ]; then while read -r _; do :; done; fi' > "$tmp/bin/sudo"
+		printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$TEST_INSTALL_ARGS"' > "$tmp/installer"
+		printf '%s\n' '#!/bin/sh' 'echo "$2" >> "$TEST_CURL_LOG"' \
+			'case "$2" in https://go.dev/*|https://nodejs.org/*) exit 1 ;; esac' \
+			'if [ "$3" = -o ]; then cp "$TEST_INSTALLER" "$4"; else echo "[repo]"; fi' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/sudo" "$tmp/bin/curl"
+		run_bootstrap() {
+			env PATH="$tmp/bin" HOME="$tmp/home" TEST_INSTALLER="$tmp/installer" TEST_INSTALL_ARGS="$tmp/args" \
+				TEST_SUDO_LOG="$tmp/sudo" TEST_CURL_LOG="$tmp/curl" TEST_GLIBC="${TEST_GLIBC:-2.35}" \
+				/bin/bash "$bootstrap" "$@" > "$tmp/out" 2>&1
+		}
+		run_bootstrap || { cat "$tmp/out" >&2; exit 1; }
+		for want in 'tee /etc/yum.repos.d/gh-cli.repo' 'dnf install -y ca-certificates gh git python3 tar' \
+			'tee /etc/yum.repos.d/cloudflared.repo' 'dnf install -y cloudflared'; do
+			grep -Fxq "$want" "$tmp/sudo" || { printf 'missing: %s\n' "$want" >&2; cat "$tmp/sudo" >&2; exit 1; }
+		done
+		! grep -q 'apt' "$tmp/sudo" || { cat "$tmp/sudo" >&2; exit 1; }
+		[[ -f "$tmp/args" ]]
+		: > "$tmp/sudo"
+		result=0
+		run_bootstrap --source-ref main || result=$?
+		[[ "$result" != 0 ]]
+		grep -Fxq 'dnf install -y gcc gcc-c++ make pkgconf-pkg-config xz' "$tmp/sudo" || { cat "$tmp/sudo" "$tmp/out" >&2; exit 1; }
+		for glibc in 2.28 none; do
+			: > "$tmp/sudo"
+			result=0
+			TEST_GLIBC="$glibc" run_bootstrap || result=$?
+			[[ "$result" == 1 && ! -s "$tmp/sudo" ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q "needs glibc 2.34 or newer.*found: ${glibc/2.28/glibc 2.28}$" "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		done
+		rm "$tmp/bin/dnf"
+		result=0
+		run_bootstrap || result=$?
+		[[ "$result" == 1 ]] && grep -q 'needs apt-get (Ubuntu, Debian) or dnf' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		;;
+	bad-tmux)
+		chmod -x "$tmp/pkg/resources/tmux/bin/tmux"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		if env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1; then
+			printf '%s\n' 'non-executable tmux was accepted' >&2; exit 1
+		fi
+		grep -q 'bundled tmux is not executable' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		;;
+	no-systemd)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		if env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1; then
+			printf '%s\n' 'default install without systemd succeeded' >&2; exit 1
+		fi
+		grep -q 'systemd user services are required' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		[[ ! -L "$tmp/host/current" ]]
+		releases=("$tmp/host/releases"/*)
+		[[ ! -e "${releases[0]}" ]]
+		;;
+	inactive-systemd)
+		printf '%s\n' '#!/bin/sh' 'exit 1' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		if env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1; then
+			printf '%s\n' 'default install without an active user service manager succeeded' >&2; exit 1
+		fi
+		grep -q 'systemd user services are unavailable' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		[[ ! -L "$tmp/host/current" ]]
+		releases=("$tmp/host/releases"/*)
+		[[ ! -e "${releases[0]}" ]]
+		;;
+	prune)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		install() {
+			env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_STATE="$1" TEST_AO_EXE="${2:-}" \
+				/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+		}
+		install stopped
+		first="$(readlink "$tmp/host/current")"
+		install stopped
+		second="$(readlink "$tmp/host/current")"
+		install ready "$first/resources/daemon/ao"
+		third="$(readlink "$tmp/host/current")"
+		[[ -d "$first" && -d "$second" && -d "$third" ]]
+		install stopped
+		fourth="$(readlink "$tmp/host/current")"
+		[[ ! -e "$first" && ! -e "$second" && -d "$third" && -d "$fourth" ]]
+		releases=("$tmp/host/releases"/*)
+		[[ ${#releases[@]} -eq 2 ]]
+		;;
+	symlinked-home)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		mkdir "$tmp/real-home"
+		ln -s "$tmp/real-home" "$tmp/home"
+		install() {
+			env HOME="$tmp/home" PATH="$tmp/bin" TEST_AO_STATE="$1" TEST_AO_EXE="${2:-}" \
+				/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+		}
+		install stopped
+		first="$(cd "$tmp/home/.ao/host/current" && pwd -P)"
+		[[ "$first" != "$tmp/home"/* ]]
+		install ready "$first/resources/daemon/ao"
+		[[ "$(cd "$tmp/home/.ao/host/current" && pwd -P)" != "$first" ]]
+		install ready "$first/resources/daemon/ao"
+		[[ -d "$first" ]]
+		install stopped
+		[[ ! -e "$first" ]]
+		releases=("$tmp/home/.ao/host/releases"/*)
+		[[ ${#releases[@]} -eq 2 ]]
+		;;
+	failed-restarts)
+		printf '%s\n' '#!/bin/sh' \
+			'case "$2" in' \
+			'  restart)' \
+			'    echo restart >> "$TEST_SYSTEMCTL_LOG"' \
+			'    if [ ! -e "$TEST_SYSTEMCTL_FAIL_ONCE" ]; then : > "$TEST_SYSTEMCTL_FAIL_ONCE"; exit 1; fi ;;' \
+			'esac' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+		good="$(readlink "$tmp/host/current")"
+		for attempt in 1 2; do
+			log="$tmp/restarts-$attempt.log"
+			if env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+				TEST_SYSTEMCTL_LOG="$log" TEST_SYSTEMCTL_FAIL_ONCE="$tmp/fail-$attempt" \
+				/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1; then
+				printf '%s\n' 'simulated service restart unexpectedly succeeded' >&2; exit 1
+			fi
+			[[ "$(readlink "$tmp/host/current")" == "$good" ]] || { printf '%s\n' 'failed restart left the new release active' >&2; exit 1; }
+			[[ "$(grep -c '^restart$' "$log")" == 2 ]] || { printf '%s\n' 'failed restart did not restart the previous service' >&2; exit 1; }
+		done
+		[[ -d "$good" ]] || { printf '%s\n' 'last working release was deleted after failed restarts' >&2; exit 1; }
+		grep -qx 'KillMode=process' "$tmp/home/.config/systemd/user/ao-self-hosted.service"
+		;;
+	failed-first-install)
+		printf '%s\n' '#!/bin/sh' \
+			'echo "$*" >> "$TEST_SYSTEMCTL_LOG"' \
+			'case "$2" in' \
+			'  enable) : > "$TEST_SYSTEMCTL_ENABLED" ;;' \
+			'  restart) exit 1 ;;' \
+			'  disable) rm "$TEST_SYSTEMCTL_ENABLED" ;;' \
+			'esac' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+			TEST_SYSTEMCTL_LOG="$tmp/systemctl.log" TEST_SYSTEMCTL_ENABLED="$tmp/unit-enabled" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" != 0 ]] || { printf '%s\n' 'failed first restart unexpectedly succeeded' >&2; exit 1; }
+		[[ ! -e "$tmp/host/current" && ! -L "$tmp/host/current" ]] || { printf '%s\n' 'failed first install left current active' >&2; exit 1; }
+		[[ ! -e "$tmp/unit-enabled" ]] || { printf '%s\n' 'failed first install left the unit enabled' >&2; exit 1; }
+		grep -Fqx -- '--user disable --now ao-self-hosted.service' "$tmp/systemctl.log" || { printf '%s\n' 'failed first install did not stop and disable the unit' >&2; exit 1; }
+		;;
+	failed-readiness)
+		printf '%s\n' '#!/bin/sh' 'if [ "$2" = restart ]; then echo restart >> "$TEST_SYSTEMCTL_LOG"; fi' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		rm "$tmp/bin/sleep"
+		printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/sleep"
+		chmod +x "$tmp/bin/sleep"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+		good="$(readlink "$tmp/host/current")"
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_HOST_ROOT="$tmp/host" \
+			TEST_AO_READY_FOR_TARGET="$good" TEST_SYSTEMCTL_LOG="$tmp/restarts.log" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" != 0 ]] || { printf '%s\n' 'unready release unexpectedly succeeded' >&2; exit 1; }
+		[[ "$(readlink "$tmp/host/current")" == "$good" ]] || { printf '%s\n' 'unready release left the new release active' >&2; exit 1; }
+		[[ "$(grep -c '^restart$' "$tmp/restarts.log")" == 2 ]] || { printf '%s\n' 'unready release did not restart the previous service' >&2; exit 1; }
+		;;
+	failed-mac-bootstrap|failed-mac-readiness)
+		rm "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac' > "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' \
+			'echo "$1" >> "$TEST_LAUNCHCTL_LOG"' \
+			'if [ "$1" = bootstrap ] && [ -n "${TEST_LAUNCHCTL_FAIL_ONCE:-}" ] && [ ! -e "$TEST_LAUNCHCTL_FAIL_ONCE" ]; then' \
+			'  : > "$TEST_LAUNCHCTL_FAIL_ONCE"; exit 1' \
+			'fi' > "$tmp/bin/launchctl"
+		chmod +x "$tmp/bin/uname" "$tmp/bin/launchctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_HOST_ROOT="$tmp/host" \
+			TEST_AO_READY_AFTER_INSTALL=1 TEST_LAUNCHCTL_LOG="$tmp/initial-launch.log" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+		good="$(readlink "$tmp/host/current")"
+		failure=()
+		args=(--bundle "$bundle")
+		plist="$tmp/home/Library/LaunchAgents/dev.aoagents.self-hosted.plist"
+		if [[ "$1" == failed-mac-bootstrap ]]; then
+			failure=(TEST_LAUNCHCTL_FAIL_ONCE="$tmp/fail-once")
+		else
+			rm "$tmp/bin/sleep"
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/sleep"
+			chmod +x "$tmp/bin/sleep"
+			args+=(--upgrade)
+			python3 -c 'import plistlib, sys; d = plistlib.load(open(sys.argv[1], "rb")); d["EnvironmentVariables"] = {"CUSTOM": "1"}; plistlib.dump(d, open(sys.argv[1], "wb"))' "$plist"
+		fi
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_HOST_ROOT="$tmp/host" \
+			TEST_AO_READY_FOR_TARGET="$good" TEST_LAUNCHCTL_LOG="$tmp/upgrade-launch.log" "${failure[@]}" \
+			/bin/bash "$script" "${args[@]}" > "$tmp/out" 2>&1 || result=$?
+		if [[ "$1" == failed-mac-readiness ]]; then
+			grep -q CUSTOM "$plist" || { printf '%s\n' 'Mac upgrade replaced the installed LaunchAgent' >&2; exit 1; }
+		fi
+		[[ "$result" != 0 ]] || { printf '%s\n' 'failed Mac upgrade unexpectedly succeeded' >&2; exit 1; }
+		[[ "$(readlink "$tmp/host/current")" == "$good" ]] || { printf '%s\n' 'failed Mac upgrade left the new release active' >&2; exit 1; }
+		[[ "$(grep -c '^bootstrap$' "$tmp/upgrade-launch.log")" == 2 ]] || { printf '%s\n' 'failed Mac upgrade did not restart the previous agent' >&2; exit 1; }
+		[[ "$(grep -c '^bootout$' "$tmp/upgrade-launch.log")" == 2 ]] || { printf '%s\n' 'failed Mac upgrade did not unload the failed agent' >&2; exit 1; }
+		;;
+	failed-mac-first)
+		rm "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac' > "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' 'echo "$1" >> "$TEST_LAUNCHCTL_LOG"' 'if [ "$1" = bootstrap ]; then exit 1; fi' > "$tmp/bin/launchctl"
+		chmod +x "$tmp/bin/uname" "$tmp/bin/launchctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_LAUNCHCTL_LOG="$tmp/launch.log" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" != 0 ]] || { printf '%s\n' 'failed first Mac install unexpectedly succeeded' >&2; exit 1; }
+		[[ ! -e "$tmp/host/current" && ! -L "$tmp/host/current" ]] || { printf '%s\n' 'failed first Mac install left current active' >&2; exit 1; }
+		[[ ! -e "$tmp/home/Library/LaunchAgents/dev.aoagents.self-hosted.plist" ]] || { printf '%s\n' 'failed first Mac install left a login agent' >&2; exit 1; }
+		[[ "$(grep -c '^bootout$' "$tmp/launch.log")" == 2 ]] || { printf '%s\n' 'failed first Mac install did not unload the failed agent' >&2; exit 1; }
+		;;
+	relative-current)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		for attempt in 1 2; do
+			env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+			if [[ "$attempt" == 1 ]]; then
+				good="$(readlink "$tmp/host/current")"
+				ln -sfn "releases/${good##*/}" "$tmp/host/current"
+			fi
+		done
+		[[ -d "$good" ]] || { printf '%s\n' 'relative current target was deleted' >&2; exit 1; }
+		second="$(readlink "$tmp/host/current")"
+		ln -sfn "./releases/${second##*/}" "$tmp/host/current"
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+		[[ -d "$second" ]] || { printf '%s\n' 'unknown current target was deleted' >&2; exit 1; }
+		;;
+	concurrent)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		block="$tmp/block"
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_BLOCK_FILE="$block" \
+			/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/first.out" 2>&1 &
+		first_pid=$!
+		for attempt in {1..100}; do
+			[[ -e "$block.ready" ]] && break
+			/bin/sleep 0.05
+		done
+		if [[ ! -e "$block.ready" ]]; then
+			: > "$block.go"
+			wait "$first_pid" || true
+			cat "$tmp/first.out" >&2
+			printf '%s\n' 'first installer did not reach status' >&2; exit 1
+		fi
+		second_status=0
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+			/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/second.out" 2>&1 || second_status=$?
+		lock_held=false
+		[[ -f "$tmp/host/.install.lock" ]] && lock_held=true
+		: > "$block.go"
+		wait "$first_pid"
+		"$lock_held" || { printf '%s\n' 'second installer removed the first installer lock' >&2; exit 1; }
+		[[ "$second_status" -ne 0 ]] || { printf '%s\n' 'concurrent installer was accepted' >&2; exit 1; }
+		grep -q 'Install lock is held' "$tmp/second.out" || { cat "$tmp/second.out" >&2; exit 1; }
+		[[ -d "$(readlink "$tmp/host/current")" ]]
+		releases=("$tmp/host/releases"/*)
+		[[ ${#releases[@]} -eq 1 ]]
+		;;
+	interrupted)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/first.out" 2>&1
+		original="$(readlink "$tmp/host/current")"
+		mkdir -p "$tmp/user-data"
+		printf '%s\n' 'keep me' > "$tmp/user-data/keep.txt"
+		block="$tmp/block"
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_BLOCK_FILE="$block" \
+			/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/interrupted.out" 2>&1 &
+		installer_pid=$!
+		for attempt in {1..100}; do
+			[[ -e "$block.ready" ]] && break
+			/bin/sleep 0.05
+		done
+		if [[ ! -e "$block.ready" ]]; then
+			: > "$block.go"
+			wait "$installer_pid" || true
+			cat "$tmp/interrupted.out" >&2
+			printf '%s\n' 'installer did not reach locked status' >&2; exit 1
+		fi
+		kill -KILL "$installer_pid"
+		wait "$installer_pid" 2>/dev/null || true
+		blocked_status=0
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/blocked-retry.out" 2>&1 || blocked_status=$?
+		[[ "$blocked_status" -ne 0 ]] || { printf '%s\n' 'retry entered while the interrupted installer child was active' >&2; exit 1; }
+		grep -q 'Install lock is held' "$tmp/blocked-retry.out" || { cat "$tmp/blocked-retry.out" >&2; exit 1; }
+		: > "$block.go"
+		recovered=false
+		for attempt in {1..100}; do
+			if env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/retry.out" 2>&1; then
+				recovered=true
+				break
+			fi
+			/bin/sleep 0.05
+		done
+		"$recovered" || { cat "$tmp/retry.out" >&2; exit 1; }
+		[[ -f "$tmp/host/.install.lock" && -d "$original" && -d "$(readlink "$tmp/host/current")" ]]
+		[[ "$(cat "$tmp/user-data/keep.txt")" == 'keep me' ]]
+		;;
+	piped)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		/bin/cat "$script" | env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+			/bin/bash -s -- --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+		[[ -d "$(readlink "$tmp/host/current")" ]]
+		;;
+	tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked)
+		printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		mode=1
+		[[ "$1" == tunnel-unavailable ]] && mode=unavailable
+		[[ "$1" == tunnel-linked ]] && mode=linked
+		[[ "$1" == tunnel-pairing-code ]] && mode=code
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+			TEST_AO_HOST_ROOT="$tmp/host" TEST_AO_READY_AFTER_INSTALL=1 TEST_AO_TUNNEL_PAIRING="$mode" \
+			/bin/bash "$script" --bundle "$bundle" --tunnel > "$tmp/out" 2>&1 || result=$?
+		if [[ "$1" == tunnel-pairing ]]; then
+			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Password: test-secret$/ { password = NR } END { exit !(address && password > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'On your laptop: Settings → Remote hosts → Add host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'The host is not linked to an Orchestrator account. To link it, run: .*remote-host link$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			TEST_SERVICE_PATH_CAPTURE="$tmp/service-path" "$tmp/host/run-daemon.sh"
+			[[ ":$(<"$tmp/service-path"):" == *":$tmp/host/current/resources/acp-runtime/node/bin:"* ]] || {
+				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;
+			}
+		elif [[ "$1" == tunnel-pairing-code ]]; then
+			# A release with pairing codes shows a code, not the password.
+			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Pairing code: fresh-code$/ { code = NR } END { exit !(address && code > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'For another, run: .*remote-host pair$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			! grep -q 'stale-code\|^Password' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		elif [[ "$1" == tunnel-linked ]]; then
+			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q '^Address: https://h-test.useao.dev:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			! grep -q 'Password\|remote-host link' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		else
+			[[ "$result" != 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'Tunnel address is not ready' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			! grep -q 'Pair this host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		fi
+		;;
+	*) printf 'Usage: %s {release-channels|bootstrap-nightly|release-arm64|bootstrap-arch|bootstrap-dnf|bad-tmux|no-systemd|inactive-systemd|prune|symlinked-home|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
+esac
+printf 'PASS %s\n' "$1"

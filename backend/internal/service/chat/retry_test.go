@@ -39,6 +39,56 @@ func turnByID(s store.ConversationSnapshot, id string) (domain.ConversationTurn,
 	return domain.ConversationTurn{}, false
 }
 
+type retryPromptErrorStore struct {
+	chatsvc.Store
+	err error
+}
+
+func (s *retryPromptErrorStore) RetryPrompt(context.Context, string, string) (domain.RetryPrompt, error) {
+	return domain.RetryPrompt{}, s.err
+}
+
+func TestRetryTurnClassifiesPromptReadErrors(t *testing.T) {
+	readFailure := errors.New("injected prompt read failure")
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"missing prompt", domain.ErrNoConversationTurn, chatsvc.ErrTurnNotRetryable},
+		{"transient read failure", readFailure, readFailure},
+		{"read deadline", context.DeadlineExceeded, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWithConversationAndStore(t, nil, func(st *store.Store) chatsvc.Store {
+				return &retryPromptErrorStore{Store: st, err: tc.err}
+			})
+			ctx := context.Background()
+			turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "retry this task", ClientMessageID: "failed-prompt-read", Origin: domain.MessageOriginHuman,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.conv.emit(ports.ChatEvent{
+				Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+				TurnState: domain.TurnStateFailed, Err: errors.New("source failed"),
+			})
+			failedTurnSnapshot(t, h, turn.ID)
+			_, retryErr := h.svc.RetryTurn(ctx, testSession, turn.ID)
+			if !errors.Is(retryErr, tc.want) {
+				t.Fatalf("RetryTurn = %v, want %v", retryErr, tc.want)
+			}
+			if !errors.Is(tc.want, chatsvc.ErrTurnNotRetryable) && errors.Is(retryErr, chatsvc.ErrTurnNotRetryable) {
+				t.Fatalf("read failure was classified as a permanent refusal: %v", retryErr)
+			}
+			if sent := h.conv.sentMessages(); len(sent) != 1 {
+				t.Fatalf("prompt read failure dispatched a retry: %+v", sent)
+			}
+		})
+	}
+}
+
 func TestRetryTurnDispatchesFailedPromptAsNewTurn(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -451,12 +501,13 @@ func TestRetrySourceRemainsConsumedWhenAttemptIsEditedOntoAnotherBranch(t *testi
 	}
 }
 
-func TestRetryTurnRefusesNonHumanPrompt(t *testing.T) {
+func TestRetryTurnResendsEventPrompt(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
+	// A review-comment relay started the turn, and the provider timed out.
 	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text:            "automated relay",
+		Text:            "address the review on #228",
 		ClientMessageID: "cm-5",
 		Origin:          domain.MessageOriginAutomation,
 	})
@@ -467,12 +518,30 @@ func TestRetryTurnRefusesNonHumanPrompt(t *testing.T) {
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: turn.ProviderTurnID,
 		TurnState:      domain.TurnStateFailed,
-		Err:            errors.New("boom"),
+		Err:            errors.New("request timed out"),
 	})
 	failedTurnSnapshot(t, h, turn.ID)
 
-	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); !errors.Is(err, chatsvc.ErrTurnNotRetryable) {
-		t.Fatalf("RetryTurn on automation-origin turn = %v, want ErrTurnNotRetryable", err)
+	retried, err := h.svc.RetryTurn(ctx, testSession, turn.ID)
+	if err != nil {
+		t.Fatalf("RetryTurn on a failed event turn: %v", err)
+	}
+	if retried.ID == "" || retried.ID == turn.ID || retried.State != domain.TurnStateRunning {
+		t.Fatalf("retried turn = %+v, want a new running turn", retried)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || sent[1].Text != "address the review on #228" {
+		t.Fatalf("provider sends = %+v, want the event prompt sent again", sent)
+	}
+	// It is still the event's prompt, not one the user typed.
+	if sent[1].Origin != domain.MessageOriginAutomation {
+		t.Fatalf("retried origin = %q, want automation", sent[1].Origin)
+	}
+
+	// A replay returns the same attempt instead of sending the event a third time.
+	again, err := h.svc.RetryTurn(ctx, testSession, turn.ID)
+	if err != nil || again.ID != retried.ID {
+		t.Fatalf("replayed RetryTurn = %+v, %v; want existing attempt %q", again, err, retried.ID)
 	}
 }
 

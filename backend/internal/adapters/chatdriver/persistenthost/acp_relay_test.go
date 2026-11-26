@@ -7,7 +7,53 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestACPRelayCapturesIndependentForkForReconnect(t *testing.T) {
+	for _, childID := range []string{"child", "", "parent"} {
+		t.Run(childID, func(t *testing.T) {
+			relay := newTestACPRelay(t)
+			provider := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"session/fork","params":{"sessionId":"parent","cwd":"/tmp"}}`+"\n"), 1)
+			result, _ := json.Marshal(map[string]any{"sessionId": childID, "configOptions": []any{}})
+			relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, provider)+`,"result":`+string(result)+`}`+"\n"), 1, true)
+			state := relay.snapshot()
+			if childID == "child" {
+				if state.SessionID != "child" || len(state.SessionResult) == 0 {
+					t.Fatalf("lost child reconnect state: %+v", state)
+				}
+			} else if state.SessionID != "" || len(state.SessionResult) != 0 {
+				t.Fatalf("malformed fork adopted parent ownership: %+v", state)
+			}
+		})
+	}
+}
+
+func TestACPRelayRetainsAvailableCommandsForReconnect(t *testing.T) {
+	relay := newTestACPRelay(t)
+	provider := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, provider)+`,"result":{"sessionId":"live"}}`+"\n"), 1, true)
+
+	update := func(session, name string) {
+		frame := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"` + session +
+			`","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"` + name + `","description":"d"}]}}}` + "\n"
+		if forwarded, retained := relayProviderFrame(t, relay, []byte(frame), 1, true); retained || len(forwarded) == 0 {
+			t.Fatalf("catalog update was not forwarded: retained=%v frame=%q", retained, forwarded)
+		}
+	}
+	update("live", "review")
+	update("live", "compact")
+	if got := string(relay.snapshot().AvailableCommands); got != `[{"name":"compact","description":"d"}]` {
+		t.Fatalf("retained catalog = %s", got)
+	}
+
+	// A catalog for a session the host no longer owns must not be handed to the
+	// controller that reattaches to the live one.
+	update("other", "stale")
+	if got := relay.snapshot().AvailableCommands; len(got) != 0 {
+		t.Fatalf("foreign catalog leaked into snapshot: %s", got)
+	}
+}
 
 func TestACPRelayReclaimsPromptAcrossAttachment(t *testing.T) {
 	relay := newTestACPRelay(t)
@@ -343,4 +389,173 @@ func frameResultString(t *testing.T, frame []byte, key string) string {
 		t.Fatalf("decode frame %q: %v", frame, err)
 	}
 	return envelope.Result[key]
+}
+
+func TestACPRelaySettlesStalledPrompt(t *testing.T) {
+	relay, promptID := startStallTestPrompt(t)
+
+	// A prompt whose adapter is still producing output never trips the watchdog.
+	update, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-live","update":{"agent_message_chunk":{"content":{"type":"text","text":"working"}}}}}`+"\n"), 1, true)
+	if !strings.Contains(string(update), ACPEventIDMetaKey) {
+		t.Fatalf("prompt update not journaled: %s", update)
+	}
+	if frame := failStalled(t, relay, 1, time.Now()).client; frame != nil {
+		t.Fatalf("fresh prompt tripped the stall watchdog: %s", frame)
+	}
+
+	stalledAt := time.Now().Add(2 * promptStallTimeout)
+	first := failStalled(t, relay, 1, stalledAt)
+	// The adapter still owns the turn; the watchdog cancels it and keeps the
+	// prompt active until the adapter answers or the grace runs out.
+	if want := `{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session-live"}}` + "\n"; string(first.provider) != want {
+		t.Fatalf("adapter frame = %s, want %s", first.provider, want)
+	}
+	if first.client != nil || !relay.snapshot().ActivePrompt {
+		t.Fatalf("watchdog settled the prompt before the adapter answered the cancel: %+v", first)
+	}
+	if frames := failStalled(t, relay, 1, stalledAt.Add(promptStallCancelGrace/2)); frames.client != nil || frames.provider != nil {
+		t.Fatalf("watchdog acted again inside the cancel grace: %+v", frames)
+	}
+
+	// A wedged adapter never answers: the relay settles the prompt without it.
+	response := failStalled(t, relay, 1, stalledAt.Add(promptStallCancelGrace)).client
+	if response == nil || frameID(t, response) != promptID {
+		t.Fatalf("stalled prompt response = %s", response)
+	}
+	var failure struct {
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response, &failure); err != nil {
+		t.Fatalf("decode stalled response %q: %v", response, err)
+	}
+	if failure.Error.Code != -32603 || !strings.Contains(failure.Error.Message, "provider stopped responding") {
+		t.Fatalf("stalled response error = %+v", failure.Error)
+	}
+	// An adapter that ignored the cancel may still emit, so the failure must not
+	// carry the marker that releases the controller's queue.
+	if strings.Contains(string(response), ACPPromptStalledDataKey) {
+		t.Fatalf("wedged-adapter failure carries the %s marker: %s", ACPPromptStalledDataKey, response)
+	}
+
+	state := relay.snapshot()
+	if state.ActivePrompt || state.PendingResultEventID == "" {
+		t.Fatalf("post-stall state = %+v", state)
+	}
+	replay := relayReplayFrames(t, relay)
+	if len(replay) == 0 || !strings.Contains(string(replay[len(replay)-1]), ACPPromptResultMethod) {
+		t.Fatalf("stall completion missing from replay: %d frames", len(replay))
+	}
+
+	// The adapter's own answer to the failed prompt arrives late. It must not
+	// reach the controller under the relay's provider id.
+	if late, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+promptID+`,"result":{"stopReason":"cancelled"}}`+"\n"), 1, true); len(late) != 0 {
+		t.Fatalf("late adapter response leaked: %s", late)
+	}
+
+	// The turn is terminal: the watchdog must not fire again, and once the
+	// controller acknowledges the synthetic completion, the session accepts a
+	// new prompt instead of refusing it as still-active.
+	if frame := failStalled(t, relay, 1, time.Now().Add(2*promptStallTimeout)).client; frame != nil {
+		t.Fatalf("settled stall fired twice: %s", frame)
+	}
+	ack, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "method": ACPPromptAckMethod,
+		"params": map[string]string{"eventId": state.PendingResultEventID},
+	})
+	if frame := relayClientFrame(t, relay, append(ack, '\n'), 1); len(frame) != 0 {
+		t.Fatalf("private ack leaked to provider: %s", frame)
+	}
+	if provider := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"session-live","prompt":[]}}`+"\n"), 1); len(provider) == 0 {
+		t.Fatalf("session refused a new prompt after the stall settlement")
+	}
+}
+
+// A restarted daemon adopts the running turn and waits for its completion, so
+// the watchdog must still cover a prompt an earlier controller sent.
+func TestACPRelaySettlesStalledPromptAfterReattach(t *testing.T) {
+	relay, _ := startStallTestPrompt(t)
+
+	stalledAt := time.Now().Add(2 * promptStallTimeout)
+	failStalled(t, relay, 2, stalledAt)
+	frame := failStalled(t, relay, 2, stalledAt.Add(promptStallCancelGrace)).client
+	if !strings.Contains(string(frame), ACPPromptResultMethod) || !strings.Contains(string(frame), "provider stopped responding") {
+		t.Fatalf("reattached controller got %s, want the private prompt result carrying the failure", frame)
+	}
+}
+
+// A turn parked on a permission or elicitation is silent by design; the
+// daemon waits up to approvalWait for a permission, and without limit for a
+// question.
+func TestACPRelayStallWatchdogWaitsOnTheClient(t *testing.T) {
+	relay, _ := startStallTestPrompt(t)
+	permission, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"sessionId":"session-live","toolCall":{"toolCallId":"t1"},"options":[]}}`+"\n"), 1, true)
+
+	if frame := failStalled(t, relay, 1, time.Now().Add(2*promptStallTimeout)).client; frame != nil {
+		t.Fatalf("watchdog failed a prompt waiting on the user: %s", frame)
+	}
+
+	// The user answers long after the request: the adapter resumes from here.
+	relay.lastActivityAt = time.Now().Add(-time.Hour)
+	relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, permission)+`,"result":{"outcome":{"outcome":"selected","optionId":"allow"}}}`+"\n"), 1)
+	if frame := failStalled(t, relay, 1, time.Now().Add(promptStallTimeout/2)).client; frame != nil {
+		t.Fatalf("watchdog counted the wait for the user as adapter silence: %s", frame)
+	}
+	if frames := failStalled(t, relay, 1, time.Now().Add(2*promptStallTimeout)); frames.provider == nil {
+		t.Fatal("watchdog ignored adapter silence after the user answered")
+	}
+}
+
+// The adapter keeps emitting from the cancelled turn until it answers. That
+// output belongs to the stalled prompt, and the answer ends it with the stall
+// failure, so the next prompt starts on a quiet adapter.
+func TestACPRelayStalledPromptEndsWhenTheAdapterAnswersTheCancel(t *testing.T) {
+	relay, promptID := startStallTestPrompt(t)
+	stalledAt := time.Now().Add(2 * promptStallTimeout)
+	if first := failStalled(t, relay, 1, stalledAt); len(first.provider) == 0 {
+		t.Fatal("watchdog did not cancel the stalled prompt")
+	}
+
+	late, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-live","update":{"agent_message_chunk":{"content":{"type":"text","text":"tail of the old turn"}}}}}`+"\n"), 1, true)
+	if !strings.Contains(string(late), ACPEventIDMetaKey) || !relay.snapshot().ActivePrompt {
+		t.Fatalf("output after the cancel left the stalled prompt: active=%v frame=%s", relay.snapshot().ActivePrompt, late)
+	}
+
+	// The answer arrives as a plain cancelled result; the turn still ends as a stall.
+	answer, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+promptID+`,"result":{"stopReason":"cancelled"}}`+"\n"), 1, true)
+	if !strings.Contains(string(answer), `"`+ACPPromptStalledDataKey+`":true`) || strings.Contains(string(answer), "cancelled") {
+		t.Fatalf("answer to the cancelled prompt = %s, want the stall failure", answer)
+	}
+	state := relay.snapshot()
+	if state.ActivePrompt || state.PendingResultEventID == "" {
+		t.Fatalf("post-answer state = %+v", state)
+	}
+	if frames := failStalled(t, relay, 1, stalledAt.Add(2*promptStallCancelGrace)); frames.client != nil || frames.provider != nil {
+		t.Fatalf("watchdog acted after the adapter answered: %+v", frames)
+	}
+	if len(relay.abandonedPrompts) != 0 {
+		t.Fatalf("an answered prompt must not be marked abandoned: %v", relay.abandonedPrompts)
+	}
+}
+
+func startStallTestPrompt(t *testing.T) (*acpRelay, string) {
+	t.Helper()
+	relay := newTestACPRelay(t)
+	providerInit := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, providerInit)+`,"result":{"protocolVersion":1}}`+"\n"), 1, true)
+	providerSession := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, providerSession)+`,"result":{"sessionId":"session-live"}}`+"\n"), 1, true)
+	providerPrompt := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"session-live","prompt":[]}}`+"\n"), 1)
+	return relay, frameID(t, providerPrompt)
+}
+
+func failStalled(t *testing.T, relay *acpRelay, generation uint64, now time.Time) acpClientFrames {
+	t.Helper()
+	frames, err := relay.failStalledPrompt(context.Background(), generation, true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return frames
 }

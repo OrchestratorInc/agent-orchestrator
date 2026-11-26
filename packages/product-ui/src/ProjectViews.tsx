@@ -296,39 +296,19 @@ export type ProjectSetupAlert = {
 };
 
 export function ProjectSetupFormView({
-	agentControls,
-	agents,
+	actions,
 	alert,
 	canSubmit,
 	intakeControl,
-	isBusy,
-	onCancel,
 	onSubmit,
 	setupNotice,
-	submitLabel,
-	submitClassName,
-	cancelLabel,
 }: {
-	agentControls: { worker: ReactNode; orchestrator: ReactNode };
-	agents: {
-		cacheMessage?: string;
-		error?: string | null;
-		loading: boolean;
-		loadingMessage: string;
-		onRetry?: () => void;
-		retrying?: boolean;
-		retryLabel?: string;
-	};
+	actions: ReactNode;
 	alert?: ProjectSetupAlert | null;
 	canSubmit: boolean;
 	intakeControl: ReactNode;
-	isBusy: boolean;
-	onCancel: () => void;
 	onSubmit: () => void;
 	setupNotice?: { message: string; warning?: string | null } | null;
-	submitLabel: string;
-	submitClassName?: string;
-	cancelLabel?: string;
 }) {
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
@@ -336,42 +316,6 @@ export function ProjectSetupFormView({
 	};
 	return (
 		<form className="space-y-5 p-4" onSubmit={submit}>
-			<div className="grid gap-4 sm:grid-cols-2">
-				{agentControls.worker}
-				{agentControls.orchestrator}
-			</div>
-
-			{agents.loading && (
-				<p className="text-xs leading-row text-[var(--color-text-agents-sheet-description)]" role="status">
-					{agents.loadingMessage}
-				</p>
-			)}
-
-			{agents.cacheMessage ? (
-				<p className="text-xs leading-row text-[var(--color-text-agents-sheet-description)]">
-					{agents.cacheMessage}
-				</p>
-			) : null}
-
-			{agents.error && (
-				<div
-					className="flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs leading-row text-destructive"
-					role="alert"
-				>
-					<span>{agents.error}</span>
-					{agents.onRetry && (
-						<button
-							type="button"
-							className="shrink-0 rounded text-[var(--color-text-agents-sheet-title)] underline-offset-2 hover:underline disabled:pointer-events-none disabled:opacity-50"
-							disabled={agents.retrying}
-							onClick={agents.onRetry}
-						>
-							{agents.retryLabel}
-						</button>
-					)}
-				</div>
-			)}
-
 			<div>{intakeControl}</div>
 
 			{setupNotice && (
@@ -406,28 +350,7 @@ export function ProjectSetupFormView({
 				</div>
 			)}
 
-			<div className="flex items-center justify-end gap-3 pt-1">
-				{cancelLabel ? (
-					<button
-						className="settings-footer-button disabled:pointer-events-none disabled:opacity-50"
-						type="button"
-						disabled={isBusy}
-						onClick={onCancel}
-					>
-						{cancelLabel}
-					</button>
-				) : null}
-				<button
-					className={cn(
-						"settings-footer-button settings-footer-button-primary disabled:pointer-events-none disabled:opacity-50",
-						submitClassName,
-					)}
-					type="submit"
-					disabled={!canSubmit}
-				>
-					{submitLabel}
-				</button>
-			</div>
+			<div className="flex items-center justify-end gap-3 pt-1">{actions}</div>
 		</form>
 	);
 }
@@ -446,7 +369,7 @@ export function ProjectSettingsSection({
 	return (
 		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
 			{!titleHidden && (
-				<h2 className="px-3 text-xs font-medium leading-4 text-settings-muted">
+				<h2 className="px-(--settings-row-inset) text-sm font-medium leading-5 text-foreground">
 					{title}
 				</h2>
 			)}
@@ -487,19 +410,23 @@ export function ProjectSettingsRow({
 }
 
 export function ProjectSettingsInputRow({
+	describedBy,
 	editIcon,
 	editLabel,
 	icon,
 	id,
+	invalid,
 	label,
 	onChange,
 	placeholder,
 	value,
 }: {
+	describedBy?: string;
 	editIcon?: ReactNode;
 	editLabel: string;
 	icon?: ReactNode;
 	id: string;
+	invalid?: boolean;
 	label: string;
 	onChange: (value: string) => void;
 	placeholder?: string;
@@ -533,6 +460,8 @@ export function ProjectSettingsInputRow({
 					ref={inputRef}
 					id={id}
 					aria-label={label}
+					aria-describedby={describedBy}
+					aria-invalid={invalid || undefined}
 					className="settings-inline-edit-input"
 					value={value}
 					onChange={(event) => onChange(event.target.value)}
@@ -545,6 +474,7 @@ export function ProjectSettingsInputRow({
 					type="button"
 					className="settings-inline-edit-trigger"
 					aria-label={editLabel}
+					aria-describedby={describedBy}
 					onClick={() => setEditing(true)}
 				>
 					<span className="settings-row-value" title={value || placeholder}>
@@ -596,6 +526,7 @@ export function ProjectGeneralSettingsView({
 	labels,
 	onDisplayNameChange,
 	project,
+	showTitle = false,
 }: {
 	displayName: string;
 	externalLink?: ProjectExternalLink;
@@ -612,6 +543,7 @@ export function ProjectGeneralSettingsView({
 		editName: string;
 	};
 	onDisplayNameChange: (value: string) => void;
+	showTitle?: boolean;
 	project: {
 		id: string;
 		kindLabel: string;
@@ -624,7 +556,7 @@ export function ProjectGeneralSettingsView({
 }) {
 	return (
 		<>
-			<ProjectSettingsSection title={labels.title} titleHidden grouped>
+			<ProjectSettingsSection title={labels.title} titleHidden={!showTitle} grouped>
 				<ProjectSettingsInputRow
 					editIcon={icons?.edit}
 					editLabel={labels.editName}
@@ -634,8 +566,6 @@ export function ProjectGeneralSettingsView({
 					value={displayName}
 					onChange={onDisplayNameChange}
 				/>
-				<ProjectSettingsValueRow icon={icons?.id} label={labels.id} value={project.id} />
-				<ProjectSettingsValueRow icon={icons?.kind} label={labels.kind} value={project.kindLabel} />
 				<ProjectSettingsValueRow externalLink={externalLink} href={project.pathHref} icon={icons?.path} label={labels.path} value={project.path} />
 				<ProjectSettingsValueRow externalLink={externalLink} href={project.repoHref} icon={icons?.repo} label={labels.repo} value={project.repo || "—"} />
 			</ProjectSettingsSection>

@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,28 +34,26 @@ func TestCORS(t *testing.T) {
 			wantACAO:   "app://renderer",
 		},
 		{
-			// Not in the allowlist — trusted because loopback-served content
-			// can already reach the daemon directly (dev/preview servers on
-			// arbitrary ports).
-			name:       "loopback origin allowed without an allowlist entry",
+			// A local web server is not an authenticated AO renderer.
+			name:       "loopback origin rejected without an allowlist entry",
 			method:     http.MethodGet,
 			headers:    map[string]string{"Origin": "http://localhost:5181"},
-			wantStatus: http.StatusOK,
-			wantACAO:   "http://localhost:5181",
+			wantStatus: http.StatusForbidden,
+			wantACAO:   "",
 		},
 		{
-			name:       "loopback IP origin allowed",
+			name:       "loopback IP origin rejected",
 			method:     http.MethodGet,
 			headers:    map[string]string{"Origin": "http://127.0.0.1:8080"},
-			wantStatus: http.StatusOK,
-			wantACAO:   "http://127.0.0.1:8080",
+			wantStatus: http.StatusForbidden,
+			wantACAO:   "",
 		},
 		{
-			name:       "isolated localhost preview origin allowed",
+			name:       "isolated localhost preview origin rejected",
 			method:     http.MethodGet,
 			headers:    map[string]string{"Origin": "http://ao-preview.mfxs2mi.localhost:5181"},
-			wantStatus: http.StatusOK,
-			wantACAO:   "http://ao-preview.mfxs2mi.localhost:5181",
+			wantStatus: http.StatusForbidden,
+			wantACAO:   "",
 		},
 		{
 			// localhost in the host position of a non-loopback origin must not
@@ -213,6 +212,112 @@ func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T)
 	}
 }
 
+// TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers keeps workspace
+// previews, which corsMiddleware admits as loopback content, from driving the
+// desktop through Cua Driver or turning on agent computer use.
+func TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) {
+	cfg := config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}
+	router := newTestRouter(cfg, discardLogger(), nil)
+	const preview = "http://ao-preview.hostile.localhost:17018"
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		origin     string
+		preflight  bool
+		wantStatus int
+		wantACAO   string
+	}{
+		{
+			name:       "preview cannot call a tool",
+			method:     http.MethodPost,
+			path:       "/api/v1/computer-use/call",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "preview preflight for a tool call is refused",
+			method:     http.MethodOptions,
+			path:       "/api/v1/computer-use/call",
+			origin:     preview,
+			preflight:  true,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "preview cannot read status",
+			method:     http.MethodGet,
+			path:       "/api/v1/computer-use/status",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "preview cannot turn on agent computer use",
+			method:     http.MethodPatch,
+			path:       "/api/v1/settings/computer-use",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "packaged renderer can call a tool",
+			method:     http.MethodPost,
+			path:       "/api/v1/computer-use/call",
+			origin:     "app://renderer",
+			wantStatus: http.StatusNotImplemented,
+			wantACAO:   "app://renderer",
+		},
+		{
+			name:       "packaged renderer preflight is answered",
+			method:     http.MethodOptions,
+			path:       "/api/v1/computer-use/call",
+			origin:     "app://renderer",
+			preflight:  true,
+			wantStatus: http.StatusNoContent,
+			wantACAO:   "app://renderer",
+		},
+		{
+			name:       "configured development renderer can read status",
+			method:     http.MethodGet,
+			path:       "/api/v1/computer-use/status",
+			origin:     "http://localhost:5173",
+			wantStatus: http.StatusNotImplemented,
+			wantACAO:   "http://localhost:5173",
+		},
+		{
+			name:       "native caller without origin can call a tool",
+			method:     http.MethodPost,
+			path:       "/api/v1/computer-use/call",
+			wantStatus: http.StatusNotImplemented,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(`{"tool":"list_apps"}`))
+			req.Header.Set("Content-Type", "application/json")
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.preflight {
+				req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+				req.Header.Set("Access-Control-Request-Headers", "content-type")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			body := response.Body.String()
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantStatus, body)
+			}
+			if got := response.Header().Get("Access-Control-Allow-Origin"); got != tt.wantACAO {
+				t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, tt.wantACAO)
+			}
+			if tt.wantStatus == http.StatusForbidden && !strings.Contains(body, `"code":"ORIGIN_FORBIDDEN"`) {
+				t.Errorf("forbidden response = %s, want ORIGIN_FORBIDDEN", body)
+			}
+		})
+	}
+}
+
 // TestCORSPreflightHeaders pins the preflight grant shape: methods, echoed
 // request headers, max-age, and the private-network opt-in.
 func TestCORSPreflightHeaders(t *testing.T) {
@@ -248,6 +353,92 @@ func TestCORSPreflightHeaders(t *testing.T) {
 	} {
 		if got := resp.Header.Get(header); got != want {
 			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+}
+
+func TestUILoginRequiresConfiguredRendererOrigin(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/agents/codex/auth/operations",
+		"/api/v1/agents/codex/auth/operations/login-1",
+		"/api/v1/agents/claude-code/auth/operations",
+		"/api/v1/agents/claude-code/auth/operations/login-1",
+		"/api/v1/agents/opencode-v2/auth/operations",
+		"/api/v1/agents/goose/auth/operations/login-1/actions",
+		"/api/v1/agents/claude-code/auth/operations/login-1/code",
+	} {
+		for _, origin := range []string{"app://renderer", "http://localhost:5173", "http://localhost", "http://ao-preview.hostile.localhost:5181", "null", ""} {
+			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+				r := httptest.NewRequest(method, path, nil)
+				if origin != "" {
+					r.Header.Set("Origin", origin)
+				}
+				w := httptest.NewRecorder()
+				rendererOriginMiddleware([]string{"app://renderer", "http://localhost:5173"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(w, r)
+				want := http.StatusForbidden
+				if origin == "" || origin == "app://renderer" || origin == "http://localhost:5173" {
+					want = http.StatusNoContent
+				}
+				if w.Code != want {
+					t.Fatalf("%s %s origin=%q: status=%d want=%d", method, path, origin, w.Code, want)
+				}
+			}
+		}
+	}
+}
+
+func TestAgentAccountsAllowPairedMobileOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		path      string
+		origin    string
+		lanBearer bool
+		want      int
+	}{
+		{"/api/v1/agents/accounts", "http://localhost", true, http.StatusNoContent},
+		{"/api/v1/agents/accounts/sessions/s1", "http://localhost", true, http.StatusNoContent},
+		{"/api/v1/agents/accounts", "http://localhost", false, http.StatusForbidden},
+		{"/api/v1/agents/accounts", "http://ao-preview.hostile.localhost:5181", true, http.StatusForbidden},
+		{"/api/v1/agents/codex/accounts", "http://localhost", true, http.StatusForbidden},
+		{"/api/v1/agents/claude-code/auth/operations", "http://localhost", true, http.StatusForbidden},
+	} {
+		r := httptest.NewRequest(http.MethodPost, tc.path, nil)
+		r.Header.Set("Origin", tc.origin)
+		if tc.lanBearer {
+			r = r.WithContext(context.WithValue(r.Context(), lanBearerContextKey{}, true))
+		}
+		w := httptest.NewRecorder()
+		rendererOriginMiddleware([]string{"app://renderer"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s origin=%q lanBearer=%v: status=%d want=%d", tc.path, tc.origin, tc.lanBearer, w.Code, tc.want)
+		}
+	}
+}
+
+func TestRenderDocumentNavigationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		method, path, origin string
+		want                 int
+	}{
+		{"GET", "/api/v1/sessions/s1/renders/r1", "", 204},
+		{"HEAD", "/api/v1/sessions/s1/renders/r1?source=1", "", 204},
+		{"POST", "/api/v1/sessions/s1/renders/r1", "", 403},
+		{"GET", "/api/v1/sessions/s1/renders/check", "", 403},
+		{"GET", "/api/v1/sessions/s1/renders/r1/artifact", "", 403},
+		{"GET", "/api/v1/sessions/s1/workspace/file/blob", "", 403},
+		{"GET", "/api/v1/sessions/s1/renders/r1", "null", 403},
+		{"GET", "/api/v1/sessions/s1/renders/r1", "http://evil.localhost", 403},
+	} {
+		for _, site := range []string{"cross-site", "none"} {
+			r := httptest.NewRequest(tc.method, tc.path, nil)
+			r.Header.Set("Sec-Fetch-Site", site)
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			w := httptest.NewRecorder()
+			corsMiddleware([]string{"app://renderer"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Errorf("%s %s origin=%q site=%s: got %d want %d", tc.method, tc.path, tc.origin, site, w.Code, tc.want)
+			}
 		}
 	}
 }

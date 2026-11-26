@@ -3,6 +3,7 @@ package conpty
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -63,7 +64,7 @@ func TestProbeFencedRuntimeRegistryMalformedIsUnknown(t *testing.T) {
 func TestRegistryResolutionHonorsCallerCancellation(t *testing.T) {
 	isolateRegistry(t)
 	spawnCalls := 0
-	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string) (string, int, error) {
+	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, HostOptions) (string, int, error) {
 		spawnCalls++
 		return "127.0.0.1:1", livePID(), nil
 	}})
@@ -94,7 +95,7 @@ func TestCreateAndDestroyPassCallerContextToRegistryMutations(t *testing.T) {
 	isolateRegistry(t)
 	type contextKey struct{}
 	ctx := context.WithValue(context.Background(), contextKey{}, "registry-mutation")
-	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string) (string, int, error) {
+	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, HostOptions) (string, int, error) {
 		return "127.0.0.1:1", livePID(), nil
 	}})
 	rt.killHost = func(string) error { return nil }
@@ -145,7 +146,7 @@ func TestProbeFencedRuntimeGenerationMismatchIsUnknown(t *testing.T) {
 func TestPartialCreateCleanupFailureReturnsRuntimeEffectEvidence(t *testing.T) {
 	isolateRegistry(t)
 	createErr := errors.New("spawn response lost")
-	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string) (string, int, error) {
+	rt := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, HostOptions) (string, int, error) {
 		return "127.0.0.1:1", livePID(), createErr
 	}})
 	rt.killHost = func(string) error { return errors.New("cleanup denied") }
@@ -234,10 +235,20 @@ func TestRuntimeRejectsStyledOutputFromARecoveredLegacyHost(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close() }()
+		// A legacy host ignores MsgControlReq; record the request after it.
 		header := make([]byte, 5)
-		if _, readErr := io.ReadFull(conn, header); readErr != nil {
-			serverDone <- readErr
-			return
+		for {
+			if _, readErr := io.ReadFull(conn, header); readErr != nil {
+				serverDone <- readErr
+				return
+			}
+			if _, readErr := io.CopyN(io.Discard, conn, int64(binary.BigEndian.Uint32(header[1:]))); readErr != nil {
+				serverDone <- readErr
+				return
+			}
+			if header[0] != MsgControlReq {
+				break
+			}
 		}
 		requestType <- header[0]
 		payload := []byte(fmt.Sprintf(`{"alive":true,"pid":%d}`, livePID()))
@@ -338,7 +349,7 @@ func (h *inProcHost) cleanup(t *testing.T) {
 // The returned map maps sessionID -> *inProcHost for test inspection.
 func fakeSpawnerFor(t *testing.T, hosts map[string]*inProcHost, fakePID int) hostSpawner {
 	t.Helper()
-	return func(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string) (string, int, error) {
+	return func(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string, _ HostOptions) (string, int, error) {
 		h := startInProcHost(t, sessionID, fakePID)
 		if hosts != nil {
 			hosts[sessionID] = h
@@ -478,7 +489,7 @@ func TestCreate_InvalidIDErrors(t *testing.T) {
 	rt := New(Options{Spawner: fakeSpawnerFor(t, nil, livePID())})
 	ctx := context.Background()
 
-	for _, bad := range []string{"", "has space", "has/slash", "has.dot"} {
+	for _, bad := range []string{"", "has space", "has/slash", ".leading", "trailing.", "has..gap"} {
 		_, err := rt.Create(ctx, ports.RuntimeConfig{
 			SessionID:     domain.SessionID(bad),
 			WorkspacePath: "/tmp/w",
@@ -486,6 +497,35 @@ func TestCreate_InvalidIDErrors(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatalf("Create(%q): expected error for invalid id, got nil", bad)
+		}
+	}
+}
+
+func TestDottedSessionAndReviewerHandlesRestoreWithoutCollision(t *testing.T) {
+	isolateRegistry(t)
+	hosts := map[string]*inProcHost{}
+	rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
+	ctx := context.Background()
+	ids := []string{"memron.ai-2", "memron-ai-2", "review-memron.ai-2"}
+	for _, id := range ids {
+		handle, err := rt.Create(ctx, ports.RuntimeConfig{
+			SessionID: domain.SessionID(id), WorkspacePath: t.TempDir(), Argv: []string{"agent"},
+		})
+		if err != nil {
+			t.Fatalf("Create(%q): %v", id, err)
+		}
+		if handle.ID != id {
+			t.Fatalf("Create(%q) handle = %q", id, handle.ID)
+		}
+		t.Cleanup(func() { hosts[id].cleanup(t) })
+	}
+	// A new adapter has no in-memory sessions and must resolve each exact handle
+	// through the durable registry, including the reviewer pane.
+	restored := New(Options{})
+	for _, id := range ids {
+		alive, err := restored.IsAlive(ctx, ports.RuntimeHandle{ID: id})
+		if err != nil || !alive {
+			t.Fatalf("restored IsAlive(%q) = %v, %v", id, alive, err)
 		}
 	}
 }

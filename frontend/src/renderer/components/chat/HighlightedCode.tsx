@@ -12,9 +12,9 @@
  * about how it is framed is.
  */
 
-import { memo, useEffect, useReducer, type ReactNode } from "react";
-import type { Root, RootContent } from "hast";
-import { highlight, highlightSync, type GrammarName } from "../../lib/code-highlight";
+import { memo, useMemo, type ReactNode } from "react";
+import type { ElementContent, RootContent } from "hast";
+import { highlightSync, type CodeLine, type GrammarName } from "../../lib/code-highlight";
 // The token colours live with the engine rather than with one caller: they are
 // scoped under `.chat-code`/`.markdown-code`, so anything rendering these class
 // names has to be inside one of those containers and has to have loaded this sheet.
@@ -29,71 +29,57 @@ import "./code-theme.css";
 export const HighlightedCode = memo(function HighlightedCode({
 	code,
 	language,
-	streaming,
 }: {
 	code: string;
-	/** Undefined renders plain monospace and loads no grammar at all. */
+	/** Undefined renders plain monospace. */
 	language?: GrammarName;
-	/** Text still arriving. A block that changes per delta is not worth tokenizing. */
-	streaming?: boolean;
 }) {
-	const tokens = useHighlighted(code, language, Boolean(streaming));
-	return <>{tokens ? renderTokens(tokens.children) : code}</>;
+	const lines = useMemo(() => {
+		const tree = language ? highlightSync(code, language) : undefined;
+		return tree ? tokenLines(tree.children).map((tokens) => ({ tokens, signature: JSON.stringify(tokens) })) : undefined;
+	}, [code, language]);
+	return lines ? <>{lines.map((line, index) => <HighlightedLine key={index} {...line} />)}</> : <>{code}</>;
 });
 
-/**
- * The token tree for a settled block, as soon as one can be had.
- *
- * Two paths, because the flash between them is the whole problem: a cached or
- * already-warm block is highlighted in its first render, and only a cold one renders
- * plain for a beat while the grammars load. The cache is the state — the async path
- * writes into it and this re-reads it, so nothing here can hold a tree that disagrees
- * with the one the next block will get.
- */
-export function useHighlighted(
-	code: string,
-	language: GrammarName | undefined,
-	streaming: boolean,
-): Root | undefined {
-	// A streaming fence has no settled content: its text changes on every delta, so
-	// tokenizing it would re-parse per delta and fill the cache with keys nothing
-	// will ever read again.
-	const wanted = Boolean(language) && !streaming;
-	const tokens = wanted ? highlightSync(code, language!) : undefined;
-	const [, reread] = useReducer((count: number) => count + 1, 0);
-
-	useEffect(() => {
-		if (!wanted || tokens) return;
-		let live = true;
-		void highlight(code, language!).then(() => {
-			if (live) reread();
-		});
-		return () => {
-			live = false;
-		};
-	}, [code, language, wanted, tokens]);
-
-	return tokens;
+// Split the tree, preserving nested scopes on each line. Putting ancestor and
+// child classes on the same span changes CSS inheritance and selector matching.
+function tokenLines(nodes: readonly RootContent[]): ElementContent[][] {
+	const split = (children: readonly RootContent[]): ElementContent[][] => {
+		const lines: ElementContent[][] = [[]];
+		for (const node of children) {
+			if (node.type === "element") {
+				const pieces = split(node.children);
+				for (let i = 0; i < pieces.length; i++) {
+					if (i > 0) lines.push([]);
+					if (pieces[i].length > 0) lines[lines.length - 1].push({ ...node, children: pieces[i] });
+				}
+			} else if (node.type === "text") {
+				const pieces = node.value.split("\n");
+				for (let i = 0; i < pieces.length; i++) {
+					if (i > 0) lines.push([]);
+					const text = pieces[i] + (i < pieces.length - 1 ? "\n" : "");
+					if (text) lines[lines.length - 1].push({ type: "text", value: text });
+				}
+			}
+		}
+		return lines;
+	};
+	const lines = split(nodes);
+	if (lines[lines.length - 1].length === 0) lines.pop();
+	return lines;
 }
 
-/**
- * highlight.js output as React elements rather than as an HTML string.
- *
- * `dangerouslySetInnerHTML` is the usual way to do this and it is exactly what the
- * chat surface rules out: the escaping guarantee would then depend on the highlighter
- * rather than on there being no HTML path at all. The tree is only spans carrying
- * class names, so walking it is cheap. Index keys are correct here — the tree is
- * rebuilt whole or read from cache, never patched.
- */
-export function renderTokens(nodes: readonly RootContent[]): ReactNode {
+function renderTokenNodes(nodes: readonly ElementContent[]): ReactNode {
 	return nodes.map((node, index) => {
 		if (node.type === "text") return node.value;
 		if (node.type !== "element") return null;
 		const className = node.properties.className;
-		return (
-			<span key={index} className={Array.isArray(className) ? className.join(" ") : undefined}>
-				{renderTokens(node.children)}
-			</span>
-		);
+		return <span key={index} className={Array.isArray(className) ? className.join(" ") : undefined}>
+			{renderTokenNodes(node.children)}
+		</span>;
 	});
 }
+
+const HighlightedLine = memo(function HighlightedLine({ tokens }: CodeLine) {
+	return <span>{renderTokenNodes(tokens)}</span>;
+}, (previous, next) => previous.signature === next.signature);

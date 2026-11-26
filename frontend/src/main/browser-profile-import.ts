@@ -8,6 +8,7 @@ import {
 	readFile,
 	readdir,
 	realpath,
+	rename,
 	rmdir,
 	rm,
 	stat,
@@ -24,6 +25,7 @@ import {
 	BROWSER_IMPORT_MAX_SOURCE_PROFILES,
 	type BrowserImportCookieSupportReason,
 	type BrowserImportDiscovery,
+	type BrowserImportDiscoveryRequest,
 	type BrowserImportProgress,
 	type BrowserImportRequest,
 	type BrowserImportResult,
@@ -79,6 +81,11 @@ type InternalSource = {
 	descriptor: BrowserDescriptor;
 	root: string;
 	profiles: InternalSourceProfile[];
+};
+
+type InternalDiscoveryOptions = {
+	sourceId?: string;
+	includeProtectedSource?: boolean;
 };
 
 type ImportedCookie = CookiesSetDetails & {
@@ -296,12 +303,16 @@ function isAccessDenied(error: unknown): boolean {
 
 function safariAccessError(): Error {
 	return Object.assign(new Error(
-		"AO couldn't access Safari's data. In System Settings, open Privacy & Security > Full Disk Access, "
-		+ "allow AO, then restart AO and try the import again.",
+		"Orchestrator couldn't access Safari's data. In System Settings, open Privacy & Security > Full Disk Access, "
+		+ "allow Orchestrator, then restart Orchestrator and try the import again.",
 	), { code: "EACCES" });
 }
 
 async function readSmallJSON(file: string, maxBytes: number): Promise<unknown> {
+	return JSON.parse(await readSmallText(file, maxBytes));
+}
+
+async function readSmallText(file: string, maxBytes: number): Promise<string> {
 	const metadata = await lstat(file);
 	if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > maxBytes) {
 		throw new Error("Browser metadata exceeds the size limit.");
@@ -311,7 +322,15 @@ async function readSmallJSON(file: string, maxBytes: number): Promise<unknown> {
 	try {
 		const opened = await handle.stat();
 		if (!opened.isFile() || opened.size > maxBytes) throw new Error("Browser metadata exceeds the size limit.");
-		return JSON.parse(await handle.readFile("utf8"));
+		const bytes = Buffer.alloc(maxBytes + 1);
+		let length = 0;
+		while (length < bytes.length) {
+			const { bytesRead } = await handle.read(bytes, length, bytes.length - length, null);
+			if (bytesRead === 0) break;
+			length += bytesRead;
+		}
+		if (length > maxBytes) throw new Error("Browser metadata exceeds the size limit.");
+		return bytes.subarray(0, length).toString("utf8");
 	} finally {
 		await handle.close().catch(() => undefined);
 	}
@@ -357,19 +376,67 @@ async function discoverChromiumProfiles(descriptor: BrowserDescriptor, root: str
 }
 
 async function discoverFirefoxProfiles(descriptor: BrowserDescriptor, root: string): Promise<InternalSourceProfile[]> {
+	const registered = new Map<string, { name: string; default: boolean }>();
+	const installDefaults = new Set<string>();
+	try {
+		const text = await readSmallText(path.join(root, "profiles.ini"), LOCAL_STATE_MAX_BYTES);
+		const sections: Array<{ section: string; values: Map<string, string> }> = [];
+		let current: typeof sections[number] | undefined;
+		for (const raw of text.split(/\r?\n/)) {
+			const line = raw.trim();
+			if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+			if (line.startsWith("[")) {
+				current = /^\[[^\[\]]+\]$/.test(line) ? { section: line.slice(1, -1), values: new Map() } : undefined;
+				if (current) sections.push(current);
+				continue;
+			}
+			const equals = line.indexOf("=");
+			if (current && equals > 0) current.values.set(line.slice(0, equals).trim(), line.slice(equals + 1).trim());
+		}
+		for (const { section, values } of sections) {
+			if (/^Install[0-9a-f]+$/i.test(section)) {
+				const directory = values.get("Default");
+				if (!directory) continue;
+				const candidate = path.resolve(root, directory);
+				const profileRoot = await existingRealDirectory(candidate);
+				if (profileRoot && contained(root, profileRoot)) installDefaults.add(profileRoot);
+				continue;
+			}
+			if (!/^Profile\d+$/.test(section)) continue;
+			const name = values.get("Name");
+			const directory = values.get("Path");
+			const relative = values.get("IsRelative");
+			if (!name || !directory || !["0", "1"].includes(relative ?? "")) continue;
+			if (path.isAbsolute(directory) !== (relative === "0")) continue;
+			const candidate = path.resolve(root, directory);
+			const profileRoot = await existingRealDirectory(candidate);
+			if (!profileRoot || !contained(root, profileRoot)) continue;
+			registered.set(profileRoot, { name, default: values.get("Default") === "1" });
+		}
+	} catch {
+		registered.clear();
+		installDefaults.clear();
+	}
 	const profileParent = (await existingRealDirectory(path.join(root, "Profiles"))) ?? root;
-	const entries = await readdir(profileParent, { withFileTypes: true }).catch(() => []);
+	const entries = contained(root, profileParent) ? await readdir(profileParent, { withFileTypes: true }).catch(() => []) : [];
+	const directories = new Set([
+		...registered.keys(),
+		...entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(profileParent, entry.name)),
+	]);
 	const profiles: InternalSourceProfile[] = [];
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		const profileRoot = await existingRealDirectory(path.join(profileParent, entry.name));
+	for (const directory of directories) {
+		const profileRoot = await existingRealDirectory(directory);
 		if (!profileRoot || !contained(root, profileRoot) || !(await hasImportableDatabase(profileRoot, "firefox"))) continue;
-		const dot = entry.name.indexOf(".");
-		const suffix = dot >= 0 ? entry.name.slice(dot + 1) : entry.name;
+		const basename = path.basename(profileRoot);
+		const dot = basename.indexOf(".");
+		const suffix = dot >= 0 ? basename.slice(dot + 1) : basename;
+		const metadata = registered.get(profileRoot);
 		profiles.push({
 			id: opaqueSourceId(`${descriptor.id}:profile`, profileRoot),
-			name: suffix || entry.name,
-			default: /default|release/i.test(suffix),
+			name: metadata?.name ?? (suffix || basename),
+			default: installDefaults.size > 0
+				? installDefaults.has(profileRoot)
+				: metadata?.default ?? /default|release/i.test(suffix),
 			root: profileRoot,
 		});
 	}
@@ -541,18 +608,47 @@ export class BrowserProfileImportService {
 		return path.join(this.stagingBase(), this.stagingInstanceId);
 	}
 
-	async discover(): Promise<BrowserImportDiscovery> {
+	async discover(request: BrowserImportDiscoveryRequest = {}): Promise<BrowserImportDiscovery> {
 		const warnings: NonNullable<BrowserImportDiscovery["warnings"]> = [];
-		const sources = await this.discoverInternal(warnings);
+		const sourceId = typeof request.sourceId === "string" && SOURCE_ID_PATTERN.test(request.sourceId)
+			? request.sourceId
+			: undefined;
+		const sources = await this.discoverInternal(warnings, {
+			...(sourceId ? { sourceId, includeProtectedSource: true } : {}),
+		});
 		return { sources: sources.map((source) => source.public), ...(warnings.length ? { warnings } : {}) };
 	}
 
-	private async discoverInternal(warnings: NonNullable<BrowserImportDiscovery["warnings"]> = []): Promise<InternalSource[]> {
+	private async discoverInternal(
+		warnings: NonNullable<BrowserImportDiscovery["warnings"]> = [],
+		options: InternalDiscoveryOptions = {},
+	): Promise<InternalSource[]> {
 		const sources: InternalSource[] = [];
 		for (const descriptor of DESCRIPTORS) {
 			for (const candidate of descriptor.roots(this.context)) {
 				const root = await existingRealDirectory(candidate);
 				if (!root) continue;
+				const publicSourceId = opaqueSourceId(`${descriptor.id}:source`, root);
+				if (options.sourceId && publicSourceId !== options.sourceId) continue;
+				const capability = cookieCapability(descriptor.family, this.context.platform);
+				if (descriptor.family === "safari" && !options.includeProtectedSource) {
+					sources.push({
+						descriptor,
+						root,
+						profiles: [],
+						public: {
+							id: publicSourceId,
+							name: descriptor.name,
+							family: descriptor.family,
+							profiles: [],
+							profilesDeferred: true,
+							cookieSupport: capability.support,
+							cookieSupportReason: capability.reason,
+							historySupport: true,
+						},
+					});
+					break;
+				}
 				let profiles: InternalSourceProfile[];
 				try {
 					profiles = descriptor.family === "chromium"
@@ -566,13 +662,12 @@ export class BrowserProfileImportService {
 					continue;
 				}
 				if (profiles.length === 0) continue;
-				const capability = cookieCapability(descriptor.family, this.context.platform);
 				sources.push({
 					descriptor,
 					root,
 					profiles,
 					public: {
-						id: opaqueSourceId(`${descriptor.id}:source`, root),
+						id: publicSourceId,
 						name: descriptor.name,
 						family: descriptor.family,
 						profiles: profiles.map(({ id, name, default: isDefault }) => ({ id, name, default: isDefault })),
@@ -616,7 +711,12 @@ export class BrowserProfileImportService {
 		let sourceRoots: string[] = [];
 		try {
 			throwIfImportAborted(signal);
-			const sources = await this.discoverInternal();
+			const sourceId = isRecord(rawRequest) && typeof rawRequest.sourceId === "string" && SOURCE_ID_PATTERN.test(rawRequest.sourceId)
+				? rawRequest.sourceId
+				: undefined;
+			const sources = await this.discoverInternal(undefined, {
+				...(sourceId ? { sourceId, includeProtectedSource: true } : {}),
+			});
 			throwIfImportAborted(signal);
 			sourceRoots = sources.map((source) => source.root);
 			const request = validateRequest(rawRequest, sources, this.options.profileStore.profiles);
@@ -666,7 +766,7 @@ export class BrowserProfileImportService {
 			for (const [index, group] of groups.entries()) {
 				throwIfImportAborted(signal);
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index, total: groups.length });
-				const profile = await this.options.profileStore.createProfile(group.name);
+				const profile = await this.options.profileStore.createProfile(group.name, { claimDefault: false });
 				created.push(profile);
 				throwIfImportAborted(signal);
 				const history = group.data.flatMap((data) => data.history);
@@ -703,6 +803,8 @@ export class BrowserProfileImportService {
 				});
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index + 1, total: groups.length });
 			}
+			// Only a committed import may become the default; see createProfile.
+			if (created[0]) await this.options.profileStore.claimDefaultIfFirst(created[0].id);
 			return { sourceName: source.public.name, entries: results };
 		} catch (error) {
 			const cleanupFailures: string[] = [];
@@ -825,7 +927,7 @@ async function readProfileData(
 			const outcome = source.descriptor.family === "safari"
 				? readSafariCookies(await readFile(await snapshotFile(cookieDatabase, profile.root, staging, budget)), now)
 				: source.descriptor.family === "chromium"
-					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget), decryptor, now)
+					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget, source.public.name), decryptor, now)
 					: readFirefoxCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget), now);
 			if (!outcome) {
 				warnings.push({ code: "cookie-database-missing" });
@@ -843,7 +945,13 @@ async function readProfileData(
 		if (!historyDatabase) {
 			warnings.push({ code: "history-database-missing" });
 		} else {
-			const snapshot = await snapshotSQLite(historyDatabase, profile.root, staging, budget);
+			const snapshot = await snapshotSQLite(
+				historyDatabase,
+				profile.root,
+				staging,
+				budget,
+				source.descriptor.family === "chromium" ? source.public.name : undefined,
+			);
 			const outcome = source.descriptor.family === "chromium"
 				? readChromiumHistory(snapshot)
 				: source.descriptor.family === "firefox"
@@ -909,37 +1017,150 @@ async function snapshotSQLite(
 	profileRoot: string,
 	staging: string,
 	budget: SourceBudget,
+	browserName?: string,
 ): Promise<string> {
 	const destination = path.join(staging, `${randomUUID()}-${path.basename(database)}`);
 	const canonical = await preflightContainedFile(database, profileRoot, SOURCE_FILE_MAX_BYTES, budget);
-	for (const suffix of ["-wal", "-shm"]) {
+	const sidecars: string[] = [];
+	for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
 		try {
 			await preflightContainedFile(`${database}${suffix}`, profileRoot, SOURCE_SIDECAR_MAX_BYTES, budget);
+			sidecars.push(suffix);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 	}
-	const source = new Database(canonical, { readonly: true, fileMustExist: true, timeout: 5_000 });
+	const source = new Database(canonical, { readonly: true, fileMustExist: true, timeout: 1_000 });
+	const temporarySnapshots: string[] = [];
+	let backupError: unknown;
 	try {
 		source.pragma("query_only = ON");
-		await source.backup(destination);
-		const output = await stat(destination).catch((error) => {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				throw new Error("AO's temporary browser data snapshot disappeared before it could be read. Restart AO and retry the import.");
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			await mkdir(staging, { recursive: true, mode: 0o700 });
+			const temporary = path.join(staging, `${randomUUID()}-${path.basename(database)}.tmp`);
+			temporarySnapshots.push(temporary);
+			try {
+				await source.backup(temporary);
+			} catch (error) {
+				await rm(temporary, { force: true }).catch(() => undefined);
+				backupError = error;
+				// A running Chromium browser holds its databases in exclusive
+				// locking mode, so retrying the backup cannot help.
+				break;
 			}
-			throw error;
-		});
-		if (!output.isFile() || output.size > SOURCE_FILE_MAX_BYTES + SOURCE_SIDECAR_MAX_BYTES) {
-			throw new Error("Browser source database exceeds the snapshot size limit.");
+			const output = await stat(temporary).catch((error) => {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+				throw error;
+			});
+			if (!output) {
+				await rm(temporary, { force: true }).catch(() => undefined);
+				continue;
+			}
+			if (!output.isFile() || output.size > SOURCE_FILE_MAX_BYTES + SOURCE_SIDECAR_MAX_BYTES) {
+				throw new Error("Browser source database exceeds the snapshot size limit.");
+			}
+			await chmod(temporary, 0o600);
+			await rename(temporary, destination);
+			return destination;
 		}
-		await chmod(destination, 0o600);
-		return destination;
+		// A locked database makes backup() reject, or resolve without writing
+		// anything. Either way the source files can still be copied.
+		try {
+			await copySQLiteSnapshot(canonical, sidecars, staging, destination);
+			return destination;
+		} catch {
+			// Report the original failure below.
+		}
+		if (browserName) throw temporarySnapshotError(browserName);
+		if (backupError !== undefined) throw backupError;
+		throw new Error("Orchestrator's temporary browser data snapshot disappeared before it could be read. Restart Orchestrator and retry the import.");
 	} catch (error) {
 		await rm(destination, { force: true }).catch(() => undefined);
 		throw error;
 	} finally {
+		for (const temporary of temporarySnapshots) {
+			await rm(temporary, { force: true }).catch(() => undefined);
+		}
 		source.close();
 	}
+}
+
+const SQLITE_SIDECAR_SUFFIXES = ["-journal", "-wal", "-shm"] as const;
+const SQLITE_COPY_ATTEMPTS = 3;
+
+// Copies a database that SQLite cannot open in place. Chromium keeps History
+// and Cookies in exclusive locking mode while the browser runs, but the files
+// themselves stay readable. The copy carries the rollback journal or WAL so
+// SQLite can recover a consistent state from it, never touching the source.
+async function copySQLiteSnapshot(
+	canonical: string,
+	sidecars: string[],
+	staging: string,
+	destination: string,
+): Promise<void> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < SQLITE_COPY_ATTEMPTS; attempt += 1) {
+		const directory = path.join(staging, randomUUID());
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		const copy = path.join(directory, "source.sqlite");
+		try {
+			await copyRegularFile(canonical, copy, SOURCE_FILE_MAX_BYTES);
+			// The -shm index is rebuilt from the WAL; a stale copy only misleads.
+			for (const suffix of sidecars.filter((candidate) => candidate !== "-shm")) {
+				try {
+					await copyRegularFile(`${canonical}${suffix}`, `${copy}${suffix}`, SOURCE_SIDECAR_MAX_BYTES);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+			}
+			// Read-write on the private copy so a hot journal or WAL is replayed.
+			const database = new Database(copy, { fileMustExist: true, timeout: 1_000 });
+			try {
+				const check = database.prepare("PRAGMA quick_check").get() as { quick_check?: unknown } | undefined;
+				if (check?.quick_check !== "ok") throw new Error("Browser database copy is inconsistent.");
+				await database.backup(destination);
+			} finally {
+				database.close();
+			}
+			await chmod(destination, 0o600);
+			return;
+		} catch (error) {
+			lastError = error;
+			await rm(destination, { force: true }).catch(() => undefined);
+		} finally {
+			await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+		}
+	}
+	throw lastError;
+}
+
+async function copyRegularFile(source: string, destination: string, maxBytes: number): Promise<void> {
+	const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+	const input = await open(source, constants.O_RDONLY | noFollow);
+	try {
+		const opened = await input.stat();
+		if (!opened.isFile() || opened.size > maxBytes) {
+			throw new Error("Browser source file exceeds the snapshot size limit.");
+		}
+		const bytes = await input.readFile();
+		if (bytes.length > maxBytes) throw new Error("Browser source file exceeds the snapshot size limit.");
+		const output = await open(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+		try {
+			await output.writeFile(bytes);
+		} finally {
+			await output.close();
+		}
+	} finally {
+		await input.close();
+	}
+}
+
+function temporarySnapshotError(browserName: string): Error {
+	return new Error(
+		`Orchestrator couldn't create a temporary copy of ${browserName}'s profile database. `
+		+ `Fully close ${browserName}, including background processes, then retry the import. `
+		+ "If this keeps happening, restart Orchestrator and try again.",
+	);
 }
 
 async function preflightContainedFile(
@@ -1152,6 +1373,15 @@ function readNullTerminatedUTF8(record: Buffer, offset: number): string {
 	return new TextDecoder("utf-8", { fatal: true }).decode(record.subarray(offset, end));
 }
 
+// Bot managers bind these to the browser that earned them. Replayed from
+// another browser they read as stolen, and sites keep challenging. They are
+// issued again on the next visit, so nothing is lost by leaving them behind.
+const ANTI_BOT_COOKIE = /^(cf_clearance|__cf_bm|_cfuvid|cf_chl_.*|datadome|_abck|ak_bmsc|bm_sz|bm_sv|bm_mi|reese84|incap_ses_.*|visid_incap_.*|nlbi_.*|_px\d?|_pxvid|_pxhd)$/;
+
+export function isAntiBotCookie(name: string): boolean {
+	return ANTI_BOT_COOKIE.test(name);
+}
+
 function normalizeCookieRows(
 	rows: Array<Record<string, unknown>>,
 	now: Date,
@@ -1159,6 +1389,7 @@ function normalizeCookieRows(
 	const cookies: ImportedCookie[] = [];
 	let expired = 0;
 	let invalid = 0;
+	let antiBot = 0;
 	for (const row of rows) {
 		const domain = stringValue(row.domain).trim().toLowerCase();
 		const hostname = domain.replace(/^\.+/, "");
@@ -1170,6 +1401,10 @@ function normalizeCookieRows(
 		const value = stringValue(row.value);
 		if (!name) {
 			invalid += 1;
+			continue;
+		}
+		if (isAntiBotCookie(name)) {
+			antiBot += 1;
 			continue;
 		}
 		const expirationDate = typeof row.expires === "number" && Number.isFinite(row.expires) && row.expires > 0 ? row.expires : undefined;
@@ -1186,7 +1421,9 @@ function normalizeCookieRows(
 				url,
 				name,
 				value,
-				domain,
+				// Passing domain turns a host-only cookie into a domain cookie.
+				// Electron also rejects __Host- cookies when domain is set.
+				...(domain.startsWith(".") ? { domain } : {}),
 				path: cookiePath,
 				secure,
 				httpOnly: row.httpOnly === true,
@@ -1201,18 +1438,19 @@ function normalizeCookieRows(
 	const warnings: BrowserImportWarning[] = [];
 	if (expired > 0) warnings.push({ code: "expired-cookies-skipped", count: expired });
 	if (invalid > 0) warnings.push({ code: "invalid-cookies-skipped", count: invalid });
-	return { cookies, skipped: expired + invalid, warnings };
+	return { cookies, skipped: expired + invalid + antiBot, warnings };
 }
 
 function readFirefoxHistory(file: string): { history: BrowserHistoryEntry[]; warnings: BrowserImportWarning[] } {
 	return withReadOnlyDatabase(file, (database) => {
 		requireTable(database, "moz_places", "The selected Firefox profile does not contain supported history data.");
-		const eligible = countRows(database, "moz_places", "WHERE url LIKE 'http%'");
+		const historyFilter = "WHERE url LIKE 'http%' AND last_visit_date IS NOT NULL";
+		const eligible = countRows(database, "moz_places", historyFilter);
 		const truncated = Math.max(0, eligible - BROWSER_IMPORT_MAX_HISTORY_ENTRIES);
 		const history = (database.prepare(`
 			SELECT url, title, visit_count, last_visit_date
 			FROM moz_places
-			WHERE url LIKE 'http%'
+			${historyFilter}
 			ORDER BY last_visit_date DESC, rowid DESC
 			LIMIT ${BROWSER_IMPORT_MAX_HISTORY_ENTRIES}
 		`).all() as Record<string, unknown>[]).flatMap((row) => {

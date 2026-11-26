@@ -24,7 +24,8 @@ export type BrowserProfile = {
 };
 
 export type BrowserProfileBinding = {
-	profileId: BrowserProfileId;
+	/** `null` is an explicit, durable choice of Temporary — distinct from no binding at all. */
+	profileId: BrowserProfileId | null;
 	updatedAt: string;
 };
 
@@ -32,6 +33,13 @@ export type BrowserProfileRegistry = {
 	version: typeof BROWSER_PROFILE_REGISTRY_VERSION;
 	profiles: BrowserProfile[];
 	bindings: Record<string, BrowserProfileBinding>;
+	/** Profile new sessions fall back to when they have no session-specific binding. */
+	defaultProfileId: BrowserProfileId | null;
+	/**
+	 * Set once the oldest profile has been offered as the default. Registries
+	 * saved without it get that default on load, so a later unset stays unset.
+	 */
+	defaultProfileSeeded: true;
 };
 
 export type BrowserProfileStoreError = {
@@ -41,6 +49,7 @@ export type BrowserProfileStoreError = {
 
 export type BrowserProfileListState = {
 	profiles: BrowserProfile[];
+	defaultProfileId: BrowserProfileId | null;
 	error?: BrowserProfileStoreError;
 };
 
@@ -48,9 +57,19 @@ export type BrowserProfileViewState = {
 	viewId: string;
 	profileId: BrowserProfileId | null;
 	profileName?: string;
-	/** True when the selection is the per-worker memory-only profile. */
+	/** True when the selection is the per-worker temporary profile. */
 	temporary: boolean;
 };
+
+/** Live browsers affected by deleting a named profile; no paths or partitions. */
+export type BrowserProfileUsage = {
+	viewId: string;
+	sessionId: string;
+	blocker: "agent-active" | "switching" | null;
+};
+
+export type BrowserProfileUsageResult = { sessions: BrowserProfileUsage[]; error?: string };
+export type BrowserProfileDeleteResult = { error?: string };
 
 export type BrowserMenuBounds = {
 	x: number;
@@ -62,11 +81,6 @@ export type BrowserMenuBounds = {
 export type BrowserProfileMenuLabels = {
 	temporary: string;
 	manage: string;
-	switchTitle: string;
-	switchMessage: string;
-	switchDetail: string;
-	cancel: string;
-	confirm: string;
 };
 
 export type BrowserProfileMenuInput = {
@@ -78,7 +92,30 @@ export type BrowserProfileMenuInput = {
 export type BrowserProfileSelectInput = {
 	viewId: string;
 	profileId: BrowserProfileId | null;
-	labels: BrowserProfileMenuLabels;
+	/**
+	 * Set after the user accepted the in-app reload warning. Without it, a
+	 * switch on a page that has navigated is not made; the main process asks
+	 * the shell to confirm instead.
+	 */
+	confirmed?: boolean;
+};
+
+/** Main → shell: the switch reloads a loaded page, so ask before making it. */
+export type BrowserProfileSwitchConfirmRequest = {
+	viewId: string;
+	profileId: BrowserProfileId | null;
+};
+
+/** Main → shell: the switch was attempted and failed. */
+export type BrowserProfileSwitchFailure = {
+	viewId: string;
+	message: string;
+	/**
+	 * Set when the switch was refused rather than attempted, so the shell can
+	 * explain it in the user's language. `agent-active`: an agent began using
+	 * this browser while the confirmation was open.
+	 */
+	reason?: "agent-active";
 };
 
 export function isBrowserProfileId(value: unknown): value is BrowserProfileId {

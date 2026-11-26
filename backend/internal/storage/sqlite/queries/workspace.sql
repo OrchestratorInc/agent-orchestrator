@@ -18,26 +18,32 @@ WHERE project_id = ?
 ORDER BY name;
 
 -- name: UpsertSessionWorktree :exec
-INSERT INTO session_worktrees (session_id, repo_name, branch, base_sha, base_ref, worktree_path, preserved_ref, state)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO session_worktrees (session_id, repo_name, branch, base_sha, base_ref, creation_sha, worktree_path, preserved_ref, state)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (session_id, repo_name) DO UPDATE SET
     branch = excluded.branch,
     base_sha = excluded.base_sha,
     base_ref = excluded.base_ref,
+    creation_sha = excluded.creation_sha,
     worktree_path = excluded.worktree_path,
     preserved_ref = excluded.preserved_ref,
     state = excluded.state;
 
 -- name: GetSessionWorktree :one
-SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref
+SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref, creation_sha
 FROM session_worktrees
 WHERE session_id = ? AND repo_name = ?;
 
 -- name: ListSessionWorktrees :many
-SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref
+SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref, creation_sha
 FROM session_worktrees
 WHERE session_id = ?
 ORDER BY CASE WHEN repo_name = '__root__' THEN 0 ELSE 1 END, repo_name;
 
 -- name: DeleteSessionWorktrees :exec
 DELETE FROM session_worktrees WHERE session_id = ?;
+
+-- name: SetSessionWorktreeBranch :exec
+-- A task's background branch rename records the branch each repository holds.
+UPDATE session_worktrees SET branch = sqlc.arg(branch)
+WHERE session_id = sqlc.arg(session_id) AND repo_name = sqlc.arg(repo_name);

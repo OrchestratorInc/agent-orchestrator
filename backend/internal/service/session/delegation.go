@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -27,14 +28,20 @@ const (
 // may be empty to open an idle worker that the user can instruct later. Empty
 // RequestedAgent means the spawn uses the project's worker-agent default.
 type DelegateTaskInput struct {
-	ProjectID      domain.ProjectID
-	Brief          string
-	RequestedAgent domain.AgentHarness
-	Model          string
-	Effort         *string
-	ApprovalMode   domain.PermissionMode
-	RequestedMode  domain.SessionMode
-	Attachments    []ports.SpawnAttachment
+	ProjectID         domain.ProjectID
+	Brief             string
+	BaseBranch        string
+	RequestedAgent    domain.AgentHarness
+	Branch            string
+	Model             string
+	Effort            *string
+	ApprovalMode      domain.PermissionMode
+	RequestedMode     domain.SessionMode
+	AccountID         string
+	Attachments       []ports.SpawnAttachment
+	TaskPreparation   domain.TaskPreparationToken
+	ClientRequestID   string
+	ClientRequestHash string
 }
 
 // DelegateTaskOutcome identifies the spawned worker. OrchestratorID remains
@@ -44,11 +51,33 @@ type DelegateTaskOutcome struct {
 	WorkerID       domain.SessionID
 }
 
+// PrepareTask starts the reversible worktree-only half of task creation.
+func (s *Service) PrepareTask(ctx context.Context, projectID domain.ProjectID) (string, error) {
+	project, err := s.requireProject(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	token, err := s.manager.PrepareTaskWorkspace(ctx, project)
+	return string(token), err
+}
+
+// CancelTaskPreparation releases an unclaimed speculative worktree. Unknown or
+// already-claimed tokens are intentionally idempotent.
+func (s *Service) CancelTaskPreparation(ctx context.Context, token string) error {
+	return s.manager.CancelTaskPreparation(ctx, domain.TaskPreparationToken(token))
+}
+
 // DelegateTask spawns the worker directly, matching `ao spawn`, with a
-// provisional display name derived from the task brief. AO then best-effort
-// refines that title through a short-lived call to the worker's resolved harness.
+// provisional display name derived from the task brief. Git tasks finalize
+// title and workspace names during provisioning; Scratch titles refine after spawn.
 func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (DelegateTaskOutcome, error) {
-	if _, err := s.requireProject(ctx, in.ProjectID); err != nil {
+	if rec, found, err := s.replayClientRequest(ctx, in.ClientRequestID, in.ClientRequestHash); err != nil {
+		return DelegateTaskOutcome{}, err
+	} else if found {
+		return DelegateTaskOutcome{WorkerID: rec.ID}, nil
+	}
+	project, err := s.requireProject(ctx, in.ProjectID)
+	if err != nil {
 		return DelegateTaskOutcome{}, err
 	}
 	if in.RequestedAgent != "" && !in.RequestedAgent.IsKnown() {
@@ -57,18 +86,29 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	if in.RequestedMode != "" && !in.RequestedMode.Valid() {
 		return DelegateTaskOutcome{}, apierr.Invalid("INVALID_SESSION_MODE", "mode must be chat or tui", nil)
 	}
+	if in.Branch != "" && project.Kind.WithDefault() != domain.ProjectKindScratch {
+		if err := s.requireUnusedTaskBranch(ctx, project, in.Branch); err != nil {
+			return DelegateTaskOutcome{}, err
+		}
+	}
 	prompt := in.Brief
 	if strings.TrimSpace(prompt) == "" {
 		prompt = ""
 	}
 
 	effort, effortOverride := optionalTuningValue(in.Effort)
-	worker, _, _, err := s.manager.Spawn(ctx, ports.SpawnConfig{
-		ProjectID:   in.ProjectID,
-		Kind:        domain.KindWorker,
-		Harness:     in.RequestedAgent,
-		Prompt:      prompt,
-		DisplayName: delegatedTaskDisplayName(in.Brief),
+	worker, _, _, err := s.spawnWithTelemetry(ctx, ports.SpawnConfig{
+		ClientRequestID:   in.ClientRequestID,
+		ClientRequestHash: in.ClientRequestHash,
+		ProjectID:         in.ProjectID,
+		Kind:              domain.KindWorker,
+		Harness:           in.RequestedAgent,
+		BaseBranch:        in.BaseBranch,
+		Branch:            in.Branch,
+		RequireNewBranch:  in.Branch != "",
+		Prompt:            prompt,
+		DisplayName:       delegatedTaskDisplayName(in.Brief),
+		NameFromPrompt:    prompt != "" && in.Branch == "" && project.Kind.WithDefault() != domain.ProjectKindScratch,
 		AgentConfig: ports.AgentConfig{
 			Model:       strings.TrimSpace(in.Model),
 			Effort:      effort,
@@ -76,8 +116,14 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		},
 		EffortOverride: effortOverride,
 		RequestedMode:  in.RequestedMode,
+		AgentAccountID: in.AccountID,
 		Attachments:    in.Attachments,
-	})
+		// This is the desktop's new-task path: there is a UI waiting to navigate
+		// to the session. A Chat worker answers as soon as it is addressable and
+		// finishes starting in the background.
+		Async:           true,
+		TaskPreparation: in.TaskPreparation,
+	}, project)
 	if err != nil {
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)
 	}
@@ -85,10 +131,37 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	// The worker spawn is the commit point. Background title
 	// generation must never hold the new-task response open. A promptless worker
 	// stays idle with its provisional title until the user supplies instructions.
-	if prompt != "" {
+	if prompt != "" && project.Kind.WithDefault() == domain.ProjectKindScratch && !worker.ClientRequestCommitted {
 		s.refineDelegatedTaskTitleInBackground(worker.ID, in)
 	}
 	return DelegateTaskOutcome{WorkerID: worker.ID}, nil
+}
+
+func (s *Service) requireUnusedTaskBranch(ctx context.Context, project domain.ProjectRecord, branch string) error {
+	paths := []string{project.Path}
+	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
+		repos, err := s.store.ListWorkspaceRepos(ctx, project.ID)
+		if err != nil {
+			return err
+		}
+		for _, repo := range repos {
+			if repo.GitStatus.WithDefault() == domain.GitStatusReady {
+				paths = append(paths, filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath)))
+			}
+		}
+	}
+	for _, path := range paths {
+		refs, err := gitWorkspaceOutput(ctx, path, "for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/")
+		if err != nil {
+			return fmt.Errorf("check task branch in %q: %w", path, err)
+		}
+		for _, ref := range strings.Fields(refs) {
+			if ref == "refs/heads/"+branch || strings.HasPrefix(ref, "refs/remotes/") && strings.HasSuffix(ref, "/"+branch) {
+				return apierr.Conflict("BRANCH_ALREADY_EXISTS", "Choose a branch name that does not already exist locally or on a remote", nil)
+			}
+		}
+	}
+	return nil
 }
 
 func optionalTuningValue(value *string) (string, bool) {

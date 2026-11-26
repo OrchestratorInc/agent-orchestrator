@@ -8,21 +8,86 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// DetectTerminalActivity reports idle only when Codex's composer and footer are visible.
-func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
-	observation := p.InspectTerminalSurface(output)
-	if observation.Work == ports.TerminalSurfaceWorkIdle {
-		return domain.ActivityIdle, true
+// codexComposerChromeLabels names provider-owned text that Codex paints into
+// the current composer row. After a Chat to Terminal UI switch the placeholder
+// can arrive without dim styling, so its visible characters would otherwise
+// read as an unsent draft. It is not human input and must not fail an
+// interface switch.
+var codexComposerChromeLabels = []string{"Ask Codex to do anything"}
+
+// codexPromptMarkers start Codex's prompt-shaped rows. Through v0.161 the
+// current composer, submitted prompts, and picker selections all use "›";
+// from v0.162 the current composer is "»" and the others keep "›".
+var codexPromptMarkers = []string{"»", "›"}
+
+// codexPromptMarker returns the marker that starts a plain row, if any.
+func codexPromptMarker(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	for _, marker := range codexPromptMarkers {
+		if strings.HasPrefix(line, marker) {
+			return marker, true
+		}
 	}
 	return "", false
+}
+
+func codexPromptLine(line string) bool {
+	_, ok := codexPromptMarker(line)
+	return ok
+}
+
+// codexLastPromptMarker is the marker of the last prompt-shaped row, the only
+// one that can be the current composer.
+func codexLastPromptMarker(output string) string {
+	lines := terminalui.PlainTerminalLines(output)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if marker, ok := codexPromptMarker(lines[i]); ok {
+			return marker
+		}
+	}
+	return "›"
+}
+
+// DetectTerminalActivity reports the work state Codex's TUI is rendering. An
+// approval picker is waiting_input even under a running turn (it is checked
+// before the working status line), and an unrecognized frame reports nothing
+// so a recorded state is never overwritten on weak evidence.
+func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
+	switch p.InspectTerminalSurface(output).Work {
+	case ports.TerminalSurfaceWorkIdle:
+		return domain.ActivityIdle, true
+	case ports.TerminalSurfaceWorkActive:
+		return domain.ActivityActive, true
+	case ports.TerminalSurfaceWorkWaitingInput:
+		return domain.ActivityWaitingInput, true
+	default:
+		return "", false
+	}
+}
+
+// ContinuouslyDetectTerminalActivityWhileWaiting opts Codex into terminal
+// reconciliation after a waiting_input state is recorded. Codex's
+// PermissionRequest hook sets waiting_input and Codex installs no
+// post-tool-use hook, so once an approval resolves mid-turn nothing else can
+// clear it before Stop; without this the session reads as needs_input for the
+// rest of an actively running turn.
+func (p *Plugin) ContinuouslyDetectTerminalActivityWhileWaiting() bool { return true }
+
+// TerminalActivityOptions reads the rendered viewport for reconciliation. On
+// ConPTY the raw output is the PTY ring, and Codex redraws can leave it
+// without the current working line, so a resumed turn would stay
+// waiting_input. Older pty-hosts without a styled snapshot keep the raw path.
+func (p *Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
+	return ports.TerminalActivityOptions{PreferStyledOutput: true, RawOutputFallback: true}
 }
 
 // InspectTerminalSurface reports Codex work and composer facts separately.
 // A visible prompt can contain a draft, and Codex can render that prompt while
 // an active turn remains interruptible.
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
+	frame := codexComposerFrame(output)
 	observation := ports.TerminalSurfaceObservation{
-		Composer: codexComposerState(terminalui.LastPromptComposerState(codexComposerFrame(output), "›")),
+		Composer: codexComposerState(terminalui.LastPromptComposerState(frame, codexLastPromptMarker(frame), codexComposerChromeLabels...)),
 	}
 	lines := terminalLines(output)
 	if len(lines) < 2 {
@@ -38,16 +103,24 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 		return observation
 	}
 	prompt, _ := codexPromptFooter(lines, start)
-	if prompt < 0 && terminalui.LastPromptHasBoldMarker(output, "›") {
+	if prompt < 0 && terminalui.LastPromptHasBoldMarker(output, codexLastPromptMarker(output)) {
 		// Codex hides its footer in constrained viewports but retains a bold,
 		// non-dim current-prompt marker. Plain or dim transcript prompts do not
 		// satisfy this fallback, so missing structural evidence still fails closed.
 		for i := len(lines) - 1; i >= start; i-- {
-			if strings.HasPrefix(strings.TrimSpace(lines[i]), "›") {
+			if codexPromptLine(lines[i]) {
 				prompt = i
 				break
 			}
 		}
+	}
+	if prompt >= 0 && codexPickerOptionRow(lines[prompt]) {
+		// A numbered option in the prompt position is a picker whose hint row is
+		// not on screen yet (mid-redraw, or a viewport too short for it). Codex
+		// styles the selected option bold, so the fallback above can land on it;
+		// report nothing rather than read the selection as the composer.
+		observation.Composer = ports.TerminalComposerUnknown
+		return observation
 	}
 	if prompt >= 0 {
 		observation.NativeConversationNotStarted = codexInitialComposer(lines, prompt)
@@ -70,7 +143,7 @@ func codexInitialComposer(lines []string, currentPrompt int) bool {
 		if strings.Contains(line, "OpenAI Codex (v") {
 			header = true
 		}
-		if strings.HasPrefix(line, "›") {
+		if codexPromptLine(line) {
 			prompts++
 			if i != currentPrompt {
 				return false
@@ -84,12 +157,13 @@ func codexConfirmationFrame(lines []string, start int) bool {
 	selection := -1
 	for i := len(lines) - 1; i >= start; i-- {
 		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "›") {
+		marker, ok := codexPromptMarker(line)
+		if !ok {
 			continue
 		}
 		// An ordinary composer below a completed picker makes the picker
 		// transcript. Only the current, last prompt-shaped row can be selected.
-		if !codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, "›"))) {
+		if !codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, marker))) {
 			return false
 		}
 		selection = i
@@ -135,7 +209,7 @@ func codexPromptFooter(lines []string, start int) (int, int) {
 			continue
 		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
-			if strings.HasPrefix(strings.TrimSpace(lines[prompt]), "›") {
+			if codexPromptLine(lines[prompt]) {
 				return prompt, footer
 			}
 		}
@@ -152,6 +226,8 @@ func codexConfirmationHint(line string) bool {
 	lower := strings.ToLower(line)
 	return strings.Contains(lower, "press enter to confirm") ||
 		strings.Contains(lower, "enter to select") ||
+		// MCP elicitation forms and agent questions with options.
+		strings.Contains(lower, "enter to submit") ||
 		strings.Contains(lower, "esc to go back")
 }
 
@@ -169,10 +245,23 @@ func codexComposerFrame(output string) string {
 		if !strings.Contains(plainFooter, " · ") {
 			continue
 		}
+		// Codex can stack several " · " footer rows; the frame ends above all of them.
+		for footer > start && strings.Contains(terminalui.PlainTerminalText(raw[footer-1]), " · ") {
+			footer--
+		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
-			if strings.HasPrefix(plainPrompt, "›") {
-				return strings.Join(raw[prompt:footer], "\n")
+			if codexPromptLine(plainPrompt) {
+				// The composer ends at the first status row with a " · " (model
+				// row, or a hint row's warnings badge), else it reads as draft text.
+				end := footer
+				for row := prompt + 1; row < footer; row++ {
+					if strings.Contains(terminalui.PlainTerminalText(raw[row]), " · ") {
+						end = row
+						break
+					}
+				}
+				return strings.Join(raw[prompt:end], "\n")
 			}
 		}
 	}
@@ -200,4 +289,12 @@ func terminalLines(output string) []string {
 		}
 	}
 	return lines
+}
+
+// codexPickerOptionRow reports a prompt-shaped row whose text is a numbered
+// picker option, under either prompt marker.
+func codexPickerOptionRow(line string) bool {
+	line = strings.TrimSpace(line)
+	marker, ok := codexPromptMarker(line)
+	return ok && codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, marker)))
 }

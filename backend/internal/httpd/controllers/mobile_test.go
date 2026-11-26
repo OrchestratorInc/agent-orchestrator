@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -28,26 +29,69 @@ func (f *fakeBridge) Enable() (MobileStatusResponse, error) {
 	r.Password = "abcd1234"
 	return r, nil
 }
-func (f *fakeBridge) Disable() error { f.enabled = false; return nil }
+func (f *fakeBridge) EnableLANOnly() (MobileStatusResponse, error)    { return f.Enable() }
+func (f *fakeBridge) EnableTunnelOnly() (MobileStatusResponse, error) { return f.Enable() }
+func (f *fakeBridge) Disable() error                                  { f.enabled = false; return nil }
 func (f *fakeBridge) Regenerate() (MobileStatusResponse, error) {
 	r := f.Status()
 	r.Password = "wxyz5678"
 	return r, nil
+}
+func (f *fakeBridge) SetKeepAwake(on bool) (MobileStatusResponse, error) {
+	r := f.Status()
+	r.KeepAwake.Enabled = on
+	return r, nil
+}
+func (f *fakeBridge) SetKeepAwakeLid(bool, bool) (MobileStatusResponse, error) {
+	return MobileStatusResponse{}, errors.New("closed-lid wakefulness unavailable")
 }
 func (f *fakeBridge) SetSecurePairing(on bool) (MobileStatusResponse, error) {
 	r := f.Status()
 	r.SecurePairing.Enabled = on
 	return r, nil
 }
+func (f *fakeBridge) SetBrowserRemoteAccess(on bool) (MobileStatusResponse, error) {
+	r := f.Status()
+	r.BrowserRemoteAccess = on
+	return r, nil
+}
+
+func TestMobileBrowserRemoteAccess(t *testing.T) {
+	c := &MobileController{Bridge: &fakeBridge{}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mobile/browser-control", strings.NewReader(`{"enabled":true}`))
+	rr := httptest.NewRecorder()
+	c.BrowserRemoteAccess(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var got MobileStatusResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.BrowserRemoteAccess {
+		t.Fatal("browser remote access was not enabled")
+	}
+}
 
 // fakeLAN is a minimal LANController for exercising BridgeService directly.
 type fakeLAN struct {
-	running   bool
-	hash      string
-	stopCalls int
+	running     bool
+	hash        string
+	accountHash string
+	stopCalls   int
+	bindHost    string
 }
 
-func (f *fakeLAN) Start(port int) (int, error) { f.running = true; return port, nil }
+func (f *fakeLAN) Start(port int) (int, error) {
+	f.running = true
+	f.bindHost = "0.0.0.0"
+	return port, nil
+}
+func (f *fakeLAN) StartLoopback(port int) (int, error) {
+	f.running = true
+	f.bindHost = "127.0.0.1"
+	return port, nil
+}
 func (f *fakeLAN) Stop(ctx context.Context) error {
 	f.stopCalls++
 	f.running = false
@@ -61,8 +105,99 @@ func (f *fakeLAN) BoundPort() int {
 	}
 	return 3011
 }
-func (f *fakeLAN) SetPasswordHash(h string) { f.hash = h }
-func (f *fakeLAN) PasswordHash() string     { return f.hash }
+func (f *fakeLAN) SetPasswordHash(h string)     { f.hash = h }
+func (f *fakeLAN) PasswordHash() string         { return f.hash }
+func (f *fakeLAN) SetAccountTokenHash(h string) { f.accountHash = h }
+func (f *fakeLAN) AccountTokenHash() string     { return f.accountHash }
+
+func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile", "config.json")
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	lan := &fakeLAN{running: true}
+	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test"}
+	if _, err := bridge.IssueAccountToken("wrong", "user-a"); err == nil {
+		t.Fatal("wrong password accepted")
+	}
+	issued, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.HostID != "h_test" || len(issued.Token) != 64 {
+		t.Fatalf("bad token: %+v", issued)
+	}
+	// The listing gets the machine's host key with the token.
+	if want, err := mobilebridge.HostPublicKey(path); err != nil || issued.HostKey != want || len(want) != 43 {
+		t.Fatalf("host key = %q, want %q (%v)", issued.HostKey, want, err)
+	}
+	state, err := mobilebridge.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mobilebridge.PasswordMatches(state.AccountTokenHash, issued.Token) || state.AccountToken != issued.Token || state.AccountTokenOwner != "user-a" || lan.accountHash != state.AccountTokenHash {
+		t.Fatal("account credential was not persisted and armed")
+	}
+	if state.Password != "secret12" {
+		t.Fatal("pairing password changed")
+	}
+}
+
+func TestPasswordRotationRevokesAccountToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile", "config.json")
+	lan := &fakeLAN{}
+	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test", DefaultPort: 3011}
+	status, err := bridge.Enable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bridge.IssueAccountToken(status.Password, "user-a"); err != nil {
+		t.Fatal(err)
+	}
+	if lan.accountHash == "" {
+		t.Fatal("account token was not armed")
+	}
+	if _, err := bridge.Regenerate(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := mobilebridge.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AccountTokenHash != "" || lan.accountHash != "" {
+		t.Fatal("password rotation left the account token valid")
+	}
+}
+
+func TestIssueAccountTokenReusesCredentialForSameAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile", "config.json")
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	lan := &fakeLAN{running: true}
+	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test"}
+	first, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Token != first.Token {
+		t.Fatalf("same-account retry rotated token: first=%q second=%q", first.Token, second.Token)
+	}
+	third, err := bridge.IssueAccountToken("secret12", "user-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Token == first.Token {
+		t.Fatal("different account did not rotate token")
+	}
+	if got, err := bridge.IssueAccountToken(third.Token, "user-b"); err != nil || got.Token != third.Token {
+		t.Fatalf("current token retry = %+v, %v; want current credential", got, err)
+	}
+}
 
 // When Save fails during a fresh enable, the listener that Start already opened
 // must be torn back down and the armed hash rolled back — otherwise a LAN
@@ -266,6 +401,9 @@ func TestSecurePairingOffClearsProxy(t *testing.T) {
 	cleared := 0
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
 	b.ClearServe = func() error { cleared++; return nil }
+	if _, err := b.SetSecurePairing(false); err != nil || cleared != 0 {
+		t.Fatalf("turning off unused secure pairing cleared an unrelated Serve route: clears=%d err=%v", cleared, err)
+	}
 	if _, err := b.SetSecurePairing(true); err != nil {
 		t.Fatal(err)
 	}
@@ -945,6 +1083,43 @@ func TestStartRemoteAccessWhileDisabledDoesNothing(t *testing.T) {
 	}
 }
 
+// The daemon downloads cloudflared itself when an enable finds none. Once it
+// lands, remote access must come up without another click, on the same
+// password, and only where the user asked for a public tunnel.
+func TestConnectorInstalledStartsTheTunnelTheBridgeWanted(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		enable    func(*BridgeService) (MobileStatusResponse, error)
+		wantStart bool
+	}{
+		{name: "public", enable: (*BridgeService).Enable, wantStart: true},
+		{name: "lan only", enable: (*BridgeService).EnableLANOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tun TunnelController // no connector yet, as at the first enable
+			b := &BridgeService{
+				ConfigPath: filepath.Join(t.TempDir(), "mobile.json"), LAN: &fakeLAN{}, DefaultPort: 3011,
+				ResolveTunnel: func() TunnelController { return tun },
+			}
+			before, err := tc.enable(b)
+			if err != nil {
+				t.Fatalf("enable: %v", err)
+			}
+
+			landed := &fakeTunnel{}
+			tun = landed
+			b.ConnectorInstalled()
+
+			if started := landed.startedOn == 3011; started != tc.wantStart {
+				t.Fatalf("connector started on %d, want started=%v", landed.startedOn, tc.wantStart)
+			}
+			if b.Status().Password != before.Password {
+				t.Fatal("password rotated: the phone paired a moment ago can no longer authenticate")
+			}
+		})
+	}
+}
+
 type startErrorLAN struct {
 	fakeLAN
 	err error
@@ -954,14 +1129,58 @@ func (f *startErrorLAN) Start(int) (int, error) { return 0, f.err }
 
 func TestMobileRestoreOnBootRollsBackHashWhenStartFails(t *testing.T) {
 	startErr := errors.New("bind failed")
-	lan := &startErrorLAN{fakeLAN: fakeLAN{hash: "previous-hash"}, err: startErr}
+	lan := &startErrorLAN{fakeLAN: fakeLAN{hash: "previous-hash", accountHash: "previous-account-hash"}, err: startErr}
 	bridge := &BridgeService{LAN: lan}
 
-	err := bridge.RestoreOnBoot(mobilebridge.State{Enabled: true, Password: "restored-password", LastPort: 3011})
+	err := bridge.RestoreOnBoot(mobilebridge.State{Enabled: true, Password: "restored-password", AccountTokenHash: "restored-account-hash", LastPort: 3011})
 	if !errors.Is(err, startErr) {
 		t.Fatalf("RestoreOnBoot error = %v, want %v", err, startErr)
 	}
 	if got := lan.PasswordHash(); got != "previous-hash" {
 		t.Fatalf("password hash after failed restore = %q, want previous-hash", got)
+	}
+	if got := lan.AccountTokenHash(); got != "previous-account-hash" {
+		t.Fatalf("account token hash after failed restore = %q, want previous-account-hash", got)
+	}
+}
+
+// A bridge with no connector says when one is being installed, so a client
+// waits for it rather than offering to install one.
+func TestTunnelStatusSaysWhenAConnectorIsOnItsWay(t *testing.T) {
+	installing := true
+	b := &BridgeService{LAN: &fakeLAN{}, ConfigPath: filepath.Join(t.TempDir(), "mobile", "config.json"), ConnectorInstalling: func() bool { return installing }}
+	if st := b.tunnelStatus(); st.Supported || !st.Installing {
+		t.Fatalf("installing: %+v", st)
+	}
+	installing = false
+	if st := b.tunnelStatus(); st.Installing {
+		t.Fatalf("not installing: %+v", st)
+	}
+}
+
+// A held account token is not proof AO Cloud accepts the link: once AO Cloud
+// refuses the machine's address under it, status says so (#7976).
+func TestStatusReportsAnAccountLinkAOCloudRefuses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile.json")
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12", AccountTokenHash: "hash-a"}); err != nil {
+		t.Fatal(err)
+	}
+	bridge := &BridgeService{LAN: &fakeLAN{running: true}, ConfigPath: path, HostID: "h_test"}
+	if st := bridge.Status(); !st.AccountLinked || st.AccountLinkRefused {
+		t.Fatalf("before any publish: linked=%v refused=%v, want linked and not known refused", st.AccountLinked, st.AccountLinkRefused)
+	}
+	bridge.NoteAccountListing("hash-a", false)
+	if !bridge.Status().AccountLinkRefused {
+		t.Fatal("a refused publish under the current token was not reported")
+	}
+	// A refusal of an earlier token says nothing about the current one.
+	bridge.NoteAccountListing("hash-old", false)
+	if bridge.Status().AccountLinkRefused {
+		t.Fatal("a refusal of another token marked the current one refused")
+	}
+	bridge.NoteAccountListing("hash-a", false)
+	bridge.NoteAccountListing("hash-a", true)
+	if bridge.Status().AccountLinkRefused {
+		t.Fatal("an accepted publish left the link refused")
 	}
 }

@@ -1,0 +1,272 @@
+import { listRemoteHosts } from "../../lib/remote-host-list";
+import { LoaderCircle, Pencil, Server, Trash2 } from "@/components/app-icons";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
+import { aoBridge } from "../../lib/bridge";
+import { disconnectHost } from "../../lib/host-clients";
+import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
+import { compareVersions, hostUpdateAction, hostUpdateError, startHostUpdate, useHostUpdateStore } from "../../hooks/useHostUpdates";
+import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
+import { useUpdateStatus } from "../../hooks/useUpdateStatus";
+import { useCloudSession } from "../../lib/cloud-session";
+import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { useSettings } from "../../hooks/useSettings";
+import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
+import { useUiStore } from "../../stores/ui-store";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
+import { SettingsRow } from "./SettingsRow";
+import { SettingsSection } from "./SettingsSection";
+import { ThisComputerAccess } from "./ThisComputerAccess";
+
+type SavedHost = { hostId: string; label: string; url: string };
+
+export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) {
+	const { t } = useTranslation();
+	const enabled = useUiStore((state) => state.remoteHosts);
+	const setEnabled = useUiStore((state) => state.setRemoteHosts);
+	const autoUpdate = useUiStore((state) => state.autoUpdateRemoteHosts);
+	const setAutoUpdate = useUiStore((state) => state.setAutoUpdateRemoteHosts);
+	const { status, signIn } = useCloudSession();
+	const { settings } = useSettings();
+	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
+	const { available: localAuthAvailable } = useCloudLocalAuth();
+	const openLocalSignIn = useLocalSignInDialogStore((state) => state.openDialog);
+	const [saved, setSaved] = useState<SavedHost[]>([]);
+	const [loading, setLoading] = useState(true);
+	const [loadError, setLoadError] = useState("");
+	const [label, setLabel] = useState("");
+	const [url, setUrl] = useState("");
+	const [password, setPassword] = useState("");
+	const [editing, setEditing] = useState<SavedHost | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [formError, setFormError] = useState("");
+	const [confirmingRemoval, setConfirmingRemoval] = useState<SavedHost | null>(null);
+	const [confirmingUpdate, setConfirmingUpdate] = useState<(SavedHost & { version: string }) | null>(null);
+	const [askingUpdate, setAskingUpdate] = useState("");
+	const [removeBusy, setRemoveBusy] = useState(false);
+	const [removeError, setRemoveError] = useState("");
+	const formRef = useRef<HTMLFormElement>(null);
+	const localVersion = useHostUpdateStore((state) => state.localVersion);
+	const hostUpdates = useHostUpdateStore((state) => state.byUrl);
+	const localUpdate = useUpdateStatus();
+	const newest = (localUpdate.version && localVersion && ["available", "downloading", "preparing", "downloaded"].includes(localUpdate.state) && (compareVersions(localUpdate.version, localVersion) ?? 0) > 0 ? localUpdate.version : localVersion)?.replace(/^v/i, "");
+
+	const load = async () => {
+		setLoading(true);
+		setLoadError("");
+		try {
+			setSaved(await listRemoteHosts());
+		} catch (cause) {
+			setLoadError(cause instanceof Error ? cause.message : t("remote.loadHostsFailed"));
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	useEffect(() => {
+		if (status === "authenticated") void load();
+		else setSaved([]);
+		// The bridge is fixed for the lifetime of this Settings page.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [status]);
+
+	const askAppHost = async (host: SavedHost) => {
+		if (askingUpdate) return;
+		setAskingUpdate(host.url);
+		useHostUpdateStore.getState().patch(host.url, { error: undefined, unconfirmed: undefined });
+		try {
+			const version = (await aoBridge.remotes.checkHostUpdate(host.url)).replace(/^v/i, "");
+			setConfirmingUpdate((open) => open ?? { ...host, version });
+		} catch (cause) {
+			useHostUpdateStore.getState().patch(host.url, { error: hostUpdateError(cause) });
+		} finally {
+			setAskingUpdate("");
+		}
+	};
+
+	const resetForm = () => {
+		setEditing(null);
+		setLabel("");
+		setUrl("");
+		setPassword("");
+		setFormError("");
+	};
+
+	const save = async (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		const nextLabel = label.trim();
+		const nextUrl = url.trim();
+		if (!nextLabel || !nextUrl || (!editing?.hostId && !password)) return;
+		setBusy(true);
+		setFormError("");
+		try {
+			// Old saved records have no identity, so re-pair them through add.
+			const health = editing?.hostId
+				? await aoBridge.remotes.update(editing.url, {
+					label: nextLabel,
+					url: nextUrl,
+					...(password ? { password } : {}),
+				})
+				: await aoBridge.remotes.add({ label: nextLabel, url: nextUrl, password });
+			if (health === "offline") throw new Error(t("remote.hostOffline"));
+			if (health === "unauthorized") throw new Error(t("remote.hostUnauthorized"));
+			if (health === "not-a-daemon") throw new Error(t("remote.hostNotDaemon"));
+			if (health === "incompatible") throw new Error(t("remote.hostIncompatible"));
+			if (editing?.hostId) await disconnectHost(editing.hostId);
+			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
+			const current = (await listRemoteHosts()).find((item) => item.url === nextUrl);
+			if (current?.hostId && cloudBaseUrl) await aoBridge.remotes.linkAccountHost(current.url);
+			await load();
+			resetForm();
+			if (!enabled) setEnabled(true);
+			requestRemoteHostsRefresh();
+		} catch (cause) {
+			setFormError(cause instanceof Error ? cause.message : t("remote.addHostFailed"));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const remove = async () => {
+		if (!confirmingRemoval) return;
+		setRemoveBusy(true);
+		setRemoveError("");
+		try {
+			if (confirmingRemoval.hostId && cloudBaseUrl) await deleteAccountRemoteHost(cloudBaseUrl, confirmingRemoval.hostId);
+			await aoBridge.remotes.remove(confirmingRemoval.url);
+			if (confirmingRemoval.hostId) await disconnectHost(confirmingRemoval.hostId);
+			await load();
+			setConfirmingRemoval(null);
+			requestRemoteHostsRefresh();
+		} catch (cause) {
+			setRemoveError(cause instanceof Error ? cause.message : t("remote.removeHostFailed"));
+		} finally {
+			setRemoveBusy(false);
+		}
+	};
+
+	if (status !== "authenticated") return (
+		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
+			<SettingsRow label={t("remote.aoCloud")} description={t("remote.signInDescription")}>{status === "unauthenticated" ? (
+				<Button onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button" variant="quiet">
+					{t("shell.signIn")}
+				</Button>
+			) : null}</SettingsRow>
+		</SettingsSection>
+	);
+
+	return <>
+		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
+			<SettingsRow label={t("remote.enable")} description={t("remote.enableDescription")}>
+				<Switch aria-label={t("remote.enable")} checked={enabled} onCheckedChange={setEnabled} />
+			</SettingsRow>
+		</SettingsSection>
+
+		<ThisComputerAccess />
+
+		<SettingsSection title={t("remote.savedHosts")} grouped>
+			{loading && saved.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted" role="status">{t("remote.loadingHosts")}</div> : null}
+			{!loading && saved.length === 0 && !loadError ? <div className="settings-row-bar text-pretty text-sm text-settings-muted">{t("remote.emptyHosts")}</div> : null}
+			{saved.length > 0 ? (
+				<SettingsRow label={t("remote.autoUpdateHosts")} description={t("remote.autoUpdateHostsDescription")}>
+					<Switch aria-label={t("remote.autoUpdateHosts")} checked={autoUpdate} onCheckedChange={setAutoUpdate} />
+				</SettingsRow>
+			) : null}
+			{saved.map((host) => {
+				const version = hostUpdates[host.url]?.view?.version;
+				const update = hostUpdateAction(hostUpdates[host.url], localVersion);
+				const appHost = hostUpdates[host.url]?.view?.method === "app";
+				const target = version && localVersion && (compareVersions(version, localVersion) ?? 0) < 0 ? newest : undefined;
+				return (
+				<SettingsRow
+					key={host.url}
+					icon={Server}
+					label={host.label}
+					description={host.hostId ? (
+						<>
+							{host.url}
+							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}{target && appHost ? ` · ${t("remote.thisComputerVersion", { version: localVersion?.replace(/^v/i, "") })}` : null}{target && !appHost ? <>{" → "}<span className="text-foreground">{`v${target}`}</span></> : null}</span> : null}
+							{update?.kind === "manual" ? <span className="mt-0.5 block text-warning">{t("shell.updateOnThatComputer")}</span> : null}
+							{update?.kind === "failed" ? <span className="mt-0.5 block text-error" role="alert">{update.error || (update.unconfirmed ? t("remote.updateUnconfirmed") : t("shell.updateFailed"))}</span> : null}
+						</>
+					) : (
+						<>
+							{host.url}
+							<span className="mt-0.5 block text-warning">{t("remote.repairRequired")}</span>
+						</>
+					)}
+				>
+					<div className="flex items-center gap-1">
+						{update?.kind === "updating" ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("shell.updating")}</span> : null}
+						{askingUpdate === host.url ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("session.statusChecking")}</span> : null}
+						{askingUpdate !== host.url && (update?.kind === "update" || update?.kind === "failed") ? (
+							<Button aria-label={t("shell.updateMachine", { name: host.label })} disabled={appHost && askingUpdate !== ""} onClick={() => { if (appHost) void askAppHost(host); else void startHostUpdate(host.url); }} size="sm" type="button" variant="quiet">
+								{update.kind === "failed" ? t("notify.retry") : t("shell.update")}
+							</Button>
+						) : null}
+						<Button aria-label={t("remote.editHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
+							setEditing(host);
+							setLabel(host.label);
+							setUrl(host.url);
+							setPassword("");
+							setFormError("");
+							formRef.current?.scrollIntoView?.({ block: "nearest" });
+						}} size="icon-sm" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-base" /></Button>
+						<Button aria-label={t("remote.removeHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
+							setConfirmingRemoval(host);
+							setRemoveError("");
+						}} size="icon-sm" type="button" variant="destructive-ghost"><Trash2 aria-hidden="true" className="size-icon-base" /></Button>
+					</div>
+				</SettingsRow>
+				);
+			})}
+			{loadError ? (
+				<SettingsRow label={t("remote.savedHosts")} description={<span className="text-error" role="alert">{loadError}</span>}>
+					<Button onClick={() => void load()} size="sm" type="button" variant="quiet">{t("notify.retry")}</Button>
+				</SettingsRow>
+			) : null}
+		</SettingsSection>
+
+		{/* The form wraps the whole section so its rows stay direct children of
+		    the grouped card and pick up the card's dividers. */}
+		<form className="flex w-full flex-col" onSubmit={(event) => void save(event)} ref={formRef}>
+			<SettingsSection title={editing ? t("remote.editHost", { label: editing.label }) : t("remote.addHost")} grouped>
+				<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("remote.setupHint")}</p>
+				<SettingsRow label={t("remote.name")}><Input aria-label={t("remote.name")} className="w-80 max-w-full" disabled={busy} maxLength={64} onChange={(event) => setLabel(event.target.value)} required value={label} /></SettingsRow>
+				<SettingsRow label={t("mobile.address")}><Input aria-label={t("mobile.address")} className="w-80 max-w-full" disabled={busy} inputMode="url" onChange={(event) => setUrl(event.target.value)} placeholder={t("remote.addressPlaceholder")} required value={url} /></SettingsRow>
+				<SettingsRow label={t("remote.connectionPassword")}><Input aria-label={t("remote.connectionPassword")} autoComplete="off" className="w-80 max-w-full" disabled={busy} onChange={(event) => setPassword(event.target.value)} placeholder={editing?.hostId ? t("remote.keepPassword") : undefined} required={!editing?.hostId} type="password" value={password} /></SettingsRow>
+				<div className="settings-content-row flex items-center justify-end gap-2">
+					{formError ? <p className="mr-auto min-w-0 text-xs text-error" role="alert">{formError}</p> : null}
+					{editing ? <Button disabled={busy} onClick={resetForm} size="sm" type="button" variant="quiet">{t("confirm.cancel")}</Button> : null}
+					<Button disabled={busy || !label.trim() || !url.trim() || (!editing?.hostId && !password)} size="sm" type="submit" variant="quiet">{busy ? t("remote.saving") : editing ? t("remote.saveHost") : t("remote.addHost")}</Button>
+				</div>
+			</SettingsSection>
+		</form>
+
+		<ConfirmDialog
+			confirmLabel={t("shell.update")}
+			description={t("remote.updateAppDescription")}
+			onConfirm={() => {
+				if (confirmingUpdate) void startHostUpdate(confirmingUpdate.url, confirmingUpdate.version);
+				setConfirmingUpdate(null);
+			}}
+			onOpenChange={(open) => { if (!open) setConfirmingUpdate(null); }}
+			open={confirmingUpdate !== null}
+			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label, version: confirmingUpdate?.version })}
+		/>
+		<ConfirmDialog
+			busy={removeBusy}
+			confirmLabel={t("shell.remove")}
+			description={t("remote.removeDescription")}
+			destructive
+			error={removeError || null}
+			onConfirm={() => void remove()}
+			onOpenChange={(open) => { if (!open && !removeBusy) setConfirmingRemoval(null); }}
+			open={confirmingRemoval !== null}
+			title={t("remote.removeTitle", { label: confirmingRemoval?.label })}
+		/>
+	</>;
+}

@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	_ "modernc.org/sqlite" // register sqlite driver for OMP auth database probes
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -39,12 +41,21 @@ func ompLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	if status, ok, err := ompAgentDBAuthStatus(filepath.Join(configDir, "agent.db")); err != nil {
+	dbPath := filepath.Join(configDir, "agent.db")
+	if status, ok, err := ompAgentDBAuthStatus(ctx, dbPath); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	} else if ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(dbPath))
+		}
 		return status, true, nil
 	}
-	return ompAuthJSONStatus(filepath.Join(configDir, "auth.json"))
+	authPath := filepath.Join(configDir, "auth.json")
+	status, ok, err := ompAuthJSONStatus(ctx, authPath)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(authPath))
+	}
+	return status, ok, err
 }
 
 func ompConfigDir() (string, bool) {
@@ -63,8 +74,8 @@ type ompAuthEntry struct {
 	Key  string `json:"key"`
 }
 
-func ompAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
-	data, err := os.ReadFile(path)
+func ompAuthJSONStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, error) {
+	data, err := authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
@@ -77,6 +88,7 @@ func ompAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
 
 	var entries map[string]ompAuthEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_invalid")
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if len(entries) == 0 {
@@ -93,32 +105,23 @@ func ompAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-func ompAgentDBAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
+func ompAgentDBAuthStatus(ctx context.Context, path string) (status ports.AgentAuthStatus, ok bool, err error) {
+	defer func() {
+		if err != nil && ctx.Err() == nil {
+			authprobe.RecordFileDiagnostic(ctx, path, "credential_store_unreadable")
+		}
+	}()
 	if strings.TrimSpace(path) == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_missing")
 		return ports.AgentAuthStatusUnknown, false, nil
 	} else if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 
-	db, err := sql.Open("sqlite", path+"?mode=ro")
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
-	}
-	defer func() {
-		_ = db.Close()
-	}()
-
-	var total int
-	var enabled int
-	err = db.QueryRow(`
-		SELECT
-			COUNT(*),
-			COUNT(CASE WHEN trim(coalesce(data, '')) <> '' AND disabled_cause IS NULL THEN 1 END)
-		FROM auth_credentials
-	`).Scan(&total, &enabled)
+	total, enabled, err := ompCountCredentials(ctx, path)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
@@ -126,7 +129,52 @@ func ompAgentDBAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	if total > 0 {
+		authprobe.RecordFileDiagnostic(ctx, path, "credentials_disabled")
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// ompCountCredentials counts stored and enabled credentials without writing.
+// agent.db uses WAL: while OMP is not running there is no -shm file, and a
+// read-only connection cannot create one, so the open fails. With no -wal
+// file every change is in the main file, so an immutable read is complete.
+func ompCountCredentials(ctx context.Context, path string) (total, enabled int, err error) {
+	count := func(dsn string) error {
+		db, err := sql.Open("sqlite", dsn)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = db.Close()
+		}()
+		return db.QueryRowContext(ctx, `
+			SELECT
+				COUNT(*),
+				COUNT(CASE WHEN trim(coalesce(data, '')) <> '' AND disabled_cause IS NULL THEN 1 END)
+			FROM auth_credentials
+		`).Scan(&total, &enabled)
+	}
+	if err = count(path + "?mode=ro"); err == nil || ctx.Err() != nil {
+		return total, enabled, err
+	}
+	walAbsent := func() bool {
+		_, statErr := os.Stat(path + "-wal")
+		return os.IsNotExist(statErr)
+	}
+	if walAbsent() {
+		// OMP may have started meanwhile: an immutable read ignores its WAL,
+		// so the count stands only if there is still none.
+		if count(ompImmutableURI(path)) == nil && walAbsent() {
+			return total, enabled, nil
+		}
+	}
+	return 0, 0, err
+}
+
+// ompImmutableURI opens path read-only as an immutable SQLite file. The URI
+// has no authority, so a Windows drive path is not read as one, and every
+// path character stays literal.
+func ompImmutableURI(path string) string {
+	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?mode=ro&immutable=1"
 }

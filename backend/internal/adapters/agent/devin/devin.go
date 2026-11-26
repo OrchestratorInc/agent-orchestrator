@@ -21,6 +21,7 @@
 package devin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -241,10 +242,13 @@ func ensureDevinNativeWorkspaceTrusted(configPath, workspacePath string) error {
 	data, err := os.ReadFile(configPath)
 	switch {
 	case err == nil:
-		if len(data) > 0 {
-			if err := json.Unmarshal(data, &root); err != nil {
-				return fmt.Errorf("devin: parse %s: %w", configPath, err)
-			}
+		// An existing empty file may be another writer's incomplete config.
+		// Refuse to replace it with a document containing only this workspace.
+		if len(bytes.TrimSpace(data)) == 0 {
+			return fmt.Errorf("devin: %s is empty; refusing to overwrite", configPath)
+		}
+		if err := json.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("devin: parse %s: %w", configPath, err)
 		}
 	case os.IsNotExist(err):
 		// Treat as empty config; we'll create it.
@@ -274,10 +278,13 @@ func ensureDevinWorkspaceTrusted(configPath, workspacePath string) error {
 	data, err := os.ReadFile(configPath)
 	switch {
 	case err == nil:
-		if len(data) > 0 {
-			if err := json.Unmarshal(data, &root); err != nil {
-				return fmt.Errorf("devin: parse %s: %w", configPath, err)
-			}
+		// Match Claude Code's guard: a transient empty read must not wipe the
+		// user's account and project history with a trust-only replacement.
+		if len(bytes.TrimSpace(data)) == 0 {
+			return fmt.Errorf("devin: %s is empty; refusing to overwrite", configPath)
+		}
+		if err := json.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("devin: parse %s: %w", configPath, err)
 		}
 	case os.IsNotExist(err):
 		// Treat as empty config; we'll create it.
@@ -333,4 +340,12 @@ func writeDevinTrustFile(configPath string, out []byte) error {
 		return fmt.Errorf("devin: replace config: %w", err)
 	}
 	return nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

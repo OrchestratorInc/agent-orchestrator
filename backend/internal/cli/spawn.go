@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -26,12 +27,17 @@ type spawnOptions struct {
 	kind            string
 	mode            string
 	branch          string
+	baseBranch      string
 	prompt          string
 	issue           string
 	name            string
 	model           string
+	output          string
+	effort          string
+	account         string
 	claimPR         string
 	noTakeover      bool
+	review          bool
 	skipAgentCheck  bool
 	trackerProvider string
 }
@@ -39,27 +45,42 @@ type spawnOptions struct {
 // spawnRequest mirrors the daemon's SpawnSessionRequest body for
 // POST /api/v1/sessions. The CLI keeps its own copy so it need not import httpd.
 type spawnRequest struct {
-	ProjectID       string `json:"projectId,omitempty"`
-	IssueID         string `json:"issueId,omitempty"`
-	ParentSessionID string `json:"parentSessionId,omitempty"`
-	TrackerProvider string `json:"trackerProvider,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	Harness         string `json:"harness,omitempty"`
-	Branch          string `json:"branch,omitempty"`
-	Prompt          string `json:"prompt,omitempty"`
-	Model           string `json:"model,omitempty"`
-	DisplayName     string `json:"displayName"`
+	ProjectID           string `json:"projectId,omitempty"`
+	IssueID             string `json:"issueId,omitempty"`
+	ParentSessionID     string `json:"parentSessionId,omitempty"`
+	TrackerProvider     string `json:"trackerProvider,omitempty"`
+	Kind                string `json:"kind,omitempty"`
+	Mode                string `json:"mode,omitempty"`
+	Harness             string `json:"harness,omitempty"`
+	Branch              string `json:"branch,omitempty"`
+	BaseBranch          string `json:"baseBranch,omitempty"`
+	Prompt              string `json:"prompt,omitempty"`
+	Model               string `json:"model,omitempty"`
+	Effort              string `json:"effort,omitempty"`
+	AccountID           string `json:"accountId,omitempty"`
+	RequestedOutput     string `json:"requestedOutput,omitempty"`
+	DisplayName         string `json:"displayName"`
+	DisplayNameExplicit bool   `json:"displayNameExplicit,omitempty"`
+	TerminateOnPRMerge  *bool  `json:"terminateOnPrMerge,omitempty"`
+	// Async publishes a Chat session as starting, with its prompt queued, before
+	// the worktree and agent are up, as the desktop's new task does. The CLI
+	// then waits for the start to settle so failures still reach the caller.
+	Async bool `json:"async,omitempty"`
+}
+
+type spawnedSession struct {
+	ID             string `json:"id"`
+	Status         string `json:"status"`
+	DisplayName    string `json:"displayName"`
+	ProvisionState string `json:"provisionState,omitempty"`
+	ProvisionError string `json:"provisionError,omitempty"`
+	IsTerminated   bool   `json:"isTerminated,omitempty"`
 }
 
 type spawnResult struct {
-	Session struct {
-		ID          string `json:"id"`
-		Status      string `json:"status"`
-		DisplayName string `json:"displayName"`
-	} `json:"session"`
-	PromptBytes       int `json:"promptBytes,omitempty"`
-	SystemPromptBytes int `json:"systemPromptBytes,omitempty"`
+	Session           spawnedSession `json:"session"`
+	PromptBytes       int            `json:"promptBytes,omitempty"`
+	SystemPromptBytes int            `json:"systemPromptBytes,omitempty"`
 }
 
 func newSpawnCommand(ctx *commandContext) *cobra.Command {
@@ -69,7 +90,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		Short: "Spawn an agent session",
 		Long: "Spawn an agent session in a registered project, or a standalone worker with --standalone.\n\n" +
 			"The session runs the chosen agent in a\n" +
-			"fresh isolated workspace. Git projects use worktrees; standalone agents use an AO-managed plain directory.",
+			"fresh isolated workspace. Git projects use worktrees; standalone agents use an Orchestrator-managed plain directory.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.standalone && strings.TrimSpace(opts.project) != "" {
@@ -77,6 +98,9 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 			if opts.noTakeover && opts.claimPR == "" {
 				return usageError{fmt.Errorf("--no-takeover requires --claim-pr")}
+			}
+			if opts.review && opts.claimPR == "" {
+				return usageError{fmt.Errorf("--review requires --claim-pr")}
 			}
 			name := strings.TrimSpace(opts.name)
 			if name == "" {
@@ -94,12 +118,18 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
 				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
 			}
+			if opts.output != "" && opts.output != "artifact" {
+				return usageError{fmt.Errorf(`--output must be "artifact"`)}
+			}
+			if opts.output != "" && opts.kind == "orchestrator" {
+				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
+			}
 			if opts.standalone {
 				if opts.kind == "orchestrator" {
 					return usageError{fmt.Errorf("standalone sessions must be workers")}
 				}
-				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
-					return usageError{fmt.Errorf("standalone sessions do not support --branch, --issue, or --claim-pr")}
+				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.baseBranch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
+					return usageError{fmt.Errorf("standalone sessions do not support --branch, --base, --issue, or --claim-pr")}
 				}
 				if strings.TrimSpace(opts.harness) == "" {
 					return usageError{fmt.Errorf("--agent is required with --standalone")}
@@ -126,22 +156,21 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				opts.project = project.ID
 			}
 
-			harness, err := resolveSpawnHarness(opts.harness, opts.kind, project)
-			if err != nil {
-				return err
-			}
-			opts.harness = harness
+			opts.harness = resolveSpawnHarness(opts.harness, opts.kind, project)
 
 			if isScratchProject(project) {
 				if strings.TrimSpace(opts.branch) != "" {
 					return usageError{fmt.Errorf("scratch projects do not support --branch")}
+				}
+				if strings.TrimSpace(opts.baseBranch) != "" {
+					return usageError{fmt.Errorf("scratch projects do not support --base")}
 				}
 				if strings.TrimSpace(opts.claimPR) != "" {
 					return usageError{fmt.Errorf("scratch projects do not support --claim-pr")}
 				}
 			}
 
-			if !opts.skipAgentCheck {
+			if !opts.skipAgentCheck && opts.harness != "" {
 				if err := ctx.preflightSpawnAgentAuth(cmd.Context(), cmd, opts.harness); err != nil {
 					return err
 				}
@@ -154,29 +183,51 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				}
 			}
 			req := spawnRequest{
-				ProjectID:       opts.project,
-				IssueID:         opts.issue,
-				ParentSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
-				TrackerProvider: opts.trackerProvider,
-				Kind:            opts.kind,
-				Harness:         opts.harness,
-				Mode:            opts.mode,
-				Branch:          opts.branch,
-				Prompt:          opts.prompt,
-				Model:           strings.TrimSpace(opts.model),
-				DisplayName:     name,
+				ProjectID:           opts.project,
+				IssueID:             opts.issue,
+				ParentSessionID:     strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+				TrackerProvider:     opts.trackerProvider,
+				Kind:                opts.kind,
+				Harness:             opts.harness,
+				Mode:                opts.mode,
+				Branch:              opts.branch,
+				BaseBranch:          strings.TrimSpace(opts.baseBranch),
+				Prompt:              opts.prompt,
+				Model:               strings.TrimSpace(opts.model),
+				Effort:              strings.TrimSpace(opts.effort),
+				AccountID:           strings.TrimSpace(opts.account),
+				RequestedOutput:     opts.output,
+				DisplayName:         name,
+				DisplayNameExplicit: true,
+				Async:               !opts.standalone,
 			}
 			var res spawnResult
-			if err := ctx.postJSON(cmd.Context(), "sessions", req, &res); err != nil {
+			if err := ctx.postSetupJSON(cmd.Context(), "sessions", req, &res); err != nil {
 				return err
 			}
 			if strings.TrimSpace(res.Session.ID) == "" {
 				return fmt.Errorf("daemon returned empty session id for spawn")
 			}
+			started, err := ctx.awaitSpawnStart(cmd.Context(), res.Session)
+			if err != nil {
+				return err
+			}
+			res.Session = started
+			if opts.review {
+				// A review claim turns every switch off before the claim, so the
+				// claimed PR's CI failures, merge conflicts and review comments
+				// never reach the agent and the native reviewer never starts on it.
+				if err := ctx.setSessionReview(cmd.Context(), res.Session.ID, true); err != nil {
+					if killErr := ctx.rollbackSpawnedSession(cmd.Context(), res.Session.ID); killErr != nil {
+						return fmt.Errorf("failed to turn off automatic fixing: %w; rollback of session %s failed: %w", err, res.Session.ID, killErr)
+					}
+					return fmt.Errorf("failed to turn off automatic fixing: %w; rolled back session %s", err, res.Session.ID)
+				}
+			}
 			claimed := ""
 			var claim claimPRResponse
 			if opts.claimPR != "" {
-				if err := ctx.postJSON(cmd.Context(), "sessions/"+url.PathEscape(res.Session.ID)+"/pr/claim", claimPRRequest{PR: claimRef, AllowTakeover: !opts.noTakeover}, &claim); err != nil {
+				if err := ctx.postJSON(cmd.Context(), "sessions/"+url.PathEscape(res.Session.ID)+"/pr/claim", claimPRRequest{PR: claimRef, AllowTakeover: !opts.noTakeover && !opts.review}, &claim); err != nil {
 					if killErr := ctx.rollbackSpawnedSession(cmd.Context(), res.Session.ID); killErr != nil {
 						return fmt.Errorf("failed to claim PR %s: %w; rollback of session %s failed: %w", opts.claimPR, err, res.Session.ID, killErr)
 					}
@@ -218,20 +269,59 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		return pflag.NormalizedName(name)
 	})
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
-	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an AO-managed plain directory (requires --agent)")
-	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, grok, droid, amp, agy, crush, cursor, qwen, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
+	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an Orchestrator-managed plain directory (requires --agent)")
+	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, codewhale, mimo-code, deepseek-harness, openhands, command-code, mastra-code, docker-agent, minimax-code, memcode, hermes, stakpak, open-interpreter, tau (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; when the project has none, the daemon selects a default agent)")
 	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
-	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
+	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: orchestrator/<session-id>/root; unsupported for standalone or Scratch sessions)")
+	f.StringVar(&opts.baseBranch, "base", "", "Start the session's branch from this branch, to stack on its pull request (default: the project's default branch); with --branch, that branch must be new")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
+	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
+	f.StringVar(&opts.account, "account", "", "Claude Code or Codex account id to start on, from ao account ls; empty uses the agent's default account")
+	f.StringVar(&opts.effort, "effort", "", "Reasoning effort override for this session only (e.g. low, medium, high); empty defers to the agent/model default")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")
 	f.StringVar(&opts.claimPR, "claim-pr", "", "Claim PR ownership metadata only for the spawned session; does not check out the PR branch")
 	f.BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the claimed PR (requires --claim-pr)")
+	f.BoolVar(&opts.review, "review", false, "Claim the PR to review it, not work on it: start with automatic CI and review-comment fixing and native auto-review off; implies --no-takeover (requires --claim-pr)")
 	f.BoolVar(&opts.skipAgentCheck, "skip-agent-check", false, "Skip CLI readiness warnings (the daemon still validates launch readiness)")
 	return cmd
+}
+
+// spawnStartPollInterval paces the wait for a session started in the background.
+var spawnStartPollInterval = 500 * time.Millisecond
+
+// awaitSpawnStart waits until a session the daemon starts in the background is
+// running or has failed. A failed start stays in AO with its reason and a Retry
+// action, so the error names the session rather than removing it.
+func (c *commandContext) awaitSpawnStart(ctx context.Context, sess spawnedSession) (spawnedSession, error) {
+	for sess.ProvisionState == "provisioning" && !sess.IsTerminated {
+		select {
+		case <-ctx.Done():
+			return sess, ctx.Err()
+		case <-time.After(spawnStartPollInterval):
+		}
+		var res struct {
+			Session spawnedSession `json:"session"`
+		}
+		if err := c.getJSON(ctx, "sessions/"+url.PathEscape(sess.ID), &res); err != nil {
+			return sess, fmt.Errorf("session %s: wait for start: %w", sess.ID, err)
+		}
+		sess = res.Session
+	}
+	switch {
+	case sess.IsTerminated:
+		return sess, fmt.Errorf("session %s was archived before it started", sess.ID)
+	case sess.ProvisionState == "failed":
+		reason := strings.TrimSpace(sess.ProvisionError)
+		if reason == "" {
+			reason = "unknown error"
+		}
+		return sess, fmt.Errorf("session %s failed to start: %s (fix the cause, then retry with `ao session resume-agent %s`, or archive it with `ao session kill %s`)", sess.ID, reason, sess.ID, sess.ID)
+	}
+	return sess, nil
 }
 
 func (c *commandContext) fetchAgentInventory(ctx context.Context, refresh bool) (agentInventory, error) {
@@ -365,25 +455,24 @@ func pathContains(root, child string) bool {
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func resolveSpawnHarness(explicit, kind string, project projectDetails) (string, error) {
+func resolveSpawnHarness(explicit, kind string, project projectDetails) string {
 	if harness := strings.TrimSpace(explicit); harness != "" {
-		return harness, nil
+		return harness
 	}
 	if project.Config != nil {
 		if kind == "orchestrator" {
 			if harness := strings.TrimSpace(project.Config.Orchestrator.Agent); harness != "" {
-				return harness, nil
+				return harness
 			}
 		} else {
 			if harness := strings.TrimSpace(project.Config.Worker.Agent); harness != "" {
-				return harness, nil
+				return harness
 			}
 		}
 	}
-	if kind == "orchestrator" {
-		return "", usageError{fmt.Errorf("agent could not be resolved; pass --agent or configure `ao project set-config %s --orchestrator-agent <agent>`", project.ID)}
-	}
-	return "", usageError{fmt.Errorf("agent could not be resolved; pass --agent or configure `ao project set-config %s --worker-agent <agent>`", project.ID)}
+	// The project names no agent for this role. The daemon gives the project
+	// its most preferred agent for every empty role and spawns on it.
+	return ""
 }
 
 func (c *commandContext) preflightSpawnAgentAuth(ctx context.Context, cmd *cobra.Command, agentID string) error {

@@ -1,23 +1,42 @@
-import { useId, useRef } from "react";
+import { useLatestCallback } from "../hooks/useStable";
+import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
+import { mediaCrossOrigin } from "../lib/file-media";
+import { fileReferenceSource } from "../lib/file-reference-source";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { FileAnnotationRange } from "../../shared/chat-file-reference";
+import { useFileAnnotationReveal } from "./diffs/useFileAnnotationReveal";
 import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
 import { getApiBaseUrl } from "../lib/api-client";
+import { useAskInChat } from "../lib/chat-context-bus";
+import { useHostConnection } from "../hooks/useHostConnection";
+import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceDiffScope, WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import { useUiStore } from "../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, PanelMessage, type FileAnnotationModel } from "./WorkspaceDiffView";
-import { AO_PIERRE_SURFACE_CSS } from "./diffs/pierreTheme";
+import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./diffs/pierreTheme";
+import { SelectionAskButton } from "./diffs/SelectionAskButton";
+import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
+import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
+import { fileManagerName } from "./ArtifactActionsMenu";
+import { Button } from "./ui/button";
 
-function formatBytes(bytes: number): string {
+/** How long a revealed line stays marked, matching the chat and settings focus highlights. */
+export const REVEALED_LINE_HIGHLIGHT_MS = 2_000;
+
+export function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
 	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | "after"): string {
+function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | "after", hostId?: string, remoteBaseUrl?: string): string | undefined {
+	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
+	if (base === undefined) return undefined;
 	const query = new URLSearchParams({ path, side });
-	return `${getApiBaseUrl()}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
+	return `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
 }
 
 // Renders an untouched (unmodified) workspace file: an agent didn't write
@@ -25,48 +44,117 @@ function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | 
 // oversized files short-circuit before any tokenization is attempted.
 export function ReadOnlyFileView({
 	annotation,
-	detail,
+	annotationRange,
+ annotationReady = true,
+	detail: incomingDetail,
 	editing = false,
+	onContentReady,
 	onEditChange,
+	onRevealLineConsumed,
+	revealLine,
 	scope = "combined",
+	source = { kind: "workspace" },
+	commitSha,
 	sessionId,
+	hostId,
+	imageUrl,
 	side = "after",
 }: {
 	annotation: FileAnnotationModel;
+	annotationRange?: FileAnnotationRange;
+ annotationReady?: boolean;
 	detail: WorkspaceFileDetail;
 	editing?: boolean;
+	onContentReady?: () => void;
 	onEditChange?: (content: string) => void;
+	onRevealLineConsumed?: (requestKey: number) => void;
+	revealLine?: { line: number; requestKey: number };
 	scope?: WorkspaceDiffScope;
+	source?: import("../hooks/useSessionWorkspaceFiles").FilesSource;
+	commitSha?: string;
 	sessionId: string;
+	hostId?: string;
+	/** Where to load an image file from, when not the workspace blob route (an artifact's raw URL). */
+	imageUrl?: string;
 	side?: "before" | "after";
 }) {
 	const { t } = useTranslation();
+	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, side, editing, annotationRange?.requestKey]);
+	const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
+	const annotationReveal=useFileAnnotationReveal(containerRef,editing ? undefined : annotationRange, {ready:annotationReady,contentKey:detail.content});
+	const pendingRevealRef = useRef(revealLine);
+	const consumedRevealRequestKeysRef = useRef(new Set<number>());
+	// The line a reveal brought into view, marked briefly so the eye lands on it.
+	const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
 	const editorInstanceId = useId();
 	const gutterHover = usePersistentGutterUtility(containerRef);
+	const revealRequestedLine = useCallback(() => {
+		const target = pendingRevealRef.current;
+		if (!target) return;
+		if (consumedRevealRequestKeysRef.current.has(target.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
+		const diffsContainer = containerRef.current?.querySelector("diffs-container");
+		const line = diffsContainer?.shadowRoot?.querySelector<HTMLElement>(`[data-line="${target.line}"]`);
+		if (!line) return;
+		line.scrollIntoView({ block: "center" });
+		setHighlightedLine(target.line);
+		consumedRevealRequestKeysRef.current.add(target.requestKey);
+		pendingRevealRef.current = undefined;
+		onRevealLineConsumed?.(target.requestKey);
+	}, [onRevealLineConsumed]);
+	useEffect(() => {
+		if (!revealLine || consumedRevealRequestKeysRef.current.has(revealLine.requestKey)) {
+			pendingRevealRef.current = undefined;
+			return;
+		}
+		pendingRevealRef.current = revealLine;
+		const frame = requestAnimationFrame(revealRequestedLine);
+		return () => cancelAnimationFrame(frame);
+	}, [revealLine?.line, revealLine?.requestKey, revealRequestedLine]);
+	useEffect(() => {
+		if (highlightedLine === null) return;
+		const timer = window.setTimeout(() => setHighlightedLine(null), REVEALED_LINE_HIGHLIGHT_MS);
+		return () => window.clearTimeout(timer);
+	}, [highlightedLine]);
+	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
+	// session has a Chat composer; in edit mode a selection belongs to the editor.
+	const askInChat = useAskInChat(sessionId, hostId);
+	const captureSource = fileReferenceSource(source, commitSha);
+	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, false), side: side === "before" ? "old" : "file", endSide: side === "before" ? "old" : "file", ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined && !editing);
+	const onPostRender = useLatestCallback(() => {
+		gutterHover.restoreAfterRender();
+		onContentReady?.();
+		revealRequestedLine();
+		annotationReveal.reveal();
+	});
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (
 				<div className="grid place-items-center p-3">
 					<img
+						crossOrigin={mediaCrossOrigin(imageUrl ?? workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl))}
 						alt={detail.path}
 						className="max-h-[70vh] max-w-full object-contain"
-						src={workspaceRawImageUrl(sessionId, detail.path, side)}
+						src={imageUrl ?? workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl)}
 					/>
 				</div>
 			);
 		}
-		return <PanelMessage>{t("files.binaryUnavailable")}</PanelMessage>;
+		return source.kind === "artifact"
+			? <BinaryArtifactPreview key={`${sessionId}:${detail.path}`} path={detail.path} sessionId={sessionId} local={!hostId && !source.cloud} />
+			: <PanelMessage>{t("files.binaryUnavailable")}</PanelMessage>;
 	}
 	if (detail.contentTruncated) {
 		return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(detail.size) })}</PanelMessage>;
 	}
-	const activeLine = annotation.target?.surface !== "review" && annotation.target?.path === detail.path && annotation.target.side === "file"
-		? annotation.target.line
-		: undefined;
-	const lineAnnotations: LineAnnotation<"feedback">[] | undefined = activeLine != null
-		? [{ lineNumber: activeLine, metadata: "feedback" }]
+	const activeTargets = annotation.targets.filter((target) => target.surface !== "review" && target.path === detail.path && target.side === "file" && target.line != null);
+	const lineAnnotations: LineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
+		? activeTargets.map((target) => ({ lineNumber: target.line as number, metadata: "feedback" }))
 		: undefined;
 	const file: FileContents = {
 		name: detail.path,
@@ -100,26 +188,31 @@ export function ReadOnlyFileView({
 			<File<"feedback">
 				disableWorkerPool={typeof Worker === "undefined"}
 				edit={editing}
-				editStateKey={`${sessionId}:${detail.path}:file:${editorInstanceId}`}
+				editStateKey={`${sessionUiKey(sessionId, hostId)}:${detail.path}:file:${editorInstanceId}`}
 				editorOptions={{
 					onAttach: (editor) => requestAnimationFrame(() => editor.focus({ lineNumber: "first-visible" })),
 					ownsVerticalViewport: true,
 				}}
 				file={file}
 				lineAnnotations={lineAnnotations}
+				selectedLines={annotationRange ? annotationReveal.selectedLines : highlightedLine === null ? null : { start: highlightedLine, end: highlightedLine }}
 				options={{
 					disableFileHeader: true,
 					enableGutterUtility: true,
 					lineHoverHighlight: "line",
-					onPostRender: gutterHover.restoreAfterRender,
+					onPostRender,
 					overflow: "wrap",
+					preferredHighlighter: PIERRE_HIGHLIGHTER,
 					theme: { dark: "github-dark", light: "github-light" },
 					themeType: resolvedTheme,
 					tokenizeMaxLength: 200_000,
 					tokenizeMaxLineLength: 2_000,
 					unsafeCSS: AO_PIERRE_SURFACE_CSS,
 				}}
-				renderAnnotation={() => <FileAnnotationComposer annotation={annotation} />}
+				renderAnnotation={(line) => {
+					const target = activeTargets.find((open) => open.line === line.lineNumber);
+					return target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null;
+				}}
 				onEditChange={(event) => onEditChange?.(event.file.contents)}
 				onEditComplete={() => "reject"}
 				renderGutterUtility={(getHoveredLine) => (
@@ -129,6 +222,28 @@ export function ReadOnlyFileView({
 					}} />
 				)}
 			/>
+			{annotationReveal.loading ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationLoading")}</p>
+			: annotationReveal.changed || annotationReveal.unverified ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
+			<SelectionAskButton onAsk={codeSelection.ask} onDismiss={codeSelection.dismiss} source={codeSelection.source} />
 		</div>
+	);
+}
+
+/** An unsupported artifact still has a useful destination on its owning machine. */
+function BinaryArtifactPreview({ path, sessionId, local }: { path: string; sessionId: string; local: boolean }) {
+	const { t } = useTranslation();
+	const open = useOpenSessionArtifacts();
+	const extension = /\.[^.]+$/.exec(path.split("/").pop() ?? "")?.[0];
+	return (
+		<PanelMessage action={local ? (
+			<div className="flex flex-col items-center gap-2">
+				<Button size="sm" variant="secondary" disabled={open.isPending} onClick={() => open.mutate({ sessionId, path, targetId: "file-manager" })}>
+					{t("artifacts.showIn", { name: fileManagerName() })}
+				</Button>
+				{open.error ? <p role="alert" className="text-destructive">{open.error.message}</p> : null}
+			</div>
+		) : undefined}>
+			{t(extension ? "files.previewUnavailableType" : "files.previewUnavailable", { type: extension })}
+		</PanelMessage>
 	);
 }

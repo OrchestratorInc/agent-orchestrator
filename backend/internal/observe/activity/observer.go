@@ -2,7 +2,9 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -19,11 +21,27 @@ const (
 
 // Config controls activity reconciliation polling.
 type Config struct {
+	DataDir     string
 	Tick        time.Duration
 	StaleAfter  time.Duration
 	OutputLines int
 	Clock       func() time.Time
 	Logger      *slog.Logger
+	// StartAfter holds the poll loop until it closes; nil starts at once. The
+	// daemon closes it once SetSessionEnv is installed, so no state change is
+	// read, and its native identity resolved, without the session's
+	// environment.
+	StartAfter <-chan struct{}
+	// Rechecks, when set, names sessions whose screen should be read before
+	// their activity goes stale (see RecheckSource).
+	Rechecks RecheckSource
+}
+
+// RecheckSource asks for an early screen read of an active session: a hook
+// arrived whose meaning only the screen can settle, such as a Kimi
+// StopFailure taken for a child's that may have been the parent's own.
+type RecheckSource interface {
+	TerminalActivityRecheckDue(id domain.SessionID, now time.Time) bool
 }
 
 type sessionSource interface {
@@ -40,6 +58,7 @@ type outputReader interface {
 
 // Observer reconciles stale hook activity from adapter-owned terminal markers.
 type Observer struct {
+	dataDir     string
 	sessions    sessionSource
 	sink        activitySink
 	runtime     outputReader
@@ -49,11 +68,27 @@ type Observer struct {
 	outputLines int
 	clock       func() time.Time
 	logger      *slog.Logger
+	startAfter  <-chan struct{}
+	rechecks    RecheckSource
+	sessionEnv  atomic.Pointer[SessionEnvFunc]
+}
+
+// SessionEnvFunc builds the environment a session's agent process runs in.
+type SessionEnvFunc func(ctx context.Context, session domain.SessionRecord) (map[string]string, error)
+
+// SetSessionEnv gives native-identity lookups the session's runtime
+// environment: an adapter whose lookup runs the agent CLI may need a
+// project-level profile or credential the daemon's own environment lacks.
+// The daemon sets it once the session manager exists; lookups before that run
+// without one.
+func (o *Observer) SetSessionEnv(fn SessionEnvFunc) {
+	o.sessionEnv.Store(&fn)
 }
 
 // New builds an activity observer.
 func New(sessions sessionSource, sink activitySink, runtime outputReader, agents ports.AgentResolver, cfg Config) *Observer {
 	o := &Observer{
+		dataDir:     cfg.DataDir,
 		sessions:    sessions,
 		sink:        sink,
 		runtime:     runtime,
@@ -63,6 +98,8 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 		outputLines: cfg.OutputLines,
 		clock:       cfg.Clock,
 		logger:      cfg.Logger,
+		startAfter:  cfg.StartAfter,
+		rechecks:    cfg.Rechecks,
 	}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
@@ -89,7 +126,20 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 
 // Start runs polling until the context is canceled.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	if o.startAfter == nil {
+		return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			return
+		case <-o.startAfter:
+		}
+		<-observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	}()
+	return done
 }
 
 // Poll performs one activity reconciliation pass.
@@ -100,9 +150,20 @@ func (o *Observer) Poll(ctx context.Context) error {
 	}
 	now := o.clock()
 	for _, session := range sessions {
-		o.reconcile(ctx, session, now)
+		o.reconcileSession(ctx, session, now)
 	}
 	return nil
+}
+
+// reconcileSession turns a panic while reading one session's pane into a
+// skipped tick for that session, instead of stopping the observer.
+func (o *Observer) reconcileSession(ctx context.Context, session domain.SessionRecord, now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("activity observer: reconciliation panicked", "session", session.ID, "panic", r)
+		}
+	}()
+	o.reconcile(ctx, session, now)
 }
 
 func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, now time.Time) {
@@ -117,6 +178,20 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok {
 		return
 	}
+	var options ports.TerminalActivityOptions
+	if provider, ok := agent.(ports.TerminalActivityOptionsProvider); ok {
+		options = provider.TerminalActivityOptions()
+	}
+	nativeDecisionCards := options.SupportsBlocked
+	rendered, supportsRendered := agent.(interface{ RequiresRenderedActivity() bool })
+	requiresRendered := supportsRendered && rendered.RequiresRenderedActivity()
+	// Hook-owned permission blocks stay sticky unless the adapter can observe
+	// the current rendered modal and its resolution.
+	if session.Activity.State == domain.ActivityBlocked && !requiresRendered && !nativeDecisionCards {
+		return
+	}
+
+	nativeDecisionCards = nativeDecisionCards || requiresRendered
 	continuous, ok := agent.(ports.ContinuousTerminalActivityDetector)
 	if !ok || !continuous.ContinuouslyDetectTerminalActivity() {
 		if session.Activity.State == domain.ActivityWaitingInput {
@@ -125,29 +200,72 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 				return
 			}
 		} else if session.Activity.State != domain.ActivityActive || session.Activity.LastActivityAt.IsZero() ||
-			now.Sub(session.Activity.LastActivityAt) < o.staleAfter {
+			(now.Sub(session.Activity.LastActivityAt) < o.staleAfter && !o.recheckDue(session.ID, now)) {
 			return
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
 		session.Activity.State != domain.ActivityIdle &&
-		session.Activity.State != domain.ActivityWaitingInput {
+		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	var output string
+	var err error
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	reader, available := o.runtime.(ports.StyledTerminalOutputReader)
+	_, requiresViewport := agent.(ports.TerminalMessageInputGuard)
+	if (requiresViewport || requiresRendered) && !available {
+		return
+	}
+	if available && (requiresViewport || requiresRendered || options.PreferStyledOutput) {
+		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
+		if err != nil && options.RawOutputFallback && !requiresViewport && !requiresRendered &&
+			errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+			output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+		}
+	} else {
+		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
 	}
 	state, ok := detector.DetectTerminalActivity(output)
-	if !ok || state == session.Activity.State ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput) {
+	if !ok || (state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && (!nativeDecisionCards || state != domain.ActivityBlocked)) {
 		return
 	}
+	if state == session.Activity.State {
+		return
+	}
+	nativeID := ""
+	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
+		resolveCfg := ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID}
+		if fn := o.sessionEnv.Load(); fn != nil && *fn != nil {
+			if env, envErr := (*fn)(ctx, session); envErr != nil {
+				o.logger.Debug("activity observer: session environment unavailable", "session", session.ID, "err", envErr)
+			} else {
+				resolveCfg.Env = env
+			}
+		}
+		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, resolveCfg)
+		if resolveErr != nil {
+			// Native identity is optional evidence; a failed lookup must not
+			// discard activity established by the current terminal frame.
+			o.logger.Debug("activity observer: native identity unavailable", "session", session.ID, "err", resolveErr)
+		} else if found {
+			nativeID = id
+		}
+	}
 	event := "terminal-" + string(state)
-	if state == domain.ActivityWaitingInput {
+	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
+		// A current native composer/busy frame resolves the prior modal. Keep
+		// its observed destination state: lifecycle accepts this boundary for
+		// active, idle, and waiting input, and clears the blocked tool flight.
+		event = "permission-resolved"
+	} else if state == domain.ActivityWaitingInput {
 		event = "terminal-waiting-input"
 	}
 	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
+		AgentSessionID:   nativeID,
 		Valid:            true,
 		State:            state,
 		Timestamp:        now,
@@ -158,4 +276,8 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
 	}
+}
+
+func (o *Observer) recheckDue(id domain.SessionID, now time.Time) bool {
+	return o.rechecks != nil && o.rechecks.TerminalActivityRecheckDue(id, now)
 }

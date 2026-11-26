@@ -68,7 +68,9 @@ func (rr *recordingReaper) reap(_ context.Context, pids []int, grace time.Durati
 
 func newTestRuntime(chunkSize int) (*Runtime, *fakeRunner) {
 	fr := &fakeRunner{}
-	r := New(Options{Binary: "tmux-test", Timeout: time.Second, Shell: "/bin/sh", ChunkSize: chunkSize})
+	// Launch environment files go to a scratch directory, never ~/.ao: the
+	// fake runner starts no shell to read and delete them.
+	r := New(Options{Binary: "tmux-test", Timeout: time.Second, Shell: "/bin/sh", ChunkSize: chunkSize, EnvDir: filepath.Join(os.TempDir(), "ao-tmux-test-env")})
 	r.runner = fr
 	r.enterDelay = 0                           // tests must not pay the real 300ms pre-Enter pause
 	r.reapSessions = (&recordingReaper{}).reap // never signal real processes from unit tests
@@ -331,6 +333,111 @@ func TestSessionNameMatchesCreateNaming(t *testing.T) {
 	}
 }
 
+func TestDottedReviewerHandleResolvesToCreateName(t *testing.T) {
+	raw := "review-memron.ai-2"
+	// The reviewer launcher destroys a stale pane with the raw derived handle
+	// before Create returns a tmux handle. Exercise that actual lookup path.
+	r, fr := newTestRuntime(0)
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy raw reviewer handle: %v", err)
+	}
+	for _, call := range fr.calls {
+		for _, arg := range call.args {
+			if arg == raw {
+				t.Fatalf("tmux received raw dotted reviewer handle: %v", call.args)
+			}
+		}
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one for sanitized reviewer handle", countCalls(fr, "kill-session"))
+	}
+	got, err := handleID(ports.RuntimeHandle{ID: raw})
+	if err != nil || got != SessionName(raw) {
+		t.Fatalf("handleID(%q) = %q, %v; want Create name %q", raw, got, err, SessionName(raw))
+	}
+	other, err := handleID(ports.RuntimeHandle{ID: "review-memron-ai-2"})
+	if err != nil || other == got {
+		t.Fatalf("distinct reviewer handle = %q, %v; dotted handle = %q", other, err, got)
+	}
+	if _, err := handleID(ports.RuntimeHandle{ID: "review-memron..ai-2"}); err == nil {
+		t.Fatal("dot path segment was accepted")
+	}
+}
+
+func TestLongReviewerHandleResolvesToCreateName(t *testing.T) {
+	raw := "review-" + strings.Repeat("a", 60)
+	want := SessionName(raw)
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("can't find session: " + raw)}
+	fr.hook = func(_ context.Context, call int) error {
+		if call == 1 {
+			return &exec.ExitError{}
+		}
+		return nil
+	}
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy raw long reviewer handle: %v", err)
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one", countCalls(fr, "kill-session"))
+	}
+	for _, call := range fr.calls {
+		if len(call.args) > 0 && call.args[0] == "kill-session" && !reflect.DeepEqual(call.args, killSessionArgs(want)) {
+			t.Fatalf("kill-session args = %v, want %v", call.args, killSessionArgs(want))
+		}
+	}
+	if got, err := handleID(ports.RuntimeHandle{ID: want}); err != nil || got != want {
+		t.Fatalf("stored handle = %q, %v; want %q", got, err, want)
+	}
+	if len(fr.calls) == 0 || !reflect.DeepEqual(fr.calls[0].args, hasSessionArgs(raw)) {
+		t.Fatalf("first call = %v, want exact raw probe", fr.calls)
+	}
+}
+
+func TestLongLegacyReviewerHandleDestroysOriginalSession(t *testing.T) {
+	raw := "review-" + strings.Repeat("a", 60)
+	r := New(Options{Binary: "bundled-tmux-test", LegacyBinary: "system-tmux-test", SocketName: "ao", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("can't find session: " + raw), err: &exec.ExitError{}}, // private socket
+		{},                  // legacy default socket has the raw session
+		{},                  // enforce detach-on-destroy
+		{out: []byte("on")}, // verify detach-on-destroy
+	}}
+	r.runner = fr
+	r.reapSessions = (&recordingReaper{}).reap
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy long legacy reviewer handle: %v", err)
+	}
+	kills := 0
+	for _, call := range fr.calls {
+		if len(call.args) >= 3 && call.args[2] == "kill-session" {
+			kills++
+			if call.name != "system-tmux-test" || !reflect.DeepEqual(call.args, append([]string{"-L", "default"}, killSessionArgs(raw)...)) {
+				t.Fatalf("kill-session call = %+v, want raw name on legacy socket", call)
+			}
+		}
+	}
+	if kills != 1 {
+		t.Fatalf("kill-session calls = %d, want one", kills)
+	}
+}
+
+func TestLongLegacyHandlePreservesRawName(t *testing.T) {
+	raw := "TestRuntimeIntegrationLegacyDefaultSocket" + strings.Repeat("a", 30)
+	r, fr := newTestRuntime(0)
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: raw}); err != nil {
+		t.Fatalf("Destroy long legacy handle: %v", err)
+	}
+	if countCalls(fr, "kill-session") != 1 {
+		t.Fatalf("kill-session calls = %d, want one", countCalls(fr, "kill-session"))
+	}
+	for _, call := range fr.calls {
+		if len(call.args) > 0 && call.args[0] == "kill-session" && !reflect.DeepEqual(call.args, killSessionArgs(raw)) {
+			t.Fatalf("kill-session args = %v, want %v", call.args, killSessionArgs(raw))
+		}
+	}
+}
+
 // -- env key validation --
 
 func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
@@ -439,7 +546,7 @@ func TestCreateLaunchCommandContainsKeepAliveShell(t *testing.T) {
 	// The launch command is the last argument to new-session (after shellPath -c).
 	args := fr.calls[0].args
 	launchCmd := args[len(args)-1]
-	if !strings.Contains(launchCmd, `exec "${SHELL:-/bin/sh}" -i`) {
+	if !strings.Contains(launchCmd, `exec "$SHELL" -i; else exec '/bin/sh' -i`) {
 		t.Fatalf("launch command missing keep-alive shell: %q", launchCmd)
 	}
 	if !strings.HasPrefix(launchCmd, "cd '/tmp/ws' || exit; ") {
@@ -447,6 +554,39 @@ func TestCreateLaunchCommandContainsKeepAliveShell(t *testing.T) {
 	}
 	if !strings.Contains(launchCmd, "'myagent'") {
 		t.Fatalf("launch command missing quoted argv: %q", launchCmd)
+	}
+}
+
+func TestLaunchPreludeUsesPOSIXShellWithNonPOSIXUserShell(t *testing.T) {
+	for _, userShell := range []string{"/usr/bin/fish", "/bin/zsh", "/bin/bash"} {
+		t.Run(filepath.Base(userShell), func(t *testing.T) {
+			r, fr := newTestRuntime(0)
+			r.shell = userShell
+			fr.outputs = [][]byte{nil, []byte("/tmp/ws\n"), nil, nil, nil, nil, nil}
+			cfg := ports.RuntimeConfig{SessionID: "sess-1", WorkspacePath: "/tmp/ws", Argv: []string{"myagent"}}
+			if _, err := r.Create(context.Background(), cfg); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			args := fr.calls[0].args
+			if got := args[len(args)-3]; got != "/bin/sh" {
+				t.Fatalf("Create prelude shell = %q, want /bin/sh", got)
+			}
+			if !strings.Contains(args[len(args)-1], `exec "$SHELL" -i; else exec '`+userShell+`' -i`) {
+				t.Fatalf("Create lost interactive shell preference: %q", args[len(args)-1])
+			}
+			if _, err := r.Restart(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, cfg); err != nil {
+				t.Fatalf("Restart: %v", err)
+			}
+			for _, call := range fr.calls {
+				if len(call.args) > 0 && call.args[0] == "respawn-pane" {
+					if got := call.args[len(call.args)-3]; got != "/bin/sh" {
+						t.Fatalf("Restart prelude shell = %q, want /bin/sh", got)
+					}
+					return
+				}
+			}
+			t.Fatal("Restart did not respawn pane")
+		})
 	}
 }
 
@@ -468,7 +608,7 @@ func TestCreateCommandTerminalExitsWhenCommandCompletes(t *testing.T) {
 	if !strings.HasSuffix(launchCmd, "; exit $?") {
 		t.Fatalf("command terminal launch = %q, want command exit propagation", launchCmd)
 	}
-	if strings.Contains(launchCmd, `exec "${SHELL:-/bin/sh}" -i`) || strings.Contains(launchCmd, `exec cat >/dev/null`) {
+	if strings.Contains(launchCmd, `exec "$SHELL" -i`) || strings.Contains(launchCmd, `exec cat >/dev/null`) {
 		t.Fatalf("command terminal launch unexpectedly keeps the pane alive: %q", launchCmd)
 	}
 }
@@ -502,34 +642,139 @@ func TestCreateLaunchCommandExportsEnvVars(t *testing.T) {
 	}
 	args := fr.calls[0].args
 	launchCmd := args[len(args)-1]
+	if !strings.Contains(launchCmd, "unset NO_COLOR;") {
+		t.Fatalf("launch command missing NO_COLOR reset: %q", launchCmd)
+	}
+	script := readLaunchEnv(t, launchCmd)
 	for _, want := range []string{
-		"unset NO_COLOR;",
-		"export AO_SESSION_ID='sess-1';",
-		"export COLORTERM='truecolor';",
-		"export ODD='can'\\''t';",
-		"export PATH='/custom/bin:/usr/bin';",
+		"export AO_SESSION_ID='sess-1'\n",
+		"export COLORTERM='truecolor'\n",
+		"export ODD='can'\\''t'\n",
+		"export PATH='/custom/bin:/usr/bin'\n",
 	} {
-		if !strings.Contains(launchCmd, want) {
-			t.Fatalf("launch command missing %q in: %q", want, launchCmd)
+		if !strings.Contains(script, want) {
+			t.Fatalf("launch environment missing %q in: %q", want, script)
 		}
+	}
+	// PATH is exported last so an explicit override takes effect.
+	if !strings.HasSuffix(script, "export PATH='/custom/bin:/usr/bin'\n") {
+		t.Fatalf("PATH is not exported last: %q", script)
 	}
 }
 
+// launchEnvPath returns the environment file a launch command sources.
+func launchEnvPath(t *testing.T, launchCmd string) string {
+	t.Helper()
+	_, rest, ok := strings.Cut(launchCmd, "; . '")
+	if !ok {
+		t.Fatalf("launch command sources no environment file: %q", launchCmd)
+	}
+	path, _, ok := strings.Cut(rest, "'")
+	if !ok {
+		t.Fatalf("unterminated environment file path: %q", launchCmd)
+	}
+	return path
+}
+
+// readLaunchEnv reads the environment file a launch command sources, checks
+// only its owner can read it, and removes it as the pane's shell would.
+func readLaunchEnv(t *testing.T, launchCmd string) string {
+	t.Helper()
+	path := launchEnvPath(t, launchCmd)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("launch environment file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("launch environment file mode = %v, want 0600", info.Mode().Perm())
+	}
+	if dir, err := os.Stat(filepath.Dir(path)); err != nil || dir.Mode().Perm() != 0o700 {
+		t.Fatalf("launch environment directory mode = %v, err = %v; want 0700", dir.Mode().Perm(), err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(path)
+	return string(data)
+}
+
+func TestLaunchKeepsEnvironmentValuesOutOfTmuxArgv(t *testing.T) {
+	const secret = "sk-proj-saved-provider-key"
+	cfg := ports.RuntimeConfig{
+		SessionID:     "sess-1",
+		WorkspacePath: "/tmp/ws",
+		Argv:          []string{"myagent"},
+		Env:           map[string]string{"AO_SESSION_ID": "sess-1", "OPENAI_API_KEY": secret},
+	}
+	assertNoSecret := func(t *testing.T, fr *fakeRunner) string {
+		t.Helper()
+		var launchCmd string
+		for _, call := range fr.calls {
+			if joined := strings.Join(call.args, " "); strings.Contains(joined, secret) {
+				t.Fatalf("saved key appears in tmux argv: %q", joined)
+			}
+			if len(call.args) > 0 && (call.args[0] == "new-session" || call.args[0] == "respawn-pane") {
+				launchCmd = call.args[len(call.args)-1]
+			}
+		}
+		if strings.Contains(launchCmd, "export ") {
+			t.Fatalf("launch command still inlines exports: %q", launchCmd)
+		}
+		if script := readLaunchEnv(t, launchCmd); !strings.Contains(script, "export OPENAI_API_KEY='"+secret+"'\n") {
+			t.Fatalf("launch environment lost the key: %q", script)
+		}
+		return launchCmd
+	}
+
+	t.Run("create", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		fr.outputs = [][]byte{nil, []byte("/tmp/ws\n"), nil, nil, nil, nil, nil}
+		if _, err := r.Create(context.Background(), cfg); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		assertNoSecret(t, fr)
+	})
+	t.Run("restart", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		if _, err := r.Restart(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, cfg); err != nil {
+			t.Fatalf("Restart: %v", err)
+		}
+		assertNoSecret(t, fr)
+	})
+	t.Run("failed create removes the file", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		fr.err = errors.New("tmux unavailable")
+		if _, err := r.Create(context.Background(), cfg); err == nil {
+			t.Fatal("Create succeeded although tmux failed")
+		}
+		path := launchEnvPath(t, fr.calls[0].args[len(fr.calls[0].args)-1])
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("launch environment left behind after a failed create: %v", err)
+		}
+	})
+}
+
 func TestBuildLaunchCommandPreservesExplicitNoColor(t *testing.T) {
-	launchCmd := buildLaunchCommand(ports.RuntimeConfig{
+	cfg := ports.RuntimeConfig{
 		WorkspacePath: "/tmp/ws",
 		Argv:          []string{"myagent"},
 		Env:           map[string]string{"NO_COLOR": "1"},
-	})
+	}
+	launchCmd := buildLaunchCommand(cfg, "/tmp/env", "/bin/sh")
+	script := launchEnvScript(cfg)
 
-	if !strings.Contains(launchCmd, "export NO_COLOR='1';") {
-		t.Fatalf("launch command does not preserve configured NO_COLOR: %q", launchCmd)
+	if !strings.Contains(script, "export NO_COLOR='1'\n") {
+		t.Fatalf("launch environment does not preserve configured NO_COLOR: %q", script)
 	}
 	if strings.Contains(launchCmd, "unset NO_COLOR;") {
 		t.Fatalf("launch command unsets configured NO_COLOR: %q", launchCmd)
 	}
-	if !strings.Contains(launchCmd, "export COLORTERM='truecolor';") {
-		t.Fatalf("launch command does not advertise true color: %q", launchCmd)
+	if !strings.Contains(script, "export COLORTERM='truecolor'\n") {
+		t.Fatalf("launch environment does not advertise true color: %q", script)
+	}
+	if !strings.Contains(launchCmd, ". '/tmp/env' || { rm -f '/tmp/env'; exit 1; }; rm -f '/tmp/env'; 'myagent'") {
+		t.Fatalf("launch command does not source and delete its environment before argv: %q", launchCmd)
 	}
 }
 
@@ -1219,6 +1464,141 @@ func TestDestroyIsIdempotentWhenDetachOnDestroySettingReportsSessionMissing(t *t
 	}
 }
 
+// tmux >= 3.5 words a missing session "no such session: <target>" (with the
+// "=" exact-match prefix echoed back) instead of "can't find session" (issue
+// #6099). It must read as confirmed absence, while transient server failures
+// stay unconfirmed so the #4223 fail-closed guard holds.
+func TestSessionMissingOutputRecognizesTmux35Wording(t *testing.T) {
+	tests := []struct {
+		output      string
+		wantMissing bool
+		wantAbsent  bool
+	}{
+		{output: "no such session: =review-x:", wantMissing: true, wantAbsent: true},
+		{output: "can't find session: sess-1", wantMissing: true, wantAbsent: true},
+		{output: "session not found: sess-1", wantMissing: true, wantAbsent: true},
+		{output: "no server running on /tmp/tmux-1000/default", wantAbsent: true},
+		{output: "error connecting to /tmp/tmux-1000/default (No such file or directory)", wantAbsent: true},
+		{output: "error connecting to /tmp/tmux-1000/default (Connection refused)"},
+		{output: "protocol version mismatch (client 8, server 7)"},
+		{output: "server exited unexpectedly"},
+	}
+	for _, tt := range tests {
+		if got := sessionMissingOutput(tt.output); got != tt.wantMissing {
+			t.Errorf("sessionMissingOutput(%q) = %v, want %v", tt.output, got, tt.wantMissing)
+		}
+		if got := confirmedAbsentOutput(&exec.ExitError{}, tt.output); got != tt.wantAbsent {
+			t.Errorf("confirmedAbsentOutput(%q) = %v, want %v", tt.output, got, tt.wantAbsent)
+		}
+	}
+}
+
+// The reviewer launcher destroys any stale pane before every launch, so a
+// missing session on tmux >= 3.5 must be a no-op success rather than failing
+// the pre-kill detach-on-destroy reassertion (issue #6099).
+func TestDestroyIsIdempotentWhenSessionMissingTmux35Wording(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{nil, []byte("no such session: =review-x:"), []byte("no such session: =review-x:")}
+	fr.err = &exec.ExitError{}
+
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "review-x"}); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if len(fr.calls) != 3 || fr.calls[0].args[0] != "list-panes" || fr.calls[1].args[0] != "set-option" || fr.calls[2].args[0] != "kill-session" {
+		t.Fatalf("calls = %#v, want list-panes, set-option, then kill-session", fr.calls)
+	}
+}
+
+// Recognizing the tmux >= 3.5 wording must not widen confirmed absence:
+// transient failures at either Destroy step still fail closed (issue #4223).
+func TestDestroyFailsClosedOnTransientFailuresAlongsideTmux35Wording(t *testing.T) {
+	transient := []string{
+		"error connecting to /tmp/tmux-1000/default (Connection refused)",
+		"protocol version mismatch (client 8, server 7)",
+		"server exited unexpectedly",
+	}
+	for _, output := range transient {
+		t.Run("set-option/"+output, func(t *testing.T) {
+			r, _ := newTestRuntime(0)
+			fr := &fakeRunnerSelectiveErr{exitErrOn: "set-option", errOutput: []byte(output)}
+			r.runner = fr
+
+			if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "review-x"}); err == nil {
+				t.Fatal("Destroy: got nil, want error on a transient set-option failure")
+			}
+			for _, c := range fr.calls {
+				if len(c.args) > 0 && c.args[0] == "kill-session" {
+					t.Fatal("Destroy reached kill-session despite an unconfirmed detach-on-destroy guard")
+				}
+			}
+		})
+		t.Run("kill-session/"+output, func(t *testing.T) {
+			r, _ := newTestRuntime(0)
+			r.runner = &fakeRunnerSelectiveErr{exitErrOn: "kill-session", errOutput: []byte(output)}
+
+			if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "review-x"}); err == nil {
+				t.Fatal("Destroy: got nil, want error on a transient kill-session failure")
+			}
+		})
+	}
+}
+
+func TestIsAliveReturnsFalseNilOnTmux35NoSuchSession(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("no such session: =sess-1:")}
+	fr.err = &exec.ExitError{}
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil {
+		t.Fatalf("IsAlive: %v", err)
+	}
+	if alive {
+		t.Fatal("alive = true, want false")
+	}
+}
+
+func TestProcessRootPIDsTreatsTmux35NoSuchSessionAsNoPIDs(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("no such session: =sess-1:")}
+	fr.err = &exec.ExitError{}
+
+	pids, err := r.ProcessRootPIDs(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || len(pids) != 0 {
+		t.Fatalf("ProcessRootPIDs = (%v, %v), want (nil, nil)", pids, err)
+	}
+}
+
+// The legacy-socket migration probe must cross to the system socket when the
+// private server reports the session missing in tmux >= 3.5 wording, exactly as
+// it does for "can't find session".
+func TestIsAliveAdoptsLegacySessionWhenPrivateSocketReportsTmux35NoSuchSession(t *testing.T) {
+	r := New(Options{
+		Binary:       "bundled-tmux-test",
+		LegacyBinary: "system-tmux-test",
+		SocketName:   "ao",
+		Timeout:      time.Second,
+	})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("no such session: =sess-1:"), err: &exec.ExitError{}}, // private probe: missing
+		{},                    // legacy default-socket discovery
+		{},                    // enforceDetachOnDestroy: set-option
+		{out: []byte("on\n")}, // enforceDetachOnDestroy: show-options verify
+		{},                    // has-session on the adopted legacy socket
+	}}
+	r.runner = fr
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if len(fr.calls) != 5 {
+		t.Fatalf("calls = %d, want 5: %+v", len(fr.calls), fr.calls)
+	}
+	if got, want := fr.calls[1].args, append([]string{"-L", "default"}, hasSessionArgs("sess-1")...); !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy discovery args = %#v, want %#v", got, want)
+	}
+}
+
 func TestIsSupervisedProcessAliveFindsExactDescendant(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{
@@ -1238,6 +1618,18 @@ func TestIsSupervisedProcessAliveFindsExactDescendant(t *testing.T) {
 	}
 }
 
+func TestIsExactSupervisedProcessAliveTreatsMissingSessionAsDead(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("can't find session: sess-1")}
+	fr.err = &exec.ExitError{}
+	alive, err := r.IsExactSupervisedProcessAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, ports.SupervisedProcessRef{
+		SessionID: "sess-1", LaunchID: "launch-1",
+	})
+	if err != nil || alive {
+		t.Fatalf("IsExactSupervisedProcessAlive = (%v, %v), want missing/dead", alive, err)
+	}
+}
+
 func TestIsSupervisedProcessAliveRejectsStaleAndUnrelatedProcesses(t *testing.T) {
 	entries, err := parseProcessTable("100 1 /bin/sh\n101 100 /opt/ao agent-process supervise --session sess-1 --launch launch-old -- codex\n102 101 codex\n200 1 /opt/ao agent-process supervise --session sess-1 --launch launch-new -- codex\n201 200 codex\n")
 	if err != nil {
@@ -1251,6 +1643,70 @@ func TestIsSupervisedProcessAliveRejectsStaleAndUnrelatedProcesses(t *testing.T)
 	}
 	if !containsExactSupervisedWorkload(entries, 100, "sess-1", "launch-old") {
 		t.Fatal("exact supervised descendant was not found")
+	}
+}
+
+func TestExactSupervisedWorkloadFindsReviewerSupervisorWithHandleIdentity(t *testing.T) {
+	entries, err := parseProcessTable("100 1 /bin/zsh -i\n101 100 /opt/ao agent-process supervise --session review-worker-7 --activity-review review-7 --launch launch-3 -- codex\n102 101 codex\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsExactSupervisedWorkload(entries, 100, "review-worker-7", "launch-3") {
+		t.Fatal("exact supervised reviewer descendant was not found")
+	}
+	if containsExactSupervisedWorkload(entries, 100, "review-worker-8", "launch-3") {
+		t.Fatal("reviewer supervisor with a different handle was accepted")
+	}
+	if containsExactSupervisedWorkload(entries, 100, "review-worker-7", "launch-old") {
+		t.Fatal("reviewer supervisor with a different launch was accepted")
+	}
+}
+
+func TestContainsUnsupervisedReviewerWorkloadDistinguishesExitedProcesses(t *testing.T) {
+	tests := []struct {
+		name  string
+		table string
+		want  bool
+	}{
+		{
+			name:  "live legacy reviewer",
+			table: "100 1 /bin/zsh -c reviewer\n101 100 codex review --pr 7\n",
+			want:  true,
+		},
+		{
+			name:  "preserved interactive shell",
+			table: "100 1 /bin/zsh -i\n",
+			want:  false,
+		},
+		{
+			name:  "supervised exit sink",
+			table: "100 1 /bin/zsh -c launch\n101 100 cat\n",
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries, err := parseProcessTable(tt.table)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := containsUnsupervisedReviewerWorkload(entries, 100); got != tt.want {
+				t.Fatalf("containsUnsupervisedReviewerWorkload = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsUnsupervisedReviewerAliveRejectsSupervisedExitSink(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{
+		nil,
+		[]byte("100\n"),
+		[]byte("100 1 /bin/zsh -c launch\n101 100 cat\n"),
+	}
+	alive, err := r.IsUnsupervisedReviewerAlive(context.Background(), ports.RuntimeHandle{ID: "review-worker-7"})
+	if err != nil || alive {
+		t.Fatalf("IsUnsupervisedReviewerAlive = (%v, %v), want (false, nil)", alive, err)
 	}
 }
 
@@ -1280,6 +1736,7 @@ func TestIsSupervisedProcessAliveFindsManualRelaunchFromPreservedShell(t *testin
 func TestIsExactSupervisedProcessAliveRejectsManualRelaunchFromPreservedShell(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{
+		nil,
 		[]byte("100\n"),
 		[]byte("100 1 /bin/zsh -i\n101 100 codex resume native-1\n102 101 codex worker\n"),
 	}
@@ -1289,6 +1746,45 @@ func TestIsExactSupervisedProcessAliveRejectsManualRelaunchFromPreservedShell(t 
 	})
 	if err != nil || alive {
 		t.Fatalf("IsExactSupervisedProcessAlive = (%v, %v), want (false, nil)", alive, err)
+	}
+}
+
+func TestHasSupervisedProcessRecordDistinguishesLegacyPane(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{
+		nil,
+		[]byte("100\n"),
+		[]byte("100 1 /bin/zsh -i\n101 100 codex resume native-1\n"),
+	}
+	tracked, err := r.HasSupervisedProcessRecord(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || tracked {
+		t.Fatalf("HasSupervisedProcessRecord = (%v, %v), want legacy/untracked", tracked, err)
+	}
+}
+
+func TestHasSupervisedProcessRecordFindsAOReviewerSupervisor(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{
+		nil,
+		[]byte("100\n"),
+		[]byte("100 1 /bin/zsh -i\n101 100 /opt/ao agent-process supervise --review review-1 --launch launch-2 -- codex\n102 101 codex\n"),
+	}
+	tracked, err := r.HasSupervisedProcessRecord(context.Background(), ports.RuntimeHandle{ID: "review-pane"})
+	if err != nil || !tracked {
+		t.Fatalf("HasSupervisedProcessRecord = (%v, %v), want supervised", tracked, err)
+	}
+}
+
+func TestHasSupervisedProcessRecordTreatsMissingSessionAsUntracked(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("can't find session: sess-1")}
+	fr.err = &exec.ExitError{}
+	tracked, err := r.HasSupervisedProcessRecord(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || tracked {
+		t.Fatalf("HasSupervisedProcessRecord = (%v, %v), want missing/untracked", tracked, err)
+	}
+	if len(fr.calls) != 1 || fr.calls[0].args[0] != "has-session" {
+		t.Fatalf("calls = %#v, want missing-session probe only", fr.calls)
 	}
 }
 
@@ -2162,4 +2658,50 @@ func exitCodeErr(t *testing.T, code int) error {
 		t.Fatalf("sh -c 'exit %d' should fail", code)
 	}
 	return err
+}
+
+func TestRuntime_ServerPID(t *testing.T) {
+	t.Run("parses the server pid tmux reports", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		r.socketName = "ao"
+		fr.outputs = [][]byte{[]byte("54321\n")}
+		pid, ok := r.ServerPID(context.Background())
+		if !ok || pid != 54321 {
+			t.Fatalf("ServerPID() = %d, %v, want 54321, true", pid, ok)
+		}
+	})
+
+	t.Run("false on a runner error", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		fr.err = errors.New("no server running")
+		pid, ok := r.ServerPID(context.Background())
+		if ok || pid != 0 {
+			t.Fatalf("ServerPID() = %d, %v, want 0, false", pid, ok)
+		}
+	})
+
+	t.Run("false on unparseable output", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		r.socketName = "ao"
+		fr.outputs = [][]byte{[]byte("not-a-pid\n")}
+		pid, ok := r.ServerPID(context.Background())
+		if ok || pid != 0 {
+			t.Fatalf("ServerPID() = %d, %v, want 0, false", pid, ok)
+		}
+	})
+
+	// Without a private socket tmux answers from the machine default server,
+	// which is the user's own tmux: claiming it bills their shells, editors
+	// and anything else they run there as AO memory.
+	t.Run("false without a private socket, never asking tmux", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		fr.outputs = [][]byte{[]byte("54321\n")}
+		pid, ok := r.ServerPID(context.Background())
+		if ok || pid != 0 {
+			t.Fatalf("ServerPID() = %d, %v, want 0, false", pid, ok)
+		}
+		if n := countCalls(fr, "display-message"); n != 0 {
+			t.Fatalf("display-message calls = %d, want 0", n)
+		}
+	})
 }

@@ -135,6 +135,12 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if agentSessionID == "" {
 		return nil, false, nil
 	}
+	if err := p.validateImportedRuntime(ctx, ports.WorkspaceHookConfig{
+		DataDir: cfg.DataDir, Env: cfg.Env, WorkspacePath: cfg.Session.WorkspacePath,
+		NativeSessionID: agentSessionID, ImportConfigDir: cfg.Session.Metadata[ports.MetadataKeyImportConfigDir],
+	}); err != nil {
+		return nil, false, err
+	}
 
 	binary, err := p.droidBinary(ctx)
 	if err != nil {
@@ -211,7 +217,7 @@ func runtimeSettingsArgs(dataDir, sessionID string, mode ports.PermissionMode, m
 		return nil, nil
 	}
 	if strings.TrimSpace(dataDir) == "" {
-		return nil, fmt.Errorf("droid: AO data directory required for runtime settings")
+		return nil, fmt.Errorf("droid: Orchestrator data directory required for runtime settings")
 	}
 
 	settings := map[string]any{}
@@ -311,4 +317,12 @@ func (p *Plugin) droidBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

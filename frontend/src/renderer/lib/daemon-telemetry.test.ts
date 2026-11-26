@@ -45,7 +45,7 @@ describe("daemon failure telemetry", () => {
 		pushStatus({ state: "error", message: "spawn /Users/alice/ao failed", code: "spawn_failed" });
 
 		expect(captureMock).toHaveBeenCalledTimes(1);
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.daemon_failure", {
+		expect(captureMock).toHaveBeenCalledWith("ao.daemon.failed", {
 			daemon_state: "error",
 			code: "spawn_failed",
 			exit_code: undefined,
@@ -58,11 +58,24 @@ describe("daemon failure telemetry", () => {
 
 		pushStatus({ state: "stopped", code: "exited", exitCode: 1, signal: "SIGKILL" });
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.daemon_failure", {
+		expect(captureMock).toHaveBeenCalledWith("ao.daemon.failed", {
 			daemon_state: "stopped",
 			code: "exited",
 			exit_code: 1,
 			signal: "SIGKILL",
+		});
+	});
+
+	it("includes why the daemon exited", () => {
+		stop = startDaemonFailureTelemetry();
+
+		pushStatus({ state: "stopped", code: "exited", exitCode: 1, exitReason: "already_running", details: "daemon already running (pid 4, port 3001)" });
+
+		expect(captureMock).toHaveBeenCalledWith("ao.daemon.failed", {
+			daemon_state: "stopped",
+			code: "exited",
+			exit_code: 1,
+			exit_reason: "already_running",
 		});
 	});
 
@@ -106,7 +119,7 @@ describe("daemon failure telemetry", () => {
 		stop = startDaemonFailureTelemetry();
 		await vi.waitFor(() => expect(captureMock).toHaveBeenCalledTimes(1));
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.daemon_failure", {
+		expect(captureMock).toHaveBeenCalledWith("ao.daemon.failed", {
 			daemon_state: "error",
 			code: "binary_missing",
 			exit_code: undefined,

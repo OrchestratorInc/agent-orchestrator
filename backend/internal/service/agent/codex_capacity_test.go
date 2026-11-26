@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -193,7 +194,7 @@ func TestCodexCapacitySuccessDoesNotMutateAuthentication(t *testing.T) {
 		t.Fatal(err)
 	}
 	latest, _ := manager.catalog.record(record.Snapshot.ID)
-	if latest.Snapshot.Authentication != before {
+	if !reflect.DeepEqual(latest.Snapshot.Authentication, before) {
 		t.Fatalf("capacity success mutated authentication: before=%#v after=%#v", before, latest.Snapshot.Authentication)
 	}
 	verified, reauthenticationRequired := manager.authenticationVerification(record.Snapshot.ID)

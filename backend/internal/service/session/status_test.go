@@ -1,11 +1,173 @@
 package session
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+func TestChangesRequestedPushReviewAndRestart(t *testing.T) {
+	const id, url = domain.SessionID("mer-1"), "https://github.com/acme/repo/pull/1"
+	st := newFakeStore()
+	rec := statusRec(domain.ActivityIdle, false)
+	rec.ID, rec.ProjectID = id, "mer"
+	st.sessions[id] = rec
+	pr := domain.PRFacts{URL: url, Number: 1, HeadSHA: "old-head", Review: domain.ReviewChangesRequest, ExternalChangesRequested: true, UpdatedAt: statusNow}
+	st.prFacts[id] = []domain.PRFacts{pr}
+
+	read := func(wantReview domain.ReviewDecision, wantStatus domain.SessionStatus, wantColumn, wantDisplay string) {
+		t.Helper()
+		// A fresh service models daemon restart: only durable store facts survive.
+		svc := &Service{store: st, clock: func() time.Time { return statusNow }}
+		for _, get := range []func() (domain.Session, error){
+			func() (domain.Session, error) { return svc.Get(context.Background(), id) },
+			func() (domain.Session, error) {
+				list, err := svc.List(context.Background(), ListFilter{})
+				if err != nil || len(list) != 1 {
+					return domain.Session{}, err
+				}
+				return list[0], nil
+			},
+		} {
+			sess, err := get()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sess.PRs) != 1 || sess.PRs[0].Review != wantReview || sess.SCMStatus != wantStatus || string(sess.DisplayStatus) != wantDisplay || string(sess.KanbanColumn) != wantColumn {
+				t.Fatalf("session after read = review %+v, scm %q, column %q, display %q; want review %q, scm %q, column %q/display %q", sess.PRs, sess.SCMStatus, sess.KanbanColumn, sess.DisplayStatus, wantReview, wantStatus, wantColumn, wantDisplay)
+			}
+		}
+	}
+
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "needs_review", "Changes requested")
+	active := rec
+	active.Activity.State = domain.ActivityActive
+	st.sessions[id] = active
+	working, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
+	if err != nil || working.KanbanColumn != "needs_review" || string(working.DisplayStatus) != "Addressing comments" {
+		t.Fatalf("active worker with requested changes = column %q, display %q, err %v", working.KanbanColumn, working.DisplayStatus, err)
+	}
+	st.sessions[id] = rec
+	// GitHub retains its aggregate verdict, while the review row targeted the old head.
+	pr.HeadSHA, pr.ExternalChangesRequested, pr.StaleChangesRequested = "new-head", false, true
+	st.prFacts[id] = []domain.PRFacts{pr}
+	read(domain.ReviewRequired, domain.StatusReviewPending, "needs_review", "Awaiting review")
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url, Verdict: domain.VerdictChangesRequested}}
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "validating", "Changes requested")
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url + "-other", Verdict: domain.VerdictChangesRequested}}
+	read(domain.ReviewRequired, domain.StatusReviewPending, "needs_review", "Awaiting review")
+	delete(st.reviewRuns, id)
+	if st.prFacts[id][0].Review != domain.ReviewChangesRequest {
+		t.Fatal("read changed durable provider decision")
+	}
+	// A current-head request and then approval each replace the awaiting state.
+	pr.ExternalChangesRequested = true
+	st.prFacts[id] = []domain.PRFacts{pr}
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "needs_review", "Changes requested")
+	pr.Review, pr.ExternalChangesRequested = domain.ReviewApproved, false
+	st.prFacts[id] = []domain.PRFacts{pr}
+	approved, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
+	if err != nil || approved.PRs[0].Review != domain.ReviewApproved {
+		t.Fatalf("current-head approval = %+v, err %v", approved.PRs, err)
+	}
+	// An old provider row without a head SHA has no evidence of staleness.
+	pr.HeadSHA, pr.Review = "", domain.ReviewChangesRequest
+	st.prFacts[id] = []domain.PRFacts{pr}
+	unknownHead, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
+	if err != nil || unknownHead.PRs[0].Review != domain.ReviewChangesRequest {
+		t.Fatalf("unknown-head decision = %+v, err %v", unknownHead.PRs, err)
+	}
+}
+
+func TestTerminatedSessionGetKeepsCurrentHeadReviewDecision(t *testing.T) {
+	const id, url = domain.SessionID("mer-terminated"), "pr/terminated"
+	st := newFakeStore()
+	rec := statusRec(domain.ActivityExited, true)
+	rec.ID, rec.ProjectID = id, "mer"
+	st.sessions[id] = rec
+	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest, StaleChangesRequested: true}}
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url, Verdict: domain.VerdictChangesRequested}}
+	svc := &Service{store: st, clock: func() time.Time { return statusNow }}
+	got, err := svc.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.List(context.Background(), ListFilter{})
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list = %+v, err %v", listed, err)
+	}
+	if got.PRs[0].Review != domain.ReviewChangesRequest || listed[0].PRs[0].Review != domain.ReviewChangesRequest {
+		t.Fatalf("Get review = %q, List review = %q; want current-head changes requested", got.PRs[0].Review, listed[0].PRs[0].Review)
+	}
+}
+
+func TestLaterSameHeadRunWithoutVerdictKeepsPostedChangesRequest(t *testing.T) {
+	const id, url = domain.SessionID("mer-rerun"), "pr/rerun"
+	st := newFakeStore()
+	rec := statusRec(domain.ActivityIdle, false)
+	rec.ID, rec.ProjectID = id, "mer"
+	st.sessions[id] = rec
+	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest, StaleChangesRequested: true}}
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{
+		{ID: "posted", PRURL: url, Harness: "codex", Verdict: domain.VerdictChangesRequested, CreatedAt: statusNow},
+		{ID: "rerun", PRURL: url, Harness: "codex", Status: domain.ReviewRunRunning, CreatedAt: statusNow.Add(time.Minute)},
+	}
+	svc := &Service{store: st, clock: func() time.Time { return statusNow.Add(2 * time.Minute) }}
+	got, err := svc.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.List(context.Background(), ListFilter{})
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list = %+v, err %v", listed, err)
+	}
+	if got.PRs[0].Review != domain.ReviewChangesRequest || listed[0].PRs[0].Review != domain.ReviewChangesRequest {
+		t.Fatalf("Get review = %q, List review = %q; want posted current-head changes request", got.PRs[0].Review, listed[0].PRs[0].Review)
+	}
+}
+
+func TestChangesRequestedWithoutProofOfOlderHeadStaysRequested(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host string
+	}{
+		{"GitLab requested_changes", "gitlab.com"},
+		{"GitHub bot current-head request", "github.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr := domain.PRFacts{URL: "pr/1", Host: tc.host, HeadSHA: "head", Review: domain.ReviewChangesRequest}
+			got := clearStaleChangesRequested([]domain.PRFacts{pr}, nil)
+			if got[0].Review != domain.ReviewChangesRequest {
+				t.Fatalf("review = %q, want provider changes_requested without proof of an older-head request", got[0].Review)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeAliasRunsKeepsLatestSettledVerdict(t *testing.T) {
+	oldURL := "https://github.com/AgentWrapper/agent-orchestrator/pull/9"
+	newURL := "https://github.com/Untrivial-ai/agent-orchestrator/pull/9"
+	prs := []domain.PRFacts{
+		{URL: oldURL, Number: 9, SourceBranch: "fix", TargetBranch: "main", HeadSHA: "head", UpdatedAt: statusNow},
+		{URL: newURL, Number: 9, SourceBranch: "fix", TargetBranch: "main", HeadSHA: "head", UpdatedAt: statusNow.Add(time.Minute)},
+	}
+	runs := []domain.CurrentHeadReviewRun{
+		{ID: "old-pending", PRURL: oldURL, Harness: "codex", CreatedAt: statusNow, LastVerdictChangesRequested: true},
+		{ID: "new-pending", PRURL: newURL, Harness: "codex", CreatedAt: statusNow.Add(time.Minute)},
+	}
+	got := canonicalizeCurrentHeadReviewRuns(prs, runs)
+	if len(got) != 1 || got[0].PRURL != newURL || !got[0].LastVerdictChangesRequested {
+		t.Fatalf("pending alias runs = %+v, want inherited current-head changes request", got)
+	}
+	runs = append(runs, domain.CurrentHeadReviewRun{ID: "approved", PRURL: oldURL, Harness: "codex", CreatedAt: statusNow.Add(2 * time.Minute), Verdict: domain.VerdictApproved})
+	runs = append(runs, domain.CurrentHeadReviewRun{ID: "after-approval", PRURL: newURL, Harness: "codex", CreatedAt: statusNow.Add(3 * time.Minute)})
+	got = canonicalizeCurrentHeadReviewRuns(prs, runs)
+	if len(got) != 1 || got[0].LastVerdictChangesRequested {
+		t.Fatalf("alias runs after approval = %+v, want request cleared by later verdict", got)
+	}
+}
 
 var statusNow = time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 
@@ -176,7 +338,7 @@ func TestAggregateStackedChildSignals(t *testing.T) {
 		{"blocked-child-ci-failing-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{CI: domain.CIFailing})}, domain.StatusCIFailed},
 		{"blocked-child-draft-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{Draft: true})}, domain.StatusDraft},
 		{"blocked-child-changes-requested-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{Review: domain.ReviewChangesRequest})}, domain.StatusChangesRequested},
-		{"blocked-child-unresolved-comments-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{ReviewComments: true})}, domain.StatusChangesRequested},
+		{"blocked-child-unresolved-comments-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{ReviewComments: true})}, domain.StatusCommented},
 		// A blocked child's readiness signals stay hidden: only the parent's
 		// mergeable state drives the session.
 		{"blocked-child-mergeable-suppressed", []domain.PRFacts{parent, child(domain.PRFacts{Mergeability: domain.MergeMergeable})}, domain.StatusMergeable},

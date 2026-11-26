@@ -11,6 +11,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 )
 
 func authorizedAgentsJSON(agent string) string {
@@ -31,6 +34,48 @@ func TestSpawnHelpListsPrimeAgentHarness(t *testing.T) {
 	}
 	if !strings.Contains(out, "prime-agent") {
 		t.Fatalf("spawn help does not list prime-agent:\n%s", out)
+	}
+}
+
+func TestSpawnHelpListsFXHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, ", fx,") {
+		t.Fatalf("spawn help does not list fx:\n%s", out)
+	}
+}
+
+func TestSpawnHelpListsOpenCodeV2Harness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "opencode, opencode-v2") {
+		t.Fatalf("spawn help does not list OpenCode 1 and 2 distinctly:\n%s", out)
+	}
+}
+
+func TestSpawnHelpListsOpenInterpreterHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "stakpak, open-interpreter") {
+		t.Fatalf("spawn help does not list open-interpreter:\n%s", out)
+	}
+}
+
+func TestSpawnHelpListsEveryRegisteredHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range registry.Harnessed() {
+		if id := string(harness.Harness); !strings.Contains(out, id) {
+			t.Errorf("spawn help does not list registered harness %q:\n%s", id, out)
+		}
 	}
 }
 
@@ -78,6 +123,51 @@ func TestProjectAddCommand_RequiresPath(t *testing.T) {
 	}
 }
 
+// A repository with no remote and no resolvable default branch is still
+// registered, with a warning naming the command that sets one. --default-branch
+// sets it up front.
+func TestProjectAddDefaultBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name, flag, replyBranch, replyRepo string
+		wantWarning                        bool
+	}{
+		{name: "unresolved without a remote warns", replyBranch: "auto", wantWarning: true},
+		{name: "unresolved with a remote resolves at spawn", replyBranch: "auto", replyRepo: "https://example.com/demo.git"},
+		{name: "flag is sent", flag: "trunk", replyBranch: "trunk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			var body addProjectRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/v1/projects" {
+					http.NotFound(w, r)
+					return
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"project":{"id":"demo","path":"/repo/demo","repo":"`+tc.replyRepo+`","defaultBranch":"`+tc.replyBranch+`"}}`)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+
+			args := []string{"project", "add", "--path", "/repo/demo"}
+			if tc.flag != "" {
+				args = append(args, "--default-branch", tc.flag)
+			}
+			out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...)
+			if err != nil || !strings.Contains(out, "registered project demo") {
+				t.Fatalf("project add: err=%v out=%q", err, out)
+			}
+			if got := strings.Contains(errOut, "ao project set-config demo --default-branch"); got != tc.wantWarning {
+				t.Fatalf("stderr = %q, warning present = %t, want %t", errOut, got, tc.wantWarning)
+			}
+			if tc.flag != "" && (body.Config == nil || body.Config.DefaultBranch != tc.flag) {
+				t.Fatalf("request config = %+v, want defaultBranch %q", body.Config, tc.flag)
+			}
+		})
+	}
+}
+
 func TestSpawnClaimPRWiring(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -113,6 +203,72 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 		t.Fatalf("output missing claimed label: %s", out)
 	}
 	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions", "POST /api/v1/sessions/demo-9/pr/claim"}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
+// TestSpawnReviewTurnsSwitchesOffBeforeClaim: a reviewer spawned with
+// --review must have every switch off before the PR is claimed, so the
+// claimed PR's CI failures and review comments never reach the agent and the
+// native reviewer never starts on it. --review alone also implies --no-takeover.
+func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(&requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-9/auto-inject-ci":
+			var req sessionAutoInjectCIRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AutoInjectCI {
+				t.Errorf("auto-inject-ci request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-9/auto-inject-review":
+			var req sessionAutoInjectReviewRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AutoInjectReview {
+				t.Errorf("auto-inject-review request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-9/auto-review":
+			var req sessionAutoReviewRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled {
+				t.Errorf("auto-review request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-9/pr/claim":
+			var req claimPRRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AllowTakeover {
+				t.Errorf("claim request = %#v err=%v, want allowTakeover false (--review implies --no-takeover)", req, err)
+			}
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	want := []string{
+		"GET /api/v1/projects/demo",
+		"POST /api/v1/agents/readiness/ensure",
+		"POST /api/v1/sessions",
+		"PATCH /api/v1/sessions/demo-9/auto-inject-ci",
+		"PATCH /api/v1/sessions/demo-9/auto-inject-review",
+		"PUT /api/v1/sessions/demo-9/auto-review",
+		"POST /api/v1/sessions/demo-9/pr/claim",
+	}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%#v want %#v", requests, want)
 	}
@@ -252,6 +408,13 @@ func TestSpawnClaimPRFailureRollsBackSession(t *testing.T) {
 func TestSpawnNoTakeoverRequiresClaimPR(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "worker", "--no-takeover")
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--no-takeover requires --claim-pr") {
+		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
+	}
+}
+
+func TestSpawnReviewRequiresClaimPR(t *testing.T) {
+	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "worker", "--review")
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--review requires --claim-pr") {
 		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
 	}
 }
@@ -521,6 +684,53 @@ func TestSpawnStandaloneOmitsProject(t *testing.T) {
 	}
 }
 
+func TestRequestedOutputArtifactSetsRequestedOutput(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var req map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"standalone-1","status":"idle"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--standalone", "--agent", "codex", "--name", "Report", "--output", "artifact"); err != nil {
+		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+	}
+	if req["requestedOutput"] != "artifact" {
+		t.Fatalf("requestedOutput = %#v, want artifact; request=%#v", req["requestedOutput"], req)
+	}
+}
+
+func TestSpawnOutputRejectsInvalidUse(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "unknown value", args: []string{"--output", "slides"}, want: `--output must be "artifact"`},
+		{name: "orchestrator", args: []string{"--output", "artifact", "--kind", "orchestrator"}, want: "--output is supported for worker sessions only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"spawn", "--project", "demo", "--name", "worker"}, tc.args...)
+			_, _, err := executeCLI(t, Deps{}, args...)
+			if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v exit=%d, want %q", err, ExitCode(err), tc.want)
+			}
+		})
+	}
+}
+
 func TestSpawnStandaloneRejectsProjectOnlyOptions(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -528,6 +738,7 @@ func TestSpawnStandaloneRejectsProjectOnlyOptions(t *testing.T) {
 	}{
 		{name: "project", args: []string{"--project", "demo"}},
 		{name: "branch", args: []string{"--branch", "feature/x"}},
+		{name: "base", args: []string{"--base", "feature/parent"}},
 		{name: "issue", args: []string{"--issue", "42"}},
 		{name: "claim pr", args: []string{"--claim-pr", "42"}},
 		{name: "orchestrator", args: []string{"--kind", "orchestrator"}},
@@ -550,6 +761,7 @@ func TestSpawnScratchRejectsGitOnlyFlags(t *testing.T) {
 		wantErr string
 	}{
 		{name: "branch", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--branch", "feature/x"}, wantErr: "scratch projects do not support --branch"},
+		{name: "base", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--base", "feature/parent"}, wantErr: "scratch projects do not support --base"},
 		{name: "claim pr", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--claim-pr", "142"}, wantErr: "scratch projects do not support --claim-pr"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -901,6 +1113,35 @@ func TestSpawnSkipAgentCheckBypassesOnlyPreflight(t *testing.T) {
 	}
 }
 
+func TestSpawnInvalidHarnessPreservesDaemonErrorEnvelope(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(&requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"bad_request","message":"Unknown agent harness","code":"UNKNOWN_HARNESS","requestId":"req-harness"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "unknown", "--skip-agent-check", "--name", "worker")
+	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), "Unknown agent harness (UNKNOWN_HARNESS) [request req-harness]") {
+		t.Fatalf("err=%v exit=%d, want preserved daemon error envelope", err, ExitCode(err))
+	}
+	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/sessions"}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
 func TestSpawnUnknownAuthEnsureWarnsAndAllows(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var req spawnRequest
@@ -958,24 +1199,24 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 			Orchestrator: roleOverride{Agent: "claude-code"},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "orchestrator", project); err != nil || got != "claude-code" {
-		t.Fatalf("orchestrator default: got %q err %v, want claude-code", got, err)
+	if got := resolveSpawnHarness("", "orchestrator", project); got != "claude-code" {
+		t.Fatalf("orchestrator default: got %q, want claude-code", got)
 	}
-	if got, err := resolveSpawnHarness("", "worker", project); err != nil || got != "codex" {
-		t.Fatalf("worker default: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "worker", project); got != "codex" {
+		t.Fatalf("worker default: got %q, want codex", got)
 	}
-	if got, err := resolveSpawnHarness("aider", "orchestrator", project); err != nil || got != "aider" {
-		t.Fatalf("explicit agent: got %q err %v, want aider", got, err)
+	if got := resolveSpawnHarness("aider", "orchestrator", project); got != "aider" {
+		t.Fatalf("explicit agent: got %q, want aider", got)
 	}
 	// Unset kind is the default `ao spawn` path and must resolve to worker.agent.
-	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
-		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "", project); got != "codex" {
+		t.Fatalf("unset kind: got %q, want codex", got)
 	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
+	// Orchestrator spawn with no orchestrator.agent configured leaves the
+	// harness to the daemon, which fills the project's empty roles.
 	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
-	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
-		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
+	if got := resolveSpawnHarness("", "orchestrator", noOrch); got != "" {
+		t.Fatalf("missing orchestrator agent: got %q, want daemon-resolved empty harness", got)
 	}
 }
 
@@ -1009,5 +1250,149 @@ func TestSpawnModelFlagWiring(t *testing.T) {
 	}
 	if req.Model != "gpt-5.6-sol" {
 		t.Fatalf("spawn request model = %q, want gpt-5.6-sol", req.Model)
+	}
+}
+
+// TestSpawnEffortFlagWiring asserts `ao spawn --effort` sends the reasoning
+// effort override to the daemon without touching project config.
+func TestSpawnEffortFlagWiring(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var req spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-21","status":"idle"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--effort", " high ")
+	if err != nil {
+		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+	}
+	if req.Effort != "high" {
+		t.Fatalf("spawn request effort = %q, want high", req.Effort)
+	}
+}
+
+// TestSpawnEffortSurfacesDaemonUnsupportedEffort asserts `ao spawn --effort`
+// on a harness that cannot honor it fails with the daemon's UNSUPPORTED_EFFORT
+// envelope instead of a CLI-side harness allowlist: the daemon owns which
+// harnesses support effort, so the list cannot drift in the thin client.
+func TestSpawnEffortSurfacesDaemonUnsupportedEffort(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("gemini"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"invalid","code":"UNSUPPORTED_EFFORT","message":"effort is only supported for codex, claude-code, and command-code agents","requestId":"req-1"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "gemini", "--name", "Worker", "--effort", "high")
+	if err == nil || ExitCode(err) != 1 {
+		t.Fatalf("err=%v exit=%d, want daemon error exit 1", err, ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "UNSUPPORTED_EFFORT") || !strings.Contains(err.Error(), "effort is only supported") {
+		t.Fatalf("err=%v, want daemon UNSUPPORTED_EFFORT envelope", err)
+	}
+}
+
+// spawnStartServer answers a project spawn as provisioning, then reports the
+// given provision states one GET at a time.
+func spawnStartServer(t *testing.T, states []string, requests *[]string, spawnBody *map[string]any) *httptest.Server {
+	t.Helper()
+	polls := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(spawnBody)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"spawning","provisionState":"provisioning"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-9":
+			state := states[min(polls, len(states)-1)]
+			polls++
+			body := map[string]any{"id": "demo-9", "status": "working", "provisionState": state, "isTerminated": false}
+			if state == "failed" {
+				body["provisionError"] = "git worktree add failed"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"session": body})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+// `ao spawn` takes the async start, so the session opens as starting with its
+// prompt shown, and still answers only once the agent is running.
+func TestSpawnWaitsForBackgroundStart(t *testing.T) {
+	cfg := setConfigEnv(t)
+	spawnStartPollInterval = time.Millisecond
+	t.Cleanup(func() { spawnStartPollInterval = 500 * time.Millisecond })
+	var requests []string
+	var body map[string]any
+	srv := spawnStartServer(t, []string{"provisioning", "ready"}, &requests, &body)
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--prompt", "fix it")
+	if err != nil {
+		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+	}
+	if body["async"] != true {
+		t.Fatalf("spawn body = %v, want async", body)
+	}
+	if !strings.Contains(out, "spawned session demo-9") || !strings.Contains(out, "(working)") {
+		t.Fatalf("output = %q, want the started session's status", out)
+	}
+	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions", "GET /api/v1/sessions/demo-9", "GET /api/v1/sessions/demo-9"}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
+// A start that fails in the background still fails the command, with the
+// daemon's reason.
+func TestSpawnReportsBackgroundStartFailure(t *testing.T) {
+	cfg := setConfigEnv(t)
+	spawnStartPollInterval = time.Millisecond
+	t.Cleanup(func() { spawnStartPollInterval = 500 * time.Millisecond })
+	var requests []string
+	var body map[string]any
+	srv := spawnStartServer(t, []string{"failed"}, &requests, &body)
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--prompt", "fix it")
+	if err == nil || !strings.Contains(err.Error(), "session demo-9 failed to start: git worktree add failed") {
+		t.Fatalf("err = %v, want the start failure reason", err)
+	}
+	if !strings.Contains(err.Error(), "ao session resume-agent demo-9") {
+		t.Fatalf("err = %v, want the retry command", err)
 	}
 }

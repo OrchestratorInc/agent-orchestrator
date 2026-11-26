@@ -4,15 +4,23 @@ import { aoBridge } from "../lib/bridge";
 import { applyDaemonStatus, readDaemonStatus, type DaemonStatus } from "../lib/daemon-status";
 import { queryClient as defaultQueryClient } from "../lib/query-client";
 import { createEventTransport } from "../lib/event-transport";
+import { getEventsConnectionState, subscribeEventsConnection } from "../lib/events-connection";
 import {
 	agentReadinessQueryKey,
 	cacheAgentReadiness,
 	ensureAgentReadiness,
 } from "./useAgentReadinessQuery";
-import { codexAccountsQueryKey } from "./codex-accounts-state";
+import { systemRequirementsQueryKey } from "./useSystemRequirementsGate";
 
 const STATUS_REFRESH_MS = 2_000;
 const READY_STATUS_REFRESH_MS = 10_000;
+
+/** DaemonStatus fields are all primitives, so a shallow comparison is exact. */
+export function sameDaemonStatus(a: DaemonStatus, b: DaemonStatus): boolean {
+	const aKeys = Object.keys(a) as (keyof DaemonStatus)[];
+	if (aKeys.length !== Object.keys(b).length) return false;
+	return aKeys.every((key) => Object.is(a[key], b[key]));
+}
 
 export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 	const [status, setStatus] = useState<DaemonStatus>({ state: "stopped" });
@@ -70,7 +78,7 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 				previousStatus.pid !== nextStatus.pid;
 			if (daemonChanged) {
 				queryClient.removeQueries({ queryKey: agentReadinessQueryKey, exact: true });
-				queryClient.removeQueries({ queryKey: codexAccountsQueryKey, exact: true });
+				queryClient.removeQueries({ queryKey: systemRequirementsQueryKey });
 			}
 			if (nextStatus.state === "ready" && nextStatus.port) {
 				applyDaemonStatus(nextStatus);
@@ -79,6 +87,13 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 			} else {
 				applyDaemonStatus(nextStatus);
 				scheduleRefresh();
+			}
+			// The 10s poll returns a fresh object every time. Keep the previous one
+			// when nothing changed so the shell context (and every useShell()
+			// consumer) does not re-render on each tick.
+			if (sameDaemonStatus(previousStatus, nextStatus)) {
+				statusRef.current = previousStatus;
+				return;
 			}
 			setStatus(nextStatus);
 		};
@@ -107,6 +122,14 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 			applyStatus(nextStatus);
 		});
 
+		// External daemons have no child-exit push. A stream disconnect prompts
+		// a supervisor probe; the stream alone does not establish daemon liveness.
+		const stopEventsConnectionListener = subscribeEventsConnection(() => {
+			if (getEventsConnectionState() === "disconnected" && statusRef.current.state === "ready") {
+				void refreshStatus();
+			}
+		});
+
 		return () => {
 			active = false;
 			clearRefresh();
@@ -114,6 +137,7 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 			document.removeEventListener("visibilitychange", refreshOnVisibility);
 			stopTransport();
 			stopStatusListener();
+			stopEventsConnectionListener();
 		};
 	}, [queryClient]);
 

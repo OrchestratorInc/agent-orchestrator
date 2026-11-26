@@ -1,6 +1,6 @@
 # agent-orchestrator rewrite docs
 
-The agent-orchestrator is being rebuilt as a long-running Go backend daemon
+Agent Orchestrator runs as a long-running Go backend daemon
 (`backend/`) plus an Electron + TypeScript frontend (`frontend/`). The backend
 supervises coding-agent sessions and exposes daemon control, project/session
 state, terminal streaming, and CDC/event infrastructure.
@@ -10,21 +10,37 @@ Start with [architecture.md](architecture.md) for the current backend model and
 
 ## Reference docs
 
+Gemini CLI setup, permission mapping, and current capability limits are documented
+in [gemini-cli.md](gemini-cli.md).
+
 | Doc                                                    | What it covers                                                                                                        |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | [documentation-map.md](documentation-map.md)           | Human-facing docs vs the machine-readable contract layer, source of truth per concern, and the CI gates that hold it. |
+| [documentation-coverage.md](documentation-coverage.md) | Stable-release baseline, covered user paths, and hands-on verification still needed. |
+| [Public manual sources](../frontend/src/docs/content/index.mdx) | Existing user guides, configuration, capability catalog, CLI reference, and mobile access pages. |
 | [architecture.md](architecture.md)                     | Current backend model, package layout, status derivation, persistence/CDC, and load-bearing rules.                    |
 | [scm-observer.md](scm-observer.md)                     | SCM subsystem: polling pipeline, durable-state invariants, PR identity model, and the rename/transfer design.         |
 | [backend-code-structure.md](backend-code-structure.md) | Package ownership rules for the Go backend: domain, services, ports, adapters, storage, HTTP, CLI, and daemon wiring. |
 | [cli/README.md](cli/README.md)                         | CLI commands and daemon control surface.                                                                              |
-| [cloud-development.md](cloud-development.md)           | Optional private checkout workflow, current Cloud foundation, remaining implementation, and recommended build order. |
-| [cloud-refactor.md](cloud-refactor.md)                 | Public contracts, generated Cloud schema types, typed client, reusable product UI, and private implementation boundaries. |
-| [changelog-publishing.md](changelog-publishing.md)     | Weekly changelog automation, human review boundary, content format, and publishing checks.                              |
+| [self-hosted-remote.md](self-hosted-remote.md)         | Set up a VM as a remote host and link it to an AO account (by hand or as an agent over SSH), client workflow, security boundary, and current limits. |
 | [development.md](development.md)                       | Prerequisites, build steps, running tests, and troubleshooting for local development.                                 |
+| [harnesses/unreal-agent.md](harnesses/unreal-agent.md) | Built-in Unreal Agent Chat setup, provider environment, persistence, and current limits.                              |
+| [harnesses/mimo-code.md](harnesses/mimo-code.md)       | MiMo Code TUI setup, permissions, activity hooks, exact restore, and current limits.                                 |
+| [harnesses/deepseek-harness.md](harnesses/deepseek-harness.md) | DeepSeek Harness Chat over ACP, headless task mode, credentials, and current limits.                        |
+| [harnesses/command-code.md](harnesses/command-code.md)   | Command Code TUI setup, activity hooks, Chat over `cmd acp`, exact restore, and current limits.                 |
+| [harnesses/mastra-code.md](harnesses/mastra-code.md)     | Mastra Code TUI setup, isolated profile, login, direct model IDs, exact restore, and current limits.             |
+| [harnesses/stakpak.md](harnesses/stakpak.md)             | Stakpak Agent TUI setup, screen-read activity, permissions, exact restore, and current limits.                  |
+| [harnesses/codewhale.md](harnesses/codewhale.md)         | Codewhale TUI setup, supported versions, and current limits.                                                     |
+| [harnesses/omp.md](harnesses/omp.md)                     | OMP TUI and Chat setup, permissions, and current limits.                                                         |
+| [harnesses/openhands.md](harnesses/openhands.md)         | OpenHands CLI TUI setup and current limits.                                                                      |
+| [harnesses/pi.md](harnesses/pi.md)                       | Pi TUI and Chat (through pi-acp) setup, the bypass-permissions requirement, and current limits.                 |
+| [harnesses/model-catalogs.md](harnesses/model-catalogs.md) | How each harness's model list is discovered, refreshed, and shared across pickers.                            |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
 | [telemetry.md](telemetry.md)                           | User-facing overview of product telemetry, privacy safeguards, and opt-out controls.                                    |
 | [posthog-cost-controls.md](posthog-cost-controls.md)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
+
+See [startup-cues.md](startup-cues.md) for command cues that gate a new worktree's opening turn.
 
 ## Mental model
 

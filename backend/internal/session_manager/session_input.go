@@ -3,24 +3,28 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
 type agentOperationKind string
 
 const (
-	agentOperationSwitch            agentOperationKind = "switch"
 	agentOperationExit              agentOperationKind = "exit"
 	agentOperationResume            agentOperationKind = "resume"
+	agentOperationHibernate         agentOperationKind = "hibernate"
 	agentOperationKill              agentOperationKind = "kill"
 	agentOperationRestore           agentOperationKind = "restore"
 	agentOperationRetire            agentOperationKind = "retire"
 	agentOperationReconcile         agentOperationKind = "reconcile"
 	agentOperationInterfaceRecovery agentOperationKind = "interface_recovery"
+	agentOperationProviderSwitch    agentOperationKind = "provider_switch"
 )
 
 var errAgentOperationInProgress = errors.New("session: another exclusive operation is in progress")
@@ -34,12 +38,20 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
-	if m.agentOperationActiveLocked(id) && !m.agentSwitchDecisionInputAllowedLocked(id) {
+	if m.serializedInput[id] && m.inputLeases[id] != 0 {
+		m.agentOpMu.Unlock()
+		return nil, false
+	}
+	if m.agentOperationActiveLocked(id) {
 		m.agentOpMu.Unlock()
 		return nil, false
 	}
 	if m.inputLeases[id] == 0 {
 		m.inputDrained[id] = make(chan struct{})
+		if m.inputLeaseSince == nil {
+			m.inputLeaseSince = make(map[domain.SessionID]time.Time)
+		}
+		m.inputLeaseSince[id] = time.Now()
 	}
 	m.inputLeases[id]++
 	m.agentOpMu.Unlock()
@@ -50,12 +62,60 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 	}, true
 }
 
+// No durable reads belong in lease acquisition. Prepare sets this before
+// launch; the first guarded paste also sets it after detached-host adoption.
+// That paste fails closed if another already-admitted writer is still active.
+func (m *Manager) enableSerializedInput(id domain.SessionID) bool {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	if m.serializedInput == nil {
+		m.serializedInput = make(map[domain.SessionID]bool)
+	}
+	m.serializedInput[id] = true
+	return m.inputLeases[id] <= 1
+}
+
+func (m *Manager) forgetSerializedInput(id domain.SessionID) {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	delete(m.serializedInput, id)
+}
+
+// ValidateSessionMessageInput runs while the shared input lease excludes native
+// keystrokes and runtime replacement for an opted-in harness.
+func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.SessionRecord, message string) error {
+	if m.agents == nil || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
+		return nil
+	}
+	agent, found := m.agents.Agent(rec.Harness)
+	if !found {
+		return nil
+	}
+	guard, guarded := agent.(ports.TerminalMessageInputGuard)
+	if !guarded {
+		return nil
+	}
+	if !m.enableSerializedInput(rec.ID) {
+		return ports.ErrTerminalMessageNotReady
+	}
+	reader, available := m.runtime.(ports.StyledTerminalOutputReader)
+	if !available {
+		return errors.New("current rendered terminal is unavailable")
+	}
+	output, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 32)
+	if err != nil {
+		return err
+	}
+	return guard.ValidateTerminalMessage(output, message)
+}
+
 func (m *Manager) releaseSessionInput(id domain.SessionID) {
 	m.agentOpMu.Lock()
 	defer m.agentOpMu.Unlock()
 	count := m.inputLeases[id]
 	if count <= 1 {
 		delete(m.inputLeases, id)
+		delete(m.inputLeaseSince, id)
 		if drained := m.inputDrained[id]; drained != nil {
 			close(drained)
 			delete(m.inputDrained, id)
@@ -67,12 +127,21 @@ func (m *Manager) releaseSessionInput(id domain.SessionID) {
 
 // SessionMutationInProgress is consumed by observation-driven lifecycle paths
 // that must not independently terminate a session while AO is replacing or
-// relaunching its provider process.
+// relaunching its provider process. A live interface or account transition is
+// one: between its source stop and the target's spawn the session's runtime is
+// dead by design, and a same-mode move stays probeable all through it.
 func (m *Manager) SessionMutationInProgress(id domain.SessionID) bool {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
-	defer m.agentOpMu.Unlock()
-	return m.agentOperationActiveLocked(id)
+	active := m.agentOperationActiveLocked(id)
+	m.agentOpMu.Unlock()
+	if active {
+		return true
+	}
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	_, live := m.transitions[id]
+	return live
 }
 
 func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
@@ -81,47 +150,116 @@ func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
 	return ok || deferred
 }
 
-func (m *Manager) agentSwitchDecisionInputAllowedLocked(id domain.SessionID) bool {
-	if _, deferred := m.deferredInterfaceRecovery[id]; deferred {
-		return false
-	}
-	switch m.agentOperations[id] {
-	case agentOperationSwitch:
-		_, allowed := m.switchDecisionInput[id]
-		return allowed
-	default:
-		return false
-	}
-}
-
 // beginAgentOperation closes input admission before waiting for already-issued
 // leases. Because both actions share agentOpMu, a pane write is either fully
 // admitted before the operation (and drained) or rejected after it; there is
 // no interval in which it can pass a boolean check and write into the new
 // provider generation.
 func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	m.agentOpMu.Lock()
-	if m.agentOperationActiveLocked(id) {
-		m.agentOpMu.Unlock()
-		return errAgentOperationInProgress
-	}
-	m.agentOperations[id] = kind
-	drained := m.inputDrained[id]
-	m.agentOpMu.Unlock()
+	return m.admitAgentOperation(ctx, id, kind, false)
+}
 
+// beginKillOperation is Kill's admission. Unlike the workspace-cleanup and
+// delete paths that share agentOperationKill, it also waits, bounded, for an
+// in-flight resume. That resume is usually a wake started by the user opening
+// the session they are now archiving.
+func (m *Manager) beginKillOperation(ctx context.Context, id domain.SessionID) error {
+	return m.admitAgentOperation(ctx, id, agentOperationKill, true)
+}
+
+func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind, waitForResume bool) error {
+	var drained <-chan struct{}
+	var resumeDeadline time.Time
+	for {
+		m.agentOpMu.Lock()
+		// Rechecked on every pass: a wait below can outlast the caller's
+		// deadline, and a slot freed at that moment must not be claimed late.
+		if err := ctx.Err(); err != nil {
+			m.agentOpMu.Unlock()
+			return err
+		}
+		if m.agentOperationActiveLocked(id) {
+			current := m.agentOperations[id]
+			m.agentOpMu.Unlock()
+			switch {
+			case current == agentOperationHibernate && kind != agentOperationHibernate:
+				// Background cleanup yields to every explicit operation once its
+				// bounded shutdown completes; it must not make Kill/Switch fail.
+			case current == agentOperationResume && waitForResume:
+				// Opening a hibernated Chat session wakes it, and the wake holds
+				// a resume for as long as the provider takes to reload the
+				// conversation. An archive clicked meanwhile must not fail for
+				// work the user did not start: wait for the wake, bounded so a
+				// wedged resume still leaves Kill most of its teardown budget.
+				if resumeDeadline.IsZero() {
+					resumeDeadline = time.Now().Add(m.killResumeWaitLimit())
+				} else if time.Now().After(resumeDeadline) {
+					m.agentWaitLogger().Warn("kill gave up waiting for a resume to finish",
+						"sessionID", id, "waited", m.killResumeWaitLimit())
+					return errAgentOperationInProgress
+				}
+			default:
+				return errAgentOperationInProgress
+			}
+			select {
+			case <-ctx.Done():
+				m.agentWaitLogger().Warn("agent operation gave up waiting for another operation to finish",
+					"sessionID", id, "operation", kind, "holder", current, "error", ctx.Err())
+				return ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+				continue
+			}
+		}
+		m.agentOperations[id] = kind
+		drained = m.inputDrained[id]
+		m.agentOpMu.Unlock()
+		break
+	}
 	if drained == nil {
 		return nil
 	}
+	waitStarted := time.Now()
 	select {
 	case <-drained:
 		return nil
 	case <-ctx.Done():
+		// A lease that outlives the whole wait usually belongs to a write that
+		// is itself waiting on this operation, such as a relay into a sleeping
+		// Chat session that has to wake it first.
+		m.agentOpMu.Lock()
+		leases := m.inputLeases[id]
+		var heldFor time.Duration
+		if since, ok := m.inputLeaseSince[id]; ok {
+			heldFor = time.Since(since).Round(time.Millisecond)
+		}
+		m.agentOpMu.Unlock()
 		m.endAgentOperation(id, kind)
+		m.agentWaitLogger().Warn("agent operation gave up waiting for session input to drain",
+			"sessionID", id, "operation", kind, "waited", time.Since(waitStarted).Round(time.Millisecond),
+			"inputLeases", leases, "oldestLeaseHeldFor", heldFor, "error", ctx.Err())
 		return ctx.Err()
 	}
+}
+
+// killResumeWaitBudget bounds how long Kill waits for an in-flight resume (a wake)
+// before reporting the session busy. A Chat wake normally finishes in seconds;
+// 30s leaves Kill 60s of its 90s teardown budget and keeps the archive request
+// inside the REST layer's 60s timeout.
+const killResumeWaitBudget = 30 * time.Second
+
+func (m *Manager) killResumeWaitLimit() time.Duration {
+	if m.killResumeWait > 0 {
+		return m.killResumeWait
+	}
+	return killResumeWaitBudget
+}
+
+// Some tests build a Manager without New, so the logger may be unset.
+func (m *Manager) agentWaitLogger() *slog.Logger {
+	if m.logger == nil {
+		return slog.Default()
+	}
+	return m.logger
 }
 
 // beginAgentOperations reserves every currently-unowned session before waiting
@@ -171,10 +309,6 @@ func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.Session
 func (m *Manager) endAgentOperation(id domain.SessionID, kind agentOperationKind) {
 	m.agentOpMu.Lock()
 	defer m.agentOpMu.Unlock()
-	if kind == agentOperationSwitch {
-		delete(m.retainedSwitches, id)
-		delete(m.switchDecisionInput, id)
-	}
 	if current, ok := m.agentOperations[id]; ok && current == kind {
 		delete(m.agentOperations, id)
 		m.resumeDeferredInterfaceRecoveryLocked(id)
@@ -207,145 +341,14 @@ func (m *Manager) resumeDeferredInterfaceRecoveryLocked(id domain.SessionID) {
 	}()
 }
 
-func (m *Manager) allowAgentSwitchDecisionInput(id domain.SessionID, switchID domain.AgentSwitchID) {
-	m.agentOpMu.Lock()
-	defer m.agentOpMu.Unlock()
-	if m.agentOperations[id] != agentOperationSwitch {
-		return
-	}
-	if m.switchDecisionInput == nil {
-		m.switchDecisionInput = make(map[domain.SessionID]domain.AgentSwitchID)
-	}
-	m.switchDecisionInput[id] = switchID
-}
-
-// closeAgentSwitchDecisionInput closes the temporary permission lane and waits
-// for an already-admitted keystroke write to finish before source teardown.
-func (m *Manager) closeAgentSwitchDecisionInput(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) error {
-	m.agentOpMu.Lock()
-	if current, ok := m.switchDecisionInput[id]; !ok || current != switchID {
-		m.agentOpMu.Unlock()
-		return nil
-	}
-	delete(m.switchDecisionInput, id)
-	drained := m.inputDrained[id]
-	m.agentOpMu.Unlock()
-	if drained == nil {
-		return nil
-	}
-	select {
-	case <-drained:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (m *Manager) beginAgentSwitch(ctx context.Context, id domain.SessionID) error {
-	if err := m.beginAgentOperation(ctx, id, agentOperationSwitch); err != nil {
-		if errors.Is(err, errAgentOperationInProgress) {
-			return ErrSwitchInProgress
-		}
-		return err
-	}
-	return nil
-}
-
-func (m *Manager) endAgentSwitch(id domain.SessionID) {
-	m.endAgentOperation(id, agentOperationSwitch)
-}
-
-// retainAgentSwitch keeps the already-owned switch/input gate closed after an
-// ambiguous external side effect. It also marks the gate as reclaimable by a
-// later recovery pass; ordinary user switches cannot reuse it.
-func (m *Manager) retainAgentSwitch(id domain.SessionID) {
-	id = domain.SessionID(strings.TrimSpace(string(id)))
-	m.agentOpMu.Lock()
-	defer m.agentOpMu.Unlock()
-	if m.agentOperations[id] != agentOperationSwitch {
-		return
-	}
-	if m.retainedSwitches == nil {
-		m.retainedSwitches = make(map[domain.SessionID]struct{})
-	}
-	m.retainedSwitches[id] = struct{}{}
-}
-
-func (m *Manager) agentSwitchRetained(id domain.SessionID) bool {
-	id = domain.SessionID(strings.TrimSpace(string(id)))
-	m.agentOpMu.Lock()
-	defer m.agentOpMu.Unlock()
-	_, retained := m.retainedSwitches[id]
-	return retained
-}
-
-// beginAgentSwitchRecovery acquires the switch gate on daemon boot, or
-// reclaims a gate retained by an earlier inconclusive recovery attempt. It
-// never re-enters a switch that is still executing normally.
-func (m *Manager) beginAgentSwitchRecovery(ctx context.Context, id domain.SessionID) error {
-	id = domain.SessionID(strings.TrimSpace(string(id)))
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	m.agentOpMu.Lock()
-	if current, active := m.agentOperations[id]; active {
-		if current == agentOperationSwitch {
-			if _, retained := m.retainedSwitches[id]; retained {
-				delete(m.retainedSwitches, id)
-				m.agentOpMu.Unlock()
-				return nil
-			}
-		}
-		m.agentOpMu.Unlock()
-		return ErrSwitchInProgress
-	}
-	if m.agentOperations == nil {
-		m.agentOperations = make(map[domain.SessionID]agentOperationKind)
-	}
-	m.agentOperations[id] = agentOperationSwitch
-	drained := m.inputDrained[id]
-	m.agentOpMu.Unlock()
-
-	if drained == nil {
-		return nil
-	}
-	select {
-	case <-drained:
-		return nil
-	case <-ctx.Done():
-		m.endAgentSwitch(id)
-		return ctx.Err()
-	}
-}
-
-// releaseRetainedAgentSwitch closes a stale in-memory fence only when it was
-// explicitly retained for recovery and no durable active saga remains.
-func (m *Manager) releaseRetainedAgentSwitch(id domain.SessionID) {
-	id = domain.SessionID(strings.TrimSpace(string(id)))
-	m.agentOpMu.Lock()
-	defer m.agentOpMu.Unlock()
-	if _, retained := m.retainedSwitches[id]; !retained {
-		return
-	}
-	delete(m.retainedSwitches, id)
-	delete(m.agentOperations, id)
-	m.resumeDeferredInterfaceRecoveryLocked(id)
-}
-
 func (m *Manager) beginAgentResume(ctx context.Context, id domain.SessionID) error {
-	if err := m.beginAgentOperation(ctx, id, agentOperationResume); err != nil {
-		if errors.Is(err, errAgentOperationInProgress) {
-			m.agentOpMu.Lock()
-			activeOperation := m.agentOperations[id]
-			m.agentOpMu.Unlock()
-			if activeOperation == agentOperationSwitch {
-				return ErrSwitchInProgress
-			}
-			return ErrResumeInProgress
-		}
-		return err
+	waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	err := m.beginAgentOperation(waitCtx, id, agentOperationResume)
+	if errors.Is(err, errAgentOperationInProgress) {
+		return ErrResumeInProgress
 	}
-	return nil
+	return err
 }
 
 func (m *Manager) endAgentResume(id domain.SessionID) {

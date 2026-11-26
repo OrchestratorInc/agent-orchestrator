@@ -52,7 +52,7 @@ export function bugReportSummary(env: BugReportEnvironment): string {
 		"",
 		"",
 		"---",
-		`AO mobile: ${formatVersion(env.build)}`,
+		`Orchestrator mobile: ${formatVersion(env.build)}`,
 		...(update ? [`Update: ${update}${runtime}`] : []),
 		`Platform: ${env.platform} ${env.osVersion}`,
 		...(env.deviceModel?.trim() ? [`Device: ${env.deviceModel.trim()}`] : []),
