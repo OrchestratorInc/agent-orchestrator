@@ -583,8 +583,8 @@ func TestReadinessCoordinatorClassifiesTimeouts(t *testing.T) {
 	}
 }
 
-func TestReadinessCoordinatorAllowsOpenCodeVersionProbeBudget(t *testing.T) {
-	for _, id := range []string{"opencode", "opencode-v2"} {
+func TestReadinessCoordinatorAllowsSlowVersionProbeBudget(t *testing.T) {
+	for _, id := range []string{"opencode", "opencode-v2", "gemini"} {
 		t.Run(id, func(t *testing.T) {
 			agent := &readinessTestAgent{resolve: func(ctx context.Context) (string, error) {
 				deadline, ok := ctx.Deadline()

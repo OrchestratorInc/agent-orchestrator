@@ -44,6 +44,26 @@ const (
 	ReviewCancelInput ReviewCancelMode = "input"
 )
 
+// ReviewerAuthRequiredError reports that a reviewer harness is installed but
+// not signed in, with Guidance telling the user how to sign in. It matches
+// ErrChatAuthRequired, and Guidance is written for users so API responses may
+// show it as-is; other ErrChatAuthRequired errors may wrap provider internals
+// and keep a fixed message.
+type ReviewerAuthRequiredError struct {
+	Guidance string
+}
+
+// Error returns the sign-in guidance, or the generic auth message without it.
+func (e *ReviewerAuthRequiredError) Error() string {
+	if e.Guidance == "" {
+		return ErrChatAuthRequired.Error()
+	}
+	return e.Guidance
+}
+
+// Unwrap lets errors.Is match ErrChatAuthRequired.
+func (e *ReviewerAuthRequiredError) Unwrap() error { return ErrChatAuthRequired }
+
 // ReviewCancelSpec is the adapter-selected cancellation behavior for a running
 // reviewer.
 type ReviewCancelSpec struct {
@@ -129,6 +149,10 @@ type ReviewInvocation struct {
 	ReviewIndex int
 	// Config carries the reviewer's resolved agent configuration override.
 	Config domain.AgentConfig
+	// ProjectEnv is the project's configured environment, which the launcher
+	// merges under the reviewer command's own Env for the pane. Adapters that
+	// probe the CLI before launch use it so the probe sees what the pane sees.
+	ProjectEnv map[string]string
 	// WorkspacePath is the worker's checkout the reviewer reads.
 	WorkspacePath string
 	// DataDir is AO's owned state root. Reviewer prelaunch hooks may use it for

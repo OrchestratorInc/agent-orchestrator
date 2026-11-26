@@ -9,13 +9,16 @@ import (
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
+var nativeCheckpointSettleWindow = 3 * time.Second
+
 // The source has stopped, but Claude writes JSONL asynchronously to its hooks.
 // Retry fresh provider observations for a bounded window before launching Chat.
 func verifyNativeCheckpoint(ctx context.Context, verifier ports.NativeCheckpointVerifier, request ports.NativeCheckpointRequest) (ports.NativeCheckpointBoundary, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
+	deadline := time.Now().Add(nativeCheckpointSettleWindow)
 	for {
-		boundary, err := verifier.VerifyNativeCheckpoint(ctx, request)
+		readCtx, cancel := context.WithTimeout(ctx, nativeHistoryLoadAttemptLimit)
+		boundary, err := verifier.VerifyNativeCheckpoint(readCtx, request)
+		cancel()
 		if err == nil {
 			return boundary, nil
 		}
@@ -28,6 +31,9 @@ func verifyNativeCheckpoint(ctx context.Context, verifier ports.NativeCheckpoint
 			timer.Stop()
 			return ports.NativeCheckpointBoundary{}, fmt.Errorf("wait for native checkpoint: %w: %w", err, ctx.Err())
 		case <-timer.C:
+		}
+		if !time.Now().Before(deadline) {
+			return ports.NativeCheckpointBoundary{}, fmt.Errorf("wait for native checkpoint: %w: %w", err, context.DeadlineExceeded)
 		}
 	}
 }
