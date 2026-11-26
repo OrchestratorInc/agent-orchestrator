@@ -5667,6 +5667,12 @@ export function Timeline({
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
+		// A disclosure opened from the keyboard, as onViewportPointerDown does for a pointer.
+		if ((event.key === "Enter" || (event.key === " " && !event.shiftKey)) && target.closest("[aria-expanded]:not([aria-haspopup])")) {
+			clearRelatch();
+			releaseFollow();
+			return;
+		}
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
 			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);

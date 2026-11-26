@@ -5138,6 +5138,23 @@ describe("ChatWorkspace timeline", () => {
 		expect(log.scrollTop).toBe(4000);
 	});
 
+	it("stops following the end when the reader opens a disclosure from the keyboard", () => {
+		const snapshot = chatFixtureLongHistory(8);
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+
+		const fold = document.createElement("button");
+		fold.setAttribute("aria-expanded", "false");
+		log.firstElementChild!.appendChild(fold);
+		fireEvent.keyDown(fold, { key: "Enter" });
+		// What the disclosure opens must not be pulled away by the end it grew past.
+		stubGeometry(log, { scrollHeight: 4400, clientHeight: 800, scrollTop: 3200 });
+		rerender(<ChatWorkspace snapshot={{ ...poll(snapshot), latestSequence: 999 }} />);
+		expect(log.scrollTop).toBe(3200);
+	});
+
 	it("keeps a trailing spacer so a dropped prompt can sit near the top", async () => {
 		const snapshot = chatFixtureSettled;
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
