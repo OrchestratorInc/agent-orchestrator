@@ -925,6 +925,7 @@ describe("ChatWorkspace timeline", () => {
 		// Settings hides the page with display: none and keeps it mounted: every size
 		// reads 0 and observers report it, but nothing on screen changes.
 		let hidden = false;
+		const checkVisibility = Object.getOwnPropertyDescriptor(Element.prototype, "checkVisibility");
 		Object.defineProperty(Element.prototype, "checkVisibility", { configurable: true, value: () => !hidden });
 		const observers = captureResizeObservers();
 		try {
@@ -956,7 +957,8 @@ describe("ChatWorkspace timeline", () => {
 			expect(scrollbar).toHaveAttribute("aria-valuenow", "100");
 		} finally {
 			observers.restore();
-			delete (Element.prototype as { checkVisibility?: unknown }).checkVisibility;
+			if (checkVisibility) Object.defineProperty(Element.prototype, "checkVisibility", checkVisibility);
+			else delete (Element.prototype as { checkVisibility?: unknown }).checkVisibility;
 		}
 	});
 

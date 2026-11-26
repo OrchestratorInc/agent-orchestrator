@@ -5518,6 +5518,10 @@ export function Timeline({
 	useEffect(() => loadOlderToFill(), [loadOlderToFill, oldestRow, hasOlder, loadingOlder]);
 
 	useEffect(() => {
+		// Setting up means this chat runs effects: a hidden <Activity> (a kept session)
+		// runs none, and showing it runs this again, laid out. Only a chat still under
+		// Settings is away, and syncScrollLayout marks it so again.
+		hiddenAway.current = false;
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(() => {
