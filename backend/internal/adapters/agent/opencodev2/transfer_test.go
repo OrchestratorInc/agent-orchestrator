@@ -78,3 +78,61 @@ func TestConversationImportPutsTheEarlierCopyBack(t *testing.T) {
 		t.Fatalf("restored = %q, %v; want the earlier copy", restored, err)
 	}
 }
+
+// The copy here is deleted only once it is backed up. OpenCode's own
+// "Session not found" means there is none; any other failure to export it, or
+// an export that is not this session, leaves it alone and refuses the import.
+func TestConversationImportReplacesTheCopyHereOnlyOnceItIsBackedUp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	const id = "ses_e34d0cd52ffeMzGW05mHN4RIm7"
+	moved := `{"info":{"id":"` + id + `","location":{"directory":"/w/app"}},"messages":[]}`
+	for _, tc := range []struct {
+		name   string
+		export string // the shell body that answers `session export`
+		wantOK bool
+		want   []string // the calls after the export, by subcommand
+	}{
+		{
+			name:   "absent",
+			export: `echo "Session not found: ` + id + `" >&2; exit 1`,
+			wantOK: true, want: []string{"import"},
+		},
+		{
+			name:   "store unreadable",
+			export: `echo "database is locked" >&2; exit 1`,
+		},
+		{
+			name:   "another session's export",
+			export: `printf '%s' '{"info":{"id":"ses_other"},"messages":[]}'`,
+		},
+		{
+			name:   "not found for another id",
+			export: `echo "Session not found: ses_other" >&2; exit 1`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, log := t.TempDir(), filepath.Join(t.TempDir(), "calls")
+			script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2.0.0; exit; fi\necho \"$2\" >> " + log + "\n" +
+				"if [ \"$2\" = export ]; then " + tc.export + "; fi\n"
+			if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			got, err := New().ImportConversation(context.Background(), []byte(moved), t.TempDir(), nil)
+			if tc.wantOK != (err == nil) || (tc.wantOK && got != id) {
+				t.Fatalf("ImportConversation = %q, %v; want ok %v", got, err, tc.wantOK)
+			}
+			calls, _ := os.ReadFile(log)
+			lines := strings.Fields(string(calls))
+			if len(lines) == 0 || lines[0] != "export" {
+				t.Fatalf("calls = %q, want the export first", lines)
+			}
+			if after := lines[1:]; strings.Join(after, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("calls after the export = %q, want %q", after, tc.want)
+			}
+		})
+	}
+}

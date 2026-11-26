@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -37,8 +40,12 @@ func (p *Plugin) ExportConversation(ctx context.Context, id string, env map[stri
 // ImportConversation places data, a `session export` document, as a session
 // run in cwd and returns its id. OpenCode refuses an id it already has, so a
 // copy here (the one left when the session moved away) is deleted first. That
-// copy is exported beforehand and put back if the import fails, so a failed
-// move never leaves this machine without the conversation.
+// copy is deleted only once it is backed up: exported, and the export names
+// this session. The backup is put back if the import fails, so a failed move
+// never leaves this machine without the conversation. Only OpenCode's own
+// "Session not found" says there is no copy to back up; any other export
+// failure (a timeout, a store it cannot read) leaves the copy alone and the
+// import is refused.
 func (p *Plugin) ImportConversation(ctx context.Context, data []byte, cwd string, env map[string]string) (string, error) {
 	id, err := ExportedSessionID(data)
 	if err != nil {
@@ -49,13 +56,20 @@ func (p *Plugin) ImportConversation(ctx context.Context, data []byte, cwd string
 		return "", err
 	}
 	defer func() { _ = os.Remove(moved) }()
-	// Deleting an id OpenCode does not have succeeds; exporting one fails.
 	previous, err := p.run(ctx, cwd, env, "session", "export", id, "--standalone")
-	if got, idErr := ExportedSessionID(previous); err != nil || idErr != nil || got != id {
+	switch {
+	case err == nil:
+		if got, idErr := ExportedSessionID(previous); idErr != nil || got != id {
+			return "", fmt.Errorf("opencode-v2: the conversation here could not be backed up, so it was not replaced: its export is not session %s", id)
+		}
+		if _, err := p.run(ctx, cwd, env, "session", "delete", id, "--standalone"); err != nil {
+			return "", err
+		}
+	case sessionNotFound(err, id):
+		// No copy here: nothing to back up or delete.
 		previous = nil
-	}
-	if _, err := p.run(ctx, cwd, env, "session", "delete", id, "--standalone"); err != nil {
-		return "", err
+	default:
+		return "", fmt.Errorf("opencode-v2: the conversation here could not be backed up, so it was not replaced: %w", err)
 	}
 	if _, err := p.run(ctx, cwd, env, "session", "import", moved, "--directory", cwd, "--standalone"); err != nil {
 		if previous != nil {
@@ -143,7 +157,41 @@ func (p *Plugin) run(ctx context.Context, dir string, env map[string]string, arg
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("opencode-v2: %s %s: %w: %s", args[0], args[1], err, bytes.TrimSpace(stderr.Bytes()))
+		return nil, &runError{args: args, err: err, stderr: string(bytes.TrimSpace(stderr.Bytes()))}
 	}
 	return out, nil
+}
+
+// runError is a failed opencode command, with what it wrote to stderr.
+type runError struct {
+	args   []string
+	err    error
+	stderr string
+}
+
+func (e *runError) Error() string {
+	return fmt.Sprintf("opencode-v2: %s %s: %v: %s", e.args[0], e.args[1], e.err, e.stderr)
+}
+
+func (e *runError) Unwrap() error { return e.err }
+
+// sessionNotFound reports OpenCode saying it has no session id: `session
+// export` exits with an error and "Session not found: <id>" on stderr. A
+// command that failed any other way (a timeout, a store it could not read)
+// says nothing about whether the session exists.
+func sessionNotFound(err error, id string) bool {
+	var failed *runError
+	if !errors.As(err, &failed) {
+		return false
+	}
+	var exit *exec.ExitError
+	if !errors.As(failed.err, &exit) {
+		return false
+	}
+	for _, line := range strings.Split(failed.stderr, "\n") {
+		if strings.TrimSpace(line) == "Session not found: "+id {
+			return true
+		}
+	}
+	return false
 }
