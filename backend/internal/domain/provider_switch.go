@@ -59,7 +59,7 @@ type ChatProviderSwitch struct {
 	SourceBranchID string
 	SourceSequence int64
 	Bootstrap      string
-	// AutoCompactWindow is the Claude Code compaction window the target starts with.
+	// AutoCompactWindow is the auto-compaction the target starts with: Claude Code's window, or OpenCode's "off".
 	AutoCompactWindow string
 }
 

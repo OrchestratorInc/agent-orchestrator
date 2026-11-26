@@ -219,6 +219,7 @@ if (typeof window !== "undefined") {
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
+			setInterfaceV2: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -433,6 +434,8 @@ if (typeof window !== "undefined") {
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
+			onProfileSwitchConfirm: () => () => undefined,
+			onProfileSwitchFailed: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,

@@ -834,6 +834,48 @@ paths:
       summary: Ensure launch-fresh readiness for one agent adapter
       tags:
       - agents
+  /api/v1/agents/{agent}/skills:
+    get:
+      operationId: listAgentSkills
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - description: Project whose skill folders are read before the user's. Omitted
+          scans only the user's own skills.
+        in: query
+        name: projectId
+        schema:
+          description: Project whose skill folders are read before the user's. Omitted
+            scans only the user's own skills.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSkillsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List the skills an agent offers in a project, read from its skill folders
+        without a session
+      tags:
+      - agents
   /api/v1/agents/{agent}/update-advisory:
     get:
       operationId: getAgentUpdateAdvisory
@@ -21554,6 +21596,8 @@ components:
           - provider_key_missing
           - auth_required
           type: string
+        hasEventPrompt:
+          type: boolean
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:
@@ -21603,7 +21647,9 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
+          - "off"
           type: string
         fastMode:
           type: boolean
@@ -21918,6 +21964,13 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        autoCompactWindow:
+          enum:
+          - 200k
+          - 500k
+          - 1m
+          - "off"
+          type: string
         baseBranch:
           maxLength: 255
           type: string
@@ -21935,6 +21988,8 @@ components:
           type:
           - "null"
           - string
+        fastMode:
+          type: boolean
         mode:
           enum:
           - tui
@@ -24397,7 +24452,9 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
+          - "off"
           type: string
         effort:
           maxLength: 64
@@ -24539,6 +24596,10 @@ components:
           items:
             type: string
           type: array
+        workingDir:
+          description: The absolute folder the command ran in. When it is inside the
+            artifact directory, a relative path is read from it if the file is there.
+          type: string
       required:
       - paths
       type: object
@@ -27381,6 +27442,13 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        autoCompactWindow:
+          enum:
+          - 200k
+          - 500k
+          - 1m
+          - "off"
+          type: string
         baseBranch:
           maxLength: 255
           type: string
@@ -27397,6 +27465,8 @@ components:
         effort:
           maxLength: 32
           type: string
+        fastMode:
+          type: boolean
         harness:
           enum:
           - claude-code

@@ -392,10 +392,10 @@ function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string {
 	return workspace.kind === CLOUD_PROJECT_KIND ? `${workspace.name} · ${t("shell.cloudProjectBadge")}` : workspace.name;
 }
 
-/** 0 when the sidebar flags a session red (it needs you), 1 for a review turn, -1 otherwise. */
+/** 0 when the sidebar flags a session's question or red alert (it needs you), 1 for a review turn, -1 otherwise. */
 function attentionMarkerRank(session: WorkspaceSession): number {
 	const marker = getSessionRowMarker(session);
-	return marker === "attention" ? 0 : marker === "review" ? 1 : -1;
+	return marker === "input" || marker === "attention" ? 0 : marker === "review" ? 1 : -1;
 }
 
 /** When the person last worked in a session, as the sidebar's age shows it. */

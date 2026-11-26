@@ -157,6 +157,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: {
@@ -382,6 +383,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
@@ -1189,6 +1192,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: { writeText: async () => undefined, readText: async () => "", writeImage: async () => undefined },
@@ -1411,6 +1415,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
