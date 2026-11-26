@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -92,6 +93,11 @@ func codexAccountIdentity(record codexAccountRecord) *domain.AgentAccountIdentit
 	return identity.Sanitized()
 }
 
+// codexDisplayUsesNativeLoginWhenSyncBlocked scopes the blocked-sync display
+// fallback to Windows, where #8603 was observed. macOS and Linux keep their
+// existing behavior. Tests override it.
+var codexDisplayUsesNativeLoginWhenSyncBlocked = runtime.GOOS == "windows"
+
 // Service integration.
 func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
 	observation, _, handled := s.structuredCodexAuthenticationRecord(ctx, agentID, purpose)
@@ -112,13 +118,21 @@ func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agent
 		// readiness path instead of treating that as proof Codex is signed out.
 		return domain.AgentAuthenticationObservation{}, none, false
 	}
-	if purpose == domain.AgentReadinessPurposeLaunch {
-		s.codexAccounts.mu.Lock()
-		verified := s.codexAccounts.reconciliation.Status == domain.CodexDeviceReconciliationVerified
-		s.codexAccounts.mu.Unlock()
-		if !verified {
-			return domain.AgentAuthenticationObservation{}, none, false
-		}
+	s.codexAccounts.mu.Lock()
+	reconciliationStatus := s.codexAccounts.reconciliation.Status
+	s.codexAccounts.mu.Unlock()
+	if purpose == domain.AgentReadinessPurposeLaunch && reconciliationStatus != domain.CodexDeviceReconciliationVerified {
+		return domain.AgentAuthenticationObservation{}, none, false
+	}
+	// On Windows the account-file sync can be blocked for the whole run (for
+	// example account_storage_unsafe). It never retries by itself, so display
+	// readiness would report account_sync_pending ("Login status unavailable")
+	// until a manual check, which passes only because launch readiness already
+	// falls back to Codex's own login check. Use that same native check for
+	// display. Stay fenced while an account switch is rewriting the credential.
+	if purpose == domain.AgentReadinessPurposeDisplay && codexDisplayUsesNativeLoginWhenSyncBlocked &&
+		reconciliationStatus == domain.CodexDeviceReconciliationBlocked && !s.CodexAccountSwitchInProgress() {
+		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	id := s.codexAccounts.activeAccountID()
 	if id == "" {
