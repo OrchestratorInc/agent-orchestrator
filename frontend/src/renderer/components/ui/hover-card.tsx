@@ -137,13 +137,13 @@ function HoverCard({
 	// out from under a pointer that stays put: in a chat that auto-scrolls while
 	// it streams, the card never got a leave event and stayed open over the
 	// timeline. Only a scroll that can move the trigger closes it: the page, or a
-	// container the trigger sits in. Scrolling inside the card or another pane
-	// keeps it open.
+	// container the trigger sits in, including another card's content holding a
+	// nested trigger. The card's own content is portaled away from its trigger,
+	// so scrolling it, or another pane, keeps the card open.
 	useEffect(() => {
 		if (!open || !dismissOnScroll) return;
 		const onScroll = (event: Event) => {
 			const target = event.target;
-			if (target instanceof Element && target.closest("[data-slot=hover-card-content]")) return;
 			const trigger = triggerRef.current;
 			const movesTrigger =
 				target === window ||

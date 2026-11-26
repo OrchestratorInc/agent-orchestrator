@@ -209,6 +209,26 @@ describe("HoverCard scroll dismissal", () => {
 		expect(screen.getByText("preview")).toBeInTheDocument();
 	});
 
+	it("closes a nested card when the outer card's content scrolls its trigger", () => {
+		render(
+			<HoverCard defaultOpen>
+				<HoverCardTrigger>outer trigger</HoverCardTrigger>
+				<HoverCardContent>
+					outer preview
+					<div data-testid="outer-body" style={{ overflow: "auto", height: 40 }}>
+						<HoverCard defaultOpen>
+							<HoverCardTrigger>inner trigger</HoverCardTrigger>
+							<HoverCardContent>inner preview</HoverCardContent>
+						</HoverCard>
+					</div>
+				</HoverCardContent>
+			</HoverCard>,
+		);
+		fireEvent.scroll(screen.getByTestId("outer-body"));
+		expect(screen.queryByText("inner preview")).not.toBeInTheDocument();
+		expect(screen.getByText("outer preview")).toBeInTheDocument();
+	});
+
 	it("leaves scrolling to an owner that opts out", () => {
 		render(
 			<div data-testid="timeline" style={{ overflow: "auto", height: 100 }}>
