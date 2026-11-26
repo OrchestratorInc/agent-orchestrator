@@ -167,9 +167,11 @@ function withSlidRows(pages: ConversationPage[], live: ConversationPage): Conver
 	const slid = current.items.filter((item) => item.sequence < floor);
 	if (!slid.length) return history;
 	// Joined only where the two pages overlap. After a gap (more new rows than a
-	// page holds), the rows between them were never read: holding the old page
-	// would hand its cursor to loading older rows, past the rows in the gap.
-	if (slid.length === current.items.length) return history;
+	// page holds), the rows between them were never read: holding the old page,
+	// or any history behind it, would hand its cursor to loading older rows, past
+	// the rows in the gap. The live page's own cursor loads them, and the history
+	// after them, again.
+	if (slid.length === current.items.length) return [];
 	const liveTurns = new Set(live.turns.map((turn) => turn.id));
 	// Only settled turns. Every page lists each queued or running turn whatever
 	// its rows, so one missing from the live page is no longer active (cancelled,

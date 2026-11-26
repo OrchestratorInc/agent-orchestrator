@@ -124,6 +124,18 @@ describe("live page and branch changes", () => {
 		expect(merged?.hasMoreBefore).toBe(true);
 	});
 
+	it("drops loaded history across a gap, so the rows in the gap still load", () => {
+		const older = page({ oldestSequence: 1, hasMoreBefore: false, items: [message("first", 1), message("second", 2)] });
+		const live = page({ oldestSequence: 3, hasMoreBefore: true, items: [message("third", 3), message("fourth", 4)] });
+		const afterGap = page({ oldestSequence: 7, hasMoreBefore: true, items: [message("seventh", 7), message("eighth", 8)] });
+		const pages = withLivePage([live, older], afterGap);
+		const merged = mergeConversationPages(pages);
+		expect(pages).toHaveLength(1);
+		expect(merged?.items.map((item) => item.id)).toEqual(["seventh", "eighth"]);
+		expect(merged?.oldestSequence).toBe(7);
+		expect(merged?.hasMoreBefore).toBe(true);
+	});
+
 	it("adds pushed-off rows to loaded history without repeating them", () => {
 		const older = page({ oldestSequence: 0, hasMoreBefore: false, items: [message("oldest", 0), message("first", 1)] });
 		const live = page({ oldestSequence: 1, items: [message("first", 1), message("second", 2)] });
