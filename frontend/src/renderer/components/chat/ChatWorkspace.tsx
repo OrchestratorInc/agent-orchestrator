@@ -226,8 +226,6 @@ import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
-import { ChatConnectorsMenu } from "./ChatConnectorsMenu";
-import { ConnectorProposalDock, connectorAskIn, type ConnectorRestart } from "./ConnectorProposalDock";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchChip } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
@@ -238,7 +236,6 @@ import {
 	activityPlan,
 	brokenMcpServers,
 	can,
-	type McpServer,
 	isCompaction,
 	isSteer,
 	fullQueuedTurnOrder,
@@ -555,7 +552,8 @@ export interface ChatWorkspaceProps {
 	onContinueTurn?: () => Promise<unknown> | void;
 	commandError?: string;
 	onResumeAgent?: () => void | Promise<unknown>;
-	connectorRestart?: ConnectorRestart;
+	connectorsMenu?: ReactNode;
+	connectorDock?: ReactNode;
 	resumingAgent?: boolean;
 	resumeError?: string;
 	/** resumeError says another app still holds this chat. */
@@ -931,7 +929,8 @@ function ChatWorkspaceContent({
 	onContinueTurn,
 	commandError,
 	onResumeAgent,
-	connectorRestart,
+	connectorsMenu,
+	connectorDock,
 	resumingAgent,
 	resumeError,
 	resumeOpenElsewhere,
@@ -1894,8 +1893,6 @@ function ChatWorkspaceContent({
 	// The running agent's limit; a pending switch names another agent, so the sign steps aside.
 	const runningQuota = agentSwitch?.pending ? undefined : nearQuota;
 	const quotaSign = runningQuota ? <QuotaSign quota={runningQuota} /> : null;
-	const stableMcpServers = useStableValue(snapshot.mcpServers);
-	const connectorAsk = useMemo(() => connectorAskIn(snapshot.items), [snapshot.items]);
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
 	const currentModelReroute =
@@ -1908,20 +1905,13 @@ function ChatWorkspaceContent({
 	const stableModelReroute = useStableValue(currentModelReroute);
 	const stablePendingApproval = useStableValue(pendingApproval);
 	const stablePendingUserInput = useStableValue(pendingUserInput);
-	const ownSignIn = can(snapshot, "mcp_sign_in");
-	const offerConnectorRestart = connectorRestart?.offer;
 	const composerSettings = useMemo(
 		() =>
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} /> : undefined}
-					afterPicker={(
-						<>
-							{quotaSign}
-							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} agentName={agentLabel(snapshot.harness)} servers={stableMcpServers ?? NO_MCP_SERVERS} ownSignIn={ownSignIn} onSignedIn={offerConnectorRestart} /> : null}
-						</>
-					)}
+					afterPicker={connectorsMenu ? <>{quotaSign}{connectorsMenu}</> : quotaSign}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
 					lastModel={lastModel}
@@ -1957,12 +1947,7 @@ function ChatWorkspaceContent({
 				/>
 			) : null,
 		[
-			stableMcpServers,
-			ownSignIn,
-			offerConnectorRestart,
-			uiSessionId,
-			activeRemoteHostId,
-			snapshot.harness,
+			connectorsMenu,
 			settingsReady,
 			settingsLocked,
 			settingsLoading,
@@ -2515,7 +2500,7 @@ function ChatWorkspaceContent({
 											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
-									{uiSessionId ? <ConnectorProposalDock sessionId={uiSessionId} hostId={activeRemoteHostId} asked={connectorAsk.asked} waiting={connectorAsk.waiting} restart={connectorRestart} /> : null}
+									{connectorDock}
 									<McpServerBanner
 										key={draftScopeKey}
 										sessionId={uiSessionId}
@@ -7379,7 +7364,6 @@ function useStableCallback<Args extends unknown[], Result>(
 	return useCallback((...args: Args) => latest.current?.(...args), []);
 }
 
-const NO_MCP_SERVERS: readonly McpServer[] = [];
 
 /** Retain an unchanged JSON-shaped value across snapshot refreshes. */
 function useStableValue<T>(value: T): T {

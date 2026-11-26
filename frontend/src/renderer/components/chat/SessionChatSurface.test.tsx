@@ -2,7 +2,7 @@ import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -194,13 +194,13 @@ vi.mock("./ChatWorkspace", async () => {
 			onSend,
 			onStageAttachments,
 			settingsReady,
-			connectorRestart,
+			connectorDock,
 			composerNotice,
 			importBlock,
 			findRequest,
 			onFindRequestHandled,
 		}: {
-			connectorRestart?: ConnectorRestart;
+			connectorDock?: ReactElement<{ restart?: ConnectorRestart }>;
 			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
 			onStageAttachments?: unknown;
@@ -229,7 +229,7 @@ vi.mock("./ChatWorkspace", async () => {
 			sideMocks.workspaceSend = onSend;
 			sideMocks.stageAttachments = onStageAttachments;
 			sideMocks.settingsReady = settingsReady;
-			sideMocks.connectorRestart = connectorRestart;
+			sideMocks.connectorRestart = connectorDock?.props.restart;
 			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);

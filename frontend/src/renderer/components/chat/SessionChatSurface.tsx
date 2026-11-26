@@ -54,13 +54,17 @@ import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
 import { activeTurn, can } from "../../types/conversation";
-import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
+import type { ConversationSnapshot, McpServer, TurnSettings } from "../../types/conversation";
+
+const NO_MCP_SERVERS: readonly McpServer[] = [];
 import type { TerminalTarget } from "../../types/terminal";
 import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "../../lib/composer-send-failure";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
 import { useConnectorRestartStore, type ReadyConnector } from "../../stores/connector-restart-store";
+import { ChatConnectorsMenu } from "./ChatConnectorsMenu";
+import { ConnectorProposalDock, connectorAskIn } from "./ConnectorProposalDock";
 import type { BackgroundTask } from "../../hooks/useBackgroundTasks";
 import { useUiStore } from "../../stores/ui-store";
 import { useTranscriptTiming } from "../../lib/performance-telemetry";
@@ -343,6 +347,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		() => ({ ready: readyConnectorLoaded ? undefined : readyConnector?.name, busy: agentBusy, offer: offerConnectorRestart, restart: restartForConnector }),
 		[agentBusy, offerConnectorRestart, readyConnector, readyConnectorLoaded, restartForConnector],
 	);
+	const connectorServersKey = JSON.stringify(snapshot?.mcpServers ?? NO_MCP_SERVERS);
+	const connectorServers = useMemo(() => JSON.parse(connectorServersKey) as McpServer[], [connectorServersKey]);
+	const connectorAsk = useMemo(() => connectorAskIn(snapshot?.items ?? []), [snapshot?.items]);
+	const connectorAgent = agentLabel(snapshot?.harness ?? session.provider);
+	const ownSignIn = snapshot ? can(snapshot, "mcp_sign_in") : false;
+	const connectorsMenu = useMemo(
+		() => <ChatConnectorsMenu sessionId={session.id} hostId={hostId} agentName={connectorAgent} servers={connectorServers} ownSignIn={ownSignIn} onSignedIn={offerConnectorRestart} />,
+		[connectorAgent, connectorServers, hostId, offerConnectorRestart, ownSignIn, session.id],
+	);
+	const connectorDock = <ConnectorProposalDock sessionId={session.id} hostId={hostId} asked={connectorAsk.asked} waiting={connectorAsk.waiting} restart={connectorRestart} />;
 	const switchBlocked = agentBusy || providerSwitch.isPending;
 	// A new pick for the same agent keeps the permission mode picked for it.
 	const choosePendingSwitch = useCallback((next: PendingAgentSwitch | undefined) => {
@@ -917,7 +931,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}
-				connectorRestart={connectorRestart}
+				connectorsMenu={connectorsMenu}
+				connectorDock={connectorDock}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
 				resumeOpenElsewhere={commands.resumeError ? commands.resumeOpenElsewhere : controllerResumeOpenElsewhere}
