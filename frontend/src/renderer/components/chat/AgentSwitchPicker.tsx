@@ -564,7 +564,7 @@ export function AgentModelPicker({
 							hint={t("agentSwitch.fastModeHint")}
 						/>
 					) : null}
-					<AutoCompactChoices {...(compact ?? { onChange: () => {}, disabled: true, unavailable: true, title: notOffered })} className="ml-auto mr-2" />
+					<AutoCompactChoices {...(compact ?? { onChange: () => {}, disabled: true, unavailable: true, title: notOffered })} className="ml-auto" />
 				</div>
 				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
