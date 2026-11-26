@@ -103,13 +103,15 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.Launch
 // the inline config has loaded for the session the task creates. While
 // starting, the footer can name AO's agent before any provider has loaded
 // ("No provider selected"); Enter then opens the connect dialog instead of
-// sending, so that state holds delivery. If the agent never appears, AO still
-// types the task when the wait ends.
+// sending, so that state holds delivery. Delivery requires the marker: typing
+// without it could start the task on build, which is the bug this avoids, so
+// a launch whose agent never appears fails instead.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, cfg ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
 	}
 	return ports.PromptReadinessHints{
+		RequireReady:     true,
 		InitialDelay:     500 * time.Millisecond,
 		Patterns:         []string{agentLabel(aoAgentName(cfg.SessionID))},
 		BlockingPatterns: []string{noProviderSelected},
@@ -162,6 +164,15 @@ func selectsAOAgent(prompt, model string, mode ports.PermissionMode) bool {
 // highlights off whenever it types the task itself.
 const cliConfigEnv = "OPENCODE_CLI_CONFIG_CONTENT"
 
+// launchEnv reads key as the launched process will see it: cfg.Env overrides
+// the daemon's environment, and a key set to "" there is unset.
+func launchEnv(cfg ports.LaunchConfig, key string) string {
+	if value, ok := cfg.Env[key]; ok {
+		return value
+	}
+	return os.Getenv(key)
+}
+
 func prepareCLIConfigContent(existing string) (string, error) {
 	config := map[string]json.RawMessage{}
 	if strings.TrimSpace(existing) != "" {
@@ -205,7 +216,7 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	// has cleared cfg.Prompt (see GetPromptDeliveryStrategy); a launch with no
 	// task looks the same and gets the same setting.
 	if content != "" && cfg.Prompt == "" && nativeID == "" {
-		cliContent, err := prepareCLIConfigContent(os.Getenv(cliConfigEnv))
+		cliContent, err := prepareCLIConfigContent(launchEnv(cfg, cliConfigEnv))
 		if err != nil {
 			return nil, err
 		}
