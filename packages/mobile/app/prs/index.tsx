@@ -203,7 +203,7 @@ function PRList() {
 		return (
 			<View style={styles.screen} collapsable={false}>
 				<StackRootBack />
-				<TabPageScroll>
+				<TabPageScroll topInset={barInset}>
 					<UnpairedState />
 				</TabPageScroll>
 			</View>

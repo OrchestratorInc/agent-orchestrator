@@ -350,7 +350,8 @@ function SpawnPage() {
 	const listening = voice.state === "starting" || voice.state === "recording";
 	// The composer docks to the bottom as the chat's does, on the same keyboard
 	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
-	// The page sits below the stack's opaque bar, so the avoider counts it.
+	// On iOS the page sits below the stack's bar, so the avoider counts it; on
+	// Android it runs under the clear pill bar, and the offset is iOS's alone.
 	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
 	const glassInset = useGlassBarInset();
 	const keyboard = useReanimatedKeyboardAnimation();
