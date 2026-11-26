@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceFilesResponse, WorkspaceFileSummary } from "./useSessionWorkspaceFiles";
 import {
@@ -84,6 +84,21 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 				workspaceVersion: "workspace-1",
 			},
 		}));
+	});
+
+	it("aborts an in-flight diff request when its review page loses its last observer", () => {
+		let requestSignal: AbortSignal | undefined;
+		postMock.mockImplementation((_path, init) => new Promise((_resolve, reject) => {
+			requestSignal = init.signal;
+			requestSignal?.addEventListener("abort", () => reject(requestSignal?.reason), { once: true });
+		}));
+		const client = new QueryClient();
+		const observer = new QueryObserver(client, sessionWorkspaceDiffsQueryOptions({ paths: ["README.md"], scope: "uncommitted", sessionId: "sess-cancel" }));
+		const unsubscribe = observer.subscribe(() => {});
+		expect(requestSignal?.aborted).toBe(false);
+		unsubscribe();
+		expect(requestSignal?.aborted).toBe(true);
+		client.clear();
 	});
 
 	it("skips a files summary that has no review sections", async () => {
@@ -192,6 +207,57 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 		expect(postMock.mock.calls[3]?.[1]?.body.paths).toEqual(files.slice(24, 48).map((entry) => entry.path));
 	});
 
+	it("reads one diff batch at a time, so a guess never holds several connections", async () => {
+		const files = Array.from({ length: 30 }, (_, index) => file(`src/file-${index}.ts`));
+		const batches: Array<(value: unknown) => void> = [];
+		postMock.mockImplementation(() => new Promise((resolve) => batches.push(resolve)));
+		const done = prefetchDefaultWorkspaceReviewDiffs(new QueryClient(), "sess-prefetch-serial", workspace(files));
+
+		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(postMock).toHaveBeenCalledTimes(1);
+		batches[0]({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [] } });
+		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		batches[1]({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [] } });
+		await done;
+		expect(postMock.mock.calls.map((call) => call[1]?.body.paths.length)).toEqual([24, 6]);
+	});
+
+	it("lets a review pane that opens meanwhile join the end-of-file read instead of sending its own", async () => {
+		const sessionId = "sess-prefetch-join";
+		const sides: Array<() => void> = [];
+		getMock.mockImplementation((_path: string, init: { params: { query: { side: "before" | "after" } } }) => new Promise((resolve) => sides.push(() => resolve({
+			data: {
+				binary: false,
+				content: init.params.query.side === "before" ? "line3\nline4\nline5\n" : "line3\nline4\nline5\nadded6\nadded7\n",
+				exists: true,
+				path: "README.md",
+				revision: init.params.query.side,
+				sessionId,
+				side: init.params.query.side,
+				size: 20,
+				truncated: false,
+				workspaceVersion: "workspace-1",
+			},
+		}))));
+		const queryClient = new QueryClient();
+		const done = prefetchDefaultWorkspaceReviewDiffs(queryClient, sessionId, workspace([file("README.md")]));
+		await vi.waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+
+		const [read] = queryClient.getQueryCache().findAll({ queryKey: ["files-review-end-of-file", sessionId] });
+		expect(read?.state.fetchStatus).toBe("fetching");
+		const paneRead = vi.fn();
+		const pane = new QueryObserver(queryClient, { queryKey: read!.queryKey, queryFn: paneRead, retry: false, staleTime: Infinity });
+		const unsubscribe = pane.subscribe(() => {});
+		for (const resolve of sides) resolve();
+		await done;
+
+		expect(paneRead).not.toHaveBeenCalled();
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(pane.getCurrentResult().data).toMatchObject({ newFile: { contents: "line3\nline4\nline5\nadded6\nadded7\n" } });
+		unsubscribe();
+	});
+
 	it("refetches invalidated diffs and full contents when the summary version is unchanged", async () => {
 		const queryClient = new QueryClient();
 		const sessionId = "sess-prefetch-invalidated";
@@ -224,6 +290,12 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 			oldFile: { contents: "new before\n" },
 			newFile: { contents: "new after\n" },
 		});
+	});
+
+	it("prefetches only the first page even when that page contains deferred files", async () => {
+		const files = Array.from({ length: 5123 }, (_, index) => file(`file-${index}.ts`, { size: index < 48 ? 600_000 : 40 }));
+		await prefetchDefaultWorkspaceReviewDiffs(new QueryClient(), "sess-prefetch-large", workspace(files));
+		expect(postMock.mock.calls.flatMap((call) => call[1].body.paths)).toEqual(files.slice(48, 96).map((entry) => entry.path));
 	});
 
 	it("skips lockfiles the review pane defers", async () => {

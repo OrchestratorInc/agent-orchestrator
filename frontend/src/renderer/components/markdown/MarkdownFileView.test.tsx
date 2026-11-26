@@ -41,6 +41,28 @@ function view(content: string, filePath = "docs/README.md", truncated = false) {
 }
 
 describe("MarkdownFileView", () => {
+	it("omits opening frontmatter in both document and thumbnail views", () => {
+		const content = "---\ntitle: Internal metadata\n---\n# Field guide\n\nReadable body.";
+		const { container, rerender } = render(view(content));
+		expect(container.querySelector(".markdown-body h1")).toHaveTextContent("Field guide");
+		expect(container).not.toHaveTextContent("Internal metadata");
+		rerender(<MarkdownFileView content={content} filePath="guide.md" presentation="thumbnail" sessionId="sess-1" truncated={false} version={7} />);
+		expect(container.querySelector(".markdown-body h1")).toHaveTextContent("Field guide");
+		expect(container).not.toHaveTextContent("Internal metadata");
+	});
+
+	it("keeps thumbnail formatting, images, and diagrams without nested controls", async () => {
+		const content = "# Overview\n\n[Docs](https://example.com)\n\n> [!NOTE]\n> Read this.\n\n![Chart](./chart.png)\n\n```ts\nconst ready = true;\n```\n\n```mermaid\nflowchart TD\n A --> B\n```";
+		const { container } = render(<MarkdownFileView artifactOrigin="http://artifact.localhost" content={content} filePath="reports/guide.md" presentation="thumbnail" sessionId="sess-1" truncated={false} version={7} />);
+		expect(container.querySelector(".markdown-body h1")).toHaveTextContent("Overview");
+		expect(container.querySelector(".markdown-alert-note")).toHaveTextContent("Read this.");
+		expect(container.querySelector("img")).toHaveAttribute("src", "http://artifact.localhost/reports/chart.png");
+		expect(container.querySelector("pre.markdown-code")).toHaveTextContent("const ready = true;");
+		expect(await screen.findByTestId("mermaid-diagram")).toBeInTheDocument();
+		expect(container.querySelector("button, a")).toBeNull();
+		expect(container.querySelector("[inert]")).not.toBeNull();
+	});
+
 	it("renders GFM, GitHub alerts, and highlighted fenced code", async () => {
 		const { container } = render(
 			view(
@@ -99,9 +121,9 @@ describe("MarkdownFileView", () => {
 
 	it("opens external links in the system browser", () => {
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
-		render(view("[AO docs](https://example.com/docs)"));
+		render(view("[Orchestrator docs](https://example.com/docs)"));
 
-		fireEvent.click(screen.getByRole("link", { name: "AO docs" }));
+		fireEvent.click(screen.getByRole("link", { name: "Orchestrator docs" }));
 
 		expect(openExternal).toHaveBeenCalledWith("https://example.com/docs");
 	});

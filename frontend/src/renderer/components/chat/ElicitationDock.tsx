@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2 } from "@/components/app-icons";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
-import { ACCENT_ACTION_PILL, QUIET_ACTION_PILL } from "./action-pill";
+import { Button } from "../ui/button";
+import { CloseButton } from "../ui/close-button";
+import { Pressable } from "../ui/pressable";
 
 type InputAction = "accept" | "decline" | "cancel";
 type InputValue = string | number | boolean | string[];
@@ -15,9 +17,12 @@ type PropertyEntry = [string, Record<string, unknown>];
  */
 export function ElicitationDock({
 	activity,
+	harness,
 	onResolve,
 }: {
 	activity: ConversationActivity;
+	/** The session's agent. Antigravity's question fields are read only when it asked. */
+	harness?: string;
 	onResolve?: (
 		requestId: string,
 		action: InputAction,
@@ -52,7 +57,7 @@ export function ElicitationDock({
 			{activity.detail?.inputMode === "url" ? (
 				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
 			) : (
-				<FormRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
+				<FormRequest activity={activity} harness={harness} disabled={submitting || unavailable} onResolve={resolve} />
 			)}
 
 			{error ? (
@@ -64,7 +69,7 @@ export function ElicitationDock({
 	);
 }
 
-export function ElicitationHistory({ activity }: { activity: ConversationActivity }) {
+export function ElicitationHistory({ activity, harness }: { activity: ConversationActivity; harness?: string }) {
 	const response = activity.inputResponse;
 	const answered = (activity.status === "resolved" || activity.status === "completed") && response?.action === "accept";
 	const outcome = activity.status === "failed" ? "Question expired"
@@ -73,39 +78,53 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 				: answered ? "Answered" : "Question closed";
 	const schema = activity.detail?.schema;
 	const properties = Object.entries(schema?.properties ?? {});
-	const groups = claudeQuestionGroups(properties);
+	const form = questionForm(properties, harness);
+	const groups = form?.groups;
 	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
 	const content = answered ? response.content : undefined;
+	// The line under the question is the answer, or how the question ended when
+	// there is no answer to show. An answer needs no "Answered" label above it.
+	const showsAnswers = answered && properties.length > 0;
+	const ending = showsAnswers ? null : <p className="text-muted-foreground">{outcome}</p>;
 
 	return (
 		<section aria-label="Agent question history" className="min-w-0 space-y-3 rounded-lg border border-border bg-surface/45 p-3 text-xs leading-relaxed">
-			<p className="font-medium text-muted-foreground">{outcome}</p>
-			{groups ? groups.map((group) => {
+			{form && groups ? groups.map((group, index) => {
 				const question = group[0];
 				if (!question) return null;
 				return (
 					<div key={question[0]} className="space-y-1">
 						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
-							{questionPrompt(question, groups.length === 1 ? activity.detail?.message : undefined)}
+							{questionFormPrompt(form, question, activity.detail?.message)}
 						</p>
-						{answered ? <HistoryAnswers properties={group} content={content} /> : null}
+						{showsAnswers ? <HistoryAnswers properties={group} content={content} /> : index === groups.length - 1 ? ending : null}
 					</div>
 				);
 			}) : (
 				<div className="space-y-1">
 					<p className="whitespace-pre-wrap break-words font-medium text-foreground">{message}</p>
 					{schema?.description ? <p className="whitespace-pre-wrap break-words">{schema.description}</p> : null}
-					{answered && properties.length > 0 ? <HistoryAnswers properties={properties} content={content} /> : null}
+					{activity.detail?.inputMode === "url" && activity.detail.url ? (
+						<p className="break-all text-muted-foreground">{activity.detail.url}</p>
+					) : null}
+					{showsAnswers ? <HistoryAnswers properties={properties} content={content} labelled /> : ending}
 				</div>
 			)}
-			{activity.detail?.inputMode === "url" && activity.detail.url ? (
-				<p className="break-all text-muted-foreground">{activity.detail.url}</p>
-			) : null}
 		</section>
 	);
 }
 
-function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; content?: Record<string, unknown> }) {
+/**
+ * Only what was picked or typed. A Claude question already reads as the answer's
+ * label, so its answers drop the field name; generic forms keep it to tell their
+ * fields apart. Option descriptions and the "(Recommended)" tag only help while
+ * choosing, so neither is repeated here.
+ */
+function HistoryAnswers({ properties, content, labelled = false }: {
+	properties: PropertyEntry[];
+	content?: Record<string, unknown>;
+	labelled?: boolean;
+}) {
 	const answers = properties.filter(([name]) => {
 		const value = content?.[name];
 		return value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0);
@@ -113,35 +132,37 @@ function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; 
 	if (answers.length === 0) {
 		return <p className="text-muted-foreground">{content ? "No answer provided" : "Answer unavailable"}</p>;
 	}
+	if (!labelled) {
+		return (
+			<>
+				{answers.map(([name, property]) => (
+					<p key={name} className="whitespace-pre-wrap break-words text-muted-foreground">{answerText(property, content?.[name])}</p>
+				))}
+			</>
+		);
+	}
 	return (
 		<dl className="space-y-1">
-			{answers.map(([name, property]) => {
-				const value = content?.[name];
-				const options = enumOptions(property);
-				function label(value: unknown): string {
-					if (typeof value === "boolean") return value ? "Yes" : "No";
-					if (typeof value === "number") return String(value);
-					if (typeof value !== "string") return "Answer unavailable";
-					const option = options.find((option) => option.value === value);
-					return option ? [option.label, option.description].filter(Boolean).join(" — ") : value;
-				}
-				return (
-					<div key={name} className="min-w-0">
-						<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
-						<dd className="mt-0.5 flex min-w-0 items-start gap-2 text-foreground">
-							{/* The same tile the dock marks a picked choice with. */}
-							<span aria-hidden="true" className="mt-0.5 grid size-4 shrink-0 place-items-center rounded bg-logo-accent text-logo-accent-foreground">
-								<Check className="size-3" />
-							</span>
-							<span className="min-w-0 whitespace-pre-wrap break-words">
-								{Array.isArray(value) ? value.map(label).join(", ") : label(value)}
-							</span>
-						</dd>
-					</div>
-				);
-			})}
+			{answers.map(([name, property]) => (
+				<div key={name} className="min-w-0">
+					<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
+					<dd className="mt-0.5 whitespace-pre-wrap break-words text-foreground">{answerText(property, content?.[name])}</dd>
+				</div>
+			))}
 		</dl>
 	);
+}
+
+function answerText(property: Record<string, unknown>, value: unknown): string {
+	const options = enumOptions(property);
+	function label(value: unknown): string {
+		if (typeof value === "boolean") return value ? "Yes" : "No";
+		if (typeof value === "number") return String(value);
+		if (typeof value !== "string") return "Answer unavailable";
+		const option = options.find((option) => option.value === value);
+		return option ? option.label.replace(/\s*\(recommended\)\s*$/i, "") : value;
+	}
+	return Array.isArray(value) ? value.map(label).join(", ") : label(value);
 }
 
 /** The full question stays visible above its answers, alongside the step count. */
@@ -180,28 +201,25 @@ function DockHeader({
 				</p>
 			</div>
 			{onToggleCollapsed ? (
-				<button
-					type="button"
+				<Pressable
 					aria-label={collapsed ? "Expand question" : "Collapse question"}
 					aria-expanded={!collapsed}
 					title={collapsed ? "Expand" : "Collapse"}
 					onClick={onToggleCollapsed}
-					className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+					className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
 				>
 					<ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", collapsed && "-rotate-90")} />
-				</button>
+				</Pressable>
 			) : null}
 			{onDismiss ? (
-				<button
-					type="button"
+				<CloseButton
+					size="icon-xs"
 					aria-label="Cancel"
 					title="Cancel"
 					disabled={disabled}
 					onClick={onDismiss}
-					className="-mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
-				>
-					<X aria-hidden="true" className="size-3.5" />
-				</button>
+					className="-mr-1"
+				/>
 			) : null}
 		</div>
 	);
@@ -271,16 +289,18 @@ function URLRequest({
 			) : null}
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
+					<Button type="button" variant="secondary" size="sm" shape="pill" disabled={disabled} onClick={() => onResolve("cancel")}>
 						Cancel
-					</button>
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("decline")}>
+					</Button>
+					<Button type="button" variant="secondary" size="sm" shape="pill" disabled={disabled} onClick={() => onResolve("decline")}>
 						Decline
-					</button>
+					</Button>
 				</div>
-				<button
+				<Button
 					type="button"
-					className={ACCENT_ACTION_PILL}
+					variant="accent"
+					size="sm"
+					shape="pill"
 					disabled={disabled || !parsed}
 					onClick={() => void consent()}
 				>
@@ -290,7 +310,7 @@ function URLRequest({
 						<ExternalLink aria-hidden="true" className="size-3.5" />
 					)}
 					Open {parsed?.hostname ?? "link"}
-				</button>
+				</Button>
 			</DockFooter>
 		</div>
 	);
@@ -298,16 +318,19 @@ function URLRequest({
 
 function FormRequest({
 	activity,
+	harness,
 	disabled,
 	onResolve,
 }: {
 	activity: ConversationActivity;
+	harness?: string;
 	disabled: boolean;
 	onResolve: (action: InputAction, content?: Record<string, unknown>) => Promise<void>;
 }) {
 	const schema = activity.detail?.schema;
 	const properties = useMemo(() => Object.entries(schema?.properties ?? {}), [schema?.properties]);
-	const questionGroups = useMemo(() => claudeQuestionGroups(properties), [properties]);
+	const form = useMemo(() => questionForm(properties, harness), [properties, harness]);
+	const questionGroups = form?.groups;
 	const otherAnswers = useMemo(() => otherAnswerFields(properties), [properties]);
 	const required = useMemo(() => new Set(schema?.required ?? []), [schema?.required]);
 	const [values, setValues] = useState<Record<string, InputValue>>(() => initialValues(properties));
@@ -333,10 +356,11 @@ function FormRequest({
 	}, [activeQuestion]);
 
 	// Claude puts a single prompt in message and each prompt of a multi-question
-	// form in its field description. The field title is only a short topic label.
+	// form in its field description; its field title is only a short topic label.
+	// Antigravity puts every prompt in the field title.
 	const question = questionGroups ? visibleProperties[0] : undefined;
-	const title = question
-		? questionPrompt(question, questionGroups?.length === 1 ? activity.detail?.message : undefined)
+	const title = form && question
+		? questionFormPrompt(form, question, activity.detail?.message)
 		: activity.detail?.message ?? schema?.title ?? activity.summary;
 	const pager =
 		questionGroups && questionGroups.length > 1
@@ -389,6 +413,35 @@ function FormRequest({
 		void onResolve("accept", values);
 	}
 
+	// On a form of several questions, Skip leaves only the shown question blank,
+	// as the phone's card does: it moves on, and on the last question sends what
+	// was answered. A required question has no Skip; the close still ends the
+	// form. Anywhere else, Skip declines the whole request.
+	const skipsOneQuestion = questionGroups !== undefined && questionGroups.length > 1;
+	const canSkip = !skipsOneQuestion || !visibleProperties.some(([name]) => required.has(name));
+
+	function skip() {
+		if (!skipsOneQuestion) {
+			void onResolve("decline");
+			return;
+		}
+		const next = { ...values };
+		// Cleared, not reset: a schema default would send the question as answered.
+		for (const [name, property] of visibleProperties) {
+			if (property.type === "array") next[name] = [];
+			else delete next[name];
+		}
+		setValues(next);
+		setMissing(new Set());
+		if (hasNextQuestion) {
+			setActiveQuestion((current) => current + 1);
+			return;
+		}
+		// With every question left blank, the whole form was skipped.
+		const answered = properties.some(([name]) => !isBlank(next[name]));
+		void (answered ? onResolve("accept", next) : onResolve("decline"));
+	}
+
 	return (
 		<form ref={formRef} onSubmit={submit} onKeyDown={pickByNumber} className="flex min-h-0 flex-1 flex-col">
 			<DockHeader
@@ -402,14 +455,18 @@ function FormRequest({
 			/>
 			{collapsed ? null : (
 				<>
+				{/* A focused row's ring draws 2px outside it, and the Other row's field sits 4px
+				    inside its row. The padding keeps that ring clear at either end of the list, and
+				    the scroll padding wherever focus scrolls a row in. Both leave room to spare,
+				    because scroll offsets round to whole pixels. */}
 				<div
 					data-testid="elicitation-scroll-body"
-					className="chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-contain py-1"
 				>
 					{!questionGroups && schema?.description ? (
 						<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
 					) : null}
-					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
+					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3")}>
 						{visibleProperties.map(([name, property], index) => (
 							<FormField
 								key={name}
@@ -449,11 +506,13 @@ function FormRequest({
 				<DockFooter>
 					<div className="flex items-center gap-1">
 						{hasPreviousQuestion ? (
-							<button
+							<Button
 								type="button"
+								variant="quiet"
+								size="icon-sm"
+								shape="pill"
 								aria-label="Back"
 								title="Back"
-								className="grid size-7 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
 								disabled={disabled}
 								onClick={() => {
 									setMissing(new Set());
@@ -461,14 +520,13 @@ function FormRequest({
 								}}
 							>
 								<ChevronLeft aria-hidden="true" className="size-4" />
-							</button>
+							</Button>
 						) : null}
 						{questionGroups && questionGroups.length > 1 ? (
 							<div className="flex items-center gap-1 px-1" aria-hidden="true">
 								{questionGroups.map((group, step) => (
-									<button
+									<Pressable
 										key={group[0]?.[0] ?? step}
-										type="button"
 										tabIndex={-1}
 										disabled={disabled || step >= activeQuestion}
 										onClick={() => {
@@ -487,21 +545,26 @@ function FormRequest({
 								))}
 							</div>
 						) : null}
-						<button
-							type="button"
-							className="h-7 rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
-							disabled={disabled}
-							onClick={() => onResolve("decline")}
-						>
-							Skip
-						</button>					</div>
+						{canSkip ? (
+							<Button
+								type="button"
+								variant="quiet"
+								size="sm"
+								shape="pill"
+								disabled={disabled}
+								onClick={skip}
+							>
+								Skip
+							</Button>
+						) : null}
+					</div>
 					{/* Sending an answer is the composer's send, so it wears the composer's send colour. */}
-					<button
+					<Button
 						type="submit"
-						className={cn(
-							ACCENT_ACTION_PILL,
-							"min-w-20 justify-center bg-foreground text-background hover:bg-foreground/90",
-						)}
+						variant="primary"
+						size="sm"
+						shape="pill"
+						className="min-w-20"
 						disabled={disabled}
 					>
 						{disabled ? (
@@ -514,7 +577,7 @@ function FormRequest({
 								<ArrowUp aria-hidden="true" className="size-3.5" />
 							</>
 						)}
-					</button>
+					</Button>
 				</DockFooter>
 				</>
 			)}
@@ -765,12 +828,42 @@ function enumOptions(property: Record<string, unknown>): Array<{ value: string; 
 	});
 }
 
-function claudeQuestionGroups(properties: PropertyEntry[]): PropertyEntry[][] | undefined {
+/**
+ * Field names an AskUserQuestion bridge gives each question and its free-text
+ * "Other" field. claude-agent-acp writes `question_<n>` / `question_<n>_custom`
+ * and carries a single question's prompt in `message`. Antigravity (`agy acp`)
+ * writes `q<n>` / `q<n>_other`, puts the prompt in the field title and sends only
+ * "The agent has N questions." as `message`. Any MCP form may name its fields
+ * `q1`, `q2`, so that scheme applies only when Antigravity asked.
+ */
+const QUESTION_FIELD_SCHEMES: Array<{ pattern: RegExp; promptInTitle: boolean; harness?: string }> = [
+	{ pattern: /^question_(\d+)(_custom)?$/, promptInTitle: false },
+	{ pattern: /^q(\d+)(_other)?$/, promptInTitle: true, harness: "agy" },
+];
+
+type QuestionForm = { groups: PropertyEntry[][]; promptInTitle: boolean };
+
+/** A question form shows one question, with its Other field, at a time. */
+function questionForm(properties: PropertyEntry[], harness?: string): QuestionForm | undefined {
+	for (const scheme of QUESTION_FIELD_SCHEMES) {
+		if (scheme.harness !== undefined && scheme.harness !== harness) continue;
+		const groups = questionGroups(properties, scheme.pattern);
+		if (groups) return { groups, promptInTitle: scheme.promptInTitle };
+	}
+	return undefined;
+}
+
+/** The prompt above a question: its description, else a single question's message, else its title. */
+function questionFormPrompt(form: QuestionForm, question: PropertyEntry, message?: string): string {
+	return questionPrompt(question, form.groups.length === 1 && !form.promptInTitle ? message : undefined);
+}
+
+function questionGroups(properties: PropertyEntry[], pattern: RegExp): PropertyEntry[][] | undefined {
 	if (properties.length === 0) return undefined;
 
 	const groups = new Map<number, { question?: PropertyEntry; custom?: PropertyEntry }>();
 	for (const entry of properties) {
-		const match = /^question_(\d+)(_custom)?$/.exec(entry[0]);
+		const match = pattern.exec(entry[0]);
 		if (!match) return undefined;
 		const index = Number(match[1]);
 		const group = groups.get(index) ?? {};

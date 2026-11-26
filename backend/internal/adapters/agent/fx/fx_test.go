@@ -38,6 +38,7 @@ func TestGetConfigSpecExposesOptionalFreeFormModel(t *testing.T) {
 }
 
 func TestGetLaunchCommandMapsEnvironmentOverrides(t *testing.T) {
+	t.Setenv("FX_HOME", "")
 	tests := []struct {
 		name        string
 		model       string
@@ -108,6 +109,7 @@ func TestContinuationCapabilitiesUseProviderAssignedNativeSessionID(t *testing.T
 }
 
 func TestNativeSessionConfigDirUsesInvocationHome(t *testing.T) {
+	t.Setenv("FX_HOME", "")
 	provider, ok := any(New()).(ports.AgentNativeSessionConfigProvider)
 	if !ok {
 		t.Fatal("fx must expose the native session state root")
@@ -134,11 +136,11 @@ func TestAfterStartPromptWrapsStandingInstructionsAndTaskInOneTurn(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `## AO Standing Instructions
+	want := `## Orchestrator Standing Instructions
 
 Keep changes surgical.
 
-## AO Task
+## Orchestrator Task
 
 Implement a task.`
 	if got != want {
@@ -147,6 +149,7 @@ Implement a task.`
 }
 
 func TestGetRestoreCommandUsesNativeSessionIDAndOverrides(t *testing.T) {
+	t.Setenv("FX_HOME", "")
 	plugin := &Plugin{resolvedBinary: "fx"}
 	got, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Config:      ports.AgentConfig{Model: "openai/gpt-5"},
@@ -234,6 +237,7 @@ func TestAdapterMethodsHonorCanceledContext(t *testing.T) {
 }
 
 func TestRestorePreservesCatalogProviderSelection(t *testing.T) {
+	t.Setenv("FX_HOME", "")
 	got, ok, err := (&Plugin{resolvedBinary: "fx"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Config:  ports.AgentConfig{Model: "fx:codex:openai/shared"},
 		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-session"}},

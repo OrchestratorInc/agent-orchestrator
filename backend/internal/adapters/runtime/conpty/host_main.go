@@ -31,7 +31,7 @@ import (
 func RunHost(args []string, stdout io.Writer) int {
 	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
+		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] [--size=COLSxROWS] [--replay=FILE] [--lines=N] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
 		return 1
 	}
 
@@ -39,6 +39,14 @@ func RunHost(args []string, stdout io.Writer) int {
 	cwd := args[1]
 	shellCmd := args[2]
 	shellArgs := args[3:]
+	ring := NewRingOfLines(opts.OutputLines)
+	if opts.ReplayFile != "" {
+		if replay, err := readReplay(opts.ReplayFile); err != nil {
+			fmt.Fprintf(os.Stderr, "pty-host [%s]: replay %s: %v\n", sessionID, opts.ReplayFile, err)
+		} else {
+			ring.Append(replay)
+		}
+	}
 	if err := os.Chdir(cwd); err != nil {
 		fmt.Fprintf(os.Stderr, "pty-host [%s]: chdir %s: %v\n", sessionID, cwd, err)
 		return 1
@@ -59,7 +67,8 @@ func RunHost(args []string, stdout io.Writer) int {
 	port := tcpAddr.Port
 
 	var pty ptyConn
-	if opts.StartOnAttach {
+	cols, rows, deferred := hostStartGrid(opts)
+	if deferred {
 		pty = newDeferredPTY(func(cols, rows uint16) (ptyConn, error) {
 			conn, err := newConPTY(cwd, shellCmd, shellArgs, cols, rows)
 			if err != nil {
@@ -68,7 +77,7 @@ func RunHost(args []string, stdout io.Writer) int {
 			return conn, err
 		})
 	} else {
-		pty, err = newConPTY(cwd, shellCmd, shellArgs, initialConPTYColumns, initialConPTYRows)
+		pty, err = newConPTY(cwd, shellCmd, shellArgs, cols, rows)
 		if err != nil {
 			_ = ln.Close()
 			fmt.Fprintf(os.Stderr, "pty-host [%s]: newConPTY: %v\n", sessionID, err)
@@ -94,7 +103,6 @@ func RunHost(args []string, stdout io.Writer) int {
 		}
 	}()
 
-	ring := NewRing()
 	cfg := ServeConfig{
 		SessionID:   sessionID,
 		Listener:    ln,
@@ -108,4 +116,13 @@ func RunHost(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func readReplay(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, MaxOutputBytes))
 }

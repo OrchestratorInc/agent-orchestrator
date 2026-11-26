@@ -123,6 +123,34 @@ func TestDelegateTaskNamesGitWorkspaceDuringSpawn(t *testing.T) {
 	}
 }
 
+func TestDelegateTaskUsesConfirmedBranchWithoutRenaming(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Path: newWorkspaceRepo(t)}
+	cmd := &fakeCommander{}
+	_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix login redirect", Branch: "ao/new-login-fix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.spawnedCfg.Branch != "ao/new-login-fix" || cmd.spawnedCfg.NameFromPrompt || !cmd.spawnedCfg.RequireNewBranch {
+		t.Fatalf("spawn config branch = %q, name from prompt = %v, require new = %v", cmd.spawnedCfg.Branch, cmd.spawnedCfg.NameFromPrompt, cmd.spawnedCfg.RequireNewBranch)
+	}
+}
+
+func TestDelegateTaskRejectsExistingExplicitBranchBeforeSpawn(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "branch", "fix/login")
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Path: repo}
+	cmd := &fakeCommander{}
+	for _, preparation := range []domain.TaskPreparationToken{"", "prepared"} {
+		_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Branch: "fix/login", TaskPreparation: preparation})
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "BRANCH_ALREADY_EXISTS" || cmd.spawnCalls != 0 {
+			t.Fatalf("preparation %q: spawnCalls=%d, err=%v", preparation, cmd.spawnCalls, err)
+		}
+	}
+}
+
 func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 	st := newFakeStore()
 	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
@@ -147,7 +175,7 @@ func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 		t.Fatalf("events = %#v, want one spawned", sink.events)
 	}
 	ev := sink.events[0]
-	if ev.Name != "ao.session.spawned" || ev.SessionID == nil || *ev.SessionID != "ao-2" || ev.Payload["kind"] != "worker" || ev.Payload["harness"] != "codex" {
+	if ev.Name != "ao.sessions.spawned" || ev.SessionID == nil || *ev.SessionID != "ao-2" || ev.Payload["kind"] != "worker" || ev.Payload["harness"] != "codex" {
 		t.Fatalf("spawned event = %#v", ev)
 	}
 
@@ -156,7 +184,7 @@ func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", RequestedAgent: domain.HarnessCodex}); err == nil {
 		t.Fatal("DelegateTask should fail")
 	}
-	if len(sink.events) != 1 || sink.events[0].Name != "ao.session.spawn_failed" || sink.events[0].Payload["harness"] != "codex" {
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.sessions.spawn_failed" || sink.events[0].Payload["harness"] != "codex" {
 		t.Fatalf("events = %#v, want one spawn_failed", sink.events)
 	}
 }
@@ -171,7 +199,7 @@ func TestDelegateTaskEmitsFirstSessionOnboarding(t *testing.T) {
 	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", TaskPreparation: "ao-1"}); err != nil {
 		t.Fatalf("DelegateTask: %v", err)
 	}
-	if len(sink.events) != 2 || sink.events[0].Name != "ao.session.spawned" || sink.events[1].Name != "ao.onboarding.first_session_spawned" {
+	if len(sink.events) != 2 || sink.events[0].Name != "ao.sessions.spawned" || sink.events[1].Name != "ao.sessions.first_spawned" {
 		t.Fatalf("events = %#v, want spawned + first_session", sink.events)
 	}
 }

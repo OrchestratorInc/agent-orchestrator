@@ -2,26 +2,29 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cloudWorkspaceReviewQueryKey } from "../../hooks/useCloudWorkspaceReview";
 import type { CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse } from "../../lib/cloud-cp";
+import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests, WORKER_STARTING_CODE } from "../../lib/cloud-worker-starting";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { CloudWorkspaceExplorer } from "./CloudWorkspaceExplorer";
 
-const { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, searchWorkspaceReview } = vi.hoisted(() => ({
+const { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } = vi.hoisted(() => ({
 	getWorkspaceReview: vi.fn(),
+	resumeSession: vi.fn(),
 	getWorkspaceReviewDiffs: vi.fn(),
 	getWorkspaceReviewTree: vi.fn(),
 	searchWorkspaceReview: vi.fn(),
 }));
 
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ baseUrl: "https://cloud.test", ready: true, client: { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, searchWorkspaceReview } }),
+	useCloudCp: () => ({ baseUrl: "https://cloud.test", ready: true, client: { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } }),
 }));
 vi.mock("../../hooks/useCloudWorkspaceReview", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudWorkspaceReview")>();
@@ -30,8 +33,10 @@ vi.mock("../../hooks/useCloudWorkspaceReview", async (importOriginal) => {
 const session: WorkspaceSession = {
 	branch: "ao/cloud", cloud: { orgId: "org-1", sandboxProvider: "nodeops" }, id: "session-1", prs: [],
 	provider: "codex", status: "working", title: "Cloud", updatedAt: "2026-09-20T00:00:00Z",
-	workspaceId: "workspace-1", workspaceName: "Cloud workspace",
+	workspaceId: "workspace-1", workspaceName: "Cloud workspace", runtimeConnected: true,
 };
+
+const startingAnswer = () => new CloudCpError("The session's workspace is still starting.", { status: 503, code: WORKER_STARTING_CODE, retryAfterMs: 1_000 });
 
 const changed = (path: string, status: CloudCpWorkspaceReviewFileSummary["status"] = "modified"): CloudCpWorkspaceReviewFileSummary => ({
 	path, status, additions: 1, deletions: 0, size: 10, binary: false, editable: true, fileFingerprint: `fp:${path}`,
@@ -87,6 +92,148 @@ describe("CloudWorkspaceExplorer", () => {
 		searchWorkspaceReview.mockReset().mockResolvedValue({ results: [] });
 		window.localStorage.clear();
 		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("does not ask a waking session's absent worker for its files, and keeps what it read before", async () => {
+		const review = {
+			workspaceVersion: "v1", files: [], truncated: false,
+			sections: { staged: [], unstaged: [changed("src/App.tsx")], untracked: [], committed: [] }, commits: [],
+			summary: { files: 1, additions: 1, deletions: 0 },
+		};
+		getWorkspaceReview.mockResolvedValue(review);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={{ ...session, runtimeConnected: false }} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(getWorkspaceReview).not.toHaveBeenCalled();
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={session} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("src/App.tsx")).toBeInTheDocument();
+		const calls = getWorkspaceReview.mock.calls.length;
+		// The worker goes away again (a pause): the files read stay, and nothing more is asked.
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={{ ...session, runtimeConnected: false }} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("src/App.tsx")).toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(calls);
+	});
+
+	it("does not ask a worker still preparing its workspace for its files, and asks once it is ready", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockResolvedValue(mixedReview());
+		noteCloudWorkerStarting("org-1", session.id, startingAnswer());
+		renderExplorer();
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(getWorkspaceReview).not.toHaveBeenCalled();
+		expect(await screen.findByText("src/App.tsx", undefined, { timeout: 3_000 })).toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps loading while the worker answers that it is still starting, and asks again only after its Retry-After", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockRejectedValueOnce(startingAnswer()).mockResolvedValue(mixedReview());
+		renderExplorer();
+		await waitFor(() => expect(getWorkspaceReview).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		// Still starting is not an error, and the 5 second poll does not ask again meanwhile.
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(1);
+		expect(await screen.findByText("src/App.tsx", undefined, { timeout: 3_000 })).toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps loading the file tree while the worker answers that it is still starting, and asks again after its Retry-After", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockResolvedValue(mixedReview());
+		getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+		getWorkspaceReviewTree.mockRejectedValueOnce(startingAnswer())
+			.mockResolvedValue({ path: "", truncated: false, entries: [{ name: "notes.txt", path: "notes.txt", type: "file", status: "untracked", size: 5 }] });
+		renderExplorer();
+		await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
+		await waitFor(() => expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		// Still starting is not an error: no 409 message, no Retry.
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(screen.queryByText("The session's workspace is still starting.")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+		expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(1);
+		expect(await screen.findByRole("treeitem", { name: /notes\.txt/ }, { timeout: 3_000 })).toBeInTheDocument();
+		expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(2);
+		resetCloudWorkerStartingForTests();
+	});
+
+	it("keeps the file tree read before on screen while the session's reads wait, and reads it again once they may", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockResolvedValue(mixedReview());
+		getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+		getWorkspaceReviewTree.mockResolvedValue({ path: "", truncated: false, entries: [{ name: "notes.txt", path: "notes.txt", type: "file", status: "untracked", size: 5 }] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderExplorer(session, queryClient);
+		await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
+		expect(await screen.findByRole("treeitem", { name: /notes\.txt/ })).toBeInTheDocument();
+		const calls = getWorkspaceReviewTree.mock.calls.length;
+		act(() => { noteCloudWorkerStarting("org-1", session.id, startingAnswer()); });
+		await act(async () => { await queryClient.invalidateQueries({ queryKey: cloudWorkspaceReviewQueryKey("https://cloud.test", "org-1", session.id) }); });
+		// The worker is not asked meanwhile, and what it answered before stays.
+		expect(screen.getByRole("treeitem", { name: /notes\.txt/ })).toBeInTheDocument();
+		expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(calls);
+		await waitFor(() => expect(getWorkspaceReviewTree.mock.calls.length).toBeGreaterThan(calls), { timeout: 3_000 });
+		expect(screen.getByRole("treeitem", { name: /notes\.txt/ })).toBeInTheDocument();
+		resetCloudWorkerStartingForTests();
+	});
+
+	it("sends one resume for a double Retry while it is in flight", async () => {
+		let answer: (value: unknown) => void = () => undefined;
+		resumeSession.mockReset().mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+		const gaveUp: WorkspaceSession = {
+			...session, runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "nodeops", runtimeState: "terminated", startupError: { code: "sandbox_start_failed", message: "The sandbox could not start.", at: "2026-10-31T00:00:00Z" } },
+		};
+		renderExplorer(gaveUp);
+		const retry = screen.getByRole("button", { name: "Retry" });
+		await userEvent.click(retry);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled());
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(resumeSession).toHaveBeenCalledTimes(1);
+		await act(async () => answer({}));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	});
+
+	it("says a session whose worker will not come back has no files, instead of loading forever", async () => {
+		resumeSession.mockReset().mockResolvedValue({});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const gaveUp: WorkspaceSession = {
+			...session, runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "nodeops", runtimeState: "terminated", startupError: { code: "sandbox_start_failed", message: "The sandbox could not start.", at: "2026-10-31T00:00:00Z" } },
+		};
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={gaveUp} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("The sandbox could not start.")).toBeInTheDocument();
+		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
+		expect(getWorkspaceReview).not.toHaveBeenCalled();
+		// Retry asks AO to start the session again.
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(resumeSession).toHaveBeenCalledWith("org-1", "session-1");
+		// A deleted session's worker is gone for good: no Retry.
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={{ ...session, runtimeConnected: false, isTerminated: true }} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("Files are not available for this session.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
 	});
 
 	it("switches from categorized changes to the complete repository tree", async () => {

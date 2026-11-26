@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -87,14 +88,14 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err != nil {
 		return fmt.Errorf("auggie.GetAgentHooks: resolve workspace path: %w", err)
 	}
-	executable, err := os.Executable()
+	executable, err := agentlaunch.Executable()
 	if err != nil {
-		return fmt.Errorf("auggie.GetAgentHooks: resolve AO executable: %w", err)
+		return fmt.Errorf("auggie.GetAgentHooks: resolve Orchestrator executable: %w", err)
 	}
 	if !filepath.IsAbs(executable) {
 		executable, err = filepath.Abs(executable)
 		if err != nil {
-			return fmt.Errorf("auggie.GetAgentHooks: resolve AO executable path: %w", err)
+			return fmt.Errorf("auggie.GetAgentHooks: resolve Orchestrator executable path: %w", err)
 		}
 	}
 
@@ -118,7 +119,7 @@ func installAuggieHookScripts(workspacePath, executable string) error {
 		path := filepath.Join(dir, name)
 		if data, err := os.ReadFile(path); err == nil { //nolint:gosec // AO-owned workspace path
 			if !strings.Contains(string(data), auggieHookSentinel) {
-				return fmt.Errorf("refusing to overwrite non-AO file at %s", path)
+				return fmt.Errorf("refusing to overwrite non-Orchestrator file at %s", path)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read hook script: %w", err)

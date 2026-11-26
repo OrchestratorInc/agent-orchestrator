@@ -4,12 +4,14 @@ package deepseekharnessacp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -27,14 +29,37 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessDeepSeek,
 		Configure:            configure,
+		NativeHistoryReplay:  nativeHistoryReplay,
 		SessionOptions:       sessionOptions,
+		PromptFailureCode:    promptFailureCode,
 		SessionPreamble:      SessionPreamble,
 		PermissionPolicy:     permissionPolicy,
 		ValidateTurnSettings: validateTurnSettings,
 	}, log)
 }
 
-func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+// The harness reports a missing key as a generic ACP internal error. Only its
+// explicit route-specific diagnostic is safe to turn into setup guidance.
+func promptFailureCode(err error) domain.ConversationFailureCode {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return ""
+	}
+	detail, _ := requestErr.Data.(string)
+	if detail == "" && strings.HasPrefix(requestErr.Message, "Internal error: ") {
+		detail = strings.TrimPrefix(requestErr.Message, "Internal error: ")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(detail),
+		`turn failed: llm-deepseek: no API key for provider route "deepseek-official";`) {
+		return ""
+	}
+	return domain.ConversationFailureProviderKeyMissing
+}
+
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	if err := deepseekharness.ValidateImportedACP(ctx, cfg.Env["DSH_HOME"], cfg.ProviderConversationID, cfg.WorkspacePath); err != nil {
+		return nil, nil, err
+	}
 	return []string{"--profile", acpProfile}, nil, nil
 }
 
@@ -84,10 +109,7 @@ func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	if standing == "" {
 		return nil
 	}
-	return []acpsdk.ContentBlock{acpsdk.TextBlock(
-		"Standing instructions from Agent Orchestrator. Follow them for this whole session:\n" +
-			"<ao_standing_instructions>\n" + standing + "\n</ao_standing_instructions>",
-	)}
+	return []acpsdk.ContentBlock{acpdriver.PlainStandingInstructionsBlock(standing)}
 }
 
 // deepseekEffort resolves one AO effort value to a Harness level, passing an

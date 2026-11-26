@@ -1,25 +1,42 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as appLinks from "../AppLink";
+import { captureExcerptSnapshot } from "../../lib/chat-excerpt-snapshot";
 import { aoBridge } from "../../lib/bridge";
+import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "../../lib/chat-find";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
-import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
+import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
+import { WorkerUpdateRows } from "./WorkerUpdates";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
 const sessionPreview = vi.hoisted(() => vi.fn());
 vi.mock("../SessionLinkPreviewCard", () => ({
+	ArtifactLinkPreviewCard: () => <div data-testid="artifact-link-preview" />,
 	SessionLinkPreviewCard: (props: unknown) => {
 		sessionPreview(props);
 		return <div data-testid="session-link-preview" />;
 	},
 }));
 
-const linkSource = vi.hoisted(() => ({ workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
-vi.mock("../../lib/use-session-link-navigation", () => ({
-	useSessionLinkSource: () => ({ ready: true, isLoading: false, isError: false, workspaces: linkSource.workspaces }),
-}));
+const linkSource = vi.hoisted(() => ({ reads: 0, workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; title?: string; artifactFiles?: Array<{ path: string }> }> }> }));
+// Like the real source, this reads through the query client, so a render
+// without one fails here as it would in the app.
+vi.mock("../../lib/use-session-link-navigation", async () => {
+	const { useQueryClient } = await import("@tanstack/react-query");
+	return {
+		useSessionLinkSource: () => {
+			useQueryClient();
+			linkSource.reads += 1;
+			// A real source with no data answers a fresh [] on every render.
+			return { ready: true, isLoading: false, isError: false, workspaces: linkSource.workspaces.length > 0 ? linkSource.workspaces : [] };
+		},
+	};
+});
 
 // Mermaid needs real SVG layout APIs jsdom lacks; pin the routing boundary and
 // let MermaidBlock.test.tsx own the block's states.
@@ -30,7 +47,15 @@ vi.mock("../../lib/mermaid-diagram", () => ({
 
 beforeEach(() => {
 	vi.mocked(renderMermaidDiagram).mockClear();
+	linkSource.workspaces = [];
+	linkSource.reads = 0;
 });
+
+/** Render inside a query client, which a chat's link workspaces are read through. */
+function renderWithQueries(ui: ReactElement) {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(ui, { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+}
 
 // The point of these is that the SYNTAX stops being visible. Every case here is a
 // shape agents actually emit, and the assertion is that structure replaced markup.
@@ -49,10 +74,58 @@ function renderWithLinkHandler(
 }
 
 function renderWithSessionLinkHandler(text: string, onSessionLinkOpen: (url: string) => void) {
-	return render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider>);
+	return renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider>);
 }
 
 describe("ChatMarkdown", () => {
+	for (const streaming of [false, true]) {
+		it.each(["hello  \nneedle", "hello\\\nneedle", "hello  \n**needle**", "hello  \n\\\nneedle", "hello\nneedle", "😀  \nneedle", "```text\n  hello\n\n  needle\n```"])(`keeps find offsets across hard breaks (streaming=${streaming}): %s`, (source) => {
+			const { container } = render(<ChatMarkdown text={source} streaming={streaming} />);
+			const blocks = renderedFindBlocks(container);
+			const expected = findTextOccurrences(findBlocks(source, true)[0], "needle");
+			const actual = findTextOccurrences(blocks[0].text, "needle");
+			expect(actual).toEqual(expected);
+			expect(findRange(blocks[0].nodes, expected[0].start, expected[0].end)?.toString()).toBe("needle");
+		});
+	}
+	it("uses current file and browser handlers after a parent refresh", async () => {
+		const before = vi.fn();
+		const after = vi.fn();
+		const paths = ["src/app.ts"];
+		const content = <ChatMarkdown text={"Open `src/app.ts:12` or [website](https://example.com)."} />;
+		const view = render(<ChatLinkProvider workspacePaths={paths} onFileOpen={before} onLinkOpen={before}>{content}</ChatLinkProvider>);
+		view.rerender(<ChatLinkProvider workspacePaths={paths} onFileOpen={after} onLinkOpen={after}>{content}</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("button", { name: "Open src/app.ts in Files" }));
+		await userEvent.click(screen.getByRole("link", { name: "website" }));
+		expect(before).not.toHaveBeenCalled();
+		expect(after).toHaveBeenCalledWith("src/app.ts", 12);
+		expect(after).toHaveBeenCalledWith("https://example.com");
+	});
+
+	it("updates file links when their catalog or opening capability changes", () => {
+		const open = vi.fn();
+		const content = <ChatMarkdown text={"`app.ts` `new.ts`"} />;
+		const view = render(<ChatLinkProvider workspacePaths={["src/app.ts"]} onFileOpen={open}>{content}</ChatLinkProvider>);
+		expect(screen.getByRole("button", { name: "Open src/app.ts in Files" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open src/new.ts in Files" })).not.toBeInTheDocument();
+		view.rerender(<ChatLinkProvider workspacePaths={["src/new.ts", "src/app.ts", "other/app.ts"]} onFileOpen={open}>{content}</ChatLinkProvider>);
+		expect(screen.queryByRole("button", { name: "Open src/app.ts in Files" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open src/new.ts in Files" })).toBeInTheDocument();
+		view.rerender(<ChatLinkProvider workspacePaths={["src/new.ts"]}>{content}</ChatLinkProvider>);
+		expect(screen.queryByRole("button", { name: "Open src/new.ts in Files" })).not.toBeInTheDocument();
+	});
+
+	it("uses the latest session-link handler", async () => {
+		const before = vi.fn();
+		const after = vi.fn();
+		const content = <ChatMarkdown text="[Worker](ao://sessions/project/session)" />;
+		const view = render(<ChatLinkProvider onSessionLinkOpen={before}>{content}</ChatLinkProvider>);
+		view.rerender(<ChatLinkProvider onSessionLinkOpen={after}>{content}</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("link", { name: "Worker" }));
+		expect(before).not.toHaveBeenCalled();
+		expect(after).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/session");
+	});
+
 	it("renders headings as headings rather than literal hashes", () => {
 		render(<ChatMarkdown text={"## Findings\n\nTwo files changed."} />);
 		expect(screen.getByRole("heading", { name: "Findings" })).toBeInTheDocument();
@@ -109,7 +182,7 @@ describe("ChatMarkdown", () => {
 	it("renders a fenced code block with its language and a copy control, and no stray backticks", () => {
 		render(<ChatMarkdown text={"```go\nfunc main() {}\n```"} />);
 		expect(screen.getByText("go")).toBeInTheDocument();
-		expect(screen.getByText("func main() {}")).toBeInTheDocument();
+		expect(document.querySelector("pre")?.textContent).toBe("func main() {}");
 		expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
 		expect(document.body.textContent).not.toContain("```");
 	});
@@ -153,6 +226,24 @@ describe("ChatMarkdown", () => {
 
 		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go", 42);
 		expect(screen.getByText("--resume").closest("button")).toBeNull();
+	});
+
+	it("shows an openable file with its Files-tree icon and leaves code names plain", () => {
+		renderWithLinkHandler("Open `backend/service.go:42` but keep `--resume` as code.", vi.fn(), ["backend/service.go"], vi.fn());
+
+		const button = screen.getByRole("button", { name: "Open backend/service.go in Files" });
+		expect(button.querySelector("code")).toHaveClass("text-chat-file-foreground");
+		expect(button.querySelector("svg")).toHaveAttribute("data-file-icon", "go");
+		expect(screen.getByText("--resume")).toHaveClass("text-markdown-code");
+	});
+
+	it("reveals filename matches in clickable inline code using the same offsets as search", () => {
+		const text = "Open `backend/service.go:42` but keep `--resume` as code.";
+		const { container } = renderWithLinkHandler(text, vi.fn(), ["backend/service.go"], vi.fn());
+		const rendered = renderedFindBlocks(container);
+		expect(rendered.map((block) => block.text)).toEqual(findBlocks(text, true));
+		const [hit] = findTextOccurrences(findBlocks(text, true)[0], "service.go");
+		expect(findRange(rendered[0].nodes, hit.start, hit.end)?.toString()).toBe("service.go");
 	});
 
 	it("opens an absolute markdown file link in Files instead of externally", async () => {
@@ -271,9 +362,10 @@ describe("ChatMarkdown", () => {
 
 	it("scopes a session preview to the chat source", async () => {
 		sessionPreview.mockClear();
+		const onSessionLinkOpen = vi.fn();
 		render(
 			<ChatLinkProvider
-				onSessionLinkOpen={vi.fn()}
+				onSessionLinkOpen={onSessionLinkOpen}
 				sessionLinkHostId="box-a"
 			>
 				<ChatMarkdown text="[Worker](ao://sessions/project/session)" />
@@ -286,7 +378,12 @@ describe("ChatMarkdown", () => {
 			href: "ao://sessions/project/session",
 			sourceHostId: "box-a",
 			sourceKind: undefined,
+			onOpen: expect.any(Function),
 		});
+
+		// The card opens the session through the same handler as the link click.
+		(sessionPreview.mock.calls.at(-1)![0] as { onOpen: () => void }).onOpen();
+		expect(onSessionLinkOpen).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/session");
 	});
 
 	it("renders remote workspace paths as text while keeping external links working", async () => {
@@ -302,6 +399,8 @@ describe("ChatMarkdown", () => {
 		fireEvent.click(report);
 		fireEvent.click(report, { metaKey: true });
 		fireEvent.contextMenu(report);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy path"]);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
 		await userEvent.click(screen.getByRole("link", { name: "issue" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://example.com/i/1");
 		expect(openExternal).not.toHaveBeenCalled();
@@ -385,7 +484,7 @@ describe("ChatMarkdown", () => {
 		const link = screen.getByRole("link", { name: "final report" });
 
 		fireEvent.contextMenu(link);
-		await user.click(await screen.findByRole("menuitem", { name: "Open in Files" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Open in Orchestrator" }));
 
 		expect(onFileOpen).toHaveBeenCalledWith("reports/final.html");
 		expect(onLinkOpen).not.toHaveBeenCalled();
@@ -403,11 +502,128 @@ describe("ChatMarkdown", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
-	it("does not auto-activate a session link while streaming", () => {
+	it("shows the worker name and hover card for an inline session ID", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		const open = vi.fn();
+		renderWithSessionLinkHandler("I've asked `worker-94` to start. `worker-999` is unknown.", open);
+		const link = screen.getByRole("link", { name: "Trace session sharing" });
+		expect(link).toHaveAttribute("href", "ao://sessions/project/worker-94");
+		expect(screen.getByText("worker-999").tagName).toBe("CODE");
+		fireEvent.pointerOver(link, { pointerType: "mouse" });
+		await screen.findByTestId("session-link-preview");
+		await userEvent.click(link);
+		expect(open).toHaveBeenCalledWith("ao://sessions/project/worker-94");
+	});
+
+	it("names an inline session ID while streaming, as once settled", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}><ChatMarkdown streaming text="Ask `worker-94` now." /></ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "Trace session sharing" })).toHaveAttribute("href", "ao://sessions/project/worker-94");
+	});
+
+	it("updates a late or renamed session title and skips rendering the link on unrelated refreshes", () => {
+		const message = <ChatMarkdown text="Ask `worker-94`." />;
+		const open = vi.fn();
+		const chat = () => <ChatLinkProvider onSessionLinkOpen={open}>{message}</ChatLinkProvider>;
+		const view = renderWithQueries(chat());
+		expect(screen.getByText("worker-94").tagName).toBe("CODE");
+		const refresh = (title: string) => {
+			linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title }] }];
+			view.rerender(chat());
+		};
+		const renderLink = vi.spyOn(appLinks, "AppLink");
+		try {
+			refresh("Trace session sharing");
+			expect(screen.getByRole("link")).toHaveTextContent("Trace session sharing");
+			const renders = renderLink.mock.calls.length;
+			expect(renders).toBeGreaterThan(0);
+			refresh("Trace session sharing");
+			expect(renderLink).toHaveBeenCalledTimes(renders);
+			refresh("Review sharing");
+			expect(screen.getByRole("link")).toHaveTextContent("Review sharing");
+		} finally {
+			renderLink.mockRestore();
+		}
+	});
+
+	it("quotes a selection inside a session title using the original worker token", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		const source = "Ask `worker-94` for an update.";
+		const { container } = renderWithSessionLinkHandler(source, vi.fn());
+		const label = screen.getByText("Trace session sharing").firstChild!;
+		const range = document.createRange();
+		range.setStart(label, 6);
+		range.setEnd(label, 13);
+		const quote = captureExcerptSnapshot(container, range, source);
+		expect(quote.text).toBe("session");
+		expect(quote.snapshot.rawText).toBe("`worker-94`");
+	});
+
+	it("requires an explicit session link in safe-origin content", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown safeOrigin text="See `worker-94` or [open worker](ao://sessions/project/worker-94)." />
+		</ChatLinkProvider>);
+		expect(screen.getByText("worker-94").tagName).toBe("CODE");
+		expect(screen.getAllByRole("link")).toHaveLength(1);
+		expect(screen.getByRole("link", { name: "open worker" })).toHaveAttribute("href", "ao://sessions/project/worker-94");
+	});
+
+	it("keeps an inline session ID as code when two projects claim it", () => {
+		linkSource.workspaces = ["first", "second"].map((id) => ({ id, sessions: [{ id: "worker-1", title: id }] }));
+		renderWithSessionLinkHandler("`worker-1`", vi.fn());
+		expect(screen.queryByRole("link")).toBeNull();
+		expect(screen.getByText("worker-1").tagName).toBe("CODE");
+	});
+
+	it("opens links while streaming, as once settled", async () => {
 		const onSessionLinkOpen = vi.fn();
-		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown streaming text="ao://sessions/project/session" /></ChatLinkProvider>);
-		expect(screen.getByRole("link")).toBeInTheDocument();
-		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+		const onLinkOpen = vi.fn();
+		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onLinkOpen={onLinkOpen}><ChatMarkdown streaming text="[open](ao://sessions/project/session), ao://sessions/project/other and [site](https://example.com)" /></ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "site" })).toHaveAttribute("href", "https://example.com");
+		expect(container.querySelector("[data-link-favicon]")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "ao://sessions/project/other" })).toHaveAttribute("href", "ao://sessions/project/other");
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("link", { name: "open" }));
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+		await user.click(screen.getByRole("link", { name: "site" }));
+		expect(onLinkOpen).toHaveBeenCalledWith("https://example.com");
+	});
+
+	it("shows a finished image while streaming and still escapes raw HTML", () => {
+		const { unmount } = render(<ChatMarkdown streaming text={"Chart:\n\n![the chart](https://example.com/chart.png)\n\nmore"} />);
+		expect(screen.getByRole("img", { name: "the chart" })).toHaveAttribute("src", "https://example.com/chart.png");
+		unmount();
+		const badge = render(<ChatMarkdown streaming text={"[![CI](https://example.com/ci.svg)](https://ci.example.com) done"} />);
+		expect(screen.getByRole("img", { name: "CI" }).closest("a")).toHaveAttribute("href", "https://ci.example.com");
+		expect(badge.container.querySelector("[data-link-favicon]")).toBeNull();
+		badge.unmount();
+		const linked = (container: HTMLElement) => [...container.querySelectorAll("a")].map((link) => ({
+			href: link.getAttribute("href"),
+			text: link.textContent,
+			images: [...link.querySelectorAll("img")].map((image) => `${image.getAttribute("alt")} ${image.getAttribute("src")}`),
+			favicon: Boolean(link.querySelector("[data-link-favicon]")),
+		}));
+		for (const text of ["[![CI](https://example.com/ci.svg) build **passing**](https://ci.example.com) done", "[*![Docs](https://example.com/d.svg)* the docs](https://docs.example.com)"]) {
+			const streamed = render(<ChatMarkdown streaming text={text} />);
+			const settled = render(<ChatMarkdown text={text} />);
+			expect(linked(streamed.container)).toEqual(linked(settled.container));
+			expect(linked(streamed.container)[0]!.images).toHaveLength(1);
+			streamed.unmount();
+			settled.unmount();
+		}
+		render(<ChatMarkdown streaming text={'before <img src=x onerror="alert(1)"> after'} />);
+		expect(document.querySelector("img")).toBeNull();
+	});
+
+	it("opens inline-code file paths while streaming and keeps code inside a link plain", async () => {
+		const onFileOpen = vi.fn();
+		const text = "Open `backend/service.go:42` or [`backend/service.go`](https://example.com/s) now";
+		const { container } = render(<ChatLinkProvider onLinkOpen={vi.fn()} onFileOpen={onFileOpen} workspacePaths={["backend/service.go"]}><ChatMarkdown streaming text={text} /></ChatLinkProvider>);
+		expect(screen.getAllByRole("button", { name: /in Files$/ })).toHaveLength(1);
+		await userEvent.click(screen.getByRole("button", { name: "Open backend/service.go in Files" }));
+		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go", 42);
+		expect(renderedFindBlocks(container).map((block) => block.text)).toEqual(findBlocks(text, true));
 	});
 
 	it.each([
@@ -425,10 +641,289 @@ describe("ChatMarkdown", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
 	});
 
+	it("offers path actions on an absolute artifact reference while preserving its artifact link", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const open = vi.fn();
+		renderWithSessionLinkHandler("`/tmp/ao/artifacts/worker-1/plan.md`", open);
+		const link = screen.getByRole("link");
+		await userEvent.click(link);
+		expect(open).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/worker-1/artifacts/plan.md");
+		fireEvent.contextMenu(link);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith("/tmp/ao/artifacts/worker-1/plan.md");
+		copy.mockRestore();
+	});
+
+	it("opens a Markdown link to a listed artifact's file as that artifact, not as a workspace file", async () => {
+		// A Cloud agent links the file it wrote under the worker's artifact
+		// directory; the file view cannot read outside the checkout (422).
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "conductor-migration-guide.md" }] }] }];
+		const onSessionLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
+			<ChatMarkdown text="See the [migration guide](/workspace/.ao/worker/artifacts/worker-1/conductor-migration-guide.md)." />
+		</ChatLinkProvider>);
+		const link = screen.getByRole("link", { name: "migration guide" });
+		expect(link).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/conductor-migration-guide.md");
+		await userEvent.click(link);
+		expect(onSessionLinkOpen).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/worker-1/artifacts/conductor-migration-guide.md");
+		expect(onFileOpen).not.toHaveBeenCalled();
+	});
+
+	it("opens a Markdown link to a listed artifact whose name Markdown percent-encodes", async () => {
+		// Markdown percent-encodes a link's target, so a space or a non-ASCII
+		// letter in the file name arrives as %20 or %C3%A9; the listed path is
+		// the name as written.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "Migration Guide.md" }, { path: "notes/résumé.md" }] }] }];
+		const onSessionLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
+			<ChatMarkdown text="[guide](</workspace/.ao/worker/artifacts/worker-1/Migration Guide.md>) and [cv](/workspace/.ao/worker/artifacts/worker-1/notes/résumé.md)" />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "guide" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/Migration%20Guide.md");
+		expect(screen.getByRole("link", { name: "cv" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/notes/r%C3%A9sum%C3%A9.md");
+		await userEvent.click(screen.getByRole("link", { name: "guide" }));
+		expect(onSessionLinkOpen).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/worker-1/artifacts/Migration%20Guide.md");
+		expect(onFileOpen).not.toHaveBeenCalled();
+	});
+
+	it("matches a listed artifact whose name itself contains a percent escape", () => {
+		// A file literally named "50%25-done.md": Markdown keeps a valid escape as
+		// written, so the target matches as it is, before any decoding.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "50%25-done.md" }] }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+			<ChatMarkdown text="[half](/workspace/.ao/worker/artifacts/worker-1/50%25-done.md)" />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "half" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/50%2525-done.md");
+	});
+
+	it("leaves a Markdown link to an unlisted artifact path as a file link", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		const onSessionLinkOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={vi.fn()}>
+			<ChatMarkdown text="[other](/workspace/.ao/worker/artifacts/worker-1/other.md)" />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "other" })).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/other.md");
+		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("keeps a Markdown link to a listed artifact's file inert in safe-origin text", () => {
+		// Automation reports, review comments and other agents' messages link only
+		// what they wrote as an ao:// link; their file links stay text.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+			<ChatMarkdown safeOrigin text="[Approve deployment](/workspace/.ao/worker/artifacts/worker-1/guide.md) or [the guide](ao://sessions/project/worker-1/artifacts/guide.md)" />
+		</ChatLinkProvider>);
+		expect(container).toHaveTextContent("Approve deployment or the guide");
+		expect(screen.queryByRole("link", { name: "Approve deployment" })).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "the guide" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/guide.md");
+	});
+
+	it("opens a listed artifact's file linked with a line, a query or a Windows path as that artifact", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+			<ChatMarkdown text={"[line](/workspace/.ao/worker/artifacts/worker-1/plan.md#L10), [raw](/workspace/.ao/worker/artifacts/worker-1/plan.md?raw) and [windows](C:\\ao\\artifacts\\worker-1\\plan.md)"} />
+		</ChatLinkProvider>);
+		for (const name of ["line", "raw", "windows"]) {
+			expect(screen.getByRole("link", { name })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/plan.md");
+		}
+	});
+
+	it("keeps the linked file's path actions on a link opened as an artifact", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		try {
+			renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+				<ChatMarkdown text="[the guide](/workspace/.ao/worker/artifacts/worker-1/guide.md)" />
+			</ChatLinkProvider>);
+			const link = screen.getByRole("link", { name: "the guide" });
+			expect(link).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/guide.md");
+			fireEvent.contextMenu(link);
+			await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+			expect(copy).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/worker-1/guide.md");
+		} finally {
+			copy.mockRestore();
+		}
+	});
+
+	it("keeps a listed artifact's file link a file link in a chat that cannot open artifact links", async () => {
+		// A new chat or a starting orchestrator has no session link handler: an
+		// artifact link there would do nothing when clicked.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider onFileOpen={onFileOpen}>
+			<ChatMarkdown text="[the guide](/workspace/.ao/worker/artifacts/worker-1/guide.md)" />
+		</ChatLinkProvider>);
+		const link = screen.getByRole("link", { name: "the guide" });
+		expect(link).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/guide.md");
+		await userEvent.click(link);
+		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/worker-1/guide.md");
+	});
+
+	it("renders a link to an artifact's file without a query client, as a file link", () => {
+		// An isolated tree (a test, another root) has no query client to read
+		// the session list with; the link stays what it was written as.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		render(<>
+			<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+				<ChatMarkdown text="[in a chat](/workspace/.ao/worker/artifacts/worker-1/guide.md) and `worker-1/guide.md`" />
+			</ChatLinkProvider>
+			<ChatMarkdown text="[on its own](/workspace/.ao/worker/artifacts/worker-1/guide.md)" />
+		</>);
+		expect(screen.getByRole("link", { name: "in a chat" })).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/guide.md");
+		expect(screen.getByRole("link", { name: "on its own" })).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/guide.md");
+	});
+
+	it("reads the chat's link workspaces once for all its links, and not at all without one", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "a.md" }, { path: "b.md" }, { path: "c.md" }] }] }];
+		const link = (name: string) => `[${name}](/workspace/.ao/worker/artifacts/worker-1/${name}.md)`;
+		const chat = (text: string) => <ChatLinkProvider onSessionLinkOpen={vi.fn()}><ChatMarkdown text={text} /></ChatLinkProvider>;
+		const plain = renderWithQueries(chat("No links here."));
+		expect(linkSource.reads).toBe(0);
+		plain.unmount();
+
+		const one = renderWithQueries(chat(link("a")));
+		expect(screen.getByRole("link", { name: "a" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/a.md");
+		const readsForOne = linkSource.reads;
+		one.unmount();
+		linkSource.reads = 0;
+		renderWithQueries(chat(`${link("a")}, ${link("b")} and ${link("c")}`));
+		expect(screen.getByRole("link", { name: "c" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/c.md");
+		expect(linkSource.reads).toBe(readsForOne);
+	});
+
+	it("opens a file in this session's artifact directory with the file opener, an HTML page too", async () => {
+		// The file opener shows it in Artifacts, listed or not; the Browser
+		// cannot show a Cloud sandbox file, so the click would do nothing.
+		const onLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider sessionId="s1" onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="[report](/workspace/.ao/worker/artifacts/s1/report.html), [plan](/workspace/.ao/worker/artifacts/s1/plan.md?raw) and [site](/workspace/repository/site/index.html)" />
+		</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("link", { name: "report" }));
+		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/s1/report.html");
+		expect(onLinkOpen).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("link", { name: "plan" }));
+		expect(onFileOpen).toHaveBeenLastCalledWith("/workspace/.ao/worker/artifacts/s1/plan.md");
+		// Any other HTML file still opens as a page.
+		await userEvent.click(screen.getByRole("link", { name: "site" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("/workspace/repository/site/index.html");
+		expect(onFileOpen).toHaveBeenCalledTimes(2);
+	});
+
+	it("opens an HTML page in this session's artifact directory with the file opener when a workspace file shares its name", async () => {
+		// A Cloud chat's file list holds the checkout's top-level files once "@"
+		// is used; an artifact named like one of them is still the artifact.
+		const onLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider sessionId="s1" workspacePaths={["index.html"]} onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="[page](/workspace/.ao/worker/artifacts/s1/index.html)" />
+		</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("link", { name: "page" }));
+		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/s1/index.html");
+		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("opens this session's artifact by the link's file path: no query or fragment, an encoded # or ? kept", async () => {
+		// A link's query and fragment are cut while its target is still encoded,
+		// so a name's own "#" or "?" (written %23, %3F) is not taken for one.
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider sessionId="s1" onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="[raw](/workspace/.ao/worker/artifacts/s1/plan.md?raw), [setup](/workspace/.ao/worker/artifacts/s1/guide.md#setup) and [issue](/workspace/.ao/worker/artifacts/s1/issue%20%2342%3F.md)" />
+		</ChatLinkProvider>);
+		for (const name of ["raw", "setup", "issue"]) await userEvent.click(screen.getByRole("link", { name }));
+		expect(onFileOpen.mock.calls.map(([path]) => path)).toEqual([
+			"/workspace/.ao/worker/artifacts/s1/plan.md",
+			"/workspace/.ao/worker/artifacts/s1/guide.md",
+			"/workspace/.ao/worker/artifacts/s1/issue #42?.md",
+		]);
+	});
+
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());
 		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		expect(document.querySelectorAll("code")).toHaveLength(2);
+	});
+
+	it.each([
+		["`worker-1/plan.md`"],
+		["[`plan.md`](ao://sessions/project/worker-1/artifacts/plan.md)"],
+	])("names a linked artifact in the UI font, not as code: %s", (text) => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		renderWithSessionLinkHandler(text, vi.fn());
+		expect(screen.getByRole("link").querySelector("code")).toBeNull();
+	});
+
+	it.each(["text", "element"])("keeps an unlisted artifact's %s children renderable and copyable", async (kind) => {
+		linkSource.workspaces = [];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		try {
+			render(<ArtifactPathCode text="/tmp/ao/artifacts/worker-1/plan.md">
+				{kind === "text" ? "plan.md" : <code>plan.md</code>}
+			</ArtifactPathCode>);
+			fireEvent.contextMenu(screen.getByText("plan.md"));
+			await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+			expect(copy).toHaveBeenCalledExactlyOnceWith("/tmp/ao/artifacts/worker-1/plan.md");
+		} finally {
+			copy.mockRestore();
+		}
+	});
+
+	it("links an artifact named with a # or ? in inline code and in a worker report, by its whole name", () => {
+		// Inline code and a report's artifact line are file paths, not link
+		// targets: "#" and "?" there are part of the name.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "issue#42.md" }, { path: "why?.md" }] }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="See `worker-1/why?.md`." />
+			<WorkerUpdateRows updates={[{
+				key: "report-1", state: "done", name: "Worker", sessionId: "worker-1", projectId: "project",
+				body: "Filed it\nartifact: issue#42.md", createdAt: "2026-10-28T12:00:00Z",
+			}]} />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "worker-1/why?.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/why%3F.md");
+		expect(screen.getByRole("link", { name: "issue#42.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/issue%2342.md");
+	});
+
+	it("links an inline artifact path once a workspace refresh lists it, and unlinks it when it goes", () => {
+		linkSource.workspaces = [];
+		// The same children each time, as a re-render of unchanged markdown passes.
+		const children = <code>plan.md</code>;
+		const path = () => <ChatLinkProvider onSessionLinkOpen={vi.fn()}>
+			<ArtifactPathCode text="/tmp/ao/artifacts/worker-1/plan.md">{children}</ArtifactPathCode>
+		</ChatLinkProvider>;
+		const view = renderWithQueries(path());
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		view.rerender(path());
+		expect(screen.getByRole("link", { name: "plan.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/plan.md");
+		linkSource.workspaces = [];
+		view.rerender(path());
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		expect(screen.getByText("plan.md")).toBeInTheDocument();
+	});
+
+	it("keeps a worker report renderable when its artifact is removed from the catalog", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const report = () => <ChatLinkProvider onSessionLinkOpen={vi.fn()}><WorkerUpdateRows updates={[{
+			key: "report-1", state: "done", name: "Worker", sessionId: "worker-1", projectId: "project",
+			body: "Finished planning\nartifact: plan.md", createdAt: "2026-10-28T12:00:00Z",
+		}]} /></ChatLinkProvider>;
+		try {
+			const view = renderWithQueries(report());
+			expect(screen.getByRole("link", { name: "plan.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/plan.md");
+			linkSource.workspaces = [];
+			view.rerender(report());
+			expect(screen.getByTestId("worker-update")).toHaveTextContent("Finished planning");
+			expect(screen.queryByRole("link", { name: "plan.md" })).not.toBeInTheDocument();
+			fireEvent.contextMenu(screen.getByText("plan.md"));
+			await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+			expect(copy).toHaveBeenCalledExactlyOnceWith("worker-1/plan.md");
+		} finally {
+			copy.mockRestore();
+		}
 	});
 
 	it("leaves malformed session-like text inert", () => {
@@ -554,7 +1049,7 @@ describe("ChatMarkdown", () => {
 		render(<ChatMarkdown text={"```mermaid\nflowchart TD\n    A --> B\n```"} streaming />);
 
 		expect(screen.queryByTestId("mermaid-diagram")).not.toBeInTheDocument();
-		expect(screen.getByText(/A --> B/)).toBeInTheDocument();
+		expect(document.querySelector("pre")?.textContent).toContain("A --> B");
 		expect(vi.mocked(renderMermaidDiagram)).not.toHaveBeenCalled();
 	});
 
@@ -731,9 +1226,8 @@ describe("ChatMarkdown image sources", () => {
 describe("ChatMarkdown code highlighting", () => {
 	const block = (language: string, code: string) => `\`\`\`${language}\n${code}\n\`\`\``;
 
-	/** The tokens land as `hljs-*` classes; `code-theme.css` colours them. */
 	function tokens(): Element[] {
-		return [...document.querySelectorAll("pre [class*='hljs-']")];
+		return [...document.querySelectorAll("pre [class*='hljs-'], pre [style*='--ao-code-']")];
 	}
 
 	it("highlights a known language, leaving the code itself untouched", async () => {
@@ -751,11 +1245,11 @@ describe("ChatMarkdown code highlighting", () => {
 		expect(screen.getByText("brainfuck")).toBeInTheDocument();
 	});
 
-	it("does not tokenize a fence that is still streaming, and does once it settles", async () => {
+	it("highlights a streaming fence and keeps it highlighted when it settles", async () => {
 		const code = "type Session struct {\n\tID string\n}";
 		const { rerender } = render(<ChatMarkdown text={block("go", code)} streaming />);
-		expect(tokens()).toHaveLength(0);
-		expect(document.querySelector("pre")?.textContent).toBe(code);
+		expect(tokens().length).toBeGreaterThan(0);
+		expect(document.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 
 		rerender(<ChatMarkdown text={block("go", code)} />);
 		await waitFor(() => expect(tokens().length).toBeGreaterThan(0));
@@ -801,7 +1295,7 @@ describe("ChatMarkdown block streaming", () => {
 		["[ref]: https://example.com\n\n    **literal", "**literal"],
 	])("preserves streamed code source: %s", (text, code) => {
 		const { container } = render(<ChatMarkdown text={text} streaming />);
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 	});
 
 	it("repairs incomplete inline formatting for display only and keeps partial links inert", () => {
@@ -811,18 +1305,44 @@ describe("ChatMarkdown block streaming", () => {
 		expect(container.querySelector("strong")).toBeNull();
 		expect(container.textContent).toBe("Some **unfinished");
 		rerender(<ChatMarkdown text="See [docs](https://exam" streaming />);
-		expect(container.querySelector("a")).toBeNull();
-		expect(container.textContent).toBe("See docs");
+		expect(container.querySelector("a[href]")).toBeNull();
+		expect(container.textContent?.trim()).toBe("See docs");
 	});
 
 	it("leaves open fences literal and highlights a completed fence before the reply ends", async () => {
 		const code = 'const literal = "**unfinished";';
 		const fence = "```js\n" + code;
 		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 		rerender(<ChatMarkdown text={fence + "\n```\n\nMore prose"} streaming />);
-		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toBeInTheDocument());
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		await waitFor(() => expect(container.querySelector("pre [style*='--ao-code-keyword']")).toBeInTheDocument());
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
+	});
+
+	it("offers Copy on a finished code block while the reply is still streaming", async () => {
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const code = "func main() {\n\tfmt.Println(\"<hi>\")\n}";
+		const fence = "```go\n" + code;
+		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
+		expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+		rerender(<ChatMarkdown text={fence + "\n```\n\nThen:\n\n```sh\nls"} streaming />);
+		await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith(code);
+		rerender(<ChatMarkdown text={fence + "\n```\n\nThen:\n\n```sh\nls\n```\n\nDone"} streaming />);
+		const buttons = container.querySelectorAll<HTMLElement>('[data-markdown="code-header"] button');
+		expect(buttons).toHaveLength(2);
+		await userEvent.click(buttons[1]!);
+		expect(copy).toHaveBeenLastCalledWith("ls");
+		copy.mockRestore();
+	});
+
+	it("copies an indented code block's current source as it grows", async () => {
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const { rerender } = render(<ChatMarkdown text={"Run:\n\n    echo one"} streaming />);
+		rerender(<ChatMarkdown text={"Run:\n\n    echo one\n    echo two"} streaming />);
+		await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith("echo one\necho two");
+		copy.mockRestore();
 	});
 
 	it("resolves late reference definitions and keeps footnote IDs document-wide", () => {
@@ -837,17 +1357,6 @@ describe("ChatMarkdown block streaming", () => {
 		expect(container.textContent).toContain("Beta");
 	});
 
-	it("keeps source-relative fade offsets when a chat opens across several blocks", () => {
-		const text = "First\n\nSecond\n\nAlready visible";
-		const view = (source: string) => <ChatOpeningRef.Provider value={{ current: true }}><ChatMarkdown text={source} streaming /></ChatOpeningRef.Provider>;
-		const { container, rerender } = render(view(text));
-		expect(container.querySelectorAll(".stream-char")).toHaveLength(0);
-		rerender(view(text + " new"));
-		expect(container.querySelectorAll(".stream-char")).toHaveLength(4);
-		const first = container.querySelector("p");
-		rerender(view(text + " new\n\nTail"));
-		expect(container.querySelector("p")).toBe(first);
-	});
 });
 
 
@@ -867,100 +1376,41 @@ describe("ActivityTitle", () => {
 	});
 });
 
-describe("ChatMarkdown streaming fade", () => {
-	afterEach(() => {
-		vi.useRealTimers();
-		vi.restoreAllMocks();
-	});
-	const fading = (container: HTMLElement) => container.querySelectorAll(".stream-char").length;
-
-	it("never wraps a reply that mounts settled", () => {
-		const { container } = render(<ChatMarkdown text="from history" />);
-		expect(fading(container)).toBe(0);
-	});
-
-	it("does not fade text already on screen when a chat opens mid-stream", () => {
-		const opening = { current: true };
-		const reply = (text: string) => (
-			<ChatOpeningRef.Provider value={opening}>
-				<ChatMarkdown text={text} streaming />
-			</ChatOpeningRef.Provider>
-		);
-		const { container, rerender } = render(reply("already shown"));
-		opening.current = false;
-		expect(fading(container)).toBe(0);
-		expect(container.textContent).toBe("already shown");
-
-		rerender(reply("already shown and more"));
-		expect(fading(container)).toBe(" and more".length);
-		expect(container.textContent).toBe("already shown and more");
-	});
-
-	it("fades while streaming and sheds the spans shortly after it settles", () => {
-		vi.useFakeTimers();
-		const { container, rerender } = render(<ChatMarkdown text="live text" streaming />);
-		expect(fading(container)).toBeGreaterThan(0);
-		expect(container.textContent).toBe("live text");
-
-		rerender(<ChatMarkdown text="live text" />);
-		expect(fading(container)).toBeGreaterThan(0);
-		act(() => vi.advanceTimersByTime(500));
-		expect(fading(container)).toBe(0);
-		expect(container.textContent).toBe("live text");
-	});
-
-	it("keeps fading across a retry that restarts the stream inside the grace period", () => {
-		vi.useFakeTimers();
-		const { container, rerender } = render(<ChatMarkdown text="one" streaming />);
-		rerender(<ChatMarkdown text="one" />);
-		act(() => vi.advanceTimersByTime(200));
-		rerender(<ChatMarkdown text="one two" streaming />);
-		act(() => vi.advanceTimersByTime(500));
-		expect(fading(container)).toBeGreaterThan(0);
-	});
-
-	it("renders plain text under reduced motion", () => {
-		vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
-			matches: query === "(prefers-reduced-motion: reduce)",
-			media: query,
-			onchange: null,
-			addEventListener: vi.fn(),
-			removeEventListener: vi.fn(),
-			addListener: vi.fn(),
-			removeListener: vi.fn(),
-			dispatchEvent: vi.fn(() => false),
-		}));
-		const { container } = render(<ChatMarkdown text="no motion" streaming />);
-		expect(fading(container)).toBe(0);
-		expect(screen.getByText("no motion")).toBeInTheDocument();
-	});
-
-	it("still compacts emoji while the fade is on", () => {
-		const { container } = render(<ChatMarkdown text="done ✅ now" streaming />);
-		expect(container.querySelector(".chat-md-emoji")).toHaveTextContent("✅");
-		expect(container.textContent).toBe("done ✅ now");
-	});
-
-	it("keeps links working while their text fades", () => {
-		const onLinkOpen = vi.fn();
-		render(
-			<ChatLinkProvider onLinkOpen={onLinkOpen}>
-				<ChatMarkdown text="see [docs](https://example.com/docs)" streaming />
-			</ChatLinkProvider>,
-		);
-		expect(screen.getByRole("link")).toHaveTextContent("docs");
-	});
-});
 
 describe("ChatMarkdown math", () => {
 	afterEach(() => useUiStore.setState({ renderMath: false }));
 
 	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
-		// With math off, `$a~b$` is prose, and streaming repair escapes its `~`.
 		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
 		act(() => useUiStore.setState({ renderMath: true }));
 		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
 		expect(container.querySelector("[data-tex]")).toHaveAttribute("data-tex", "a~b");
+	});
+
+	it("typesets the same formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "Euler $e^{i\\pi}+1=0$, \\(x^2\\), \\[y\\] and $$z$$.\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$\n\n$$\n\nF=ma\n$$\n\n```math\na^2\n```\n\nCode `\\(no\\)` stays.\n\n```ts\nconst s = \"\\\\(no\\\\)\";\n```\n\n    \\(indented\\)\n\n> ~~~\n> \\(quoted\\)\n> ~~~\n\n\\[w\\]";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(streamed)).toHaveLength(9);
+		expect(formulas(streamed)).toContain("display F=ma typeset");
+		expect(streamed.querySelector("code")).toHaveTextContent("\\(no\\)");
+		expect([...streamed.querySelectorAll("pre")].map((pre) => pre.textContent)).toEqual(['const s = "\\\\(no\\\\)";\n', "\\(indented\\)\n", "\\(quoted\\)\n"]);
+	});
+
+	it("typesets padded and digit-followed dollar formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "The result is $ x^2 $. Costs $5 and $10, $  w $ or $$ y $$.";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		await waitFor(() => expect(settled.querySelector(".katex")).not.toBeNull());
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(settled)).toHaveLength(4);
 	});
 
 	it("leaves dollar signs as text while the setting is off", () => {

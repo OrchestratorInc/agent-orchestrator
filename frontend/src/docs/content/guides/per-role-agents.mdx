@@ -44,11 +44,11 @@ For a full configuration replacement, the stored JSON shape is:
 
 This example uses `bypass-permissions`, which lets provider tools act without their normal approval prompts. Use it only when intended; available permission modes depend on the provider.
 
-The `--config-json` flag takes a JSON string, not a file, and `set-config` replaces the whole project configuration. Preserve existing setup, rules, reviewers, and intake settings. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for CLI limitations and safer alternatives.
+The `--config-json` flag takes a JSON string, not a file, and replaces the whole project configuration. Preserve existing setup, rules, reviewers, and intake settings. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for CLI limitations and safer alternatives.
 
 ## Choose which models a harness offers
 
-Open **Settings → Harnesses**, choose a harness, and open **Models**. Turn a model's switch off to hide it from the model pickers for new tasks, project settings, reviewers, agent switching, and chat. **Enable all** and **Disable all** change every listed model at once; at least one model stays on. With every model on, the pickers offer the harness's full catalog, including models it reports later.
+Open **Settings → Agents**, choose a harness, and open **Models**. Turn a model's switch off to hide it from the model pickers for new tasks, project settings, reviewers, agent switching, and chat. **Enable all** and **Disable all** change every listed model at once; at least one model stays on. With every model on, the pickers offer the harness's full catalog, including models it reports later.
 
 The choice belongs to the selected computer. A model a project, task, or session already uses stays listed even when it is switched off. Cloud VM tasks use their own catalog.
 
@@ -90,7 +90,7 @@ Only agents that are installed and ready on that computer are offered, and Chat 
 
 ## Project rules
 
-Use `agentRules` and `agentRulesFile` for worker instructions. Use `orchestratorRules` for supervision-specific guidance. These are stored in the typed project config and injected into the appropriate session role.
+Use `agentRules` and `agentRulesFile` for worker instructions. Use `orchestratorRules` and `orchestratorRulesFile` for supervision-specific guidance. These are stored in the typed project config and injected into the appropriate session role.
 
 <Callout type="info">
 	Orchestrator uses the provider CLI already installed and authenticated on your machine. Run `ao doctor` if a configured harness fails preflight.

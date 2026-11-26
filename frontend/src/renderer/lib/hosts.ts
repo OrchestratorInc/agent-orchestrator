@@ -4,6 +4,9 @@ export type HostId = string;
 
 export const LOCAL_HOST: HostId = "local";
 
+/** A host that did not answer, as opposed to one that answered with an error. */
+export const HOST_UNREACHABLE_CODES: ReadonlySet<string | undefined> = new Set(["UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"]);
+
 /** Anything addressable across hosts. A bare id is never enough to act on. */
 export type Ref = {
 	host: HostId;

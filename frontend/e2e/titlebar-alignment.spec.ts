@@ -3,10 +3,10 @@ import { installFakeAgent } from "./support/fake-bridge";
 
 test.use({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36" });
 
-// The nav cluster sits on the native traffic lights' centerline, not on the
-// session header, which is inset below the panel. The lights are 14px tall
-// with their top at y=12, so their center is 19px from the window top.
-const TRAFFIC_LIGHT_CENTER = 19;
+// The nav cluster sits on the native traffic lights' centerline, which is the
+// framed panel's header centerline: 6px inset + 1px border + 36px / 2 = 25.
+// Native fullscreen has no frame, so the flush 36px row centers at 18.
+const trafficLightCenter = (fullScreen: boolean) => (fullScreen ? 18 : 25);
 
 async function geometry(page: Page) {
 	return page.evaluate(() => {
@@ -50,7 +50,7 @@ for (const mode of ["chat", "tui"] as const) {
 			}
 			await expect.poll(async () => {
 				const boxes = await geometry(page);
-				return Math.abs(boxes.nav.center - TRAFFIC_LIGHT_CENTER);
+				return Math.abs(boxes.nav.center - trafficLightCenter(fullScreen));
 			}).toBeLessThanOrEqual(1);
 			if (mode === "chat" && !fullScreen) {
 				await page.setViewportSize({ width: 700, height: 800 });
@@ -59,8 +59,21 @@ for (const mode of ["chat", "tui"] as const) {
 				await expect.poll(() => page.evaluate(() => Number.parseFloat(document.querySelector<HTMLElement>('[data-testid="session-terminal-region"]')!.style.getPropertyValue("--ao-sidebar-layout-width")))).toBeGreaterThan(100);
 			}
 			const expanded = await geometry(page);
+			// Windowed and fullscreen both draw the selected tab as a rounded pill,
+			// never the legacy underline.
+			const activeTab = await page.evaluate(() => {
+				const frame = document.querySelector<HTMLElement>("[data-terminal-tab-frame][data-active]")!;
+				const underline = frame.querySelector<HTMLElement>('[data-testid="active-terminal-tab-indicator"]');
+				return {
+					pillRadius: getComputedStyle(frame, "::before").borderTopLeftRadius,
+					underline: underline ? getComputedStyle(underline).display : "none",
+				};
+			});
+			expect(activeTab.underline).toBe("none");
+			expect(activeTab.pillRadius).not.toBe("0px");
 			const expandedTab = await page.getByRole("tab").first().boundingBox();
-			expect(Math.abs(expandedTab!.x - expanded.region.x)).toBeLessThanOrEqual(1);
+			// Fullscreen's flush panel starts the pill strip one 4px tab gap in.
+			expect(Math.abs(expandedTab!.x - expanded.region.x - (fullScreen ? 4 : 0))).toBeLessThanOrEqual(1);
 			await nav.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
 			await expect.poll(async () => (await geometry(page)).region.x).toBeLessThan(expanded.region.x);
 			const collapsed = await geometry(page);
@@ -69,7 +82,7 @@ for (const mode of ["chat", "tui"] as const) {
 			// Chromium can report a fractional CSS-pixel centerline after the sidebar
 			// transition. Keep the smoke assertion strict without rejecting subpixel
 			// rasterization differences across CI runners.
-			expect(Math.abs(collapsed.nav.center - TRAFFIC_LIGHT_CENTER)).toBeLessThanOrEqual(2);
+			expect(Math.abs(collapsed.nav.center - trafficLightCenter(fullScreen))).toBeLessThanOrEqual(2);
 			const firstTab = await page.getByRole("tab").first().boundingBox();
 			expect(firstTab!.x).toBeGreaterThanOrEqual(collapsed.nav.x + collapsed.nav.width);
 			if (!fullScreen) {
@@ -79,6 +92,67 @@ for (const mode of ["chat", "tui"] as const) {
 		});
 	}
 }
+
+// Every control in the windowed floating bar sits on the traffic lights' line,
+// with as much visible space above it (below the window's 1px top highlight)
+// as below it (down to the panel frame's top line).
+async function floatingBarControls(page: Page) {
+	return page.evaluate(() => {
+		const shell = document.querySelector(".center-panel-shell--floating-topbar");
+		const surface = shell?.querySelector<HTMLElement>(":scope > .center-panel-surface");
+		if (!shell || !surface) return null;
+		const frameTop = surface.getBoundingClientRect().top + Number.parseFloat(getComputedStyle(surface, "::after").top);
+		const selectors = [
+			"[data-terminal-tab-frame]",
+			".workspace-topbar-actions .group\\/button",
+			"[data-testid='panel-topbar-controls'] button",
+		];
+		const controls = [...shell.querySelectorAll<HTMLElement>(selectors.join(","))]
+			.map((element) => ({ label: element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName, box: element.getBoundingClientRect() }))
+			// Controls that start below the frame belong to the panel (e.g. the
+			// Browser panel's own tab row). One that starts in the bar but runs past
+			// the frame stays in, so its spacing check fails.
+			.filter(({ box }) => box.width > 0 && box.height > 0 && box.top < frameTop)
+			.map(({ label, box }) => ({ label, center: box.top + box.height / 2, above: box.top - 1, below: frameTop - box.bottom }));
+		return { frameTop, controls };
+	});
+}
+
+async function expectFloatingBarCentered(page: Page) {
+	await expect.poll(async () => (await floatingBarControls(page))?.controls.length ?? 0).toBeGreaterThan(1);
+	const bar = (await floatingBarControls(page))!;
+	expect(bar.frameTop).toBeCloseTo(49, 1);
+	for (const control of bar.controls) {
+		expect(Math.abs(control.center - trafficLightCenter(false)), control.label).toBeLessThanOrEqual(0.5);
+		expect(Math.abs(control.above - control.below), control.label).toBeLessThanOrEqual(0.5);
+	}
+}
+
+test("floating top bar controls are vertically centered between the window edge and the panel @T0", async ({ page }) => {
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	await installFakeAgent(page, {
+		platform: "MacIntel",
+		workers: [{ id: "bar-worker", provider: "codex", title: "Bar worker", mode: "chat", status: "idle", activity: "idle" }],
+	});
+	await page.route("**/api/v1/sessions/bar-worker/conversation{,?*}", (route) => route.fulfill({ json: {
+		conversationId: "bar-conversation", sessionId: "bar-worker", harness: "codex", mode: "chat", controller: "ready",
+		latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: [], messages: [], activities: [], settings: {},
+	} }));
+	await page.route("**/api/v1/sessions/bar-worker/conversation/models", (route) => route.fulfill({ json: { models: [], selected: {} } }));
+	await page.route("**/api/v1/sessions/bar-worker/conversation/skills", (route) => route.fulfill({ json: { skills: [] } }));
+	const nav = page.locator('[data-slot="titlebar-nav"]');
+	for (const path of ["/#/projects/fake-proj", "/#/projects/fake-proj/sessions/bar-worker"]) {
+		await page.goto(path);
+		await expect(page.locator(".center-panel-shell--floating-topbar")).toBeVisible({ timeout: 20_000 });
+		if (await nav.getByRole("button", { name: "Expand sidebar", exact: true }).count()) {
+			await nav.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+		}
+		await expectFloatingBarCentered(page);
+		await nav.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+		await expect(nav.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
+		await expectFloatingBarCentered(page);
+	}
+});
 
 for (const mode of ["chat", "tui"] as const) {
 	test(`${mode} title moves continuously left during sidebar collapse @T0`, async ({ page }) => {
@@ -95,7 +169,8 @@ for (const mode of ["chat", "tui"] as const) {
 			await nav.getByRole("button", { name: "Expand sidebar", exact: true }).click();
 		}
 		await expect.poll(() => page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="session-terminal-region"]')!.style.getPropertyValue("--ao-sidebar-collapse-progress"))).toBe("0");
-		const radius = await page.locator(".center-panel-surface").evaluate((el) => parseFloat(getComputedStyle(el).borderTopLeftRadius));
+		// The floating macOS top bar draws the panel's rounded frame on ::after.
+		const radius = await page.locator(".center-panel-surface").evaluate((el) => parseFloat(getComputedStyle(el, "::after").borderTopLeftRadius));
 		expect(radius).toBeGreaterThan(0);
 		const positions = await page.evaluate(async () => {
 			const tab = document.querySelector<HTMLElement>('[role="tab"]')!;

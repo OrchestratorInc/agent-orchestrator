@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="96" height="96" />
 
-<h3>别再照看智能体，开始合并真正的成果。</h3>
+### Orchestrator.inc
+
+<h4>别再照看智能体，开始合并真正的成果。</h4>
 
 <p>
   运行一整支编程智能体队伍，同时让分支、评审和 CI 失败始终可控。
@@ -73,7 +75,7 @@
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/copilot-dark.svg" /><img src="../frontend/src/renderer/assets/agents/copilot-light.svg" alt="GitHub Copilot" width="24" height="24" align="middle" /></picture> &nbsp; <b>GitHub Copilot</b></td>
   </tr>
   <tr valign="middle">
-    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/grok-dark.svg" /><img src="../frontend/src/renderer/assets/agents/grok-light.svg" alt="Grok" width="24" height="24" align="middle" /></picture> &nbsp; <b>Grok</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/grok-dark.svg" /><img src="../frontend/src/renderer/assets/agents/grok-light.svg" alt="Grok Build" width="24" height="24" align="middle" /></picture> &nbsp; <b>Grok Build</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/kimi-dark.svg" /><img src="../frontend/src/renderer/assets/agents/kimi-light.svg" alt="Kimi" width="24" height="24" align="middle" /></picture> &nbsp; <b>Kimi</b></td>
     <td valign="middle" nowrap><img src="../docs/assets/readme/agents/pi-coding-agent.svg" alt="Pi" width="24" height="24" align="middle" /> &nbsp; <b>Pi</b></td>
   </tr>
@@ -88,17 +90,17 @@
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/goose-dark.svg" /><img src="../frontend/src/renderer/assets/agents/goose-light.svg" alt="Goose" width="24" height="24" align="middle" /></picture> &nbsp; <b>Goose</b></td>
   </tr>
   <tr valign="middle">
-    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/qwen-dark.svg" /><img src="../frontend/src/renderer/assets/agents/qwen-light.svg" alt="Qwen" width="24" height="24" align="middle" /></picture> &nbsp; <b>Qwen</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/qwen-dark.svg" /><img src="../frontend/src/renderer/assets/agents/qwen-light.svg" alt="Qwen Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Qwen Code</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/continue-dark.svg" /><img src="../frontend/src/renderer/assets/agents/continue-light.svg" alt="Continue" width="24" height="24" align="middle" /></picture> &nbsp; <b>Continue</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/devin-dark.svg" /><img src="../frontend/src/renderer/assets/agents/devin-light.svg" alt="Devin" width="24" height="24" align="middle" /></picture> &nbsp; <b>Devin</b></td>
   </tr>
   <tr valign="middle">
     <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/kiro.svg" alt="Kiro" width="24" height="24" align="middle" /> &nbsp; <b>Kiro</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/kilocode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/kilocode-light.svg" alt="Kilo Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Kilo Code</b></td>
-    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/vibe.svg" alt="Vibe" width="24" height="24" align="middle" /> &nbsp; <b>Vibe</b></td>
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/vibe.svg" alt="Mistral Vibe" width="24" height="24" align="middle" /> &nbsp; <b>Mistral Vibe</b></td>
   </tr>
   <tr valign="middle">
-    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/muse.svg" alt="Muse" width="24" height="24" align="middle" /> &nbsp; <b>Muse</b></td>
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/muse.svg" alt="Muse Code" width="24" height="24" align="middle" /> &nbsp; <b>Muse Code</b></td>
     <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/agy.svg" alt="Agy" width="24" height="24" align="middle" /> &nbsp; <b>Agy</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../docs/assets/readme/agents/autohand-stacked-dark.png" /><img src="../docs/assets/readme/agents/autohand-stacked-light.png" alt="Autohand" width="24" height="24" align="middle" /></picture> <b>Autohand</b></td>
   </tr>
@@ -122,13 +124,27 @@
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/hermes.png" alt="Hermes Agent" width="24" height="24" align="middle" /> &nbsp; <b>Hermes Agent</b></td>
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/tau.png" alt="Tau" width="24" height="24" align="middle" /> &nbsp; <b>Tau</b></td>
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/mastra-code.svg" alt="Mastra Code" width="24" height="24" align="middle" /> &nbsp; <b>Mastra Code</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/open-interpreter-dark.svg" /><img src="../frontend/src/renderer/assets/agents/open-interpreter.svg" alt="Open Interpreter" width="24" height="24" align="middle" /></picture> &nbsp; <b>Open Interpreter</b></td>
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/minimax-code.svg" alt="MiniMax Code" width="24" height="24" align="middle" /> &nbsp; <b>MiniMax Code</b></td>
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/memcode.png" alt="memcode" width="24" height="24" align="middle" /> &nbsp; <b>memcode</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/docker-agent-dark.svg" /><img src="../frontend/src/renderer/assets/agents/docker-agent-light.svg" alt="Docker Agent" width="24" height="24" align="middle" /></picture> &nbsp; <b>Docker Agent</b></td>
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/stakpak.png" alt="Stakpak" width="24" height="24" align="middle" /> &nbsp; <b>Stakpak</b></td>
+  </tr>
 </table>
 
 <br />
 
 ### Orchestrator for Mobile
 
-用手机操控在桌面端运行的智能体。安装适用于 [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) 或 [Android](https://play.google.com/store/apps/details?id=aoagents.dev) 的应用，在 **Settings → Connect Mobile** 中扫描二维码即可与桌面端配对。在家里的 Wi-Fi 和外出时都能使用。
+用手机操控在桌面端运行的智能体。安装适用于 [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) 或 [Android](https://play.google.com/store/apps/details?id=aoagents.dev) 的应用，在 **Settings → Mobile** 中扫描二维码即可与桌面端配对。在家里的 Wi-Fi 和外出时都能使用。
 
 - **接收提醒**：智能体有问题或需要批准时，会收到推送通知。
 - **回复**：在聊天中回答、批准请求，或打开智能体的终端。
@@ -153,8 +169,8 @@
 
 | 平台 | 下载 |
 | :-- | :-- |
-| **macOS**（Apple 芯片） | [`agent-orchestrator-darwin-arm64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg) |
-| **macOS**（Intel） | [`agent-orchestrator-darwin-x64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg) |
+| **macOS**（Apple 芯片） | [`Orchestrator-darwin-arm64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/Orchestrator-darwin-arm64.dmg) |
+| **macOS**（Intel） | [`Orchestrator-darwin-x64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/Orchestrator-darwin-x64.dmg) |
 | **Windows** | [`agent-orchestrator-win32-x64.exe`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe) |
 | **Linux**（AppImage） | [`agent-orchestrator-linux-x64.AppImage`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
 | **Linux**（Debian/Ubuntu） | [`agent-orchestrator-linux-x64.deb`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb) |

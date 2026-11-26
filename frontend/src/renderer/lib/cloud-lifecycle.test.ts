@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
+import {
+	cloudChatStartingInPlace,
+	cloudLifecycleStage,
+	cloudSessionStartRequestInFlight,
+	cloudStartupProblem,
+	cloudWorkerAnswering,
+	isCloudPausedStage,
+	requestCloudWorkspaceCheckout,
+	restoreCloudSession,
+	resumeCloudSession,
+	subscribeCloudSessionStartRequests,
+} from "./cloud-lifecycle";
 
 function session(
 	desiredState: string,
@@ -55,6 +66,39 @@ describe("cloudLifecycleStage", () => {
 	});
 });
 
+describe("cloudChatStartingInPlace", () => {
+	const freestyleChat = (desired: string, observed: string, connected = false): WorkspaceSession => {
+		const base = session(desired, observed, connected);
+		return { ...base, mode: "chat", cloud: { ...base.cloud!, sandboxProvider: "freestyle" } };
+	};
+
+	it.each([
+		["running", "requested"],
+		["running", "provisioning"],
+		["running", "bootstrapping"],
+		["running", "stopped"],
+		["running", "restoring"],
+		["running", "running"],
+		["running", "failed"],
+	] as const)("holds a Freestyle Chat session on its conversation while %s/%s", (desired, observed) => {
+		expect(cloudChatStartingInPlace(freestyleChat(desired, observed))).toBe(true);
+	});
+
+	it("lets go once the worker connects, and while the session is paused", () => {
+		expect(cloudChatStartingInPlace(freestyleChat("running", "bootstrapping", true))).toBe(false);
+		expect(cloudChatStartingInPlace(freestyleChat("paused", "stopped"))).toBe(false);
+		// A session being deleted or archived is going away, not getting ready.
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "stopped"))).toBe(false);
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "running"))).toBe(false);
+	});
+
+	it("leaves other providers and terminal sessions to the startup screen", () => {
+		expect(cloudChatStartingInPlace({ ...freestyleChat("running", "provisioning"), mode: "tui" })).toBe(false);
+		const coder = freestyleChat("running", "provisioning");
+		expect(cloudChatStartingInPlace({ ...coder, cloud: { ...coder.cloud!, sandboxProvider: "coder" } })).toBe(false);
+	});
+});
+
 describe("cloudStartupProblem", () => {
 	const startupError = { code: "workspace_not_ready", message: "Your Coder workspace wasn't ready after 20 minutes.", at: "2026-10-08T00:00:00Z" };
 	function withRuntime(runtimeState: string | undefined, extra: Partial<NonNullable<WorkspaceSession["cloud"]>> = {}, connected = false): WorkspaceSession {
@@ -104,6 +148,18 @@ describe("cloudStartupProblem", () => {
 		});
 	});
 
+	it("reports a conversation a woken session could not restore even though the worker is connected", () => {
+		const restore = {
+			code: "conversation_restore_failed",
+			message: "AO couldn't restore this session's conversation, so the agent did not start without it. Reopen this session to try again.",
+			at: "2026-11-24T10:00:00Z",
+			detail: "fetch captured checkpoint: 502",
+		};
+		expect(cloudStartupProblem(withRuntime("running", { startupError: restore }, true))).toEqual({
+			phase: "failed", message: restore.message, code: "conversation_restore_failed", detail: restore.detail, at: restore.at,
+		});
+	});
+
 	it("reports a final startup failure once AO gives up", () => {
 		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({
 			phase: "failed",
@@ -140,5 +196,90 @@ describe("cloudStartupProblem", () => {
 		const local = session("running", "terminated");
 		delete local.cloud;
 		expect(cloudStartupProblem(local)).toBeUndefined();
+	});
+});
+
+describe("resumeCloudSession", () => {
+	it("sends one request for a session however many views ask while it is in flight", async () => {
+		const answers: ((value: unknown) => void)[] = [];
+		const resumeSession = vi.fn(() => new Promise((resolve) => { answers.push(resolve); }));
+		const client = { resumeSession } as unknown as Parameters<typeof resumeCloudSession>[0];
+		const first = resumeCloudSession(client, "org", "session-a");
+		const second = resumeCloudSession(client, "org", "session-a");
+		const other = resumeCloudSession(client, "org", "session-b");
+		expect(resumeSession).toHaveBeenCalledTimes(2);
+		expect(second).toBe(first);
+		expect(other).not.toBe(first);
+		answers.forEach((answer) => answer({}));
+		await first;
+		// Once it answered, a later open asks again.
+		void resumeCloudSession(client, "org", "session-a");
+		expect(resumeSession).toHaveBeenCalledTimes(3);
+	});
+
+	it("shares a refusal with every caller and asks again afterwards", async () => {
+		const resumeSession = vi.fn().mockRejectedValueOnce(new Error("terminated")).mockResolvedValue({});
+		const client = { resumeSession } as unknown as Parameters<typeof resumeCloudSession>[0];
+		await expect(Promise.all([resumeCloudSession(client, "org", "s"), resumeCloudSession(client, "org", "s")])).rejects.toThrow("terminated");
+		await expect(resumeCloudSession(client, "org", "s")).resolves.toEqual({});
+		expect(resumeSession).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("one start request per session", () => {
+	it("sends one resume for a double press, and resumes four sessions in parallel", async () => {
+		const answers = new Map<string, (value: unknown) => void>();
+		const resumeSession = vi.fn((_org: string, id: string) => new Promise((resolve) => { answers.set(id, resolve); }));
+		const client = { resumeSession } as unknown as Parameters<typeof resumeCloudSession>[0];
+		const listener = vi.fn();
+		const unsubscribe = subscribeCloudSessionStartRequests(listener);
+		const press = resumeCloudSession(client, "org", "paused-1");
+		const again = resumeCloudSession(client, "org", "paused-1");
+		expect(again).toBe(press);
+		expect(cloudSessionStartRequestInFlight("org", "paused-1")).toBe(true);
+		expect(listener).toHaveBeenCalled();
+		const others = ["paused-2", "paused-3", "paused-4"].map((id) => resumeCloudSession(client, "org", id));
+		expect(resumeSession).toHaveBeenCalledTimes(4);
+		expect(resumeSession.mock.calls.map(([, id]) => id)).toEqual(["paused-1", "paused-2", "paused-3", "paused-4"]);
+		for (const id of ["paused-1", "paused-2", "paused-3", "paused-4"]) expect(cloudSessionStartRequestInFlight("org", id)).toBe(true);
+		answers.forEach((answer) => answer({}));
+		await Promise.all([press, ...others]);
+		expect(cloudSessionStartRequestInFlight("org", "paused-1")).toBe(false);
+		unsubscribe();
+	});
+
+	it("shares a workspace checkout in flight and counts it as the session starting", async () => {
+		let answer: (value: unknown) => void = () => undefined;
+		const requestWorkspaceCheckout = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+		const client = { requestWorkspaceCheckout } as unknown as Parameters<typeof requestCloudWorkspaceCheckout>[0];
+		const first = requestCloudWorkspaceCheckout(client, "org", "s");
+		const second = requestCloudWorkspaceCheckout(client, "org", "s");
+		expect(second).toBe(first);
+		expect(requestWorkspaceCheckout).toHaveBeenCalledTimes(1);
+		expect(cloudSessionStartRequestInFlight("org", "s")).toBe(true);
+		answer({ requested: true });
+		await first;
+		expect(cloudSessionStartRequestInFlight("org", "s")).toBe(false);
+		void requestCloudWorkspaceCheckout(client, "org", "s");
+		expect(requestWorkspaceCheckout).toHaveBeenCalledTimes(2);
+	});
+
+	it("shares a restore in flight and lets a failed one be asked again", async () => {
+		const restoreSession = vi.fn().mockRejectedValueOnce(new Error("refused")).mockResolvedValue({});
+		const client = { restoreSession } as unknown as Parameters<typeof restoreCloudSession>[0];
+		await expect(Promise.all([restoreCloudSession(client, "org", "s"), restoreCloudSession(client, "org", "s")])).rejects.toThrow("refused");
+		await expect(restoreCloudSession(client, "org", "s")).resolves.toEqual({});
+		expect(restoreSession).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("cloudWorkerAnswering", () => {
+	it("needs a connected worker in a running sandbox", () => {
+		expect(cloudWorkerAnswering(session("running", "running", true))).toBe(true);
+		expect(cloudWorkerAnswering(session("running", "running", false))).toBe(false);
+		expect(cloudWorkerAnswering(session("running", "bootstrapping", true))).toBe(false);
+		const local = session("running", "running", true);
+		delete local.cloud;
+		expect(cloudWorkerAnswering(local)).toBe(false);
 	});
 });

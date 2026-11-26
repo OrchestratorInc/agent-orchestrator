@@ -5,6 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import { preloadMarkdownFonts } from "./hooks/useMarkdownFontsReady";
 import { queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { playNotificationSound } from "./lib/notification-sound-player";
@@ -13,17 +14,24 @@ import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
 import { TelemetryIdentityRuntime } from "./components/TelemetryIdentityRuntime";
-import { applyAnalyticsOptOut, applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
+import { applyAnalyticsOptOut, applyRendererTelemetryPolicy, bindRendererErrorHandlers, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
 import { startSessionManagementTelemetry } from "./lib/session-management-telemetry";
+import { applyPerformanceOptOut, startPerformanceTelemetry } from "./lib/performance-telemetry";
+import { discardUiUsage, startUiUsageTelemetry } from "./lib/ui-usage-telemetry";
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
 
+// Bind before the first render: errors during route setup and the first
+// render used to fire before TelemetryBoundary's effect bound these. Captures
+// made before the consent policy arrives are held by preload.
+bindRendererErrorHandlers();
+void preloadMarkdownFonts();
 const router = createAppRouter(queryClient);
 
 // Main owns consent and only acknowledges opt-out after every live AO shell
@@ -39,11 +47,18 @@ aoBridge.telemetry.onPolicy((view) => applyRendererTelemetryPolicy(view.eventsEn
 // The analytics opt-out lives in main (shared with the daemon and mobile). Apply
 // it to this renderer's PostHog client at launch and whenever Settings flips it.
 void aoBridge.telemetry.getAnalyticsOptOut().then((optedOut) => {
-	if (optedOut) void applyAnalyticsOptOut(true);
+	if (!optedOut) return;
+	void applyAnalyticsOptOut(true);
+	applyPerformanceOptOut(true);
+	discardUiUsage();
 }).catch(() => undefined);
 aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
 	useAnalyticsOptOutStore.setState({ optedOut, loaded: true });
 	void applyAnalyticsOptOut(optedOut);
+	applyPerformanceOptOut(optedOut);
+	// Either way the UI usage window starts over: nothing counted before an
+	// opt-out is sent, and no time from while it was off is counted after.
+	discardUiUsage();
 });
 
 if (import.meta.env.DEV) {
@@ -92,6 +107,8 @@ const bootstrapSessionManagementTelemetry = () => {
 	void initTelemetry().then((enabled) => {
 		if (enabled) {
 			startSessionManagementTelemetry();
+			startPerformanceTelemetry();
+			startUiUsageTelemetry();
 			return;
 		}
 		if (!isDeniedEvent("ao.renderer.session_management_summary") && sessionManagementTelemetryRetries++ < 12) {

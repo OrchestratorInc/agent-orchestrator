@@ -12,7 +12,7 @@ the fresh-install check below, not by this daemon suite.
 
 | Tier                          | What                                                                                                                                                                                                                                                                  | Where                                                |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| **Comprehensive (primary)**   | A cross-platform Go suite that builds `ao` and exercises the daemon and CLI lifecycle against isolated state. Runs natively on **ubuntu + macOS + windows**.                                                                                                    | `backend/internal/cli/e2e_test.go` and `e2e_sigpipe_unix_test.go` (build tag `e2e`) |
+| **Comprehensive (primary)**   | A cross-platform Go suite that builds `ao` and exercises the daemon and CLI lifecycle against isolated state. On a ready PR into `main`, runs on **ubuntu** when the PR touches `backend/`, `test/cli/`, or CI-wide files. Pushes to `main`, PRs into `stable`, and PRs labelled `ci:full` run it on **ubuntu + macOS + windows**. Draft PRs skip it.                                                                                                    | `backend/internal/cli/e2e_test.go` and `e2e_sigpipe_unix_test.go` (build tag `e2e`) |
 | **Fresh-install (hardening)** | Proves a clean installation can run `version` and `doctor`, then reaches the expected `ao start` release-fetch error without a panic or silent success.                                                                                                        | `test/cli/Dockerfile` + `test/cli/install-check.sh`  |
 
 ## Run it
@@ -48,7 +48,9 @@ docker run --rm --init ao-cli-smoke
 stop) · `TestE2E_Lifecycle` (daemon startup, ready, idempotent, daemon-created store,
 `/healthz` identity, stop, run-file cleanup) · `TestE2E_ShutdownGuard` (the
 `/shutdown` CSRF + DNS-rebinding 403 guard, daemon survives) ·
-`TestE2E_StaleRunFile` (dead-PID run-file → stale → cleaned) · `TestE2E_ExitCodes`
+`TestE2E_StaleRunFile` (dead-PID run-file → stale → cleaned) ·
+`TestE2E_SecondDaemonOnSameDataDir` (a second daemon on the same data dir
+waits and exits 75 without writing a run-file, then starts once the owner stops) · `TestE2E_ExitCodes`
 (2 usage / 1 runtime / config error) · `TestE2E_Completion` (all four shells).
 On Unix, the tagged suite also runs
 `TestE2E_DaemonClosedOutputPipeShutdownRemovesRunFile`, which verifies that a
@@ -71,7 +73,7 @@ separate tests. The container stays as a thin clean-install check.
 - **Add a case:** a new `TestE2E_*` function (or a `t.Run` subtest) in an
   appropriate `backend/internal/cli/*_test.go` file. Use `newEnv(t)` for
   isolated state and the `env.run`/`httpGet`/`postShutdown` helpers.
-- **Add an OS:** extend the `matrix.os` list in `.github/workflows/cli-e2e.yml`.
+- **Add an OS:** extend the native `matrix.os` list in `.github/workflows/cli-e2e.yml`.
 - Assertions for default state paths under `~/.ao`
   when `AO_RUN_FILE`/`AO_DATA_DIR` are unset belong in unit tests in
   `internal/config`; this suite intentionally overrides both paths.

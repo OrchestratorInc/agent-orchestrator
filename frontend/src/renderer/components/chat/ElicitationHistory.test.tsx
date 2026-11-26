@@ -30,12 +30,31 @@ function question(overrides: Partial<ConversationActivity> = {}): ConversationAc
 }
 
 describe("ElicitationHistory", () => {
-	it("retains the full prompt, selected option labels and descriptions, and verbatim feedback", () => {
+	it("retains the full prompt, selected option labels, and verbatim feedback", () => {
 		render(<ElicitationHistory activity={question()} />);
 		expect(screen.getByText("Which worktrees should I delete?")).toBeVisible();
-		expect(screen.getByText("fix/login — Merged with no local changes, fix/settings")).toBeVisible();
+		expect(screen.getByText("fix/login, fix/settings")).toBeVisible();
 		expect(screen.getByText("Keep fix/settings until I check it.\nShow me the names first.", { normalizer: (value) => value })).toBeVisible();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+	});
+
+	it("shows only the question and the picked answer once answered", () => {
+		render(<ElicitationHistory activity={question({
+			detail: { inputMode: "form", message: "What should the new agent work on?", schema: { properties: {
+				question_0: { type: "string", title: "Agent task", oneOf: [
+					{ const: "review", title: "Review PR #10 (Recommended)", description: "Run AO's native reviewer on the PR." },
+					{ const: "fix", title: "Fix the failing check" },
+				] },
+				question_0_custom: { type: "string", title: "Other" },
+			} } },
+			inputResponse: { action: "accept", content: { question_0: "review" } },
+		})} />);
+		expect(screen.getByText("What should the new agent work on?")).toBeVisible();
+		expect(screen.getByText("Review PR #10")).toBeVisible();
+		expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent task")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Recommended/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/native reviewer/)).not.toBeInTheDocument();
 	});
 
 	it("associates each answer with its full prompt in a multi-question form", () => {
@@ -48,6 +67,29 @@ describe("ElicitationHistory", () => {
 		})} />);
 		expect(screen.getByText("Which worktrees should I delete?").parentElement).toHaveTextContent("fix/login");
 		expect(screen.getByText("Which worktrees should I keep?").parentElement).toHaveTextContent("fix/settings");
+	});
+
+	it("pairs each Antigravity answer with the prompt from its field title", () => {
+		render(<ElicitationHistory activity={question({
+			detail: { message: "The agent has a question.", schema: { properties: {
+				q1: { type: "string", title: "Which color?", oneOf: [{ const: "1", title: "Red" }, { const: "2", title: "Blue" }] },
+				q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: Which color?" },
+			} } },
+			inputResponse: { action: "accept", content: { q1: "2" } },
+		})} harness="agy" />);
+		expect(screen.getByText("Which color?").parentElement).toHaveTextContent("Blue");
+		expect(screen.queryByText("The agent has a question.")).not.toBeInTheDocument();
+	});
+
+	it("keeps another agent's q1 form under its message", () => {
+		render(<ElicitationHistory activity={question({
+			detail: { message: "Pick a color.", schema: { properties: {
+				q1: { type: "string", title: "Color", oneOf: [{ const: "1", title: "Red" }, { const: "2", title: "Blue" }] },
+			} } },
+			inputResponse: { action: "accept", content: { q1: "2" } },
+		})} harness="claude-code" />);
+		expect(screen.getByText("Pick a color.")).toBeVisible();
+		expect(screen.getByText("Color").parentElement).toHaveTextContent("Blue");
 	});
 
 	it.each([
@@ -77,6 +119,7 @@ describe("ElicitationHistory", () => {
 			} } },
 			inputResponse: { action: "accept", content: { removeBranches: false, keepDays: 0, note: "" } },
 		})} />);
+		expect(screen.getByText("Remove local branches")).toBeVisible();
 		expect(screen.getByText("No")).toBeVisible();
 		expect(screen.getByText("0")).toBeVisible();
 		expect(screen.queryByText("Note")).not.toBeInTheDocument();

@@ -1,8 +1,8 @@
+import { apiErrorException } from "./api-error-exception";
 import { queryOptions } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { appI18n } from "../i18n";
 import { sortedPRs, type WorkspaceSession } from "../types/workspace";
-import { apiErrorMessage } from "./api-client";
 import { clientForSessionHost } from "./host-clients";
 import { usesPreviewWorkspaceData as usePreviewData } from "./preview-mode";
 
@@ -27,15 +27,16 @@ export function sessionReviewsQueryOptions(session: WorkspaceSession, enabled: b
 		...(staleTime !== undefined ? { staleTime } : {}),
 		refetchInterval: (query) => {
 			const data = query.state.data as ReviewsResponse | undefined;
-			const reviews = data?.reviews ?? [];
-			return reviews.some((review) => review.status === "running") ? 2500 : false;
+			// Every active run has a daemon owner and a time limit, so polling
+			// while one exists always ends.
+			return reviewsHaveActiveRun(data) ? 2500 : false;
 		},
 		queryFn: async () => {
 			if (usePreviewData) return mockReviewsResponse(session);
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/reviews", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load reviews"));
+			if (error) throw apiErrorException(error, "Unable to load reviews");
 			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [], activeReviewers: [] } satisfies ReviewsResponse);
 		},
 	});
@@ -51,30 +52,70 @@ export function openReviewStatesFor(session: WorkspaceSession, reviewStates: PRR
 	return reviewStates.filter((reviewState) => openPRURLs.has(reviewState.prUrl));
 }
 
+export type ReviewRunStatus = ReviewRunFacts["status"];
+
+/** Run states the daemon still owns: each one has a time limit and always ends. */
+export function reviewRunIsActive(status: ReviewRunStatus | undefined): boolean {
+	return status === "queued" || status === "launching" || status === "running" || status === "cancelling";
+}
+
+function reviewsHaveActiveRun(data: ReviewsResponse | undefined): boolean {
+	if (!data) return false;
+	return (
+		(data.reviews ?? []).some((review) => review.status === "running" || reviewRunIsActive(review.latestRun?.status)) ||
+		(data.runs ?? []).some((run) => reviewRunIsActive(run.status))
+	);
+}
+
 export function reviewIsRunning(openReviewStates: PRReviewState[]): boolean {
 	return openReviewStates.some((reviewState) => reviewState.status === "running");
 }
 
-export function reviewHasLiveActivity(
+/** What the review is doing right now, read from the run state alone. */
+export type ReviewPhase = "starting" | "reviewing" | "waiting_input" | "stopping";
+
+export function reviewPhase(
 	openReviewStates: PRReviewState[],
 	reviewerActivityState: ReviewerActivityState | undefined,
-	hasReviewerSession: boolean,
-): boolean {
-	if (!reviewIsRunning(openReviewStates)) return false;
-	if (!hasReviewerSession) return false;
-	switch (reviewerActivityState) {
-		case "idle":
-		case "waiting_input":
-		case "exited":
-			return false;
-		case "active":
-		case "blocked":
-			return true;
-		default:
-			// Older daemons do not return reviewer activity state. Keep today's
-			// running-run semantics until a hook says otherwise.
-			return true;
+	reviewerActivityHarness?: string,
+): ReviewPhase | null {
+	const running = openReviewStates
+		.filter((reviewState) => reviewState.status === "running")
+		.map((reviewState) => reviewState.latestRun);
+	if (running.length === 0) return null;
+	const reviewing = running.filter((run) => run?.status === "running" || run === undefined);
+	if (reviewing.length > 0) {
+		// The daemon keeps a run alive while its reviewer waits for input, so say
+		// so instead of implying it is working. The activity state belongs to
+		// one reviewer; another reviewer's running pass must not borrow it.
+		const waiting =
+			reviewerActivityState === "waiting_input" &&
+			Boolean(reviewerActivityHarness) &&
+			reviewing.some((run) => run?.harness === reviewerActivityHarness);
+		return waiting ? "waiting_input" : "reviewing";
 	}
+	const statuses = running.map((run) => run?.status);
+	if (statuses.some((status) => status === "queued" || status === "launching")) return "starting";
+	return "stopping";
+}
+
+/**
+ * The run behind the phase reviewPhase reports, so the status line names its
+ * agent, commit and time: with one PR launching and another waiting for input,
+ * the waiting one is the run to show.
+ */
+export function reviewPhaseRun(
+	openReviewStates: PRReviewState[],
+	phase: ReviewPhase | null,
+	reviewerActivityHarness?: string,
+): NonNullable<PRReviewState["latestRun"]> | undefined {
+	const running = openReviewStates
+		.filter((reviewState) => reviewState.status === "running")
+		.flatMap((reviewState) => (reviewState.latestRun ? [reviewState.latestRun] : []));
+	if (phase === "waiting_input") return running.find((run) => run.status === "running" && run.harness === reviewerActivityHarness);
+	if (phase === "reviewing") return running.find((run) => run.status === "running");
+	if (phase === "starting") return running.find((run) => run.status === "queued" || run.status === "launching");
+	return running[0];
 }
 
 export function reviewRunDisabled(openReviewStates: PRReviewState[], isTriggering: boolean): boolean {
@@ -123,7 +164,7 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 						prUrl: pr.url,
 						reviewId: `demo-review-${pr.number}`,
 						sessionId: session.id,
-						status: "delivered",
+						status: "completed" as const,
 						targetSha,
 						triggerSource: "manual" as const,
 						verdict: pr.review === "approved" ? "approved" : "changes_requested",
@@ -141,7 +182,7 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 			prUrl: pr.url,
 			reviewId: `demo-review-${pr.number}`,
 			sessionId: session.id,
-			status: "complete",
+			status: "completed" as const,
 			targetSha,
 			verdict: "",
 			...over,
@@ -150,7 +191,7 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 		// produce, so the preview shows every shape the panel can render.
 		if (pr.number === MOCK_RUNNING_PR) {
 			return {
-				latestRun: run({ status: "running", id: `demo-review-run-${pr.number}-live` }),
+				latestRun: run({ status: "running" as const, id: `demo-review-run-${pr.number}-live` }),
 				prNumber: pr.number,
 				prUrl: pr.url,
 				status: "running",
@@ -163,7 +204,7 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 			// has since changed, so the panel demotes it to "Previous".
 			return {
 				previousRun: run({
-					status: "delivered",
+					status: "completed",
 					verdict: "changes_requested",
 					githubReviewId: `${pr.number}09`,
 					body: "Demo review asked for a tighter activity sample before the last commit.",
@@ -203,7 +244,7 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 			triggerSource: "manual" as const,
 			reviewId: `demo-review-${state.prNumber}`,
 			sessionId: session.id,
-			status: "delivered",
+			status: "completed" as const,
 			targetSha: state.targetSha,
 		};
 		return [

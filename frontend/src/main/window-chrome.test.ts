@@ -6,8 +6,13 @@ describe("native macOS header alignment", () => {
 		const window = { isDestroyed: () => false, isFullScreen: () => false, getWindowButtonPosition: (): { x: number; y: number } | null => null, setWindowButtonPosition: vi.fn() };
 		syncMacWindowButtons(window, { isDestroyed: () => false, getZoomFactor: () => zoom });
 		const position = window.setWindowButtonPosition.mock.calls[0][0];
-		expect(Math.abs(position.y + 7 - 18 * zoom)).toBeLessThanOrEqual(0.5);
-		expect(position.x).toBe(14);
+		expect(Math.abs(position.y + 7 - 25 * zoom)).toBeLessThanOrEqual(0.5);
+		expect(position.x).toBe(19);
+	});
+	it("moves the buttons 2px right for Interface v2's wider edges, on the same row", () => {
+		const window = { isDestroyed: () => false, isFullScreen: () => false, getWindowButtonPosition: (): { x: number; y: number } | null => null, setWindowButtonPosition: vi.fn() };
+		syncMacWindowButtons(window, { isDestroyed: () => false, getZoomFactor: () => 1 }, 2);
+		expect(window.setWindowButtonPosition).toHaveBeenCalledWith({ x: 21, y: 18 });
 	});
 	it("avoids reconfiguring the native view when zoom has not changed", () => {
 		const window = { isDestroyed: () => false, isFullScreen: () => false, getWindowButtonPosition: (): { x: number; y: number } | null => null, setWindowButtonPosition: vi.fn() };

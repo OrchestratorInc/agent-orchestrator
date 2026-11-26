@@ -47,6 +47,32 @@ describe("another paired host's live runner", () => {
 		} finally { runner.stop(); }
 	});
 
+	// One unanswered poll on another machine used to read as "This machine is
+	// offline" in its chat and project views. Its outcomes are tracked like the
+	// selected machine's, so a blip reads as reconnecting and only a sustained
+	// run of failed polls and races reads as unreachable.
+	it("tracks poll and race outcomes so a blip is not an offline machine", async () => {
+		vi.useFakeTimers();
+		const { connectToHost } = await import("./connectRuntime");
+		const { getSessions, getNotifications } = await import("./api");
+		const { classifyLink, UNKNOWN_PHONE_NETWORK } = await import("./linkHealth");
+		vi.mocked(connectToHost).mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config })
+			.mockResolvedValue({ ok: false, reason: "unreachable" } as never);
+		vi.mocked(getSessions).mockRejectedValue(new Error("network lost"));
+		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
+		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
+		let snapshot = emptyHostSnapshot(host);
+		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
+		const health = () => classifyLink(snapshot.linkTracker!, UNKNOWN_PHONE_NETWORK, Date.now());
+		try {
+			await runner.refresh();
+			expect(snapshot.connection).toBe("closed");
+			expect(health()).toBe("reconnecting");
+			await vi.advanceTimersByTimeAsync(2_000 + 15_000 + 15_000);
+			expect(health()).toBe("unreachable");
+		} finally { runner.stop(); }
+	});
+
 	it("never sends a bearer to a host with the wrong identity", async () => {
 		const { connectToHost } = await import("./connectRuntime");
 		const { getSessions } = await import("./api");

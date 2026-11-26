@@ -84,7 +84,7 @@ vi.mock("./diffs/WorkspaceReviewPane", () => ({
 		<div data-testid="review-pane">
 			<span data-testid="review-filter">{filter}</span>
 			<span data-testid="review-scroll">{scrollRequest ? `${scrollRequest.path}:${scrollRequest.key}` : ""}</span>
-			<span data-testid="review-target">{target.key}</span>
+			<span data-state={target.state} data-testid="review-target">{target.key}</span>
 			<span data-testid="review-collapse">{collapseRequest ? `${collapseRequest.expand ? "expand" : "collapse"}:${collapseRequest.key}` : ""}</span>
 			<button onClick={() => onAllCollapsedChange?.(true)} type="button">Report all collapsed</button>
 			<button onClick={() => onAllCollapsedChange?.(false)} type="button">Report an expanded file</button>
@@ -507,17 +507,17 @@ describe("SessionFileExplorer", () => {
 		renderWithQuery(<SessionFileExplorer sessionId="sess-explorer-collapse" />);
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 
-		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-down-up");
+		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("icon-list-chevrons-down-up");
 		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("collapse:1");
 
 		// Once the review reports every file collapsed, the menu offers the way back.
 		await userEvent.click(screen.getByRole("button", { name: "Report all collapsed" }));
-		expect(screen.getByRole("button", { name: "Expand all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-up-down");
+		expect(screen.getByRole("button", { name: "Expand all files" }).querySelector("svg")).toHaveClass("icon-list-chevrons-up-down");
 		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("expand:2");
 		await userEvent.click(screen.getByRole("button", { name: "Report an expanded file" }));
-		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-down-up");
+		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("icon-list-chevrons-down-up");
 	});
 
 	it("opens the maximize tooltip on hover or keyboard focus, not when focus is handed back", async () => {
@@ -733,6 +733,30 @@ describe("SessionFileExplorer review pickers", () => {
 			expect.stringMatching(/^fix\/crash.*Pull request #42 · Updated/),
 		]);
 		expect(rows[0]).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("reviews the branch's commits from the manifest while its history loads, and browses their snapshot once it lands", async () => {
+		const sessionId = "sess-all-commits";
+		const committed = { ...manifest, files: [changed], sections: { uncommitted: [], committed: [changed], staged: [], unstaged: [], untracked: [] }, summary: { additions: 1, deletions: 0, files: 1 } };
+		let resolveHistory: (value: { data: WorkspaceHistoryResponse }) => void = () => {};
+		getMock.mockImplementation(async (path: string) => {
+			if (path.endsWith("/workspace/manifest")) return { data: { ...committed, sessionId } };
+			if (path.endsWith("/workspace/branches")) return { data: { ...branchList, sessionId } };
+			if (path.endsWith("/workspace/history")) return new Promise((resolve) => { resolveHistory = resolve; });
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+
+		// The manifest lists the whole range's files, so the review needs no second round trip.
+		expect(await screen.findByTestId("review-target")).toHaveAttribute("data-state", "ready");
+		expect(screen.getByTestId("review-target")).toHaveTextContent("committed");
+		// Browsing that range's snapshot waits for the tip its history fences it to.
+		await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument();
+		await act(async () => resolveHistory({ data: { ...checkedOutHistory, sessionId } }));
+		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("false");
+		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
 	});
 
 	it("picking another branch offers only commits, hides the view tabs, and sends only read requests", async () => {

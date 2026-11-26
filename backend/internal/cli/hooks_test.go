@@ -376,6 +376,39 @@ func TestHooks_ReviewerRoutesToReviewActivity(t *testing.T) {
 	}
 }
 
+func TestHooks_ClineReviewerUsesResumableIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"task ID", `{"taskId":"conv_123"}`, ""},
+		{"snake task ID", `{"task_id":"conv_123"}`, ""},
+		{"root ID", `{"taskId":"conv_123","sessionContext":{"rootSessionId":"native-root"}}`, "native-root"},
+		{"legacy ID", `{"taskResume":{"taskMetadata":{"ulid":"native-legacy"}}}`, "native-legacy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
+			t.Setenv("AO_REVIEW_HARNESS", "cline")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tc.payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setReviewActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if capture.path != "/api/v1/reviews/review-7/activity" || req.AgentSessionID != tc.want || req.State != "active" {
+				t.Fatalf("review hook = %s, %+v; want native ID %q and active state", capture.path, req, tc.want)
+			}
+		})
+	}
+}
+
 func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 	t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
@@ -684,6 +717,71 @@ func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
 	}
 }
 
+// Kimi fires StopFailure, not Stop, when a provider error such as an invalid
+// API key ends the turn and Kimi returns to its prompt (#3387). It must report
+// idle as a turn boundary without recording the error as the turn's answer.
+func TestHooks_KimiStopFailureReportsIdle(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"hook_event_name":"StopFailure","session_id":"kimi-native-1","cwd":"/work","error_type":"ChatProviderError","error_message":"[provider.auth_error] 401 The API Key appears to be invalid or may have expired."}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "kimi", "stop-failure")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capture.hits != 1 {
+		t.Fatalf("daemon calls = %d, want 1", capture.hits)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.Event != "stop-failure" || req.AgentSessionID != "kimi-native-1" {
+		t.Fatalf("request = %#v, want idle stop-failure for kimi-native-1", req)
+	}
+	if req.FinalAssistantMessage != "" || req.TurnUserRequest != "" || req.LatestAssistantUpdate != "" {
+		t.Fatalf("stop-failure reported conversation facts: %#v", req)
+	}
+}
+
+// Kimi's child hooks derive no state; they reach lifecycle only because the
+// payload carries session_id. Lifecycle counts open children from them.
+func TestHooks_KimiSubagentHooksReachLifecycle(t *testing.T) {
+	for event, payload := range map[string]string{
+		"subagent-start": `{"hook_event_name":"SubagentStart","session_id":"kimi-native-1","session_title":"Map the importer","client_type":"kimi_code_cli","cwd":"/work","agent_name":"explore","prompt":"Find the importer"}`,
+		"subagent-stop":  `{"hook_event_name":"SubagentStop","session_id":"kimi-native-1","session_title":"Map the importer","client_type":"kimi_code_cli","cwd":"/work","agent_name":"explore","response":"Found it"}`,
+	} {
+		t.Run(event, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "kimi", event)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if capture.hits != 1 {
+				t.Fatalf("daemon calls = %d, want 1", capture.hits)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.Event != event || req.Harness != "kimi" || req.AgentSessionID != "kimi-native-1" {
+				t.Fatalf("request = %#v, want %s from kimi for kimi-native-1", req, event)
+			}
+		})
+	}
+}
+
 func TestHooks_ClaudeStopCarriesRunningSubagents(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
@@ -939,13 +1037,182 @@ func TestHooks_UserPromptSubmitReportsOnlyMainUserCheckpoint(t *testing.T) {
 }
 
 func TestHookConversationFactsCorrelatesAcceptedReportDelivery(t *testing.T) {
-	prompt := domain.WrapReportDelivery("report-batch:abc123", "Reports since your previous turn:")
-	payload := []byte(`{"prompt":` + mustJSONString(t, prompt) + `,"prompt_id":"native-turn"}`)
-	got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
-	if got.CheckpointOrigin != domain.ConversationCheckpointOriginCoordination ||
-		got.CoordinationID != "report-batch:abc123" || got.LatestUserPrompt != "" {
-		t.Fatalf("conversation facts = %+v", got)
+	// Claude transcript lines 1538, 687, 659, and 1303 from the replay
+	// investigation. Keep the paste boundaries; shorten unrelated report text.
+	tests := []struct {
+		name, prompt, deliveryID string
+	}{
+		{
+			name: "fully wrapped",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7bf824eb-2fd9-4b15-a920-04f0469aac0f">
+Reports since your previous turn:
+
+[stuck] ao://sessions/ao-agentic-testing/ao-agentic-testing-28
+artifact: /evidence/unattended-rebuild-02/create.log
+</ao-report-delivery>
+</pasted_content id="eead">
+`,
+			deliveryID: "report-batch:rpt_7bf824eb-2fd9-4b15-a920-04f0469aac0f",
+		},
+		{
+			name: "partially wrapped",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026">
+Reports since your previous turn:
+
+artifact: /evidence/vnc-headless-6gb-02
+</pasted_content id="eead">
+
+/character-fidelity-result-01.json
+</ao-report-delivery>`,
+			deliveryID: "report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026",
+		},
+		{
+			name: "multiple paste blocks",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026">
+Reports since your previous turn:
+
+artifact: /evidence/vnc-headless-6gb-02
+</pasted_content id="eead">
+
+
+<pasted_content id="eead">
+/character-fidelity-result-01.json
+</ao-report-delivery>
+</pasted_content id="eead">
+`,
+			deliveryID: "report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026",
+		},
+		{
+			name:       "unwrapped",
+			prompt:     domain.WrapReportDelivery("report-batch:rpt_a0cdacc3-6362-43b0-aa86-9030fcdcecf1", "Reports since your previous turn:"),
+			deliveryID: "report-batch:rpt_a0cdacc3-6362-43b0-aa86-9030fcdcecf1",
+		},
+		{
+			name:       "plain closing tag",
+			prompt:     "<pasted_content id=\"eead\">\n" + domain.WrapReportDelivery("report-batch:abc123", "worker finished") + "\n</pasted_content>",
+			deliveryID: "report-batch:abc123",
+		},
+		{
+			name: "multiple paste blocks with plain closing tags",
+			prompt: "<pasted_content id=\"a\"><ao-report-delivery id=\"report-batch:abc123\">worker </pasted_content>\n" +
+				"<pasted_content id=\"b\">finished</ao-report-delivery></pasted_content>",
+			deliveryID: "report-batch:abc123",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `,"prompt_id":"native-turn"}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginCoordination ||
+				got.CoordinationID != tt.deliveryID || got.LatestUserPrompt != "" || got.ProviderTurnID != "native-turn" {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+}
+
+func TestHookConversationFactsPreservesHumanTextAfterReportPaste(t *testing.T) {
+	const deliveryID = "report-batch:abc123"
+	report := domain.WrapReportDelivery(deliveryID, "worker finished")
+	pasteOpen, pasteClose := "<pasted_content id=\"eead\">\n", "\n</pasted_content id=\"eead\">"
+	instruction := "Please stop the worker and wait for my approval."
+	tests := []struct {
+		name, prompt string
+	}{
+		{
+			name:   "instruction inside paste wrapper",
+			prompt: pasteOpen + report + "\n" + instruction + pasteClose,
+		},
+		{
+			name:   "instruction after paste wrapper",
+			prompt: pasteOpen + report + pasteClose + "\n" + instruction,
+		},
+		{
+			name: "instruction after multiple paste blocks",
+			prompt: pasteOpen +
+				"<ao-report-delivery id=\"" + deliveryID + "\">\nworker " + pasteClose +
+				"\n\n" + pasteOpen + "finished\n</ao-report-delivery>" + pasteClose + "\n" + instruction,
+		},
+		{
+			name:   "unmatched paste closer",
+			prompt: report + "\n</pasted_content id=\"eead\">",
+		},
+		{
+			name:   "unmatched plain paste closer",
+			prompt: report + "\n</pasted_content>",
+		},
+		{
+			name: "paste block closed twice",
+			prompt: pasteOpen + "<ao-report-delivery id=\"" + deliveryID + "\">\nworker " + pasteClose +
+				"\n" + pasteOpen + "finished\n</ao-report-delivery>" + pasteClose + "\n</pasted_content>",
+		},
+		{
+			name: "closer for a block a plain closer already closed",
+			prompt: "<ao-report-delivery id=\"" + deliveryID + "\"><pasted_content id=\"a\">worker</pasted_content>" +
+				"<pasted_content id=\"b\">finished</ao-report-delivery></pasted_content id=\"a\">",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman ||
+				got.CoordinationID != deliveryID || got.LatestUserPrompt != tt.prompt {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+}
+
+func TestHookConversationFactsRejectsInvalidReportPastes(t *testing.T) {
+	report := domain.WrapReportDelivery("report-batch:abc123", "worker finished")
+	pasteOpen, pasteClose := "<pasted_content id=\"eead\">\n", "\n</pasted_content id=\"eead\">"
+	wrapped := pasteOpen + report + pasteClose
+	tests := []struct {
+		name, prompt string
+	}{
+		{name: "missing closing tag", prompt: pasteOpen + report},
+		{name: "mismatched paste id", prompt: pasteOpen + report + "\n</pasted_content id=\"other\">"},
+		{name: "malformed opening tag", prompt: "<pasted_content id=eead>\n" + report + pasteClose},
+		{name: "lookalike opening tag", prompt: "<pasted_content_other id=\"eead\">\n" + report + pasteClose},
+		{name: "invalid delivery id", prompt: pasteOpen + domain.WrapReportDelivery("bad value", "worker finished") + pasteClose},
+		{name: "empty delivery id", prompt: pasteOpen + domain.WrapReportDelivery("", "worker finished") + pasteClose},
+		{name: "long delivery id", prompt: pasteOpen + domain.WrapReportDelivery(strings.Repeat("a", 129), "worker finished") + pasteClose},
+		{name: "human text before report", prompt: "Please speed up.\n" + report},
+		{name: "human text before paste", prompt: "Please speed up.\n" + wrapped},
+		{name: "human text inside paste", prompt: pasteOpen + "Please speed up.\n" + report + pasteClose},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman ||
+				got.CoordinationID != "" || got.LatestUserPrompt != tt.prompt {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+	t.Run("other harness", func(t *testing.T) {
+		payload := []byte(`{"prompt":` + mustJSONString(t, wrapped) + `}`)
+		got := hookConversationFacts(domain.HarnessCodex, "user-prompt-submit", payload)
+		if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman || got.CoordinationID != "" || got.LatestUserPrompt != wrapped {
+			t.Fatalf("conversation facts = %+v", got)
+		}
+	})
+	t.Run("domain parser stays strict", func(t *testing.T) {
+		if id, ok := domain.ReportDeliveryID(wrapped); ok || id != "" {
+			t.Fatalf("ReportDeliveryID(wrapped) = %q, %v", id, ok)
+		}
+	})
 }
 
 func TestHooks_SubagentStopCannotReportMainConversationCheckpoint(t *testing.T) {
@@ -1076,6 +1343,7 @@ func TestHookSemanticAcceptanceFacts(t *testing.T) {
 		domain.HarnessPi,
 		domain.HarnessAmp,
 		domain.HarnessPrimeAgent,
+		domain.HarnessMiniMaxCode,
 	} {
 		t.Run(string(harness), func(t *testing.T) {
 			got := hookSemanticAcceptanceFacts(
@@ -1202,7 +1470,7 @@ func TestHookAgentSessionIDReadsClineTaskID(t *testing.T) {
 	}
 }
 
-func TestHooks_ClineSessionStartReportsTaskID(t *testing.T) {
+func TestHooks_ClineSessionStartIgnoresTaskID(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1219,7 +1487,7 @@ func TestHooks_ClineSessionStartReportsTaskID(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
 	}
-	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "cline-task-abc123"}
+	want := setActivityAPIRequest{State: "active", Event: "session-start"}
 	assertActivityRequest(t, req, want)
 }
 
@@ -1327,6 +1595,58 @@ func TestHooks_PostToolUseCarriesCorrelationFields(t *testing.T) {
 	assertActivityRequest(t, req, want)
 }
 
+func TestHooks_ClineTaskIDDoesNotBecomeAgentSessionID(t *testing.T) {
+	for _, payload := range []string{`{"taskId":"conv_123"}`, `{"task_id":"conv_123"}`, `{"session_id":"conv_123"}`} {
+		t.Run(payload, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.AgentSessionID != "" || req.State != "active" {
+				t.Fatalf("hook must report activity without replacing native ID: %+v", req)
+			}
+		})
+	}
+}
+
+func TestHooks_ClineTaskStartCarriesAgentSessionID(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_123","sessionContext":{"rootSessionId":"cline-session-123"},"hookName":"agent_start","taskStart":{"task":"fix restore"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.ObservedAt.IsZero() {
+		t.Fatal("hook omitted its observation time")
+	}
+	req.ObservedAt = time.Time{}
+	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "cline-session-123", Harness: "cline"}
+	if req != want {
+		t.Errorf("body = %+v, want %+v", req, want)
+	}
+}
+
 func TestHooks_EventWithoutToolIdentityOmitsIt(t *testing.T) {
 	// Adapters whose payloads carry no tool fields (codex permission-request
 	// payload here has tool_name only) still tag the event; missing identity
@@ -1391,6 +1711,32 @@ func TestHooks_CodexSessionStartReportsAgentSessionID(t *testing.T) {
 	}
 	want := setActivityAPIRequest{Event: "session-start", AgentSessionID: "codex-native-1"}
 	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_PiSessionStartReportsUsageTranscriptPath(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In: strings.NewReader(`{
+			"session_id":"pi-native-1",
+			"transcript_path":"/ao/data/pi/sessions/pi-native-1.jsonl"
+		}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "pi", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.AgentSessionID != "pi-native-1" || req.TranscriptPath != "/ao/data/pi/sessions/pi-native-1.jsonl" || req.Usage == nil ||
+		req.Usage.Harness != "pi" || req.Usage.TranscriptPath != "/ao/data/pi/sessions/pi-native-1.jsonl" {
+		t.Fatalf("body = %+v", req)
+	}
 }
 
 func TestHooks_CodexBlankSessionIDIsIgnored(t *testing.T) {
@@ -1500,6 +1846,127 @@ func TestHooks_MuseUserPromptReportsActive(t *testing.T) {
 	}
 	want := setActivityAPIRequest{State: "active", Event: "user-prompt-submit", AgentSessionID: "muse-native-1"}
 	assertActivityRequest(t, req, want)
+}
+
+// Every mid-turn sub-command Kimi's managed hook config installs must reach
+// the daemon as an active signal: the tool-use trio and PermissionResult,
+// which the config maps onto AO's canonical permission-resolved event.
+func TestHooks_KimiMidTurnEventsReportActive(t *testing.T) {
+	for _, event := range []string{"pre-tool-use", "post-tool-use", "post-tool-use-failure", "permission-resolved"} {
+		t.Run(event, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(`{"session_id":"kimi-native-1"}`),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "kimi", event)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+			}
+			want := setActivityAPIRequest{State: "active", Event: event, AgentSessionID: "kimi-native-1"}
+			assertActivityRequest(t, req, want)
+		})
+	}
+}
+
+// A tool call alone cannot identify an approval. Old payloads without native
+// approval identity must retain the ID-less compatibility path.
+func TestHooks_KimiToolCallAloneDoesNotIdentifyApproval(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"kimi-native-1","tool_call_id":"call-1"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "kimi", "permission-resolved")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "active", Event: "permission-resolved", AgentSessionID: "kimi-native-1"}
+	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_KimiApprovalIdentityIsScopedAndStable(t *testing.T) {
+	var first string
+	for _, tt := range []struct {
+		name    string
+		event   string
+		payload string
+		same    bool
+	}{
+		{"request", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, true},
+		{"matching result", "permission-resolved", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call","decision":"approved"}`, true},
+		{"another approval for same tool", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_b","tool_call_id":"call"}`, false},
+		{"another turn", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":2,"id":"approval_a","tool_call_id":"call"}`, false},
+		{"background agent", "permission-request", `{"session_id":"native","agent_id":"worker","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, false},
+		{"another native session", "permission-request", `{"session_id":"other","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{In: strings.NewReader(tt.payload), ProcessAlive: func(int) bool { return true }}, "hooks", "kimi", tt.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(req.ToolUseID, "kimi-approval:") || len(req.ToolUseID) > maxActivityMetaLen {
+				t.Fatalf("missing bounded native approval identity: %q", req.ToolUseID)
+			}
+			if first == "" {
+				first = req.ToolUseID
+			}
+			if (req.ToolUseID == first) != tt.same {
+				t.Fatalf("identity equality = %v, want %v", req.ToolUseID == first, tt.same)
+			}
+		})
+	}
+}
+
+func TestActivityMetaDoesNotLiftOtherAgentsToolCallID(t *testing.T) {
+	_, id := activityMeta([]byte(`{"tool_call_id":"unrelated"}`))
+	if id != "" {
+		t.Fatalf("tool_call_id changed shared mapper behavior: %q", id)
+	}
+	_, id = activityMeta([]byte(`{"tool_call_id":"unrelated","tool_use_id":"toolu_1"}`))
+	if id != "toolu_1" {
+		t.Fatalf("tool_use_id was not preserved: %q", id)
+	}
+}
+
+func TestKimiApprovalIncompleteIdentityUsesCompatibilityPath(t *testing.T) {
+	for _, payload := range []string{
+		`{}`, `not json`,
+		`{"session_id":"s","agent_id":"main","turn_id":1}`,
+		`{"id":"a","agent_id":"main","turn_id":1}`,
+		`{"id":"a","session_id":"s","turn_id":1}`,
+		`{"id":"a","session_id":"s","agent_id":"main"}`,
+		`{"id":"a","session_id":"s","agent_id":"main","turn_id":-1}`,
+		`{"id":"a","session_id":"s","agent_id":"main","turn_id":1.5}`,
+		`{"id":"a\u0000b","session_id":"s","agent_id":"main","turn_id":1}`,
+		`{"id":"` + strings.Repeat("a", 257) + `","session_id":"s","agent_id":"main","turn_id":1}`,
+	} {
+		if id := kimiApprovalID([]byte(payload)); id != "" {
+			t.Fatalf("incomplete identity produced correlation %q for %s", id, payload)
+		}
+	}
 }
 
 func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) {
@@ -2371,19 +2838,32 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 	// answer, so the hook decides: the exact submit shapes are allowed, anything
 	// else is denied, and no blocked activity is reported either way.
 	// The shell literal, JSON-escaped for the hook payload; `it'\''s` is the
-	// prompt's shell-escaped single quote.
+	// printf fallback's shell-escaped single quote. Heredoc bodies carry quotes,
+	// $(...), and backticks verbatim because the quoted delimiter disables
+	// expansion.
 	const submitJSON = `'{ \"reviews\": [ { \"runId\": \"run-1\", \"verdict\": \"approved\", \"body\": \"it'\\''s fine\" } ] }'`
 	cases := []struct {
 		name    string
 		payload string
 		want    string
 	}{
-		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "allow"},
+		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "deny"},
 		{"gh api review post", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"ok\" }' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'"}}`, "allow"},
-		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --reviews -"}}`, "deny"},
-		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"heredoc submit", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.json <<'EOF'\n{}\nEOF\nao review submit --session worker-7 --reviews - < /tmp/r.json"}}`, "deny"},
+		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"single-run body pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'it'\\''s fine' | ao review submit --session worker-7 --run run-1 --verdict approved --review-id 42 --body -"}}`, "allow"},
+		{"gh api review heredoc", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{\n  \"event\": \"COMMENT\",\n  \"body\": \"it's $(fine) ` + "`ok`" + `\"\n}\nAO_REVIEW_EOF"}}`, "allow"},
+		{"single-run body heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict changes_requested --review-id 42 --body - <<'AO_REVIEW_EOF'\n## Review\nThe worker's nil check doesn't run.\nAO_REVIEW_EOF\n"}}`, "allow"},
+		{"single-run heredoc without review id", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nLooks good.\nAO_REVIEW_EOF"}}`, "allow"},
+		{"batch heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews - <<'AO_REVIEW_EOF'\n{ \"reviews\": [] }\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc for other worker session", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-9 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc body ends early then runs a command", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc with command after terminator", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned"}}`, "deny"},
+		{"unquoted heredoc delimiter", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<AO_REVIEW_EOF\n$(id)\nAO_REVIEW_EOF"}}`, "deny"},
+		{"other heredoc delimiter", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'EOF'\nok\nEOF"}}`, "deny"},
+		{"indented heredoc terminator", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\n    AO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc into a file", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.json <<'AO_REVIEW_EOF'\n{}\nAO_REVIEW_EOF\nao review submit --session worker-7 --reviews - < /tmp/r.json"}}`, "deny"},
 		{"env inspection", `{"tool_name":"Bash","tool_input":{"command":"pip3 show pkg | sed -n 1p; cat \"$(pip3 show pkg)\" || python3 -c \"print(1)\""}}`, "deny"},
 		{"non-bash tool", `{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}`, "deny"},
 	}
@@ -2427,22 +2907,26 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 }
 
 func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "ao-worker")
-	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
-	cfg := setConfigEnv(t)
-	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
-	writeRunFileFor(t, cfg, srv)
-	payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
-	_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", "claude-code", "user-prompt-submit")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var req setActivityAPIRequest
-	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
-		t.Fatal(err)
-	}
-	if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
-		t.Fatalf("hook facts=%+v", req)
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessMiniMaxCode} {
+		t.Run(string(harness), func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-worker")
+			t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
+			_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", string(harness), "user-prompt-submit")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
+				t.Fatalf("hook facts=%+v", req)
+			}
+		})
 	}
 }
 
@@ -2482,6 +2966,7 @@ func TestClaudeHookDeniesFirstArtifactUseOnly(t *testing.T) {
 	if got.HookSpecificOutput.HookEventName != "PreToolUse" ||
 		got.HookSpecificOutput.PermissionDecision != "deny" ||
 		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "html_render") ||
+		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "call Artifact again") ||
 		strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "ao report") {
 		t.Fatalf("unexpected decision: %+v", got)
 	}
@@ -2504,5 +2989,80 @@ func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
 	}, "hooks", "claude-code", "pre-tool-use")
 	if err != nil || stdout != "" {
 		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+}
+
+// Claude Code's built-in computer use tells the user to grant "the Claude
+// desktop app"; inside AO macOS checks Orchestrator. The hook answers that
+// refusal with a notice for the user and corrected guidance for the model,
+// and stays silent for every other tool result.
+func TestClaudeHookAnswersComputerUsePermissionRefusal(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv(envDesktopApp, "1")
+	cfg := setConfigEnv(t)
+	srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	run := func(agent, event string, payload map[string]any) string {
+		t.Helper()
+		body, _ := json.Marshal(payload)
+		stdout, _, err := executeCLI(t, Deps{In: strings.NewReader(string(body)), ProcessAlive: func(int) bool { return true }}, "hooks", agent, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout
+	}
+	refused := map[string]any{
+		"session_id": "native",
+		"tool_name":  "mcp__computer-use__request_access",
+		"tool_response": []map[string]string{{"type": "text", "text": "The user saw the permission prompt but macOS Accessibility permission(s) are still not granted. " +
+			"Do not retry in this turn. Let the user know these permissions need to be granted in the Claude desktop app."}},
+	}
+
+	for _, event := range []string{"post-tool-use", "post-tool-use-failure"} {
+		var got claudePostToolUseOutput
+		if err := json.Unmarshal([]byte(run("claude-code", event, refused)), &got); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+		wantEvent := map[string]string{"post-tool-use": "PostToolUse", "post-tool-use-failure": "PostToolUseFailure"}[event]
+		if got.HookSpecificOutput.HookEventName != wantEvent ||
+			!strings.Contains(got.SystemMessage, "Settings > Computer use agents > Native computer use > Grant macOS permissions to Orchestrator") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "Ignore the advice to grant Claude") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "restart") {
+			t.Fatalf("%s: unexpected output %+v", event, got)
+		}
+	}
+
+	failure := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "error": "Screen Recording permission(s) are still not granted"}
+	if out := run("claude-code", "post-tool-use-failure", failure); !strings.Contains(out, "Grant macOS permissions to Orchestrator") {
+		t.Fatalf("refusal in error field not answered: %q", out)
+	}
+
+	granted := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "tool_response": "ok"}
+	otherTool := map[string]any{"session_id": "native", "tool_name": "Bash", "tool_response": "permission not granted"}
+	// The user declining one app is not a macOS refusal: Claude's own
+	// explanation stands.
+	appDeclined := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__request_access", "tool_response": "Access to Safari was not granted."}
+	onScreenText := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "tool_response": "Window text: permission not granted"}
+	for name, tc := range map[string]struct {
+		agent, event string
+		payload      map[string]any
+	}{
+		"granted result":   {"claude-code", "post-tool-use", granted},
+		"other tool":       {"claude-code", "post-tool-use", otherTool},
+		"pre-tool-use":     {"claude-code", "pre-tool-use", refused},
+		"non-Claude agent": {"codex", "post-tool-use", refused},
+		"app declined":     {"claude-code", "post-tool-use", appDeclined},
+		"on-screen text":   {"claude-code", "post-tool-use", onScreenText},
+	} {
+		if out := run(tc.agent, tc.event, tc.payload); out != "" {
+			t.Fatalf("%s produced output: %q", name, out)
+		}
+	}
+
+	// A daemon started from a terminal: macOS checks that terminal, so
+	// Claude's own advice is left alone.
+	t.Setenv(envDesktopApp, "")
+	if out := run("claude-code", "post-tool-use", refused); out != "" {
+		t.Fatalf("CLI-started daemon produced output: %q", out)
 	}
 }

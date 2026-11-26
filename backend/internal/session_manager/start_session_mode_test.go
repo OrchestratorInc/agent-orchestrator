@@ -9,7 +9,7 @@ import (
 )
 
 // The cloud control plane resolves a cloud session's interface with the same
-// precedence, against the same cases (cloud/internal/domain), so a change to
+// precedence, against the same cases (the control plane's internal/domain), so a change to
 // either side fails the other's test until both agree.
 func TestStartSessionModeMatchesTheSharedCases(t *testing.T) {
 	raw, err := os.ReadFile("../../../contracts/session-start-interface.json")

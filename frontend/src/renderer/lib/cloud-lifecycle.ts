@@ -1,4 +1,6 @@
 import type { WorkspaceSession } from "../types/workspace";
+import type { CloudCpClient } from "./cloud-cp";
+import { FREESTYLE_PROVIDER } from "./cloud-offering";
 
 export type CloudLifecycleStage =
 	| "paused_by_coder"
@@ -12,6 +14,31 @@ export type CloudLifecycleStage =
 /** A stage where the sandbox is paused on purpose (no startup loader). */
 export function isCloudPausedStage(stage: CloudLifecycleStage | undefined): stage is "paused" | "paused_by_coder" {
 	return stage === "paused" || stage === "paused_by_coder";
+}
+
+/** Sandbox states of a session being created or woken, before its worker connects. */
+const STARTING_SANDBOX_STATES = new Set(["requested", "provisioning", "bootstrapping", "stopped", "restoring"]);
+
+/**
+ * Sandbox states in which a session meant to run can still lack its worker: the
+ * sandbox is up (or its start failed and is retried) but the worker has not
+ * connected, or has disconnected, as with a stalled worker.
+ */
+const WORKER_PENDING_SANDBOX_STATES = new Set([...STARTING_SANDBOX_STATES, "running", "failed"]);
+
+/**
+ * A Freestyle Chat session starting, waking, or waiting on a worker that is not
+ * connected (including a running sandbox whose worker dropped): it stays on its conversation
+ * (no startup screen), its composer shimmers, and messages queue until its
+ * worker connects. Other providers start behind the startup screen, which
+ * shows a Coder start's steps and workspace link.
+ */
+export function cloudChatStartingInPlace(session?: WorkspaceSession): boolean {
+	const cloud = session?.cloud;
+	if (session?.mode !== "chat" || cloud?.sandboxProvider !== FREESTYLE_PROVIDER || session.runtimeConnected) return false;
+	// Only a session meant to run is starting: a paused one keeps its badge, and
+	// one being deleted (or archived) is going away, not getting ready.
+	return cloud.desiredState === "running" && WORKER_PENDING_SANDBOX_STATES.has(cloud.observedState ?? "");
 }
 
 /**
@@ -82,6 +109,7 @@ export const WORKSPACE_STARTUP_ERROR_CODES: ReadonlySet<string> = new Set([
 	"working_directory_occupied",
 	"project_setup_failed",
 	"agent_start_failed",
+	"conversation_restore_failed",
 ]);
 
 export function isWorkspaceStartupError(code?: string): boolean {
@@ -107,4 +135,82 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	}
 	if (final) return { phase: "unavailable", message: lifecycle.runtimeError?.trim() || undefined };
 	return undefined;
+}
+
+/**
+ * Whether the session's worker can answer workspace reads: it is connected and
+ * its sandbox runs. A worker that has just connected can still be preparing
+ * its workspace; cloud-worker-starting holds its reads back until it answers.
+ */
+export function cloudWorkerAnswering(session?: WorkspaceSession): boolean {
+	if (!session?.cloud || session.runtimeConnected !== true) return false;
+	const stage = cloudLifecycleStage(session);
+	return stage === "connected" || stage === undefined;
+}
+
+/**
+ * The requests that (re)start a cloud session's startup: waking it, asking its
+ * worker to prepare the workspace again, and restoring it. One of each is in
+ * flight per session; every caller shares it.
+ */
+export type CloudSessionStartRequest = "resume" | "checkout" | "restore";
+
+const startRequestsInFlight = new Map<string, Promise<unknown>>();
+const startRequestListeners = new Set<() => void>();
+
+function notifyStartRequests() {
+	for (const listener of startRequestListeners) listener();
+}
+
+function shareStartRequest<T>(kind: CloudSessionStartRequest, orgId: string, sessionId: string, send: () => Promise<T>): Promise<T> {
+	const key = `${kind}:${orgId}/${sessionId}`;
+	const pending = startRequestsInFlight.get(key);
+	if (pending) return pending as Promise<T>;
+	let sent: Promise<T>;
+	try {
+		sent = Promise.resolve(send());
+	} catch (error) {
+		sent = Promise.reject(error);
+	}
+	const request = sent.finally(() => {
+		startRequestsInFlight.delete(key);
+		notifyStartRequests();
+	});
+	startRequestsInFlight.set(key, request);
+	notifyStartRequests();
+	return request;
+}
+
+/** Whether a resume, workspace checkout or restore of the session is in flight. */
+export function cloudSessionStartRequestInFlight(orgId: string, sessionId: string): boolean {
+	const suffix = `:${orgId}/${sessionId}`;
+	for (const key of startRequestsInFlight.keys()) if (key.endsWith(suffix)) return true;
+	return false;
+}
+
+export function subscribeCloudSessionStartRequests(listener: () => void): () => void {
+	startRequestListeners.add(listener);
+	return () => { startRequestListeners.delete(listener); };
+}
+
+/**
+ * Asks the control plane to resume a cloud session, sharing a request already
+ * in flight for it: opening a session asks from both its view and its Chat,
+ * and one request wakes it. Other sessions resume in parallel.
+ */
+export function resumeCloudSession(client: Pick<CloudCpClient, "resumeSession">, orgId: string, sessionId: string): Promise<unknown> {
+	return shareStartRequest("resume", orgId, sessionId, () => client.resumeSession(orgId, sessionId));
+}
+
+/**
+ * Asks the session's worker to prepare its workspace again (which retries a
+ * failed checkout or Setup), sharing a request already in flight for it.
+ */
+export function requestCloudWorkspaceCheckout(client: Pick<CloudCpClient, "requestWorkspaceCheckout">, orgId: string, sessionId: string): Promise<unknown> {
+	return shareStartRequest("checkout", orgId, sessionId, () => client.requestWorkspaceCheckout(orgId, sessionId));
+}
+
+/** Restores a deleted cloud session, sharing a request already in flight for it. */
+export function restoreCloudSession(client: Pick<CloudCpClient, "restoreSession">, orgId: string, sessionId: string): Promise<unknown> {
+	return shareStartRequest("restore", orgId, sessionId, () => client.restoreSession(orgId, sessionId));
 }

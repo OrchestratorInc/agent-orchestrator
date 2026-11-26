@@ -20,6 +20,30 @@ import type {
 
 export const CODER_PROVIDER = "coder";
 export const FREESTYLE_PROVIDER = "freestyle";
+/** Offering feature that lets an organization share sessions (WorkOS metadata feature=share). */
+export const SHARE_FEATURE = "share";
+/** Offering feature of a control plane that starts Cloud standalone agents (POST /orgs/{orgId}/standalone-agents). */
+export const STANDALONE_AGENTS_FEATURE = "standalone_agents";
+/** Offering feature the control plane sends while its session attachment routes are on. */
+export const ATTACHMENTS_FEATURE = "attachments";
+/** Offering feature the control plane sends when a queued chat message can be edited (editQueuedMessage). */
+export const QUEUED_EDIT_FEATURE = "queued-edit";
+/** Offering feature the control plane sends when a queued message can be deleted without stopping a started turn (deleteQueuedMessage). */
+export const QUEUED_DELETE_FEATURE = "queued-delete";
+/**
+ * Offering feature the control plane sends when a queued message can be steered into the
+ * running turn (steerQueuedMessage), with the outcome recorded on the queued turn's events.
+ */
+export const QUEUED_STEER_FEATURE = "queued-steer";
+/**
+ * Offering feature the control plane sends when a project whose sessions run on
+ * Coder may run its orchestrator on Coder too (config.orchestratorSandboxProvider
+ * "coder") instead of the instant VM it gets by default: the deployment offers
+ * Coder and Freestyle, and the org may run Coder as its own.
+ */
+export const ORCHESTRATOR_ON_CODER_FEATURE = "orchestrator-on-coder";
+/** The largest Cloud attachment when the control plane takes files but names no limit. */
+export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export interface ResolvedCloudOffering {
 	providers: string[];
@@ -29,6 +53,12 @@ export interface ResolvedCloudOffering {
 	/** Undefined while a fallback still waits on the billing summary. */
 	billingMode: CloudCpBillingMode | undefined;
 	features: string[];
+	/**
+	 * The largest file a Cloud session takes as an attachment; undefined when
+	 * the control plane takes none (no attachments feature), so no surface
+	 * offers to attach.
+	 */
+	maxAttachmentBytes: number | undefined;
 	/**
 	 * The org may connect its own Coder deployment (it holds the coder
 	 * capability), which shows the Coder settings page. An older control plane
@@ -114,6 +144,9 @@ export function resolveCloudOffering(
 			kind: offering.kind ?? offeringKindFor(providers),
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
+			maxAttachmentBytes: offering.features?.includes(ATTACHMENTS_FEATURE)
+				? (offering.maxAttachmentBytes && offering.maxAttachmentBytes > 0 ? offering.maxAttachmentBytes : CLOUD_MAX_ATTACHMENT_BYTES)
+				: undefined,
 			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
 			artifacts: offering.artifacts ?? false,
 			coderWorkerWorkingFolder: offering.coderWorkerWorkingFolder === true,
@@ -130,6 +163,7 @@ export function resolveCloudOffering(
 		kind: offeringKindFor(providers),
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
+		maxAttachmentBytes: undefined,
 		customCoder: providers.includes(CODER_PROVIDER),
 		artifacts: false,
 		coderWorkerWorkingFolder: false,

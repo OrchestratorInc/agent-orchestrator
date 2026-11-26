@@ -1,5 +1,4 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
 import type {
 	CloudCpClient,
 	CloudCpClientEvent,
@@ -10,7 +9,8 @@ import type {
 	CloudCpWorkspaceReviewSearchQuery,
 } from "../lib/cloud-cp";
 import { CloudCpError, workspaceRepositoryOf } from "../lib/cloud-cp";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { cloudWorkerReadRetry, cloudWorkerRequest, recordCloudWorkspaceStartupEvent } from "../lib/cloud-worker-starting";
+import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 
 export const cloudWorkspaceReviewQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
 	["cloud-workspace-review", baseUrl, orgId, sessionId] as const;
@@ -37,10 +37,16 @@ export function cloudWorkspaceReviewSummaryQueryOptions(args: {
 	const { client, baseUrl, orgId, sessionId } = args;
 	return {
 		queryKey: [...repositoryKey(client, baseUrl, orgId, sessionId), "summary"] as const,
-		queryFn: () => client.getWorkspaceReview(orgId, sessionId),
+		// The summary is the session's first workspace read, so its answer tells
+		// every other read whether the worker is still preparing the workspace.
+		queryFn: () => cloudWorkerRequest(orgId, sessionId, () => client.getWorkspaceReview(orgId, sessionId)),
 		enabled: args.enabled ?? true,
 		refetchInterval: args.visible === false ? false as const : 5_000,
-		retry: cloudWorkspaceReviewRetry,
+		// A worker still preparing its workspace is asked again after its
+		// Retry-After (or a growing wait) while the panel keeps loading, not
+		// every poll, for as long as the session's starting budget lasts
+		// (cloud-worker-starting).
+		...cloudWorkerReadRetry(orgId, sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -50,11 +56,14 @@ export function cloudWorkspaceReviewTreeQueryOptions(args: {
 	orgId: string;
 	sessionId: string;
 	path?: string;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	return {
 		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "tree", args.path ?? ""] as const,
-		queryFn: () => args.client.getWorkspaceReviewTree(args.orgId, args.sessionId, args.path),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewTree(args.orgId, args.sessionId, args.path)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -64,12 +73,15 @@ export function cloudWorkspaceReviewSearchQueryOptions(args: {
 	orgId: string;
 	sessionId: string;
 	query: CloudCpWorkspaceReviewSearchQuery;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	return {
 		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "search", args.query.query, args.query.cursor ?? "", args.query.limit ?? 50] as const,
 		queryFn: ({ signal }: { signal?: AbortSignal } = {}) =>
-			args.client.searchWorkspaceReview(args.orgId, args.sessionId, args.query, { signal }),
-		retry: cloudWorkspaceReviewRetry,
+			cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.searchWorkspaceReview(args.orgId, args.sessionId, args.query, { signal })),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -81,12 +93,15 @@ export function cloudWorkspaceReviewFileQueryOptions(args: {
 	path: string;
 	scope?: CloudCpWorkspaceReviewScope;
 	commitSha?: string;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	const query: CloudCpWorkspaceReviewFileQuery = { path: args.path, scope: args.scope, commitSha: args.commitSha };
 	return {
 		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "file", args.scope ?? "combined", args.commitSha ?? "", args.path] as const,
-		queryFn: () => args.client.getWorkspaceReviewFile(args.orgId, args.sessionId, query),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewFile(args.orgId, args.sessionId, query)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -101,6 +116,8 @@ export function cloudWorkspaceReviewDiffsQueryOptions(args: {
 	ignoreWhitespace?: boolean;
 	workspaceVersion?: string;
 	commitSha?: string;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	const body: CloudCpWorkspaceReviewDiffsRequest = {
 		scope: args.scope,
@@ -115,8 +132,9 @@ export function cloudWorkspaceReviewDiffsQueryOptions(args: {
 			...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "diffs", args.scope,
 			args.commitSha ?? "", [...args.paths], body.contextLines, body.ignoreWhitespace, args.workspaceVersion ?? "",
 		] as const,
-		queryFn: () => args.client.getWorkspaceReviewDiffs(args.orgId, args.sessionId, body),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewDiffs(args.orgId, args.sessionId, body)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -126,14 +144,17 @@ export function cloudWorkspaceReviewRevisionQueryOptions(args: {
 	orgId: string;
 	sessionId: string;
 	query: CloudCpWorkspaceReviewRevisionQuery;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	return {
 		queryKey: [
 			...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "revision", args.query.scope ?? "combined",
 			args.query.commitSha ?? "", args.query.side ?? "after", args.query.path, args.query.workspaceVersion ?? "", args.query.expectedRevision ?? "",
 		] as const,
-		queryFn: () => args.client.getWorkspaceReviewRevision(args.orgId, args.sessionId, args.query),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewRevision(args.orgId, args.sessionId, args.query)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -158,17 +179,15 @@ export function useCloudWorkspaceReviewEvents(args: {
 	enabled: boolean;
 }): void {
 	const queryClient = useQueryClient();
-	useEffect(() => {
-		if (!args.enabled || !args.orgId || !args.baseUrl) return;
-		const abort = new AbortController();
-		const key = cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId);
-		void subscribeSessionEventsBridged({
-			baseUrl: args.baseUrl,
-			orgId: args.orgId,
-			sessionId: args.sessionId,
-			signal: abort.signal,
-			onEvent: (event) => { void invalidateCloudWorkspaceReviewEvent(queryClient, key, event); },
-		});
-		return () => abort.abort();
-	}, [args.baseUrl, args.enabled, args.orgId, args.sessionId, queryClient]);
+	useCloudSessionEventListener({
+		baseUrl: args.baseUrl,
+		orgId: args.orgId,
+		sessionId: args.sessionId,
+		enabled: args.enabled,
+		onEvent: (event) => {
+			if (!args.orgId) return;
+			recordCloudWorkspaceStartupEvent(args.orgId, args.sessionId, event);
+			void invalidateCloudWorkspaceReviewEvent(queryClient, cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), event);
+		},
+	});
 }

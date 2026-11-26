@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
-import { useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, type WorkspaceSession } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, type WorkspaceSession } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost, type WorkspaceScope } from "./useWorkspaceQuery";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -12,13 +12,21 @@ import {
 	type OrchestratorSpawnSource,
 } from "../lib/spawn-orchestrator";
 import { formatOrchestratorStartupError } from "../lib/orchestrator-startup-error";
-import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
+import { addRendererExceptionStep, captureRendererException } from "../lib/telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useCanResumeAgent } from "./useCanResumeAgent";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
+import { apiErrorCode } from "../lib/api-client";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useConnectedHosts } from "./useHostConnection";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
+import type { CloudCpSession } from "../lib/cloud-cp";
+
+function isCachedFreestyleSession(queryClient: QueryClient, sessionId: string): boolean {
+	return queryClient.getQueriesData<CloudCpSession[]>({ queryKey: cloudSessionsQueryKey })
+		.some(([, sessions]) => sessions?.some((session) => session.id === sessionId && session.sandboxProvider === FREESTYLE_PROVIDER));
+}
 
 export function useProjectOrchestratorAction({
 	projectId,
@@ -90,13 +98,20 @@ export function useProjectOrchestratorAction({
 			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
-			const openedSessionId = hostId
-				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
-				: resumableOrchestrator
-				? (await earlyResume, resumableOrchestrator.id)
-				: project?.kind === CLOUD_PROJECT_KIND
-					? await spawnCloudOrchestrator(queryClient, projectId)
-					: await spawnOrchestrator(projectId, source, false, mode);
+			let openedSessionId: string;
+			try {
+				openedSessionId = hostId
+					? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
+					: resumableOrchestrator
+					? (await earlyResume, resumableOrchestrator.id)
+					: project?.kind === CLOUD_PROJECT_KIND
+						? await spawnCloudOrchestrator(queryClient, projectId)
+						: await spawnOrchestrator(projectId, source, false, mode);
+			} catch (cause) {
+				if (apiErrorCode(cause) !== "AGENT_REQUIRED" || activeRoute.current !== routeKey) throw cause;
+				useUiStore.getState().openProjectSettings(projectId, { hostId, section: "agents" });
+				return;
+			}
 			await queryClient.invalidateQueries({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),
 			});
@@ -104,7 +119,11 @@ export function useProjectOrchestratorAction({
 			// A completed request belongs to its original route, even if this
 			// component survived a project or session change while it was pending.
 			if (!earlyResume && activeRoute.current === routeKey) {
-				void navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
+				const opening = navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
+				// A Freestyle orchestrator starts in place: the open stays pending
+				// until its route has rendered, so the board's starting view hands
+				// straight over to the session instead of showing the board between.
+				if (project?.kind === CLOUD_PROJECT_KIND && isCachedFreestyleSession(queryClient, openedSessionId)) await opening;
 			}
 		},
 		onError: (cause) => {
@@ -123,23 +142,18 @@ export function useProjectOrchestratorAction({
 			source: "orchestrator-open", operation: "open_orchestrator",
 			surface: sessionId ? "session_detail" : "project_board", project_id: projectId,
 		});
-		void captureRendererEvent("ao.renderer.orchestrator_open_requested", { project_id: projectId });
-		if (hostId && projectId && !orchestrator && project && !hasConfiguredOrchestratorAgent(project)) {
-			useUiStore.getState().openProjectSettings(projectId, hostId);
-		} else if (resumableOrchestrator) {
+		if (resumableOrchestrator) {
 			mutation.mutate(mode);
 		} else if (orchestrator) {
 			void navigate(sessionNavigateTarget(projectId, orchestrator.id, hostId));
-		} else if (project?.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
-			if (project) useUiStore.getState().openProjectSettings(projectId, hostId);
-		} else {
+		} else if (project) {
 			mutation.mutate(mode);
 		}
 	};
 	const openNewTask = () => {
 		if (projectId && hostConnected && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
 	};
-	return { projectId, orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
+	return { projectId, hostId, orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
 		canCreateAsTui: isChatPreflightError(error), openOrchestrator, openNewTask };
 }
 

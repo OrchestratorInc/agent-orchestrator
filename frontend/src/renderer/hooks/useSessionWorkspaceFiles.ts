@@ -1,16 +1,19 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
 import { appI18n } from "../i18n";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { aoBridge } from "../lib/bridge";
 import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
 import { CHECKED_OUT_BRANCH, buildReviewTarget, defaultChanges, followsDefaultSelection, isLegacyManifest, workspaceSelectionKey } from "../lib/files-review-selection";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { fileMediaKind } from "../lib/file-media";
 import { artifactContentUrl } from "../lib/artifact-content-url";
-import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
+import { WORKSPACE_REVIEW_BATCH_SIZE, WORKSPACE_REVIEW_PAGE_SIZE } from "../lib/workspace-review";
 import { useUiStore } from "../stores/ui-store";
 import {
 	getWorkspaceFileConnectionState,
@@ -78,7 +81,10 @@ export type FilesSource =
 	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
 	 * `artifactRoot` is the URL relative links resolve against.
 	 */
-	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void };
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; /** Offers no feedback to the worker, as for an archived session's files. */ noFeedback?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave; savedVersion?: number };
+
+/** Saves an edit of an artifact file somewhere other than the local daemon, as a cloud session's control plane. */
+export type ArtifactSave = (input: { path: string; content: string; expectedFileFingerprint: string }) => Promise<{ fileFingerprint: string; size: number }>;
 
 /** The branch the Files review reads. Only the checked-out branch reads the worktree; the others read revisions. */
 export type FilesBranchTarget =
@@ -124,7 +130,7 @@ export type ReviewTarget = {
 	/** Set when exactly one commit is picked. */
 	sha?: string;
 	subject?: string;
-	/** Historical targets carry their source when opening a file. */
+	/** Historical targets carry their source when opening a file; false until that source is fenced to a tip. */
 	openable: boolean;
 	source?: FilesSource;
 	state: "ready" | "pending" | "error" | "not_combinable";
@@ -134,6 +140,7 @@ export type ReviewTarget = {
 
 /** A failed workspace read that keeps the daemon's error code, for callers that act on it. */
 export class WorkspaceRequestError extends Error {
+	readonly telemetryCode: string = "WORKSPACE_REQUEST_ERROR";
 	constructor(
 		message: string,
 		readonly code?: string,
@@ -152,6 +159,48 @@ export function workspaceErrorCode(error: unknown): string | undefined {
 	return error instanceof WorkspaceRequestError ? error.code : undefined;
 }
 
+export function isMissingWorkspaceError(error: unknown): boolean {
+	return error instanceof WorkspaceRequestError && error.code === "PROJECT_FOLDER_MISSING" && error.status === 404;
+}
+
+export function isStaleWorkspaceSnapshotError(error: unknown): boolean {
+	return error instanceof WorkspaceRequestError && error.code === "WORKSPACE_SNAPSHOT_STALE" && error.status === 409;
+}
+
+const missingWorkspaces = new Map<string, { error: WorkspaceRequestError; expiresAt: number }>();
+const MISSING_WORKSPACE_TTL_MS = 60_000;
+const workspaceRecoveryEpochs = new Map<string, number>();
+const missingWorkspaceKey = (sessionId: string, hostId?: string) => sessionUiKey(sessionId, hostId);
+
+export function workspaceRecoveryEpoch(sessionId: string, hostId?: string): number {
+	return workspaceRecoveryEpochs.get(missingWorkspaceKey(sessionId, hostId)) ?? 0;
+}
+
+export function clearMissingWorkspace(sessionId: string, hostId?: string): void {
+	const key = missingWorkspaceKey(sessionId, hostId);
+	missingWorkspaces.delete(key);
+	workspaceRecoveryEpochs.set(key, workspaceRecoveryEpoch(sessionId, hostId) + 1);
+}
+
+export function knownMissingWorkspace(sessionId: string, hostId?: string): WorkspaceRequestError | undefined {
+	const key = missingWorkspaceKey(sessionId, hostId);
+	const entry = missingWorkspaces.get(key);
+	if (entry && entry.expiresAt <= Date.now()) {
+		missingWorkspaces.delete(key);
+		return undefined;
+	}
+	return entry?.error;
+}
+
+export function recordWorkspaceResult(sessionId: string, hostId: string | undefined, error: unknown, response: Response | undefined, fallback: string, epoch = workspaceRecoveryEpoch(sessionId, hostId)): WorkspaceRequestError {
+	const typed = workspaceRequestError(error, response, fallback);
+	if (isMissingWorkspaceError(typed) && epoch === workspaceRecoveryEpoch(sessionId, hostId)) {
+		missingWorkspaces.set(missingWorkspaceKey(sessionId, hostId), { error: typed, expiresAt: Date.now() + MISSING_WORKSPACE_TTL_MS });
+		if (missingWorkspaces.size > 256) missingWorkspaces.delete(missingWorkspaces.keys().next().value!);
+	}
+	return typed;
+}
+
 /**
  * Retries a failed read up to three times, except a 4xx answer: it comes back
  * the same every time, and the recovery keyed on its code (a moved tip, a gone
@@ -167,11 +216,15 @@ export const sessionWorkspaceFilesQueryKey = (sessionId: string, hostId?: string
 const WORKSPACE_FILES_DEGRADED_REFETCH_MS = 30_000;
 const MAX_ARTIFACT_TEXT_BYTES = 256 * 1024;
 
-async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
-	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
+async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string, signal?: AbortSignal): Promise<WorkspaceFilesResponse> {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
+	const { data, error, response: httpResponse } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
 		params: { path: { sessionId } },
+		signal,
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, httpResponse, errorMessage, epoch);
 	const response = (data ? { ...data, commits: [] } : {
 		sessionId,
 		files: [],
@@ -188,14 +241,18 @@ async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: strin
 	};
 }
 
-async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH): Promise<WorkspaceHistoryResponse> {
+async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH, signal?: AbortSignal): Promise<WorkspaceHistoryResponse> {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const query = branch.kind === "branch" ? { branch: branch.name }
 		: branch.kind === "pull_request" ? { prNumber: branch.number, sourceUrl: branch.url || undefined }
 		: undefined;
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/history", {
 		params: query ? { path: { sessionId }, query } : { path: { sessionId } },
+		signal,
 	});
-	if (error) throw workspaceRequestError(error, response, errorMessage);
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
 	return {
 		...data,
@@ -204,10 +261,13 @@ async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: str
 }
 
 async function fetchSessionWorkspaceBranches(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceBranches> {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/branches", {
 		params: { path: { sessionId } },
 	});
-	if (error) throw workspaceRequestError(error, response, errorMessage);
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
 	return { ...data, branches: data.branches ?? [] };
 }
@@ -254,7 +314,7 @@ async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope:
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/file", {
 		params: { path: { sessionId }, query: { path, section: scope === "combined" ? undefined : scope, commitSha } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw apiErrorException(error, errorMessage);
 	if (!data) throw new Error(errorMessage);
 	return data as WorkspaceFileDetail;
 }
@@ -281,16 +341,18 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file", {
 		params: { path: { sessionId, prNumber: number }, query: { path, previousPath, sourceUrl, commitSha } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw apiErrorException(error, errorMessage);
 	if (!data) throw new Error(errorMessage);
 	return data as WorkspaceFileDetail;
 }
 
-/** Cloud artifact files read as text; any other cloud file is shown as binary. */
-export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|ya?ml|toml|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|html?)$/i;
+/** Cloud artifact files read as text at once; any other cloud file is read as text when it is small UTF-8 (cloudArtifactText). */
+export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|diff|patch|html?)$/i;
 
 /** A cloud artifact read refused because the access prefix expired or the user lost access. */
-export class CloudArtifactAccessError extends Error {}
+export class CloudArtifactAccessError extends Error {
+	readonly code: string = "CLOUD_ARTIFACT_ACCESS_ERROR";
+}
 
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the
@@ -299,7 +361,8 @@ export class CloudArtifactAccessError extends Error {}
 // instead, explicitly selecting the artifact root. Remote proxy and cloud URLs
 // already identify their content endpoint and must keep their original routing.
 // A cloud file is read through the cloud bridge, which carries the whole body
-// as text; media and other non-text files are asked for with HEAD only.
+// as text; media and other non-text files are asked for with HEAD only, and a
+// small one is then read as bytes and kept as text when it is UTF-8.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string, cloud = false): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
 	const contentUrl = cloud ? rawUrl : artifactContentUrl(sessionId, path, rawUrl);
@@ -312,11 +375,14 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 	if (cloud && (response.status === 401 || response.status === 403)) throw new CloudArtifactAccessError(appI18n.t("artifacts.accessError"));
 	if (cloud && response.status === 404) throw new Error(appI18n.t("artifacts.unavailable"));
 	if (!response.ok) throw new Error(errorMessage);
-	const { binary, bytes, content, size, truncated } = media || headOnly
-		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
-		: await readArtifactTextResponse(response);
-	// Only a complete local text file can be edited: the save sends it back whole.
-	const editable = !cloud && !binary && !truncated;
+	const headSize = Number(response.headers.get("content-length")) || 0;
+	const sniffed = headOnly && !media ? await cloudArtifactText(contentUrl, headSize) : undefined;
+	const { binary, bytes, content, size, truncated } = sniffed
+		?? (media || headOnly
+			? { binary: true, bytes: new Uint8Array(), content: "", size: headSize, truncated: false }
+			: await readArtifactTextResponse(response));
+	// Only a complete text file can be edited: the save sends it back whole.
+	const editable = !binary && !truncated;
 	return {
 		additions: 0,
 		binary,
@@ -336,6 +402,22 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		status: "unmodified",
 		workspaceVersion: "",
 	};
+}
+
+/**
+ * A cloud file without a text extension, read as bytes when it is small and
+ * kept as text when they are UTF-8; undefined leaves it binary.
+ */
+async function cloudArtifactText(url: string, size: number): Promise<{ binary: boolean; bytes: Uint8Array; content: string; size: number; truncated: boolean } | undefined> {
+	if (size <= 0 || size > MAX_ARTIFACT_TEXT_BYTES) return undefined;
+	let bytes: Uint8Array;
+	try {
+		bytes = await aoBridge.cloudArtifact.fetch(url);
+	} catch {
+		return undefined;
+	}
+	const decoded = decodeArtifactText(bytes, false);
+	return decoded.binary ? undefined : { ...decoded, bytes, size: bytes.byteLength, truncated: false };
 }
 
 async function readArtifactTextResponse(response: Response): Promise<{ binary: boolean; bytes: Uint8Array; content: string; size: number; truncated: boolean }> {
@@ -510,8 +592,9 @@ export function sessionWorkspaceDiffsQueryOptions({
 }) {
 	return {
 		queryKey: sessionWorkspaceDiffsQueryKey(sessionId, scope, paths, contextLines, ignoreWhitespace, workspaceVersion, selectionKeyFor(view, commitSha, commitShas), hostId),
-		queryFn: async (): Promise<WorkspaceDiffsResponse> => {
+		queryFn: async ({ signal }: { signal?: AbortSignal } = {}): Promise<WorkspaceDiffsResponse> => {
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/workspace/diffs", {
+				signal,
 				params: { path: { sessionId } },
 				body: { ...view, ...commitParams(commitSha, commitShas), contextLines, ignoreWhitespace, paths: [...paths], scope, workspaceVersion },
 			});
@@ -567,7 +650,7 @@ export async function fetchPRFileRevision(sessionId: string, number: number, sou
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision", {
 		params: { path: { sessionId, prNumber: number }, query: { path, side, sourceUrl, commitSha } },
 	});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Unable to load pull request file revision"));
+	if (error || !data) throw apiErrorException(error, "Unable to load pull request file revision");
 	return data as WorkspaceFileRevision;
 }
 
@@ -671,7 +754,7 @@ export async function updateSessionWorkspaceFile({
 		params: { path: { sessionId } },
 		body: { content, expectedFileFingerprint, path },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Unable to save workspace file"));
+	if (error) throw apiErrorException(error, "Unable to save workspace file");
 	if (!data) throw new Error("Unable to save workspace file");
 	return data as WorkspaceFileDetail;
 }
@@ -697,7 +780,7 @@ export async function updateSessionArtifactFile({
 		params: { path: { sessionId } },
 		body: { content, expectedFileFingerprint, path },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Unable to save artifact"));
+	if (error) throw apiErrorException(error, "Unable to save artifact");
 	if (!data) throw new Error("Unable to save artifact");
 	return data;
 }
@@ -707,7 +790,7 @@ export async function deleteSessionArtifactFile({ path, sessionId, hostId }: { p
 	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/sessions/{sessionId}/artifact-files", {
 		params: { path: { sessionId }, query: { path } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Unable to delete artifact"));
+	if (error) throw apiErrorException(error, "Unable to delete artifact");
 }
 
 export function sessionWorkspaceSearchQueryOptions(
@@ -724,7 +807,7 @@ export function sessionWorkspaceSearchQueryOptions(
 				params: { path: { sessionId }, query: { query, limit } },
 				signal,
 			});
-			if (error) throw new Error(apiErrorMessage(error, errorMessage));
+			if (error) throw apiErrorException(error, errorMessage);
 			if (!data) throw new Error(errorMessage);
 			return data;
 		},
@@ -736,7 +819,9 @@ export function sessionWorkspaceSearchQueryOptions(
 export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessage = "Unable to load workspace files", hostId?: string) {
 	return {
 		queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId),
-		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId),
+		queryFn: ({ signal }: { signal?: AbortSignal } = {}) => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId, signal),
+		retry: retryWorkspaceRead,
+		refetchOnWindowFocus: false,
 	};
 }
 
@@ -756,7 +841,7 @@ export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMess
 		queryKey: branch.kind === "branch" ? [...prefix, "branch", branch.name, branch.tipSha ?? ""] as const
 			: branch.kind === "pull_request" ? [...prefix, "pr", branch.url, branch.tipSha ?? ""] as const
 			: prefix,
-		queryFn: () => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId, branch),
+		queryFn: ({ signal }: { signal?: AbortSignal } = {}) => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId, branch, signal),
 		staleTime: Infinity,
 		retry: retryWorkspaceRead,
 	};
@@ -860,7 +945,6 @@ export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefin
 // Must match WorkspaceReviewPane: the Files tab requests these batches, with
 // this context size, and then full contents for files whose patch ends on the
 // last hunk. A mismatch leaves the tab on "Loading diff…".
-const REVIEW_PREFETCH_BATCHES = 4;
 const REVIEW_PREFETCH_EOF_MAX = 40;
 const REVIEW_PREFETCH_EOF_MAX_BYTES = 128 * 1024;
 const lastPrefetchedReview = new Map<string, string>();
@@ -886,7 +970,7 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 	// runs against a full workspace response.
 	if (!data.sections) return;
 	const target = defaultWorkspaceReviewTarget(data);
-	const files = (target.files ?? []).filter((file) => !isDeferredReviewFile(file)).slice(0, WORKSPACE_REVIEW_BATCH_SIZE * REVIEW_PREFETCH_BATCHES);
+	const files = (target.files ?? []).slice(0, WORKSPACE_REVIEW_PAGE_SIZE).filter((file) => !isDeferredReviewFile(file));
 	if (files.length === 0) return;
 	const token = `${target.workspaceVersion ?? ""}:${target.scope}:${target.selectionKey}:${files.map((file) => file.path).join("\n")}`;
 
@@ -903,22 +987,28 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 			return state?.data !== undefined && !state.isInvalidated;
 		})) return;
 		lastPrefetchedReview.set(cacheKey, token);
-		const responses = await Promise.all(batches.map((batch) => queryClient.fetchQuery({
-			...sessionWorkspaceDiffsQueryOptions({
-				contextLines: REVIEW_CONTEXT_LINES,
-				paths: batch.map((file) => file.path),
-				scope: target.scope,
-				sessionId,
-				workspaceVersion: target.workspaceVersion,
-				commitShas: target.commitShas,
-				view: target.view,
-				hostId,
-			}),
-			// A prefetch never retries, as fetchQuery's own default.
-			retry: false,
-			staleTime: Infinity,
-			gcTime: 30 * 60 * 1000,
-		})));
+		// A speculative read takes one connection at a time. The renderer has
+		// few to the daemon (its event streams hold most), and the view the user
+		// opens next must not queue behind a guess.
+		const responses: WorkspaceDiffsResponse[] = [];
+		for (const batch of batches) {
+			responses.push(await queryClient.fetchQuery({
+				...sessionWorkspaceDiffsQueryOptions({
+					contextLines: REVIEW_CONTEXT_LINES,
+					paths: batch.map((file) => file.path),
+					scope: target.scope,
+					sessionId,
+					workspaceVersion: target.workspaceVersion,
+					commitShas: target.commitShas,
+					view: target.view,
+					hostId,
+				}),
+				// A prefetch never retries, as fetchQuery's own default.
+				retry: false,
+				staleTime: Infinity,
+				gcTime: 30 * 60 * 1000,
+			}));
+		}
 
 		const filesByPath = new Map(files.map((file) => [file.path, file]));
 		const endOfFile: { file: WorkspaceFileSummary; identity: string }[] = [];
@@ -938,25 +1028,29 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 			}
 		}
 
-		await Promise.all(endOfFile.map(async ({ file, identity }) => {
-			const queryKey = filesReviewEndOfFileQueryKey(sessionId, target.scope, target.selectionKey, file.path, file.fileFingerprint ?? "", identity, hostId);
-			const cached = queryClient.getQueryState(queryKey);
-			if (cached?.data !== undefined && !cached.isInvalidated) return;
-			try {
-				const [before, after] = await Promise.all([
-					fetchWorkspaceFileRevision({ commitShas: target.commitShas, view: target.view, sessionId, path: file.path, scope: target.scope, side: "before", workspaceVersion: target.workspaceVersion, hostId }),
-					fetchWorkspaceFileRevision({ commitShas: target.commitShas, view: target.view, sessionId, path: file.path, scope: target.scope, side: "after", workspaceVersion: target.workspaceVersion, hostId }),
-				]);
-				if (before.binary || after.binary || before.truncated || after.truncated) return;
-				const loaded = {
-					oldFile: { name: file.previousPath || file.path, contents: before.content, cacheKey: before.revision },
-					newFile: { name: file.path, contents: after.content, cacheKey: after.revision },
-				};
-				await queryClient.prefetchQuery({ queryKey, queryFn: () => loaded, retry: false, staleTime: Infinity, gcTime: 30 * 60 * 1000 });
-			} catch {
-				// Leave the cache empty so the review pane can fetch this file itself.
-			}
-		}));
+		// The read is the review pane's own query, so a pane that opens meanwhile
+		// joins it instead of sending the same pair again. A failed read leaves
+		// no data, and the pane reads that file itself when it mounts.
+		for (const { file, identity } of endOfFile) {
+			await queryClient.prefetchQuery({
+				queryKey: filesReviewEndOfFileQueryKey(sessionId, target.scope, target.selectionKey, file.path, file.fileFingerprint ?? "", identity, hostId),
+				queryFn: async ({ signal }) => {
+					const read = { commitShas: target.commitShas, view: target.view, sessionId, path: file.path, scope: target.scope, workspaceVersion: target.workspaceVersion, hostId, signal };
+					const [before, after] = await Promise.all([
+						fetchWorkspaceFileRevision({ ...read, side: "before" }),
+						fetchWorkspaceFileRevision({ ...read, side: "after" }),
+					]);
+					if (before.binary || after.binary || before.truncated || after.truncated) throw new AoError("FILES_REVIEW_END_OF_FILE_UNREADABLE", appI18n.t("files.error.loadFile"));
+					return {
+						oldFile: { name: file.previousPath || file.path, contents: before.content, cacheKey: before.revision },
+						newFile: { name: file.path, contents: after.content, cacheKey: after.revision },
+					};
+				},
+				retry: false,
+				staleTime: Infinity,
+				gcTime: 30 * 60 * 1000,
+			});
+		}
 	} catch {
 		const cacheKey = sessionUiKey(sessionId, hostId);
 		if (lastPrefetchedReview.get(cacheKey) === token) lastPrefetchedReview.delete(cacheKey);

@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -51,8 +52,23 @@ const (
 	nativeWarningPrompt  = "⚠ ❯"
 	nativeQuestionPrompt = "? ❯"
 	nativeUserEcho       = "● "
+	// display.cli_layout=modern (the default since at least v0.22.5) echoes
+	// submitted messages with the skin's prompt glyph instead of ●, between the
+	// same 40-cell transcript rules; cli_layout=classic keeps ●. Built from
+	// nativePrompt so the echo and composer markers cannot drift apart. `❯ `
+	// is more common in assistant output (shell prompts) than ●, so a match
+	// still needs exact rules on both sides, the whole message and a rising
+	// count before it acknowledges a send.
+	nativeModernUserEcho = nativePrompt + " "
 	nativeCommandEcho    = "⚙️  "
 	nativeTranscriptRule = "────────────────────────────────────────"
+	// modernSpinner holds the frames the modern layout (the v0.22 default)
+	// draws at the start of the composer's top rule while a turn or command runs.
+	modernSpinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	// modernFooter starts the status line the modern layout draws under the
+	// composer, one column in: " ☤ <model> · …". The compact busy row starts
+	// in the first column instead.
+	modernFooter = " ☤ "
 )
 
 var (
@@ -60,6 +76,8 @@ var (
 	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
 	titleUnsafe         = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+	// modernTitledRule is a composer top rule with the session title at its end.
+	modernTitledRule = regexp.MustCompile(`^─{3,} \S.* ─$`)
 	// A tagless clean checkout; a ".dirty" suffix never matches.
 	nativeSourceVersionLine = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
 	// A Homebrew bottle is built from the release tarball, which has no git
@@ -473,7 +491,7 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 		// checkout with edited tracked files (locales, chrome) still prints
 		// it. Refuse when git reports such edits.
 		if root := launcherSourceRoot(path); root != "" && !sourceUnmodified(ctx, root) {
-			return false, fmt.Sprintf("source checkout %s is modified or its state could not be verified with git; AO qualifies only unmodified releases", root), false
+			return false, fmt.Sprintf("source checkout %s is modified or its state could not be verified with git; Orchestrator qualifies only unmodified releases", root), false
 		}
 		return true, "", false
 	}
@@ -489,16 +507,20 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	if err != nil {
 		return false, fmt.Sprintf("version probe failed (%v): %q", err, firstLine), false
 	}
-	return false, fmt.Sprintf("version banner %q is not a Hermes release line AO has qualified", firstLine), false
+	return false, fmt.Sprintf("version banner %q is not a Hermes release line Orchestrator has qualified", firstLine), false
 }
 
 // qualifiedReleaseLines are the major.minor release lines whose composer,
 // busy, modal and transcript chrome AO's terminal detection was checked
-// against (v0.21.6 on Linux, v0.22.2 on macOS). A newer line stays installed
-// but unverified until its markers are revalidated. Only major.minor is
+// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux,
+// and v0.23.2 live through AO's pty-host).
+// The modern layout, the default on 0.22 and 0.23, echoes submitted messages
+// with its prompt glyph, which committedMessageEchoes accepts alongside ●.
+// A newer line stays installed but unverified until its markers are
+// revalidated. Only major.minor is
 // compared: Hermes derives its banner from git tags, so the same build can
 // report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
-var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
+var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}, {0, 23}}
 
 // qualifiedSourceCheckout accepts the banner Hermes prints when its own git
 // lookup finds no release tag (`vgit.<sha>`, e.g. after a shallow or cold
@@ -760,7 +782,7 @@ func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 }
 func validate(cfg ports.LaunchConfig) error {
 	if len(cfg.AllowedTools)+len(cfg.DisallowedTools) > 0 {
-		return fmt.Errorf("hermes: AO tool allow/deny restrictions are unsupported")
+		return fmt.Errorf("hermes: Orchestrator tool allow/deny restrictions are unsupported")
 	}
 	return nil
 }
@@ -817,11 +839,17 @@ func (p *Plugin) sessionCommand(ctx context.Context, cfg ports.LaunchConfig, tit
 		return nil, err
 	}
 	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath, "--continue", title}
+	// Creation overrides ride only fresh launches. Hermes rejects them on
+	// resume — "Resume retains gateway session policy; creation overrides are
+	// unsupported on resume. -m/--model, --provider differ from this session's
+	// launch: resume without them and use /model after resuming to switch." —
+	// so a restore that carried a configured --model/--reasoning died at
+	// startup and the switch surfaced a dead terminal.
 	if create {
 		cmd = append(cmd, "--create-if-missing")
+		agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+		agentbase.AppendEffortFlag(&cmd, cfg.Config, "--reasoning")
 	}
-	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
-	agentbase.AppendEffortFlag(&cmd, cfg.Config, "--reasoning")
 	return append(cmd, permissionArgs(cfg.Permissions)...), nil
 }
 
@@ -1181,19 +1209,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		}
 		instructions = string(b)
 	}
-	combined := original + instructions
-	if original != "" && instructions != "" {
-		combined = original + "\n\n" + instructions
+	if _, err := ComposeEphemeralPrompt(original, instructions); err != nil {
+		return err
 	}
-	// Linux MAX_ARG_STRLEN counts NAME= and the trailing NUL for each entry;
-	// Windows caps a variable at 32,767 characters. The AO original-prompt
-	// entry carries a second copy of the native text.
-	maxEnvString := 128 * 1024
-	if runtime.GOOS == "windows" {
-		maxEnvString = 32767
-	}
-	if len("HERMES_EPHEMERAL_SYSTEM_PROMPT=")+len(combined)+1 > maxEnvString ||
-		len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString {
+	// The AO original-prompt entry carries a second copy of the native text.
+	if len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString() {
 		return fmt.Errorf("hermes: standing instructions exceed process environment limit")
 	}
 	if instructions != "" {
@@ -1232,7 +1252,7 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		if bundled = pyStrip(bundled); bundled != "" {
 			path, ok := childPath(bundled)
 			if st, err := os.Stat(path); !ok || err == nil && st.IsDir() {
-				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome AO reads; unset it for AO sessions")
+				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome Orchestrator reads; unset it for Orchestrator-managed sessions")
 			}
 		}
 	}
@@ -1264,7 +1284,7 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		entries, _ := os.ReadDir(dir)
 		for _, entry := range entries {
 			if englishLocaleFile.MatchString(entry.Name()) && !entry.IsDir() {
-				return fmt.Errorf("hermes: %s rewords the English terminal chrome AO reads; remove or rename it for AO sessions", filepath.Join(dir, entry.Name()))
+				return fmt.Errorf("hermes: %s rewords the English terminal chrome Orchestrator reads; remove or rename it for Orchestrator-managed sessions", filepath.Join(dir, entry.Name()))
 			}
 		}
 	}
@@ -1329,7 +1349,7 @@ func refuseSecretSources(config map[string]any) error {
 			continue
 		}
 		if override, isBool := yaml11Bool(source["override_existing"]); !isBool || override {
-			return fmt.Errorf("hermes: secret source %q may override the language and instructions AO sets; set override_existing: false for it", name)
+			return fmt.Errorf("hermes: secret source %q may override the language and instructions Orchestrator sets; set override_existing: false for it", name)
 		}
 	}
 	return nil
@@ -1346,13 +1366,13 @@ func refuseDotenvOverrides(envFile string) error {
 		}
 		switch key := guardedEnvName(binding.key); key {
 		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
-			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would replace Orchestrator's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
 		case "HERMES_LANGUAGE":
-			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would change the terminal chrome Orchestrator reads; set display.language in config.yaml instead", key, envFile)
 		case "HERMES_BUNDLED_LOCALES":
-			return fmt.Errorf("hermes: %s in %s would replace the English terminal chrome AO reads", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would replace the English terminal chrome Orchestrator reads", key, envFile)
 		case "HERMES_HOME", "HERMES_MANAGED_DIR":
-			return fmt.Errorf("hermes: %s in %s would move Hermes away from the configuration AO checked; set it in AO's environment instead", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would move Hermes away from the configuration Orchestrator checked; set it in Orchestrator's environment instead", key, envFile)
 		}
 	}
 	return nil
@@ -1374,6 +1394,82 @@ func referencesEnv(value any) bool {
 		return slices.ContainsFunc(v, referencesEnv)
 	}
 	return false
+}
+
+// maxEnvString bounds one NAME=value environment entry: Linux MAX_ARG_STRLEN
+// counts NAME= and the trailing NUL, and Windows caps a variable at 32,767
+// characters.
+func maxEnvString() int {
+	if runtime.GOOS == "windows" {
+		return 32767
+	}
+	return 128 * 1024
+}
+
+// ComposeEphemeralPrompt folds AO's standing instructions into the native
+// persona text, separated the way the TUI path renders both, and rejects the
+// result when the HERMES_EPHEMERAL_SYSTEM_PROMPT entry would exceed the
+// process environment limit both launch paths share. Hermes reads that
+// variable first and only falls back to the native configuration when it is
+// empty, so composing it from AO's instructions alone would replace the
+// user's persona.
+func ComposeEphemeralPrompt(original, instructions string) (string, error) {
+	combined := original + instructions
+	if original != "" && instructions != "" {
+		combined = original + "\n\n" + instructions
+	}
+	if len("HERMES_EPHEMERAL_SYSTEM_PROMPT=")+len(combined)+1 > maxEnvString() {
+		return "", fmt.Errorf("hermes: standing instructions exceed process environment limit")
+	}
+	return combined, nil
+}
+
+// OriginalEphemeralPrompt resolves the persona text Hermes would apply before
+// AO's instructions: an explicit ephemeral prompt — preserved through
+// AO_HERMES_ORIGINAL_EPHEMERAL by the hook-config path, or set as an explicit
+// session-env HERMES_EPHEMERAL_SYSTEM_PROMPT, both of which Hermes reads ahead
+// of its configuration — and only when neither exists the config.yaml overlay
+// that NativeEphemeralOverlay renders. A value merely inherited from the
+// daemon's own process environment is deliberately ignored: standing
+// instructions must not leak from the shell/CI environment into every session
+// (the #6536 boundary, TestStandingInstructionsIgnoreDaemonEphemeralPrompt).
+func OriginalEphemeralPrompt(env map[string]string) (string, error) {
+	if original, ok := env["AO_HERMES_ORIGINAL_EPHEMERAL"]; ok && original != "" {
+		return original, nil
+	}
+	if original := env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]; original != "" {
+		return original, nil
+	}
+	return NativeEphemeralOverlay(env)
+}
+
+// NativeEphemeralOverlay reads the persona Hermes would apply natively from
+// <HERMES_HOME>/config.yaml, the same overlay the TUI path renders
+// (nativeOverlay). It returns "" when the native configuration carries no
+// persona.
+func NativeEphemeralOverlay(env map[string]string) (string, error) {
+	home, err := ResolveHome(env)
+	if err != nil {
+		return "", err
+	}
+	b, readErr := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return "", readErr
+	}
+	var config map[string]any
+	if len(b) > 0 {
+		if err := unmarshalYAML11(b, &config); err != nil {
+			return "", fmt.Errorf("hermes: invalid native configuration: %w", err)
+		}
+	}
+	overlay, envRef, untyped := nativeOverlay(config)
+	if envRef {
+		return "", fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
+	}
+	if untyped {
+		return "", fmt.Errorf("hermes: native instruction configuration has a non-text value (YAML 1.1 reads yes, on, ~ or numbers as non-strings); quote it in config.yaml")
+	}
+	return overlay, nil
 }
 
 // nativeOverlay rebuilds the overlay Hermes renders (personality.py): the
@@ -1504,7 +1600,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	title, err := sessionTitle(cfg.DataDir, cfg.Session.ID)
 	if err != nil {
-		return nil, false, fmt.Errorf("hermes: AO native session title unavailable: %w", err)
+		return nil, false, fmt.Errorf("hermes: Orchestrator native session title unavailable: %w", err)
 	}
 	if _, err := p.titledSessionID(ctx, cfg.DataDir, cfg.Session.ID, title); err != nil {
 		return nil, false, err
@@ -1565,6 +1661,7 @@ func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 
 // DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
+	output, modernBusy := modernComposer(output)
 	// Native placeholders use italic; typed composer text has normal styling.
 	composerOutput := nativeStyleSequence.ReplaceAllStringFunc(output, func(sequence string) string {
 		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
@@ -1610,6 +1707,9 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
 			break
 		}
+	}
+	if modernBusy {
+		return domain.ActivityActive, true
 	}
 	// Below 64 columns Hermes hides the bottom input rule and draws only the
 	// state icon, without ❯ (`☤ ` busy; `⚠ `, `? `, `✎ ` and the credential icons
@@ -1659,6 +1759,60 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 	return "", false
 }
 
+// modernComposer reshapes Hermes's modern layout into the composer the checks
+// above read. That layout puts a status footer under the composer and the
+// session title, or a spinner while Hermes works, into the composer's top rule.
+// Left in place, the footer reads as the compact busy row and the title breaks
+// the matching pair of rules, so an idle terminal never reads as idle. The
+// footer is dropped and a titled top rule becomes a plain rule. busy reports
+// the spinner, which the modern layout draws at every width.
+func modernComposer(output string) (string, bool) {
+	// A CRLF capture reads as LF rows. A bare \r still splits a row, as the
+	// plain lines do, so raw and plain rows stay aligned.
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	raw := strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n")
+	plain := terminalui.PlainTerminalLines(output)
+	if len(raw) != len(plain) {
+		return output, false
+	}
+	last := len(plain) - 1
+	for last >= 0 && strings.TrimSpace(plain[last]) == "" {
+		last--
+	}
+	if last >= 1 && strings.HasPrefix(plain[last], modernFooter) && strings.Contains(plain[last], " · ") {
+		raw, plain = raw[:last], plain[:last]
+		last--
+		for last >= 0 && strings.TrimSpace(plain[last]) == "" {
+			last--
+		}
+	}
+	for i := last; i >= 1 && i >= last-7; i-- {
+		row := strings.TrimSpace(plain[i])
+		if !strings.HasPrefix(row, nativePrompt) && !strings.HasPrefix(row, "☤ ") {
+			continue
+		}
+		top := strings.TrimSpace(plain[i-1])
+		if rest, ok := strings.CutPrefix(top, "── "); ok {
+			if frame, _ := utf8.DecodeRuneInString(rest); strings.ContainsRune(modernSpinner, frame) {
+				return strings.Join(raw, "\n"), true
+			}
+		}
+		if modernTitledRule.MatchString(top) {
+			// Match the bottom rule, which a wide title character would not.
+			width := utf8.RuneCountInString(top)
+			for _, below := range plain[i+1 : last+1] {
+				if rule := strings.TrimSpace(below); len([]rune(rule)) >= 16 && strings.Trim(rule, "─") == "" {
+					width = utf8.RuneCountInString(rule)
+					break
+				}
+			}
+			raw[i-1] = strings.Repeat("─", width)
+		}
+		break
+	}
+	return strings.Join(raw, "\n"), false
+}
+
 // RequiresRenderedActivity implements the scoped native adapter contract.
 func (*Plugin) RequiresRenderedActivity() bool { return true }
 
@@ -1687,10 +1841,10 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 }
 
 // ValidateTerminalMessage refuses ordinary AO text while native decisions own input.
-func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
+func (p *Plugin) ValidateTerminalMessage(screen, _ string) error {
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
-		return fmt.Errorf("hermes: ordinary AO sends require the current empty native composer; enter approval decisions directly in the terminal")
+		return fmt.Errorf("hermes: ordinary Orchestrator sends require the current empty native composer; enter approval decisions directly in the terminal")
 	}
 	return nil
 }
@@ -1711,6 +1865,18 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 		return false
 	}
 	return committedMessageEchoes(message, screen) > committedMessageEchoes(message, baseline)
+}
+
+// userEchoPrefix reports which native echo prefix a rendered line starts with:
+// ● for cli_layout=classic, or the skin's prompt glyph for the modern layout
+// (the default on 0.22 and 0.23). Empty when the line is not a user echo.
+func userEchoPrefix(line string) string {
+	for _, echo := range []string{nativeUserEcho, nativeModernUserEcho} {
+		if strings.HasPrefix(line, echo) {
+			return echo
+		}
+	}
+	return ""
 }
 
 // Count complete matching native echoes outside the current composer. Comparing
@@ -1745,11 +1911,15 @@ func committedMessageEchoes(message, screen string) int {
 			count++
 			continue
 		}
-		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule || !strings.HasPrefix(line, nativeUserEcho) {
+		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule {
+			continue
+		}
+		echoPrefix := userEchoPrefix(line)
+		if echoPrefix == "" {
 			continue
 		}
 		var echo strings.Builder
-		echo.WriteString(strings.TrimPrefix(line, nativeUserEcho))
+		echo.WriteString(strings.TrimPrefix(line, echoPrefix))
 		j := i + 1
 		for j < end && strings.TrimSpace(lines[j]) != nativeTranscriptRule {
 			echo.WriteString(strings.TrimSpace(lines[j]))

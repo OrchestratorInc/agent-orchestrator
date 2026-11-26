@@ -107,10 +107,10 @@ func settledHibernationHarness(t *testing.T, state domain.TurnState, gate ...fun
 	return hibernationHarnessWith(t, state, func(opts *chatsvc.Options) { opts.HibernationEnabled = enabled })
 }
 
-func hibernationHarnessWith(t *testing.T, state domain.TurnState, configure func(*chatsvc.Options)) (*harness, *hibernationConversation) {
+func hibernationHarnessWith(t *testing.T, state domain.TurnState, configure func(*chatsvc.Options), imports ...*domain.SessionImportSource) (*harness, *hibernationConversation) {
 	t.Helper()
 	conv := &hibernationConversation{fakeConversation: newFakeConversation()}
-	st := openStore(t)
+	st := openStore(t, imports...)
 	h := &harness{st: st, conv: conv.fakeConversation, activity: &recordingActivity{}, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
 	var nextID atomic.Int32
 	opts := chatsvc.Options{
@@ -1246,13 +1246,13 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	if err := svc.DrainQueued(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
-	h.advance(6 * time.Minute)
+	h.advance(chatsvc.IdleBeforeHibernate + time.Minute)
 	rec, found, err := st.GetSession(ctx, testSession)
 	if err != nil || !found {
 		t.Fatalf("get session = %v, %v", found, err)
 	}
 	rec.Kind = domain.KindWorker
-	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now().Add(-6 * time.Minute)}
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now().Add(-chatsvc.IdleBeforeHibernate - time.Minute)}
 	rec.Metadata.ProviderConversationID = first.ProviderConversationID()
 	if err := st.UpdateSession(ctx, rec); err != nil {
 		t.Fatal(err)
@@ -1328,5 +1328,52 @@ func TestProviderSwitchWakesASleepingChatFirst(t *testing.T) {
 	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex})
 	if !woken || err == nil || !strings.Contains(err.Error(), "could not be woken") {
 		t.Fatalf("woken=%v err=%v; want the switch to wake the chat first", woken, err)
+	}
+}
+
+// A relay queued for a hibernated session keeps the sender facts the live
+// controller path records: transcript attribution and the orchestrator's
+// interaction with its worker.
+func TestRelayWhileHibernatedKeepsSenderAndInteraction(t *testing.T) {
+	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
+		t.Fatalf("HibernateChat = %v, %v", hibernated, err)
+	}
+	h.svc.SetWakeCallback(func(ctx context.Context, _ domain.SessionID) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	sender, err := h.st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: testProject, Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex,
+		Mode: domain.SessionModeChat, DisplayName: "Project orchestrator",
+		CreatedAt: h.now(), UpdatedAt: h.now(),
+	})
+	if err != nil {
+		t.Fatalf("create sender: %v", err)
+	}
+	interactionAt := h.now().Add(-time.Minute)
+
+	turnID, err := h.svc.RelaySessionChatTurn(ctx, testSession, "please rebase", "relay-sender-1", ports.MessageDeliveryOptions{
+		SenderSessionID: string(sender.ID), InteractionAt: interactionAt,
+	})
+	if err != nil || turnID == "" {
+		t.Fatalf("cold relay = %q, %v", turnID, err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, found, err := h.st.ConversationMessageByClientID(ctx, conversation.ID, "relay-sender-1")
+	if err != nil || !found {
+		t.Fatalf("queued message found=%v err=%v", found, err)
+	}
+	if message.SenderSessionID != string(sender.ID) || message.SenderProjectID != string(testProject) || message.SenderDisplayName != "Project orchestrator" {
+		t.Fatalf("queued message sender = %q/%q/%q, want %s/%s/Project orchestrator",
+			message.SenderSessionID, message.SenderProjectID, message.SenderDisplayName, sender.ID, testProject)
+	}
+	rec, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found || !rec.Metadata.LatestInteractionAt.Equal(interactionAt) {
+		t.Fatalf("worker latest interaction = %v (found=%v err=%v), want %v", rec.Metadata.LatestInteractionAt, found, err, interactionAt)
 	}
 }

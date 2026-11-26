@@ -81,6 +81,76 @@ The daemon starts with Chat hibernation disabled; the desktop synchronizes its D
 
 ---
 
+### Session background work
+
+Background task reads cover the Chat registry, with unsupported providers reported
+as unavailable. The board
+uses one batch read; a Chat panel reads only its current controller. Reads never
+wake a hibernated session. OS processes remain separate, optional Diagnostics.
+
+| Chat transport | Source | Coverage |
+| --- | --- | --- |
+| Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
+| Codex | Paginated `thread/backgroundTerminals/list`, launch/turn completion, idle reconnect snapshots and collaboration events | Always partial: shells need launch-lifecycle evidence, and event-derived subagents may predate attachment |
+| Unreal Agent | No background mode in the pinned harness | Unavailable; Bash operations are foreground tool calls |
+| All other ACP bindings | Explicitly backgrounded tool metadata and provider-reported lifecycle events | Reported jobs; complete native inventory is not available in ACP v1 |
+
+The shared ACP path includes Cursor, OpenCode v1/v2, Droid, Kimi, Kimchi, Pi,
+OMP, Qwen, Copilot, Agy, Command Code, and DeepSeek Harness. An adapter that
+emits no background metadata or async-task events cannot expose hidden native
+jobs through ACP; a partial empty reading means no jobs **reported**, not none
+running. Partial readings may miss completions as well as starts. Do not infer
+jobs from foreground tool duration, an idle turn, output prose, or process trees.
+Advertising the Air `asyncTasks` capability is binding-specific and enabled only
+for the verified Claude binding. Other bindings can still report explicit
+background tool metadata. Session IDs are not task handles; native task handles
+and the launching tool-call identity distinguish executions. An unambiguous
+session reference can settle an already observed agent, but never creates a job.
+
+Codex command-start events establish elapsed time. A terminal whose launch ended
+but whose start event was missed has no start timestamp, so elapsed time is hidden.
+The native terminal list also contains foreground commands. A shell is reported
+and stoppable only when a read begun after its launching call or turn completed
+still lists it. Unconfirmed calls and their failures stay out of the reading.
+An overlapping read cannot use a completion that arrived after it began. Settled
+history can recover matching launch evidence after attachment. On live host
+reconnect, background reads also recover terminals whose runtime item IDs or exit
+codes do not match replayed history, or whose commands are absent from history.
+For these unmatched terminals, `thread/read` must show an idle thread both before
+and after the complete terminal inventory, with unchanged turn IDs. A foreground
+turn starting during the read, even if it finishes before the second snapshot,
+invalidates that bracket. Unsettled or malformed reads remain retryable; recovery
+stops fetching history after a stable idle bracket. These reads do not replay the
+transcript or resume a turn. Unknown start timestamps remain hidden. Short-lived
+jobs may end before a qualifying read. Confirmed shells retain outcomes even if a later list omits them
+before completion arrives. Unconfirmed command metadata is bounded to 256
+sanitized labels per conversation.
+Provider labels are one line, capped at 240 characters, and redact obvious
+credential assignments, credential flags with arbitrary prefixes,
+authorization values, and URL userinfo (including token-only userinfo). Query and
+fragment email addresses stay readable. `--sort-key` and `--primary-key` are exempt
+in space and `=` forms. Plain `-u` arguments stay readable; colon-separated
+`-u`/`--user` pairs remain conservatively redacted, including numeric UID:GID
+values, since these can also be credentials. This is not general secret detection.
+A task's command keeps its line breaks and length but gets the same redaction.
+
+Claude stop acknowledgments do not establish completion. After an SDK rejection,
+wait up to one second for native reconciliation. An observed completion maps to
+not-stoppable; a task still live returns a visible retryable error, never a success
+or the UI's silent not-stoppable response. Native notifications or snapshots
+settle task state, and Stop remains retryable if it stays live. Closed-session
+failures still propagate. A notification arriving after the bounded wait can
+still settle the reading, but cannot retroactively turn a failed request into
+success.
+
+`GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
+`ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
+termination/generation checks after provider I/O. Provider reads run outside the
+cache mutex; deferred cleanup releases waiting readers even if a provider panics,
+without caching a sample from that call. Real completion outcomes remain
+visible for 30 seconds. Event-derived running jobs defer ACP hibernation; native
+snapshots remain authoritative where a provider supports them.
+
 ## System overview
 
 ```mermaid
@@ -201,6 +271,37 @@ Observation is separated from action:
 - **Observe layer:** SCM Observer and Runtime Reaper poll external state.
 - **Lifecycle layer:** Reduces observations into durable facts.
 - **Service layer:** Computes display status from facts.
+
+Review runs follow the same split. The Runtime Reaper also probes reviewers,
+but only those serving an in-progress review run, and reports each pass to the
+review engine's run lifecycle (`internal/review/run_lifecycle.go`) instead of
+the session LCM: a reviewer has no session row. The run lifecycle reduces the
+pass into guarded `review_run` transitions (`queued`, `launching`, `running`,
+`cancelling`, then `completed`, `failed`, `cancelled` or `superseded`), applies
+the time limits (launch, first activity, idle grace, max duration, cancel), and
+force-kills a reviewer that ignores a cancel. The reaper's first pass after
+startup is the boot pass, which settles runs a previous daemon left in
+progress; until it has, other paths leave those runs alone so their
+reviewers are reaped, and the boot pass never touches a run this daemon
+created. Reviewer activity hooks, trigger, cancel and the reviews list settle
+their worker's runs directly without waiting for the next pass. Time the
+daemon did not observe (the machine slept) never counts against a run, and a
+reviewer that is still being cancelled is not given new work. The boot pass
+never waits on a worker's lock; a worker a trigger holds is settled on a later
+pass. A reviewer interrupted because its pass timed out stays supervised until
+it stops or is force-stopped. A force-stop captures the reviewer's whole
+process tree before tearing down its runtime and kills any survivor, so an
+agent that cannot react to hangup is not left running; the stop counts as
+confirmed only when none of those processes remains. A process is identified
+by pid and start time (which survives exec and changes on pid reuse), read
+together with its parent from one consistent observation, and the tree is
+walked only from roots the runtime vouches for (a live tmux pane, or a
+ConPTY host that started no later than it was spawned); a process whose
+identity cannot be read is never killed and never counted as gone, and the
+runtime is not torn down until the tree has been captured. Survivors of an
+unconfirmed attempt are carried into the retry, and still killed if a new
+launch takes over the reviewer. Suspend gaps
+are kept for a pending stop's grace as they are for active runs.
 
 ### 4. Change data capture
 
@@ -358,9 +459,9 @@ prompt generate a title and task slug together
 through the selected agent's background-task driver. The call starts with
 provisioning and has a twenty-second deadline, but neither setup nor the agent
 waits for it: the worktree is created at `worktrees/<project-id>/<session-id>` on
-the temporary branch `ao/<session-id>/root` and keeps that folder for its whole
+the temporary branch `orchestrator/<session-id>/root` and keeps that folder for its whole
 life. After launch, a background step renames only the branch to
-`ao/<slug>/root` (numeric suffix when the namespace is occupied) in every
+`orchestrator/<slug>/root` (numeric suffix when the namespace is occupied) in every
 repository of the task and records it on the session and its repository rows
 together, only after a start that succeeded. The session also keeps the
 temporary branch it replaced: a full-row write from an older read never puts it
@@ -434,6 +535,40 @@ that flag, while new provider boundaries use scoped IDs.
 When Codex proves fork ancestry, replay omits copied prefixes only if their stable
 item IDs and complete content match retained ancestor rows. Those rows stay in
 their original scope. Unknown ancestry or changed content is retained in full.
+
+Side-chat tabs are launch-scoped drafts until their first accepted Send. Draft
+creation reads conversation metadata only: it does not wake the parent, read its
+full transcript, or create a provider. Separate creation keys never merge unused
+drafts through empty anchors. The daemon serializes each side's submissions and
+atomically accepts the opening turn with its frozen latest completed parent
+context, model, effort, and launch configuration. Later parent work cannot move
+that cutoff. Opening-turn IDs and timestamps travel with the side's recovery
+state; the shared chat timeline shows that opening question and its lattice
+loader while later questions remain in the queue dock.
+
+The renderer loads each saved side draft before freezing a Send or copying a
+replacement. Typing alone does not mark that draft as loaded, and autosaves wait
+for the read so they cannot erase saved files or delivery receipts. Edits made
+after Send remain in the next draft. Known opening failures are saved with the
+receipt and restore their Retry or Recreate action without automatic dispatch;
+accepted daemon turns take precedence over older local failures. Definitively
+rejected follow-ups remove their temporary bubbles, while uncertain delivery
+keeps its original identity until reconciliation.
+
+Queued follow-ups appear in the shared queue dock before daemon acknowledgement,
+then reconcile by client message ID without duplicating or remounting their row.
+A matching daemon turn also settles a recovered delivery receipt without another
+submission, preserving handoff ownership and newer draft edits. Late HTTP replies
+cannot undo that acknowledgement or release a newer send's ownership.
+
+Unused drafts restore without provider work, including JSON-null launch settings.
+A recovered pre-dispatch receipt or
+interrupted startup with unverified ownership requires visible recreation instead
+of silently capturing newer context or submitting again. Safe startup retries
+reuse the accepted turn and frozen configuration. Staged image bytes are loaded
+from daemon-owned attachment files after renderer remounts. Closing an unused
+draft requires no provider shutdown; an accepted startup retains the existing
+closing controller's cancellation, generation fencing, and cleanup ownership.
 
 Current-context side forks fence source dispatch only during copying. The
 start/stop gate is released before provider I/O; Stop cancels the copy and Kill
@@ -622,6 +757,37 @@ sequenceDiagram
         Dispatch->>Chat: Enqueue native provider turn
     end
 ```
+
+Chat queues every message in SQLite while a provider turn is active. Completion
+claims from the front of the queue in enqueue order. A message the user typed
+gets a turn of its own, so the agent answers each one before the next is sent.
+Agent and Orchestrator messages waiting next to each other (agent messages,
+review comments, conflict notices) go together as one provider input, stopping
+before the next typed message. A steer claims the whole waiting queue and
+appends its guidance to one active turn input. Each source message keeps its
+own transcript row, origin, sender, and delivery handle. Messages arriving after the claim wait for the next
+turn. AO does not truncate a batch or impose a provider input size limit;
+provider limits and refusals are surfaced as delivery failures. An uncertain
+provider result closes the claimed receipts without automatically replaying
+input that the provider may already have accepted. Terminal sessions retain
+their existing delivery path.
+
+The desktop composer sends one message per session at a time, so the daemon
+receives them in the order they were entered. A send clears the box before the
+daemon answers. If the user enters the next message while the previous send is
+still in flight, the composer holds it and sends it as soon as that send is
+accepted. Each held message then gets its own queued row and keeps its place.
+A held message is sent only if the box still holds exactly the text that was
+entered; an edit made since waits for its own Enter. If the previous send is
+refused or gets no answer, the held message stays in the box instead of
+overtaking it.
+
+The queue dock lists waiting messages in send order: the next one on top, the
+newest at the bottom, and a send the daemon has not confirmed yet after them.
+Folded, it keeps the next message in view. While a turn can be steered, every
+row shows Steer. Cmd/Ctrl+Enter in an empty composer steers the next message,
+as Cmd/Ctrl+Enter steers a typed draft. A plain Enter in an empty composer does
+nothing.
 
 ---
 
@@ -948,7 +1114,15 @@ flowchart TD
     Skip --> NextSession{More sessions?}
     CDC --> NextSession
     NextSession -->|Yes| ForEach
-    NextSession -->|No| Loop
+    NextSession -->|No| Reviewers[List reviewers serving<br/>an in-progress review run]
+
+    Reviewers --> AnyReview{Any?}
+    AnyReview -->|No| Loop
+    AnyReview -->|Yes| ProbeReviewer[Probe each reviewer<br/>exact launch or Chat controller]
+    ProbeReviewer --> ReviewerBreaker[Reviewer mass-death breaker]
+    ReviewerBreaker --> ApplyReview[ApplyReviewerObservations]
+    ApplyReview --> RunLifecycle[Review run lifecycle<br/>guarded review_run transitions]
+    RunLifecycle --> Loop
 
 ```
 
@@ -1125,6 +1299,31 @@ sessions have no agent runtime handle and never attach their provider through
 tmux. They may still open session-scoped shell terminals as a worktree escape
 hatch; those shells are separate resources and do not become the agent
 controller.
+
+### Terminal titles
+
+The PTY host reads OSC 0/2 titles from terminal output without changing it,
+drops animated status glyphs, and keeps the latest title with or without viewers.
+`service/terminaltitle` watches live TUI sessions and shell terminals and stores
+changes at a bounded rate. It does not poll: it reads live sessions once at
+start, then one session per CDC event (spawn, restore, terminate and delete all
+emit one), and the shell terminal service reports user shells as they open and
+close. A watch ends when the runtime cannot report titles or the host stops
+answering, and starts again when the session gets a new launch. Session titles use `session_terminal_titles` because
+every `sessions` update bumps the revision that fences observer writes. A label
+is resolved at read time: an explicit name wins, then a meaningful program title
+(`terminalTitle`), then the existing fallback. A title never changes session
+identity. Chat transports and legacy tmux handles have no titles.
+
+### Agents in shell tabs
+
+`service/shellagent` names the agent a user started by hand in a local shell
+tab and whether it is working, idle or waiting. The PTY host reports the
+terminal's foreground process group and its argv (`tcgetpgrp` with
+`kern.procargs2` on macOS, `/proc` on Linux) when the program changes or starts
+or stops drawing; nothing polls, and watches run only while a client subscribes
+to the `shell-agents` mux channel. Windows ConPTY, tmux and remote or cloud
+shells keep plain tabs.
 
 ### Terminal architecture
 

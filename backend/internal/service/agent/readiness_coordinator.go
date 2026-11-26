@@ -8,12 +8,14 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 const (
@@ -26,10 +28,13 @@ const (
 	hermesInstallCheckTimeout = 60 * time.Second
 	// The Hermes auth check resolves the binary, then runs `hermes status`,
 	// which inspects every provider and takes several seconds even when warm.
-	hermesAuthCheckTimeout     = 45 * time.Second
-	opencodeV2MigrationTimeout = 30 * time.Minute
-	defaultAuthCheckTimeout    = 10 * time.Second
-	defaultReadinessWorkers    = 4
+	hermesAuthCheckTimeout = 45 * time.Second
+	// The Docker Agent auth check runs `docker-agent doctor`, then asks the
+	// provider to list models with the key; each has its own bound.
+	dockerAgentAuthCheckTimeout = 30 * time.Second
+	opencodeV2MigrationTimeout  = 30 * time.Minute
+	defaultAuthCheckTimeout     = 10 * time.Second
+	defaultReadinessWorkers     = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -43,6 +48,7 @@ const (
 )
 
 type readinessCoordinatorConfig struct {
+	DataDir             string
 	Agents              []agentregistry.HarnessAgent
 	Factory             func() []agentregistry.HarnessAgent
 	Context             context.Context
@@ -87,6 +93,7 @@ type readinessCallKey struct {
 }
 
 type readinessCoordinator struct {
+	dataDir             string
 	ctx                 context.Context
 	factory             func() []agentregistry.HarnessAgent
 	logger              *slog.Logger
@@ -146,7 +153,8 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		}
 	}
 	c := &readinessCoordinator{
-		ctx: cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
+		dataDir: cfg.DataDir,
+		ctx:     cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
 		displayTTL: cfg.DisplayTTL, launchTTL: cfg.LaunchTTL,
 		installTimeout: cfg.InstallTimeout, authTimeout: cfg.AuthTimeout,
 		retryDelays: cfg.RetryDelays, workers: cfg.Workers,
@@ -160,8 +168,10 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		if label == "" {
 			label = id
 		}
+		interrupt, canInterrupt := item.Agent.(ports.TurnInterruptKey)
+		canInterrupt = canInterrupt && interrupt.InterruptKey() != ""
 		c.entries[id] = &readinessEntry{snapshot: domain.AgentReadinessSnapshot{
-			ID: id, Label: label,
+			ID: id, Label: label, CanStopTurn: canInterrupt,
 			Installation: domain.AgentInstallationObservation{
 				State: domain.AgentInstallationUnknown, Freshness: domain.AgentReadinessStale,
 				ReasonCode: domain.AgentReadinessReasonNotChecked, Reason: "Installation has not been checked yet.",
@@ -218,25 +228,40 @@ func (c *readinessCoordinator) Force(ctx context.Context, agentIDs []string, pur
 // confirms a harness. Compatible checks already in progress remain shared and
 // continue under the daemon context after this caller stops waiting; presence
 // checks never inherit an execution-enabled identity probe.
-func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, bool) {
+//
+// It reports PresenceMissing only when every check finished with a definite
+// answer and none found an agent. A check that is still running when ctx ends,
+// timed out, or failed proves nothing, so the result is PresenceUnconfirmed.
+func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, Presence) {
 	if err := ctx.Err(); err != nil || !purpose.Valid() {
-		return domain.AgentReadinessSnapshot{}, false
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 	}
 	ids, err := c.normalizeIDs(nil)
-	if err != nil || len(ids) == 0 {
-		return domain.AgentReadinessSnapshot{}, false
+	if err != nil {
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
+	}
+	if len(ids) == 0 {
+		return domain.AgentReadinessSnapshot{}, PresenceMissing
 	}
 	waitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	matches := make(chan domain.AgentReadinessSnapshot, 1)
 	done := make(chan struct{})
+	var unconfirmed atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(ids))
 	for _, id := range ids {
 		go func(id string) {
 			defer wg.Done()
 			snapshot, ensureErr := c.ensureOne(waitCtx, id, purpose, readinessInvalidateInstallation, true)
-			if ensureErr != nil || snapshot.Installation.State != domain.AgentInstallationInstalled {
+			if ensureErr != nil {
+				unconfirmed.Store(true)
+				return
+			}
+			if snapshot.Installation.State != domain.AgentInstallationInstalled {
+				if !installationSettled(snapshot.Installation) {
+					unconfirmed.Store(true)
+				}
 				return
 			}
 			select {
@@ -252,17 +277,38 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 	}()
 	select {
 	case snapshot := <-matches:
-		return snapshot, true
+		return snapshot, PresenceFound
 	case <-done:
 		select {
 		case snapshot := <-matches:
-			return snapshot, true
+			return snapshot, PresenceFound
 		default:
-			return domain.AgentReadinessSnapshot{}, false
+			if unconfirmed.Load() {
+				return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
+			}
+			return domain.AgentReadinessSnapshot{}, PresenceMissing
 		}
 	case <-ctx.Done():
-		return domain.AgentReadinessSnapshot{}, false
+		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 	}
+}
+
+// installationSettled reports whether an installation observation is a
+// definite answer for the startup search. Only a fresh, completed check
+// counts: a failed, stale, or still-running check can show the state an
+// earlier check recorded, which proves nothing now. An executable whose
+// identity is not confirmed yet is present but unverified, not absent. So the
+// definite answers are a fresh installed or not-installed result, plus a
+// harness with no installation check, which can never answer.
+func installationSettled(installation domain.AgentInstallationObservation) bool {
+	if installation.Freshness != domain.AgentReadinessFresh || isReadinessFailureCode(installation.ReasonCode) {
+		return false
+	}
+	switch installation.State {
+	case domain.AgentInstallationInstalled, domain.AgentInstallationNotInstalled:
+		return true
+	}
+	return installation.ReasonCode == domain.AgentReadinessReasonInstallCheckUnsupported
 }
 
 func (c *readinessCoordinator) ensure(ctx context.Context, agentIDs []string, purpose domain.AgentReadinessPurpose, requested readinessInvalidation) ([]domain.AgentReadinessSnapshot, error) {
@@ -569,7 +615,11 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	}
 	var incompatibleVersion *opencode.IncompatibleVersionError
 	if errors.As(err, &incompatibleVersion) {
-		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
+		message := item.Manifest.Name + " is not installed."
+		if replaced := incompatibleVersion.ReplacedOpenCode1Message(); replaced != "" {
+			message = replaced
+		}
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, message), false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true
@@ -580,6 +630,11 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (observation domain.AgentAuthenticationObservation, failed bool) {
 	var diagnostics []domain.AgentAuthDiagnostic
 	evidenceCtx, evidence := ports.WithAuthEvidence(c.ctx)
+	if c.dataDir != "" {
+		// AO exports every saved provider key to itself; the probe sees only
+		// what this harness's sessions receive, so status and sessions agree.
+		evidenceCtx = ports.WithAuthEnvironment(evidenceCtx, providerkeys.Withheld(c.dataDir, string(item.Harness)))
+	}
 	defer func() {
 		observation.Diagnostics = append(observation.Diagnostics, diagnostics...)
 		observation.Diagnostics = append(observation.Diagnostics, evidence.Diagnostics()...)
@@ -612,8 +667,15 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 			timeout = opencodeV2MigrationTimeout
 		case domain.HarnessHermes:
 			timeout = hermesAuthCheckTimeout
+		case domain.HarnessDockerAgent:
+			// `docker-agent doctor` (15s) then the provider key check (10s).
+			timeout = dockerAgentAuthCheckTimeout
 		case domain.HarnessMiMoCode:
-			// Allow separate 20-second credential detection and verification budgets.
+			// Allow separate credential detection (40s) and verification (20s) budgets.
+			timeout = 60 * time.Second
+		case domain.HarnessMiniMaxCode:
+			// `mcode provider list` has its own 20-second budget after the
+			// binary is resolved and its version probed.
 			timeout = 40 * time.Second
 		}
 	}
@@ -622,7 +684,11 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
-	if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
+	if runtimeChecker, ok := item.Agent.(ports.AgentRuntimeAuthChecker); ok && c.dataDir != "" {
+		// Verify the credential local session launch will use, including a
+		// login AO saved itself (Claude's setup token).
+		status, account, diagnostics, err = runtimeChecker.AuthStatusForRuntime(ctx, c.dataDir)
+	} else if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
 		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
 	} else {
 		status, err = checker.AuthStatus(ctx)
@@ -647,7 +713,7 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		// A definite observation — a credential exists — but not a verified
 		// one. It is recorded as a success so the coordinator does not retry
 		// it as a failure, and it derives to unknown readiness, not ready.
-		reason := item.Manifest.Name + " has credentials configured, but AO could not verify them."
+		reason := item.Manifest.Name + " has credentials configured, but Orchestrator could not verify them."
 		if slices.ContainsFunc(diagnostics, func(d domain.AgentAuthDiagnostic) bool { return d.Code == "token_renewal_pending" }) {
 			reason = item.Manifest.Name + " is signed in; its access token renews the next time it runs."
 		}

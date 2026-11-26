@@ -44,7 +44,7 @@ type DownloadShell = {
 	trashItem: (filePath: string) => Promise<void>;
 };
 
-type StoredDownload = BrowserDownload & { savePath: string };
+type StoredDownload = Omit<BrowserDownload, "fileRemovable"> & { savePath: string; superseded?: boolean };
 
 type BrowserDownloadManagerOptions = {
 	downloadsDirectory: string;
@@ -62,6 +62,8 @@ const MAX_BLOCKED_DOWNLOADS = 20;
 const DOWNLOAD_DESTINATION_ERROR = "Could not prepare the Downloads folder.";
 const DOWNLOAD_DELETE_ERROR = "Could not delete the downloaded file.";
 const DOWNLOAD_UNAVAILABLE_ERROR = "This download is no longer available. Open the link again.";
+const MAX_FILENAME_BYTES = 255;
+const filenameSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 // How long an explicit approval waits for Chromium to request the file again.
 const DOWNLOAD_APPROVAL_TTL_MS = 60_000;
 
@@ -80,8 +82,8 @@ function downloadSource(url: string): string {
 }
 
 function publicDownload(download: StoredDownload): BrowserDownload {
-	const { savePath: _savePath, ...safe } = download;
-	return safe;
+	const { savePath, superseded, ...safe } = download;
+	return { ...safe, fileRemovable: download.status === "completed" && superseded !== true && existsSync(savePath) };
 }
 
 function safeFilename(value: string): string {
@@ -89,12 +91,34 @@ function safeFilename(value: string): string {
 	return fileName && fileName !== "." && fileName !== ".." ? fileName : "download";
 }
 
+function truncateToBytes(value: string, maxBytes: number): string {
+	let result = "";
+	let bytes = 0;
+	for (const { segment } of filenameSegmenter.segment(value)) {
+		const size = Buffer.byteLength(segment, "utf8");
+		if (bytes + size > maxBytes) break;
+		result += segment;
+		bytes += size;
+	}
+	return result;
+}
+
 function collisionSafePath(directory: string, fileName: string, unavailable: Set<string>): string {
 	const parsed = path.parse(fileName);
-	let candidate = path.join(directory, fileName);
+	const candidateName = (suffix: string): string => {
+		// Keep the extension when it fits. An unusually long extension must also
+		// yield space for the suffix and at least the first stem grapheme.
+		const suffixBytes = Buffer.byteLength(suffix);
+		const firstStemBytes = Buffer.byteLength(filenameSegmenter.segment(parsed.name).containing(0)?.segment ?? "", "utf8");
+		const stemBytes = firstStemBytes <= MAX_FILENAME_BYTES - suffixBytes ? firstStemBytes : Buffer.byteLength("download");
+		const extension = truncateToBytes(parsed.ext, MAX_FILENAME_BYTES - suffixBytes - stemBytes);
+		const stem = truncateToBytes(parsed.name, MAX_FILENAME_BYTES - suffixBytes - Buffer.byteLength(extension)) || "download";
+		return `${stem}${suffix}${extension}`.replace(/[. ]+$/u, "");
+	};
+	let candidate = path.join(directory, candidateName(""));
 	let suffix = 1;
 	while (existsSync(candidate) || unavailable.has(candidate.toLowerCase())) {
-		candidate = path.join(directory, `${parsed.name} (${suffix})${parsed.ext}`);
+		candidate = path.join(directory, candidateName(` (${suffix})`));
 		suffix += 1;
 	}
 	return candidate;
@@ -151,6 +175,7 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		done: (event: unknown, state: "completed" | "cancelled" | "interrupted") => void;
 	}>();
 	const reservedPaths = new Set<string>();
+	const removingItems = new Set<string>();
 	let disposed = false;
 	let downloads: StoredDownload[] = [];
 	let error = "";
@@ -158,16 +183,23 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 	try {
 		const parsed = JSON.parse(readFileSync(options.historyPath, "utf8")) as unknown;
 		if (Array.isArray(parsed)) {
+			const seenPaths = new Set<string>();
 			downloads = parsed
 				.filter((download): download is StoredDownload =>
 					isStoredDownload(download) && isInsideDirectory(options.downloadsDirectory, download.savePath))
-				.map((download) => ({
-					...download,
-					fileName: path.basename(download.savePath),
-					status: download.status === "progressing" || download.status === "paused" ? "interrupted" : download.status,
-					active: false,
-					resumable: false,
-				}));
+				.map((download) => {
+					const key = download.savePath;
+					const superseded = download.superseded === true || seenPaths.has(key);
+					seenPaths.add(key);
+					return {
+						...download,
+						superseded,
+						fileName: path.basename(download.savePath),
+						status: download.status === "progressing" || download.status === "paused" ? "interrupted" : download.status,
+						active: false,
+						resumable: false,
+					};
+				});
 		}
 	} catch {
 		// A missing or malformed optional history file starts with an empty list.
@@ -318,6 +350,9 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		error = "";
 		const now = (options.now ?? Date.now)();
 		reservedPaths.add(savePath.toLowerCase());
+		downloads = downloads.map((download) => download.savePath === savePath
+			? { ...download, superseded: true }
+			: download);
 		activeItems.set(id, item);
 		const download: StoredDownload = {
 			id,
@@ -440,17 +475,26 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 					return state();
 				case "remove": {
 					if (item) throw new Error("Active downloads cannot be removed");
+					if (removingItems.has(input.id)) throw new Error("Download removal is already in progress");
+					const key = download.savePath.toLowerCase();
+					let reserved = false;
+					removingItems.add(input.id);
 					try {
-						if (existsSync(download.savePath)) {
+						if (download.status === "completed" && download.superseded !== true && !reservedPaths.has(key) && existsSync(download.savePath)) {
 							if (!isInsideDirectory(options.downloadsDirectory, download.savePath)) {
 								throw new Error(DOWNLOAD_DELETE_ERROR);
 							}
 							const file = lstatSync(download.savePath);
 							if (!file.isFile() && !file.isSymbolicLink()) throw new Error(DOWNLOAD_DELETE_ERROR);
+							reservedPaths.add(key);
+							reserved = true;
 							await options.shell.trashItem(download.savePath);
 						}
 					} catch {
 						throw new Error(DOWNLOAD_DELETE_ERROR);
+					} finally {
+						if (reserved) reservedPaths.delete(key);
+						removingItems.delete(input.id);
 					}
 					blockedRequests.delete(input.id);
 					approvals.delete(input.id);

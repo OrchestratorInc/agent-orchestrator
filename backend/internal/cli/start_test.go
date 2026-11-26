@@ -290,6 +290,12 @@ func TestRegisterLinuxProtocolHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(entry)
+	if !strings.Contains(content, "\nName=Orchestrator\n") {
+		t.Fatalf("desktop entry does not use the visible app name:\n%s", content)
+	}
+	if !strings.Contains(content, "\nNoDisplay=true\n") {
+		t.Fatalf("protocol handler must stay hidden from app menus:\n%s", content)
+	}
 	if !strings.Contains(content, `Exec="/tmp/Agent Orchestrator 100%%.AppImage" %u`) {
 		t.Fatalf("desktop entry does not safely target AppImage:\n%s", content)
 	}

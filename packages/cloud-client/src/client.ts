@@ -14,6 +14,8 @@ import type {
   CurrentAccount,
   DeleteProjectResponse,
   DeleteSessionResponse,
+  SessionPinResponse,
+  UpdateSessionInput,
   ErrorEnvelope,
   EventReplayOptions,
   GitHubInstallation,
@@ -26,7 +28,16 @@ import type {
   Project,
   ProjectPage,
   ProjectSettingsInput,
+  ProjectEnvironment,
+  PutProjectEnvironmentInput,
+  ProjectIntakeStatus,
+  Cue,
+  CueDefinitionInput,
+  InvokeCueResult,
+  DataRetention,
+  DataRetentionChange,
   PutAgentProviderConnectionInput,
+  PutDataRetentionInput,
   RedactedProviderConnection,
   RequestOptions,
   Session,
@@ -39,11 +50,14 @@ import type {
   SessionPullRequests,
   SessionReviewState,
   SendMessageInput,
+  EditQueuedMessageInput,
   TerminalKind,
   TerminalTicket,
   TurnSteeredEvent,
+  TurnSteerRequestedEvent,
   UpdateProjectInput,
   UserMessageEvent,
+  UserMessageEditedEvent,
   WorkerBootstrapInput,
   WorkerBootstrapResponse,
   WorkerCancellationResponse,
@@ -69,6 +83,11 @@ import type {
   WorkspaceEntryPage,
   WorkspaceFile,
   WorkspaceFileWriteInput,
+  ChatSearchResults,
+  SaveSessionArtifactInput,
+  SessionArtifactResult,
+  SessionArtifactVersion,
+  SessionArtifactVersionList,
 } from "./types.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -93,6 +112,7 @@ interface JSONRequestOptions extends RequestOptions {
 }
 
 export class CloudApiError extends Error {
+  readonly telemetryCode: string = "CLOUD_API_ERROR";
   readonly status: number;
   readonly code: string;
   readonly requestId: string;
@@ -129,6 +149,21 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  /** How long the signed-in user's Cloud sessions and their conversation content are kept. */
+  getDataRetention(options: RequestOptions = {}): Promise<DataRetention> {
+    return this.request("/api/cloud/v1/me/data-retention", options);
+  }
+
+  /**
+   * Choose how long the signed-in user's Cloud sessions are kept. With
+   * `dryRun` nothing changes; both modes count the sessions the period deletes.
+   */
+  putDataRetention(input: PutDataRetentionInput, options: RequestOptions = {}): Promise<DataRetentionChange> {
+    return this.request("/api/cloud/v1/me/data-retention", {
+      method: "PUT", body: input, signal: options.signal,
+    });
   }
 
   async listAgents(
@@ -175,6 +210,48 @@ export class CloudClient {
   updateProjectSettings(orgId: string, projectId: string, input: ProjectSettingsInput, options: RequestOptions = {}): Promise<{ project: Project }> {
     return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/settings`), {
       method: "PATCH", body: input, signal: options.signal,
+    });
+  }
+
+  getProjectEnvironment(orgId: string, projectId: string, options: RequestOptions = {}): Promise<ProjectEnvironment> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/environment`), options);
+  }
+
+  putProjectEnvironment(orgId: string, projectId: string, input: PutProjectEnvironmentInput, options: RequestOptions = {}): Promise<ProjectEnvironment> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/environment`), {
+      method: "PUT", body: input, signal: options.signal,
+    });
+  }
+
+  getProjectIntakeStatus(orgId: string, projectId: string, options: RequestOptions = {}): Promise<ProjectIntakeStatus> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/intake`), options);
+  }
+
+  listProjectCues(orgId: string, projectId: string, options: RequestOptions = {}): Promise<{ cues: Cue[] }> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/cues`), options);
+  }
+
+  createProjectCue(orgId: string, projectId: string, input: CueDefinitionInput, options: RequestOptions = {}): Promise<{ cue: Cue }> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/cues`), {
+      method: "POST", body: input, signal: options.signal,
+    });
+  }
+
+  updateProjectCue(orgId: string, cueId: string, input: CueDefinitionInput, options: RequestOptions = {}): Promise<{ cue: Cue }> {
+    return this.request(this.orgPath(orgId, `/cues/${encodeURIComponent(cueId)}`), {
+      method: "PATCH", body: input, signal: options.signal,
+    });
+  }
+
+  async deleteProjectCue(orgId: string, cueId: string, options: RequestOptions = {}): Promise<void> {
+    await this.request<unknown>(this.orgPath(orgId, `/cues/${encodeURIComponent(cueId)}`), {
+      method: "DELETE", signal: options.signal,
+    });
+  }
+
+  invokeProjectCue(orgId: string, cueId: string, sessionId: string, options: RequestOptions & { idempotencyKey?: string } = {}): Promise<InvokeCueResult> {
+    return this.request(this.orgPath(orgId, `/cues/${encodeURIComponent(cueId)}/invoke`), {
+      method: "POST", body: { sessionId }, idempotencyKey: options.idempotencyKey, signal: options.signal,
     });
   }
 
@@ -369,6 +446,87 @@ export class CloudClient {
     );
   }
 
+  /** Saves an edit of one artifact file; 409 artifact_changed when the file changed since it was read. */
+  saveArtifact(
+    orgId: string,
+    sessionId: string,
+    input: SaveSessionArtifactInput,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactResult> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/content`),
+      { method: "PUT", body: input, signal: options.signal },
+    );
+  }
+
+  /** Lists the kept versions of one artifact file, newest (the committed file) first. */
+  listArtifactVersions(
+    orgId: string,
+    sessionId: string,
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactVersionList> {
+    return this.request(
+      this.withQuery(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/versions`), { path }),
+      options,
+    );
+  }
+
+  /** Returns one kept version of an artifact file with the start of its text. */
+  getArtifactVersion(
+    orgId: string,
+    sessionId: string,
+    path: string,
+    version: number,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactVersion> {
+    return this.request(
+      this.withQuery(
+        this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/versions/${encodeURIComponent(String(version))}`),
+        { path },
+      ),
+      options,
+    );
+  }
+
+  /** Makes a kept version the committed file again, as its newest version. */
+  restoreArtifactVersion(
+    orgId: string,
+    sessionId: string,
+    path: string,
+    version: number,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactResult> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/versions/restore`),
+      { method: "POST", body: { path, version }, signal: options.signal },
+    );
+  }
+
+  /** Starts a live session's exited terminal agent again in its worker. */
+  restartSessionAgent(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<{ requested: boolean }> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/agent/restart`),
+      { method: "POST", signal: options.signal },
+    );
+  }
+
+  /** Searches the chat messages of the organization's sessions, newest first. */
+  searchChats(
+    orgId: string,
+    query: string,
+    options: RequestOptions & { limit?: number } = {},
+  ): Promise<ChatSearchResults> {
+    return this.request(
+      this.withQuery(this.orgPath(orgId, "/chat-search"), { q: query, limit: options.limit }),
+      { signal: options.signal },
+    );
+  }
+
   /** Retries a session whose worker never started (see Session.startupError). */
   retrySessionStartup(
     orgId: string,
@@ -463,6 +621,32 @@ export class CloudClient {
     return this.request(
       this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}`),
       { method: "DELETE", signal: options.signal },
+    );
+  }
+
+  /** Renames a session for everyone who sees it. */
+  updateSession(
+    orgId: string,
+    sessionId: string,
+    input: UpdateSessionInput,
+    options: RequestOptions = {},
+  ): Promise<{ session: Session }> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}`),
+      { method: "PATCH", body: input, signal: options.signal },
+    );
+  }
+
+  /** Pins or unpins a session in the caller's own sidebar. */
+  setSessionPinned(
+    orgId: string,
+    sessionId: string,
+    pinned: boolean,
+    options: RequestOptions = {},
+  ): Promise<SessionPinResponse> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/pin`),
+      { method: pinned ? "POST" : "DELETE", signal: options.signal },
     );
   }
 
@@ -578,6 +762,85 @@ export class CloudClient {
       {
         method: "POST",
         body: typeof message === "string" ? { text: message } : message,
+        idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Replace a queued message's text and files before the agent starts on it
+   * (offered when offering.features lists queued-edit). 409 TURN_NOT_QUEUED
+   * once the agent took it.
+   */
+  editQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    message: EditQueuedMessageInput,
+    options: RequestOptions = {},
+  ): Promise<{ event: UserMessageEditedEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit`,
+      ),
+      {
+        method: "POST",
+        body: message,
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Take back a message whose turn is still queued (offered when
+   * offering.features lists queued-delete). Unlike cancelTurn it never stops a
+   * turn that left the queue: 409 TURN_NOT_QUEUED once the agent took it,
+   * 409 ALREADY_STEERED once the agent took it as a steer. While the worker is
+   * taking the message as a steer it answers pending, and the steer's outcome
+   * decides (chat.turn_interrupted deleted, or chat.turn_steered with
+   * deleteRequested).
+   */
+  deleteQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    options: RequestOptions = {},
+  ): Promise<WorkerOKResponse & { pending?: boolean }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/delete`,
+      ),
+      {
+        method: "POST",
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Steer a message whose turn is still queued into the running turn
+   * (offered when offering.features lists queued-steer). Answers the steer
+   * request; the message leaves the queue on chat.turn_steered and stays
+   * queued on chat.turn_steer_failed. 409 TURN_NOT_QUEUED once the agent took
+   * it, TURN_NOT_STEERABLE when no running turn can take guidance.
+   */
+  steerQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    options: IdempotentRequestOptions & { composerEpoch?: number },
+  ): Promise<{ event: TurnSteerRequestedEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/steer-queued`,
+      ),
+      {
+        method: "POST",
+        body: options.composerEpoch !== undefined ? { composerEpoch: options.composerEpoch } : {},
         idempotencyKey: options.idempotencyKey,
         signal: options.signal,
       },
@@ -806,6 +1069,17 @@ export class CloudClient {
       providerConnections: RedactedProviderConnection[];
     }>(this.orgPath(orgId, "/provider-connections"), options);
     return response.providerConnections;
+  }
+
+  listUserAgentModels(
+    orgId: string,
+    provider: "claude-code" | "codex" | "cursor" | "opencode",
+    options: RequestOptions = {},
+  ): Promise<ChatModelsResponse> {
+    return this.request(
+      this.orgPath(orgId, `/providers/${encodeURIComponent(provider)}/models`),
+      options,
+    );
   }
 
   putAgentProviderConnection(

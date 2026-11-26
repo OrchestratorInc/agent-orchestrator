@@ -10,9 +10,7 @@
  *
  * Loading shows the source as plain text and swaps in the diagram when the
  * engine chunk arrives — the same plain-first pattern as syntax highlighting,
- * so there is no spinner flash and no layout shift on first paint. A fence
- * that is still streaming never starts a render at all: its text changes per
- * delta, and each attempt would join the cache under a key nothing rereads.
+ * so there is no spinner flash and no layout shift on first paint.
  *
  * On any failure (syntax error, oversized block, engine chunk that will not
  * load) the block stays source text with a quiet caption. A missing diagram
@@ -22,6 +20,7 @@
 
 import { memo, useCallback, useEffect, useState, type MouseEvent } from "react";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { isRenderableDiagram, renderMermaidDiagram, type DiagramTheme } from "../../lib/mermaid-diagram";
 import { CopyButton } from "./CopyButton";
@@ -58,12 +57,12 @@ function useDiagramTheme(): DiagramTheme {
 
 export const MermaidBlock = memo(function MermaidBlock({
 	code,
-	streaming = false,
+	interactive = true,
 	onLinkOpen,
 }: {
 	code: string;
-	/** Text still arriving. A block that changes per delta is not worth laying out. */
-	streaming?: boolean;
+	/** Passive document thumbnails render the diagram without buttons or link actions. */
+	interactive?: boolean;
 	/**
 	 * Where a web link inside the diagram goes. Chat passes its AO Browser
 	 * handler; surfaces without one (file preview) leave it undefined and
@@ -78,9 +77,9 @@ export const MermaidBlock = memo(function MermaidBlock({
 	const [showSource, setShowSource] = useState(false);
 
 	useEffect(() => {
-		if (streaming || !isRenderableDiagram(code)) {
+		if (!isRenderableDiagram(code)) {
 			setSvg(undefined);
-			setFailed(!streaming && !isRenderableDiagram(code) && code.trim().length > 0);
+			setFailed(code.trim().length > 0);
 			return;
 		}
 		let live = true;
@@ -97,7 +96,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 		return () => {
 			live = false;
 		};
-	}, [code, theme, streaming]);
+	}, [code, theme]);
 
 	// A `click A https://…` directive in the source becomes a live anchor in
 	// the SVG. Letting it navigate would drive the whole renderer to that
@@ -140,20 +139,19 @@ export const MermaidBlock = memo(function MermaidBlock({
 	const showingDiagram = svg !== undefined && !showSource;
 
 	return (
-		<div className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
-			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+		<div data-chat-find-exclude="" className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
+			<div data-excerpt-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
 					mermaid
 				</span>
-				<div className="ml-auto flex items-center gap-1.5">
+				{interactive ? <div className="ml-auto flex items-center gap-1.5">
 					{svg !== undefined ? (
 						<div
 							role="group"
 							aria-label="Diagram view"
 							className="flex items-center rounded-md border border-border bg-background p-0.5"
 						>
-							<button
-								type="button"
+							<Pressable
 								onClick={() => setShowSource(false)}
 								aria-pressed={!showSource}
 								className={cn(
@@ -164,9 +162,8 @@ export const MermaidBlock = memo(function MermaidBlock({
 								)}
 							>
 								Diagram
-							</button>
-							<button
-								type="button"
+							</Pressable>
+							<Pressable
 								onClick={() => setShowSource(true)}
 								aria-pressed={showSource}
 								className={cn(
@@ -177,13 +174,13 @@ export const MermaidBlock = memo(function MermaidBlock({
 								)}
 							>
 								Code
-							</button>
+							</Pressable>
 						</div>
 					) : null}
 					<div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">
 						<CopyButton text={code} label="Copy diagram source" />
 					</div>
-				</div>
+				</div> : null}
 			</div>
 			{showingDiagram ? (
 				<div className="overflow-x-auto bg-background px-3 py-3">
@@ -197,8 +194,8 @@ export const MermaidBlock = memo(function MermaidBlock({
 						data-testid="mermaid-diagram"
 						role="img"
 						aria-label="Mermaid diagram"
-						onClick={onDiagramClick}
-						onAuxClick={onDiagramAuxClick}
+						onClick={interactive ? onDiagramClick : undefined}
+						onAuxClick={interactive ? onDiagramAuxClick : undefined}
 						// The theme already matches AO's: the diagram re-renders with
 						// mermaid's dark theme when AO is dark (see
 						// useDiagramTheme), so no CSS inversion is applied here.
@@ -207,12 +204,12 @@ export const MermaidBlock = memo(function MermaidBlock({
 					/>
 				</div>
 			) : (
-				<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
+				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
 					<code className="font-mono text-xs leading-[1.6] text-foreground">{code}</code>
 				</pre>
 			)}
 			{failed && !showSource ? (
-				<div className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
+				<div data-excerpt-exclude="" className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
 					Couldn&apos;t render this diagram — showing its source.
 				</div>
 			) : null}

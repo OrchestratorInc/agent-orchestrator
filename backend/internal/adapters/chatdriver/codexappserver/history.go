@@ -126,6 +126,8 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 		}
 	}
 
+	c.rememberBackgroundLaunchHistory(resp.Thread.Turns)
+
 	events := make([]ports.ChatEvent, 0, len(resp.Thread.Turns)*4)
 	citations := newCitationFormatter()
 	// Native history is a snapshot: collect references before projecting any

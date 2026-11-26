@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { clearCloudChatCaches } from "../lib/cloud-chat-history";
 import { useUiStore } from "../stores/ui-store";
 
 /**
@@ -12,6 +13,7 @@ export function clearPreviousAccountState(queryClient: QueryClient): void {
 		if (mutation.state.status === "error") mutations.remove(mutation);
 	}
 	useUiStore.setState({ orchestratorStartupErrors: {}, orchestratorReplacementErrors: {} });
+	clearCloudChatCaches(queryClient);
 }
 
 /**

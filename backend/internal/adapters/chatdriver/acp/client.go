@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,11 +58,17 @@ func (c *conversation) RequestPermission(
 	if len(params.Options) == 0 {
 		return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
 	}
+	if isQwenUserQuestion(params.ToolCall) {
+		return c.handleQwenUserQuestion(ctx, params)
+	}
 	c.mu.Lock()
 	policy, mode := c.permissionFor, c.permissionMode
 	c.mu.Unlock()
 	if policy != nil {
 		if selected, handled := policy(mode, params); handled {
+			if selected == CancelPermission {
+				return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
+			}
 			for _, option := range params.Options {
 				if option.OptionId == selected {
 					return acpsdk.RequestPermissionResponse{
@@ -255,12 +262,18 @@ func (c *conversation) requestInput(
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 	accepted, hasAccepted := c.accepted[requestID]
+	turnID := c.activeTurn
+	parked.turnID = turnID
 	if hasAccepted && accepted.Kind == persistentInteractionInput {
 		delete(c.accepted, requestID)
+	} else if c.turnInterruptedLocked(turnID) {
+		// Stop already closed this turn's questions; one that arrives after
+		// that scan would otherwise wait with no deadline.
+		c.mu.Unlock()
+		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	} else {
 		c.pendingInputs[requestID] = parked
 	}
-	turnID := c.activeTurn
 	c.mu.Unlock()
 
 	c.emit(ports.ChatEvent{
@@ -273,7 +286,10 @@ func (c *conversation) requestInput(
 		parked.result <- *accepted.Input
 	}
 
-	timer := timeAfter(approvalWait)
+	// Unlike an approval, a question has no deadline: it waits for an answer, the
+	// provider withdrawing it (Stop does this), or the conversation ending. An
+	// expired form reaches the agent as an empty one, which reads as the user
+	// having answered nothing.
 	select {
 	case response := <-parked.result:
 		return response, nil
@@ -282,10 +298,6 @@ func (c *conversation) requestInput(
 		if !c.providerDetaching() {
 			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		}
-		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
-	case <-timer:
-		c.discardInput(requestID)
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 }
@@ -342,10 +354,23 @@ func (c *conversation) ResolveInput(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		if !c.closed {
+		// A question whose turn was stopped or has since ended is not put back:
+		// nothing would close it, since questions have no deadline.
+		stopped := !c.closed && (c.turnInterruptedLocked(request.turnID) ||
+			(request.turnID != "" && request.turnID != c.activeTurn))
+		if !c.closed && !stopped {
 			c.pendingInputs[requestID] = request
 		}
 		c.mu.Unlock()
+		if stopped {
+			// Stop's scan, or the turn's end, came while the answer was being
+			// recorded and could not see this question, so close it as Stop would.
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
+			select {
+			case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
+			default:
+			}
+		}
 		return err
 	}
 	command.EventID = eventID
@@ -601,6 +626,11 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	var err error
 	switch method {
 	case acpsdk.ClientMethodSessionUpdate:
+		// Decode for an async task only when its discriminator can be present,
+		// so ordinary frames are not decoded twice on the frame reader.
+		if bytes.Contains(params, []byte("async_task")) && c.observeAsyncTaskNotification(params) {
+			return true
+		}
 		var update acpsdk.SessionNotification
 		if err = json.Unmarshal(params, &update); err == nil {
 			err = update.Validate()
@@ -608,8 +638,11 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		if err == nil {
 			err = c.SessionUpdate(context.Background(), update)
 		}
-	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPPromptHandoffMethod,
+		persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
+	case claudeSDKMessageMethod:
+		err = c.handleClaudeSDKMessage(params)
 	default:
 		return false
 	}
@@ -619,18 +652,114 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	return true
 }
 
+// claudeSDKMessageMethod carries the raw Claude Agent SDK messages a session
+// asked for with _meta.claudeCode.emitRawSDKMessages.
+const claudeSDKMessageMethod = "_claude/sdkMessage"
+
+// handleClaudeSDKMessage reports the SDK's running and idle states. Claude Code
+// starts cycles on its own after an AO turn, for example to answer a finished
+// background task, and those cycles have no ACP prompt, so no turn events.
+func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
+	var payload struct {
+		SessionID string `json:"sessionId"`
+		Message   struct {
+			Type    string `json:"type"`
+			Subtype string `json:"subtype"`
+			State   string `json:"state"`
+		} `json:"message"`
+		Meta map[string]any `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return err
+	}
+	if payload.Message.Type != "system" || payload.Message.Subtype != "session_state_changed" {
+		return nil
+	}
+	var status domain.ThreadStatus
+	switch payload.Message.State {
+	case "running":
+		status = domain.ThreadStatusActive
+	case "idle":
+		status = domain.ThreadStatusIdle
+	default:
+		// requires_action: the approval or input request already reports it.
+		return nil
+	}
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if sessionID == "" || payload.SessionID != sessionID {
+		return nil
+	}
+	// Only the live state means anything; history replay must not carry one.
+	c.historyMu.Lock()
+	loadingHistory := c.history != nil
+	c.historyMu.Unlock()
+	if loadingHistory {
+		return nil
+	}
+	c.mu.Lock()
+	c.providerReportsState = true
+	c.mu.Unlock()
+	if status == domain.ThreadStatusIdle {
+		// The agent's own idle ends the cycle it ran without a prompt.
+		c.endProviderCycle()
+	}
+	event := ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: status}}
+	if eventID := stableACPEventID(payload.Meta); eventID != "" {
+		event.ProviderEventID = eventID + ":0"
+	}
+	c.emit(event)
+	return nil
+}
+
 // processUpdate runs the full ACP -> AO normalization for one update: live
 // notifications and replayed updates during the post-load drain.
 func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	if c.prepareHistoryUpdate(params.Update) {
 		return nil
 	}
+	update := params.Update
+	// Outside a turn, the update belongs to the agent's own cycle. The turn is
+	// read and the cycle entered under one hold of mu, so a turn starting in
+	// between cannot find a cycle open, or this update's items in its maps.
+	// cycleStateMu is held through a cycle update's events (see
+	// emitEndedCycle), and otherwise only until the cycle check is done.
+	replaying := c.historyReplayActive()
+	if !replaying {
+		c.cycleStateMu.Lock()
+	}
+	holdingCycleState := !replaying
 	c.mu.Lock()
 	sessionID := c.sessionID
 	turnID := c.activeTurn
+	sessionMatches := sessionID == "" || string(params.SessionId) == sessionID
+	var cycle *providerCycle
+	opened := false
+	if sessionMatches && turnID == "" && !replaying {
+		cycle, opened = c.enterProviderCycleLocked(update)
+	}
 	c.mu.Unlock()
-	if sessionID != "" && string(params.SessionId) != sessionID {
+	if opened {
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
+	}
+	if holdingCycleState {
+		if cycle != nil {
+			// Deferred first, so it runs last: after the late settles below.
+			defer c.cycleStateMu.Unlock()
+		} else {
+			c.cycleStateMu.Unlock()
+		}
+	}
+	if !sessionMatches {
 		return fmt.Errorf("ACP update for unexpected session %q", params.SessionId)
+	}
+	// itemTurn names this update's message and reasoning items: the turn's, or
+	// in a cycle the cycle's, so each cycle gets items of its own.
+	itemTurn := turnID
+	if cycle != nil {
+		itemTurn = cycle.id
+		defer c.armProviderCycle(cycle, update)
 	}
 	sourceID := stableACPEventID(params.Meta)
 	sourceIndex := 0
@@ -642,7 +771,6 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.emit(event)
 	}
 
-	update := params.Update
 	providerOutputResumed := update.AgentMessageChunk != nil ||
 		update.AgentThoughtChunk != nil ||
 		update.ToolCall != nil ||
@@ -652,8 +780,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
+		if c.steerAcknowledgement(turnID, contentText(update.AgentMessageChunk.Content)) {
+			// The agent's note that it took a steer prompt; the "↳ Steered" mark
+			// already says so.
+			break
+		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
@@ -663,15 +797,17 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			}
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentMessageChunk.MessageId, "assistant", turnID))
+		parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta))
+		if parentID != "" || cycle != nil {
+			// A steer goes to the parent turn, so a subagent's reply stays one
+			// message. A cycle takes no steers.
+			segment = 0
+		}
+		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", itemTurn, segment))
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
-			if parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta)); parentID != "" {
-				c.mu.Lock()
-				item, existed := c.nestedMessages[id]
-				item.text += delta
-				item.parentID = parentID
-				c.nestedMessages[id] = item
-				c.mu.Unlock()
+			if parentID != "" {
+				existed, late := c.appendItemText(cycle, itemNested, id, parentID, delta)
+				defer c.emitSettledCycle(late)
 				detail, _ := json.Marshal(map[string]any{"parentProviderItemId": parentID, "nestedAgent": true})
 				if !existed {
 					emit(ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: turnID,
@@ -682,24 +818,25 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 					ProviderItemID: id, Delta: delta})
 				break
 			}
-			c.mu.Lock()
-			c.messages[id] += delta
-			c.mu.Unlock()
+			_, late := c.appendItemText(cycle, itemMessage, id, "", delta)
+			defer c.emitSettledCycle(late)
 			emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turnID, ProviderItemID: id, Delta: delta})
 		}
 	case update.AgentThoughtChunk != nil:
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentThoughtChunk.MessageId, "thought", turnID))
+		if cycle != nil {
+			segment = 0
+		}
+		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", itemTurn, segment))
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
-			c.mu.Lock()
-			_, existed := c.thoughts[id]
-			c.thoughts[id] += delta
-			c.mu.Unlock()
+			existed, late := c.appendItemText(cycle, itemThought, id, "", delta)
+			defer c.emitSettledCycle(late)
 			if !existed {
 				emit(ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: turnID,
 					ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
@@ -718,6 +855,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.mu.Lock()
 		c.tools[tool.id] = tool
 		c.mu.Unlock()
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.ToolCallUpdate != nil:
@@ -726,6 +864,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			emit(ports.ChatEvent{Kind: ports.ChatEventCommandOutputDelta, ProviderTurnID: turnID,
 				ProviderItemID: c.providerItemID(tool.id), Delta: delta})
 		}
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.Plan != nil:
@@ -734,12 +873,21 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
-			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
+			if title, ok := providerTitle(*update.SessionInfoUpdate.Title); ok {
+				emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: title})
+			}
 		}
 		if turnID != "" {
-			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
-				emit(event)
+			// A retry or limit notice is live status. The live run already stored
+			// and settled it; replayed into a reconstructed turn it would come back
+			// as a new running row (direct connections give it a fresh id) on a turn
+			// that has long ended, spinning in every client.
+			if !c.historyReplayActive() {
+				if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
+					emit(event)
+				}
 			}
+			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -765,6 +913,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		if limits := claudeRateLimits(update.UsageUpdate.Meta); limits != nil {
 			emit(ports.ChatEvent{Kind: ports.ChatEventRateLimits, RateLimits: limits})
 		}
+		c.trackClaudeRateLimit(update.UsageUpdate.Meta, time.Now())
 	}
 	return nil
 }
@@ -781,9 +930,16 @@ func contentText(content acpsdk.ContentBlock) string {
 	return content.Text.Text
 }
 
-func messageID(id *string, prefix, turnID string) string {
+// segmentedMessageID names a streamed message. An agent that sends no message
+// id streams the whole turn as one message, so each steer the turn takes starts
+// a new one: otherwise the reply written after the steer would grow the message
+// that sits above it in the timeline.
+func segmentedMessageID(id *string, prefix, turnID string, segment int) string {
 	if id != nil && *id != "" {
 		return *id
+	}
+	if segment > 0 {
+		return fmt.Sprintf("%s-%s-%d", prefix, turnID, segment)
 	}
 	return prefix + "-" + turnID
 }
@@ -851,6 +1007,21 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 	}
 	if outputCut {
 		detailMap["outputTruncated"] = true
+	}
+	if c.harness == domain.HarnessHermes {
+		// Hermes omits tool payloads on delegation updates. Keep those fields
+		// absent, and use the timeline's arguments key without changing other
+		// ACP providers' persisted input contract.
+		delete(detailMap, "input")
+		if input, err := json.Marshal(tool.rawInput); err == nil && string(input) != "null" {
+			detailMap["arguments"] = cappedPayload(tool.rawInput)
+		}
+		if len(tool.locations) == 0 {
+			delete(detailMap, "locations")
+		}
+		if len(tool.content) == 0 {
+			delete(detailMap, "content")
+		}
 	}
 	if activityKind == domain.ActivityKindFileChange {
 		files := make([]map[string]any, 0)
@@ -1221,6 +1392,34 @@ func (c *conversation) sessionFailureEvent(
 	return event, true
 }
 
+// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
+// OpenCode ends a failed compaction with a normal end_turn, so this update is the
+// only sign that the history was left as it was.
+func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
+	compaction := nestedMap(meta, "opencode/compaction")
+	if compaction == nil {
+		return
+	}
+	failure := ""
+	switch status, _ := compaction["status"].(string); status {
+	case "started", "completed":
+	case "failed":
+		failure, _ = nestedMap(compaction, "error")["message"].(string)
+		if failure = strings.TrimSpace(failure); failure == "" {
+			failure = "Compaction failed"
+		}
+	default:
+		// OpenCode only sends the three statuses above. Leave the recorded
+		// outcome alone rather than guess what a new one means.
+		return
+	}
+	c.mu.Lock()
+	if c.compactingTurnID == turnID {
+		c.compactionFailure = failure
+	}
+	c.mu.Unlock()
+}
+
 func sessionFailure(meta map[string]any) map[string]any {
 	air := nestedMap(nestedMap(meta, "jetbrains"), "air")
 	version, versionOK := number(air["version"])
@@ -1300,6 +1499,61 @@ func claudeRateLimits(meta map[string]any) *ports.ChatRateLimits {
 		limits.PlanLabel = strings.ReplaceAll(kind, "_", " ")
 	}
 	return limits
+}
+
+const claudeUsageLimitMaxWait = 31 * 24 * time.Hour
+
+func (c *conversation) trackClaudeRateLimit(meta map[string]any, now time.Time) {
+	info := nestedMap(meta, "_claude/rateLimit")
+	if info == nil {
+		return
+	}
+	kind, _ := info["rateLimitType"].(string)
+	if kind == "" {
+		kind = "unknown"
+	}
+	status, _ := info["status"].(string)
+	overageStatus, _ := info["overageStatus"].(string)
+	usingOverage, _ := info["isUsingOverage"].(bool)
+	overageInUse, _ := info["overageInUse"].(bool)
+	overage := overageStatus == "allowed" || overageStatus == "allowed_warning" || usingOverage || overageInUse
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case status == "rejected" && !overage:
+		var reset time.Time
+		if seconds, ok := number(info["resetsAt"]); ok && seconds > 0 {
+			if at := time.Unix(int64(seconds), 0).UTC(); at.Sub(now) <= claudeUsageLimitMaxWait {
+				reset = at
+			}
+		}
+		if c.claudeRejectedLimits == nil {
+			c.claudeRejectedLimits = make(map[string]time.Time)
+		}
+		c.claudeRejectedLimits[kind] = reset
+	case status == "allowed" || status == "allowed_warning" || overage:
+		delete(c.claudeRejectedLimits, kind)
+	}
+}
+
+func (c *conversation) claudeUsageLimitReset(now time.Time) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for kind, reset := range c.claudeRejectedLimits {
+		if !reset.IsZero() && !reset.After(now) {
+			delete(c.claudeRejectedLimits, kind)
+		}
+	}
+	var latest time.Time
+	for _, reset := range c.claudeRejectedLimits {
+		if reset.IsZero() {
+			return time.Time{}, false
+		}
+		if reset.After(latest) {
+			latest = reset
+		}
+	}
+	return latest, !latest.IsZero()
 }
 
 func number(value any) (float64, bool) {

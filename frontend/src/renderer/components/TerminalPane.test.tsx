@@ -10,6 +10,9 @@ import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
+import { CloudCpError } from "../lib/cloud-cp";
 import {
 	cloudTerminalKind,
 	TerminalCacheProvider,
@@ -67,8 +70,20 @@ const {
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
+// What the pane hands the terminal for dropped files, and the session organization's attachment limit.
+const dropSetup = vi.hoisted(() => ({
+	maxAttachmentBytes: undefined as number | undefined,
+	props: undefined as { saveDroppedFile?: unknown; droppedFileMaxBytes?: number } | undefined,
+}));
+// Read through a function: an assignment in a test would otherwise narrow it for the checks that follow.
+const droppedFileProps = () => dropSetup.props;
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
+}));
 
+const cloudRestoreMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("../hooks/useCloudCp", () => ({
+	createRendererCloudCpClient: () => ({ restoreSession: cloudRestoreMock }),
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
 		client: { createTerminalTicket: cloudTicketMock },
@@ -103,8 +118,11 @@ vi.mock("./XtermTerminal", () => ({
 		onLinkOpen?: (uri: string) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
 		supportsCursorColorScheme?: boolean;
+		saveDroppedFile?: unknown;
+		droppedFileMaxBytes?: number;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
+		dropSetup.props = { saveDroppedFile: props.saveDroppedFile, droppedFileMaxBytes: props.droppedFileMaxBytes };
 		visibleContentCallback.value = props.onVisibleContent;
 		const instance = useRef(0);
 		if (instance.current === 0) {
@@ -267,6 +285,45 @@ describe("cloud terminal routing", () => {
 	});
 });
 
+describe("TerminalPane dropped files", () => {
+	it("takes drops on a Cloud terminal only while the control plane takes files, up to its limit", async () => {
+		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
+		dropSetup.maxAttachmentBytes = undefined;
+		const without = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
+			// A path on this machine means nothing in the sandbox: no drops at all.
+			expect(droppedFileProps()?.saveDroppedFile).toBeNull();
+		} finally {
+			without.restore();
+			without.unmount();
+		}
+		dropSetup.maxAttachmentBytes = 25 * 1024 * 1024;
+		dropSetup.props = undefined;
+		const withFiles = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(droppedFileProps()?.saveDroppedFile).toBeTypeOf("function"));
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBe(25 * 1024 * 1024);
+		} finally {
+			withFiles.restore();
+			withFiles.unmount();
+			dropSetup.maxAttachmentBytes = undefined;
+		}
+	});
+
+	it("leaves a local terminal's drops to this machine", async () => {
+		dropSetup.props = undefined;
+		const view = renderPane(worker);
+		try {
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
+			expect(droppedFileProps()?.saveDroppedFile).toBeUndefined();
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBeUndefined();
+		} finally {
+			view.restore();
+		}
+	});
+});
+
 describe("TerminalPane Cloud reviewer connections", () => {
 	it("dials each Cloud reviewer through the control plane by its own terminal ID", async () => {
 		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
@@ -305,6 +362,7 @@ function renderPane(
 	onInputRequestResult?: (id: number, accepted: boolean) => void,
 	terminalTarget?: TerminalTarget,
 	onTerminalContentReadyChange?: (ready: boolean) => void,
+	onLinkOpen?: (uri: string) => void,
 ) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const previousAO = window.ao;
@@ -318,6 +376,7 @@ function renderPane(
 					inputRequest={inputRequest}
 					onInputRequestResult={onInputRequestResult}
 					onTerminalContentReadyChange={onTerminalContentReadyChange}
+					onLinkOpen={onLinkOpen}
 					session={session}
 					terminalTarget={terminalTarget}
 					theme="dark"
@@ -354,6 +413,7 @@ function renderCachedPane({
 	terminalTarget,
 	focusRequested = false,
 	createMux,
+	onLinkOpen,
 }: {
 	session?: WorkspaceSession;
 	sessions: WorkspaceSession[];
@@ -361,8 +421,10 @@ function renderCachedPane({
 	terminalTarget?: TerminalTarget;
 	focusRequested?: boolean;
 	createMux?: () => TerminalMux;
+	onLinkOpen?: (uri: string) => void;
 }) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryDefaults(shellTerminalsQueryKey, { staleTime: Infinity });
 	queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions(sessions));
 	queryClient.setQueryData(shellTerminalsQueryKey, shellTerminals);
 	const previousAO = window.ao;
@@ -381,6 +443,7 @@ function renderCachedPane({
 							theme="dark"
 							focusRequested={focusRequested}
 							createMux={createMux}
+							onLinkOpen={onLinkOpen}
 						/>
 					) : (
 						<div data-testid="away" />
@@ -634,7 +697,7 @@ describe("TerminalPane empty states", () => {
 	it("shows a no-selection message when no session is selected", () => {
 		const view = renderPane();
 		try {
-			expect(screen.getByText("Agent Orchestrator")).toBeInTheDocument();
+			expect(screen.getByText("Orchestrator")).toBeInTheDocument();
 			expect(screen.getByText("No session selected. Pick a worker to attach its terminal.")).toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -854,6 +917,22 @@ describe("TerminalPane replay cover", () => {
 describe("TerminalCacheProvider", () => {
 	const sessionA = { ...worker, id: "sess-a", title: "session A", terminalHandleId: "handle-a" };
 	const sessionB = { ...worker, id: "sess-b", title: "session B", terminalHandleId: "handle-b" };
+	it("opens a standalone Cline link from the cached terminal", async () => {
+		const shell = { handleId: "cline-login", title: "Cline login", workingDir: "/repo", createdAt: "2026-11-22T00:00:00Z" } satisfies ShellTerminal;
+		const onLinkOpen = vi.fn();
+		const view = renderCachedPane({
+			sessions: [], shellTerminals: [shell], onLinkOpen,
+			terminalTarget: { kind: "shell", handleId: shell.handleId, generation: shell.createdAt, title: shell.title },
+		});
+		try {
+			await waitFor(() => expect(activeXterm()).toBeInTheDocument(), { timeout: 10_000 });
+			act(() => terminalLinkHandler?.("https://app.cline.bot/auth/device"));
+			expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://app.cline.bot/auth/device");
+			expect(postMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
 
 	it("uses a caller-provided mux without retaining a remote shell in the local cache", async () => {
 		const shell = { handleId: "auth-a", title: "Log in", workingDir: "/host-a", createdAt: "2026-09-29T00:00:00Z" } satisfies ShellTerminal;
@@ -937,6 +1016,48 @@ describe("TerminalCacheProvider", () => {
 			expect(parked?.style.contentVisibility).toBe("");
 		} finally {
 			view.restore();
+		}
+	});
+
+	it("shows a terminal in each split pane and moves one between panes without remounting it", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionA, sessionB]));
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		const tree = (left?: WorkspaceSession, right?: WorkspaceSession) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<TerminalCacheProvider daemonReady theme="dark">
+						<div data-testid="left-pane">
+							{left ? <TerminalPane daemonReady fontSize={12} session={left} theme="dark" /> : null}
+						</div>
+						<div data-testid="right-pane">
+							{right ? <TerminalPane daemonReady fontSize={12} session={right} theme="dark" /> : null}
+						</div>
+					</TerminalCacheProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree(sessionA, sessionB));
+		try {
+			await waitFor(() => expect(within(screen.getByTestId("left-pane")).getByTestId("xterm")).toBeInTheDocument());
+			await waitFor(() => expect(within(screen.getByTestId("right-pane")).getByTestId("xterm")).toBeInTheDocument());
+			const hostA = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionA.id}:worker|"]`);
+			const hostB = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionB.id}:worker|"]`);
+			// Both panes are on screen at once: neither terminal is parked.
+			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
+			expect(hostB).toHaveAttribute("data-terminal-activation-phase", "visible");
+			const mounts = xtermMounts.value;
+
+			// A moves to the right pane and B leaves: A's live renderer is re-parented.
+			view.rerender(tree(undefined, sessionA));
+			await waitFor(() => expect(screen.getByTestId("right-pane").contains(hostA)).toBe(true));
+			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
+			expect(hostB).toHaveAttribute("data-terminal-activation-phase", "parked");
+			expect(xtermMounts.value).toBe(mounts);
+		} finally {
+			window.ao = previousAO;
 		}
 	});
 
@@ -1242,6 +1363,62 @@ describe("terminal restore", () => {
 		}
 	});
 
+	it("restores an archived Cloud session from the strip through the control plane", async () => {
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		// Restore finds a Cloud session in the Cloud listing, which keeps archived rows.
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			await waitFor(() => expect(cloudRestoreMock).toHaveBeenCalledWith("org-1", worker.id));
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
+		} finally {
+			view.restore();
+			// The restore leaves the session waiting for its new box; later tests reuse its id.
+			useTerminalResetStore.getState().markConnected(worker.id);
+		}
+	});
+
+	it("says a Cloud session past its data retention can't be restored, and stops offering Restore", async () => {
+		terminalState.value = "exited";
+		cloudRestoreMock.mockRejectedValueOnce(new CloudCpError(
+			"This session is older than its creator's data retention period, so its content is being deleted. It can't be restored.",
+			{ status: 410, code: "SESSION_CONTENT_EXPIRED" },
+		));
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			expect(await screen.findByText(
+				"This session is past its data retention period, so its content is being removed. It can't be restored.",
+			)).toBeInTheDocument();
+			expect(screen.queryByText(/older than its creator's data retention period/)).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			expect(useContentExpiredSessionsStore.getState().ids[worker.id]).toBe(true);
+		} finally {
+			view.restore();
+			useContentExpiredSessionsStore.setState({ ids: {} });
+		}
+	});
+
+	it("offers no Restore to a guest on an archived Cloud session shared with them", () => {
+		// Only the sharer's organization restores a session; a guest's restore
+		// would not even reach the control plane (the session is not in their
+		// own Cloud listing), it would go to this machine's daemon instead.
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1", shared: true }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
+		} finally {
+			view.restore();
+		}
+	});
+
 	it.each([
 		["exited", undefined],
 		["error", "terminal handle missing"],
@@ -1281,6 +1458,7 @@ describe("terminal restore", () => {
 			terminalState.value = "exited";
 			const view = renderPane({ ...session, ...exited });
 			try {
+				expect(screen.getByText("Agent exited")).toBeInTheDocument();
 				await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
 				await waitFor(() =>
 					expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
@@ -1322,9 +1500,9 @@ describe("terminal restore", () => {
 			},
 		);
 
-		// Cloud sessions recover through the control plane; the local daemon has
-		// never heard of them, so this button must not appear for one.
-		it("does not offer resume for a cloud session", () => {
+		// A Cloud session's exited agent restarts in its live worker through the
+		// control plane (ResumeAgentControl), never through the local daemon.
+		it("offers resume for a cloud session whose agent exited", () => {
 			terminalState.value = "exited";
 			const view = renderPane({
 				...worker,
@@ -1332,7 +1510,8 @@ describe("terminal restore", () => {
 				cloud: { orgId: "org-1" },
 			});
 			try {
-				expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+				expect(screen.getByText("Agent exited")).toBeInTheDocument();
+				expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
 			} finally {
 				view.restore();
 			}
@@ -1364,10 +1543,30 @@ describe("terminal restore", () => {
 			terminalHandleId: "term-1",
 		});
 		try {
-			expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+			const restore = screen.getByRole("button", { name: "Restore session" });
+			expect(restore).toBeInTheDocument();
+			// The restore action must be a visible labeled CTA, not an icon-only
+			// button floating in the corner of the strip (issue #3300).
+			expect(restore).toHaveTextContent("Restore session");
 		} finally {
 			view.restore();
 		}
+	});
+
+	it("explains a terminated session with a visible recovery action", () => {
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", terminalHandleId: "term-1" });
+		try {
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Restore session" })).toHaveTextContent("Restore session");
+		} finally { view.restore(); }
+	});
+
+	it("shows the recorded startup failure rather than guessing an exit reason", () => {
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", provisionState: "failed", provisionError: "Workspace checkout failed", terminalHandleId: "term-1" });
+		try {
+			expect(screen.getByText("Session failed to start")).toBeInTheDocument();
+			expect(screen.getByText("Workspace checkout failed")).toBeInTheDocument();
+		} finally { view.restore(); }
 	});
 
 	it("preserves Restore controls after a cached attachment reports a fatal pane error", async () => {
@@ -1382,7 +1581,7 @@ describe("terminal restore", () => {
 		try {
 			expect(await screen.findByRole("button", { name: "Restore session" })).toBeInTheDocument();
 			expect(screen.getByTestId("xterm")).toBeInTheDocument();
-			expect(screen.getByText("Terminal ended")).toBeInTheDocument();
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
 			expect(screen.queryByText("Terminal error: terminal handle missing")).not.toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -1469,6 +1668,18 @@ describe("terminal link preview", () => {
 		const view = renderPane();
 		try {
 			act(() => terminalLinkHandler?.("http://localhost:3000"));
+			expect(postMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("uses the standalone terminal's link handler when supplied", () => {
+		const onLinkOpen = vi.fn();
+		const view = renderPane(undefined, undefined, undefined, { kind: "shell", handleId: "cline-login", generation: "2026-11-22T00:00:00Z", title: "Cline login" }, undefined, onLinkOpen);
+		try {
+			act(() => terminalLinkHandler?.("https://app.cline.bot/auth/device"));
+			expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://app.cline.bot/auth/device");
 			expect(postMock).not.toHaveBeenCalled();
 		} finally {
 			view.restore();

@@ -2,12 +2,15 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { RestartToUpdateDialog } from "./RestartToUpdateDialog";
+import { AppBrowserLinkContext } from "./AppLink";
 import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 import type { UpdateStatus } from "../../main/update-settings";
+import { appI18n } from "../i18n";
 
-const { updInstall, updRelaunch, updGetStatus, updOnStatus, workspaceData } = vi.hoisted(() => ({
+const { updInstall, updRelaunch, updGetStatus, updOnStatus, openExternal, workspaceData } = vi.hoisted(() => ({
 	updInstall: vi.fn(),
+	openExternal: vi.fn(),
 	updRelaunch: vi.fn(),
 	updGetStatus: vi.fn(),
 	updOnStatus: vi.fn(),
@@ -15,7 +18,10 @@ const { updInstall, updRelaunch, updGetStatus, updOnStatus, workspaceData } = vi
 }));
 
 vi.mock("../lib/bridge", () => ({
-	aoBridge: { updates: { getStatus: updGetStatus, install: updInstall, relaunch: updRelaunch, onStatus: updOnStatus } },
+	aoBridge: {
+		app: { openExternal },
+		updates: { getStatus: updGetStatus, install: updInstall, relaunch: updRelaunch, onStatus: updOnStatus },
+	},
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: workspaceData.current }),
@@ -43,7 +49,8 @@ function renderDialog(status: UpdateStatus) {
 }
 
 beforeEach(() => {
-	for (const m of [updInstall, updRelaunch, updGetStatus, updOnStatus]) m.mockReset();
+	for (const m of [updInstall, updRelaunch, updGetStatus, updOnStatus, openExternal]) m.mockReset();
+	openExternal.mockResolvedValue(undefined);
 	updOnStatus.mockReturnValue(() => undefined);
 	workspaceData.current = [];
 	useUiStore.setState({ updateInstallPromptOpen: false });
@@ -69,7 +76,7 @@ it("shows what the build changes", async () => {
 		new Date(Date.UTC(2026, 8, 2, 17, 13)),
 	);
 	expect(screen.getByText(`Nightly 0.12.11 · ${expected}`)).toBeVisible();
-	expect(screen.queryByText(/Leave AO closed until it reopens/)).toBeNull();
+	expect(screen.queryByText(/Leave Orchestrator closed until it reopens/)).toBeNull();
 });
 
 it("shows stable notes without contributor handles and retains linked PR numbers", async () => {
@@ -163,6 +170,43 @@ it("links the generated nightly comparison without allowing arbitrary compare UR
 
 	expect(await screen.findByRole("link", { name: "full comparison" })).toHaveAttribute("href", comparisonUrl);
 	expect(screen.queryByRole("link", { name: "another comparison" })).toBeNull();
+});
+
+it("opens release-note links in the system browser, never the Orchestrator Browser", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	const comparisonUrl = "https://github.com/Untrivial-ai/agent-orchestrator/compare/v0.14.10...v0.14.11-nightly.202611120300";
+	const commitUrl = "https://github.com/Untrivial-ai/agent-orchestrator/commit/4d7c9cf";
+	const openInAo = vi.fn();
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "0.14.11-nightly.202611120300",
+		releaseNotes: [
+			"**Changes in this nightly**",
+			"",
+			`- 2 more linked changes are included in the [full comparison](${comparisonUrl}).`,
+			"",
+			"**Build details**",
+			"",
+			`- Commit: [4d7c9cf](${commitUrl})`,
+		].join("\n"),
+	});
+	render(
+		<TooltipProvider>
+			<AppBrowserLinkContext.Provider value={openInAo}>
+				<RestartToUpdateDialog />
+			</AppBrowserLinkContext.Provider>
+		</TooltipProvider>,
+	);
+
+	const comparison = await screen.findByRole("link", { name: "full comparison" });
+	expect(fireEvent.click(comparison)).toBe(false);
+	expect(fireEvent.click(screen.getByRole("link", { name: "4d7c9cf" }), { metaKey: true })).toBe(false);
+	const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+	fireEvent(comparison, middle);
+	expect(middle.defaultPrevented).toBe(true);
+
+	expect(openExternal.mock.calls).toEqual([[comparisonUrl], [commitUrl], [comparisonUrl]]);
+	expect(openInAo).not.toHaveBeenCalled();
 });
 
 it("renders the nightly build date from the UTC instant", async () => {
@@ -284,16 +328,16 @@ it("shows an inline failure and retries by relaunching AO", async () => {
 	await screen.findByText("Safer updates");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	await act(async () => install.reject(new Error("Error invoking remote method 'updates:install': Error: Couldn't finish preparing the update. Retry to try again.")));
-	expect(screen.getByRole("alert")).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(screen.getByRole("alert")).toHaveTextContent("Orchestrator could not prepare the update. Please try again.");
 	expect(screen.getByRole("alert")).toHaveTextContent("Couldn't finish preparing the update. Retry to try again.");
 	expect(screen.getByRole("alert")).not.toHaveTextContent("Error invoking remote method");
 	expect(screen.getByText("Safer updates")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
 	expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
 	expect(screen.queryByRole("progressbar")).toBeNull();
-	// The primary action becomes Retry, and retry restarts AO rather than
+	// The primary action becomes Relaunch AO, and retry restarts AO rather than
 	// re-invoking install() against a Squirrel that cannot be reset in-process.
-	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+	await userEvent.click(screen.getByRole("button", { name: "Relaunch Orchestrator" }));
 	expect(updRelaunch).toHaveBeenCalledTimes(1);
 	expect(updInstall).toHaveBeenCalledTimes(1);
 });
@@ -311,6 +355,28 @@ it("hides the install-on-quit line once preparation fails", async () => {
 	// gone rather than contradicting the error.
 	expect(screen.getByRole("alert")).toBeVisible();
 	expect(screen.queryByText(/installs on its own the next time you quit/)).toBeNull();
+});
+
+it.each(["before", "after"])("restores install confirmation when native readiness arrives %s the failed IPC reply", async (order) => {
+	const install = deferredInstall();
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3", releaseNotes: "Safer updates" });
+	await screen.findByText("Safer updates");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const ready = () => act(() => updOnStatus.mock.calls[0][0]({ state: "downloaded", version: "1.2.3", staged: { version: "1.2.3", stagedAt: 1, escalated: false } }));
+	if (order === "before") ready();
+	await act(async () => install.reject(new Error("Couldn't finish preparing the update. Relaunch AO to try again.")));
+	if (order === "after") {
+		expect(screen.getByRole("button", { name: "Relaunch Orchestrator" })).toBeVisible();
+		ready();
+	}
+	expect(screen.queryByRole("alert")).toBeNull();
+	expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();
+	expect(updInstall).toHaveBeenCalledTimes(1);
+	expect(updRelaunch).not.toHaveBeenCalled();
+	updInstall.mockResolvedValue(undefined);
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	expect(updInstall).toHaveBeenCalledTimes(2);
 });
 
 it("allows cancelling after preparation fails", async () => {
@@ -342,17 +408,73 @@ it.each(["resolve", "reject"] as const)("ignores an install %s after unmount", a
 	expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();
 });
 
-it("renders bounded recovery details as plain text", async () => {
-	const message = "<strong>Fix folder permissions</strong> " + "x".repeat(1500);
+it("renders recovery details as plain text", async () => {
+	const message = "<strong>Fix folder permissions</strong> " + "x".repeat(900);
 	updInstall.mockRejectedValue(new Error(message));
 	useUiStore.setState({ updateInstallPromptOpen: true });
 	renderDialog({ state: "downloaded", version: "1.2.3" });
 	await screen.findByText("v1.2.3");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	const alert = await screen.findByRole("alert");
-	expect(alert).toHaveTextContent(message.slice(0, 1000));
+	expect(alert).toHaveTextContent(message);
 	expect(alert.querySelector("strong")).toBeNull();
-	expect(alert.lastElementChild?.textContent).toHaveLength(1000);
+	expect(alert.lastElementChild?.textContent).toBe(message);
+});
+
+// Settings treats text past 1000 characters as a dump; the dialog must not
+// truncate it first and show the first 1000 characters instead (#5755).
+it("keeps only the heading for overlong recovery details (#5755)", async () => {
+	updInstall.mockRejectedValue(new Error("Fix folder permissions " + "x".repeat(1500)));
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3" });
+	await screen.findByText("v1.2.3");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveTextContent("Orchestrator could not prepare the update. Please try again.");
+	expect(alert).not.toHaveTextContent(/Fix folder permissions/);
+	expect(alert.children).toHaveLength(1);
+});
+
+it("keeps only the heading when the install rejects with an updater dump (#5755)", async () => {
+	updInstall.mockRejectedValue(new Error(
+		"Error invoking remote method 'updates:install': Error: HttpError: 504 Gateway Time-out\nHeaders: {\"set-cookie\": \"_gh_sess=abc123\"}",
+	));
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3" });
+	await screen.findByText("v1.2.3");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveTextContent("Orchestrator could not prepare the update. Please try again.");
+	expect(alert).not.toHaveTextContent(/HttpError|set-cookie/);
+	expect(alert.children).toHaveLength(1);
+});
+
+it("shows the install failure in the person's language when the status describes it (#5755)", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	const message = "Couldn't install the update — the update server timed out. Try again in a few minutes.";
+	updInstall.mockImplementation(async () => {
+		act(() => emit({ state: "error", message, errorInfo: { kind: "timeout", phase: "install" } }));
+		throw new Error(`Error invoking remote method 'updates:install': Error: ${message}`);
+	});
+	await appI18n.changeLanguage("ja");
+	try {
+		useUiStore.setState({ updateInstallPromptOpen: true });
+		renderDialog({ state: "downloaded", version: "1.2.3" });
+		const confirm = await screen.findByRole("button", { name: appI18n.t("update.restart.confirm") });
+		await userEvent.click(confirm);
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(
+			"アップデートをインストールできませんでした — アップデートサーバーの応答がタイムアウトしました。数分後にもう一度お試しください。",
+		);
+		expect(alert).not.toHaveTextContent("Couldn't install");
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
 });
 
 it("shows the replacement build and requires another explicit confirmation", async () => {
@@ -384,4 +506,17 @@ it("does not reuse old release notes when a replacement has none and allows canc
 	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 	expect(updInstall).toHaveBeenCalledTimes(1);
 	expect(useUiStore.getState().updateInstallPromptOpen).toBe(false);
+});
+
+it("pairs the staged build with its own notes while a newer build downloads (#6607)", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({
+		state: "downloading",
+		version: "2.1.0",
+		percent: 40,
+		releaseNotes: "Newer build notes",
+		staged: { version: "2.0.0", stagedAt: 1, escalated: false, releaseNotes: "Staged build notes" },
+	});
+	expect(await screen.findByText(/Staged build notes/)).toBeVisible();
+	expect(screen.queryByText(/Newer build notes/)).toBeNull();
 });
