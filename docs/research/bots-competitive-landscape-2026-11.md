@@ -142,7 +142,7 @@ These matter to AO as channels as well as competitors. The Grok Bot skill pack (
 
 **Missing:**
 
-- Inbound event ingress. Everything is polled today, and there is no webhook endpoint.
+- Inbound ingress from integrations and for bots. Tracker and SCM state (issues, PRs, CI, reviews) is polled. The daemon's only webhook-style route is the loopback agent-lifecycle callback `POST /api/v1/sessions/{sessionId}/activity/codewhale`, and that is not an integration entry point. Nothing receives Slack, Linear, GitHub, or generic webhook events.
 - A Slack app and Linear app identity.
 - A persistent bot entity with identity and memory files.
 - A "Needs you" inbox as the primary surface.

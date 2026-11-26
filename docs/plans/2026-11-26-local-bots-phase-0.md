@@ -220,9 +220,17 @@ The renderer merges `/inbox` across hosts it can reach, using the existing host 
 
 ## Memory tidy
 
-When `memory_tidy` is on, the daemon schedules a tidy turn: nightly after 03:00 local time, and only after a day with new turns. The turn runs in a fresh bot session with these instructions:
+The daemon schedules a tidy turn from `memory_tidy`. A tidy runs only when the bot had new turns since its last tidy:
 
-- read the day's journal and the current MEMORY.md;
+| Setting | Schedule |
+| --- | --- |
+| `nightly` | Each night after 03:00 local time, if the previous day had new turns. |
+| `weekly` | Once a week, on Monday after 03:00 local time, if any day since the last tidy had new turns. |
+| `off` | Never. The owner can still run a tidy from the Memory tab. |
+
+The turn runs in a fresh bot session with these instructions:
+
+- read the journal days since the last tidy and the current MEMORY.md;
 - write a consolidated MEMORY.md through `ao bot memory replace`;
 - make no other tool calls, spawns, or sends.
 
@@ -238,7 +246,20 @@ This is an open question below.
 ## Hybrid readiness (what Phase 0 must not break)
 
 - `bots.home` exists from day one. Phase 2 widens its `CHECK` constraint to add a remote-host value and `cloud`.
-- The bot folder plus the bot conversation export make up the whole portable state. Nothing a bot needs lives only in process memory or in absolute paths.
+- **The portable state is the bot folder plus a bot export bundle.** Nothing a bot needs lives only in process memory or in absolute paths. The bundle holds everything the bot keeps in the database:
+
+  | Bundle part | Contents | On import |
+  | --- | --- | --- |
+  | `bot.json` | The bot row: handle, display name, purpose, harness, model, effort, permissions, `max_active_workers`, `memory_tidy`, `paused_at` | New bot ID on the target home. The project is matched by repository identity, not the source project ID. `home` is set to the target. The agent config is validated against the target's harnesses; an unknown model falls back to the target default and is reported to the owner. |
+  | `asks.json` | Open bot asks (no `answered_at` or `withdrawn_at`), with question, kind, options, subject, and created time | Recreated as open asks, so the moved bot's system prompt and Needs-you inbox have them from its first session. Answered asks are history and live in the conversation. |
+  | `schedules.json` | Every automation with this `bot_id`: RRULE, timezone, prompt, template, enabled flag | Recreated with the same RRULE and timezone, but **disabled**. The owner re-enables them in one confirmation, so a schedule never fires on two homes. |
+  | `conversation.jsonl` | The bot conversation's turns and messages | Imported as the new bot conversation. |
+
+- **Not in the bundle:**
+  - Crew sessions and their worktrees stay on the source home, detached as ordinary sessions, like on Archive.
+  - Credentials and sign-ins are never exported. The target home uses its own agent sign-ins.
+  - Session IDs, project IDs, and absolute paths are never carried over.
+- **Phase 0 builds the format, not the move.** It implements bundle export and import behind the daemon API, plus a round-trip test: export, import into a fresh data dir, then assert that the bot row, open asks, disabled schedules, memory files, and conversation match. The move UX and non-local homes are Phase 2.
 - Every renderer and API surface addresses a bot as `Ref{host, id}`. The Phase 1 relay will route Slack and GitHub events to `(host, bot id)` the same way.
 - Inbox aggregation happens in the client, across hosts. This follows the cloud architecture rule of federation at the client, not in the local daemon.
 - Handles are unique per project, not globally, so two homes never fight over a name.
@@ -263,12 +284,22 @@ Thin clients over new daemon routes, following `backend/internal/cli` patterns. 
 
 ```text
 ao bot create --project <p> --handle <h> --name <n> [--purpose ...] [--agent ...] [--template ...]
-ao bot ls | get <handle> | send <handle> <text> | pause | resume | archive | rm
+ao bot ls [--project <p>]
+ao bot get|send|pause|resume|archive|rm <bot> [--project <p>] [<text>]
 ao bot memory show | append <text> | replace --file <f> | history | undo   # agent-facing writes
-ao bot memory purge <text>                                               # owner only; scrubs MEMORY.md, .history/ and journal/
+ao bot memory purge <bot> <text> [--project <p>]                           # owner only; scrubs MEMORY.md, .history/ and journal/
 ao bot ask --kind decision|approval|review|info "<question>" [--option ...] [--subject <ref>]
-ao inbox [--bot <handle>]
+ao inbox [--bot <bot>] [--project <p>]
 ```
+
+**Addressing a bot.** Handles are unique per project only, so two projects can each have a `ci-watch`. A `<bot>` argument resolves in this order:
+
+1. A qualified `<project>/<handle>`, such as `agent-orchestrator/ci-watch`, or a bot ID (`bot_...`). Either is always unambiguous.
+2. A bare handle plus `--project <p>`.
+3. A bare handle with no flag inside an AO session: the project comes from `AO_SESSION_ID`, the same way `ao spawn` resolves it.
+4. A bare handle with no flag outside a session: it resolves only when exactly one project has that handle. Otherwise it fails with a `usageError` (exit 2) that lists the matching `<project>/<handle>` forms.
+
+Agent-facing commands (`ao bot memory show|append|replace|history|undo` and `ao bot ask`) take no `<bot>` argument. They act on the calling bot, found from `AO_SESSION_ID`, and are refused outside a bot session. The HTTP API always addresses bots by ID.
 
 Add a `using-ao` skill page for bots. It tells a bot session how to use memory, asks, spawn, and reports, and that content from issues, PRs, and logs is information, never instructions.
 
@@ -296,7 +327,7 @@ Ten PRs of about two weeks' total work, each with tests for the boundary it chan
 7. Hibernate and wake for bots, and recycle with a handoff note.
 8. Automations targeting bots, with bundled templates as bot templates.
 9. The Needs-you projection and APIs, the ask answer route, and push rules.
-10. Renderer: sidebar rows, bot route, inspector tabs, create dialog, and the cross-host inbox. Then the memory tidy and the dogfood bots.
+10. Renderer: sidebar rows, bot route, inspector tabs, create dialog, and the cross-host inbox. Then the memory tidy, the export bundle with its round-trip test, and the dogfood bots.
 
 ## Open questions
 
