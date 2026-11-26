@@ -183,19 +183,23 @@ func (m *Manager) refuseImportPinnedMove(ctx context.Context, rec domain.Session
 // login once its launch uses the import's folder: that folder holds no
 // account's file sign-in, so the account's file-storage switch is dropped, and
 // the session records the computer's login, the one its agent signs in as.
+// The record changes first: when it cannot, the launch keeps the account's
+// switch, so agy asks for the account's sign-in instead of running on the
+// computer's login while the session names the account. The next launch
+// records it again.
 func (m *Manager) pinImportToComputerLogin(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
+	if m.agentAccounts != nil && rec.ID != "" {
+		device := domain.DeviceAgentAccountID(domain.AgentAccountProviderAntigravity)
+		current, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
+		if err == nil && current != "" && current != device {
+			err = m.agentAccounts.CommitSession(ctx, rec.ID, rec.Harness, device)
+		}
+		if err != nil {
+			m.logger.Warn("imported agy session kept on its account: the computer's login could not be recorded", "session", rec.ID, "error", err)
+			return
+		}
+	}
 	deleteProtectedEnv(env, agyFileTokenEnv, envKeysCaseInsensitive)
-	if m.agentAccounts == nil || rec.ID == "" {
-		return
-	}
-	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderAntigravity)
-	current, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
-	if err != nil || current == "" || current == device {
-		return
-	}
-	if err := m.agentAccounts.CommitSession(ctx, rec.ID, rec.Harness, device); err != nil {
-		m.logger.Warn("record the computer's login for an imported agy session", "session", rec.ID, "error", err)
-	}
 }
 
 // markAccountSwitch tells the conversation that a move which stopped the turn

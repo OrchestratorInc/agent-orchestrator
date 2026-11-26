@@ -333,6 +333,18 @@ func TestImportedAgyLaunchRunsOnTheComputersLogin(t *testing.T) {
 	if got := accounts.boundTo(rec.ID); got != "device-antigravity" {
 		t.Fatalf("binding = %q, want the computer's own login", got)
 	}
+
+	// A record that cannot change keeps the launch on the account it names.
+	accounts.bound[rec.ID] = "acct-b"
+	accounts.bindErr = errors.New("store unavailable")
+	env = map[string]string{"GEMINI_HOME": "/accounts/b", agyFileTokenEnv: "true"}
+	manager.applyImportedConfigEnv(context.Background(), rec, env)
+	if env[agyFileTokenEnv] != "true" {
+		t.Fatal("the launch moved to the computer's login while the session still names the account")
+	}
+	if got := accounts.boundTo(rec.ID); got != "acct-b" {
+		t.Fatalf("binding = %q, want the account it could not leave", got)
+	}
 }
 
 // A bind failure after the target is live is still before the commit point:
