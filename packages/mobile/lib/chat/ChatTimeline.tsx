@@ -123,7 +123,8 @@ import { accountHandoffNote } from "./usageLimit";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
-import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
+import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates, stripSenderPrefix } from "./automationMessages";
+import { isAutomationSteer, SteerNote } from "./SteerMessage";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { SessionStartupView } from "../session/sessionStartup";
 
@@ -818,7 +819,7 @@ const TimelineItem = memo(function TimelineItem({
 			);
 		}
 		if (item.role === "user") {
-			return <OriginMessageView message={item} fallback={<OriginMessage message={item} />} />;
+			return <OriginMessageView message={item} fallback={<OriginMessage label={item.senderLabel || (item.origin === "automation" ? "Automation" : "Orchestrator")} text={item.text} />} />;
 		}
 		return (
 			<View style={styles.assistantRow}>
@@ -840,10 +841,20 @@ const TimelineItem = memo(function TimelineItem({
 		return <ProviderSwitchMarker activity={item} />;
 	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
-		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
-		// Another agent's message that arrived mid-turn names its sender, as one between turns does.
-		return item.detail.senderSessionId ? <OriginMessageView message={item} fallback={steered} /> : steered;
+		const detail = item.detail;
+		const text = detail.text || item.summary;
+		// Another agent's message that arrived mid-turn names its sender, as one
+		// between turns does, and is marked steered as the person's own steer is.
+		if (isAutomationSteer(detail)) {
+			const sender = detail.senderSessionId?.trim();
+			const card = <OriginMessage label={detail.senderDisplayName?.trim() || sender || "Automation"} text={sender ? stripSenderPrefix(text, sender).trim() : text} />;
+			return <View style={styles.steerRow}>{sender ? <OriginMessageView message={item} fallback={card} /> : card}<SteerNote detail={detail} /></View>;
+		}
+		const { body, attachments } = stagedAttachmentParts(text);
+		return <View style={styles.userRow}>
+			<View style={[styles.userBubble, { maxWidth: bubbleWidth }]}>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View>
+			<SteerNote detail={detail} />
+		</View>;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
@@ -1033,15 +1044,15 @@ function deliveryCopy(state?: string): string | undefined {
 	}
 }
 
-function OriginMessage({ message }: { message: Extract<ConversationItem, { kind: "message" }> }) {
+function OriginMessage({ label, text }: { label: string; text: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button");
-	const long = message.text.length > 600;
+	const long = text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
-		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
+		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{label}</Text></View>
+		{long && expanded ? <ChatMarkdown text={text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{text}</Text>}
 		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.originMore, pressed && feedback.pressed]}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
 }
@@ -1680,8 +1691,7 @@ const makeStyles = (t: Theme) => {
 		originText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 		originMore: { alignSelf: "flex-start", minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 		originMoreText: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		steerBubble: { backgroundColor: t.bgSubtle },
-		steerLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
+		steerRow: { paddingBottom: space.xs },
 		assistantRow: { paddingTop: space.sm, paddingBottom: space.xs },
 		sender: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
 		// The glyph lines up with the reply's left edge, and the row ends at its

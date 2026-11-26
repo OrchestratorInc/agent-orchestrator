@@ -455,7 +455,14 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			items.push({
 				kind: "activity", id: `cloud-steer-${event.sequence}`, turnId, sequence: event.sequence, revision: 1,
 				activityKind: "system", status: "completed", summary: `Steered: ${text}`,
-				detail: { event: "steer", text, origin: "human", clientMessageId: str(payload.clientMessageId) }, createdAt: event.createdAt,
+				detail: {
+					event: "steer", text, clientMessageId: str(payload.clientMessageId),
+					// An orchestrator's message steered into a busy worker names only its label.
+					...(payload.origin === "automation" ? { origin: "automation", senderDisplayName: str(payload.senderLabel) } : { origin: "human" }),
+					// Deleted while the agent was taking it: it got the message anyway.
+					...(payload.deleteRequested === true ? { deliveredBeforeDelete: true } : {}),
+				},
+				createdAt: event.createdAt,
 			});
 			continue;
 		}

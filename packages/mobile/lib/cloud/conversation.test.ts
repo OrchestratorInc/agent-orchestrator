@@ -121,6 +121,23 @@ describe("cloud conversation projection", () => {
 		expect(cloudConversationSnapshot(session(), [...base, event("chat.turn_capabilities", { turnId: "t1", steering: true })]).capabilities).toEqual(["steer"]);
 	});
 
+	it("keeps who sent a steer and whether it was deleted while the agent took it", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use the staging DB", clientMessageId: "c1" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Never mind", deleteRequested: true }),
+			event("chat.turn_steered", { turnId: "t1", text: "CI is red", origin: "automation", senderLabel: "Orchestrator" }),
+		]);
+		const steers = snapshot.items.flatMap((item) => item.kind === "activity" && item.detail?.event === "steer" ? [item.detail] : []);
+		expect(steers).toEqual([
+			{ event: "steer", text: "Use the staging DB", clientMessageId: "c1", origin: "human" },
+			{ event: "steer", text: "Never mind", clientMessageId: undefined, origin: "human", deliveredBeforeDelete: true },
+			{ event: "steer", text: "CI is red", clientMessageId: undefined, origin: "automation", senderDisplayName: "Orchestrator" },
+		]);
+	});
+
 	it("shows automation prompts by their display text and drops Codex's stdin notice", () => {
 		sequence = 0;
 		const snapshot = cloudConversationSnapshot(session({ harness: "codex" }), [
