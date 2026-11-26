@@ -83,6 +83,7 @@ export function effortGaugeNeedle(choices: readonly EffortChoice[]): number {
  * `step` apart from `start`.
  */
 export function nearestStop(x: number, start: number, step: number, count: number): number {
+	"worklet";
 	if (count <= 1 || step <= 0) return 0;
 	return Math.min(count - 1, Math.max(0, Math.round((x - start) / step)));
 }
@@ -94,6 +95,7 @@ export function nearestStop(x: number, start: number, step: number, count: numbe
  * at the halfway point, so the blob never jumps.
  */
 export function magneticOffset(offset: number, step: number): number {
+	"worklet";
 	const half = step / 2;
 	if (half <= 0) return 0;
 	const reach = Math.min(Math.abs(offset) / half, 1);

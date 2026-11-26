@@ -56,6 +56,8 @@ vi.mock("react-native-gesture-handler", async () => {
 		GestureHandlerRootView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("GestureHandlerRootView", props, children),
 	};
 });
+// The drag's worklets call JS through scheduleOnRN; here it calls at once.
+vi.mock("react-native-worklets", () => ({ scheduleOnRN: (fn: (...args: unknown[]) => void, ...args: unknown[]) => fn(...args) }));
 vi.mock("react-native-reanimated", async () => {
 	const React = await import("react");
 	return {
@@ -71,6 +73,7 @@ vi.mock("react-native-reanimated", async () => {
 			};
 		})()).current,
 		useAnimatedStyle: (style: () => unknown) => style,
+		interpolateColor: (value: number, input: number[], output: string[]) => (value <= input[0] ? output[0] : output[output.length - 1]),
 		withTiming: (value: number) => {
 			fixtures.glides.push(value);
 			return fixtures.midGlide ? { glidingTo: value } : value;
@@ -84,7 +87,7 @@ import { markTouchInside, rootTouchStart } from "./touchOutside";
 const levels = (selected?: string) => ["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1), selected: value === selected }));
 
 let renderer: ReactTestRenderer | undefined;
-beforeEach(() => { fixtures.detent.mockClear(); fixtures.setOptions.mockClear(); fixtures.midGlide = false; fixtures.glides = []; fixtures.os = "ios"; });
+beforeEach(() => { fixtures.detent.mockClear(); fixtures.setOptions.mockClear(); fixtures.midGlide = false; fixtures.glides = []; fixtures.os = "ios"; fixtures.reduceMotion = false; });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; });
 
 const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
@@ -96,11 +99,13 @@ async function render(selected?: string) {
 	const root = renderer!.root;
 	const track = () => root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider")[0];
 	// A 240-wide track: stops at 20, 70, 120, 170, 220.
-	await act(async () => track().props.onLayout({ nativeEvent: { layout: { width: 240 } } }));
+	// The track measures itself; the card around it carries the accessibility.
+	const trackView = () => root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider-track")[0];
+	await act(async () => trackView().props.onLayout({ nativeEvent: { layout: { width: 240 } } }));
 	// The blob is the last animated view; its style function reads the shared value.
 	const blobCentre = () => {
-		const style = root.findAll((node) => hostType(node) === "AnimatedView").at(-1)!.props.style[1]() as { transform: { translateX: number }[] };
-		return style.transform[0].translateX + 16;
+		const style = root.findAll((node) => hostType(node) === "AnimatedView" && node.props.testID === "effort-slider-blob")[0].props.style[1]() as { left: number };
+		return style.left + 16;
 	};
 	// The pan's callbacks, from the latest render; `x` is from the track's left edge.
 	const pan = () => (root.findAll((node) => hostType(node) === "GestureDetector")[0].props.gesture as { handlers: Record<string, (event?: { x: number }) => unknown> }).handlers;
@@ -110,6 +115,7 @@ async function render(selected?: string) {
 		end: () => { pan().finalize(); },
 	};
 	return {
+		root,
 		track,
 		pan,
 		drag,
@@ -122,6 +128,8 @@ async function render(selected?: string) {
 
 describe("effort slider", () => {
 	it("pulls the blob toward the nearest level while dragging, ticking as it lands on each", async () => {
+		// Positions only: no touch-down glide to catch up from.
+		fixtures.reduceMotion = true;
 		const { drag, blobCentre, label, onChoose } = await render("high");
 		await act(async () => drag.begin(120));
 		// A little off a level, the blob barely moves.
@@ -133,9 +141,66 @@ describe("effort slider", () => {
 		expect(blobCentre()).toBeCloseTo(154);
 		await act(async () => drag.move(236));
 		expect(blobCentre()).toBe(220);
-		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["xhigh", "max"]);
+		// Each level crossed shows and ticks; only the release chooses, once.
 		expect(fixtures.detent).toHaveBeenCalledTimes(2);
 		expect(label()).toBe("Max");
+		expect(onChoose).not.toHaveBeenCalled();
+		await act(async () => drag.end());
+		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["max"]);
+	});
+
+	// The blob and the fill move by layout, in the same commit; the lit dots
+	// ride inside the fill, clipped by it, so a dot is lit exactly where the
+	// fill covers it.
+	it("moves the fill with the blob, the lit dots clipped inside it", async () => {
+		fixtures.reduceMotion = true;
+		const { drag, root } = await render("low");
+		const fill = () => root.findAll((node) => hostType(node) === "AnimatedView" && node.props.testID === "effort-slider-fill")[0];
+		const fillWidth = () => (fill().props.style[1]() as { width: number }).width;
+		// On Low (20): to just past the blob's right edge.
+		expect(fillWidth()).toBe(20 + 16 + 4);
+		await act(async () => { drag.begin(20); drag.move(170); });
+		expect(fillWidth()).toBe(170 + 16 + 4);
+		// A faint dot per level on the track, and a lit one per level inside the fill.
+		const lit = fill().findAll((node) => hostType(node) === "View").map((dot) => (dot.props.style[1] as { backgroundColor: string }).backgroundColor);
+		expect(lit).toEqual(Array(5).fill("#textSecondary"));
+	});
+
+	// The touch-down glide is still running when the finger moves on: the blob
+	// closes on the finger over a few moves, then holds it, never trailing.
+	it("catches the blob up to a moving finger after touch down, then holds it", async () => {
+		const { drag, blobCentre } = await render("low");
+		await act(async () => drag.begin(170));
+		await act(async () => drag.move(170));
+		const first = blobCentre();
+		expect(first).toBeGreaterThanOrEqual(170 - 1);
+		for (let i = 0; i < 12; i++) await act(async () => drag.move(170));
+		expect(blobCentre()).toBe(170);
+	});
+
+	// A re-render while the blob moves on the UI thread hands React's stale
+	// position back to the native view; the track must hold still through the
+	// label changing at every level crossed.
+	it("keeps the track from re-rendering while the level changes under a finger", async () => {
+		fixtures.reduceMotion = true;
+		const { drag, root, label } = await render("low");
+		const blob = () => root.findAll((node) => hostType(node) === "AnimatedView" && node.props.testID === "effort-slider-blob")[0];
+		const before = blob().props.style;
+		await act(async () => { drag.begin(20); drag.move(170); });
+		expect(label()).toBe("Xhigh");
+		// The same style array: the blob's element was not rebuilt.
+		expect(blob().props.style).toBe(before);
+	});
+
+	// Closed mid-drag (the keyboard, back), the level the finger was on is
+	// still chosen, before the host hears the close.
+	it("chooses the level under the finger when closed mid-drag", async () => {
+		const { drag, onChoose } = await render("low");
+		await act(async () => { drag.begin(20); drag.move(170); });
+		expect(onChoose).not.toHaveBeenCalled();
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["xhigh"]);
 	});
 
 	it("glides onto the level when let go, and says the level is settled", async () => {
@@ -243,30 +308,12 @@ describe("effort slider", () => {
 		const backdrop = window.findAll((node) => hostType(node) === "Pressable")[0];
 		act(() => backdrop.props.onPressIn());
 		expect(onDismiss).toHaveBeenCalledOnce();
-		// Gesture handler hears nothing in a window of its own: the track takes
-		// the drag through the responder system, as the finger lands.
-		expect(window.findAll((node) => hostType(node) === "GestureDetector")).toHaveLength(0);
-		const track = window.findAll((node) => node.props.testID === "effort-slider" && hostType(node) === "View")[0];
-		expect(track.props.onStartShouldSetResponder()).toBe(true);
-		expect(track.props.onResponderTerminationRequest()).toBe(false);
+		// The window brings its own gesture handler root, so the drag runs on
+		// the UI thread there as anywhere else.
+		const gestureRoot = window.findAll((node) => hostType(node) === "GestureHandlerRootView")[0];
+		expect(gestureRoot.findAll((node) => hostType(node) === "GestureDetector")).toHaveLength(1);
 		await act(async () => renderer!.update(<EffortSliderOverlay overKeyboard visible={false} onDismiss={onDismiss} choices={levels("low")} onChoose={() => {}} />));
 		expect(renderer!.root.findAll((node) => hostType(node) === "OverKeyboardView")[0].props.visible).toBe(false);
-	});
-
-	it("drags over the keyboard, a finger off the track still driving it", async () => {
-		const onChoose = vi.fn();
-		const onRelease = vi.fn();
-		await act(async () => { renderer = create(<EffortSliderOverlay overKeyboard choices={levels("low")} onChoose={onChoose} onRelease={onRelease} />); });
-		const track = () => renderer!.root.findAll((node) => node.props.testID === "effort-slider" && hostType(node) === "View")[0];
-		// A 240-wide track 80 in from the page's edge: stops at 20, 70, 120, 170, 220.
-		await act(async () => track().props.onLayout({ nativeEvent: { layout: { width: 240 } } }));
-		await act(async () => track().props.onResponderGrant({ nativeEvent: { locationX: 20, pageX: 100 } }));
-		await act(async () => track().props.onResponderMove({ nativeEvent: { locationX: 0, pageX: 80 + 170 } }));
-		// Past the track's end, read from the page: the top level.
-		await act(async () => track().props.onResponderMove({ nativeEvent: { locationX: 0, pageX: 80 + 400 } }));
-		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["xhigh", "max"]);
-		await act(async () => track().props.onResponderRelease());
-		expect(onRelease).toHaveBeenCalledOnce();
 	});
 
 	it("takes no touches and holds nothing while hidden", async () => {

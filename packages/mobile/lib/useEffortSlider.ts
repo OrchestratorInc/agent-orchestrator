@@ -112,24 +112,34 @@ export type EffortSliderProps = {
 };
 
 /**
- * The slider's level: the thumb's stop follows the finger at once while the
- * owner's choice catches up, and each new stop ticks and is chosen.
+ * The slider's level. A drag shows each level it crosses at once (`show`: the
+ * label and a tick) and chooses only where it ends (`choose`): choosing
+ * re-renders the owner, and doing it per level was the JS work a streaming
+ * reply competed with. `pick` does both, for a screen reader's step.
  */
 export function useEffortSlider(choices: readonly EffortChoice[], onChoose: (value: string) => void, tick: () => void) {
 	const chosen = choices.findIndex((choice) => choice.selected);
 	const [index, setIndex] = useState(chosen);
 	const indexRef = useRef(chosen);
 	useEffect(() => { indexRef.current = chosen; setIndex(chosen); }, [chosen]);
-	const pick = (next: number) => {
+	const show = (next: number) => {
 		if (next < 0 || next >= choices.length || next === indexRef.current) return;
 		indexRef.current = next;
 		setIndex(next);
 		tick();
+	};
+	const choose = (next: number) => {
+		if (next < 0 || next >= choices.length || next === chosen) return;
 		onChoose(choices[next].value);
+	};
+	const pick = (next: number) => {
+		if (next === indexRef.current) return;
+		show(next);
+		choose(next);
 	};
 	// The level kept from before the choices changed can point past them (a
 	// model with fewer levels, or none) until the effect above catches up; the
 	// slider stays mounted across model changes, so fall back to the chosen one.
 	const current = index < choices.length ? index : chosen;
-	return { index: current, label: current >= 0 ? choices[current].label : "Default", pick };
+	return { index: current, label: current >= 0 ? choices[current].label : "Default", show, choose, pick };
 }

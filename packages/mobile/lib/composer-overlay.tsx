@@ -1,6 +1,7 @@
 import { useNavigation } from "expo-router";
-import { createContext, useContext, useEffect, useLayoutEffect, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet, Text, View, type DimensionValue, type ViewStyle } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { OverKeyboardView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -116,18 +117,6 @@ export function ComposerOverlay({ bottom, overKeyboard = false, onDismiss, lift 
 	);
 }
 
-const OwnWindowContext = createContext(false);
-
-/**
- * True inside an overlay drawn in a window of its own (over the keyboard):
- * gesture handler hears no touch there, so a control in it takes its touches
- * through React Native's responder system, which the window feeds itself.
- * Nothing scrolls under it there to take a drag away.
- */
-export function useInOwnWindow(): boolean {
-	return useContext(OwnWindowContext);
-}
-
 /**
  * The overlay over the keyboard, as ChatGPT's effort slider is: in a window of
  * its own above every other, the keyboard's included (keyboard-controller's
@@ -144,9 +133,9 @@ export function useInOwnWindow(): boolean {
  * iOS that is the window's own: a point no view of it claims falls through
  * to the window below. Android's window takes every touch on the screen, so
  * there any touch outside the content only puts the overlay away; typing
- * still puts it away (see the composer's field). Gesture handler hears
- * nothing in a window of its own, so controls here use the responder system
- * (see useInOwnWindow).
+ * still puts it away (see the composer's field). The window carries its own
+ * gesture handler root, so gestures (the slider's drag) run there on the UI
+ * thread as anywhere else.
  */
 function OverKeyboardOverlay({ visible, onDismiss, fill, reveal, children }: {
 	visible: boolean;
@@ -185,7 +174,10 @@ function OverKeyboardOverlay({ visible, onDismiss, fill, reveal, children }: {
 						    otherwise take it for a tap outside and close it as the finger
 						    lands. */}
 						<View style={[styles.stack, fill && styles.fill]} onTouchStart={markTouchInside}>
-							<OwnWindowContext.Provider value>{children}</OwnWindowContext.Provider>
+							{/* Gesture handler's root for this window: the window is outside the
+							    app's native tree, so without one no gesture in it (the slider's
+							    drag) is heard, as a React Native Modal needs its own. */}
+							<GestureHandlerRootView style={[styles.gestureRoot, fill && styles.fill]}>{children}</GestureHandlerRootView>
 						</View>
 					</Animated.View>
 				</Animated.View>
@@ -247,6 +239,8 @@ const makeStyles = (t: Theme) =>
 		// No wider than the composer, so a card inside can be capped to it.
 		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
 		fill: { alignSelf: "stretch" },
+		// Sized by its content like the stack, never stretched (its default is flex: 1).
+		gestureRoot: { alignItems: "center", maxWidth: "100%" },
 		heading: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xxs },
 		title: { ...type.footnote, color: t.textSecondary },
 		value: { ...type.footnote, fontFamily: type.headline.fontFamily, color: t.textPrimary, flexShrink: 1 },
