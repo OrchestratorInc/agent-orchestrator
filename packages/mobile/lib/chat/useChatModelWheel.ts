@@ -112,7 +112,9 @@ export function useChatModelWheel({ snapshot, models, options, disabled, onSetti
 			return;
 		}
 		const model = list.find((agent) => agent.id === agentId)?.models.find((item) => item.key === modelKey);
-		if (!model || (held?.harness === agentId && (held.model ?? AUTOMATIC_MODEL) === modelKey)) return;
+		// The switch in force stands where chosenModel puts it: one to the agent's
+		// default on its starred model, which must not be saved as that model.
+		if (!model || (held?.harness === agentId && (held.model ?? defaultModelOf(switching, agentId) ?? AUTOMATIC_MODEL) === modelKey)) return;
 		const defaultLabel = switching?.models[agentId]?.defaultLabel;
 		switching?.onPick({
 			harness: agentId,

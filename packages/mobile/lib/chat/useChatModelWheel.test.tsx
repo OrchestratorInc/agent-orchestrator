@@ -103,6 +103,17 @@ describe("chat model wheel", () => {
 		expect(wheel.chosenModel).toBe("fable-5-1");
 	});
 
+	// Rolled away and back, the wheels close on the starred model the switch
+	// stands on: saving it would pin the model and stop following the default.
+	it("keeps a switch to an agent's own default when the wheels close on its starred model", () => {
+		const { onPick } = render({ harness: "codex", modelLabel: "Fable 5.1" });
+		act(() => wheel.choose("codex", "fable-5-1"));
+		expect(onPick).not.toHaveBeenCalled();
+		// Another of its models is still a change.
+		act(() => wheel.choose("codex", "fable-5"));
+		expect(onPick).toHaveBeenCalledExactlyOnceWith({ harness: "codex", model: "fable-5", modelLabel: "Fable 5" });
+	});
+
 	// Where the effort slider shows, Fast mode is its bolt and not a row here.
 	it("lists Fast mode under the wheels only while the effort slider does not carry it", () => {
 		render(undefined, { fastOnEffort: false });
