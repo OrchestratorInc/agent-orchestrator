@@ -3986,6 +3986,7 @@
 	"artifacts.share.pageFiles.skipped_other": "No se incluyeron {{count}} archivos que usa esta página, así que la página compartida no los mostrará.",
 	"artifacts.share.pageFiles.unsupported": "No se incluyeron las imágenes de esta página: Orchestrator Cloud todavía no puede compartirlas con una página.",
 	"artifacts.share.pageFiles.videos": "Todavía no se pueden compartir videos con una página.",
+	"artifacts.share.pageFiles.hostOutdated": "Algunos están en un equipo con una versión anterior de Orchestrator: actualízala allí para incluirlos.",
 	"artifacts.share.unpublished": "El enlace de este archivo dejó de publicarse. Al publicarlo, tendrá un enlace nuevo.",
 	"artifacts.share.upgradeTitle": "Mejora tu plan para compartir más",
 	"artifacts.share.limitReached": "Plan gratuito: hasta {{limit}} enlaces activos. Mejora tu plan para compartir más.",
