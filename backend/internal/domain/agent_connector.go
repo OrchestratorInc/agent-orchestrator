@@ -6,14 +6,14 @@ import "time"
 type AgentConnectorStatus string
 
 const (
-	// AgentConnectorConnected: the connector answered and its tools load.
+	// AgentConnectorConnected means the connector answered and its tools load.
 	AgentConnectorConnected AgentConnectorStatus = "connected"
-	// AgentConnectorNeedsAuth: the connector is added but its own sign-in
+	// AgentConnectorNeedsAuth means the connector is added but its own sign-in
 	// (for example Google's) is missing or expired, on the provider's site.
 	AgentConnectorNeedsAuth AgentConnectorStatus = "needs_auth"
-	// AgentConnectorFailed: the connector could not be reached.
+	// AgentConnectorFailed means the connector could not be reached.
 	AgentConnectorFailed AgentConnectorStatus = "failed"
-	// AgentConnectorUnknown: the CLI reported a state AO does not recognize.
+	// AgentConnectorUnknown means the CLI reported a state AO does not recognize.
 	AgentConnectorUnknown AgentConnectorStatus = "unknown"
 )
 
@@ -29,12 +29,14 @@ type AgentConnector struct {
 type AgentConnectorsUnavailable string
 
 const (
-	// AgentConnectorsSetupToken: a `claude setup-token` token is limited to
-	// inference and cannot load claude.ai connectors (#9101).
+	// AgentConnectorsSetupToken means a `claude setup-token` token signs the
+	// account in; it is limited to inference and cannot load claude.ai
+	// connectors (#9101).
 	AgentConnectorsSetupToken AgentConnectorsUnavailable = "setup_token"
-	// AgentConnectorsAPIKey: an API key has no provider account behind it.
+	// AgentConnectorsAPIKey means an API key signs the account in, which has no
+	// provider account behind it.
 	AgentConnectorsAPIKey AgentConnectorsUnavailable = "api_key"
-	// AgentConnectorsUnsupported: the account's provider has no connectors.
+	// AgentConnectorsUnsupported means the account's provider has no connectors.
 	AgentConnectorsUnsupported AgentConnectorsUnavailable = "unsupported"
 )
 
