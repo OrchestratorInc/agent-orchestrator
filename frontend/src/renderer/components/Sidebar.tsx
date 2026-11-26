@@ -81,6 +81,7 @@ import {
 	type SessionRowMarker,
 } from "../lib/session-presentation";
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
+import { prefetchEditorHandoffState } from "../hooks/useEditorHandoff";
 import { dropdownMenuKit, MenuEntries, MenuKitContext, type MenuEntry } from "./menu-model";
 import { isArchivedSession } from "../lib/standalone-archive";
 import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -1897,6 +1898,7 @@ const ProjectItem = memo(function ProjectItem({
 					label: t("shell.newTask"),
 					disabled: isProjectRestarting,
 					onSelect: () => requestNewTask(workspace.id, workspace.hostId),
+					accelerator: "n",
 				}]
 				: []),
 			...(!isStandalone && !isAgent && (!workspace.shared || orchestrator)
@@ -1907,6 +1909,7 @@ const ProjectItem = memo(function ProjectItem({
 					label: orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower"),
 					disabled: isSpawning || isProjectProvisioning || isProjectRestarting,
 					onSelect: () => void openOrchestrator(),
+					accelerator: "o",
 				}]
 				: []),
 			...(!isStandalone && !isAgent
@@ -1916,6 +1919,7 @@ const ProjectItem = memo(function ProjectItem({
 					icon: <LayoutGrid aria-hidden="true" />,
 					label: t("shell.openDashboard"),
 					onSelect: () => selection.goProject(workspace.id),
+					accelerator: "d",
 				}]
 				: []),
 			...(archivedCount > 0
@@ -1938,6 +1942,7 @@ const ProjectItem = memo(function ProjectItem({
 					icon: <Copy aria-hidden="true" />,
 					label: t("editor.copyPath"),
 					onSelect: () => copyToClipboard(workspace.path),
+					accelerator: "c",
 				}]
 				: []),
 			{ kind: "separator", id: "project-sep" },
@@ -1948,6 +1953,7 @@ const ProjectItem = memo(function ProjectItem({
 					icon: isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />,
 					label: isPinned ? t("shell.unpinProject") : t("shell.pinProject"),
 					onSelect: () => setProjectPinned(workspace.id, !isPinned),
+					accelerator: "p",
 				}]
 				: []),
 			...(!isStandalone && !isAgent
@@ -1958,6 +1964,7 @@ const ProjectItem = memo(function ProjectItem({
 						icon: <Settings aria-hidden="true" />,
 						label: t("shell.projectSettings"),
 						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
+						accelerator: "s",
 					},
 					// A project shared from another organization is its organization's to delete.
 					...(workspace.shared ? [] : [{
@@ -2805,6 +2812,14 @@ const SessionRow = memo(function SessionRow({
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
 	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
+	// The row's menus (right-click and ⋮) open on their final rows: their data is
+	// read once the pointer rests on the row, or at once on a press or focus.
+	const menuPrefetchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(menuPrefetchTimerRef.current), []);
+	const prefetchMenu = () => {
+		clearTimeout(menuPrefetchTimerRef.current);
+		prefetchEditorHandoffState(queryClient, session.id);
+	};
 	const prefetchConversation = () => {
 		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
@@ -2906,6 +2921,13 @@ const SessionRow = memo(function SessionRow({
 					data-session-row=""
 					data-dragging={reorder?.isDragging ? "true" : undefined}
 					data-preview-open={preview.open ? "" : undefined}
+					onFocusCapture={prefetchMenu}
+					onPointerDownCapture={prefetchMenu}
+					onPointerEnter={() => {
+						clearTimeout(menuPrefetchTimerRef.current);
+						menuPrefetchTimerRef.current = setTimeout(prefetchMenu, CHAT_PREFETCH_REST_MS);
+					}}
+					onPointerLeave={() => clearTimeout(menuPrefetchTimerRef.current)}
 				>
 					<NavRowHighlight active={active} disabled={Boolean(reorder?.isDragging)} />
 					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>

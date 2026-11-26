@@ -2809,6 +2809,7 @@ describe("Sidebar", () => {
 
 	it("starts the same inline rename from the session context menu", async () => {
 		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
@@ -2816,20 +2817,46 @@ describe("Sidebar", () => {
 		const menu = renameItem.closest('[role="menu"]');
 		if (!menu) throw new Error("Session context menu not found");
 		await within(menu as HTMLElement).findByRole("menuitem", { name: "Open in" });
-		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Open in",
-			"Copy path",
-			"Rename",
-			"Pin session",
-			"Fork session",
-			"Archive session",
+		// Each row's label, without its key hint; the hint is the row's letter.
+		const label = (item: Element) =>
+			[...item.childNodes].filter((node) => !(node instanceof Element && node.matches('[data-slot="menu-shortcut"]'))).map((node) => node.textContent).join("");
+		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => [label(item), item.getAttribute("aria-keyshortcuts")])).toEqual([
+			["Open in", null],
+			["Copy path", "C"],
+			["Rename", "R"],
+			["Pin session", "P"],
+			["Fork session", "F"],
+			["Archive session", "A"],
 		]);
-		expect(renameItem).toHaveTextContent(/^Rename$/);
+		expect(label(renameItem)).toBe("Rename");
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
 		expect(screen.getByRole("textbox", { name: "Rename fix login" })).toHaveFocus();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("shows no letter keys on menu rows without Interface v2", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const rename = await screen.findByRole("menuitem", { name: "Rename fix login" });
+		expect(rename).not.toHaveAttribute("aria-keyshortcuts");
+		expect(rename.closest('[role="menu"]')?.querySelector("[data-menu-accelerator]")).toBeNull();
+	});
+
+	it("runs a session menu row from its letter while the menu is open", async () => {
+		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const menu = (await screen.findByRole("menuitem", { name: "Rename fix login" })).closest('[role="menu"]') as HTMLElement;
+		await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
+		await user.keyboard("r");
+
+		expect(await screen.findByRole("textbox", { name: "Rename fix login" })).toBeInTheDocument();
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
 
 	it("lists every open target in the editor row's submenu", async () => {
