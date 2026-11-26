@@ -13,18 +13,37 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var _ ports.AgentAuthChecker = (*Plugin)(nil)
+var (
+	_ ports.AgentAuthChecker        = (*Plugin)(nil)
+	_ ports.AgentRuntimeAuthChecker = (*Plugin)(nil)
+)
 
 // AuthStatus checks Prime Agent's documented credential sources without
 // starting a session or making a provider request.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	return p.authStatusInProfile(ctx, primeConfigDir())
+}
+
+// AuthStatusForRuntime checks the profile a session launched from dataDir runs
+// with. Sessions never read the default ~/.prime/agent profile, so a login held
+// only there doesn't count.
+func (p *Plugin) AuthStatusForRuntime(ctx context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	dir, err := primeDataDir(dataDir)
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
+	}
+	status, err := p.authStatusInProfile(ctx, dir)
+	return status, domain.AgentAccountIdentity{}, nil, err
+}
+
+func (p *Plugin) authStatusInProfile(ctx context.Context, dir string) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		if errors.Is(err, ports.ErrAgentBinaryNotFound) {
 			return ports.AgentAuthStatusUnknown, nil
 		}
 		return ports.AgentAuthStatusUnknown, err
 	}
-	status, ok, err := primeLocalAuthStatus(ctx)
+	status, ok, err := primeProfileAuthStatus(ctx, dir)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
@@ -64,14 +83,14 @@ var primeAPIKeyEnvVars = []string{
 	"AWS_BEARER_TOKEN_BEDROCK",
 }
 
-// primeLocalAuthStatus checks Prime Agent's own auth.json and models.json
-// first; keys and cloud credentials in the environment are the fallback when
-// those hold no usable credential.
-func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+// primeProfileAuthStatus checks auth.json and models.json in dir first; keys and
+// cloud credentials in the environment are the fallback when those hold no
+// usable credential. An empty dir skips the profile.
+func primeProfileAuthStatus(ctx context.Context, dir string) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	status, found, err := primeStoredAuthStatus(ctx)
+	status, found, err := primeStoredAuthStatus(ctx, dir)
 	if err == nil && found && status.HasCredential() {
 		return status, true, nil
 	}
@@ -96,9 +115,8 @@ func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	return status, found, err
 }
 
-func primeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
-	dir, ok := primeConfigDir()
-	if !ok {
+func primeStoredAuthStatus(ctx context.Context, dir string) (ports.AgentAuthStatus, bool, error) {
+	if dir == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	for _, file := range []struct {
@@ -145,17 +163,18 @@ func primeFirstSetEnv(names ...string) string {
 	return names[0]
 }
 
-func primeConfigDir() (string, bool) {
+// primeConfigDir is the profile Prime Agent uses outside AO, or "" without one.
+func primeConfigDir() string {
 	for _, name := range []string{primeAgentCodingAgentDirEnv, "PI_CODING_AGENT_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return dir, true
+			return dir
 		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return "", false
+		return ""
 	}
-	return filepath.Join(home, ".prime", "agent"), true
+	return filepath.Join(home, ".prime", "agent")
 }
 
 func primeAWSCredentialEnvConfigured() bool {

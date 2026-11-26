@@ -200,7 +200,7 @@ export function HumanMessageEditor({
 							autoFocus
 							rows={1}
 							cols={1}
-							className="w-full min-w-0 resize-none overflow-hidden bg-transparent p-0 break-words whitespace-pre-wrap text-pretty text-foreground outline-none"
+							className="w-full min-w-0 resize-none overflow-hidden bg-transparent p-0 break-words whitespace-pre-wrap text-foreground outline-none"
 						/>
 					</div>
 				</CollapsibleHumanBody>
