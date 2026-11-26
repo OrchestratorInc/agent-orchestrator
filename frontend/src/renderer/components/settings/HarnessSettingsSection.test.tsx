@@ -2927,6 +2927,35 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByText("Not installed")).not.toBeInTheDocument();
 	});
 
+	it("says why a succeeded install still reads not installed and offers a retry", async () => {
+		const notInstalled = agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" });
+		const initial = { agents: [agentReadiness("claude-code", "Claude Code"), notInstalled] };
+		const timedOut = { agents: [{ ...notInstalled, installation: { ...notInstalled.installation, freshness: "stale" as const, reasonCode: "install_check_timeout", reason: "Installation check timed out." } }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		let probed = false;
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? timedOut : initial } as never;
+			if (path === "/api/v1/agents/{agent}/install") return { data: { target: "codex", status: "succeeded", method: "homebrew", startedAt: "2026-09-19T00:00:00Z" } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				probed = true;
+				return { data: { agent: { id: "codex", authStatus: "unknown" }, installed: false } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection(undefined, "codex");
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
+
+		await waitFor(() => expect(within(row).getByRole("alert")).toHaveTextContent("Installation check timed out."));
+		expect(within(row).getByRole("button", { name: "Retry install" })).toBeInTheDocument();
+		expect(within(row).queryByRole("progressbar", { name: "Done" })).not.toBeInTheDocument();
+	});
+
 	it("updates a mounted readiness consumer when the Harness authentication terminal completes", async () => {
 		const initial = { agents: [
 			agentReadiness("claude-code", "Claude Code"),

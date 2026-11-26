@@ -287,8 +287,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			if (!confirmsJob) return;
 			setConfirmingInstalls((current) => current.filter((id) => id !== agentId));
 			// A failed readiness refresh confirms nothing: no Done, and the row
-			// reports the check so it can be run again.
-			if (confirmed === undefined) setActionErrors((current) => ({ ...current, [agentId]: t("settings.harness.health.checkFailed") }));
+			// reports the check so it can be run again. A job that succeeded but
+			// still reads not installed says why, beside the retry.
+			const installation = queryClient.getQueryData<AgentReadiness>(readinessKey)?.agents.find((agent) => agent.id === agentId)?.installation;
+			const error = confirmed === undefined ? t("settings.harness.health.checkFailed")
+				: installation?.state === "not_installed" ? installation.reason || t("settings.harness.verifyFailed", { agent: agentLabel(agentId) })
+				: undefined;
+			if (error) setActionErrors((current) => ({ ...current, [agentId]: error }));
 		}).finally(async () => {
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId, hostId) }),
@@ -297,7 +302,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				invalidateAgentModelCatalogs(queryClient, agentId, hostId),
 			]);
 		});
-	}, [authPlansKey, hostId, installerKey, queryClient, t]);
+	}, [authPlansKey, hostId, installerKey, queryClient, readinessKey, t]);
 
 	useEffect(() => {
 		let active = true;
