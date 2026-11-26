@@ -87,6 +87,7 @@
 	"chat.attachment.saveFailed": "无法保存文件",
 	"chat.attachment.readFailed": "无法加载完整文件",
 	"chat.attachment.viewerTruncated": "仅显示前 {{size}}",
+	"chat.attachment.saveWhole": "保存完整文件",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.annotation.commentPlaceholder": "添加评论",
 	"chat.annotation.commentLabel": "对所选文本的评论",

@@ -187,4 +187,26 @@ describe("StagedAttachmentItems opening a text file", () => {
 		expect(viewer.querySelector("pre")?.textContent).toHaveLength(VIEWER_BYTES);
 		expect(within(viewer).queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
 	});
+
+	it("saves the whole file from a viewer that showed only its start", async () => {
+		const whole = "x".repeat(VIEWER_BYTES + 100);
+		const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => new Response(tileRead(init) ? "first line" : whole, { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		const saved: Blob[] = [];
+		vi.stubGlobal("URL", Object.assign(Object.create(URL), { createObjectURL: (blob: Blob) => (saved.push(blob), "blob:whole"), revokeObjectURL: () => undefined }));
+		const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		fireEvent.click(await within(viewer).findByRole("button", { name: "Save the whole file" }));
+
+		await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
+		const link = click.mock.contexts[0] as HTMLAnchorElement;
+		expect(link.download).toBe("attachment-notes.txt");
+		expect(link.href).toBe("blob:whole");
+		expect(saved[0]?.size).toBe(whole.length);
+		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`);
+		click.mockRestore();
+	});
 });

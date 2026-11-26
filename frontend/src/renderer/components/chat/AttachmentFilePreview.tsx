@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
@@ -71,6 +72,21 @@ function rawTextUrl(src: string): string {
 	return src.startsWith("blob:") ? src : `${src}${src.includes("?") ? "&" : "?"}raw=true`;
 }
 
+async function saveFile(src: string, name: string) {
+	const local = src.startsWith("blob:");
+	let url = src;
+	if (!local) {
+		const response = await fetch(rawTextUrl(src));
+		if (!response.ok) throw new Error(`Save failed: ${response.status}`);
+		url = URL.createObjectURL(await response.blob());
+	}
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = name;
+	link.click();
+	if (!local) setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function TextViewer({ src, name, start, onOpenChange }: {
 	src: string;
 	name: string;
@@ -81,6 +97,7 @@ function TextViewer({ src, name, start, onOpenChange }: {
 	const [full, setFull] = useState<{ text: string; more: boolean }>();
 	const [failed, setFailed] = useState(false);
 	const [attempt, setAttempt] = useState(0);
+	const [saving, setSaving] = useState(false);
 	useEffect(() => {
 		const controller = new AbortController();
 		void fetch(rawTextUrl(src), {
@@ -103,7 +120,23 @@ function TextViewer({ src, name, start, onOpenChange }: {
 				<div className="flex min-w-0 items-center gap-2 pr-8">
 					<DialogTitle className="min-w-0 flex-1 truncate text-sm">{name}</DialogTitle>
 					{full?.more ? (
-						<span className="text-xs text-muted-foreground">{t("chat.attachment.viewerTruncated", { size: formatAttachmentSize(TEXT_VIEWER_BYTES) })}</span>
+						<>
+							<span className="text-xs text-muted-foreground">{t("chat.attachment.viewerTruncated", { size: formatAttachmentSize(TEXT_VIEWER_BYTES) })}</span>
+							<Button
+								type="button"
+								variant="secondary"
+								size="xs"
+								disabled={saving}
+								onClick={() => {
+									setSaving(true);
+									void saveFile(src, name)
+										.catch(() => useUiStore.getState().showGlobalToast(t("chat.attachment.saveFailed"), undefined, "error"))
+										.finally(() => setSaving(false));
+								}}
+							>
+								{t("chat.attachment.saveWhole")}
+							</Button>
+						</>
 					) : full ? (
 						<CopyButton text={full.text} label="Copy text" />
 					) : failed ? (

@@ -81,6 +81,7 @@
 	"chat.attachment.saveFailed": "Не удалось сохранить файл",
 	"chat.attachment.readFailed": "Не удалось загрузить файл целиком",
 	"chat.attachment.viewerTruncated": "Показаны первые {{size}}",
+	"chat.attachment.saveWhole": "Сохранить файл целиком",
 	"chat.annotationReferences": "Упомянутые аннотации чата",
 	"chat.annotation.commentPlaceholder": "Добавить комментарий",
 	"chat.annotation.commentLabel": "Комментарий к выделенному тексту",

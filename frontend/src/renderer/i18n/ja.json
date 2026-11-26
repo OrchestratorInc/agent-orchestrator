@@ -87,6 +87,7 @@
 	"chat.attachment.saveFailed": "ファイルを保存できませんでした",
 	"chat.attachment.readFailed": "ファイル全体を読み込めませんでした",
 	"chat.attachment.viewerTruncated": "最初の {{size}} を表示しています",
+	"chat.attachment.saveWhole": "ファイル全体を保存",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.annotation.commentPlaceholder": "コメントを追加",
 	"chat.annotation.commentLabel": "選択したテキストへのコメント",

@@ -87,6 +87,7 @@
 	"chat.attachment.saveFailed": "Couldn't save the file",
 	"chat.attachment.readFailed": "Couldn't load the whole file",
 	"chat.attachment.viewerTruncated": "Showing the first {{size}}",
+	"chat.attachment.saveWhole": "Save the whole file",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.annotation.commentPlaceholder": "Add a comment",
 	"chat.annotation.commentLabel": "Comment on the selected text",

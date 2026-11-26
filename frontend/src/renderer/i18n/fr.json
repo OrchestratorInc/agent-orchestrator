@@ -88,6 +88,7 @@
 	"chat.attachment.saveFailed": "Impossible d'enregistrer le fichier",
 	"chat.attachment.readFailed": "Impossible de charger le fichier complet",
 	"chat.attachment.viewerTruncated": "Affichage des premiers {{size}}",
+	"chat.attachment.saveWhole": "Enregistrer le fichier complet",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.annotation.commentPlaceholder": "Ajouter un commentaire",
 	"chat.annotation.commentLabel": "Commentaire sur le texte sélectionné",
