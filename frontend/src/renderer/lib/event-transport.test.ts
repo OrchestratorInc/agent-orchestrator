@@ -49,13 +49,15 @@ vi.mock("./host-clients", () => ({
 	clientForSessionHost: () => ({ GET: remoteGetMock }),
 }));
 
-import { createEventTransport } from "./event-transport";
+import { createEventTransport, EVENT_STREAM_STALL_MS } from "./event-transport";
 import { interfaceTransitionRefetchInterval } from "../hooks/useSessionInterfaceTransition";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
 import { conversationQueryOptions } from "../hooks/useConversation";
 
 class EventSourceStub {
 	static instances: EventSourceStub[] = [];
+	/** How many upcoming constructions throw, as a browser may for a refused URL. */
+	static failNext = 0;
 	url: string;
 	closed = false;
 	readyState = 0; // CONNECTING
@@ -65,6 +67,10 @@ class EventSourceStub {
 	listeners: string[] = [];
 	handlers = new Map<string, (event: Event) => void>();
 	constructor(url: string) {
+		if (EventSourceStub.failNext > 0) {
+			EventSourceStub.failNext -= 1;
+			throw new Error("EventSource construction failed");
+		}
 		this.url = url;
 		EventSourceStub.instances.push(this);
 	}
@@ -109,6 +115,7 @@ function cdcSources() {
 
 beforeEach(() => {
 	EventSourceStub.instances = [];
+	EventSourceStub.failNext = 0;
 	onStatusMock.mockReset().mockReturnValue(removeStatusMock);
 	removeStatusMock.mockReset();
 	getApiBaseUrlMock.mockReset().mockReturnValue("http://127.0.0.1:3001");
@@ -423,6 +430,141 @@ describe("createEventTransport", () => {
 		onStatusHandler();
 
 		expect(EventSourceStub.instances).toHaveLength(1);
+	});
+
+	it("rebuilds a stream that stops delivering after heartbeats, and refreshes open chats", async () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			const first = cdcSources()[0];
+			first.readyState = 1;
+			first.onopen?.();
+			first.emit("heartbeat", "{}");
+			await vi.advanceTimersByTimeAsync(1_000);
+			(queryClient.invalidateQueries as ReturnType<typeof vi.fn>).mockClear();
+
+			// The browser still calls it open, but nothing arrives: no heartbeat, no event.
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS + 5_000);
+
+			expect(first.closed).toBe(true);
+			expect(cdcSources()).toHaveLength(2);
+			expect(getEventsConnectionState()).toBe("disconnected");
+			const replacement = cdcSources()[1];
+			replacement.readyState = 1;
+			replacement.onopen?.();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a stream whose heartbeats keep arriving", async () => {
+		vi.useFakeTimers();
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+			source.readyState = 1;
+			source.onopen?.();
+			for (let beat = 0; beat < 12; beat += 1) {
+				source.emit("heartbeat", "{}");
+				await vi.advanceTimersByTimeAsync(10_000);
+			}
+			expect(cdcSources()).toHaveLength(1);
+			expect(source.closed).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("leaves an idle stream alone when the daemon has sent no heartbeat", async () => {
+		vi.useFakeTimers();
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+			source.readyState = 1;
+			source.onopen?.();
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS * 4);
+			expect(cdcSources()).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rebuilds a replacement that never opens once the daemon is known to send heartbeats", async () => {
+		vi.useFakeTimers();
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const first = cdcSources()[0];
+			first.readyState = 1;
+			first.onopen?.();
+			first.emit("heartbeat", "{}");
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS + 5_000);
+			expect(cdcSources()).toHaveLength(2);
+
+			// The replacement hangs in CONNECTING: it is rebuilt in turn.
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS + 5_000);
+			expect(cdcSources()).toHaveLength(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reopens a stream the browser closed without an error on the next status echo", () => {
+		createEventTransport(fakeQueryClient()).connect();
+		const pushStatus = onStatusMock.mock.calls[0][0] as (status: { state: string; port?: number; pid?: number }) => void;
+		pushStatus({ state: "ready", port: 3001, pid: 10 });
+		const source = cdcSources()[0];
+		source.readyState = 1;
+		source.onopen?.();
+
+		// Closed with no error event: no retry was scheduled.
+		source.readyState = 2;
+		pushStatus({ state: "ready", port: 3001, pid: 10 });
+
+		expect(cdcSources()).toHaveLength(2);
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
+	});
+
+	it("leaves a scheduled retry's backoff alone on a status echo", () => {
+		vi.useFakeTimers();
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const pushStatus = onStatusMock.mock.calls[0][0] as (status: { state: string; port?: number; pid?: number }) => void;
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			const source = cdcSources()[0];
+			source.onopen?.();
+
+			// Closed with an error: the retry owns the next attempt.
+			source.readyState = 2;
+			source.onerror?.();
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			expect(cdcSources()).toHaveLength(1);
+
+			vi.advanceTimersByTime(5_000);
+			expect(cdcSources()).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("retries a stream whose construction threw", async () => {
+		vi.useFakeTimers();
+		try {
+			EventSourceStub.failNext = 1;
+			createEventTransport(fakeQueryClient()).connect();
+			expect(cdcSources()).toHaveLength(0);
+			expect(getEventsConnectionState()).toBe("disconnected");
+
+			// The first retry lands within the 5s initial backoff, whatever the jitter.
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(cdcSources()).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("closes the old connection and reconnects when the base URL changes", () => {
@@ -1093,6 +1235,8 @@ describe("id-only session updates", () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
 		const disconnect = createEventTransport(client).connect();
+		const taskRefreshes = () => vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["background-tasks"]').length;
+		const initialTasks = taskRefreshes();
 		idOnly("busy");
 		await vi.advanceTimersByTimeAsync(1_000);
 		idOnly("busy");
@@ -1108,9 +1252,11 @@ describe("id-only session updates", () => {
 		sessionRow("a", "active");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(3);
+		expect(taskRefreshes()).toBe(initialTasks);
 		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(4);
+		expect(taskRefreshes()).toBe(initialTasks + 1);
 		// Those refreshes already covered the waiting id-only update.
 		await vi.advanceTimersByTimeAsync(6_000);
 		expect(workspaceRefreshes(client)).toBe(4);

@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureApiErrorToSentry, captureExceptionToSentry, captureOnboardingFailureToSentry } from "./sentry";
 import { noteOnboardingPagesFinished, resetOnboardingFlowForTests, setOnboardingTourStep, setOnboardingWindowOpen } from "./onboarding-flow";
@@ -77,6 +78,20 @@ it("keeps anonymous minified frames and their chunk debug IDs", () => {
 	}
 });
 
+it("uses the browser location and error type when no error object or stack is available", () => {
+	const event = new ErrorEvent("error", {
+		message: "Uncaught TypeError: Cannot read properties of undefined (reading 'id')",
+		filename: "app://renderer/assets/index-A1B2C3D4.js?private=query",
+		lineno: 42,
+		colno: 9,
+	});
+	captureExceptionToSentry(undefined, { category: "renderer_exception", code: "WINDOW_ERROR" }, event);
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: event.message,
+		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/index-A1B2C3D4.js", lineno: 42, colno: 9 }] },
+	}));
+});
+
 it("reports a broken onboarding action as an error titled by action and reason", () => {
 	captureOnboardingFailureToSentry("gh_install", "install_failed", "gh");
 	expect(capture).toHaveBeenCalledWith({
@@ -115,4 +130,14 @@ it("tags the tour only in the launch whose onboarding pages finished", () => {
 	setOnboardingTourStep(undefined);
 	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
 	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+});
+
+it("forwards a cause code and drops overlong text at the IPC boundary", () => {
+	captureExceptionToSentry(new Error("x".repeat(4097), {
+		cause: new AoError("WORKSPACE_NO_READY_REPOS", "No resolved repositories"),
+	}), { category: "renderer_exception", code: "WINDOW_ERROR" });
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: "",
+		tags: expect.objectContaining({ error_code: "WORKSPACE_NO_READY_REPOS", code: "WINDOW_ERROR" }),
+	}));
 });

@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -274,6 +275,11 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 		case <-op.done:
 		default:
 			s.mu.Unlock()
+			// An account's sign-in is not this harness's own: say so, and never
+			// name its operation for the harness's panel to adopt as its own.
+			if op.account {
+				return nil, apierr.Conflict("AGENT_AUTH_ACCOUNT_LOGIN_IN_PROGRESS", "An account is signing in to this harness. Finish or close that sign-in first.", nil)
+			}
 			return nil, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "A login is already in progress for this harness.", map[string]any{"operationId": op.snapshot.ID})
 		}
 	}
@@ -376,6 +382,10 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
 		env["XDG_DATA_HOME"] = dataHome
+	}
+	if plan.AgentID == "prime-agent" && s.dataDir != "" {
+		// Sign in to the profile sessions run with, not ~/.prime/agent.
+		primeagent.New().AugmentRuntimeEnv(env, s.dataDir)
 	}
 	if len(env) > 0 {
 		input.Env = env

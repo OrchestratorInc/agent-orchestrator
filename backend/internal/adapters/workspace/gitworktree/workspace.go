@@ -2012,9 +2012,9 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 				return worktreeRefs{seedRef: requestedRef, baseRef: requestedRef}, nil
 			}
 			return worktreeRefs{}, fmt.Errorf(
-				"%w: %s; configure this repository's primary remote and cached HEAD (for example, `git -C %q remote set-head <remote> <branch>`) and retry",
+				"%w: %s; %s and retry",
 				ErrDefaultBranchUnresolved, strings.TrimPrefix(err.Error(), gitdefault.ErrUnresolved.Error()+": "),
-				repo,
+				w.defaultBranchRemedy(ctx, repo),
 			)
 		}
 		return worktreeRefs{}, fmt.Errorf("gitworktree: resolve repository default for %q: %w", repo, err)
@@ -2142,6 +2142,16 @@ func (w *Workspace) recordLiveDefault(repo string) {
 	w.liveDefaultAt[filepath.Clean(repo)] = w.clock()
 }
 
+// defaultBranchRemedy names a fix that applies to repo. A repository with no
+// remote has no remote HEAD to configure, and a workspace child has no default
+// branch setting of its own.
+func (w *Workspace) defaultBranchRemedy(ctx context.Context, repo string) string {
+	if out, err := w.run(ctx, w.binary, "-C", repo, "remote"); err == nil && strings.TrimSpace(string(out)) == "" {
+		return "add a remote, or for a single-repository project set the project's default branch,"
+	}
+	return fmt.Sprintf("configure this repository's primary remote and cached HEAD (for example, `git -C %q remote set-head <remote> <branch>`)", repo)
+}
+
 func (w *Workspace) resolveWorktreeRefsWithBudget(ctx context.Context, repo, branch, baseBranch string) (worktreeRefs, error) {
 	remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
 	defer cancelRemote()
@@ -2219,7 +2229,9 @@ func (w *Workspace) isDirty(ctx context.Context, path string) (bool, error) {
 func (w *Workspace) listRecords(ctx context.Context, repo string) ([]worktreeRecord, error) {
 	out, err := w.run(ctx, w.binary, worktreeListPorcelainArgs(repo)...)
 	if err != nil {
-		return nil, fmt.Errorf("gitworktree: worktree list: %w", err)
+		// repo is always a registered project repository, so a missing .git
+		// here is the project's, not a session worktree's (#8905).
+		return nil, fmt.Errorf("gitworktree: worktree list: %w", notARepoAt(repo, err))
 	}
 	records, err := parseWorktreePorcelain(string(out))
 	if err != nil {
@@ -2436,7 +2448,7 @@ func resolvedSessionPrefix(cfg ports.WorkspaceConfig) string {
 }
 
 func defaultSessionBranchName(id domain.SessionID) string {
-	return "ao/" + string(id)
+	return domain.SessionBranchPrefix + "/" + string(id)
 }
 
 func firstNonEmpty(values ...string) string {

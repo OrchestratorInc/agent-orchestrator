@@ -15,6 +15,7 @@ import {
 	type HostShareLink,
 	artifactShareUrl,
 	isPrivateShare,
+	isUnplayableShareVideo,
 	sameShareFingerprint,
 } from "../../shared/cloud-share";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
@@ -75,8 +76,6 @@ type Phase =
 	| { kind: "unpublished" }
 	| { kind: "error"; message: string };
 
-/** Videos are not shared yet: there is no partial-file serving for them. */
-export const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
 const COPIED_MS = 2_000;
 
 /**
@@ -546,7 +545,9 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	const recheck = useCallback(() => setChecks((count) => count + 1), []);
 	const available = useShareAvailable();
 	const { baseUrl, signedIn, scope } = useShareAccess();
-	const video = VIDEO_FILE.test(file.path);
+	// A video browsers cannot play is never published. Any other video is
+	// offered: a control plane that does not serve videos yet refuses it.
+	const video = isUnplayableShareVideo(file.path);
 	const publishing = usePublishing(pendingKey(baseUrl, file));
 	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, scope, `${revision}:${checks}:${publishing}`);
 	// What the panel does on opening is fixed when it opens, so a check that
@@ -591,7 +592,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 						</Button>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("artifacts.share.videoSoon")}</TooltipContent>
+				<TooltipContent side="bottom">{t("artifacts.share.videoFormat")}</TooltipContent>
 			</Tooltip>
 		);
 	}
@@ -669,10 +670,9 @@ function SharePanel({
 	const [staged, setStaged] = useState<string[]>([]);
 	// Adding past what one publish can share the link with: said under the field.
 	const [stagedOver, setStagedOver] = useState(false);
-	// On a team workspace: its teams, and whether everyone in it, a file on
-	// this computer is shared with once its Publish has made the link.
+	// On a team workspace: the teams a file on this computer is shared with
+	// once its Publish has made the link.
 	const [stagedTeams, setStagedTeams] = useState<ArtifactTeam[]>([]);
-	const [stagedWorkspace, setStagedWorkspace] = useState(false);
 	const [removing, setRemoving] = useState<string>();
 	const [changingAccess, setChangingAccess] = useState(false);
 	// Teams and workspaces are for a team workspace on a paid Cloud plan, as
@@ -767,7 +767,6 @@ function SharePanel({
 			case "published":
 				setStaged([]);
 				setStagedTeams([]);
-				setStagedWorkspace(false);
 				showPublished(result.share, result.pageFiles ? { pageFiles: result.pageFiles } : {});
 				onChanged?.();
 				refreshArtifacts();
@@ -1107,7 +1106,11 @@ function SharePanel({
 	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 	const spinner = <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />;
 	const ownerIdentity = { name: owner?.displayName, email: owner?.email };
-	const workspaceChoice = teamWorkspace ? { name: workspaceName } : undefined;
+	// Sharing a link with everyone at a workspace is off for now: the app
+	// cannot yet tell a workspace on a Cloud plan from a free one. Only a
+	// published link already shared with its workspace shows that choice, as
+	// the one it has, and choosing another access stops it.
+	const workspaceChoice = (audience: ArtifactAudience) => teamWorkspace && audience === "workspace" ? { name: workspaceName } : undefined;
 
 	switch (phase.kind) {
 		case "loading":
@@ -1121,7 +1124,7 @@ function SharePanel({
 				</>
 			);
 		case "unsupported":
-			return <>{titled(t("artifacts.share.title.publish"))}{status(t("artifacts.share.videoSoon"))}</>;
+			return <>{titled(t("artifacts.share.title.publish"))}{status(t(isUnplayableShareVideo(name) ? "artifacts.share.videoFormat" : "artifacts.share.videoSoon"))}</>;
 		case "notOwner":
 			return <>{titled(t("artifacts.share.title.publish"))}{status(t("artifacts.share.notOwner"))}</>;
 		case "limit":
@@ -1161,7 +1164,6 @@ function SharePanel({
 				setStagedTeams([...stagedTeams, ...added.map((team) => ({ teamId: team.teamId, name: team.name, memberCount: team.memberCount, pending: true }))]);
 				return true;
 			};
-			const stagedAudience: ArtifactAudience = stagedWorkspace ? "workspace" : stagedAccess;
 			return (
 				<>
 					{titled(t("artifacts.share.title.publish"))}
@@ -1189,13 +1191,9 @@ function SharePanel({
 								teams={stagedTeams}
 							/>
 							<ArtifactGeneralAccess
-								access={stagedAudience}
+								access={stagedAccess}
 								invited={staged.length + stagedTeams.length}
-								onChange={(next) => {
-									setStagedWorkspace(next === "workspace");
-									setStagedAccess(next === "workspace" ? "restricted" : next);
-								}}
-								workspace={workspaceChoice}
+								onChange={(next) => setStagedAccess(next === "workspace" ? "restricted" : next)}
 							/>
 						</div>
 					) : null}
@@ -1206,7 +1204,6 @@ function SharePanel({
 								access: stagedAccess,
 								emails: staged,
 								teamIds: stagedTeams.map((team) => team.teamId),
-								workspace: stagedWorkspace,
 							})}
 							size="sm"
 							type="button"
@@ -1319,7 +1316,7 @@ function SharePanel({
 							disabled={changingAccess}
 							invited={invited}
 							onChange={(next) => void changeAudience(phase, next)}
-							workspace={privateLinks ? workspaceChoice : undefined}
+							workspace={privateLinks ? workspaceChoice(audience) : undefined}
 						/>
 						{phase.narrowed && access === "restricted" ? note(t("artifacts.share.access.narrowed")) : null}
 					</div>

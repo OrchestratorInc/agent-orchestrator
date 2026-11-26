@@ -40,10 +40,14 @@ export const SNAPSHOT_GAP_MS = 150;
 export type SnapshotRenderer = (job: ArtifactSnapshotJob) => Promise<Buffer>;
 
 /** A file with nothing to draw: asked again it would only fail again, so it is not retried until the app restarts. */
-export class SnapshotUnavailableError extends Error {}
+export class SnapshotUnavailableError extends Error {
+	readonly code: string = "SNAPSHOT_UNAVAILABLE_ERROR";
+}
 
 /** A render that did not happen because nothing is left to show it (the app window closed): not held against its file. */
-export class SnapshotCancelledError extends Error {}
+export class SnapshotCancelledError extends Error {
+	readonly code: string = "SNAPSHOT_CANCELLED_ERROR";
+}
 
 /** What `request` answers when the request was pushed out of a full queue: not a failure, ask again later. */
 export const SNAPSHOT_DROPPED = "dropped" as const;

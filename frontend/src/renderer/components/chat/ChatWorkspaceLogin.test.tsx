@@ -95,7 +95,7 @@ describe("ChatWorkspace refused login", () => {
 			scope: "global", section: "harness", focusAgentId: "claude-code", harnessView: "local", startLogin: true,
 		});
 		// Back in the chat before the login took, the band says what is pending.
-		expect(band()).toHaveTextContent("Finish logging in on the Harness page · your message is waiting");
+			expect(band()).toHaveTextContent("Finish logging in on the Agents page · your message is waiting");
 		expect(within(band()).getByRole("button", { name: "Open again" })).toBeInTheDocument();
 		expect(screen.getByTestId("login-status")).toHaveTextContent("Waiting for login");
 		expect(retry).not.toHaveBeenCalled();

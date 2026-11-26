@@ -132,6 +132,7 @@ func (s *Store) DeleteAutomation(ctx context.Context, id domain.AutomationID) (b
 }
 
 // ListDueAutomations returns enabled definitions whose durable cursor is due.
+// Definitions owned by an archived (removed) project are never due.
 func (s *Store) ListDueAutomations(ctx context.Context, now time.Time, limit int64) ([]domain.Automation, error) {
 	rows, err := s.qr.ListDueAutomations(ctx, gen.ListDueAutomationsParams{NextRunAt: now, Limit: limit})
 	if err != nil {

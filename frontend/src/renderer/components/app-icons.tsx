@@ -7,7 +7,7 @@
 // that tests and styles can target without depending on the library.
 //
 // Generated from the lucide names the app used; add new icons by hand.
-import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from "react";
+import { forwardRef, useId, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from "react";
 import {
 	Activity as MynaActivity,
 	Archive as MynaArchive,
@@ -105,6 +105,7 @@ import {
 	Pin as MynaPin,
 	Plus as MynaPlus,
 	Presentation as MynaPresentation,
+	Question as MynaQuestion,
 	QuestionCircle as MynaQuestionCircle,
 	Refresh as MynaRefresh,
 	Repeat as MynaRepeat,
@@ -135,6 +136,8 @@ import {
 	Upload as MynaUpload,
 	User as MynaUser,
 	Users as MynaUsers,
+	VolumeHigh as MynaVolumeHigh,
+	VolumeX as MynaVolumeX,
 	Building as MynaBuilding,
 	Mail as MynaMail,
 	SearchMinus as MynaSearchMinus,
@@ -219,6 +222,7 @@ import {
 	Ungroup as LucideUngroup,
 	Check as LucideCheck,
 	Ellipsis as LucideEllipsis,
+	GalleryHorizontal as LucideGalleryHorizontal,
 	EllipsisVertical as LucideEllipsisVertical,
 	GripVertical as LucideGripVertical,
 	Pause as LucidePause,
@@ -318,6 +322,7 @@ export const CircleArrowUp = fromMyna(MynaArrowUpCircle, "circle-arrow-up");
 export const CircleCheck = fromMyna(MynaCheckCircle, "circle-check");
 export const CircleDashed = fromMyna(MynaCircleDashed, "circle-dashed");
 export const CircleHelp = fromMyna(MynaQuestionCircle, "circle-help");
+export const QuestionMark = fromMyna(MynaQuestion, "question-mark");
 export const CircleMinus = fromMyna(MynaMinusCircle, "circle-minus");
 export const CircleStop = fromMyna(MynaStopCircle, "circle-stop");
 export const CircleX = fromMyna(MynaXCircle, "circle-x");
@@ -363,6 +368,7 @@ export const FolderOpen = fromLucide(LucideFolderOpen, "folder-open");
 export const FolderPlus = fromMyna(MynaFolderPlus, "folder-plus");
 export const FolderTree = fromLucide(LucideFolderTree, "folder-tree");
 export const Folders = fromLucide(LucideFolders, "folders");
+export const GalleryHorizontal = fromLucide(LucideGalleryHorizontal, "gallery-horizontal");
 export const Gauge = fromLucide(LucideGauge, "gauge");
 export const GitBranch = fromMyna(MynaGitBranch, "git-branch");
 export const GitCommitHorizontal = fromMyna(MynaGitCommit, "git-commit-horizontal");
@@ -491,6 +497,8 @@ export const Undo2 = fromLucide(LucideUndo2, "undo-2");
 export const User = fromMyna(MynaUser, "user");
 export const UserRound = fromMyna(MynaUser, "user-round");
 export const Users = fromMyna(MynaUsers, "users");
+export const Volume2 = fromMyna(MynaVolumeHigh, "volume-2");
+export const VolumeX = fromMyna(MynaVolumeX, "volume-x");
 export const Video = fromMyna(MynaVideo, "video");
 export const WandSparkles = fromMyna(MynaSparkles, "wand-sparkles");
 export const Workflow = fromLucide(LucideWorkflow, "workflow");
@@ -500,6 +508,58 @@ export const X = fromMyna(MynaX, "x", "full");
 export const XCircle = fromMyna(MynaXCircle, "xcircle");
 export const XIcon = fromMyna(MynaX, "x", "full");
 export const Zap = fromMyna(MynaZap, "zap");
+
+// Myna's bolt, drawn in front of the agent.
+const BOLT = "M12.748 3.572c.059-.503-.532-.777-.835-.388L4.111 13.197c-.258.33-.038.832.364.832h6.988c.285 0 .506.267.47.57l-.68 5.83c-.06.502.53.776.834.387l7.802-10.013c.258-.33.038-.832-.364-.832h-6.988c-.285 0-.506-.267-.47-.57z";
+// How far right of Zap's place the bolt sits, in Myna's units: past the agent's right eye.
+const AGENT_BOLT_OFFSET = 13.6;
+const AGENT_ZAP_WIDTH = 20 + AGENT_BOLT_OFFSET + 0.9 - 1.2;
+
+/**
+ * Claude Code's Ultracode, which runs many agents: the agent (Bot's robot) with a bolt as big as Fast
+ * mode's standing in front of its right side. It is wider than tall, so give it a height and let the
+ * width follow (h-3.5 w-auto). The agent is cut away around the bolt, and only the bolt fills when
+ * the icon is filled, so the agent keeps its face.
+ */
+export const AgentZap: AppIcon = forwardRef<SVGSVGElement, AppIconProps>(({ absoluteStrokeWidth: _ignored, className, strokeWidth, size, style, ...rest }, ref) => {
+	// React's ids hold characters (":", "«") a url(#…) reference cannot name, which would hide the agent.
+	const mask = `agent-zap-${useId().replace(/[^\w-]/g, "")}`;
+	const stroke = Number(strokeWidth ?? STROKE) * MYNA_CROP;
+	const bolt = `translate(${AGENT_BOLT_OFFSET} 0)`;
+	return (
+		<svg
+			ref={ref}
+			xmlns="http://www.w3.org/2000/svg"
+			{...(size === undefined ? {} : { height: size })}
+			viewBox={`1.2 1.2 ${AGENT_ZAP_WIDTH} 21.6`}
+			fill="none"
+			stroke="currentColor"
+			strokeWidth={stroke}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden={rest["aria-label"] ? undefined : true}
+			style={{ aspectRatio: `${AGENT_ZAP_WIDTH} / 21.6`, ...style }}
+			{...rest}
+			className={cn("icon", "icon-agent-zap", className)}
+		>
+			<mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="40" height="24">
+				<rect x="0" y="0" width="40" height="24" fill="white" />
+				<path d={BOLT} transform={bolt} fill="black" stroke="black" strokeWidth={stroke * 3} />
+			</mask>
+			{/* Lucide's bot. Its own fill="none" keeps it an outline when the icon is filled. */}
+			<g mask={`url(#${mask})`} fill="none">
+				<path d="M12 8V4H8" />
+				<rect width="16" height="12" x="4" y="8" rx="2" />
+				<path d="M2 14h2" />
+				<path d="M20 14h2" />
+				<path d="M15 13v2" />
+				<path d="M9 13v2" />
+			</g>
+			<path d={BOLT} transform={bolt} />
+		</svg>
+	);
+});
+AgentZap.displayName = "Icon(agent-zap)";
 
 // Added by hand (no lucide equivalent was in use): inspector tab icons.
 export const Chat = fromMyna(MynaChat, "chat");

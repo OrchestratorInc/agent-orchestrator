@@ -24,7 +24,7 @@ func TestProvisionWorkspaceWorktreeIncludeBeforeSetup(t *testing.T) {
 	record := domain.ProjectRecord{Path: project, Config: domain.ProjectConfig{
 		PostCreate: []string{"test -f .env && test ! -L .env && cp .env setup-read"},
 	}}
-	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), record, workspace); err != nil {
+	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), record, "", workspace); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(workspace, "setup-read")); err != nil || string(got) != "local configuration\n" {
@@ -46,7 +46,7 @@ func TestProvisionWorkspaceDirectorySymlinkWinsOverWorktreeInclude(t *testing.T)
 	writeTestFile(t, filepath.Join(project, "config", "secrets.json"), "shared configuration")
 	workspace := t.TempDir()
 	record := domain.ProjectRecord{Path: project, Config: domain.ProjectConfig{Symlinks: []string{"config"}}}
-	if err := (&Manager{}).provisionWorkspace(context.Background(), record, workspace); err != nil {
+	if err := (&Manager{}).provisionWorkspace(context.Background(), record, "", workspace); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Lstat(filepath.Join(workspace, "config"))

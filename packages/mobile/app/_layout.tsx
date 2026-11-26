@@ -13,12 +13,17 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
+import { RouteRestorer } from "../lib/RouteRestorer";
+import { startReviewPersistence } from "../lib/files/reviewPersistence";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
+import { UpdateScreen } from "../lib/UpdateScreen";
+import { UpdateRouteKeeper } from "../lib/UpdateRouteKeeper";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
+import { pillHeaderOptions } from "../lib/headerPill";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { CloudProvider } from "../lib/cloud/CloudProvider";
@@ -149,6 +154,8 @@ export default function RootLayout() {
 }
 
 function Shell() {
+	// Unsent review comments survive the phone closing the app (see reviewPersistence).
+	useEffect(() => { void startReviewPersistence(); }, []);
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const navigationTheme = useMemo(
@@ -176,8 +183,12 @@ function Shell() {
 			<TelemetryManager />
 			<PushManager />
 			<UpdatesManager />
+			<UpdateScreen />
+			<UpdateRouteKeeper />
 			<StoreUpdateManager />
 			<OnboardingGate />
+			{/* Reopens the last screen after the phone closed the app in the background. */}
+			<RouteRestorer />
 			{/* The navigator paints surfaces of its own, and it reads them from *its*
 			    theme, not from the palette above. Two of those surfaces are visible
 			    only while a page moves: the stack's own container, which shows
@@ -214,6 +225,7 @@ function Shell() {
 				{/* An Orchestrator Cloud session's sandbox shell, the cloud's worktree shell. */}
 				<Stack.Screen name="cloud/terminal" options={{ title: "Shell", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="device/[id]" options={{ title: "Device", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="shared-artifact" options={{ title: "Shared artifact", ...GLASS_HEADER_OPTIONS }} />
@@ -248,7 +260,8 @@ function Shell() {
 				{/* A page pushed over the tabs, laid out as a conversation that has
 				    not begun: its settings sit above the composer at the bottom, and
 				    starting the task replaces it with that conversation. */}
-				<Stack.Screen name="spawn" options={{ title: "New task", ...GLASS_HEADER_OPTIONS }} />
+				{/* Android: the chat's pill bar over its frost, as Settings has. */}
+				<Stack.Screen name="spawn" options={{ title: "New task", ...GLASS_HEADER_OPTIONS, ...pillHeaderOptions() }} />
 				{/* A page pushed over the board, like Settings. */}
 				<Stack.Screen name="notifications" options={{ headerShown: false, title: "Notifications", contentStyle: { backgroundColor: t.bgBase } }} />
 				{/* The page renames itself to the project once it loads. */}

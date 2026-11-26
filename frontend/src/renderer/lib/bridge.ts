@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { createWebSideCloseBridge } from "./web-side-close";
@@ -14,6 +15,10 @@ export const aoBridge: AoBridge =
 	({
 		triage: {
 			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+		},
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
 		},
 		dictation: {
 			start: async () => undefined,
@@ -61,6 +66,7 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			onShortcutPressed: () => () => undefined,
 			reportSessionsShown: () => undefined,
 			setMenuAvailability: () => undefined,
 			onMenuAction: () => () => undefined,
@@ -89,6 +95,7 @@ export const aoBridge: AoBridge =
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
+			setInterfaceV2: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -238,6 +245,7 @@ export const aoBridge: AoBridge =
 			getLifetimeSessions: async () => null,
 			takeLaunchStart: async () => null,
 			takeResourceSummary: async () => null,
+			launchSteps: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -377,6 +385,8 @@ export const aoBridge: AoBridge =
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
+			onProfileSwitchConfirm: () => () => undefined,
+			onProfileSwitchFailed: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
@@ -471,6 +481,9 @@ export const aoBridge: AoBridge =
 			remove: async () => undefined,
 			connect: async () => { throw new Error("remote hosts need the desktop app"); },
 			disconnect: async () => undefined,
+			hostUpdate: async () => null,
+			checkHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
+			startHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
 			computerName: async () => { throw new Error("remote hosts need the desktop app"); },
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,

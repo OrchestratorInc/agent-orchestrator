@@ -244,6 +244,17 @@ describe("send keys", () => {
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.fileReferences).toEqual([expect.objectContaining({ id: ref.id })]));
 		expect(onSend.mock.calls[0][5]).toBeUndefined();
 	});
+	it("holds a pasted picture's place with a square and any other file's with a card", async () => {
+		const staging = deferred<string[]>();
+		const { field } = renderComposer({ draftSessionId: "pending-tile-shape", onStageAttachments: vi.fn(() => staging.promise) });
+		fireEvent.paste(field, { clipboardData: clipboardData([png("shot.png"), textFile("notes.txt")]) });
+		// The placeholder is already the size its tile will be, so nothing shifts when the file lands.
+		expect(await screen.findByRole("status", { name: "Attaching shot.png" })).toHaveClass("size-14");
+		expect(screen.getByRole("status", { name: "Attaching notes.txt" })).toHaveClass("w-50");
+		staging.resolve([".ao/attachments/shot.png", ".ao/attachments/notes.txt"]);
+		expect((await screen.findByRole("button", { name: "Remove shot.png" })).closest("li")).toHaveClass("size-14");
+		expect(screen.getByRole("button", { name: "Remove notes.txt" }).closest("li")).toHaveClass("w-50");
+	});
 	it("cancels a Cloud upload from its chip, never holds the page for it, and lets the message go", async () => {
 		const sessionId = "composer-cloud-cancel";
 		const signals: AbortSignal[] = [];
@@ -318,7 +329,10 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
 		const removeImage = await screen.findByRole("button", { name: "Remove shot.png" });
 		const row = screen.getByTestId("composer-attachments-and-annotations");
-		expect(row).toHaveClass("flex", "flex-wrap", "items-center");
+		// One row that scrolls sideways and fades at an edge with more past it, never wraps.
+		expect(row).toHaveClass("edge-fade", "edge-fade-x", "overflow-x-auto");
+		expect(row.firstElementChild).toHaveClass("flex", "w-max", "items-start");
+		expect(row.firstElementChild).not.toHaveClass("flex-wrap");
 		expect(row).toContainElement(removeImage);
 		expect(row).toContainElement(screen.getByRole("button", { name: "1 annotation" }));
 		await userEvent.click(screen.getByRole("button", { name: "Remove all annotations" }));
@@ -561,6 +575,21 @@ describe("send keys", () => {
 		await typeInComposer(field, "queue this next");
 		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
+	});
+
+	// Stop already landed and the agent is winding the turn down. Another press
+	// would only repeat the request, so the button shows progress instead.
+	it("shows Stop in progress without firing again, and still takes a draft", async () => {
+		const onInterrupt = vi.fn();
+		const { field } = renderComposer({ willQueue: true, onInterrupt, stopping: true });
+
+		const stopping = screen.getByRole("button", { name: "Stopping turn" });
+		expect(stopping).toBeDisabled();
+		expect(onInterrupt).not.toHaveBeenCalled();
+
+		await typeInComposer(field, "next question");
+		expect(field.textContent).toBe("next question");
 		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 	});
 
@@ -2129,6 +2158,14 @@ describe("slash commands", () => {
 		expect(screen.queryByText("Loading skills…")).toBeNull();
 	});
 
+	it("says the files are loading on the first @, and closes with Escape", async () => {
+		const { field } = renderComposer({ filePaths: [], filePathsLoading: true });
+		await typeInComposer(field, "@src");
+		expect(screen.getByText("Loading files…")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByText("Loading files…")).toBeNull();
+	});
+
 	it("opens on a slash after existing text", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "look here /rev");
@@ -2204,7 +2241,7 @@ describe("slash commands", () => {
 		expect(onSend).not.toHaveBeenCalled();
 		const token = field.querySelector('[data-composer-token="skill"]');
 		expect(token).toHaveTextContent("/review");
-		expect(token).toHaveClass("text-logo-accent");
+		expect(token).toHaveClass("text-logo-accent-text");
 		expect(token).not.toHaveClass("text-accent");
 		expect(field.textContent).toBe("/review ");
 		// The trigger is finished, so the menu closes rather than re-filtering what was

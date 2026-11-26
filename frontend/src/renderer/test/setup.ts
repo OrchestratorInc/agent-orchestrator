@@ -142,6 +142,10 @@ if (typeof window !== "undefined") {
 
 	window.ao = {
 		triage: { launch: async () => ({ ok: true }) },
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -186,6 +190,7 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			onShortcutPressed: () => () => undefined,
 			reportSessionsShown: () => undefined,
 			setMenuAvailability: () => undefined,
 			onMenuAction: () => () => undefined,
@@ -214,6 +219,7 @@ if (typeof window !== "undefined") {
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
+			setInterfaceV2: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -305,6 +311,7 @@ if (typeof window !== "undefined") {
 			getLifetimeSessions: async () => null,
 			takeLaunchStart: async () => null,
 			takeResourceSummary: async () => null,
+			launchSteps: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
@@ -427,6 +434,8 @@ if (typeof window !== "undefined") {
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
+			onProfileSwitchConfirm: () => () => undefined,
+			onProfileSwitchFailed: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
@@ -518,6 +527,9 @@ if (typeof window !== "undefined") {
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			hostUpdate: async () => null,
+			checkHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
+			startHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
 			computerName: async () => "Test computer",
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,

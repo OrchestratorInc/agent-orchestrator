@@ -221,7 +221,7 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 				</TooltipProvider>
 			) : null}
 			{problem && props.onRetry ? (
-				<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void props.onRetry?.().catch(() => undefined)}>
+				<Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={() => void props.onRetry?.().catch(() => undefined)}>
 					{t("newTask.modelNotice.retry")}
 				</Button>
 			) : null}
