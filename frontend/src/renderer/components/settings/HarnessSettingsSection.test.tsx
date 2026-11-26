@@ -2888,6 +2888,45 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.getByTestId("originating-selector")).toBe(selector);
 	});
 
+	it("keeps a succeeded install verifying until readiness confirms it, then shows Done", async () => {
+		const initial = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" }),
+		] };
+		const installed = { agents: [initial.agents[0], agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
+		let probed = false;
+		let releaseProbe = () => {};
+		const probeHeld = new Promise<void>((resolve) => { releaseProbe = resolve; });
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? installed : initial } as never;
+			if (path === "/api/v1/agents/{agent}/install") return { data: { target: "codex", status: "succeeded", method: "homebrew", startedAt: "2026-09-19T00:00:00Z", updatedAt: "2026-09-19T00:00:00Z" } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				await probeHeld;
+				probed = true;
+				return { data: { agent: { id: "codex", authStatus: "unauthorized" }, installed: true } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection(undefined, "codex");
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
+
+		// The job succeeded, but readiness has not answered yet: no Done beside Not installed.
+		await waitFor(() => expect(within(row).getByRole("progressbar", { name: "Verifying…" })).toBeInTheDocument());
+		expect(within(row).queryByText("Done")).not.toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
+
+		act(() => releaseProbe());
+		await waitFor(() => expect(within(row).getByRole("progressbar", { name: "Done" })).toBeInTheDocument());
+		expect(within(row).queryByText("Not installed")).not.toBeInTheDocument();
+	});
+
 	it("updates a mounted readiness consumer when the Harness authentication terminal completes", async () => {
 		const initial = { agents: [
 			agentReadiness("claude-code", "Claude Code"),

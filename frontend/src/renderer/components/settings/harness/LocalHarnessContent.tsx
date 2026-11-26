@@ -115,6 +115,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [inUseSessions, setInUseSessions] = useState<{ agentId: AgentId; inUse: HarnessInUse } | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [checkingAuth, setCheckingAuth] = useState<AgentId[]>([]);
+	// Harnesses whose install or update just succeeded and whose readiness is
+	// still being checked again: their job reads as verifying until it answers.
+	const [confirmingInstalls, setConfirmingInstalls] = useState<AgentId[]>([]);
 	const [authCheckErrors, setAuthCheckErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [selectedMethods, setSelectedMethods] = useState<Partial<Record<AgentId, string>>>({});
@@ -277,9 +280,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		}));
 	}, []);
 	const checkAuthRef = useRef<(agentId: AgentId) => Promise<unknown>>(async () => undefined);
-	const refreshInstalledAgent = useCallback((agentId: AgentId) => {
+	const refreshInstalledAgent = useCallback((agentId: AgentId, { confirmsJob = false }: { confirmsJob?: boolean } = {}) => {
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
+		if (confirmsJob) setConfirmingInstalls((current) => current.includes(agentId) ? current : [...current, agentId]);
 		void checkAuthRef.current(agentId).finally(async () => {
+			if (confirmsJob) setConfirmingInstalls((current) => current.filter((id) => id !== agentId));
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId, hostId) }),
 				queryClient.invalidateQueries({ queryKey: installerKey }),
@@ -428,7 +433,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			}
 			const completedWhileMounted = activeInstallJobs.current.delete(agentId);
 			if (job.status !== "succeeded" || !completedWhileMounted) continue;
-			refreshInstalledAgent(agentId);
+			refreshInstalledAgent(agentId, { confirmsJob: true });
 		}
 	}, [jobs.data, refreshInstalledAgent]);
 
@@ -535,7 +540,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			}
 			setOperationAttempts((current) => ({ ...current, [agentId]: { operation, startedAt: data.startedAt } }));
 			updateJob(data);
-			if (data.status === "succeeded") refreshInstalledAgent(agentId);
+			if (data.status === "succeeded") refreshInstalledAgent(agentId, { confirmsJob: true });
 			return true;
 		} catch (error) {
 			return fail(error instanceof Error ? error.message : t("settings.harness.startFailed"));
@@ -576,7 +581,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				return;
 			}
 			updateJob(data);
-			if (data.status === "succeeded") refreshInstalledAgent(agentId);
+			if (data.status === "succeeded") refreshInstalledAgent(agentId, { confirmsJob: true });
 		} finally {
 			endAction(agentId);
 		}
@@ -808,12 +813,18 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		};
 	}, [hostId]);
 
+	// A job that succeeded stays verifying until readiness answers again, so
+	// Done never sits beside an installation state from before the install.
+	const displayedJob = (agentId: AgentId): InstallJob | undefined => {
+		const job = jobMap.get(agentId);
+		return job?.status === "succeeded" && confirmingInstalls.includes(agentId) ? { ...job, status: "verifying" } : job;
+	};
 	const describe = (agentId: AgentId) => describeHarness({
 		agentId,
 		t,
 		language: i18n.resolvedLanguage ?? "en",
 		plan: plans.get(agentId),
-		job: jobMap.get(agentId),
+		job: displayedJob(agentId),
 		installed: installed.has(agentId),
 		selectedMethodId: selectedMethods[agentId],
 		advisoryQuery: advisoryMap.get(agentId),
