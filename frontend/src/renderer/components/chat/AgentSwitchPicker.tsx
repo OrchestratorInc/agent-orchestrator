@@ -870,13 +870,25 @@ export function catalogProblem(catalog: Pick<AgentModelCatalog, "refreshError" |
 	return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
-/** Two routes to one model read the same once shortened; their router tells them apart. */
+/**
+ * Two routes to one model read the same once shortened. Their router tells them
+ * apart, and where the router repeats too, only the full ID does.
+ */
 function nameSharedLabels<T extends { id: string; label: string }>(models: T[]): T[] {
+	const routed = (model: T) => {
+		const slash = model.id.indexOf("/");
+		return slash < 0 ? model.label : `${model.label} (${model.id.slice(0, slash)})`;
+	};
 	const uses = new Map<string, number>();
-	for (const model of models) uses.set(model.label, (uses.get(model.label) ?? 0) + 1);
-	return models.map((model) => model.id.includes("/") && (uses.get(model.label) ?? 0) > 1
-		? { ...model, label: `${model.label} (${model.id.slice(0, model.id.indexOf("/"))})` }
-		: model);
+	const routes = new Map<string, number>();
+	for (const model of models) {
+		uses.set(model.label, (uses.get(model.label) ?? 0) + 1);
+		routes.set(routed(model), (routes.get(routed(model)) ?? 0) + 1);
+	}
+	return models.map((model) => {
+		if (!model.id.includes("/") || (uses.get(model.label) ?? 0) < 2) return model;
+		return { ...model, label: (routes.get(routed(model)) ?? 0) > 1 ? model.id : routed(model) };
+	});
 }
 
 /** The running agent's models told apart, the picker button naming the chosen one the same way. */

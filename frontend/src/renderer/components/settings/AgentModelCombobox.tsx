@@ -248,11 +248,14 @@ export function AgentModelCombobox({
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
 	// With no identified model, nothing is selected and the menu just lists models.
-	// A closed compact picker names the provider too when the picked name is shared.
-	const sharedDetail = compact && selected?.id.includes("/") ? sharedLabelDetails.get(selected.id) : undefined;
-	const selectedName = sharedDetail
-		? sharedDetail === selected?.id ? sharedDetail : `${selected?.label} (${sharedDetail})`
-		: selected?.label;
+	// A closed compact picker tells a shared name apart too: by its provider, or by a
+	// routed ID. An alias such as "opus" reads worse than the name, so it keeps it.
+	const sharedDetail = compact && selected ? sharedLabelDetails.get(selected.id) : undefined;
+	let selectedName = selected?.label;
+	if (selected && sharedDetail) {
+		if (sharedDetail !== selected.id) selectedName = `${selected.label} (${sharedDetail})`;
+		else if (selected.id.includes("/")) selectedName = selected.id;
+	}
 	const currentLabel = (triggerLabel ?? selectedName ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);

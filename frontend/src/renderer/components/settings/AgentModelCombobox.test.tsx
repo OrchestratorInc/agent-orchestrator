@@ -110,6 +110,21 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent(/^only-here$/);
 	});
 
+	it("names the provider on the closed picker for a shared name whose ID has no slash", () => {
+		const { unmount } = renderCombobox([
+			{ id: "local-a", label: "Shared", provider: "alpha" },
+			{ id: "local-b", label: "Shared", provider: "beta" },
+		], { compact: true, value: "local-b" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Shared (beta)");
+		unmount();
+		// Aliases with nothing but their ID to tell them apart keep the plain name.
+		renderCombobox([
+			{ id: "default", label: "Shared" },
+			{ id: "alias", label: "Shared" },
+		], { compact: true, value: "alias" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent(/^Shared$/);
+	});
+
 	// Long names often differ only at the end ("…-large-flash", "…-large-v2"),
 	// which a narrow menu cuts off, so a compact row wraps instead.
 	it("wraps a long model name in a compact menu instead of cutting it off", async () => {
