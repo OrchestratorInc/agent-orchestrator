@@ -40,6 +40,7 @@ func decodeArtifactImport(in *ArtifactImportRequest) ([]domain.ArtifactImportFil
 	}
 	files := make([]domain.ArtifactImportFile, 0, len(in.Files))
 	seen := make(map[string]bool, len(in.Files))
+	spelling := make(map[string]string, len(in.Files))
 	total := 0
 	for _, file := range in.Files {
 		clean, ok := sessionartifacts.CleanImportPath(file.Path)
@@ -47,6 +48,7 @@ func decodeArtifactImport(in *ArtifactImportRequest) ([]domain.ArtifactImportFil
 			return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "a file path is invalid or repeated", map[string]any{"path": file.Path})
 		}
 		seen[strings.ToLower(clean)] = true
+		spelling[strings.ToLower(clean)] = clean
 		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(file.Data))
 		if err != nil {
 			return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "file data is not valid base64", map[string]any{"path": clean})
@@ -68,6 +70,11 @@ func decodeArtifactImport(in *ArtifactImportRequest) ([]domain.ArtifactImportFil
 			}
 		}
 	}
+	// The entry takes its file's own spelling, which is the one written and registered.
+	entry, ok = spelling[strings.ToLower(entry)]
+	if !ok {
+		return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "entry must be one of the files", nil)
+	}
 	// A copy lives in one folder under shared/, the folder marked as a copy:
 	// every file is in it, so the marker covers them all.
 	copyRoot := sessionartifacts.CopyRoot(entry)
@@ -79,9 +86,6 @@ func decodeArtifactImport(in *ArtifactImportRequest) ([]domain.ArtifactImportFil
 			return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "every file must be in the copy's folder", map[string]any{"path": file.Path, "folder": copyRoot})
 		}
 	}
-	if !seen[strings.ToLower(entry)] {
-		return nil, "", apierr.Invalid("ARTIFACT_IMPORT_INVALID", "entry must be one of the files", nil)
-	}
 	return files, entry, nil
 }
 
@@ -89,7 +93,8 @@ func decodeArtifactImport(in *ArtifactImportRequest) ([]domain.ArtifactImportFil
 // keeping the current content of any file it replaces as a version first, and
 // registers the entry as a deliverable.
 func (c *SessionsController) importArtifacts(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
+	// Without versions, a replaced file's content would be lost instead of kept.
+	if c.Svc == nil || c.ArtifactVersions == nil {
 		apispec.NotImplemented(w, r, http.MethodPost, artifactImportsPath)
 		return
 	}
@@ -123,9 +128,11 @@ func (c *SessionsController) importArtifacts(w http.ResponseWriter, r *http.Requ
 		envelope.WriteError(w, r, err)
 		return
 	}
-	// Already marked when the session started from it; marked again in case it was not.
+	// Already marked when the session started from it; marked again in case it
+	// was not. A copy is never reported done unmarked; a retry marks it again.
 	if err := sessionartifacts.MarkSharedCopy(sess.Metadata.ArtifactDir, sessionartifacts.CopyRoot(entry), files); err != nil {
-		slog.Default().Warn("mark shared artifact copy", "session", sess.ID, "path", entry, "err", err)
+		envelope.WriteError(w, r, fmt.Errorf("mark shared artifact copy: %w", err))
+		return
 	}
 	if _, err := c.Svc.RegisterArtifacts(r.Context(), sess.ID, "", []string{entry}); err != nil {
 		envelope.WriteError(w, r, err)

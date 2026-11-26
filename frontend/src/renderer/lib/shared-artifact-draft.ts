@@ -39,14 +39,14 @@ export function withoutPrompt(text: string, prompt: string): string {
 	return text.replace(`${prompt}\n\n`, "").replace(prompt, "").trim();
 }
 
-/** Takes prompt, exactly, out of the new-chat draft. */
-function removeFromDraft(prompt: string): void {
+/** Takes prompt, exactly, out of the new-chat draft: false when the draft could not be saved. */
+function removeFromDraft(prompt: string): boolean {
 	const scope = newChatDraftScope();
 	const draft = readChatSessionDraft(scope).composer.text;
-	if (!draft.includes(prompt)) return;
-	if (writeChatComposerText(scope, withoutPrompt(draft, prompt)).ok) {
-		useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
-	}
+	if (!draft.includes(prompt)) return true;
+	if (!writeChatComposerText(scope, withoutPrompt(draft, prompt)).ok) return false;
+	useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
+	return true;
 }
 
 /**
@@ -58,19 +58,21 @@ export function dropSharedArtifactDraft(): void {
 	const pending = useSharedArtifactDraftStore.getState().pending;
 	if (!pending) return;
 	useSharedArtifactDraftStore.getState().clearPending();
-	forgetSavedPrompt();
-	removeFromDraft(pending.prompt);
+	// Kept while the line is still in the draft, so a later cleanup can take it out.
+	if (removeFromDraft(pending.prompt)) forgetSavedPrompt();
 }
 
 /**
  * Takes a shared artifact's prompt out of the new-chat draft when no copy is
  * waiting for it any more (after a reload): only the exact line that was
- * written, never text the person added around it.
+ * written, never text the person added around it. False when the draft
+ * could not be saved, leaving the line to be taken out later.
  */
-export function dropOrphanSharedArtifactPrompt(): void {
-	if (useSharedArtifactDraftStore.getState().pending) return;
+export function dropOrphanSharedArtifactPrompt(): boolean {
+	if (useSharedArtifactDraftStore.getState().pending) return true;
 	const prompt = readSavedPrompt();
-	if (!prompt) return;
+	if (!prompt) return true;
+	if (!removeFromDraft(prompt)) return false;
 	forgetSavedPrompt();
-	removeFromDraft(prompt);
+	return true;
 }

@@ -1,7 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "./chat-drafts";
 import { dropOrphanSharedArtifactPrompt, dropSharedArtifactDraft, rememberSharedArtifactPrompt, withoutPrompt } from "./shared-artifact-draft";
 import { useSharedArtifactDraftStore, type PendingSharedArtifact } from "../stores/shared-artifact-draft-store";
+
+let failDraftWrites = false;
+vi.mock("./chat-drafts", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./chat-drafts")>();
+	return {
+		...actual,
+		writeChatComposerText: (...args: Parameters<typeof actual.writeChatComposerText>) =>
+			failDraftWrites ? ({ ok: false } as ReturnType<typeof actual.writeChatComposerText>) : actual.writeChatComposerText(...args),
+	};
+});
 
 const prompt = "Work from this shared artifact, copied into your artifact folder: shared/r/r.html";
 const pending: PendingSharedArtifact = {
@@ -14,6 +24,7 @@ const pending: PendingSharedArtifact = {
 const draftText = () => readChatSessionDraft(newChatDraftScope()).composer.text;
 
 afterEach(() => {
+	failDraftWrites = false;
 	useSharedArtifactDraftStore.getState().clearPending();
 	writeChatComposerText(newChatDraftScope(), "");
 	localStorage.clear();
@@ -48,6 +59,18 @@ describe("shared artifact drafts", () => {
 		writeChatComposerText(newChatDraftScope(), "Work from this shared artifact, copied into your artifact folder: shared/x/y.md is my own line");
 		dropOrphanSharedArtifactPrompt();
 		expect(draftText()).toContain("is my own line");
+	});
+
+	it("keeps the saved prompt when the draft cannot be saved, so a later cleanup can retry", () => {
+		rememberSharedArtifactPrompt(prompt);
+		writeChatComposerText(newChatDraftScope(), `${prompt}
+
+summarise it`);
+		failDraftWrites = true;
+		expect(dropOrphanSharedArtifactPrompt()).toBe(false);
+		failDraftWrites = false;
+		expect(dropOrphanSharedArtifactPrompt()).toBe(true);
+		expect(draftText()).toBe("summarise it");
 	});
 
 	it("removes the prompt wherever it is", () => {

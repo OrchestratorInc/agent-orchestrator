@@ -13,7 +13,7 @@ import { CloudCpError } from "../lib/cloud-cp";
 import { LOCAL_HOST } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { checkForUpdate, nextSharedArtifactStep, type LinkedSession, type SharedArtifactSessionDeps, type SharedArtifactSessionStep } from "../lib/shared-artifact-session";
-import { dropSharedArtifactDraft, rememberSharedArtifactPrompt } from "../lib/shared-artifact-draft";
+import { dropOrphanSharedArtifactPrompt, dropSharedArtifactDraft, rememberSharedArtifactPrompt } from "../lib/shared-artifact-draft";
 import { useSharedArtifactDraftStore } from "../stores/shared-artifact-draft-store";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -110,6 +110,11 @@ export function SharedArtifactSessionButton({ artifact, onClose }: { artifact: {
 			// Only now, with this copy in hand, does another link's copy (and the
 			// prompt naming it) give way: a failed copy leaves that draft alone.
 			dropSharedArtifactDraft();
+			// A prompt left from before a reload goes too, before its record is replaced.
+			if (!dropOrphanSharedArtifactPrompt()) {
+				fail();
+				return;
+			}
 			const copy = result.copy;
 			pending = { key, name: share.name || artifact.name, updatedAt: share.updatedAt, copy, prompt: t("artifacts.shared.startSessionPrompt", { path: copy.entry }) };
 			useSharedArtifactDraftStore.getState().setPending(pending);
