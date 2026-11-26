@@ -2973,9 +2973,10 @@ func (s *Service) SetConfigOption(
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
 	if record.Harness == domain.HarnessClaudeCode {
-		// Provider-owned defaults stay implicit so future Claude defaults still apply.
-		if settings.Model == "default" {
-			settings.Model = ""
+		// A picked "default" is saved so a relaunch passes --model default and gets
+		// the model the picker showed; without it Claude uses settings.json's model.
+		if settings.Model == "default" && configID != "model" {
+			settings.Model = previous.Model
 		}
 		if settings.ReasoningEffort == "default" {
 			settings.ReasoningEffort = ""
