@@ -30,7 +30,7 @@ import { handOffComposerDraft } from "../lib/chat-context-bus";
 import { sessionUiKey } from "../lib/hosts";
 import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
 import { LaunchSettingsBar, rememberLaunchSettings, rememberOpeningStart, type LaunchSettings } from "./chat/LaunchSettingsBar";
-import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar } from "./chat/TurnSettingsBar";
+import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar, withUltracode } from "./chat/TurnSettingsBar";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, isPhone, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
@@ -189,6 +189,10 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		() => task.isCloudProject ? undefined : readChatSettingsTemplate(harness, hostId),
 		[harness, hostId, task.isCloudProject],
 	);
+	// Claude Code's Ultracode, asked for in the opening message. Only a local chat keeps it
+	// for the messages after, so a Cloud task does not offer it.
+	const [ultracodeOn, setUltracodeOn] = useState(false);
+	const offersUltracode = harness === "claude-code" && !task.isCloudProject;
 	const barFor = (settings: TurnSettings): LaunchSettings => {
 		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.approvalModes) : undefined;
 		return {
@@ -203,6 +207,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			// A Cloud task with no model picked runs the project's or the agent's
 			// default, as the New Task picker words it; it needs no choice.
 			...(task.isCloudProject ? { unsetModelLabel: t("newTask.cloudConfiguredDefault") } : {}),
+			...(offersUltracode ? { ultracode: ultracodeOn } : {}),
 		};
 	};
 	const barSettings = barFor(task.turnSettings);
@@ -360,7 +365,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
+			// Ultracode is the one saved with the send, so a retry asks for it as the first try did.
+			const sessionId = await launch.launch(settings.ultracode ? withUltracode(text) : text, { clientRequestId: clientMessageId, replay, attachments });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -412,7 +418,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			const sessionId = await task.launchFallback(brief.text, clientMessageId, heldAttachments);
+			const sessionId = await task.launchFallback(settings.ultracode ? withUltracode(brief.text) : brief.text, clientMessageId, heldAttachments);
 			fallbackRequest.current = undefined;
 			writeChatComposerText(draftScope, "");
 			writeChatAttachments(draftScope, []);
@@ -565,6 +571,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 									if (next) task.switchAgent(next.harness, { model: next.model, effort: next.effort ?? next.shownEffort });
 								},
 								account: accountChoice,
+								...(offersUltracode ? { ultracode: { on: ultracodeOn, onChange: setUltracodeOn } } : {}),
+								...(task.autoCompact ? { autoCompact: task.autoCompact } : {}),
 							}}
 							autoSelectEffortOnOpen
 						/>

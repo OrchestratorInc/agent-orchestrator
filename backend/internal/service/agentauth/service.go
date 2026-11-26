@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -381,6 +382,10 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
 		env["XDG_DATA_HOME"] = dataHome
+	}
+	if plan.AgentID == "prime-agent" && s.dataDir != "" {
+		// Sign in to the profile sessions run with, not ~/.prime/agent.
+		primeagent.New().AugmentRuntimeEnv(env, s.dataDir)
 	}
 	if len(env) > 0 {
 		input.Env = env
