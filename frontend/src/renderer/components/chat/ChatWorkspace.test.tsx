@@ -3284,6 +3284,28 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	// #7759: the controller died mid-turn, so the durable turn is still "running" — but
+	// the stopped banner owns that state. The live row with its spinner and elapsed
+	// timer must go, or it would keep counting for hours next to a stopped controller.
+	it("never shows the stopped banner and the live turn spinner together", async () => {
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items = snapshot.items.filter(
+			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
+		);
+		const view = render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />);
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+
+		// The controller dies mid-turn; no turn-end event follows it.
+		view.rerender(
+			<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		// The live row fades out as the turn settles (LIVE_ROW_EXIT_MS), then it is gone.
+		await waitFor(() => expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument());
+		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
+	});
+
 	// #6064: a reviewer whose controller died mid-turn spun "Working for…" forever.
 	it("settles a running turn with an unknown outcome once the controller stops", async () => {
 		const user = userEvent.setup();
