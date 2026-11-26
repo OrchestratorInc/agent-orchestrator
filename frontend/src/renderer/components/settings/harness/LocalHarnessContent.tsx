@@ -1055,6 +1055,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									installed={selectedDetails.isInstalled}
 									needsLogin={needsAuthentication(selectedDetails.agentId)}
 									onOpenAccount={() => setDetailTab("account")}
+									customEndpoint={selectedDetails.isInstalled ? agentAuthPlans.get(selectedDetails.agentId)?.customEndpoint : undefined}
 								/>
 							</TabsContent>
 							<TabsContent value="health" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">

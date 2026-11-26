@@ -3,6 +3,7 @@ import type { components } from "../../api/schema";
 import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
 import { agentAuthPlansQueryKeyForHost } from "./useAgentAuth";
+import { invalidateAgentModelCatalogs } from "./useAgentModelsQuery";
 import { cacheAgentReadiness, ensureAgentReadiness } from "./useAgentReadinessQuery";
 
 export type AgentEndpointStatus = components["schemas"]["AgentEndpointStatus"];
@@ -30,11 +31,16 @@ export async function clearAgentEndpoint(agentId: string, hostId?: string): Prom
 	return data.endpoint;
 }
 
-/** Refreshes the auth plan and a fresh readiness check after an endpoint change. */
+/** Refreshes the auth plan, the model lists and a fresh readiness check after
+ * an endpoint change: the endpoint decides which models the harness offers
+ * and which one is the default. */
 export function useRefreshAfterEndpointChange(hostId?: string) {
 	const queryClient = useQueryClient();
 	return async (agentId: string) => {
-		await queryClient.invalidateQueries({ queryKey: agentAuthPlansQueryKeyForHost(hostId) });
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: agentAuthPlansQueryKeyForHost(hostId) }),
+			invalidateAgentModelCatalogs(queryClient, agentId, hostId),
+		]);
 		try {
 			cacheAgentReadiness(queryClient, await ensureAgentReadiness([agentId], "display", hostId), hostId);
 		} catch {
