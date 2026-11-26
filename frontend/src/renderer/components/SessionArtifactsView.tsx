@@ -906,9 +906,14 @@ export function SessionArtifactsView({
 		};
 	}, [reportEngaged, zoomController]);
 	const exitFullscreen = useMemo(() => () => setFullscreen(false), []);
+	// A file left open whose session's list was still loading on return, until the list settles.
+	const untilListed = useRef(Boolean(initial.untilListed));
 	useEffect(() => {
 		if (!request || request.key === handledRequestKey.current) return;
 		handledRequestKey.current = request.key;
+		// The requested file replaces one left open, so a list that settles in
+		// the same render does not let go of the request in its place.
+		untilListed.current = false;
 		setEditingPath(null);
 		setHtmlSourcePath(null);
 		setSelectedPath(request.path);
@@ -927,7 +932,6 @@ export function SessionArtifactsView({
 	// A file left open whose session's list was still loading on return: once
 	// the list is in without it, it was deleted meanwhile, and the list stays,
 	// even if a file by that name comes back later.
-	const untilListed = useRef(Boolean(initial.untilListed));
 	const listPending = Boolean(session.artifactFilesPending);
 	useEffect(() => {
 		if (!untilListed.current || (!listed && listPending)) return;

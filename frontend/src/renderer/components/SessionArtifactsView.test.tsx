@@ -1443,6 +1443,17 @@ describe("SessionArtifactsView comes back as it was left", () => {
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
 	});
 
+	it("keeps a request that arrives as a still-loading list comes in without the file left open", async () => {
+		const first = renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		first.unmount();
+
+		const remaining = artifacts.filter((artifact) => artifact.path !== "notes.md");
+		const view = renderView(<SessionArtifactsView session={{ ...session([]), artifactFilesPending: true } as WorkspaceSession} />);
+		view.rerender(<SessionArtifactsView request={{ key: 7, path: "plan.md" }} session={session(remaining)} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:plan.md");
+	});
+
 	it("opens a file left open once a still-loading list lists it", async () => {
 		const first = renderView(<SessionArtifactsView session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
