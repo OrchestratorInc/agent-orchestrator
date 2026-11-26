@@ -27,19 +27,25 @@ type ConfirmDialogProps = {
 	/** Defaults to "Cancel"; reversible actions can soften it to "No". */
 	cancelLabel?: string;
 	destructive?: boolean;
+	/**
+	 * Which button takes focus on open (default: confirm). Pass "cancel" when a
+	 * repeated Enter from the control that opened the dialog would discard the
+	 * user's work, so it has to be a deliberate choice.
+	 */
+	initialFocus?: "cancel" | "confirm";
 	/** Options shown between the description and the buttons. */
 	children?: React.ReactNode;
+	/** Starts here rather than on a button, for a dialog with a field to fill. */
+	initialFocusRef?: React.RefObject<HTMLElement | null>;
 	busy?: boolean;
+	busyLabel?: string;
+	onCloseAutoFocus?: (event: Event) => void;
 	confirmDisabled?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
 	onOpenChange: (open: boolean) => void;
 };
 
-// Shared confirmation modal styled exactly like the settings dialogs — same
-// frame, header typography, and footer buttons via the shared
-// settingsDialog* class constants. Destructive confirms fill
-// with the deep danger-strong token instead of the settings accent.
 export function ConfirmDialog({
 	open,
 	title,
@@ -48,8 +54,12 @@ export function ConfirmDialog({
 	confirmAriaLabel,
 	cancelLabel,
 	destructive,
+	initialFocus,
 	children,
+	initialFocusRef,
 	busy,
+	busyLabel,
+	onCloseAutoFocus,
 	confirmDisabled,
 	error,
 	onConfirm,
@@ -60,14 +70,10 @@ export function ConfirmDialog({
 	const cancelRef = useRef<HTMLButtonElement>(null);
 	const confirmRef = useRef<HTMLButtonElement>(null);
 
-	// Sized for a two-line prompt, not a settings form: the shared settings
-	// frame (575px, 38px footer pills) reads oversized around one question, so
-	// the confirm narrows the dialog and compacts the buttons while keeping the
-	// settings family's colors, borders, and typography.
-	const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
 	return (
 		<Dialog open={open} onOpenChange={(next) => { if (busy && !next) return; onOpenChange(next); }}>
 			<DialogContent
+				aria-busy={busy || undefined}
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(420px,calc(100vw-24px))]")}
 				// React portals re-dispatch synthetic events up the React tree, not the
@@ -79,13 +85,19 @@ export function ConfirmDialog({
 				onClick={(event) => event.stopPropagation()}
 				onContextMenu={(event) => event.stopPropagation()}
 				onOpenAutoFocus={(event) => {
-					// Destructive confirms start on the safe choice, not the close X.
-					const target = destructive ? cancelRef.current : confirmRef.current;
+					// Start on the confirm button (or Cancel when asked), not the close X,
+					// so Enter confirms what the person just asked for; Escape cancels. A disabled button can't
+					// take focus, which would leave it behind the dialog: then Cancel, or
+					// Radix's own choice.
+					const preferred = initialFocus === "cancel" ? cancelRef.current : confirmRef.current;
+					const target = initialFocusRef?.current ?? (preferred && !preferred.disabled
+						? preferred
+						: [cancelRef.current, confirmRef.current].find((button) => button && !button.disabled));
 					if (!target) return;
 					event.preventDefault();
 					target.focus();
 				}}
-				onCloseAutoFocus={restoreFocusOnClose}
+				onCloseAutoFocus={onCloseAutoFocus ?? restoreFocusOnClose}
 				overlay={<DialogOverlay onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()} />}
 			>
 				<DialogClose asChild>
@@ -106,6 +118,7 @@ export function ConfirmDialog({
 				</div>
 
 				{children ? <div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>{children}</div> : null}
+				{busy && busyLabel ? <span role="status" aria-live="polite" className="sr-only">{busyLabel}</span> : null}
 
 				{error ? (
 					<div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>
@@ -117,7 +130,7 @@ export function ConfirmDialog({
 
 				<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
 					<DialogClose asChild>
-						<Button ref={cancelRef} type="button" variant="footer" className={compactButtonClass} disabled={busy}>
+						<Button ref={cancelRef} type="button" variant="secondary" disabled={busy}>
 							{cancelLabel ?? t("confirm.cancel")}
 						</Button>
 					</DialogClose>
@@ -125,8 +138,7 @@ export function ConfirmDialog({
 						ref={confirmRef}
 						aria-label={confirmAriaLabel}
 						type="button"
-						variant={destructive ? "footer-destructive" : "footer-primary"}
-						className={compactButtonClass}
+						variant={destructive ? "destructive" : "primary"}
 						disabled={busy || confirmDisabled}
 						onClick={onConfirm}
 					>

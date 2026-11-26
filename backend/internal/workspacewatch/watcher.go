@@ -136,13 +136,13 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 		uniqueRoots = append(uniqueRoots, cleanRoot)
 	}
 	if len(uniqueRoots) == 1 {
-		return watchRoot(ctx, uniqueRoots[0])
+		return watchRoot(ctx, uniqueRoots[0], nil)
 	}
 
 	watchCtx, cancel := context.WithCancel(ctx)
 	sources := make([]<-chan struct{}, 0, len(uniqueRoots))
 	for _, cleanRoot := range uniqueRoots {
-		source, err := watchRoot(watchCtx, cleanRoot)
+		source, err := watchRoot(watchCtx, cleanRoot, nil)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -171,7 +171,17 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 	return changes, nil
 }
 
-func watchRoot(ctx context.Context, root string) (<-chan struct{}, error) {
+// WatchSkipping is Watch for one root, leaving out the entries skip names:
+// their directories are not watched and their changes are not reported. skip
+// gets a slash-separated path relative to root, and must also match everything
+// below a skipped directory. The kqueue backend keeps a descriptor for every
+// file in a watched directory and maxWatchedDirectories counts directories, so
+// a directory of generated files must be skipped, not merely ignored.
+func WatchSkipping(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, error) {
+	return watchRoot(ctx, root, skip)
+}
+
+func watchRoot(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace path: %w", err)
@@ -190,6 +200,7 @@ func watchRoot(ctx context.Context, root string) (<-chan struct{}, error) {
 	}
 
 	git := discoverGitWorkspace(ctx, root)
+	git.skip = skip
 	limiter := newDirWatchLimiter(watcher, maxWatchedDirectories)
 	if err := addInitialDirectories(ctx, limiter, root, git); err != nil {
 		_ = watcher.Close()
@@ -206,6 +217,17 @@ type gitWorkspace struct {
 	available     bool
 	files         []string
 	metadataFiles map[string]struct{}
+	// skip names the entries a WatchSkipping caller leaves out. Nil skips none.
+	skip func(rel string) bool
+}
+
+// skips reports whether target, inside root, is left out of this watch.
+func (g gitWorkspace) skips(root, target string) bool {
+	if g.skip == nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, target)
+	return err == nil && rel != "." && g.skip(filepath.ToSlash(rel))
 }
 
 func discoverGitWorkspace(ctx context.Context, root string) gitWorkspace {
@@ -301,13 +323,19 @@ func addInitialDirectories(ctx context.Context, limiter *dirWatchLimiter, root s
 		if !entry.IsDir() {
 			return nil
 		}
-		if path != root && entry.Name() == ".git" {
+		if path != root && (entry.Name() == ".git" || git.skips(root, path)) {
 			return filepath.SkipDir
 		}
 		dirs[path] = struct{}{}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("walk workspace directories: %w", err)
+	}
+	// A repository can list a skipped directory's files.
+	for dir := range dirs {
+		if git.skips(root, dir) {
+			delete(dirs, dir)
+		}
 	}
 
 	// Register watches shallowest-first so that when the platform refuses
@@ -392,7 +420,7 @@ func handleEvent(ctx context.Context, limiter *dirWatchLimiter, root string, git
 	if _, ok := git.metadataFiles[name]; ok {
 		return true
 	}
-	if !isWithin(root, name) || hasGitMetadataComponent(root, name) {
+	if !isWithin(root, name) || hasGitMetadataComponent(root, name) || git.skips(root, name) {
 		return false
 	}
 	if git.available && gitIgnored(ctx, root, name) {
@@ -421,7 +449,7 @@ func addCreatedTree(ctx context.Context, limiter *dirWatchLimiter, root string, 
 		if !entry.IsDir() {
 			return nil
 		}
-		if hasGitMetadataComponent(root, path) || (git.available && gitIgnored(ctx, root, path)) {
+		if hasGitMetadataComponent(root, path) || git.skips(root, path) || (git.available && gitIgnored(ctx, root, path)) {
 			return filepath.SkipDir
 		}
 		// Created directories draw from the same budget as the initial

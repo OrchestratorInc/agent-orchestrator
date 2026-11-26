@@ -1,4 +1,4 @@
-import { artifactFilePath, artifactFilesPath, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
+import { artifactFilePath, artifactFilesPath, contentRangeTotal, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
 import { resolveArtifactReference } from "./artifactPageInliner";
 import { parseVersion, parseVersionSummaries, type ArtifactVersion, type ArtifactVersionSummary } from "./artifactVersions";
 import type { ArchiveSummary } from "./archive/archiveSummary";
@@ -6,8 +6,10 @@ import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from ".
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
+import type { ApprovalMode } from "./spawnApproval";
 
 // ---- Types (subset of AO's DashboardSession we use on the phone) ------------
 
@@ -72,7 +74,7 @@ export type DashboardSession = {
 	kanbanColumn?: KanbanColumn | null;
 	/**
 	 * The daemon's phrase for what is happening inside that column — richer than
-	 * `status` ("Awaiting PR", "Fixing CI failures"), and already localized on the
+	 * `status` ("Awaiting review", "Fixing CI failures"), and already localized on the
 	 * wire so clients print it without a mapping table.
 	 */
 	displayStatus?: string | null;
@@ -161,9 +163,9 @@ export type ProjectInfo = {
 export type ProjectDetail = ProjectInfo & {
 	agent?: string;
 	config?: {
-		agentConfig?: { model?: string };
-		worker?: { agent?: string; agentConfig?: { model?: string } };
-		reviewers?: { harness?: string }[];
+		agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
+		worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
+		reviewers?: { harness?: string; agentConfig?: { model?: string; mode?: string; effort?: string } }[];
 	};
 };
 
@@ -418,6 +420,7 @@ export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 // server is unreachable" need very different advice. The message keeps the
 // `${status} ${statusText}` prefix that call sites already match on.
 export class ApiError extends Error {
+	readonly telemetryCode: string = "API_ERROR";
 	constructor(
 		readonly status: number,
 		message: string,
@@ -456,6 +459,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	let bodyText = "";
 	try {
 		const installId = cachedInstallId();
+		const startedAt = Date.now();
 		await Promise.race([aborted, (async () => {
 			received = await fetch(url, {
 				...init,
@@ -467,6 +471,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...(init?.headers ?? {}),
 				},
 			});
+			noteRequestAnswered(startedAt);
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
@@ -508,7 +513,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		}
 		// Server answered with an error: classify by status + daemon code, and tag
 		// the requestId so a mobile event pivots to the daemon's own capture.
-		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId);
+		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId, detail);
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
@@ -646,6 +651,45 @@ export async function getArchivedSessions(
 	};
 }
 
+/** The PR states an ended session's pull requests are read back in. */
+export type ArchivedPRState = "merged" | "closed";
+
+/** Archived workers owning a pull request in one state, a page at a time. */
+export type PRStatePage = ArchivePage & {
+	/** How many archived workers match, across every page. */
+	total: number;
+	/** Names the whole filtered list; equal versions mean the same list. Null from a daemon that sends none. */
+	version: string | null;
+};
+
+/** Pages of archived workers by PR state are larger than the archive's: they are read to the end. */
+export const PR_STATE_PAGE_SIZE = 100;
+
+/**
+ * One page of a machine's archived workers that own a PR in `prState`, newest
+ * state change first. Null from a daemon that predates the filter: it ignores
+ * the parameter and so does not echo it, and its page is the plain archive.
+ */
+export async function getArchivedPRSessions(
+	cfg: ServerConfig,
+	options: { prState: ArchivedPRState; cursor?: string | null; projectId?: string },
+	init?: Pick<RequestInit, "signal">,
+): Promise<PRStatePage | null> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", prState: options.prState, limit: String(PR_STATE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	if (data?.prState !== options.prState) return null;
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+		total: typeof data?.total === "number" ? data.total : raw.length,
+		version: typeof data?.version === "string" && data.version ? data.version : null,
+	};
+}
+
 // ---- Preview (in-app browser) ----------------------------------------------
 
 // Load the session's selected app preview, never a discovered repository file.
@@ -657,6 +701,73 @@ export async function getArchivedSessions(
  */
 export function previewFilePath(sessionId: string, path: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export type SessionDeviceLease = {
+	sessionId: string;
+	provider: string;
+	reason: string;
+	device: { id: string; name: string; platform: "ios" | "android"; version?: string; booted: boolean };
+};
+
+export type DeviceSummary = SessionDeviceLease["device"];
+
+/** The machine's device support: whether it is on, its devices, and which sessions hold which. */
+export type DeviceStatus = {
+	/** False while the desktop app's Developer mode is off: devices are a Developer mode preview. */
+	available: boolean;
+	enabled: boolean;
+	state: "off" | "installing" | "ready" | "error";
+	error?: string;
+	platforms: { platform: "ios" | "android"; available: boolean; reason?: string }[];
+	devices: DeviceSummary[];
+	leases: { sessionId: string; device: { id: string } }[];
+};
+
+export async function getDeviceStatus(cfg: ServerConfig, init?: Pick<RequestInit, "signal">): Promise<DeviceStatus> {
+	const res = await req(cfg, `${API}/devices`, init);
+	return (await res.json()) as DeviceStatus;
+}
+
+/** The simulator or emulator this session holds, or null. */
+export async function getSessionDevice(cfg: ServerConfig, id: string, init?: Pick<RequestInit, "signal">): Promise<SessionDeviceLease | null> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device`, init);
+	const data = await res.json();
+	return (data?.lease ?? null) as SessionDeviceLease | null;
+}
+
+/** Leases (and boots, when it is off) a device for the session. */
+export async function openSessionDevice(cfg: ServerConfig, id: string, device: { deviceId: string; platform: "ios" | "android" }): Promise<SessionDeviceLease | null> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/open`, { method: "POST", body: JSON.stringify(device) });
+	const data = await res.json();
+	return (data?.lease ?? null) as SessionDeviceLease | null;
+}
+
+/** Releases the session's device; it keeps running unless `shutdown` powers it off too. */
+export async function closeSessionDevice(cfg: ServerConfig, id: string, options: { shutdown?: boolean } = {}): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/close`, { method: "POST", body: JSON.stringify({ shutdown: Boolean(options.shutdown) }) });
+}
+
+/**
+ * Presses a device button through the daemon's own driver. False when the
+ * provider leaves that button to the input socket (the daemon answers 409
+ * DEVICE_BUTTON_UNSUPPORTED), so the caller sends it there instead.
+ */
+export async function pressSessionDeviceButton(cfg: ServerConfig, id: string, button: "home" | "back" | "recents"): Promise<boolean> {
+	try {
+		await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/button`, { method: "POST", body: JSON.stringify({ button }) });
+		return true;
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.code === "DEVICE_BUTTON_UNSUPPORTED") return false;
+		throw cause;
+	}
+}
+
+export type DeviceStreamQuality = "high" | "balanced" | "low";
+
+/** Sets how much the session's device stream costs the link; the daemon resets it when the lease ends. */
+export async function setSessionDeviceQuality(cfg: ServerConfig, id: string, quality: DeviceStreamQuality): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/quality`, { method: "POST", body: JSON.stringify({ quality }) });
 }
 
 /** The daemon's route for a file in a session's artifact folder, each segment escaped. */
@@ -684,6 +795,49 @@ export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry
 export function artifactFileUrl(cfg: ServerConfig, sessionId: string, path: string): string | undefined {
 	const route = artifactFilePath(sessionId, path);
 	return route ? `${httpBase(cfg)}${route}` : undefined;
+}
+
+/**
+ * An authenticated source for a native player or downloader: the preview-files
+ * URL, which streams the file whatever its size and answers range requests,
+ * with the Bearer header the native side sends on every request (a WebView
+ * sends it only on the page load). `version` makes a rewritten file load again.
+ */
+export function artifactStreamSource(cfg: ServerConfig, sessionId: string, path: string, version?: string): { uri: string; headers: Record<string, string> } | undefined {
+	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) return undefined;
+	return { uri: `${httpBase(cfg)}${route}${version ? `&v=${encodeURIComponent(version)}` : ""}`, headers: authHeaders(cfg) };
+}
+
+/** The first `bytes` of an artifact as text, to tell a large text file from a binary one. */
+export async function getArtifactHead(cfg: ServerConfig, sessionId: string, path: string, bytes: number, init?: Pick<RequestInit, "signal">): Promise<string> {
+	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) throw new Error("This artifact's path can't be opened.");
+	const res = await req(cfg, route, { ...init, headers: { Range: `bytes=0-${Math.max(0, bytes - 1)}` } });
+	return res.text();
+}
+
+/**
+ * An artifact's size, for a file the session does not list (whose size the list
+ * would give): one byte is read, and the range response names the whole. An
+ * empty file has no byte to send: the daemon answers it whole (200, length 0);
+ * a server that refuses the range instead (416) is read as 0 bytes too.
+ */
+export async function getArtifactSize(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<number | undefined> {
+	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) return undefined;
+	try {
+		const res = await req(cfg, route, { ...init, headers: { Range: "bytes=0-0" } });
+		if (res.status === 206) return contentRangeTotal(res.headers.get("content-range"));
+		// No length (a chunked reply) is not "empty": the size is unknown, and the viewer falls back.
+		const header = res.headers.get("content-length")?.trim();
+		if (!header) return undefined;
+		const length = Number(header);
+		return Number.isInteger(length) && length >= 0 ? length : undefined;
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.status === 416) return 0;
+		throw cause;
+	}
 }
 
 /** The URL the app reads one artifact's bytes from, with the Bearer header (see artifactFilesPath). */
@@ -724,6 +878,33 @@ export function artifactMarkdownImageSource(cfg: ServerConfig, sessionId: string
  * text. A page is read raw from the preview route: the artifact-files route
  * would write AO's bootstrap into it.
  */
+/** A text read stopped at its limit: the file is larger than the viewer loads. */
+export class ArtifactTextTooLargeError extends Error {
+	readonly code: string = "ARTIFACT_TEXT_TOO_LARGE_ERROR";
+	constructor() {
+		super("This file is too large to load as text.");
+		this.name = "ArtifactTextTooLargeError";
+	}
+}
+
+/**
+ * An artifact's text, read only if it is at most `maxBytes`: the read asks for
+ * one byte more than that (a range), so a file larger than the viewer loads
+ * (even one that grew after its size was known) rejects with
+ * ArtifactTextTooLargeError instead of being read whole.
+ */
+export async function getArtifactTextWithin(cfg: ServerConfig, sessionId: string, path: string, maxBytes: number, init?: Pick<RequestInit, "signal">): Promise<string> {
+	const route = /\.html?$/i.test(path) ? artifactFilePath(sessionId, path, { raw: true }) : artifactFilesPath(sessionId, path);
+	if (!route) throw new Error("This artifact's path can't be opened.");
+	const res = await req(cfg, route, { ...init, headers: { Range: `bytes=0-${maxBytes}` } });
+	const text = await res.text();
+	const total = res.status === 206 ? contentRangeTotal(res.headers.get("content-range")) : undefined;
+	// A server that ignores the range sends the whole file: its own length decides.
+	const length = total ?? Number(res.headers.get("content-length") || new TextEncoder().encode(text).length);
+	if (length > maxBytes) throw new ArtifactTextTooLargeError();
+	return text;
+}
+
 export async function getArtifactText(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<string> {
 	const route = /\.html?$/i.test(path) ? artifactFilePath(sessionId, path, { raw: true }) : artifactFilesPath(sessionId, path);
 	if (!route) throw new Error("This artifact's path can't be opened.");
@@ -815,7 +996,15 @@ export type AgentCatalog = {
 	authorized: AgentInfo[];
 };
 
-export type AgentModelInfo = { id: string; label: string; isDefault?: boolean; provider?: string };
+export type AgentModelInfo = {
+	id: string;
+	label: string;
+	isDefault?: boolean;
+	provider?: string;
+	/** The effort levels this model takes, lowest first; absent for one that takes none. */
+	efforts?: string[];
+	defaultEffort?: string;
+};
 export type AgentModelCatalog = {
 	agentId: string;
 	selectionMode: "catalog" | "text" | "mode";
@@ -912,7 +1101,9 @@ export async function getAgentModels(cfg: ServerConfig, agent: string, projectId
 	for (;;) {
 		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
 		const catalog = await res.json() as AgentModelCatalog;
-		const discovering = catalog?.refreshState === "refreshing" && !catalog.models?.length;
+		// Queued is discovery too: answering then hands back an empty list that
+		// a menu would show as "default only", with nothing coming to replace it.
+		const discovering = (catalog?.refreshState === "refreshing" || catalog?.refreshState === "queued") && !catalog.models?.length;
 		if (!discovering || signal?.aborted) return catalog;
 		await pollDelay(signal);
 		if (signal?.aborted) return catalog;
@@ -1356,7 +1547,7 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
@@ -1369,6 +1560,10 @@ export async function spawnSession(
 			// default worker.agent; the spawn screen lets the user pick one.
 			harness: opts.harness || undefined,
 			model: opts.model || undefined,
+			effort: opts.effort || undefined,
+			accountId: opts.accountId || undefined,
+			// Omitted keeps the project's policy (Auto when it names none).
+			approvalMode: opts.approvalMode || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
 			// that cannot expose a structured controller, but omission must never make
 			// the phone depend on a desktop preference it cannot see.
@@ -1395,7 +1590,7 @@ export async function getSession(cfg: ServerConfig, id: string): Promise<Dashboa
 
 export async function delegateTask(
 	cfg: ServerConfig,
-	opts: { projectId: string; brief: string; agent?: string; model?: string; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId: string; brief: string; agent?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
@@ -1405,6 +1600,9 @@ export async function delegateTask(
 			brief: opts.brief,
 			agent: opts.agent || undefined,
 			model: opts.model || undefined,
+			effort: opts.effort || undefined,
+			accountId: opts.accountId || undefined,
+			approvalMode: opts.approvalMode || undefined,
 			mode: opts.mode,
 			attachments: opts.attachments?.length ? opts.attachments : undefined,
 			clientRequestId: opts.clientRequestId,

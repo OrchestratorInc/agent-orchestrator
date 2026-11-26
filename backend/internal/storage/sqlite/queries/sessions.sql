@@ -23,7 +23,7 @@ INSERT INTO sessions (
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash
+    client_request_id, client_request_hash, import_source, display_name_explicit
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -31,7 +31,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?
+    ?, ?, ?, ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -275,11 +275,14 @@ SET session_mode = sqlc.arg(target_mode),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND session_mode = sqlc.arg(source_mode) AND is_terminated = 0;
 
+-- name: GetSessionNumFloor :one
+SELECT max_num FROM session_num_floors WHERE id_prefix = sqlc.arg(id_prefix);
+
 -- name: GetSession :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -294,14 +297,14 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -316,14 +319,14 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -338,14 +341,14 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -360,8 +363,15 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id
+    runtime_released_launch_id, import_source
 FROM sessions ORDER BY project_id, num;
+
+-- name: ListPreviewSessions :many
+-- Live workers with only the columns the preview poller reads.
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions
+WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY id;
 
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
@@ -388,12 +398,16 @@ WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
     AND s.id NOT IN (
         SELECT t.handled_by_session_id FROM conversation_turns t
         JOIN conversations c ON c.id = t.conversation_id
-        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+        LEFT JOIN review r ON r.id = c.review_id
+        WHERE (c.session_id IS NULL OR c.session_id <> t.handled_by_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> t.handled_by_session_id)
     )
     AND s.id NOT IN (
         SELECT c.current_session_id FROM conversations c
+        LEFT JOIN review r ON r.id = c.review_id
         WHERE c.current_session_id IS NOT NULL
             AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> c.current_session_id)
     )
 ORDER BY s.id;
 
@@ -417,6 +431,7 @@ UPDATE sessions SET
     harness = sqlc.arg(harness),
     auto_review_enabled = sqlc.arg(auto_review_enabled),
     display_name = sqlc.arg(display_name),
+    display_name_explicit = sqlc.arg(display_name_explicit),
     activity_state = sqlc.arg(activity_state),
     activity_last_at = sqlc.arg(activity_last_at),
     is_terminated = 0,
@@ -429,6 +444,7 @@ UPDATE sessions SET
     updated_at = sqlc.arg(updated_at),
     auto_inject_review = sqlc.arg(auto_inject_review),
     auto_inject_ci = sqlc.arg(auto_inject_ci),
+    terminate_on_pr_merge = sqlc.arg(terminate_on_pr_merge),
     provision_state = sqlc.arg(provision_state),
     provision_error = '',
     client_request_id = sqlc.arg(client_request_id),
@@ -437,7 +453,7 @@ UPDATE sessions SET
 WHERE id = sqlc.arg(id) AND is_task_preparation = 1;
 
 -- name: RenameSession :execrows
-UPDATE sessions SET display_name = ?, updated_at = ? WHERE id = ?;
+UPDATE sessions SET display_name = ?, display_name_explicit = 1, updated_at = ? WHERE id = ?;
 
 -- name: RenameSessionIfDisplayName :execrows
 UPDATE sessions

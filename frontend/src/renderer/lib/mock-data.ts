@@ -1,6 +1,7 @@
 import type { CloudCpSessionChild } from "./cloud-cp";
 import type { PRState, PullRequestFacts, WorkspaceSummary } from "../types/workspace";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
+import { noPRDetails } from "./pr-display";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 
 const now = new Date().toISOString();
@@ -118,7 +119,7 @@ export const mockWorkspaces: WorkspaceSummary[] = [
 				branch: "demo/browser-preview-stack",
 				status: "review_pending",
 				kanbanColumn: "needs_review",
-				displayStatus: "Needs human review",
+				displayStatus: "Awaiting review",
 				issueId: "github:4479",
 				createdAt: hoursAgo(7),
 				updatedAt: minutesAgo(7),
@@ -147,7 +148,7 @@ export const mockWorkspaces: WorkspaceSummary[] = [
 				branch: "demo/project-settings-copy",
 				status: "review_pending",
 				kanbanColumn: "needs_review",
-				displayStatus: "Review pending",
+				displayStatus: "Awaiting review",
 				createdAt: hoursAgo(4),
 				updatedAt: minutesAgo(31),
 				activity: { state: "idle", lastActivityAt: minutesAgo(31) },
@@ -210,7 +211,7 @@ export const mockWorkspaces: WorkspaceSummary[] = [
 				branch: "demo/install-docs",
 				status: "working",
 				kanbanColumn: "building",
-				displayStatus: "Awaiting PR",
+				displayStatus: "Working",
 				createdAt: hoursAgo(2),
 				updatedAt: minutesAgo(13),
 				activity: { state: "active", lastActivityAt: minutesAgo(13) },
@@ -241,6 +242,7 @@ const prSummary = (sessionId: string, number: number, overrides: Partial<Session
 	const facts = session?.prs.find((item) => item.number === number);
 	const url = facts?.url ?? `https://github.com/Untrivial-ai/agent-orchestrator/pull/${number}`;
 	return {
+		...noPRDetails(),
 		url,
 		htmlUrl: url,
 		number,
@@ -258,6 +260,7 @@ const prSummary = (sessionId: string, number: number, overrides: Partial<Session
 		changedFiles: 3,
 		ci: {
 			autoInjectCI: true,
+			checks: [],
 			state: facts?.ci === "failing" ? "failing" : facts?.ci === "pending" ? "pending" : "passing",
 			failingChecks: [],
 		},
@@ -301,6 +304,7 @@ export const mockSessionScmSummaries: Record<string, SessionPRSummary[]> = {
 		prSummary("demo-ci-failed", 324, {
 			ci: {
 				autoInjectCI: false,
+				checks: [],
 				state: "failing",
 				failingChecks: [
 					{
@@ -420,6 +424,7 @@ export const mockSessionScmSummaries: Record<string, SessionPRSummary[]> = {
 			deletions: 17,
 			ci: {
 				autoInjectCI: true,
+				checks: [],
 				state: "failing",
 				failingChecks: [
 					{
@@ -457,6 +462,7 @@ export const mockSessionScmSummaries: Record<string, SessionPRSummary[]> = {
 			deletions: 22,
 			ci: {
 				autoInjectCI: true,
+				checks: [],
 				state: "failing",
 				failingChecks: [
 					{

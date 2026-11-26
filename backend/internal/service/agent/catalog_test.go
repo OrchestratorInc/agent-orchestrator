@@ -908,9 +908,9 @@ func TestFindInstalledBinary_ResolvesWithoutRefreshingInventory(t *testing.T) {
 		harnessAgent("codex", "Codex", nil),
 	})
 
-	got, ok := svc.FindInstalledBinary(context.Background())
-	if !ok {
-		t.Fatal("FindInstalledBinary() found no binary, want Codex")
+	got, search := svc.FindInstalledBinary(context.Background())
+	if search != PresenceFound {
+		t.Fatalf("FindInstalledBinary() search = %v, want found Codex", search)
 	}
 	if got.ID != "codex" || got.Label != "Codex" {
 		t.Fatalf("FindInstalledBinary() = %#v, want Codex", got)
@@ -942,9 +942,9 @@ func TestFindInstalledBinaryUsesPresenceResolverWithoutAuthOrNormalResolution(t 
 		},
 	})
 
-	got, ok := svc.FindInstalledBinary(context.Background())
-	if !ok || got.ID != "muse" {
-		t.Fatalf("FindInstalledBinary() = (%#v, %v), want Muse", got, ok)
+	got, search := svc.FindInstalledBinary(context.Background())
+	if search != PresenceFound || got.ID != "muse" {
+		t.Fatalf("FindInstalledBinary() = (%#v, %v), want Muse", got, search)
 	}
 	if got := presenceCalls.Load(); got != 1 {
 		t.Fatalf("presence resolver calls = %d, want 1", got)
@@ -970,8 +970,8 @@ func TestFindInstalledBinaryKeepsNameOnlyGooseMatchUnknown(t *testing.T) {
 		},
 	}})
 
-	if _, ok := svc.FindInstalledBinary(context.Background()); ok {
-		t.Fatal("FindInstalledBinary() treated an unverified name match as installed")
+	if _, search := svc.FindInstalledBinary(context.Background()); search != PresenceUnconfirmed {
+		t.Fatalf("FindInstalledBinary() search = %v for an unverified name match, want unconfirmed (never found)", search)
 	}
 	if got := presenceCalls.Load(); got != 1 {
 		t.Fatalf("startup presence calls = %d, want 1", got)
@@ -1017,8 +1017,8 @@ func TestPresslyGooseDoesNotSatisfyStartupOrFreshInventory(t *testing.T) {
 		Manifest: adapters.Manifest{ID: "goose", Name: "Goose"},
 		Agent:    pressly,
 	}})
-	if _, ok := svc.FindInstalledBinary(context.Background()); ok {
-		t.Fatal("Pressly-only PATH match satisfied the process-free startup check")
+	if _, search := svc.FindInstalledBinary(context.Background()); search != PresenceUnconfirmed {
+		t.Fatalf("Pressly-only PATH match gave startup search %v, want unconfirmed (never found)", search)
 	}
 	if got := presenceCalls.Load(); got != 1 {
 		t.Fatalf("startup presence calls = %d, want 1", got)
@@ -1372,6 +1372,48 @@ func TestProbeRechecksCachedUnauthorizedAuthentication(t *testing.T) {
 	}
 	if calls := agent.authCalls.Load(); calls != 2 {
 		t.Fatalf("authentication checks = %d, want fresh check after cached unauthorized", calls)
+	}
+}
+
+// cachingAuthAgent answers auth checks from a cache only an invalidation clears,
+// as the Claude adapter does with its CLI report.
+type cachingAuthAgent struct {
+	mutableAuthAgent
+	cached *ports.AgentAuthStatus
+}
+
+func (a *cachingAuthAgent) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	if a.cached == nil {
+		status, err := a.mutableAuthAgent.AuthStatus(ctx)
+		if err != nil {
+			return status, err
+		}
+		a.cached = &status
+	}
+	return *a.cached, nil
+}
+
+func (a *cachingAuthAgent) InvalidateAuthCache() { a.cached = nil }
+
+func TestProbeDropsTheAdaptersCachedAuthentication(t *testing.T) {
+	status := ports.AgentAuthStatusUnauthorized
+	agent := &cachingAuthAgent{mutableAuthAgent: mutableAuthAgent{status: &status}}
+	svc := NewWithAgents([]agentregistry.HarnessAgent{{
+		Harness:  domain.AgentHarness("claude-code"),
+		Manifest: adapters.Manifest{ID: "claude-code", Name: "Claude Code"},
+		Agent:    agent,
+	}})
+	if _, err := svc.EnsureAgentReadiness(context.Background(), "claude-code", domain.AgentReadinessPurposeLaunch); err != nil {
+		t.Fatalf("EnsureAgentReadiness: %v", err)
+	}
+
+	status = ports.AgentAuthStatusConfigured
+	got, err := svc.Probe(context.Background(), "claude-code")
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got.Agent.AuthStatus != ports.AgentAuthStatusConfigured {
+		t.Fatalf("Probe authStatus = %q, want the login made since the cached answer", got.Agent.AuthStatus)
 	}
 }
 
@@ -1776,7 +1818,7 @@ func TestGlobalModelDiscoveryUsesAODirectoryWithoutProject(t *testing.T) {
 	discoveryDir := filepath.Join(t.TempDir(), "model-discovery")
 	svc := NewWithDeps(Deps{ModelDiscoveryDir: discoveryDir})
 
-	request, err := svc.modelDiscoveryRequest("deepseek-harness", "", "/usr/local/bin/dsh")
+	request, err := svc.modelDiscoveryRequest(context.Background(), "deepseek-harness", "", "/usr/local/bin/dsh")
 	if err != nil {
 		t.Fatal(err)
 	}

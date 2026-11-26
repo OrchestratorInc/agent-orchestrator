@@ -4,13 +4,13 @@ import { useSidebarChromeGeometry } from "../../hooks/useSidebarChromeGeometry";
 
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { PanelLeftIcon } from "lucide-react";
+import { PanelLeftIcon } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { Slot } from "radix-ui";
 import { useTranslation } from "react-i18next";
 
 import { useIsMobile } from "@/hooks/use-mobile";
-import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { shellPanelTransition } from "@/lib/motion-spring";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -162,7 +162,7 @@ function Sidebar({
 }: React.ComponentProps<"div"> & {
 	side?: "left" | "right";
 	variant?: "sidebar" | "floating" | "inset";
-	collapsible?: "offcanvas" | "icon" | "none";
+	collapsible?: "offcanvas" | "icon" | "rail" | "none";
 	resizeScopeRef?: React.RefObject<HTMLDivElement | null>;
 }) {
 	const { t } = useTranslation();
@@ -170,7 +170,7 @@ function Sidebar({
 	const { isMobile, state, openMobile, setOpenMobile, isReady } = useSidebar();
 	const gapRef = React.useRef<HTMLDivElement>(null);
 	const containerRef = React.useRef<HTMLDivElement>(null);
-	useSidebarChromeGeometry(!isMobile && side === "left" && collapsible !== "none", gapRef, containerRef);
+	useSidebarChromeGeometry(!isMobile && side === "left" && collapsible !== "none", gapRef, containerRef, collapsible === "rail");
 
 	if (collapsible === "none") {
 		return (
@@ -211,15 +211,21 @@ function Sidebar({
 
 	const isOffcanvasCollapsed = state === "collapsed" && collapsible === "offcanvas";
 	const isIconCollapsed = state === "collapsed" && collapsible === "icon";
+	// A rail keeps the container's full width and layout and clips it to the
+	// rail (styles.css), so nothing inside reflows or moves while it narrows.
+	const isRailCollapsed = state === "collapsed" && collapsible === "rail";
 	const containerX = isOffcanvasCollapsed ? (side === "left" ? "-100%" : "100%") : "0%";
-	const activeTransition: typeof SHELL_PANEL_SPRING | { duration: number } =
-		!isReady || prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
+	// Only Interface v2 collapses to a rail, so the rail takes v2's drawer ease.
+	const activeTransition: ReturnType<typeof shellPanelTransition> | { duration: number } =
+		!isReady || prefersReducedMotion ? { duration: 0 } : shellPanelTransition(collapsible === "rail");
 
 	// Target width for the gap placeholder. Animating the actual width lets the
 	// flex sibling <main> follow in real time instead of snapping separately.
 	const gapTargetWidth =
 		isOffcanvasCollapsed
 			? 0
+			: isRailCollapsed
+				? "var(--sidebar-width-rail)"
 			: isIconCollapsed
 				? variant === "floating" || variant === "inset"
 					? "calc(var(--sidebar-width-icon) + 1rem)"
@@ -267,6 +273,7 @@ function Sidebar({
 					// with `top-(--sidebar-chrome-offset)` without fighting inset-y-0.
 					// DO NOT restore `inset-y-0` + `h-svh` — under-topbar offset then clips wrong.
 					"fixed top-0 bottom-0 z-chrome hidden w-(--ao-sidebar-w,var(--sidebar-width)) md:flex",
+					collapsible === "rail" && "sidebar-rail-clip",
 					side === "left" ? "left-0" : "right-0",
 					// Adjust the padding for floating and inset variants.
 					variant === "floating" || variant === "inset"
@@ -538,7 +545,6 @@ function SidebarMenuButton({
 	tooltip?: string | React.ComponentProps<typeof TooltipContent>;
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
 	const Comp = asChild ? Slot.Root : "button";
-	const { isMobile, state } = useSidebar();
 
 	const button = (
 		<Comp
@@ -564,9 +570,17 @@ function SidebarMenuButton({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>{button}</TooltipTrigger>
-			<TooltipContent side="right" align="center" hidden={state !== "collapsed" || isMobile} {...tooltip} />
+			<SidebarMenuButtonTooltipContent {...tooltip} />
 		</Tooltip>
 	);
+}
+
+// Reads the sidebar state here rather than in SidebarMenuButton, so collapsing
+// or expanding the sidebar re-renders only each tooltip's content, not every
+// row button with its trigger.
+function SidebarMenuButtonTooltipContent(props: React.ComponentProps<typeof TooltipContent>) {
+	const { isMobile, state } = useSidebar();
+	return <TooltipContent side="right" align="center" hidden={state !== "collapsed" || isMobile} {...props} />;
 }
 
 function SidebarMenuAction({

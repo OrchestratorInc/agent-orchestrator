@@ -36,6 +36,9 @@ const (
 // capture Kimi's native session id for true resume without mutating the user's
 // global Kimi profile.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if cfg.ImportConfigDir != "" && cfg.NativeSessionID != "" {
+		return errors.New("kimi: imported conversations require Chat mode")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -43,6 +46,13 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return errors.New("kimi.GetAgentHooks: WorkspacePath is required")
 	}
 
+	if IsImportedHome(cfg.Env[kimiCodeHomeEnv], cfg.DataDir) {
+		prompt, err := kimiSystemPromptText(cfg.SystemPrompt, cfg.SystemPromptFile)
+		if err != nil {
+			return err
+		}
+		return PrepareACPInstructions(ctx, cfg.WorkspacePath, prompt)
+	}
 	if err := installKimiConfigHooks(cfg); err != nil {
 		return fmt.Errorf("kimi.GetAgentHooks: %w", err)
 	}
@@ -121,7 +131,7 @@ func kimiInstructionsPath(workspacePath string) string {
 func installKimiConfigHooks(cfg ports.WorkspaceHookConfig) error {
 	home, ok := kimiCodeHomeFromEnv(cfg.Env)
 	if !ok {
-		return errors.New("kimi: AO-managed Kimi Code home is unavailable")
+		return errors.New("kimi: Orchestrator-managed Kimi Code home is unavailable")
 	}
 	if err := seedKimiCredentials(home); err != nil {
 		return err
@@ -187,25 +197,31 @@ func seedKimiCredentials(targetHome string) error {
 // sign each other out. It reports false where the user has no Kimi login or a
 // link cannot be made (Windows without the privilege), leaving the copy below.
 func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
-	source := filepath.Join(sourceHome, "credentials")
-	target := filepath.Join(targetHome, "credentials")
+	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(sourceHome, "credentials", "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
+	}
+	return shareKimiNativeDirectory(sourceHome, targetHome, "credentials")
+}
+
+// Both ordinary credential sharing and imported OAuth use this same link
+// operation. Imports refuse its copy fallback so rotating tokens stay shared.
+func shareKimiNativeDirectory(sourceHome, targetHome, name string) (bool, error) {
+	source := filepath.Join(sourceHome, name)
+	target := filepath.Join(targetHome, name)
 	if sameKimiConfigPath(source, target) {
 		return true, nil
-	}
-	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(source, "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
-		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
 	}
 	if link, err := os.Readlink(target); err == nil && sameKimiConfigPath(link, source) {
 		return true, nil
 	}
 	if err := os.MkdirAll(targetHome, 0o700); err != nil {
-		return false, fmt.Errorf("create AO Kimi home: %w", err)
+		return false, fmt.Errorf("create Orchestrator Kimi home: %w", err)
 	}
 	// AO's folder only held seeded copies; it is restored if the link fails.
 	aside := target + ".seeded"
 	_ = os.RemoveAll(aside)
 	if err := os.Rename(target, aside); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("set aside AO's Kimi credentials: %w", err)
+		return false, fmt.Errorf("set aside Orchestrator's Kimi credentials: %w", err)
 	}
 	if err := os.Symlink(source, target); err != nil {
 		_ = os.Rename(aside, target)
@@ -368,12 +384,38 @@ func mergeKimiHooksConfig(existing string) string {
 	return joinKimiConfigParts(existing[:start], block, existing[end:])
 }
 
+// kimiHooksConfigBlock lists the hooks AO installs into the AO-managed Kimi
+// config. The tool-use trio keeps the activity state active mid-turn: without
+// it the Stop of a prior step parks the session on idle for the rest of the
+// turn even while the agent keeps executing tools. Kimi's PermissionResult is
+// installed as AO's canonical permission-resolved event so the shared deriver
+// reports active and lifecycle clears waiting_input as soon as the approval
+// dialog resolves; permission-request keeps the session on waiting_input until
+// then, and lifecycle's sticky suppression stops the trio from clearing it.
+//
+// Kimi checks each hook's event against its own list and refuses the whole
+// config on an unknown one, so an event is added only when every release that
+// accepts this block already knows it. StopFailure predates PermissionRequest;
+// Interrupt (an Esc'd turn) stays out because releases before 0.14 refuse it.
 func kimiHooksConfigBlock() string {
 	return kimiHooksSentinelStart + "\n\n" +
 		kimiHookEntry("SessionStart", "startup", "ao hooks kimi session-start") +
 		kimiHookEntry("UserPromptSubmit", "", "ao hooks kimi user-prompt-submit") +
+		kimiHookEntry("PreToolUse", "", "ao hooks kimi pre-tool-use") +
+		kimiHookEntry("PostToolUse", "", "ao hooks kimi post-tool-use") +
+		kimiHookEntry("PostToolUseFailure", "", "ao hooks kimi post-tool-use-failure") +
 		kimiHookEntry("PermissionRequest", "", "ao hooks kimi permission-request") +
+		kimiHookEntry("PermissionResult", "", "ao hooks kimi permission-resolved") +
 		kimiHookEntry("Stop", "", "ao hooks kimi stop") +
+		// Kimi fires StopFailure instead of Stop when a provider error (an
+		// invalid API key, a rate limit) ends the turn. Without it that turn
+		// leaves the session active, reading "working" forever.
+		kimiHookEntry("StopFailure", "", "ao hooks kimi stop-failure") +
+		// Kimi runs hooks per agent with no agent id, so a child's
+		// StopFailure reads like the parent's. These bracket each child so
+		// lifecycle can tell them apart. Both predate PermissionRequest.
+		kimiHookEntry("SubagentStart", "", "ao hooks kimi subagent-start") +
+		kimiHookEntry("SubagentStop", "", "ao hooks kimi subagent-stop") +
 		kimiHooksSentinelEnd + "\n"
 }
 

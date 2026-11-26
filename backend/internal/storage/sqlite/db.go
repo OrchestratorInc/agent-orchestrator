@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -111,9 +113,19 @@ func checkLegacyDatabasePath(dataDir string) error {
 		return fmt.Errorf("inspect legacy database: %w", readErr)
 	}
 	if n == len(header) && string(header[:]) == "SQLite format 3\x00" {
-		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop AO and recover the legacy database explicitly before retrying", legacy, intended)
+		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop Orchestrator and recover the legacy database explicitly before retrying", legacy, intended)
 	}
 	return nil
+}
+
+// timestampFenceTimeout bounds startup repair. A failed fence never publishes
+// readers that could compare legacy timestamps as local wall-clock text.
+const timestampFenceTimeout = 5 * time.Minute
+
+type timestampOpenOptions struct {
+	driver      string
+	fenceBudget time.Duration
+	repairDone  chan<- struct{}
 }
 
 // Open opens (creating if absent) the SQLite database under dataDir and returns
@@ -128,6 +140,13 @@ func checkLegacyDatabasePath(dataDir string) error {
 //   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
 //     it; WAL readers see the latest committed snapshot.
 func Open(dataDir string) (*Store, error) {
+	return openWithTimestampOptions(dataDir, timestampOpenOptions{driver: "ao-sqlite", fenceBudget: timestampFenceTimeout})
+}
+
+func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store, error) {
+	if opts.driver == "" {
+		opts.driver = "ao-sqlite"
+	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -136,7 +155,7 @@ func Open(dataDir string) (*Store, error) {
 	}
 	dsn := databaseURI(dataDir) + pragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open(opts.driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite writer: %w", err)
 	}
@@ -146,16 +165,89 @@ func Open(dataDir string) (*Store, error) {
 		_ = writeDB.Close()
 		return nil, err
 	}
-
-	readDB, err := sql.Open("sqlite", dsn)
+	readDB, err := openTimestampReaders(opts.driver, dsn)
 	if err != nil {
 		_ = writeDB.Close()
+		return nil, err
+	}
+	state := newTimestampRepairState()
+	{
+		started := time.Now()
+		slog.Info("checking legacy timestamps before opening readers")
+		ctx, cancel := context.WithTimeout(context.Background(), opts.fenceBudget)
+		result, repairErr := runTimestampRepairState(ctx, writeDB, readDB, true, state)
+		if repairErr == nil {
+			repairErr = ctx.Err()
+		}
+		cancel()
+		if repairErr != nil {
+			_ = readDB.Close()
+			_ = writeDB.Close()
+			return nil, fmt.Errorf("timestamp startup repair incomplete; committed batches retained: %w", repairErr)
+		}
+		slog.Info("timestamp startup fence completed", "duration", time.Since(started), "repaired", result.Repaired, "skipped", result.Skipped, "deleted", result.Deleted)
+	}
+	store, err := withSearchIndexPools(dataDir, dsn, writeDB, readDB)
+	if err != nil {
+		_ = readDB.Close()
+		_ = writeDB.Close()
+		return nil, err
+	}
+	store.StartTimestampRepair(func(ctx context.Context) error {
+		if opts.repairDone != nil {
+			defer close(opts.repairDone)
+		}
+		_, err := runTimestampRepairState(ctx, writeDB, readDB, false, state)
+		return err
+	})
+
+	return store, nil
+}
+
+func openTimestampReaders(driverName, dsn string) (*sql.DB, error) {
+	readDB, err := sql.Open(driverName, dsn)
+	if err != nil {
 		return nil, fmt.Errorf("open sqlite reader: %w", err)
 	}
 	readDB.SetMaxOpenConns(maxReaders)
 	readDB.SetMaxIdleConns(maxReaders)
+	return readDB, nil
+}
 
-	return sqlitestore.NewStore(writeDB, readDB), nil
+// withSearchIndex opens the reader pool beside an open, migrated writer, then
+// the optional session search index (search_db.go).
+//
+// The index never decides whether the store opens: one that cannot be opened
+// is recorded on the store (SessionSearchUnavailable) and search stays off,
+// while every other read and write works as usual.
+func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
+	readDB, err := openTimestampReaders("ao-sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	return withSearchIndexPools(dataDir, dsn, writeDB, readDB)
+}
+
+func withSearchIndexPools(dataDir, dsn string, writeDB, readDB *sql.DB) (*Store, error) {
+	store := sqlitestore.NewStore(writeDB, readDB)
+
+	if sessionSearchSwitchedOff() {
+		store.SetSearchUnavailable(errSessionSearchOff)
+		return store, nil
+	}
+	searchDB, reset, err := openSearchWriter(dataDir, writeDB)
+	if err != nil {
+		store.SetSearchUnavailable(fmt.Errorf("open session search index: %w", err))
+		return store, nil
+	}
+	searchReaders, err := openSearchReaders(dataDir, dsn)
+	if err != nil {
+		_ = searchDB.Close()
+		store.SetSearchUnavailable(fmt.Errorf("open session search readers: %w", err))
+		return store, nil
+	}
+	store.SetSearchIndex(searchDB, searchReaders, reset)
+	return store, nil
 }
 
 // OpenReadOnly opens an existing SQLite database under dataDir without creating
@@ -163,7 +255,7 @@ func Open(dataDir string) (*Store, error) {
 func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 	dsn := databaseURI(dataDir) + readOnlyPragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite read-only writer: %w", err)
 	}
@@ -174,7 +266,7 @@ func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite read-only writer: %w", err)
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	readDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, fmt.Errorf("open sqlite read-only reader: %w", err)
@@ -259,7 +351,7 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 
 	dsn := databaseURI(dataDir) + pragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite writer: %w", err)
 	}
@@ -282,18 +374,15 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 		)
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	store, err := withSearchIndex(dataDir, dsn, writeDB)
 	if err != nil {
 		_ = writeDB.Close()
-		return nil, fmt.Errorf("open sqlite reader: %w", err)
+		return nil, err
 	}
-	readDB.SetMaxOpenConns(maxReaders)
-	readDB.SetMaxIdleConns(maxReaders)
-
-	return sqlitestore.NewStore(writeDB, readDB), nil
+	return store, nil
 }
 
-func migrate(db *sql.DB) error {
+func migrate(db *sql.DB) (err error) {
 	gooseMu.Lock()
 	defer gooseMu.Unlock()
 	goose.SetBaseFS(migrationsFS)
@@ -301,6 +390,24 @@ func migrate(db *sql.DB) error {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set goose dialect: %w", err)
 	}
+	migrations, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion)
+	if err != nil {
+		return fmt.Errorf("collect migrations: %w", err)
+	}
+	versions := make([]int64, len(migrations))
+	for i, migration := range migrations {
+		versions[i] = migration.Version
+	}
+	ctx := context.Background()
+	triggers, err := prepareTimestampSchemaMigration(ctx, db, versions)
+	if err != nil {
+		return fmt.Errorf("prepare timestamp tracking for schema migrations: %w", err)
+	}
+	defer func() {
+		if restoreErr := restoreTimestampProgressTriggers(ctx, db, triggers); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore timestamp repair triggers: %w", restoreErr))
+		}
+	}()
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
@@ -1660,6 +1767,19 @@ SELECT (SELECT COUNT(*) FROM sqlite_master
 	if kimiUsageShape == 2 {
 		return nil
 	}
+	var openUsageShape int
+	if err := db.QueryRow(`
+SELECT (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_bindings'
+          AND instr(COALESCE(sql, ''), 'trim(harness)') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_sources'
+          AND instr(COALESCE(sql, ''), 'trim(kind)') > 0)`).Scan(&openUsageShape); err != nil {
+		return err
+	}
+	if openUsageShape == 2 {
+		return nil
+	}
 
 	_, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 117`)
 	return err
@@ -2062,11 +2182,40 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// The Mastra development branch previously used 0213 for its harness
+	// constraint. Preserve that ledger while restoring main's physical 0213
+	// effects before later migrations and generated session reads execute.
+	{version: 213, table: "sessions", column: "stale_binary_since",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_since TIMESTAMP`},
+	{version: 213, table: "sessions", column: "stale_binary_version",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_version TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_launch",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_launch TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_switch_failed_at",
+		addDDL:  `ALTER TABLE sessions ADD COLUMN stale_binary_switch_failed_at TIMESTAMP`,
+		postAdd: []string{staleBinaryCDCTrigger}},
 	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
 	// another migration first, and generated message reads select this column.
 	{version: 199, table: "conversation_messages", column: "continuation",
 		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
 }
+
+// staleBinaryCDCTrigger is 0213's change_log trigger. Its columns are each
+// added by their own statement, so a stop between the last ALTER and this
+// trigger leaves every column present and the trigger missing; reconcileSchema
+// therefore recreates it whenever all four columns exist.
+const staleBinaryCDCTrigger = `CREATE TRIGGER IF NOT EXISTS sessions_stale_binary_cdc_update
+AFTER UPDATE OF stale_binary_since, stale_binary_launch, stale_binary_switch_failed_at ON sessions
+WHEN OLD.stale_binary_since IS NOT NEW.stale_binary_since
+    OR OLD.stale_binary_launch IS NOT NEW.stale_binary_launch
+    OR OLD.stale_binary_switch_failed_at IS NOT NEW.stale_binary_switch_failed_at
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    VALUES (NEW.project_id, NEW.id, 'session_updated',
+        json_object('id', NEW.id, 'conversationId',
+            (SELECT id FROM conversations WHERE current_session_id = NEW.id LIMIT 1)),
+        CURRENT_TIMESTAMP);
+END`
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
 // and replays the skipped migration's effects for any that are missing. It is
@@ -2097,6 +2246,16 @@ func reconcileSchema(db *sql.DB) error {
 			}
 		}
 	}
+	var staleBinaryColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN
+		('stale_binary_since', 'stale_binary_version', 'stale_binary_launch', 'stale_binary_switch_failed_at')`).Scan(&staleBinaryColumns); err != nil {
+		return fmt.Errorf("schema verification: inspect stale-binary columns: %w", err)
+	}
+	if staleBinaryColumns == 4 {
+		if _, err := db.Exec(staleBinaryCDCTrigger); err != nil {
+			return fmt.Errorf("schema repair: restore sessions_stale_binary_cdc_update: %w", err)
+		}
+	}
 	if err := reconcileHarnessConstraint(db); err != nil {
 		return err
 	}
@@ -2109,7 +2268,7 @@ func reconcileSchema(db *sql.DB) error {
 		return fmt.Errorf("schema verification: inspect session revision fence: %w", err)
 	}
 	if revisionColumn > 0 && revisionTrigger != 1 {
-		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting AO")
+		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting Orchestrator")
 	}
 	return nil
 }
@@ -2159,9 +2318,17 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
+	needsDockerAgent := !strings.Contains(schema, "'docker-agent'")
+	needsFX := !strings.Contains(schema, "'fx'")
+	needsOpenCodeV2 := !strings.Contains(schema, "'opencode-v2'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsStakpak := !strings.Contains(schema, "'stakpak'")
+	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
+	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
+	needsTau := !strings.Contains(schema, "'tau'")
+	needsMastraCode := !strings.Contains(schema, "'mastra-code'")
+	if !needsMastraCode && !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2175,6 +2342,59 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+	}
+	if !needsStakpak {
+		// Stakpak's migration also inserts it before 'fake', so remove it the
+		// same way before the exact repairs and append it again below.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''stakpak'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Stakpak constraint: %w", err)
+		}
+		needsStakpak = true
+	}
+	if !needsDockerAgent {
+		// Docker Agent must stay last before 'fake' (its migration's Down
+		// anchors on "'docker-agent', 'fake'))"), but the appends below would
+		// land after it. Remove it the same way and append it again last.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''docker-agent'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Docker Agent constraint: %w", err)
+		}
+		needsDockerAgent = true
+	}
+	if !needsMiniMaxCode {
+		// MiniMax Code's migration runs after Docker Agent's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after Docker Agent.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''minimax-code'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize MiniMax Code constraint: %w", err)
+		}
+		needsMiniMaxCode = true
+	}
+	if !needsOpenInterpreter {
+		// Open Interpreter's migration runs after MiniMax Code's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after MiniMax Code.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''open-interpreter'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Open Interpreter constraint: %w", err)
+		}
+		needsOpenInterpreter = true
+	}
+	if !needsTau {
+		// Tau's migration runs after Open Interpreter's, so it is last before
+		// 'fake' on a fresh database. Remove it the same way and append it
+		// again after Open Interpreter.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''tau'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Tau constraint: %w", err)
+		}
+		needsTau = true
+	}
+	if !needsMastraCode {
+		// Mastra Code's migration runs after Tau's, so it is last before
+		// 'fake' on a fresh database. Remove it the same way and append it
+		// again after Tau.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''mastra-code'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Mastra Code constraint: %w", err)
+		}
+		needsMastraCode = true
 	}
 	type replacement struct {
 		old string
@@ -2284,12 +2504,42 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
+	// Append only after the exact legacy recognizers have repaired older lists.
+	if needsFX {
+		repairs = append(repairs, replacement{"'fake'))", "'fx', 'fake'))"})
+	}
+	if needsOpenCodeV2 {
+		repairs = append(repairs, replacement{"'fake'))", "'opencode-v2', 'fake'))"})
+	}
 	// Add the new harness only after exact historical variants are repaired.
 	if needsNativeAssistant {
 		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
 	}
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
+	}
+	if needsStakpak {
+		repairs = append(repairs, replacement{"'fake'))", "'stakpak', 'fake'))"})
+	}
+	// Docker Agent comes last, matching the migration order of a fresh database.
+	if needsDockerAgent {
+		repairs = append(repairs, replacement{"'fake'))", "'docker-agent', 'fake'))"})
+	}
+	// MiniMax Code's migration runs after Docker Agent's, so it follows it.
+	if needsMiniMaxCode {
+		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
+	}
+	// Open Interpreter's migration runs after MiniMax Code's, so it follows it.
+	if needsOpenInterpreter {
+		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
+	}
+	// Tau's migration runs after Open Interpreter's, so it follows it.
+	if needsTau {
+		repairs = append(repairs, replacement{"'fake'))", "'tau', 'fake'))"})
+	}
+	// Mastra Code's migration runs after Tau's, so it follows it.
+	if needsMastraCode {
+		repairs = append(repairs, replacement{"'fake'))", "'mastra-code', 'fake'))"})
 	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
@@ -2340,14 +2590,32 @@ WHERE type = 'table' AND name = 'sessions'`,
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
 	}
-	if !strings.Contains(schema, "'command-code'") {
-		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
-	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
 	}
+	if !strings.Contains(schema, "'minimax-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing MiniMax Code and did not match known pre-MiniMax-Code schema")
+	}
+	if !strings.Contains(schema, "'docker-agent'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Docker Agent")
+	}
+	if !strings.Contains(schema, "'command-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
+	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'stakpak'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
+	}
+	if !strings.Contains(schema, "'open-interpreter'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")
+	}
+	if !strings.Contains(schema, "'tau'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Tau")
+	}
+	if !strings.Contains(schema, "'mastra-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Mastra Code")
 	}
 	return nil
 }

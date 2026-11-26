@@ -1,6 +1,6 @@
 # ao stop
 
-Stop the AO daemon.
+Stop the Orchestrator daemon.
 
 ## Syntax
 

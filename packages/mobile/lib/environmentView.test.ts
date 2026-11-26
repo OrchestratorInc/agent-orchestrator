@@ -38,14 +38,20 @@ describe("environment overview presentation", () => {
 		]);
 	});
 
-	it("summarizes the fleet around the default machine", async () => {
-		const view = await import("./environmentView").catch(() => null);
-		expect(view).not.toBeNull();
-		if (!view) return;
+	it("picks a machine's route from the connection it is on, then the first saved one", async () => {
+		const view = await import("./environmentView");
+		expect(view.primaryEnvironmentEndpoint(view.environmentEndpointRows(host, activeConfig))?.label).toBe("Tailscale");
+		expect(view.endpointDisplayAddress("https://studio.tail123.ts.net:3011")).toEqual({ host: "studio.tail123.ts.net", authority: "studio.tail123.ts.net:3011" });
+		expect(view.endpointDisplayAddress("not a url:22/")).toEqual({ host: "not a url", authority: "not a url:22" });
+	});
 
-		expect(view.environmentSummary(0)).toBe("No machines");
-		expect(view.environmentSummary(1, "Studio Mac")).toBe("Studio Mac · 1 machine");
-		expect(view.environmentSummary(3, "Studio Mac")).toBe("Studio Mac · 3 machines");
+	it("names each connection state in words", async () => {
+		const view = await import("./environmentView");
+		expect(view.environmentStatus({ connection: "open", loading: true })).toEqual({ kind: "connected", label: "Connected" });
+		expect(view.environmentStatus({ connection: "connecting", loading: false })).toEqual({ kind: "connecting", label: "Connecting" });
+		expect(view.environmentStatus({ connection: "closed", loading: true })).toEqual({ kind: "connecting", label: "Connecting" });
+		expect(view.environmentStatus({ connection: "closed", loading: false })).toEqual({ kind: "offline", label: "Offline" });
+		expect(view.environmentStatus(undefined)).toEqual({ kind: "offline", label: "Offline" });
 	});
 
 	it("presents daemon platform values as human-readable operating systems", async () => {

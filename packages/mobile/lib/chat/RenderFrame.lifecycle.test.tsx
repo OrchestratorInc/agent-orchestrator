@@ -5,10 +5,12 @@ vi.mock("react-native", () => ({
 	View: "View",
 	Text: "Text",
 	Pressable: "Pressable",
-	Modal: "Modal",
+	Platform: { OS: "ios" },
 	StyleSheet: { create: (styles: object) => styles, absoluteFill: {} },
 	useWindowDimensions: () => ({ width: 390, height: 800 }),
 }));
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("expo-router", () => ({ useRouter: () => router }));
 vi.mock("react-native-webview", () => ({ WebView: "WebView" }));
 // Like the real hook, focus changes re-render through a subscription, past React.memo.
 const navigation = vi.hoisted(() => ({ focused: true, listeners: new Set<() => void>() }));
@@ -19,14 +21,10 @@ vi.mock("expo-router/react-navigation", async () => {
 });
 // Inlining an artifact page has its own tests; these frames are renders.
 vi.mock("../useInlinedArtifactPage", () => ({ useInlinedArtifactPage: () => ({ failed: false }) }));
-// An artifact frame opens the artifact viewer through the router.
-vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("expo-linking", () => ({ openURL: vi.fn() }));
-vi.mock("../config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), httpBase: () => "http://lab:3011" }));
+vi.mock("../config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), httpBase: () => "http://lab:3011", machineIdentity: () => "host.lab-host" }));
 vi.mock("../haptics", () => ({ haptics: { tap: () => {} } }));
-vi.mock("../icons", () => ({ Feather: "Feather" }));
-vi.mock("../store", () => ({ useApp: () => ({ config: { host: "lab", httpPort: "3011", muxPort: "", password: "test" } }) }));
+vi.mock("../store", () => ({ useApp: () => ({ config: { host: "lab", httpPort: "3011", muxPort: "", password: "test" }, currentHostId: "lab-host" }) }));
 vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: () => "#000" });
 	return { useTheme: () => theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (t: unknown) => unknown) => factory(theme) };
@@ -34,7 +32,7 @@ vi.mock("../ThemeProvider", () => {
 vi.mock("./RenderSkeleton", () => ({ RenderSkeleton: "RenderSkeleton" }));
 vi.mock("./renderHeightStore", () => ({ startRenderHeightStore: () => {} }));
 
-import { RenderFrame } from "./RenderFrame";
+import { RenderDocument, RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport } from "./renderFrameModel";
 
 const render = { id: "page", title: "Page", height: 300, path: "/api/v1/sessions/s/renders/page" };
@@ -139,4 +137,29 @@ it("lets its page go under a pushed screen and loads it again on return", () => 
 	expect(webView()).toBeUndefined();
 	setFocused(true);
 	expect(webView()).toBeDefined();
+});
+
+// The page opens larger as a route of its own, with a native header and the
+// platform's own dismissal, rather than a modal drawn over the conversation.
+it("expands into the viewer route for its page and machine", () => {
+	const expand = renderer!.root.findAll((node) => node.type === ("Pressable" as never) && node.props.accessibilityLabel === "Expand Page")[0];
+	act(() => expand.props.onPress());
+	expect(router.push).toHaveBeenCalledWith({ pathname: "/render", params: { path: render.path, title: "Page", hostId: "lab-host" } });
+	expect(renderer!.root.findAll((node) => node.type === ("Modal" as never))).toHaveLength(0);
+});
+
+// An inline frame stays live off screen and a tap opens the viewer instead of
+// reaching the page, so it keeps the default policy (nothing plays with sound
+// unprompted); the fullscreen viewer is the page on screen and plays inline.
+it("plays media unprompted only in the viewer, never in an inline frame", () => {
+	const inline = webView().props;
+	expect(inline.allowsInlineMediaPlayback).toBeUndefined();
+	expect(inline.mediaPlaybackRequiresUserAction).toBeUndefined();
+	let viewer: ReactTestRenderer | undefined;
+	act(() => {
+		viewer = create(<RenderDocument path={render.path} displayMode="fullscreen" onReady={() => {}} onGone={() => {}} onFailed={() => {}} />, { createNodeMock: () => ({ injectJavaScript: () => {} }) });
+	});
+	const fullscreen = viewer!.root.findAll((node) => node.type === ("WebView" as never))[0].props;
+	expect(fullscreen).toMatchObject({ allowsInlineMediaPlayback: true, mediaPlaybackRequiresUserAction: false });
+	act(() => viewer?.unmount());
 });
