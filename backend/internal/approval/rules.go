@@ -45,6 +45,8 @@ var (
 	Classify = rules.Classify
 	// ClassifyDialog judges accepting a page dialog.
 	ClassifyDialog = rules.ClassifyDialog
+	// Truncate cuts text to at most max characters, never splitting one.
+	Truncate = rules.Truncate
 	// ValidMode reports whether m is a known mode.
 	ValidMode = rules.ValidMode
 	// Site returns the host a page URL belongs to.
