@@ -587,6 +587,45 @@ describe("ProjectSettingsForm", () => {
 		expect(saved).not.toHaveProperty("effort");
 	});
 
+	it.each([
+		["GPT-6.1-Sol", "gpt-6.1-sol"],
+		["GPT-6.1-Mini", "gpt-6.1-mini"],
+	])("reapplies AO's fallback effort when %s is picked again after Use agent model", async (label, model) => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [
+					{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", isDefault: true, efforts: ["low", "medium", "high"] },
+					{ id: "gpt-6.1-mini", label: "GPT-6.1-Mini", efforts: ["low", "medium", "high"] },
+				],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { permissions: "auto" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-6.1-Sol"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: label }));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: label }));
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("Medium");
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(
+			expect.objectContaining({ model, effort: "medium" }),
+		);
+	});
+
 	it("saves Claude effort from the effort chip beside the model picker", async () => {
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents") return agentCatalogResponse;
