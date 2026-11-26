@@ -3265,7 +3265,7 @@ export interface components {
             sessionId?: string;
             /** @constant */
             source: "cloud";
-            /** @description What happened, such as needs_input or pr_merged. Clients show title and body for a type they do not know. An automation run that finished is automation_run_completed, one that failed or timed out automation_run_failed, and a skipped occurrence automation_run_skipped; each goes to the automation's subscribers, once per run. Its sessionId is the run's session or, for a run that got none, the session of the automation's latest run that had one (no notification when no run had one). */
+            /** @description What happened, such as needs_input or pr_merged. Clients show title and body for a type they do not know. An automation run that finished is automation_run_completed, one that failed or timed out automation_run_failed, and a skipped occurrence automation_run_skipped; each goes to the automation's subscribers, once per run. Repeated skips of one automation for the same reason are told once while that notice is unread and no run has happened since; every skip is still in the run list. A run whose end turns the automation off is told as automation_run_failed titled with the automation's name and "turned off". Its sessionId is the run's session or, for a run that got none, the session of the automation's latest run that had one (no notification when no run had one). */
             type: string;
             title: string;
             body: string;
@@ -3855,7 +3855,7 @@ export interface components {
             status: components["schemas"]["AutomationRunStatus"];
             /**
              * Format: uuid
-             * @description The session it ran in, once started. With the automation's deleteSessionOnComplete off, runs share one session: a run sends its prompt to the previous run's session when that is not deleted, and starts a new one when it is. On, the session ends when the run does (completed, failed or timed_out), as deleteSession ends one: its sandbox is deleted and its transcript, artifacts and pull requests stay; it can be restored, and the next run ends a restored one again, since it holds the shared branch.
+             * @description The session it ran in, once started. With the automation's deleteSessionOnComplete off, runs share one session: a run sends its prompt to the previous run's session when that is not deleted and when it is the session of the person the run runs as, still on the automation's harness and in Chat, and starts a new one otherwise. A session's agent runs on its creator's credential, so another member's Run now, the first run after someone else saved the automation, an agent switch or a move to the terminal starts a new session, and the earlier one ends, since it holds the shared branch. On, the session ends when the run does (completed, failed or timed_out), as deleteSession ends one: its sandbox is deleted and its transcript, artifacts and pull requests stay; it can be restored, and the next run ends a restored one again, since it holds the shared branch.
              */
             sessionId?: string;
             attemptCount: number;
@@ -3907,9 +3907,9 @@ export interface components {
             };
             /** Format: uuid */
             createdByUserId?: string;
-            /** @description Scheduled runs in a row that failed or timed out; a completed scheduled run resets it, and skipped and manual runs leave it. At 5 the automation is turned off. */
+            /** @description Scheduled runs in a row that failed or timed out; a completed scheduled run resets it, and skipped and manual runs leave it. At 5 the automation is turned off. A scheduled run refused with agent_provider_required or forbidden turns it off at once. */
             consecutiveFailures: number;
-            /** @description Why it was turned off automatically, such as after 5 scheduled runs in a row that failed or timed out, in words for a person to read. Absent while enabled or turned off by a person. */
+            /** @description Why it was turned off automatically, such as after 5 scheduled runs in a row that failed or timed out, in words for a person to read. Absent while enabled or turned off by a person. A scheduled run refused because the person it runs as has no valid credential for the harness (agent_provider_required) or is no longer in the organization (forbidden) turns the automation off at once, and an automation whose project was deleted is turned off when it next comes due. */
             disabledReason?: string;
             /** @description Whether the caller is notified of its runs. */
             subscribed: boolean;
@@ -3926,6 +3926,7 @@ export interface components {
             /** Format: uuid */
             projectId: string;
             displayName: string;
+            /** @description At most 32768 bytes of UTF-8; maxLength counts characters, so a prompt with non-ASCII text can be refused (422 validation_error) under 32768 characters. */
             prompt: string;
             harness: components["schemas"]["AutomationHarness"];
             model?: string;
@@ -3950,6 +3951,7 @@ export interface components {
         /** @description Fields to change. rrule or cron replaces the schedule; timezone alone moves the saved rule into the new zone. */
         UpdateAutomationInput: {
             displayName?: string;
+            /** @description At most 32768 bytes of UTF-8; maxLength counts characters, so a prompt with non-ASCII text can be refused (422 validation_error) under 32768 characters. */
             prompt?: string;
             harness?: components["schemas"]["AutomationHarness"];
             model?: string;
