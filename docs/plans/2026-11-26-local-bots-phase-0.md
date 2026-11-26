@@ -291,7 +291,7 @@ This is an open question below.
 
   | Bundle part | Contents | On import |
   | --- | --- | --- |
-  | `bot.json` | The bot row: handle, display name, purpose, harness, model, effort, permissions, `max_active_workers`, `memory_tidy`, `paused_at` | New bot ID on the target home. The project is matched by repository identity, not the source project ID. `home` is set to the target. The agent config is validated against the target's harnesses; an unknown model falls back to the target default and is reported to the owner. |
+  | `bot.json` | The bot row: handle, display name, purpose, harness, model, effort, permissions, `max_active_workers`, `memory_tidy`, `paused_at` | The bot ID reserved by the target in move step 0, or a new ID for a plain copy. The project is matched by repository identity, not the source project ID. `home` is set to the target. The agent config is validated against the target's harnesses; an unknown model falls back to the target default and is reported to the owner. |
   | `asks.json` | Open bot asks (no `answered_at` or `withdrawn_at`), with question, kind, options, subject, and created time | Recreated as open asks, so the moved bot's system prompt and Needs-you inbox have them from its first session. Answered asks are history and live in the conversation. |
   | `schedules.json` | Every automation with this `bot_id`: RRULE, timezone, prompt, template, enabled flag | Recreated with the same RRULE and timezone, but **disabled**. The owner re-enables them in one confirmation. |
   | `conversation.jsonl` | The bot conversation's turns and messages | Imported as the new bot conversation. |
@@ -299,13 +299,18 @@ This is an open question below.
 
 - **Export is a copy; a move is export plus a source-side stop.** Exporting alone, for example as a backup, does not change the source bot. Its schedules keep running. Importing that copy and enabling its schedules would run the same RRULE on both homes. So the import screen warns that the source may still be live, and AO makes no single-home guarantee for a plain copy.
 - **The move flow (Phase 2) guarantees one live home.** It runs in this order:
+  0. **Reserve the target ID.** The target home allocates the new bot ID and holds it as a pending reservation before anything changes on the source. If the target cannot reserve one, the move does not start.
   1. Pause the source bot and disable all its schedules.
-  2. Record `moved_to` (the target home and new bot ID, once known) on the source row.
+  2. Record `moved_to` on the source row: the target home and the reserved bot ID. From this point every `BOT_MOVED` refusal names a concrete target `Ref{host, id}`.
   3. Export. The bundle's `queue.jsonl` carries every message the source accepted but had not delivered, including ones queued during the pause.
-  4. Import on the target, with schedules disabled.
+  4. Import on the target. The import must claim the reservation from step 0 and create the bot under exactly that ID, with schedules disabled. An import that does not present a valid reservation is refused.
   5. Only after the source confirms step 1 can the owner enable schedules on the target.
 
   If the source home is unreachable, the move does not proceed. The owner must either archive the source bot or explicitly accept a copy.
+
+  **If the move aborts after step 2** (export or import fails, or the owner cancels):
+  - The source clears `moved_to` and stays paused until the owner resumes it.
+  - The target keeps the reservation as a tombstone. A message resent to the reserved ID gets `BOT_MOVE_ABORTED`, which names the source `Ref{host, id}`, so the sender is pointed back rather than told the bot does not exist.
 
 - **Messages that arrive during or after a move are refused, not queued.**
   - From step 2 on, the source accepts no new messages or asks for the bot. It refuses them with `BOT_MOVED`, and the error names the target `Ref{host, id}`.
