@@ -59,6 +59,19 @@ describe("useArtifactScrollRestore", () => {
 		expect(memory.current()).toEqual({ x: 0, y: 40 });
 	});
 
+	it("gives up on a position the content no longer reaches, and remembers where it stopped", () => {
+		const { root, element } = scroller(100);
+		const memory = new ArtifactScrollMemory({ x: 0, y: 500 });
+		const now = vi.spyOn(performance, "now").mockReturnValue(0);
+		renderHook(() => useArtifactScrollRestore(root, memory, true));
+		expect(element.scrollTop).toBe(100);
+		now.mockReturnValue(3_001);
+		frames.shift()!(0);
+		expect(memory.pendingPosition()).toBeUndefined();
+		expect(memory.current()).toEqual({ x: 0, y: 100 });
+		expect(frames).toHaveLength(0);
+	});
+
 	it("neither restores nor records while disabled, and forgets on clear", () => {
 		const { root, element } = scroller(1000);
 		const memory = new ArtifactScrollMemory({ x: 0, y: 500 });

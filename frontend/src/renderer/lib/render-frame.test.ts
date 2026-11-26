@@ -318,16 +318,21 @@ describe("render page bootstrap", () => {
 
 	it("reports its scroll to a host that asks, and goes back to a scroll the host restores", () => {
 		const page = bootPage();
-		const scrollable = (height: number) => page.view.scrollTo.mockImplementation((x: number, y: number) => {
-			page.view.scrollX = x;
-			page.view.scrollY = Math.min(y, height);
+		// The restore scrolls with options (instant); the zoom with coordinates.
+		const scrollable = (height: number) => page.view.scrollTo.mockImplementation((to: number | { left: number; top: number }, y?: number) => {
+			page.view.scrollX = typeof to === "number" ? to : to.left;
+			page.view.scrollY = Math.min(typeof to === "number" ? y ?? 0 : to.top, height);
 		});
 		scrollable(10_000);
 		const scroll = () => page.windowEvents.get("scroll")?.({});
 		scroll();
 		expect(page.frames).toHaveLength(0);
 
+		// Asked, it reports where it is at once, even at its top.
 		page.context({ scrollReport: true });
+		expect(page.frames).toHaveLength(1);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 0 } }, "*");
 		page.view.scrollY = 320;
 		scroll();
 		scroll();
@@ -339,7 +344,7 @@ describe("render page bootstrap", () => {
 		scrollable(400);
 		page.postMessage.mockClear();
 		page.context({ scrollTo: { x: 0, y: 900 } });
-		expect(page.view.scrollTo).toHaveBeenLastCalledWith(0, 900);
+		expect(page.view.scrollTo).toHaveBeenLastCalledWith({ left: 0, top: 900, behavior: "instant" });
 		expect(page.view.scrollY).toBe(400);
 		scroll();
 		expect(page.frames).toHaveLength(0);

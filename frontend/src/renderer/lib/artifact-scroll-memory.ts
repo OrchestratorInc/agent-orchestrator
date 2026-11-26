@@ -79,10 +79,15 @@ export function useArtifactScrollRestore(root: HTMLElement | null, memory: Artif
 		const removeInputs = () => {
 			for (const name of READER_INPUTS) root.removeEventListener(name, stop, true);
 		};
+		// Settled, the memory holds where the view really is: short of the
+		// position when the content no longer reaches it, or wherever the reader
+		// took over.
 		const stop = () => {
 			window.cancelAnimationFrame(frame);
 			memory.settle();
 			removeInputs();
+			const element = scroller();
+			if (element) memory.record({ x: element.scrollLeft, y: element.scrollTop });
 		};
 		const started = performance.now();
 		const restore = () => {

@@ -1427,6 +1427,33 @@ describe("SessionArtifactsView comes back as it was left", () => {
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
 	});
 
+	it("lets go of a file left open once a still-loading list comes in without it", async () => {
+		const first = renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		first.unmount();
+
+		const remaining = artifacts.filter((artifact) => artifact.path !== "notes.md");
+		const loading = (files: SessionArtifact[], pending: boolean) => ({ ...session(files), artifactFilesPending: pending } as WorkspaceSession);
+		const view = renderView(<SessionArtifactsView session={loading([], true)} />);
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		view.rerender(<SessionArtifactsView session={loading(remaining, false)} />);
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		// Gone when the list came in: a file by that name later is not reopened.
+		view.rerender(<SessionArtifactsView session={loading(artifacts, false)} />);
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+	});
+
+	it("opens a file left open once a still-loading list lists it", async () => {
+		const first = renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		first.unmount();
+
+		const view = renderView(<SessionArtifactsView session={{ ...session([]), artifactFilesPending: true } as WorkspaceSession} />);
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		view.rerender(<SessionArtifactsView session={session()} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+	});
+
 	it("brings back a page's zoom, and its source when the source was showing", async () => {
 		const first = renderView(<SessionArtifactsView request={{ key: 1, path: "report.html" }} session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));

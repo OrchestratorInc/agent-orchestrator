@@ -66,6 +66,8 @@ type InitialArtifactsView = {
 	zoom?: number;
 	scroll?: ScrollPosition;
 	requestKey?: number;
+	/** The file was kept unlisted because the list was still loading: it shows once listed, or goes when the list settles without it. */
+	untilListed?: boolean;
 };
 
 /**
@@ -99,6 +101,7 @@ export function initialArtifactsView(
 		zoom: memory.zoom,
 		scroll: memory.scroll,
 		requestKey: memory.requestKey,
+		untilListed: !listed && !memory.awaited,
 	};
 }
 
@@ -921,6 +924,16 @@ export function SessionArtifactsView({
 	useEffect(() => {
 		if (listed && listed.path !== selectedPath) setSelectedPath(listed.path);
 	}, [listed, selectedPath]);
+	// A file left open whose session's list was still loading on return: once
+	// the list is in without it, it was deleted meanwhile, and the list stays,
+	// even if a file by that name comes back later.
+	const untilListed = useRef(Boolean(initial.untilListed));
+	const listPending = Boolean(session.artifactFilesPending);
+	useEffect(() => {
+		if (!untilListed.current || (!listed && listPending)) return;
+		untilListed.current = false;
+		if (!listed && selectedPath !== null && selectedPath !== awaitedPath) setSelectedPath(null);
+	}, [awaitedPath, listPending, listed, selectedPath]);
 	// An open cloud file keeps the URL it opened with while the access prefix
 	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);

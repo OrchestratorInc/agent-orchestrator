@@ -101,7 +101,8 @@
   function restoreScroll() {
     if (!restoreTarget) return;
     if (Date.now() > restoreUntil) return stopRestore();
-    window.scrollTo(restoreTarget.x, restoreTarget.y);
+    // Instant, so a page with smooth scrolling neither animates back nor misses the check below.
+    window.scrollTo({ left: restoreTarget.x, top: restoreTarget.y, behavior: "instant" });
     if (Math.abs(window.scrollX - restoreTarget.x) <= 1 && Math.abs(window.scrollY - restoreTarget.y) <= 1) stopRestore();
   }
   function stopRestore() {
@@ -131,6 +132,9 @@
       restoreTimer = window.setTimeout(stopRestore, 3000);
       restoreScroll();
     }
+    // A host that starts listening hears where the page is now, even at its top
+    // with no scroll to come; not while a restore is on its way.
+    if (p.scrollReport === true) scheduleScrollReport();
   });
   if (!framed) return;
   function notify(method, params, id) {
