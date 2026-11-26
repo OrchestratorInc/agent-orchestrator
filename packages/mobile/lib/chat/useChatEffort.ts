@@ -58,6 +58,15 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 	// A model the conversation reports with levels but no Extra High has no
 	// Ultracode; with no effort row reported yet there is nothing to go on.
 	useEffect(() => { if (row && !ultracodeOffered && ultracodeWanted) setUltracode(false); }, [row, ultracodeOffered, ultracodeWanted, setUltracode]);
+	// Whether the next message asks for Ultracode: as the level saved and not
+	// yet reported has it, else as the conversation reports. Read at send time,
+	// since a pick held on the slider changes nothing the composer renders.
+	const ultracodeNow = useRef({ offered: ultracodeOffered, wanted: ultracodeWanted, saved });
+	ultracodeNow.current = { offered: ultracodeOffered, wanted: ultracodeWanted, saved };
+	const sendsUltracode = useCallback(() => {
+		const { offered: on, wanted, saved: reported } = ultracodeNow.current;
+		return on && wanted && (held.current ?? reported) === ULTRACODE_LEVEL;
+	}, []);
 	const choices = useMemo<EffortChoice[]>(() => {
 		const levels = withFallbackEffort(row?.choices
 			.filter((choice) => !followsAgentLabel(choice.label))
@@ -90,13 +99,19 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 			const pickedValue = picked.current;
 			picked.current = undefined;
 			if (pickedValue === undefined) return;
-			stopConfirmTimer();
+			const value = pickedValue === ULTRACODE ? ULTRACODE_LEVEL : pickedValue;
+			// Ultracode or not, as it was before this pick: what a failed save returns to.
+			const wasUltracode = ultracodeWanted;
 			// Ultracode is Extra High saved, and on for the messages that follow.
 			setUltracode(pickedValue === ULTRACODE);
-			const value = pickedValue === ULTRACODE ? ULTRACODE_LEVEL : pickedValue;
+			// The level already on its way: its save and hold stand.
+			if (row && held.current !== undefined && value === held.current) return;
+			stopConfirmTimer();
 			const save = ++saves.current;
-			// Back on the level already saved: nothing to send, nothing to hold.
-			if (!row || saved === value) {
+			// Back on the level already saved, with none on its way: nothing to
+			// send, nothing to hold. Back on it with another level on its way,
+			// the save goes, or that level would land over it.
+			if (!row || value === (held.current ?? saved)) {
 				held.current = undefined;
 				slider.setPick(undefined);
 				return;
@@ -112,7 +127,7 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 				if (picked.current !== undefined) return;
 				stopConfirmTimer();
 				slider.setPick(undefined);
-				if (pickedValue === ULTRACODE) setUltracode(false);
+				setUltracode(wasUltracode);
 			};
 			// Held until the conversation shows it (the effect below), or dropped
 			// if it never does.
@@ -141,7 +156,7 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 	}, [saved, offered, slider, row]);
 	useEffect(() => stopConfirmTimer, []);
 	const close = useCallback(() => slider.setOpen(false), [slider]);
-	return { choices, slider, busy: Boolean(disabled), close, choose, commit, ultracode, fast };
+	return { choices, slider, busy: Boolean(disabled), close, choose, commit, ultracode, sendsUltracode, fast };
 }
 
 /**

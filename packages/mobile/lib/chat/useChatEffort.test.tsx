@@ -250,6 +250,27 @@ describe("chat effort", () => {
 			expect(effort.choices.some((choice) => choice.value === "ultracode")).toBe(false);
 		});
 
+		// The message is prepared as the pick on its way has it, not only as the
+		// conversation last reported; a failed save goes back to what was before.
+		it("asks for Ultracode in the next message as soon as it is picked, until its save fails", async () => {
+			const saves: Array<{ reject: (cause: Error) => void }> = [];
+			const { update } = render({ models: claude, snapshot: claudeChat("high"), onSettings: () => new Promise<void>((_resolve, reject) => { saves.push({ reject }); }) });
+			expect(effort.sendsUltracode()).toBe(false);
+			act(() => slider.toggle());
+			act(() => { effort.choose("ultracode"); effort.commit(); });
+			expect(effort.sendsUltracode()).toBe(true);
+			await act(async () => saves[0].reject(new Error("no")));
+			expect(effort.sendsUltracode()).toBe(false);
+			// On, reported, then another level on its way: off until it fails.
+			act(() => { effort.choose("ultracode"); effort.commit(); });
+			update(claudeChat("xhigh"));
+			expect(effort.sendsUltracode()).toBe(true);
+			act(() => { effort.choose("max"); effort.commit(); });
+			expect(effort.sendsUltracode()).toBe(false);
+			await act(async () => saves[2].reject(new Error("no")));
+			expect(effort.sendsUltracode()).toBe(true);
+		});
+
 		it("saves Extra High, and is on once the conversation reports it", () => {
 			const onSettings = vi.fn(() => Promise.resolve());
 			const { update } = render({ models: claude, snapshot: claudeChat(), onSettings });
@@ -330,6 +351,27 @@ describe("chat effort", () => {
 		act(() => slider.toggle());
 		act(() => { effort.choose("high"); effort.commit(); });
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", fastMode: true, reasoningEffort: "high" });
+	});
+
+	// Picking the conversation's own level back while another is on its way
+	// must save it, or the level on its way lands over it.
+	it("saves the reported level again when it is picked back before another pick is reported", () => {
+		const { onSettings } = render();
+		act(() => slider.toggle());
+		act(() => { effort.choose("high"); effort.commit(); });
+		expect(onSettings).toHaveBeenCalledTimes(1);
+		act(() => { effort.choose("low"); effort.commit(); });
+		expect(onSettings).toHaveBeenCalledTimes(2);
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: undefined });
+	});
+
+	it("sends nothing more, and keeps the hold, when the level on its way is picked again", () => {
+		const { onSettings } = render();
+		act(() => slider.toggle());
+		act(() => { effort.choose("high"); effort.commit(); });
+		act(() => { effort.choose("high"); effort.commit(); });
+		expect(onSettings).toHaveBeenCalledTimes(1);
+		expect(shown()).toBe("high");
 	});
 
 	// A Fast flip's save replaces the whole set too: an effort pick saved and

@@ -428,7 +428,7 @@ function Composer({
 	// stays the field's and inserts a newline, rather than being caught and dropped.
 	const canSubmit = !submitting && !pending && !disabled && !(draftKey && !draftLoaded);
 	// Claude Code's Ultracode, picked on the effort slider: each message asks for it.
-	const ultracodeOn = useRef(false);
+	const ultracodeOn = useRef<() => boolean>(() => false);
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send", from: "button" | "keyboard" = "button") => {
 		if (!canSubmit) return;
 		const trimmed = responseReplyText(text, quotes);
@@ -459,7 +459,7 @@ function Composer({
 			const route = composerDeliveryRoute(intent, steerEligible);
 			// With Ultracode's prefix added, the draft as typed goes too: a retry's
 			// completion matches the composer against it, exactly.
-			const sentText = ultracodeOn.current ? withUltracode(trimmed) : trimmed;
+			const sentText = ultracodeOn.current() ? withUltracode(trimmed) : trimmed;
 			const typed: [] | [string] = sentText === trimmed ? [] : [trimmed];
 			const id = route === "steer"
 				? await onSteer(sentText, ...typed)
@@ -619,7 +619,8 @@ function Composer({
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	// Ultracode has no field on the daemon: it is kept per conversation here.
 	const effort = useChatEffort({ ...settingsProps, ultracodeKey: machine ? `ao.chat.ultracode.${machine}.${sessionId}` : null });
-	ultracodeOn.current = effort.ultracode;
+	// Read as the message goes: a pick saved and not yet reported counts.
+	ultracodeOn.current = effort.sendsUltracode;
 	const permissions = useChatPermissions(settingsProps);
 	// Fast mode is the effort slider's bolt where the slider shows, so the wheels leave it out.
 	const modelWheel = useChatModelWheel({ ...settingsProps, otherAgents, fastOnEffort: Boolean(effort.fast && effort.choices.length) });
