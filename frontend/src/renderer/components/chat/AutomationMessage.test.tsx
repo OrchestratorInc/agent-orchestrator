@@ -479,9 +479,9 @@ describe("drawing AO's automation messages", () => {
 		expect(event).not.toHaveTextContent("storage.googleapis.com");
 		expect(event).toHaveTextContent("Flow diagram");
 		expect(event).not.toHaveTextContent("example.com/flow.png");
-		// The only picture is the reviewer's avatar on the line.
+		// The only pictures are the reviewer's avatar, on the line and on the comment.
 		expect(event.querySelector("picture, source")).toBeNull();
-		expect([...event.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual(["https://github.com/illegalcall.png?size=40"]);
+		expect([...event.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual(Array(2).fill("https://github.com/illegalcall.png?size=40"));
 		const details = event.querySelector("details");
 		expect(details).not.toHaveAttribute("open");
 		expect(details?.querySelector("summary")).toHaveTextContent("Prompt for AI Agents");
