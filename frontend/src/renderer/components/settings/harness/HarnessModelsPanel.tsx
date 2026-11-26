@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Search } from "@/components/app-icons";
+import { ChevronLeft, ChevronRight, LoaderCircle, Search } from "@/components/app-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { setAgentEndpoint, useRefreshAfterEndpointChange, type AgentEndpointStatus } from "../../../hooks/useAgentEndpoint";
 import { agentModelsQueryOptions } from "../../../hooks/useAgentModelsQuery";
 import { useSettings, useUpdateHarnessDefault } from "../../../hooks/useSettings";
 import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
@@ -25,13 +26,16 @@ export const MULTI_PROVIDER_HARNESSES = new Set<string>([
 	"continue", "goose", "vibe", "cline", "autohand", "qwen", "fx",
 ]);
 
-/** The harness catalog, browsed by provider. */
-export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
+/** The harness catalog, browsed by provider. With a custom endpoint saved,
+ * the catalog is the endpoint's own model list, and any model in it can be
+ * made the default every session of the harness starts with. */
+export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount, customEndpoint }: {
 	agentId: AgentId;
 	hostId?: string;
 	installed: boolean;
 	needsLogin: boolean;
 	onOpenAccount: () => void;
+	customEndpoint?: AgentEndpointStatus;
 }) {
 	const { i18n, t } = useTranslation();
 	const options = agentModelsQueryOptions(agentId, "", hostId, true);
@@ -84,6 +88,24 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 				queuedSaves.current -= 1;
 				if (queuedSaves.current === 0) setDisabledDraft(undefined);
 			});
+	};
+	// The endpoint's default model is saved with the endpoint, so changing it
+	// reuses the saved URL and key; the daemon keeps the auth style that works.
+	const refreshEndpoint = useRefreshAfterEndpointChange(hostId);
+	const endpointDefaults = Boolean(customEndpoint?.configured && !customEndpoint.error && customEndpoint.supportsModel && customEndpoint.baseUrl);
+	const [defaultChange, setDefaultChange] = useState<{ scope: string; id?: string; error?: string }>();
+	const pendingDefault = defaultChange?.scope === scope ? defaultChange.id : undefined;
+	const defaultError = defaultChange?.scope === scope ? defaultChange.error : undefined;
+	const makeDefault = async (id: string) => {
+		if (!customEndpoint?.baseUrl || pendingDefault) return;
+		setDefaultChange({ scope, id });
+		try {
+			await setAgentEndpoint(agentId, { baseUrl: customEndpoint.baseUrl, model: id }, hostId);
+			await refreshEndpoint(agentId);
+			setDefaultChange(undefined);
+		} catch (cause) {
+			setDefaultChange({ scope, error: cause instanceof Error ? cause.message : t("settings.harness.models.makeDefaultFailed") });
+		}
 	};
 	const initialModel = allModels?.find((model) => model.isDefault);
 	const initialProviderID = initialModel ? initialModel.provider?.trim() ?? "" : undefined;
@@ -179,6 +201,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 			</span> : null}
 		</div>
 		{disabledModelsError ? <p role="alert" className="text-xs text-error">{disabledModelsError}</p> : null}
+		{defaultError ? <p role="alert" className="text-xs text-error">{defaultError}</p> : null}
 		{providerModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
 			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />
 			<input type="search" aria-label={t("settings.models.searchAria", { label: t("settings.harness.models.title").toLocaleLowerCase() })}
@@ -200,6 +223,14 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
 						</span> : null}
 					</span>
+					{endpointDefaults && !model.isDefault && isConcreteModelID(model.id) && idsOf(model.id).some(isModelEnabled) ? <Button type="button" size="xs" variant="ghost"
+						className="shrink-0"
+						aria-label={t("settings.harness.models.makeDefaultFor", { model: agentModelDisplayLabel(agentId, model.label) })}
+						disabled={Boolean(pendingDefault)}
+						onClick={() => void makeDefault(model.id)}>
+						{pendingDefault === model.id ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+						{t("settings.harness.models.makeDefault")}
+					</Button> : null}
 					{model.efforts?.length ? <span className="shrink-0 text-right text-xs text-settings-muted">
 						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
 					</span> : null}
