@@ -229,12 +229,54 @@ describe("effort slider", () => {
 	// Closed mid-drag (the keyboard, back), the level the finger was on is
 	// still chosen, before the host hears the close.
 	it("chooses the level under the finger when closed mid-drag", async () => {
-		const { drag, onChoose } = await render("low");
+		const { drag, onChoose, onRelease } = await render("low");
 		await act(async () => { drag.begin(20); drag.move(170); });
 		expect(onChoose).not.toHaveBeenCalled();
 		act(() => renderer!.unmount());
 		renderer = undefined;
 		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["xhigh"]);
+		// Released too, so the owner saves it: the host may hear no close.
+		expect(onRelease).toHaveBeenCalledOnce();
+	});
+
+	it("settles a drag once, whether it ends or the slider goes first", async () => {
+		const { drag, pan, onChoose, onRelease } = await render("low");
+		await act(async () => { drag.begin(20); drag.move(170); });
+		const finalize = pan().finalize;
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		finalize();
+		expect(onChoose).toHaveBeenCalledOnce();
+		expect(onRelease).toHaveBeenCalledOnce();
+	});
+
+	// The touch-down glide unfinished when the finger moves, then stops: the
+	// blob must keep gliding onto it, not stop where the move left it.
+	it("keeps gliding onto a finger that stops before the touch-down glide ends", async () => {
+		const { drag } = await render("low");
+		fixtures.midGlide = true;
+		await act(async () => drag.begin(170));
+		const glides = fixtures.glides.length;
+		await act(async () => drag.move(172));
+		expect(fixtures.glides.length).toBe(glides + 1);
+		expect(fixtures.glides.at(-1)).toBeGreaterThan(160);
+	});
+
+	// A model with fewer levels arriving mid-drag must not leave the release
+	// on a level that is gone.
+	it("lands the release on a real level when the levels shrink mid-drag", async () => {
+		const onChoose = vi.fn();
+		await act(async () => { renderer = create(<EffortSlider choices={levels("low")} onChoose={onChoose} />); });
+		const root = renderer!.root;
+		const trackView = () => root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider-track")[0];
+		await act(async () => trackView().props.onLayout({ nativeEvent: { layout: { width: 240 } } }));
+		const pan = () => (root.findAll((node) => hostType(node) === "GestureDetector")[0].props.gesture as { handlers: Record<string, (event?: { x: number }) => unknown> }).handlers;
+		await act(async () => { pan().begin({ x: 20 }); pan().update({ x: 170 }); });
+		const finalize = pan().finalize;
+		const two = [{ value: "low", label: "Low", selected: true }, { value: "high", label: "High", selected: false }];
+		await act(async () => renderer!.update(<EffortSlider choices={two} onChoose={onChoose} />));
+		await act(async () => { finalize(); });
+		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["high"]);
 	});
 
 	it("glides onto the level when let go, and says the level is settled", async () => {

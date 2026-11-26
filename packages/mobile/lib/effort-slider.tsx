@@ -43,9 +43,10 @@ const SCREEN_GUTTER = 28;
 // The blob is white in both themes, as a system switch's thumb is.
 const BLOB_FILL = "#ffffff";
 const BLOB_SHADOW = "#000000";
-// The share of the gap to the finger a move closes while the blob is still
-// gliding from touch down.
-const CATCH_UP = 0.45;
+// While the blob is still gliding from touch down, each move retargets a glide
+// this long at the finger: about half the gap closes in a frame, and the glide
+// still lands on a finger that stops.
+const CATCH_MS = 60;
 
 /** The slider floating over the chat above the composer (see ComposerOverlay). */
 export function EffortSliderOverlay({ bottom, overKeyboard, onDismiss, visible = true, ...props }: EffortSliderProps & { bottom?: DimensionValue; overKeyboard?: boolean; onDismiss?: () => void; visible?: boolean; fast?: FastToggle }) {
@@ -96,6 +97,12 @@ export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSlide
 	useEffect(() => {
 		trackW.value = laidOut;
 		step.value = stepFor(laidOut);
+		// Fewer levels than before (a model change, even mid-drag): the stop
+		// held and the one shown are brought onto the last there is, so the
+		// release lands on a real level and chooses one.
+		const last = Math.max(count - 1, 0);
+		if (held.value > last) held.value = last;
+		if (shown.current > last) shown.current = last;
 		if (!dragging.value) blobX.value = END + shown.current * step.value;
 	}, [laidOut, count]); // eslint-disable-line react-hooks/exhaustive-deps
 	// A level from outside (a model change, a save that failed) moves the blob;
@@ -112,17 +119,26 @@ export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSlide
 		shown.current = stop;
 		show(stop);
 	};
+	// Settles a drag once: on release, or on unmount mid-drag, whichever
+	// comes first. A release the UI thread sends after the slider is gone
+	// finds it settled and does nothing.
+	const gone = useRef(false);
 	const onEnd = (stop: number) => {
+		if (gone.current) return;
 		midDrag.current = false;
 		shown.current = stop;
 		choose(stop);
 		onRelease?.();
 	};
-	// Closed mid-drag (the keyboard, back): the level the finger was on is
-	// still chosen, before the host hears the close.
-	const latestChoose = useRef(choose);
-	latestChoose.current = choose;
-	useEffect(() => () => { if (midDrag.current) latestChoose.current(shown.current); }, []);
+	// Closed mid-drag (the keyboard, back, a request card taking the host): the
+	// level the finger was on is still chosen and released, so the owner saves
+	// it whether or not it also hears the close.
+	const settleOnUnmount = useRef(() => {});
+	settleOnUnmount.current = () => { if (midDrag.current) onEnd(shown.current); };
+	useEffect(() => {
+		gone.current = false;
+		return () => { settleOnUnmount.current(); gone.current = true; };
+	}, []);
 
 	// The worklets call JS through these, so they always reach the latest
 	// render's callbacks without rebuilding the gesture.
@@ -161,12 +177,12 @@ export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSlide
 			.onUpdate((event) => {
 				"worklet";
 				const { stop, pulled } = target(event.x);
-				// Still gliding from touch down: close a share of the gap each move
-				// (an eased timing restarted every frame starts slow each time, and
-				// left the blob trailing the finger), then hold the finger.
-				const next = catching.value ? blobX.value + (pulled - blobX.value) * CATCH_UP : pulled;
-				if (Math.abs(pulled - next) < 1) catching.value = false;
-				blobX.value = catching.value ? next : pulled;
+				// Still gliding from touch down: retarget a short glide at the
+				// finger, then hold the finger once caught. Setting a partial
+				// position instead cancelled the glide, and the blob stopped short
+				// of a finger that stopped moving.
+				if (catching.value && Math.abs(pulled - blobX.value) < 1) catching.value = false;
+				blobX.value = catching.value ? withTiming(pulled, { duration: CATCH_MS, easing: Easing.out(Easing.quad) }) : pulled;
 				level(stop);
 			})
 			.onFinalize(() => {
