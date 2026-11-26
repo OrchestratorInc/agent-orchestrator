@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, Bell, BellRing, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, Cloud, History, GitPullRequest, Info, ListChecks, FileText, Filter, Pencil, Play, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
+import { ArrowDownUp, Bell, BellRing, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, Cloud, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Play, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -187,9 +187,9 @@ export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
 	const workspaces = useWorkspaceQuery().data ?? [];
-	// A cloud run's session ends when the run settles (ao-control-plane#122);
-	// one deleted mid-run reads terminated before its run settles.
-	const endedSessionIds = useMemo(() => new Set(workspaces.flatMap((workspace) => (workspace.sessions ?? []).filter((session) => session.isTerminated).map((session) => session.id))), [workspaces]);
+	// Whether each listed session has ended: a cloud run's session may outlive
+	// its run (an automation that keeps it) or end before it (deleted mid-run).
+	const sessionTerminated = useMemo(() => new Map(workspaces.flatMap((workspace) => (workspace.sessions ?? []).map((session) => [session.id, Boolean(session.isTerminated)] as const))), [workspaces]);
 	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
@@ -335,7 +335,7 @@ export function AutomationsView() {
 							{visibleAutomations.length > 0 ? (
 								<div className="divide-y divide-border">
 									{visibleAutomations.map((entry) => entry.cloud ? (
-										<CloudAutomationRow key={entry.key} item={entry.cloud} userId={cloud.userId} endedSessionIds={endedSessionIds} projectName={projectName(entry.projectId)} busy={updateCloud.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setCloudEditTarget(entry.cloud ?? null)} onDelete={() => setDeleteTarget(entry)} onError={setActionError} onToggle={(enabled) => updateCloud.mutateAsync({ id: entry.cloud!.id, body: { enabled } })} />
+										<CloudAutomationRow key={entry.key} item={entry.cloud} userId={cloud.userId} sessionTerminated={sessionTerminated} projectName={projectName(entry.projectId)} busy={updateCloud.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setCloudEditTarget(entry.cloud ?? null)} onDelete={() => setDeleteTarget(entry)} onError={setActionError} onToggle={(enabled) => updateCloud.mutateAsync({ id: entry.cloud!.id, body: { enabled } })} />
 									) : entry.local ? (
 										<AutomationRow key={entry.key} item={entry.local} projectName={projectName(entry.projectId)} busy={update.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setEditTarget(entry.local ?? null)} onDelete={() => setDeleteTarget(entry)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: entry.local!.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
 									) : null)}
@@ -355,7 +355,7 @@ export function AutomationsView() {
 				</ScrollArea.Scrollbar>
 			</main>
 			</ScrollArea.Root>
-			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t)} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async (input) => {
+			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t, { harness: createCloud.variables?.harness })} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async (input) => {
 				if (input.runsOn === "cloud") {
 					// A cloud run is unattended: trusted mode, the default time limit.
 					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName!, prompt: input.prompt!, harness: input.harness!, timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: input.deleteSessionOnComplete ?? false, enabled: true });
@@ -366,7 +366,7 @@ export function AutomationsView() {
 				setCreateOpen(false);
 			}} />
 			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget || input.runsOn !== "local") return; const { runsOn: _runsOn, ...body } = input; await update.mutateAsync({ id: editTarget.id, body }); setEditTarget(null); }} />
-			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudUserId={cloud.userId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t)} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
+			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudUserId={cloud.userId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t, { harness: updateCloud.variables?.body.harness ?? cloudEditTarget?.harness })} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
 				if (!cloudEditTarget || input.runsOn !== "cloud") return;
 				// Only what changed: any change makes the automation run as the editor, so
 				// an unchanged save must not rebind it.
@@ -500,7 +500,7 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
  * An automation that runs in AO Cloud: the whole organization sees it and may
  * run it now; only the person it runs as, its creator and admins change it.
  */
-function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; userId?: string; endedSessionIds: ReadonlySet<string>; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<unknown>; onError: (message: string | null) => void }) {
+function CloudAutomationRow({ item, userId, sessionTerminated, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; userId?: string; sessionTerminated: ReadonlyMap<string, boolean>; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<unknown>; onError: (message: string | null) => void }) {
 	const runs = useCloudAutomationRuns(expanded ? item.id : null);
 	const runNow = useRunCloudAutomationNow();
 	const subscribe = useSubscribeCloudAutomation();
@@ -522,10 +522,11 @@ function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, 
 	const notOnSchedule = item.disabledReason || t("automations.paused");
 	async function act(action: () => Promise<unknown>) {
 		onError(null);
-		try { await action(); } catch (error) { onError(cloudAutomationErrorMessage(error, t)); }
+		try { await action(); } catch (error) { onError(cloudAutomationErrorMessage(error, t, { harness: item.harness })); }
 	}
-	// Turning it on makes it run as whoever turned it on (ao-control-plane#122),
-	// so an editor who is not its run-as person is told before and after.
+	// Turning it on makes it run as whoever turned it on (the contract's
+	// updateAutomation), so an editor who is not its run-as person is told
+	// before and after.
 	const turnOnRebinds = !item.enabled && item.canEdit && Boolean(userId) && item.runAs.userId !== userId;
 	async function toggle(enabled: boolean) {
 		onError(null);
@@ -534,7 +535,7 @@ function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, 
 		} catch (error) {
 			onError(enabled && turnOnRebinds && error instanceof CloudCpError && error.code === "agent_provider_required"
 				? t("automations.cloud.error.turnOnNeedsLogin", { agent: agentLabel(item.harness) })
-				: cloudAutomationErrorMessage(error, t) ?? t("automations.updateError"));
+				: cloudAutomationErrorMessage(error, t, { harness: item.harness }) ?? t("automations.updateError"));
 		}
 	}
 	const toggleSwitch = <Switch checked={item.enabled} disabled={busy || !item.canEdit} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void toggle(checked)} />;
@@ -616,8 +617,11 @@ function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, 
 					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{cloudAutomationErrorMessage(runs.error, t)}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => {
 						const runError = cloudRunErrorMessage(run, t);
 						const sessionId = run.sessionId;
-						// A settled run's session has ended: still readable (and restorable), never live.
-						const sessionEnded = Boolean(sessionId) && (!isCloudRunInFlight(run) || endedSessionIds.has(sessionId!));
+						// An ended session is still readable (and restorable), never live. The
+						// session list says which have ended; one it does not carry ended with
+						// its settled run only when the automation deletes its runs' sessions.
+						// Otherwise the session stays, paused, and the next run continues in it.
+						const sessionEnded = Boolean(sessionId) && (sessionTerminated.get(sessionId!) ?? (!isCloudRunInFlight(run) && item.deleteSessionOnComplete));
 						return <div key={run.id} data-testid="automation-run" data-session={sessionId} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium">{t(`automations.runStatus.${run.status}`, { defaultValue: run.status })}</span><span className="ml-3 text-caption tabular-nums text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.trigger === "manual" ? <span className="ml-3 text-caption text-muted-foreground">{t("automations.cloud.manual")}</span> : null}{sessionEnded ? <span className="ml-3 text-caption text-muted-foreground">{t("automations.cloud.sessionEnded")}</span> : null}{runError ? <p className="mt-1 text-xs text-destructive">{runError}</p> : null}</div>{sessionId ? <Button variant="secondary" size="sm" onClick={() => void navigate(sessionNavigateTarget(item.projectId, sessionId))}>{t(sessionEnded ? "automations.cloud.viewSession" : "automations.runs.openSession")}</Button> : null}</div>;
 					})}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
 				</div>
@@ -905,7 +909,7 @@ function AutomationFormDialog({
 					...(!cloudAutomation || prompt !== cloudAutomation.prompt ? { prompt } : {}),
 					...(!cloudAutomation || cloudHarness !== cloudAutomation.harness ? { harness: cloudHarness } : {}),
 					...(scheduleChanged ? { rrule: nextRRule } : {}),
-					...(!cloudAutomation || deleteSessionOnComplete !== cloudAutomation.deleteSessionOnComplete ? { deleteSessionOnComplete } : {}),
+					...(!cloudAutomation || deleteSessionOnComplete !== (cloudAutomation.deleteSessionOnComplete ?? false) ? { deleteSessionOnComplete } : {}),
 				});
 				if (funnel) void captureRendererEvent("ao.renderer.automation_create_succeeded", funnel);
 				return;
@@ -1155,19 +1159,14 @@ function AutomationFormDialog({
 						) : null}
 						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
 						{isCloud ? (
-							<div className="flex items-center justify-between gap-3">
-								<span className="flex min-w-0 items-center gap-1">
+							// What the switch does is visible help it is described by, as a Settings
+							// row's description: a tooltip only names a control (DESIGN.md).
+							<div className="flex flex-col gap-1">
+								<div className="flex items-center justify-between gap-3">
 									<label htmlFor={DELETE_SESSION_FIELD_ID} className={onboardingFormLabelClass}>{t("automations.cloud.deleteSession")}</label>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<Button type="button" size="icon-xs" variant="quiet" aria-label={t("automations.cloud.deleteSession.info")}>
-												<Info className="size-icon-sm" aria-hidden="true" />
-											</Button>
-										</TooltipTrigger>
-										<TooltipContent className="max-w-sm">{t("automations.cloud.deleteSession.help")}</TooltipContent>
-									</Tooltip>
-								</span>
-								<Switch id={DELETE_SESSION_FIELD_ID} checked={deleteSessionOnComplete} disabled={busy} onCheckedChange={setDeleteSessionOnComplete} />
+									<Switch id={DELETE_SESSION_FIELD_ID} checked={deleteSessionOnComplete} disabled={busy} aria-describedby={`${DELETE_SESSION_FIELD_ID}-help`} onCheckedChange={setDeleteSessionOnComplete} />
+								</div>
+								<p id={`${DELETE_SESSION_FIELD_ID}-help`} className={onboardingFieldHintClass}>{t("automations.cloud.deleteSession.help")}</p>
 							</div>
 						) : null}
 						{rebindsToEditor && cloudHarness ? <p className={onboardingFieldHintClass}>{t("automations.cloud.rebindNotice", { agent: agentLabel(cloudHarness) })}</p> : null}

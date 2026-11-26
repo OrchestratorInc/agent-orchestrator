@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "../lib/cloud-cp";
-import { cloudAutomationActiveRun, cloudAutomationErrorMessage, cloudAutomationPollInterval, cloudRunsPollInterval, useCloudAutomations, useRunCloudAutomationNow, type CloudAutomation, type CloudAutomationRun } from "./useCloudAutomations";
+import { cloudAutomationActiveRun, cloudAutomationErrorMessage, cloudAutomationPollInterval, cloudRunErrorMessage, cloudRunsPollInterval, useCloudAutomations, useRunCloudAutomationNow, type CloudAutomation, type CloudAutomationRun } from "./useCloudAutomations";
 
 const mocks = vi.hoisted(() => ({
 	client: {
@@ -59,6 +59,25 @@ describe("cloudAutomationErrorMessage", () => {
 		expect(cloudAutomationErrorMessage(refusal("WORKER_SLOTS_FULL"), t)).toBe("automations.cloud.error.PLAN_LIMIT");
 		expect(cloudAutomationErrorMessage(refusal("WEEKLY_LIMIT_REACHED"), t)).toBe("automations.cloud.error.PLAN_LIMIT");
 		expect(cloudAutomationErrorMessage(refusal("SOMETHING_NEW"), t)).toBe("server says SOMETHING_NEW");
+	});
+	it("names the agent a missing login is for when the request's harness is known", () => {
+		const withArgs = ((key: string, options?: Record<string, unknown>) => options ? `${key} ${JSON.stringify(options)}` : key) as unknown as Parameters<typeof cloudAutomationErrorMessage>[1];
+		expect(cloudAutomationErrorMessage(refusal("agent_provider_required"), withArgs, { harness: "codex" })).toBe('automations.cloud.error.agentLoginRequired {"agent":"Codex"}');
+		expect(cloudAutomationErrorMessage(refusal("agent_provider_required"), withArgs)).toBe("automations.cloud.error.agent_provider_required");
+		// Another refusal reads the same with or without the harness.
+		expect(cloudAutomationErrorMessage(refusal("PLAN_REQUIRED"), withArgs, { harness: "codex" })).toBe("automations.cloud.error.PLAN_REQUIRED");
+	});
+});
+
+// A run's error code reads in the person's language for every code the
+// contract names (AutomationRun.errorCode); an unknown one keeps the server's words.
+describe("cloudRunErrorMessage", () => {
+	const t = ((key: string) => key) as unknown as Parameters<typeof cloudRunErrorMessage>[1];
+	it.each(["STOPPED", "forbidden", "PLAN_REQUIRED", "SESSION_ENDED", "agent_provider_required"])("names %s", (errorCode) => {
+		expect(cloudRunErrorMessage({ errorCode, errorMessage: "server words" }, t)).toBe(`automations.cloud.runError.${errorCode}`);
+	});
+	it("keeps the server's words for a code it does not know", () => {
+		expect(cloudRunErrorMessage({ errorCode: "SOMETHING_NEW", errorMessage: "server words" }, t)).toBe("server words");
 	});
 });
 

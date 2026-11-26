@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { CloudCpError, type CloudCpAutomation, type CloudCpAutomationRun, type CloudCpClient, type CloudCpCreateAutomationRequest, type CloudCpUpdateAutomationRequest } from "../lib/cloud-cp";
+import { agentLabel } from "../lib/agent-options";
 import { AUTOMATIONS_FEATURE } from "../lib/cloud-offering";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudMeUserId } from "./useCloudMeUserId";
@@ -244,9 +245,16 @@ const ERROR_CODES = [
 	"PLAN_REQUIRED",
 ] as const;
 
-/** A control-plane refusal as the person reads it; the server's own message for anything else. */
-export function cloudAutomationErrorMessage(error: unknown, t: TFunction): string | null {
+/**
+ * A control-plane refusal as the person reads it; the server's own message for
+ * anything else. harness is the agent the refused request runs with: a missing
+ * login then names the agent to log in to, as the control plane's message does.
+ */
+export function cloudAutomationErrorMessage(error: unknown, t: TFunction, { harness }: { harness?: string } = {}): string | null {
 	if (!error) return null;
+	if (error instanceof CloudCpError && error.code === "agent_provider_required" && harness) {
+		return t("automations.cloud.error.agentLoginRequired", { agent: agentLabel(harness) });
+	}
 	if (error instanceof CloudCpError && error.code && (ERROR_CODES as readonly string[]).includes(error.code)) {
 		return t(`automations.cloud.error.${error.code as (typeof ERROR_CODES)[number]}`);
 	}
@@ -262,7 +270,10 @@ const RUN_ERROR_CODES = [
 	"AGENT_FAILED",
 	"SESSION_ENDED",
 	"START_FAILED",
+	"STOPPED",
 	"agent_provider_required",
+	"forbidden",
+	"PLAN_REQUIRED",
 ] as const;
 
 /** The plan refusals a run is skipped with (the contract's AutomationRunStatus): one message for all. */
