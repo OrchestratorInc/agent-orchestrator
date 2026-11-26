@@ -428,6 +428,10 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	var setupErr *SetupStepError
 	if errors.As(cause, &setupErr) {
 		message = setupErr.Error()
+	} else if guidance, _, _, ok := ProjectNotARepoGuidance(cause); ok {
+		// A project folder that lost its .git: show how to recover, not
+		// git's raw exit 128 (#8905).
+		message = guidance
 	}
 	if _, err := m.setProvisionStateCause(cleanupCtx, id, domain.SessionProvisionFailed, message, cause); err != nil {
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)

@@ -95,6 +95,7 @@ export const aoBridge: AoBridge =
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
+			setInterfaceV2: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -384,6 +385,8 @@ export const aoBridge: AoBridge =
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
+			onProfileSwitchConfirm: () => () => undefined,
+			onProfileSwitchFailed: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,

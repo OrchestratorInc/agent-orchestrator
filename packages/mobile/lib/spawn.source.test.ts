@@ -51,7 +51,7 @@ describe("spawn composer", () => {
 	// field rather than a row of chips stacked above it.
 	it("draws attachments inside the composer pill, over the field", () => {
 		expect(spawn).toContain("<ComposerAttachmentTray");
-		const pill = composer.slice(composer.indexOf("<View style={styles.composer}>"));
+		const pill = composer.slice(composer.indexOf("<View style={styles.composer}"));
 		expect(pill.indexOf("{attachments}")).toBeGreaterThan(0);
 		expect(pill.indexOf("{attachments}")).toBeLessThan(pill.indexOf("<TextInput"));
 		for (const controls of platformControls) {
@@ -285,6 +285,8 @@ describe("spawn draft", () => {
 			for (const [, name, value] of handlers) {
 				// Opens the model sheet; the pick it answers with is wrapped below.
 				if (name === "onBrowseModels") continue;
+				// Reads the "/" list; a skill picked from it lands through onChangePrompt.
+				if (name === "onLoadSkills") continue;
 				expect(value, name).toMatch(/^(busy \? null : )?edited\(/);
 			}
 			expect(spawn).toContain("onSelect: edited((id: string) => selectAgentModel(agentId, id || \"__auto__\")),");

@@ -122,6 +122,7 @@ export function toWorkspaceSession(
 		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
+		roleAgent: session.roleAgent ? toAgentProvider(session.roleAgent) : undefined,
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		reviewerConfig: session.reviewerConfig
 			? {
@@ -231,6 +232,7 @@ function toLocalWorkspaceSession(
 		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
+		roleAgent: session.roleAgent ? toAgentProvider(session.roleAgent) : undefined,
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		reviewerConfig: session.reviewerConfig
 			? {

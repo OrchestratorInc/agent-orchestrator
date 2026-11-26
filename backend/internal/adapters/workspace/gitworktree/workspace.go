@@ -2250,7 +2250,9 @@ func (w *Workspace) isDirty(ctx context.Context, path string) (bool, error) {
 func (w *Workspace) listRecords(ctx context.Context, repo string) ([]worktreeRecord, error) {
 	out, err := w.run(ctx, w.binary, worktreeListPorcelainArgs(repo)...)
 	if err != nil {
-		return nil, fmt.Errorf("gitworktree: worktree list: %w", err)
+		// repo is always a registered project repository, so a missing .git
+		// here is the project's, not a session worktree's (#8905).
+		return nil, fmt.Errorf("gitworktree: worktree list: %w", notARepoAt(repo, err))
 	}
 	records, err := parseWorktreePorcelain(string(out))
 	if err != nil {

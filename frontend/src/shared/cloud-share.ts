@@ -247,6 +247,11 @@ export interface CloudSharePageFiles {
 	skipped: number;
 	/** How many of skipped are video the control plane does not publish yet. */
 	videos: number;
+	/**
+	 * How many of skipped are on a remote host too old to include them:
+	 * updating Orchestrator there includes them.
+	 */
+	hostOutdated?: number;
 	/** The control plane predates included files: the page was published alone. */
 	unsupported: boolean;
 }
