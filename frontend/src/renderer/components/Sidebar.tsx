@@ -35,6 +35,7 @@ import {
 	Pin,
 	PinOff,
 	Plus,
+	QuestionMark,
 	Search,
 	Settings,
 	Smartphone,
@@ -80,6 +81,7 @@ import {
 	type SessionRowMarker,
 } from "../lib/session-presentation";
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
+import { prefetchEditorHandoffState } from "../hooks/useEditorHandoff";
 import { dropdownMenuKit, MenuEntries, MenuKitContext, type MenuEntry } from "./menu-model";
 import { isArchivedSession } from "../lib/standalone-archive";
 import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -151,6 +153,7 @@ import { AwakeMenuItem, awakeNeedsAttention, useFooterStayAwake } from "./AwakeC
 import { FOOTER_RAIL_BUTTON_CLASS, SidebarUpdateRail, SidebarUpdateRow } from "./SidebarUpdate";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
+import { newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
@@ -219,6 +222,10 @@ const FOOTER_ICON_BUTTON_CLASS = cn(
 // a 10px inset, 8px icon gap, and 14px icons so edges match the section headers
 // and session rows.
 const SIDEBAR_ROW_CLASS = "h-8 gap-2 [&_svg]:size-icon-md";
+
+/** A project tree row's pill starts after the rail's arm; this keeps the
+ *  indent left of the pill pressable, so the row's hit target never shrinks. */
+const TREE_ROW_HIT_CLASS = "before:absolute before:inset-y-0 before:right-full before:w-(--tree-indent) before:content-['']";
 
 // Search + Sessions/Projects section chrome: same type, icon, and row size.
 const SECTION_ROW_CLASS =
@@ -601,23 +608,32 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// Rows showing the red alert sit above the rest, but only in the default
-// order: once the user has dragged rows into their own order, it wins. Stable,
-// so the order still holds within each group.
+// A marker that asks the user to act now: the agent's question, or the red alert.
+function isUrgentMarker(marker: ReturnType<typeof getSessionRowIndicator>): boolean {
+	return marker === "input" || marker === "attention";
+}
+
+// Rows with a question or the red alert sit above the rest, but only in the
+// default order: once the user has dragged rows into their own order, it wins.
+// Stable, so the order still holds within each group.
 function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
 	if (hasManualOrder) return sessions;
-	const flagged = sessions.filter((session) => getSessionRowIndicator(session) === "attention");
+	const flagged = sessions.filter((session) => isUrgentMarker(getSessionRowIndicator(session)));
 	if (flagged.length === 0 || flagged.length === sessions.length) return sessions;
 	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
 }
 
 // The icons a row or a collapsed project can show, plus the working
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
-// Each state has its own glyph, so colour is never the only difference: a red
-// alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge. A row's blue spinner (working) and its dot are
-// drawn by SessionActivityGlyph.
+// Each state has its own glyph, so colour is never the only difference: an
+// amber question mark is the agent asking you something, a red alert is
+// something to fix (CI, conflicts, changes requested), an amber alert (the
+// same amber, a different shape) is a person's review next, a green pull
+// request is ready to merge. A question is not an error, so it never takes the
+// red. A row's blue spinner (working) and its dot are drawn by
+// SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
+	input: { Icon: QuestionMark, tone: "text-status-in-review" },
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
 	review: { Icon: CircleAlert, tone: "text-status-in-review" },
@@ -752,9 +768,13 @@ export const Sidebar = memo(function Sidebar({
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
+	// Interface v2 collapses to a rail of the nav buttons; the lists fade away.
+	// Interface v2 needs Developer mode too; the saved switch alone is not enough.
+	const newDesktopUi = useUiStore(newDesktopUiEnabled);
+	const collapsible = newDesktopUi ? "rail" : SIDEBAR_COLLAPSIBLE;
 	// List behavior (force-open sections, lifted Show more caps) belongs to the
 	// icon rail only; toggling an offcanvas sidebar must not change any list.
-	const isIconRail = isCollapsed && SIDEBAR_COLLAPSIBLE === "icon";
+	const isIconRail = isCollapsed && collapsible === "icon";
 	useTelemetrySurface("sidebar", !isCollapsed || isIconRail);
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
 	// One IPC subscription for both footer variants of the restart-to-update prompt.
@@ -1088,7 +1108,7 @@ export const Sidebar = memo(function Sidebar({
 	return (
 		// Pinned sidebars start below shell chrome.
 		<SidebarRoot
-			collapsible={SIDEBAR_COLLAPSIBLE}
+			collapsible={collapsible}
 			resizeScopeRef={resizeScopeRef}
 			data-telemetry-surface="sidebar"
 			data-expanded-chrome={expandedChromeVisible ? "visible" : "hidden"}
@@ -1159,7 +1179,7 @@ export const Sidebar = memo(function Sidebar({
 			) : (
 			<>
 			{/* Keep Search + section chrome fixed above the scrollable sidebar content. */}
-			<div className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
+			<div data-sidebar-topnav="" className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
 				{commandPaletteEnabled ? (
 					<SidebarGroup className="p-0 pb-0.5 group-data-[collapsible=icon]:pb-1">
 						<SidebarGroupContent>
@@ -1201,7 +1221,12 @@ export const Sidebar = memo(function Sidebar({
 				</SidebarMenu>
 			</div>
 
-			<SidebarContent className="scrollbar-none gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
+			<SidebarContent
+				aria-hidden={(isCollapsed && collapsible === "rail") || undefined}
+				inert={isCollapsed && collapsible === "rail"}
+				data-sidebar-sections=""
+				className="scrollbar-none gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5"
+			>
 				<SidebarGroup className="min-h-0 flex-1 p-0">
 					{/* Tree (project-sidebar__tree) */}
 					<SidebarGroupContent
@@ -1360,6 +1385,7 @@ export const Sidebar = memo(function Sidebar({
 					// before the slide finishes. aria-hidden and tabIndex -1 already keep it
 					// out of reach while collapsed.
 					hidden={isIconRail}
+					data-sidebar-footer-expanded=""
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col"
 				>
 					<div className={FOOTER_UPDATES_CLASS}>
@@ -1400,6 +1426,7 @@ export const Sidebar = memo(function Sidebar({
 				{!settingsPage ? (
 					<div
 						aria-hidden={!isCollapsed || undefined}
+						data-sidebar-rail-footer=""
 						className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
 					>
 						<SidebarUpdateRail
@@ -1444,6 +1471,33 @@ export const Sidebar = memo(function Sidebar({
 								</Pressable>
 							</TooltipTrigger>
 							<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
+						</Tooltip>
+					</div>
+				) : collapsible === "rail" ? (
+					// Settings in the rail: the expanded Back row fades with the labels,
+					// so the rail keeps a Back icon in the same bottom slot.
+					<div
+						aria-hidden={!isCollapsed || undefined}
+						data-sidebar-rail-footer=""
+						className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex flex-col items-center justify-end opacity-0 transition-opacity duration-150 ease-out"
+					>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									aria-label={t("settings.back")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									disabled={settingsPage.cueBusy}
+									onClick={settingsPage.close}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<ArrowLeft aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="right">{t("settings.back")}</TooltipContent>
 						</Tooltip>
 					</div>
 				) : null}
@@ -1561,6 +1615,8 @@ const ProjectItem = memo(function ProjectItem({
 	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
 	const projectActive = dashboardActive || orchestratorActive || (activeProjectMatches && isProjectProvisioning);
 	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(projectKey));
+	// The session tree rail is part of Interface v2; off, the list keeps its indent.
+	const tree = useUiStore(newDesktopUiEnabled);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const projectIsDragging = isDragged;
@@ -1579,7 +1635,7 @@ const ProjectItem = memo(function ProjectItem({
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
 	// What a collapsed project signals, strongest first: a session waiting on the
-	// user (the alert replaces the icon), then one whose agent is working, then a
+	// user (the question mark replaces the icon), then one whose agent is working, then a
 	// finished turn the user has not opened (both a corner dot on the icon, like
 	// the orchestrator button's).
 	const readAt = useSessionReadStore((state) => state.readAt);
@@ -1595,7 +1651,7 @@ const ProjectItem = memo(function ProjectItem({
 		if (Number.isFinite(updated)) markRead(sessionReadKey(viewedSession), updated);
 	}, [markRead, viewedSession]);
 	const projectActivity = useMemo(() => {
-		if (projectNeedsInput) return "attention" as const;
+		if (projectNeedsInput) return "input" as const;
 		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
 		if (indicators.includes("working")) return "working" as const;
 		const read = { readAt, baseline: readBaseline };
@@ -1842,6 +1898,7 @@ const ProjectItem = memo(function ProjectItem({
 					label: t("shell.newTask"),
 					disabled: isProjectRestarting,
 					onSelect: () => requestNewTask(workspace.id, workspace.hostId),
+					accelerator: "n",
 				}]
 				: []),
 			...(!isStandalone && !isAgent && (!workspace.shared || orchestrator)
@@ -1852,6 +1909,7 @@ const ProjectItem = memo(function ProjectItem({
 					label: orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower"),
 					disabled: isSpawning || isProjectProvisioning || isProjectRestarting,
 					onSelect: () => void openOrchestrator(),
+					accelerator: "o",
 				}]
 				: []),
 			...(!isStandalone && !isAgent
@@ -1861,6 +1919,7 @@ const ProjectItem = memo(function ProjectItem({
 					icon: <LayoutGrid aria-hidden="true" />,
 					label: t("shell.openDashboard"),
 					onSelect: () => selection.goProject(workspace.id),
+					accelerator: "d",
 				}]
 				: []),
 			...(archivedCount > 0
@@ -1883,6 +1942,7 @@ const ProjectItem = memo(function ProjectItem({
 					icon: <Copy aria-hidden="true" />,
 					label: t("editor.copyPath"),
 					onSelect: () => copyToClipboard(workspace.path),
+					accelerator: "c",
 				}]
 				: []),
 			{ kind: "separator", id: "project-sep" },
@@ -1893,6 +1953,7 @@ const ProjectItem = memo(function ProjectItem({
 					icon: isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />,
 					label: isPinned ? t("shell.unpinProject") : t("shell.pinProject"),
 					onSelect: () => setProjectPinned(workspace.id, !isPinned),
+					accelerator: "p",
 				}]
 				: []),
 			...(!isStandalone && !isAgent
@@ -1903,6 +1964,7 @@ const ProjectItem = memo(function ProjectItem({
 						icon: <Settings aria-hidden="true" />,
 						label: t("shell.projectSettings"),
 						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
+						accelerator: "s",
 					},
 					// A project shared from another organization is its organization's to delete.
 					...(workspace.shared ? [] : [{
@@ -1997,8 +2059,8 @@ const ProjectItem = memo(function ProjectItem({
 											className="relative inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
-											{!expanded && projectActivity === "attention" ? (
-												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
+											{!expanded && projectActivity === "input" ? (
+												<SessionMarkerIcon data-project-marker="input" marker="input" />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
 											{!expanded && (projectActivity === "working" || projectActivity === "unread") ? (
 												<ReplyBadge data-project-marker={projectActivity} reply={projectActivity} surface="sidebar" />
@@ -2017,8 +2079,8 @@ const ProjectItem = memo(function ProjectItem({
 											<ChevronRight />
 										</span>
 									</span>
-									{/* Collapsed icon rail: the project icon, with a red badge when a session
-									    waits on the user. The session list is hidden here, so the badge
+									{/* Collapsed icon rail: the project icon, with an amber badge when a
+									    session waits on the user. The session list is hidden here, so the badge
 									    shows whether or not the project is expanded. */}
 									<span
 										aria-hidden="true"
@@ -2027,8 +2089,8 @@ const ProjectItem = memo(function ProjectItem({
 										<ProjectIcon avatarUrl={avatarUrl} className="size-5" expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />
 										{projectNeedsInput ? (
 											<span
-												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-destructive ring-2 ring-sidebar"
-												data-project-marker="attention"
+												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-status-in-review ring-2 ring-sidebar"
+												data-project-marker="input"
 											/>
 										) : null}
 									</span>
@@ -2132,6 +2194,7 @@ const ProjectItem = memo(function ProjectItem({
 													<Button
 														size="icon-xs"
 														variant="quiet"
+														data-telemetry-id="sidebar.project_orchestrator"
 														aria-current={orchestratorActive ? "page" : undefined}
 														aria-label={orchestratorReplyLabel(
 															orchestrator
@@ -2198,32 +2261,40 @@ const ProjectItem = memo(function ProjectItem({
 						</div>
 						{/* end outer relative */}
 					</div>
-					{/* project-sidebar__sessions: indented under the project parent so worker
-					    sessions read as children without adding a persistent guide rail. The
+					{/* project-sidebar__sessions: indented under the project parent. Under
+					    Interface v2 it is a tree: a muted spine drops from the project icon
+					    and branches into each row (see .sidebar-tree in styles.css). The
 					    list opens, closes and gains its first session at full height in one
 					    frame, so the projects below never slide. */}
 					{expanded && sessions.length > 0 && (
-						<div ref={projectSessionsRef} className="sidebar-expanded-chrome overflow-hidden">
+						<div
+							ref={projectSessionsRef}
+							className={cn(tree && "sidebar-tree", "sidebar-expanded-chrome overflow-hidden")}
+							data-tree-more={tree && hiddenSessionCount > 0 ? "" : undefined}
+						>
 							<SessionReorderList
 								dndId={sessionDndId(projectKey)}
 								testId={`session-list-${projectKey}`}
 								className={cn(
-									"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
+									"mx-0 translate-x-0 gap-px border-l-0 px-0 pt-1",
+									tree ? "ml-0" : "ml-3.5",
 									hiddenSessionCount > 0 ? "pb-px" : "pb-1",
 								)}
 								sessions={listedSessions}
 								sessionIds={listedSessionIds}
 								activeSessionId={selection.activeSessionId}
 								plain={projectDragInProgress}
+								tree={tree}
 								onReorder={commitSessionOrder}
 								onKilled={handleSessionKilled}
 								onOpen={openSession}
 							/>
 							{hiddenSessionCount > 0 ? (
-								// Indented to the session list so its label starts on the status-dot column.
-								<div className="pl-4">
+								// Its label starts on the status-dot column; in the tree it is the
+								// last leaf, so the rail's elbow ends on it.
+								<div className={tree ? "sidebar-tree-item" : "pl-4"} data-tree-more={tree ? "" : undefined}>
 									<ShowMoreRow
-										className="px-3"
+										className={tree ? cn("px-2", TREE_ROW_HIT_CLASS) : "px-3"}
 										expanded={showAllSessions}
 										label={
 											showAllSessions
@@ -2491,6 +2562,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active,
 	consumeDragClick,
 	indented = true,
+	tree = false,
 	listIsDragging,
 	dropTransitionDisabled,
 	cloud,
@@ -2502,6 +2574,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	consumeDragClick: (id: string) => boolean;
 	cloud?: boolean;
 	indented?: boolean;
+	tree?: boolean;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2525,6 +2598,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			active={active}
 			cloud={cloud}
 			indented={indented}
+			tree={tree}
 			onKilled={onKilled}
 			onOpen={open}
 			listIsDragging={listIsDragging}
@@ -2544,6 +2618,7 @@ function SessionReorderList({
 	sessionIds,
 	activeSessionId,
 	indented = true,
+	tree = false,
 	plain = false,
 	cloudBadge = false,
 	onReorder,
@@ -2557,6 +2632,8 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
+	/** Draw the project tree rail into each row (a project's own session list). */
+	tree?: boolean;
 	/** Badge Cloud sessions, in a list (the Scratchpad) that mixes them with local ones. */
 	cloudBadge?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
@@ -2615,6 +2692,7 @@ function SessionReorderList({
 						active={activeSessionId === session.id}
 						cloud={cloudBadge && Boolean(session.cloud)}
 						indented={indented}
+						tree={tree}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
 					/>
@@ -2643,6 +2721,7 @@ function SessionReorderList({
 							consumeDragClick={dragClickGuard.consumeClick}
 							cloud={cloudBadge && Boolean(session.cloud)}
 							indented={indented}
+							tree={tree}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
 							onKilled={onKilled}
@@ -2668,6 +2747,7 @@ const SessionRow = memo(function SessionRow({
 	hostLabel,
 	cloud = false,
 	indented = true,
+	tree = false,
 	listIsDragging = false,
 	onKilled,
 	onOpen,
@@ -2679,6 +2759,8 @@ const SessionRow = memo(function SessionRow({
 	/** Mark the row as a Cloud session, in a list (the Scratchpad) that mixes them with local ones. */
 	cloud?: boolean;
 	indented?: boolean;
+	/** A project tree row: the rail sits in its indent and the pill starts after the arm. */
+	tree?: boolean;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2730,6 +2812,14 @@ const SessionRow = memo(function SessionRow({
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
 	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
+	// The row's menus (right-click and ⋮) open on their final rows: their data is
+	// read once the pointer rests on the row, or at once on a press or focus.
+	const menuPrefetchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(menuPrefetchTimerRef.current), []);
+	const prefetchMenu = () => {
+		clearTimeout(menuPrefetchTimerRef.current);
+		prefetchEditorHandoffState(queryClient, session);
+	};
 	const prefetchConversation = () => {
 		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
@@ -2766,10 +2856,11 @@ const SessionRow = memo(function SessionRow({
 
 	if (rename.isEditing) {
 		return (
-			<SidebarMenuSubItem className={cn(indented && "pl-0.5")}>
+			<SidebarMenuSubItem className={cn(tree ? "sidebar-tree-item" : indented && "pl-0.5")}>
 				<div
 					className={cn(
-						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pl-1.5 pr-1",
+						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pr-1",
+						tree ? "pl-0.5" : "pl-1.5",
 						active && "text-foreground",
 					)}
 					data-session-row=""
@@ -2813,7 +2904,7 @@ const SessionRow = memo(function SessionRow({
 			<ContextMenuTrigger asChild>
 				<HoverCardTrigger asChild>
 				<SidebarMenuSubItem
-					className={cn(indented && "pl-0.5", reorder?.isDragging && "z-chrome cursor-grabbing opacity-60")}
+					className={cn(tree ? "sidebar-tree-item" : indented && "pl-0.5", reorder?.isDragging && "z-chrome cursor-grabbing opacity-60")}
 					data-dragging={reorder?.isDragging ? "true" : undefined}
 					ref={rowNodeRef}
 					style={reorder ? sortableRowStyle(reorder) : undefined}
@@ -2830,6 +2921,13 @@ const SessionRow = memo(function SessionRow({
 					data-session-row=""
 					data-dragging={reorder?.isDragging ? "true" : undefined}
 					data-preview-open={preview.open ? "" : undefined}
+					onFocusCapture={prefetchMenu}
+					onPointerDownCapture={prefetchMenu}
+					onPointerEnter={() => {
+						clearTimeout(menuPrefetchTimerRef.current);
+						menuPrefetchTimerRef.current = setTimeout(prefetchMenu, CHAT_PREFETCH_REST_MS);
+					}}
+					onPointerLeave={() => clearTimeout(menuPrefetchTimerRef.current)}
 				>
 					<NavRowHighlight active={active} disabled={Boolean(reorder?.isDragging)} />
 					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>
@@ -2840,7 +2938,10 @@ const SessionRow = memo(function SessionRow({
 							data-telemetry-id="sidebar.session_row"
 							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
-								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+								// In the tree the pill starts after the arm, so the dot keeps the
+								// reference's 8px inset from the pill's edge.
+								tree ? cn("pl-0.5", TREE_ROW_HIT_CLASS) : "pl-1.5",
 								(session.isPinned || (session.lastInteractionAt ?? session.lastUserMessageAt)) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions focus-visible-in-session-row:pr-sidebar-project-actions",
@@ -2888,7 +2989,7 @@ const SessionRow = memo(function SessionRow({
 										"min-w-0 flex-1 truncate",
 										// Only a session that needs you reads at full brightness; the
 										// rest sit back, so the list has a clear lead.
-										active || marker === "attention"
+										active || isUrgentMarker(marker)
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
 										shimmer && "relative",
@@ -3678,7 +3779,7 @@ function SidebarTopNavRow({
 export function SettingsSidebarNav({ layer }: { layer: NonNullable<ReturnType<typeof useSettingsPage>> }) {
 	const { t } = useTranslation();
 	return (
-		<SidebarContent className="scrollbar-none gap-0 px-2">
+		<SidebarContent className="scrollbar-none gap-0 px-2" data-sidebar-settings-nav="">
 			<SidebarGroup className="p-0">
 				<SidebarGroupContent>
 					<SidebarMenu aria-label={t("settings.navSectionsAria")} className="gap-0.5" role="navigation">

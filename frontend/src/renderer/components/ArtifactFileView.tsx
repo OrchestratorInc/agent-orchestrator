@@ -34,6 +34,7 @@ function initialModeFor(path: string): FileViewMode {
  * markdown, a table, or a PDF page can be sent to the worker.
  */
 export function ArtifactFileView({
+	active = true,
 	artifactName,
 	feedbackRequestKey,
 	initialEditing = false,
@@ -53,6 +54,8 @@ export function ArtifactFileView({
 	menuActions,
 	onEditingChange,
 }: {
+	/** False while the view is mounted but hidden, such as a closed inspector: a video pauses then. */
+	active?: boolean;
 	artifactName: string;
 	feedbackRequestKey?: number;
 	initialEditing?: boolean;
@@ -144,7 +147,7 @@ export function ArtifactFileView({
 			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" data-artifact-selection-scope="" ref={scrollRef}>
 				<div className="h-full origin-top-left" ref={contentRef}>
-					<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} menuActions={menuActions} footerHost={footerHost} onEditingChange={editingChanged} />
+					<FileContentPane active={active} annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} menuActions={menuActions} footerHost={footerHost} onEditingChange={editingChanged} />
 				</div>
 			</div>
 			<div className="shrink-0" ref={setFooterHost} />

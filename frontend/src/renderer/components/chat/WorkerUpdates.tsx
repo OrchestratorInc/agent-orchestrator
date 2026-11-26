@@ -532,7 +532,7 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 			</Pressable>
-			{open ? <div className="ml-1.5 mt-1 flex min-w-0 flex-col border-l border-border pl-3">{children}</div> : null}
+			{open ? <div className="chat-tree chat-tree-updates ml-1.5 mt-1 flex min-w-0 flex-col border-l border-border pl-3">{children}</div> : null}
 		</div>
 	);
 }
@@ -836,6 +836,8 @@ function prState(session: WorkspaceSession): WaitingState | undefined {
 	const marker = getSessionRowMarker(session);
 	// Failing CI, conflicts or requested changes: the sidebar's red alert.
 	if (marker === "attention") return { label: session.displayStatus ?? "Needs attention", glyph: "alert" };
+	// A session waiting on its person outranks its PR, as it does in the sidebar.
+	if (marker === "input") return { label: "Needs input", glyph: "alert" };
 	return marker ? PR_STATES[marker] : undefined;
 }
 

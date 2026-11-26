@@ -157,8 +157,15 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
-	useRouterState: ({ select }: { select: (state: { location: { search: unknown; pathname: string } }) => unknown }) =>
-		select({ location: { search: shellMocks.state.routeSearch ?? {}, pathname: shellMocks.state.matchRouteTarget ?? "" } }),
+	useRouterState: ({
+		select,
+	}: {
+		select: (state: { location: { search: unknown; pathname: string }; matches: { pathname: string }[] }) => unknown;
+	}) =>
+		select({
+			location: { search: shellMocks.state.routeSearch ?? {}, pathname: shellMocks.state.matchRouteTarget ?? "" },
+			matches: [{ pathname: shellMocks.state.matchRouteTarget ?? "" }],
+		}),
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -232,6 +239,11 @@ vi.mock("../hooks/useRemoteHosts", async (importOriginal) => {
 	};
 });
 
+vi.mock("../hooks/useHostUpdates", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useHostUpdates")>()),
+	useHostUpdatePolling: () => {},
+}));
+
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({
 		status: shellMocks.state.cloudSessionStatus,
@@ -298,7 +310,9 @@ vi.mock("../hooks/useAgentInventoryTelemetry", async (importOriginal) => ({
 }));
 
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
-vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
+vi.mock("../components/HarnessUpdateNotice", () => ({
+	HarnessUpdateNotice: ({ enabled }: { enabled: boolean }) => <div data-enabled={String(enabled)} data-testid="harness-update-notice" />,
+}));
 vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
@@ -608,6 +622,9 @@ describe("shell workspace startup", () => {
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: true },
 		}));
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/devices/availability", {
+			body: { enabled: true },
+		}));
 
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
 		view.rerender(
@@ -619,7 +636,49 @@ describe("shell workspace startup", () => {
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
 	});
 
-	it("keeps chat hibernation disabled when Developer Mode is off", async () => {
+	it("starts agent update checks once launch has settled, not with the app", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+			const view = await renderShell();
+			// Each check can hold a daemon connection for seconds on a fresh daemon.
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "false");
+			await act(async () => {
+				vi.advanceTimersByTime(15_000);
+			});
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "true");
+
+			// A new daemon that replaces it while still ready waits out its own launch.
+			shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
+			view.rerender(
+				<Suspense fallback={null}>
+					<ShellRoute />
+				</Suspense>,
+			);
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "false");
+			await act(async () => {
+				vi.advanceTimersByTime(15_000);
+			});
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "true");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("sends device availability even while another Developer Mode setting fails", async () => {
+		useUiStore.setState({ developerMode: true });
+		vi.mocked(apiClient.PUT).mockImplementation(async (path: string) =>
+			(path === "/api/v1/usage/limit-history" ? { error: { code: "STORE_UNAVAILABLE", message: "disk full" } } : { error: undefined }) as never);
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		await renderShell();
+
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/devices/availability", {
+			body: { enabled: true },
+		}));
+		expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", { body: { enabled: true } });
+	});
+
+	it("keeps chat hibernation and devices disabled when Developer Mode is off", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		await renderShell();
 
@@ -627,6 +686,9 @@ describe("shell workspace startup", () => {
 			body: { enabled: false },
 		}));
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
+			body: { enabled: false },
+		}));
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/devices/availability", {
 			body: { enabled: false },
 		}));
 	});

@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: () => "#888888" }),
 	router: { push: vi.fn(), navigate: vi.fn(), back: vi.fn(), canGoBack: () => true, replace: vi.fn() },
 }));
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0, useHeaderOverlap: () => 0 }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	return {
