@@ -31,6 +31,9 @@ func (*hibernationSettingsStore) SetSessionRetentionDays(context.Context, int, t
 func (*hibernationSettingsStore) SetAccountHandoff(context.Context, bool, time.Time) error {
 	return nil
 }
+func (*hibernationSettingsStore) SetIdleCompaction(context.Context, domain.IdleCompactionMode, time.Time) error {
+	return nil
+}
 
 func (*hibernationSettingsStore) SetCommitAttribution(context.Context, bool, time.Time) error {
 	return nil

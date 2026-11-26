@@ -15909,6 +15909,43 @@ paths:
       summary: Choose which models one harness's pickers offer
       tags:
       - settings
+  /api/v1/settings/idle-compaction:
+    patch:
+      operationId: updateIdleCompaction
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateIdleCompactionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose when an idle Claude Chat over 200K tokens compacts its history
+      tags:
+      - settings
   /api/v1/settings/session-interface:
     patch:
       operationId: updateSessionInterface
@@ -26878,6 +26915,16 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/HarnessDefault'
           type: object
+        idleCompaction:
+          description: 'When an idle Claude Chat over 200,000 tokens compacts its
+            history: onReturn compacts first when a message arrives after its prompt
+            cache expired (default), beforeCacheExpires compacts shortly before the
+            cache expires (beta), off never compacts.'
+          enum:
+          - onReturn
+          - beforeCacheExpires
+          - "off"
+          type: string
         localEnabled:
           type: boolean
         sessionRetentionDays:
@@ -26899,6 +26946,7 @@ components:
       - versionRefresh
       - computerUse
       - accountHandoff
+      - idleCompaction
       - commitAttribution
       - sessionRetentionDays
       - cloudEnabled
@@ -28308,6 +28356,17 @@ components:
           - array
       required:
       - disabledModels
+      type: object
+    UpdateIdleCompactionRequest:
+      properties:
+        mode:
+          enum:
+          - onReturn
+          - beforeCacheExpires
+          - "off"
+          type: string
+      required:
+      - mode
       type: object
     UpdateProjectSettingsInput:
       properties:

@@ -5221,6 +5221,23 @@ export interface paths {
         patch: operations["updateHarnessDefault"];
         trace?: never;
     };
+    "/api/v1/settings/idle-compaction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose when an idle Claude Chat over 200K tokens compacts its history */
+        patch: operations["updateIdleCompaction"];
+        trace?: never;
+    };
     "/api/v1/settings/session-interface": {
         parameters: {
             query?: never;
@@ -9498,6 +9515,11 @@ export interface components {
             harnessDefaults?: {
                 [key: string]: components["schemas"]["HarnessDefault"];
             };
+            /**
+             * @description When an idle Claude Chat over 200,000 tokens compacts its history: onReturn compacts first when a message arrives after its prompt cache expired (default), beforeCacheExpires compacts shortly before the cache expires (beta), off never compacts.
+             * @enum {string}
+             */
+            idleCompaction: "onReturn" | "beforeCacheExpires" | "off";
             localEnabled: boolean;
             /** @description Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it. */
             sessionRetentionDays: number;
@@ -10044,6 +10066,10 @@ export interface components {
         };
         UpdateHarnessDefaultRequest: {
             disabledModels: null | string[];
+        };
+        UpdateIdleCompactionRequest: {
+            /** @enum {string} */
+            mode: "onReturn" | "beforeCacheExpires" | "off";
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -29878,6 +29904,57 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateIdleCompaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateIdleCompactionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

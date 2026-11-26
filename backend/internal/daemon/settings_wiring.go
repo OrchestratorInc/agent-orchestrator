@@ -36,6 +36,7 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		CommitAttribution:    row.CommitAttribution,
 		SessionRetentionDays: row.SessionRetentionDays,
 		AccountHandoff:       row.AccountHandoff,
+		IdleCompaction:       row.IdleCompaction,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -75,6 +76,10 @@ func (s settingsStore) SetAccountHandoff(ctx context.Context, enabled bool, now 
 		}
 	}
 	return nil
+}
+
+func (s settingsStore) SetIdleCompaction(ctx context.Context, mode domain.IdleCompactionMode, now time.Time) error {
+	return s.store.SetIdleCompaction(ctx, mode, now)
 }
 
 func (s settingsStore) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error {

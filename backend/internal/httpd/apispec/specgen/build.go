@@ -230,6 +230,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
+	"ControllersUpdateIdleCompactionRequest":               "UpdateIdleCompactionRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -1641,6 +1642,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/session-retention", id: "updateSessionRetention", tag: "settings",
 			summary: "Choose how long archived sessions are kept before they are deleted",
 			reqBody: controllers.UpdateSessionRetentionRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/idle-compaction", id: "updateIdleCompaction", tag: "settings",
+			summary: "Choose when an idle Claude Chat over 200K tokens compacts its history",
+			reqBody: controllers.UpdateIdleCompactionRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

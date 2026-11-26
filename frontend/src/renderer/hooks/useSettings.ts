@@ -17,6 +17,8 @@ export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disa
 
 export const settingsQueryKey = ["settings"] as const;
 
+export type IdleCompactionMode = components["schemas"]["SettingsResponse"]["idleCompaction"];
+
 export interface Settings {
 	harnessDefaults?: Record<string, HarnessDefault>;
 	/** Applies to sessions created from now on; never to an existing one. */
@@ -42,6 +44,8 @@ export interface Settings {
 	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
 	sessionRetentionDays?: number;
 	accountHandoff?: boolean;
+	/** When an idle Claude Chat over 200K tokens compacts, so the next message does not reprocess its whole history. */
+	idleCompaction?: IdleCompactionMode;
 }
 
 const settingsReadTimeoutMs = 10_000;
@@ -87,6 +91,8 @@ function settingsQueryOptions(hostId?: string) {
 				// Absent on a daemon that predates retention, which keeps every session.
 				sessionRetentionDays: data?.sessionRetentionDays,
 				accountHandoff: data?.accountHandoff ?? false,
+				// A daemon that predates the setting never compacts idle chats.
+				idleCompaction: data?.idleCompaction ?? "off",
 			};
 		},
 	};
@@ -229,6 +235,27 @@ export function useUpdateAccountHandoff() {
 
 	return {
 		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+/** Chooses when an idle Claude Chat compacts. Applies to every Claude Chat at its next message or turn. */
+export function useUpdateIdleCompaction() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (mode: IdleCompactionMode) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/idle-compaction", {
+				body: { mode },
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (mode: IdleCompactionMode) => mutation.mutate(mode),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -142,6 +143,10 @@ type Service struct {
 	prewarming         sync.Map // domain.AgentHarness -> struct{}
 	providerSwitches   sync.Map // domain.SessionID -> chan struct{}, one switch at a time
 	terminalSwitcher   TerminalProviderSwitcher
+	// idleCompactionMode reads when an idle Claude Chat compacts (see
+	// idle_compaction.go). Unset means never.
+	idleCompactionMode atomic.Pointer[func(context.Context) domain.IdleCompactionMode]
+	idleTimers         idleCompactionTimers
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -1130,6 +1135,8 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if owner.Kind != domain.ConversationOwnerReview {
 		controller.artifactDir = s.sessionArtifactDir(ctx, cfg.SessionID)
 	}
+	controller.idleProbe = s.newIdleCompactionProbe(cfg.Harness, cfg.Env)
+	controller.onTurnIdle = s.scheduleIdleCompaction
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {

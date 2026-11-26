@@ -24,6 +24,7 @@ type SettingsService interface {
 	SetCommitAttribution(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetSessionRetentionDays(ctx context.Context, days int) (settingssvc.Snapshot, error)
 	SetAccountHandoff(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
+	SetIdleCompaction(ctx context.Context, mode domain.IdleCompactionMode) (settingssvc.Snapshot, error)
 	ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness
 	Offering() settingssvc.Offering
 }
@@ -47,6 +48,7 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Patch("/settings/commit-attribution", c.setCommitAttribution)
 	r.Patch("/settings/session-retention", c.setSessionRetention)
 	r.Patch("/settings/account-handoff", c.setAccountHandoff)
+	r.Patch("/settings/idle-compaction", c.setIdleCompaction)
 	r.Patch("/settings/harness-defaults/{agent}", c.setHarnessDefault)
 }
 
@@ -200,6 +202,29 @@ func (c *SettingsController) setAccountHandoff(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
 }
 
+func (c *SettingsController) setIdleCompaction(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/idle-compaction")
+		return
+	}
+	var req UpdateIdleCompactionRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	mode := domain.IdleCompactionMode(req.Mode)
+	if !mode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"IDLE_COMPACTION_INVALID", "mode must be onReturn, beforeCacheExpires or off", nil)
+		return
+	}
+	snapshot, err := c.Svc.SetIdleCompaction(r.Context(), mode)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
 func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsResponse {
 	// Reported so the client can warn that choosing chat narrows which agents are
 	// available, instead of letting the user discover it at spawn time.
@@ -222,6 +247,7 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		SessionRetentionDays:   snapshot.SessionRetentionDays,
 		CloudEnabled:           offering.CloudEnabled(),
 		AccountHandoff:         snapshot.AccountHandoff,
+		IdleCompaction:         string(domain.NormalizeIdleCompaction(string(snapshot.IdleCompaction))),
 		CloudControlPlaneURL:   offering.CloudControlPlaneURL,
 		TrackerIntakeEnabled:   offering.TrackerIntakeEnabled,
 	}
