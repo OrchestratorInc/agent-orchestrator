@@ -936,7 +936,17 @@ func BinaryVersion(ctx context.Context, binary string) string {
 
 // catalogSchemaVersions invalidates snapshots when an adapter's catalog format
 // changes independently of its installed executable or configuration.
-var catalogSchemaVersions = map[string]string{"memcode": "native-picker-v1"}
+var catalogSchemaVersions = map[string]string{
+	"memcode": "native-picker-v1",
+	// Catalogs cached before resource-path IDs were labelled with the model's
+	// name still show the whole path.
+	"aider":       "path-labels-v1",
+	"crush":       "path-labels-v1",
+	"kilocode":    "path-labels-v1",
+	"mimo-code":   "path-labels-v1",
+	"opencode":    "path-labels-v1",
+	"opencode-v2": "path-labels-v1",
+}
 
 // CatalogFingerprint hashes every stable discovery input for an agent: the
 // resolved executable plus the configuration and credentials its discovery
@@ -1096,12 +1106,32 @@ func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 	return models, nil
 }
 
+// accountModelPathPattern matches the resource name Fireworks uses as a model
+// ID, accounts/<account>/models/<model>.
+var accountModelPathPattern = regexp.MustCompile(`^accounts/([^/]+)/models/([^/]+)$`)
+
+// sharedModelAccount is the account Fireworks publishes its public models under.
+const sharedModelAccount = "fireworks"
+
 // splitProviderID labels a provider/model selector with its provider and the
-// name after the first slash, reporting whether the ID had both parts.
+// name after the first slash, reporting whether the ID had both parts. A
+// resource path is labelled with its model's name, and another account's
+// deployment as account/model so it does not read as the public one. Any other
+// nested name (a router's vendor/model) is kept whole, as the vendor is part of
+// it. So is a public path to a model literally named "default", because
+// normalize reads that label as the default-model marker.
 func splitProviderID(item *ports.AgentModelInfo) bool {
 	provider, name, ok := strings.Cut(item.ID, "/")
 	if !ok || provider == "" || name == "" {
 		return false
+	}
+	if match := accountModelPathPattern.FindStringSubmatch(name); len(match) == 3 {
+		switch account, model := match[1], match[2]; {
+		case account != sharedModelAccount:
+			name = account + "/" + model
+		case !strings.EqualFold(model, "default"):
+			name = model
+		}
 	}
 	item.Provider, item.Label = provider, name
 	return true
