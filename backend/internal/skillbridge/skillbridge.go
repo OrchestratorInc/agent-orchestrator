@@ -218,8 +218,8 @@ func cleanReal(path string) string {
 	if path == "" {
 		return ""
 	}
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		return real
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
 	}
 	return filepath.Clean(path)
 }
