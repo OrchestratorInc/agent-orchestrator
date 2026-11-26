@@ -659,8 +659,25 @@ func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 	}
 }
 
+type failingHoldReleaseStore struct {
+	*store.Store
+	failures atomic.Int32
+}
+
+func (s *failingHoldReleaseStore) ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error {
+	if s.failures.Add(-1) >= 0 {
+		return errors.New("database is locked")
+	}
+	return s.Store.ReleaseConversationQueueHeldBy(ctx, conversationID, turnID)
+}
+
 func TestAccountHandoffSkippedRetryReleasesTheHeldQueue(t *testing.T) {
-	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	failing := &failingHoldReleaseStore{}
+	failing.failures.Store(1)
+	hh := handoffHarnessFor(t, newHarnessWithConversationAndStoreForHarness(t, nil, func(st *store.Store) chatsvc.Store {
+		failing.Store = st
+		return failing
+	}, domain.HarnessClaudeCode), domain.HarnessClaudeCode)
 	ctx := context.Background()
 	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
 	hh.tick(t)
@@ -672,6 +689,11 @@ func TestAccountHandoffSkippedRetryReleasesTheHeldQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if err := hh.svc.HandoffUsageLimitedTurns(ctx); err == nil {
+		t.Fatal("handoff finished although its queue release failed")
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	hh.advance(16 * time.Second)
 	hh.tick(t)
 
 	if _, found, _ := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID); found {
