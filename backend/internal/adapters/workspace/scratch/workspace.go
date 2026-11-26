@@ -120,9 +120,16 @@ func (w *Workspace) destroy(_ context.Context, info ports.WorkspaceInfo) (ports.
 type scratchContents struct {
 	userWork bool
 	// managed are AO-owned files and directories, removed before dirs.
-	managed []string
+	managed []managedEntry
 	// dirs are the directories under the root, parents before children.
 	dirs []string
+}
+
+// managedEntry is an AO-owned path and what it was when scanned, so an entry
+// replaced after the scan is preserved rather than deleted.
+type managedEntry struct {
+	path string
+	info fs.FileInfo
 }
 
 // scanScratchContents classifies everything under root. Agent adapters write
@@ -151,7 +158,9 @@ func scanScratchContents(root string) (scratchContents, error) {
 			managedByDir[dir] = managed
 		}
 		if managed.match(entry.Name()) {
-			contents.managed = append(contents.managed, fullPath)
+			if err := contents.addManaged(fullPath); err != nil {
+				return err
+			}
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -162,8 +171,7 @@ func scanScratchContents(root string) (scratchContents, error) {
 			return nil
 		}
 		if aoManagedCopilotProfile(root, fullPath, entry) {
-			contents.managed = append(contents.managed, fullPath)
-			return nil
+			return contents.addManaged(fullPath)
 		}
 		contents.userWork = true
 		return filepath.SkipAll
@@ -174,13 +182,43 @@ func scanScratchContents(root string) (scratchContents, error) {
 	return contents, nil
 }
 
+func (c *scratchContents) addManaged(fullPath string) error {
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return err
+	}
+	c.managed = append(c.managed, managedEntry{path: fullPath, info: info})
+	return nil
+}
+
 // remove deletes AO's files, then each directory only if it is empty. A file
-// that appeared after the scan leaves its directory non-empty, so it is kept
-// and reported as dirty rather than deleted.
+// that appeared after the scan leaves its directory non-empty, and an AO entry
+// replaced after the scan is left in place; either is kept and reported as
+// dirty rather than deleted. Ownership markers go last, so a failed removal
+// leaves what they claim recognisable to the next attempt.
 func (c scratchContents) remove(root string) error {
-	for _, managed := range c.managed {
-		if err := os.RemoveAll(managed); err != nil {
-			return fmt.Errorf("scratch workspace: remove AO file %q: %w", managed, err)
+	ordered := make([]managedEntry, 0, len(c.managed))
+	var markers []managedEntry
+	for _, entry := range c.managed {
+		if filepath.Base(entry.path) == ".gitignore" {
+			markers = append(markers, entry)
+			continue
+		}
+		ordered = append(ordered, entry)
+	}
+	for _, entry := range append(ordered, markers...) {
+		current, err := os.Lstat(entry.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("scratch workspace: inspect AO file %q: %w", entry.path, err)
+		}
+		if !os.SameFile(current, entry.info) || current.Mode().Type() != entry.info.Mode().Type() {
+			return fmt.Errorf("scratch workspace: preserve replaced %q: %w", entry.path, ports.ErrWorkspaceDirty)
+		}
+		if err := os.RemoveAll(entry.path); err != nil {
+			return fmt.Errorf("scratch workspace: remove AO file %q: %w", entry.path, err)
 		}
 	}
 	// Children before parents, the root last.
@@ -257,8 +295,9 @@ func aoManagedCopilotProfile(root, fullPath string, entry fs.DirEntry) bool {
 	return ok && strings.Contains(content, hookutil.CopilotAgentProfileSentinel)
 }
 
-// readSmallRegularFile reads up to 64 KiB of a regular file, not following a
-// symlink, so a marker can only be trusted from a file in the workspace.
+// readSmallRegularFile reads a regular file of at most 64 KiB, not following a
+// symlink, so a marker can only be trusted from a file in the workspace. A
+// larger file is rejected whole rather than parsed from a truncated tail.
 func readSmallRegularFile(file string) (string, bool) {
 	info, err := os.Lstat(file)
 	if err != nil || !info.Mode().IsRegular() {
@@ -269,8 +308,9 @@ func readSmallRegularFile(file string) (string, bool) {
 		return "", false
 	}
 	defer func() { _ = handle.Close() }()
-	data, err := io.ReadAll(io.LimitReader(handle, 64*1024))
-	if err != nil {
+	const limit = 64 * 1024
+	data, err := io.ReadAll(io.LimitReader(handle, limit+1))
+	if err != nil || len(data) > limit {
 		return "", false
 	}
 	return string(data), true

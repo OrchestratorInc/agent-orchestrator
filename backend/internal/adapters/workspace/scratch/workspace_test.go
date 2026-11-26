@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
@@ -292,5 +293,21 @@ func TestWorkspaceDestroyRemovesGlobAndDirectoryEntriesAOListed(t *testing.T) {
 	}
 	if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("scratch dir holding only AO-listed entries still exists or stat failed differently: %v", err)
+	}
+}
+
+// A marker too large to read whole claims nothing, so a truncated last line
+// can never be parsed as a shorter name that matches a user's file.
+func TestWorkspaceDestroyIgnoresOversizedAOGitignore(t *testing.T) {
+	ws, info := createStandaloneScratch(t)
+	padding := strings.Repeat("/ao-padding-entry\n", 64*1024/len("/ao-padding-entry\n")+1)
+	writeScratchFile(t, filepath.Join(info.Path, ".gitignore"), hookutil.GitignoreSentinel+"\n/.gitignore\n/notes.md\n"+padding)
+	writeScratchFile(t, filepath.Join(info.Path, "notes.md"), "mine\n")
+
+	if err := ws.Destroy(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
+		t.Fatalf("Destroy err = %v, want ErrWorkspaceDirty", err)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "notes.md")); err != nil {
+		t.Fatalf("file named only by an oversized marker was not preserved: %v", err)
 	}
 }
