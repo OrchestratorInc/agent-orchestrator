@@ -152,7 +152,7 @@ func TestTimelineIsCompactedToTheNewestEntries(t *testing.T) {
 	padding := strings.Repeat("x", 2048)
 	total := compactTimelineBytes/2048 + keepTimelineEntries
 	for index := 0; index < total; index++ {
-		s.recordCall(scope, "type_text", map[string]any{"text": fmt.Sprintf("%d-%s", index, padding)}, time.Now(), nil, nil)
+		s.recordCall(scope, "press_key", map[string]any{"key": fmt.Sprintf("%d-%s", index, padding)}, nil, nil)
 	}
 	info, err := os.Stat(filepath.Join(scope, timelineFile))
 	if err != nil || info.Size() > compactTimelineBytes+4096 {
@@ -162,9 +162,100 @@ func TestTimelineIsCompactedToTheNewestEntries(t *testing.T) {
 	if len(entries) > keepTimelineEntries || len(entries) == 0 {
 		t.Fatalf("kept %d entries", len(entries))
 	}
-	last, _ := entries[len(entries)-1].Arguments["text"].(string)
+	last, _ := entries[len(entries)-1].Arguments["key"].(string)
 	if !strings.HasPrefix(last, fmt.Sprintf("%d-", total-1)) {
 		t.Fatalf("newest entry = %.20q", last)
+	}
+}
+
+func TestTimelineLeavesOutTypedText(t *testing.T) {
+	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	scope, err := s.images.scope("ao-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []any{
+		map[string]any{"tool": "type_text", "args": map[string]any{"text": "hunter2", "pid": 7}},
+		map[string]any{"set_value": map[string]any{"value": "hunter3", "name": "Password"}},
+		map[string]any{"tool": "click", "args": map[string]any{"name": "Sign in"}},
+	}
+	s.recordCall(scope, "type_text", map[string]any{"text": "hunter1", "pid": 7}, nil, nil)
+	s.recordCall(scope, "set_value", map[string]any{"value": "hunter4", "name": "Password"}, nil, nil)
+	s.recordCall(scope, "run_steps", map[string]any{"pid": 7, "steps": steps}, nil, nil)
+
+	data, err := os.ReadFile(filepath.Join(scope, timelineFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "hunter") {
+		t.Fatalf("typed text was logged: %s", data)
+	}
+	entries, _ := s.Timeline(context.Background(), "ao-9")
+	if len(entries) != 3 || entries[0].Arguments["pid"] == nil || entries[1].Arguments["name"] != "Password" {
+		t.Fatalf("entries = %+v", entries)
+	}
+	logged, _ := entries[2].Arguments["steps"].([]any)
+	click, _ := logged[2].(map[string]any)
+	if args, _ := click["args"].(map[string]any); len(logged) != 3 || args["name"] != "Sign in" {
+		t.Fatalf("steps = %v", logged)
+	}
+	// The agent's own arguments are left as they were sent.
+	if first, _ := steps[0].(map[string]any)["args"].(map[string]any); first["text"] != "hunter2" {
+		t.Fatalf("request arguments changed: %v", steps)
+	}
+}
+
+func TestTimelineIsDatedWhenTheCallFinished(t *testing.T) {
+	driver := screenshotDriver()
+	next := driver.onCall
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		time.Sleep(50 * time.Millisecond)
+		return next(args)
+	}
+	s := newTestService(t, driver, "darwin")
+	started := time.Now()
+	if _, err := s.Call(context.Background(), CallRequest{Tool: "list_windows", SessionID: "ao-10"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := s.Timeline(context.Background(), "ao-10")
+	if len(entries) != 1 || entries[0].At.Sub(started) < 50*time.Millisecond {
+		t.Fatalf("entry dated %v, call started %v", entries, started)
+	}
+}
+
+func TestTimelineRereadsOnlyWhatChanged(t *testing.T) {
+	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	scope, err := s.images.scope("ao-11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.recordCall(scope, "list_windows", nil, nil, nil)
+	first, _ := s.Timeline(context.Background(), "ao-11")
+	again, _ := s.Timeline(context.Background(), "ao-11")
+	if len(first) != 1 || len(again) != 1 || again[0].ID != first[0].ID {
+		t.Fatalf("first = %+v, again = %+v", first, again)
+	}
+	s.recordCall(scope, "click", nil, nil, nil)
+	after, _ := s.Timeline(context.Background(), "ao-11")
+	if len(after) != 2 || after[1].Tool != "click" {
+		t.Fatalf("after a new call = %+v", after)
+	}
+	// A screenshot pruned from the folder drops out of the entry that named it.
+	name := "shot.png"
+	if err := os.WriteFile(filepath.Join(scope, name), pngHeader, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.recordCall(scope, "get_window_state", nil, []Image{{Path: filepath.Join(scope, name)}}, nil)
+	withShot, _ := s.Timeline(context.Background(), "ao-11")
+	if got := withShot[len(withShot)-1].Screenshots; len(got) != 1 {
+		t.Fatalf("screenshots = %v", got)
+	}
+	if err := os.Remove(filepath.Join(scope, name)); err != nil {
+		t.Fatal(err)
+	}
+	pruned, _ := s.Timeline(context.Background(), "ao-11")
+	if got := pruned[len(pruned)-1].Screenshots; len(got) != 0 {
+		t.Fatalf("pruned screenshot still listed: %v", got)
 	}
 }
 

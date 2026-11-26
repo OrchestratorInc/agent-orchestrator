@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -50,19 +51,33 @@ type TimelineEntry struct {
 	Screenshots []string `json:"screenshots" description:"Screenshot file names, served by GET /api/v1/computer-use/sessions/{sessionId}/screenshots/{name}."`
 }
 
-// timelineLog serializes writes to every session's log.
+// timelineLog serializes writes to every session's log, and keeps each
+// session's last read so a poll of an unchanged log costs two stats.
 type timelineLog struct {
-	mu sync.Mutex
+	mu    sync.Mutex
+	reads map[string]timelineRead
 }
 
-// recordCall appends one call to its session's timeline. Best effort: a
-// failure to log never fails the call.
-func (s *Service) recordCall(scope, tool string, arguments map[string]any, started time.Time, images []Image, callErr error) {
+// timelineRead is one session's last Timeline result and the state of its
+// folder and log when it was read.
+type timelineRead struct {
+	dirModTime  time.Time
+	fileModTime time.Time
+	fileSize    int64
+	entries     []TimelineEntry
+}
+
+// recordCall appends one call to its session's timeline, dated when the call
+// finished: a long batch that started before the user opened the session
+// still counts as news there. Best effort: a failure to log never fails the
+// call.
+func (s *Service) recordCall(scope, tool string, arguments map[string]any, images []Image, callErr error) {
+	finished := time.Now()
 	entry := TimelineEntry{
-		ID:          timelineID(started),
-		At:          started.UTC(),
+		ID:          timelineID(finished),
+		At:          finished.UTC(),
 		Tool:        tool,
-		Arguments:   timelineArguments(arguments),
+		Arguments:   timelineArguments(tool, arguments),
 		OK:          callErr == nil,
 		Screenshots: []string{},
 	}
@@ -132,9 +147,24 @@ func (s *Service) Timeline(_ context.Context, sessionID string) ([]TimelineEntry
 		return entries, nil
 	}
 	s.timeline.mu.Lock()
-	file, err := os.Open(filepath.Join(dir, timelineFile))
+	defer s.timeline.mu.Unlock()
+	path := filepath.Join(dir, timelineFile)
+	dirInfo, dirErr := os.Stat(dir)
+	fileInfo, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return entries, nil
+	}
 	if err != nil {
-		s.timeline.mu.Unlock()
+		return nil, apierr.InternalCause("COMPUTER_USE_TIMELINE_UNREADABLE", "The computer-use timeline could not be read.", err)
+	}
+	// Screenshots and the log change the folder or the log; neither changed
+	// means the last read still holds.
+	if last, ok := s.timeline.reads[dir]; ok && dirErr == nil && last.dirModTime.Equal(dirInfo.ModTime()) &&
+		last.fileModTime.Equal(fileInfo.ModTime()) && last.fileSize == fileInfo.Size() {
+		return slices.Clone(last.entries), nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return entries, nil
 		}
@@ -149,7 +179,6 @@ func (s *Service) Timeline(_ context.Context, sessionID string) ([]TimelineEntry
 		}
 	}
 	_ = file.Close()
-	s.timeline.mu.Unlock()
 	if len(entries) > keepTimelineEntries {
 		entries = entries[len(entries)-keepTimelineEntries:]
 	}
@@ -162,6 +191,14 @@ func (s *Service) Timeline(_ context.Context, sessionID string) ([]TimelineEntry
 			}
 		}
 		entries[index].Screenshots = kept
+	}
+	if dirErr == nil {
+		if s.timeline.reads == nil {
+			s.timeline.reads = map[string]timelineRead{}
+		}
+		s.timeline.reads[dir] = timelineRead{
+			dirModTime: dirInfo.ModTime(), fileModTime: fileInfo.ModTime(), fileSize: fileInfo.Size(), entries: slices.Clone(entries),
+		}
 	}
 	return entries, nil
 }
@@ -225,9 +262,15 @@ func screenshotNames(dir string) map[string]bool {
 	return names
 }
 
+// typedArguments are the arguments that carry text the agent typed or set,
+// by tool. The log outlives the chat and the text may be a password, so it
+// keeps only that something was typed.
+var typedArguments = map[string]string{"type_text": "text", "set_value": "value"}
+
 // timelineArguments copies the agent's arguments without the ones AO or the
-// driver set for their own use.
-func timelineArguments(arguments map[string]any) map[string]any {
+// driver set for their own use, and without typed text, including inside a
+// run_steps batch's steps.
+func timelineArguments(tool string, arguments map[string]any) map[string]any {
 	if len(arguments) == 0 {
 		return nil
 	}
@@ -235,7 +278,48 @@ func timelineArguments(arguments map[string]any) map[string]any {
 	for _, key := range []string{"session", "screenshot_out_file", "debug_image_out"} {
 		delete(copied, key)
 	}
+	if key, ok := typedArguments[tool]; ok {
+		delete(copied, key)
+	}
+	if steps, ok := copied["steps"].([]any); ok && tool == "run_steps" {
+		copied["steps"] = withoutTypedText(steps)
+	}
 	return copied
+}
+
+// withoutTypedText copies run_steps steps, `{tool, args}` or
+// `{<tool>: args}`, without the typed text in their args.
+func withoutTypedText(steps []any) []any {
+	copied := make([]any, len(steps))
+	for index, raw := range steps {
+		step, ok := raw.(map[string]any)
+		if !ok {
+			copied[index] = raw
+			continue
+		}
+		step = maps.Clone(step)
+		if tool, _ := step["tool"].(string); tool != "" {
+			if args, ok := step["args"].(map[string]any); ok {
+				step["args"] = withoutKey(args, typedArguments[tool])
+			}
+		}
+		for tool, key := range typedArguments {
+			if args, ok := step[tool].(map[string]any); ok {
+				step[tool] = withoutKey(args, key)
+			}
+		}
+		copied[index] = step
+	}
+	return copied
+}
+
+func withoutKey(args map[string]any, key string) map[string]any {
+	if key == "" {
+		return args
+	}
+	args = maps.Clone(args)
+	delete(args, key)
+	return args
 }
 
 func timelineError(err error) string {

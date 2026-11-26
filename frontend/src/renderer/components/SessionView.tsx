@@ -179,7 +179,7 @@ import { queryShown } from "../lib/dom-selectors";
 import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
-import { useComputerUseTimeline } from "../hooks/useComputerUseTimeline";
+import { localComputerUseSessionId, useComputerUseTimeline } from "../hooks/useComputerUseTimeline";
 import { useSettings } from "../hooks/useSettings";
 import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
@@ -2813,10 +2813,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Computer use: the session's first call, made while this session is on
 	// screen, opens its tab. Later calls only badge it while it is not visible,
 	// so a user who closed the tab is not pulled back to it.
-	const computerUseSessionId = session && !session.cloud && !hostId ? session.id : undefined;
+	const computerUseSessionId = localComputerUseSessionId(session, hostId);
 	const { settings: computerUseSettings } = useSettings(undefined, computerUseSessionId !== undefined);
 	const computerUseTimeline = useComputerUseTimeline(computerUseSessionId, {
-		live: computerUseSettings?.computerUse === true,
+		live: computerUseSettings?.computerUse === true && !terminated,
 		open: isInspectorOpen && inspectorView === "computerUse",
 	});
 	const latestComputerUseStep = computerUseTimeline.data?.at(-1)?.id ?? null;
