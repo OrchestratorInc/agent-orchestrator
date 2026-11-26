@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
@@ -128,7 +129,7 @@ func nonEmptyRegularFile(path string) bool {
 func macOSKeychainItemExists(ctx context.Context, service, account string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, keychainProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/security", "find-generic-password", "-s", service, "-a", account) //nolint:gosec // fixed argv; no user input.
+	cmd := aoprocess.CommandContext(ctx, "/usr/bin/security", "find-generic-password", "-s", service, "-a", account) //nolint:gosec // fixed argv; no user input.
 	err := cmd.Run()
 	if err == nil {
 		return true, nil

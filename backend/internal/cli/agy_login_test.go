@@ -29,7 +29,7 @@ func runAgyLoginForTest(t *testing.T, selection string, lookPath func(string) (s
 		Out:      &stdout,
 		Err:      io.Discard,
 		LookPath: lookPath,
-		RunInteractiveCommand: func(_ context.Context, name string, args []string, _ io.Reader, _, _ io.Writer) error {
+		RunInteractiveCommand: func(_ context.Context, name, _ string, args []string, _ io.Reader, _, _ io.Writer) error {
 			value, set := os.LookupEnv(agyADCAuthEnv)
 			calls = append(calls, agyLoginCall{name: name, args: append([]string(nil), args...), adcEnv: value, adcSet: set})
 			return runErr

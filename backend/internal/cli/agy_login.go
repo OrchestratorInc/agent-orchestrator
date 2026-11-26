@@ -87,7 +87,7 @@ func (c *commandContext) runAgyGoogleLogin(ctx context.Context, agy string, in i
 	if _, err := fmt.Fprintln(out, strings.Join(lines, "\n")); err != nil {
 		return err
 	}
-	if err := c.deps.RunInteractiveCommand(ctx, agy, nil, in, out, stderr); err != nil {
+	if err := c.deps.RunInteractiveCommand(ctx, agy, "", nil, in, out, stderr); err != nil {
 		return fmt.Errorf("agy sign-in failed: %w", err)
 	}
 	_, err = fmt.Fprintf(out, "\n%s\n", style.success("Agy will use your Google account sign-in."))
@@ -111,7 +111,7 @@ func (c *commandContext) runAgyADCLogin(ctx context.Context, in io.Reader, out, 
 		if _, err := fmt.Fprintf(out, "\n%s\n\n", style.dim("Opening Google Cloud sign-in in your browser…")); err != nil {
 			return err
 		}
-		if err := c.deps.RunInteractiveCommand(ctx, gcloud, []string{"auth", "application-default", "login"}, in, out, stderr); err != nil {
+		if err := c.deps.RunInteractiveCommand(ctx, gcloud, "", []string{"auth", "application-default", "login"}, in, out, stderr); err != nil {
 			return fmt.Errorf("gcloud application-default login failed: %w", err)
 		}
 	}
