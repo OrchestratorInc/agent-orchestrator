@@ -143,6 +143,9 @@ func TestReviewCommandLaunchesHostTrustedInteractiveTUI(t *testing.T) {
 		t.Fatalf("AO-owned environment = %#v", spec.Env)
 	}
 	assertOnboardingComplete(t, filepath.Join(spec.Env["HOME"], ".gemini", "antigravity-cli", "cache", "onboarding.json"))
+	if got := readTrusted(t, filepath.Join(spec.Env["HOME"], ".gemini", "antigravity-cli", "settings.json")); !slices.Equal(got, []string{"/worker"}) {
+		t.Fatalf("trusted workspaces = %#v, want only the reviewer workspace", got)
+	}
 }
 
 func TestReviewCommandPassesConfiguredModel(t *testing.T) {
@@ -220,6 +223,132 @@ func TestSeedOnboardingCompletePreservesExistingState(t *testing.T) {
 		t.Fatalf("onboarding state mode = %o, want 600", mode)
 	}
 	assertOnboardingComplete(t, path)
+}
+
+func TestSeedTrustedWorkspaceFreshSettingsTrustsOnlyWorkspace(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "worktrees", "worker-1")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seedTrustedWorkspace(root, workspace); err != nil {
+		t.Fatalf("seedTrustedWorkspace: %v", err)
+	}
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "settings.json")
+	want := []string{workspace}
+	if resolved != workspace {
+		want = append(want, resolved)
+	}
+	got := readTrusted(t, path)
+	if !slices.Equal(got, want) {
+		t.Fatalf("trusted = %#v, want %#v", got, want)
+	}
+	home, _ := os.UserHomeDir()
+	for _, entry := range got {
+		if entry == filepath.Dir(workspace) || entry == home || entry == "/" || entry == "~" {
+			t.Fatalf("trust broadened to %q", entry)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode = %v, %v; want 0600", info, err)
+	}
+}
+
+func TestSeedTrustedWorkspacePreservesExistingSettings(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permissions":{"allow":["Read"]},"trustedWorkspaces":["/existing/project",7]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // idempotent: a retry adds nothing
+		if err := seedTrustedWorkspace(root, "/worker"); err != nil {
+			t.Fatalf("seedTrustedWorkspace: %v", err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if string(settings["permissions"]) != `{"allow":["Read"]}` {
+		t.Fatalf("unrelated settings not preserved: %s", raw)
+	}
+	if string(settings["trustedWorkspaces"]) != `["/existing/project",7,"/worker"]` {
+		t.Fatalf("trustedWorkspaces = %s, want existing entries kept and /worker added once", settings["trustedWorkspaces"])
+	}
+}
+
+func TestSeedTrustedWorkspaceScopeAndInvalidInput(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "settings.json")
+	for _, workspace := range []string{"", "   ", "relative/worker"} {
+		if err := seedTrustedWorkspace(root, workspace); err != nil {
+			t.Fatalf("seedTrustedWorkspace(%q): %v", workspace, err)
+		}
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty or relative workspace wrote settings: %v", err)
+	}
+
+	// A symlinked workspace trusts the link and its target, nothing above them.
+	base := t.TempDir()
+	target := filepath.Join(base, "real", "worker")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seedTrustedWorkspace(root, link+"/"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTrusted(t, path); !slices.Equal(got, []string{link, resolvedTarget}) {
+		t.Fatalf("symlink trusted = %#v, want [%s %s]", got, link, resolvedTarget)
+	}
+
+	// Corrupt settings and a non-list trust value are replaced.
+	for _, content := range []string{"not json", `{"trustedWorkspaces":"oops"}`} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := seedTrustedWorkspace(root, "/worker"); err != nil {
+			t.Fatalf("seedTrustedWorkspace(%q): %v", content, err)
+		}
+		if got := readTrusted(t, path); !slices.Equal(got, []string{"/worker"}) {
+			t.Fatalf("after %q trusted = %#v", content, got)
+		}
+	}
+}
+
+func readTrusted(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings struct {
+		TrustedWorkspaces []string `json:"trustedWorkspaces"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatalf("decode settings %q: %v", raw, err)
+	}
+	return settings.TrustedWorkspaces
 }
 
 func assertOnboardingComplete(t *testing.T, path string) map[string]json.RawMessage {

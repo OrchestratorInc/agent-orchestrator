@@ -77,6 +77,9 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err := seedOnboardingComplete(env.ConfigRoot); err != nil {
 		return ports.ReviewCommandSpec{}, fmt.Errorf("agy reviewer: seed first-run state: %w", err)
 	}
+	if err := seedTrustedWorkspace(env.ConfigRoot, inv.WorkspacePath); err != nil {
+		return ports.ReviewCommandSpec{}, fmt.Errorf("agy reviewer: seed workspace trust: %w", err)
+	}
 	if err := r.verifyCompatibility(ctx, binary, envVars); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
@@ -204,14 +207,80 @@ func seedOnboardingComplete(configRoot string) error {
 	for _, key := range onboardingFlags {
 		state[key] = json.RawMessage("true")
 	}
-	raw, err := json.Marshal(state)
+	return writePrivateJSON(path, state)
+}
+
+// trustedWorkspacesKey is the settings.json list of folders Agy trusts. Agy
+// asks "Do you trust the contents of this project?" for an untrusted working
+// directory, which nobody can answer in the reviewer pane (#8862).
+const trustedWorkspacesKey = "trustedWorkspaces"
+
+// seedTrustedWorkspace adds the reviewer's working directory to Agy's trusted
+// folders inside the isolated reviewer home only. It trusts exactly that
+// workspace (as given and, if different, with symlinks resolved, since Agy may
+// see either form), never an ancestor or the home directory. The --add-dir
+// prompt root needs no trust entry. Other settings and existing entries are
+// kept; missing, unreadable, or corrupt settings are replaced.
+func seedTrustedWorkspace(configRoot, workspacePath string) error {
+	workspacePath = strings.TrimSpace(workspacePath)
+	if workspacePath == "" || !filepath.IsAbs(workspacePath) {
+		return nil
+	}
+	candidates := []string{filepath.Clean(workspacePath)}
+	if resolved, err := filepath.EvalSymlinks(workspacePath); err == nil && resolved != candidates[0] {
+		candidates = append(candidates, resolved)
+	}
+	dir := filepath.Join(configRoot, ".gemini", agentagy.CLIStorageDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "settings.json")
+	settings := map[string]json.RawMessage{}
+	if raw, err := os.ReadFile(path); err == nil {
+		if json.Unmarshal(raw, &settings) != nil || settings == nil {
+			settings = map[string]json.RawMessage{}
+		}
+	}
+	var trusted []json.RawMessage
+	if raw, ok := settings[trustedWorkspacesKey]; ok && json.Unmarshal(raw, &trusted) != nil {
+		trusted = nil
+	}
+	present := map[string]bool{}
+	for _, entry := range trusted {
+		var value string
+		if json.Unmarshal(entry, &value) == nil {
+			present[value] = true
+		}
+	}
+	for _, candidate := range candidates {
+		if present[candidate] {
+			continue
+		}
+		entry, err := json.Marshal(candidate)
+		if err != nil {
+			return err
+		}
+		trusted = append(trusted, entry)
+		present[candidate] = true
+	}
+	raw, err := json.Marshal(trusted)
 	if err != nil {
 		return err
 	}
-	// Write through a private temp file and rename it into place, so an
-	// existing file with an unusable mode is replaced rather than reused.
-	// Directory and storage failures still surface as errors.
-	tmp, err := os.CreateTemp(dir, ".onboarding-*.json")
+	settings[trustedWorkspacesKey] = raw
+	return writePrivateJSON(path, settings)
+}
+
+// writePrivateJSON writes value through a private temp file renamed into
+// place, so an existing file with an unusable mode is replaced rather than
+// reused. Directory and storage failures surface as errors.
+func writePrivateJSON(path string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+strings.TrimSuffix(filepath.Base(path), ".json")+"-*.json")
 	if err != nil {
 		return err
 	}
