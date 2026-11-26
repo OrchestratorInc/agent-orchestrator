@@ -100,8 +100,9 @@ func RemoveLocalOAuthToken(dataDir string) error {
 // AugmentRuntimeEnv signs local sessions in with a setup-token AO saved,
 // injected as CLAUDE_CODE_OAUTH_TOKEN. The token chosen in AO's login menu
 // applies over API keys, but not over a usable claude.ai login of Claude
-// Code's own; signing in through another menu option removes it again. The AO Cloud token applies only when
-// Claude Code has no first-party login of its own.
+// Code's own; signing in through another menu option removes it again. The
+// AO Cloud token applies only when Claude Code has no first-party login of
+// its own.
 //
 // Provider keys AO holds back from Claude Code are not this adapter's to
 // decide: the session manager applies them to launches, and callers pass
@@ -132,6 +133,17 @@ func (p *Plugin) augmentCredential(env map[string]string, dataDir string) {
 		// with `claude auth login` outside AO) is what sessions use (#9101).
 		if !hasSubscriptionLogin(ctx, env) {
 			env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+			return
+		}
+		// The launch inherits the daemon's environment, and Claude Code takes
+		// a credential variable over its stored login. The token used to mask
+		// one the daemon has; with the token skipped, blank them instead so
+		// the login is what signs the session in. A launch-specific credential
+		// returned above, so it keeps its precedence.
+		for _, name := range claudeCredentialEnv {
+			if strings.TrimSpace(os.Getenv(name)) != "" {
+				env[name] = ""
+			}
 		}
 		return
 	}
