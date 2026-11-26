@@ -1106,7 +1106,8 @@ func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, se
 		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
 	}
 	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
-	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {
+	legacyBranch := sessionmanager.LegacyOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
+	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) && !isOrchestratorBranch(branch, legacyBranch) {
 		return orchestratorReplacementUnverified("new session %s uses branch %q, want %q", sess.ID, branch, expectedBranch)
 	}
 	return nil
@@ -2086,6 +2087,7 @@ func toAPIError(err error) error {
 
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
+	var importRefusedErr *ports.ImportRefusedError
 	var cleanupRefused *sessionmanager.CleanupRefusedError
 	switch {
 	case err == nil:
@@ -2284,10 +2286,17 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspacePathOccupied):
 		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspaceNotARepo):
+		return projectNotARepoError(err)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
 		return err
+	case errors.As(err, &importRefusedErr):
+		// An import refused for a reason the user can fix, such as an agent
+		// CLI that changed between import and first open; the adapter's fixed
+		// message says what to do.
+		return apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", importRefusedErr.Message, nil)
 	case errors.As(err, &relaunchErr):
 		return apierr.Conflict("AGENT_RESUME_FAILED",
 			"Orchestrator could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
@@ -2295,6 +2304,19 @@ func mapSessionError(err error) error {
 	default:
 		return err
 	}
+}
+
+// projectNotARepoError turns git's raw "not a git repository" exit 128 for a
+// registered project folder (for example a project or workspace root whose .git
+// was deleted) into an actionable error that names the folder and how to
+// recover. The text is shared with asynchronous chat start failures.
+func projectNotARepoError(err error) error {
+	message, path, fix, _ := sessionmanager.ProjectNotARepoGuidance(err)
+	details := map[string]any{"suggestedFix": fix}
+	if path != "" {
+		details["path"] = path
+	}
+	return apierr.Invalid("PROJECT_NOT_A_REPO", message, details)
 }
 
 // toSpawnAPIError maps spawn failures to structured API errors so telemetry and

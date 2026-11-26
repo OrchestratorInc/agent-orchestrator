@@ -8,6 +8,9 @@ import {
 	ERROR_KINDS,
 	ERROR_PRESENTATIONS,
 	sanitizeUiUsageProperties,
+	SHORTCUT_CONTROLS,
+	SHORTCUT_IDS,
+	SHORTCUT_STAT_KEYS,
 	SURFACE_OPENED_BY,
 	SURFACE_STAT_KEYS,
 	SWITCH_SOURCES,
@@ -135,6 +138,23 @@ describe("sanitizeUiUsageProperties", () => {
 		expect(sanitizeUiUsageProperties("ao.ui.usage_summary", { surfaces: [], controls: [{ control_id: "nope" }] })).toEqual({});
 	});
 
+	it("keeps known shortcut rows once, with only their counts", () => {
+		const safe = sanitizeUiUsageProperties("ao.ui.usage_summary", {
+			shortcuts: [
+				{ shortcut_id: "toggle-sidebar", key_count: 3, cmdk_count: 1, chord: "Cmd+B" },
+				{ shortcut_id: "toggle-sidebar", key_count: 50 },
+				{ shortcut_id: "my-macro", key_count: 2 },
+				{ shortcut_id: "next-session" },
+			],
+		});
+		expect(safe.shortcuts).toEqual([{ shortcut_id: "toggle-sidebar", key_count: 3, cmdk_count: 1 }]);
+	});
+
+	it("maps shortcuts only onto controls that exist", () => {
+		expect(Object.values(SHORTCUT_CONTROLS).filter((control) => !UI_CONTROLS.includes(control!))).toEqual([]);
+		expect(Object.keys(SHORTCUT_CONTROLS).filter((id) => !SHORTCUT_IDS.includes(id as (typeof SHORTCUT_IDS)[number]))).toEqual([]);
+	});
+
 	it("is what the renderer client applies to these events", async () => {
 		await expect(sanitizeRendererProperties("ao.ui.rage_clicked", { surface: "sidebar", x: 10, y: 20 })).resolves.toEqual({ surface: "sidebar" });
 		await expect(sanitizeRendererProperties("ao.surfaces.viewed", { surface: "cmdk", opened_by: "shortcut", url: "https://x" })).resolves.toEqual({
@@ -165,6 +185,7 @@ describe("docs/telemetry.md", () => {
 			...ERROR_KINDS,
 			...ERROR_PRESENTATIONS,
 			...ERROR_CODES,
+			...SHORTCUT_IDS,
 		];
 		expect(values.filter((value) => !documented(value))).toEqual([]);
 	});
@@ -179,6 +200,9 @@ describe("docs/telemetry.md", () => {
 			"surfaces",
 			"controls",
 			"control_id",
+			"shortcuts",
+			"shortcut_id",
+			...SHORTCUT_STAT_KEYS,
 			...USAGE_SUMMARY_COUNTERS.filter((key) => !key.startsWith("switch_from_")),
 			...SURFACE_STAT_KEYS,
 			...CONTROL_STAT_KEYS,

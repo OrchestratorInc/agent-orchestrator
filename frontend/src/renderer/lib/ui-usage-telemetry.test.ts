@@ -186,6 +186,89 @@ describe("UiUsageRuntime", () => {
 		expect(capture.mock.calls.filter(([event]) => event === "ao.ui.rage_clicked")).toEqual([["ao.ui.rage_clicked", { surface: "sidebar" }]]);
 	});
 
+	it("does not call quick double clicks that select text a rage click", async () => {
+		const input = document.getElementById("input")!;
+		const blank = document.getElementById("blank")!;
+		// Two double clicks in a field: four clicks inside a second.
+		for (const detail of [1, 2, 1, 2]) {
+			click(input, detail);
+			now += 100;
+		}
+		now += 5_000;
+		// The same on plain text, which each double click leaves selected.
+		for (const detail of [1, 2, 1, 2]) {
+			if (detail === 2) window.getSelection()?.selectAllChildren(blank);
+			click(blank, detail);
+			now += 100;
+		}
+		window.getSelection()?.removeAllRanges();
+		expect((await summary()).rage_click_count).toBeUndefined();
+	});
+
+	it("counts a word selected from one of its styled parts as selecting text, not a selection elsewhere", async () => {
+		const blank = document.getElementById("blank")!;
+		const word = document.createElement("span");
+		word.innerHTML = "un<b>der</b>line";
+		blank.after(word);
+		const part = word.querySelector("b")!;
+		const range = document.createRange();
+		// The whole word: both ends lie outside the styled part that was clicked.
+		range.setStart(word.firstChild!, 0);
+		range.setEnd(word.lastChild!, 4);
+		for (const detail of [1, 2, 1, 2]) {
+			if (detail === 2) {
+				window.getSelection()?.removeAllRanges();
+				window.getSelection()?.addRange(range);
+			}
+			click(part, detail);
+			now += 100;
+		}
+		expect(runtime.summaryProperties().rage_click_count).toBeUndefined();
+		now += 5_000;
+		// A selection left on the word does not hide a burst on other plain text.
+		for (const detail of [1, 2, 3, 4]) {
+			click(blank, detail);
+			now += 100;
+		}
+		window.getSelection()?.removeAllRanges();
+		word.remove();
+		expect((await summary()).rage_click_count).toBe(1);
+	});
+
+	it("still calls a fast burst on a button a rage click, though the browser numbers it as a multi-click", async () => {
+		const home = document.getElementById("home")!;
+		for (const detail of [1, 2, 3, 4]) {
+			click(home, detail);
+			now += 100;
+		}
+		expect((await summary()).rage_click_count).toBe(1);
+	});
+
+	it("does not call a click that closes a menu, or that the app cancels, a dead click", async () => {
+		const blank = document.getElementById("blank")!;
+		box(blank, { left: 0, top: 200, width: 300, height: 100 });
+		// The press landed outside an open menu, so the click only closed it.
+		runtime.pointerDown(true);
+		click(blank, 1, 20, 250);
+		now += 2_000;
+		// A listener after this one handled the click and prevented its default.
+		runtime.click({ target: blank, detail: 1, clientX: 20, clientY: 250, defaultPrevented: true });
+		now += 2_000;
+		// With no menu open, the same click is dead.
+		runtime.pointerDown(false);
+		click(blank, 1, 20, 250);
+		expect((await summary()).dead_click_count).toBe(1);
+	});
+
+	it("does not call a click on a text cursor a dead click", async () => {
+		const blank = document.getElementById("blank")!;
+		box(blank, { left: 0, top: 200, width: 300, height: 100 });
+		// A place that focuses a field when clicked, such as the composer's padding.
+		blank.style.cursor = "text";
+		click(blank, 1, 20, 250);
+		expect((await summary()).dead_click_count).toBeUndefined();
+	});
+
 	it("does not call slow, spread-out clicks a rage click", async () => {
 		const home = document.getElementById("home")!;
 		for (let i = 0; i < 6; i += 1) {
@@ -255,15 +338,69 @@ describe("UiUsageRuntime", () => {
 		});
 	});
 
-	it("counts key chords as shortcuts, except editing keys in a text field", async () => {
+	it("does not count a key chord on the page as a shortcut", async () => {
 		const input = document.getElementById("input")!;
+		// App shortcuts are claimed by main and reported by id; a chord the page sees is editing or the OS.
+		runtime.keyDown({ key: "Backspace", metaKey: true, ctrlKey: false, altKey: false, target: input, repeat: false });
 		runtime.keyDown({ key: "k", metaKey: true, ctrlKey: false, altKey: false, target: document.body, repeat: false });
-		runtime.keyDown({ key: "k", metaKey: true, ctrlKey: false, altKey: false, target: document.body, repeat: true });
-		runtime.keyDown({ key: "v", metaKey: true, ctrlKey: false, altKey: false, target: input, repeat: false });
-		runtime.keyDown({ key: "Meta", metaKey: true, ctrlKey: false, altKey: false, target: input, repeat: false });
-		runtime.keyDown({ key: "a", metaKey: false, ctrlKey: false, altKey: false, target: input, repeat: false });
 		now += 2_000;
-		expect((await summary()).shortcut_count).toBe(1);
+		expect((await summary()).shortcut_count).toBeUndefined();
+	});
+
+	it("counts each app shortcut by id, on its control too, and by Cmd+K apart from its keys", async () => {
+		runtime.shortcutUsed("toggle-inspector", "key");
+		runtime.shortcutUsed("toggle-inspector", "key");
+		runtime.shortcutUsed("toggle-inspector", "cmdk");
+		runtime.shortcutUsed("find-in-chat", "key");
+		// Not a shortcut AO has: dropped.
+		runtime.shortcutUsed("format-disk", "key");
+		const properties = (await summary()) as Awaited<ReturnType<typeof summary>> & { shortcuts: Array<Record<string, unknown>> };
+		expect(properties.shortcut_count).toBe(3);
+		expect(properties.shortcuts).toEqual([
+			{ shortcut_id: "toggle-inspector", key_count: 2, cmdk_count: 1 },
+			{ shortcut_id: "find-in-chat", key_count: 1 },
+		]);
+		// Its chord shows beside the button's clicks; Cmd+K does not.
+		expect(controlRow(properties, "topbar.inspector")).toEqual({ control_id: "topbar.inspector", shortcut_count: 2 });
+		expect(properties.measurement_schema_version).toBe(2);
+	});
+
+	it("names a shortcut as what switched the session", async () => {
+		runtime.sessionViewed("host|a");
+		runtime.shortcutUsed("next-session", "key");
+		runtime.sessionViewed("host|b");
+		const properties = await summary();
+		expect(properties.switch_from_shortcut_count).toBe(1);
+		expect(controlRow(properties, "sidebar.session_row")).toMatchObject({ shortcut_count: 1 });
+	});
+
+	it("drops the old chord count from a window saved before shortcuts were counted by id", async () => {
+		// As an older build saved it: no `shortcuts`, and every key chord in shortcut_count.
+		localStorage.setItem("ao.telemetry.uiUsage.v1", JSON.stringify({
+			version: 1,
+			windowId: "11111111-1111-4111-8111-111111111111",
+			windowStartedAt: START,
+			windowFlushAt: START + 60_000,
+			activeMs: 0,
+			counters: { shortcut_count: 7, send_count: 2 },
+			surfaces: {},
+			controls: {},
+		}));
+		runtime = make();
+		const properties = await summary();
+		expect(properties.shortcut_count).toBeUndefined();
+		expect(properties.send_count).toBe(2);
+	});
+
+	it("keeps shortcut counts saved before a restart, and drops unknown ones", async () => {
+		runtime.shortcutUsed("toggle-sidebar", "key");
+		runtime.checkpoint();
+		const saved = JSON.parse(localStorage.getItem("ao.telemetry.uiUsage.v1")!) as { shortcuts: Record<string, unknown> };
+		saved.shortcuts["format-disk"] = { key_count: 9 };
+		localStorage.setItem("ao.telemetry.uiUsage.v1", JSON.stringify(saved));
+		runtime = make();
+		const properties = (await summary()) as Awaited<ReturnType<typeof summary>> & { shortcuts: Array<Record<string, unknown>> };
+		expect(properties.shortcuts).toEqual([{ shortcut_id: "toggle-sidebar", key_count: 1 }]);
 	});
 
 	it("counts sends, attachments, discarded drafts, model changes and errors", async () => {

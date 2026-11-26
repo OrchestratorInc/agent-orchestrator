@@ -99,6 +99,25 @@ export function reviewPhase(
 	return "stopping";
 }
 
+/**
+ * The run behind the phase reviewPhase reports, so the status line names its
+ * agent, commit and time: with one PR launching and another waiting for input,
+ * the waiting one is the run to show.
+ */
+export function reviewPhaseRun(
+	openReviewStates: PRReviewState[],
+	phase: ReviewPhase | null,
+	reviewerActivityHarness?: string,
+): NonNullable<PRReviewState["latestRun"]> | undefined {
+	const running = openReviewStates
+		.filter((reviewState) => reviewState.status === "running")
+		.flatMap((reviewState) => (reviewState.latestRun ? [reviewState.latestRun] : []));
+	if (phase === "waiting_input") return running.find((run) => run.status === "running" && run.harness === reviewerActivityHarness);
+	if (phase === "reviewing") return running.find((run) => run.status === "running");
+	if (phase === "starting") return running.find((run) => run.status === "queued" || run.status === "launching");
+	return running[0];
+}
+
 export function reviewRunDisabled(openReviewStates: PRReviewState[], isTriggering: boolean): boolean {
 	return (
 		isTriggering ||

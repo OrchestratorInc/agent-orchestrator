@@ -29,6 +29,7 @@ import {
 	readableModelLabel,
 	type ModelVariant,
 } from "../../lib/model-variants";
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import { cn } from "../../lib/utils";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import type { ApprovalMode, TurnSettings } from "../../types/conversation";
@@ -239,8 +240,8 @@ export function AgentModelPicker({
 	title?: string;
 	/** A flag on the trigger, such as a substituted model. */
 	mark?: ReactNode;
-	/** The current agent's other settings, as menu rows under its effort. */
-	extras?: ReactNode;
+	/** The current agent's other settings, as menu rows under its effort. Given the picker's pick, called when one is changed. */
+	extras?: (markPick: () => void) => ReactNode;
 	onCloseAutoFocus?: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
@@ -300,12 +301,15 @@ export function AgentModelPicker({
 	);
 	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
 	const [open, setOpen] = useState(false);
+	// The composer's model menu; a terminal's agent menu is not counted as one.
+	const markModelPick = useTelemetrySurface("model_picker", open && !terminal, { choice: true });
 	const favorites = useModelFavorites();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
 	// Cursor's command-line ids fold settings into the model; a running Cursor chat reports its own, kept as is.
 	const live = listsModelVariants(currentHarness) && current.efforts.length === 0 && current.thinking === undefined
 		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
-		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) } : current;
+		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) }
+		: nameSharedModels(current);
 	const { settings: hostSettings } = useSettings(hostId);
 	// The agent's list is shared by every session, so it names the saved model at once.
 	// No saved model means the agent's own default, which Claude Code leaves unset.
@@ -368,12 +372,21 @@ export function AgentModelPicker({
 	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
 	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
 	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
+	// A row is named by its row id, a favourite by its row and the variant it sends; either names the current model.
+	// A terminal's agent menu is not the composer's model picker, so its picks are not counted.
+	const countModelPick = (harness: string, ids: Array<string | undefined>) => {
+		markModelPick();
+		const same = harness === currentHarness && ids.some((id) => id !== undefined && (id === currentSource.modelId || id === currentSource.sendId));
+		if (!terminal && !same) uiUsage.modelChanged();
+	};
 	const pickModel = (harness: string, id: string) => {
+		countModelPick(harness, [id]);
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
 		currentSource.onPickModel?.(id);
 	};
 	const pickSetup = (favorite: ModelFavorite) => {
+		countModelPick(favorite.harness, [favorite.row, favorite.model]);
 		if (favorite.harness === currentHarness) {
 			keepCurrent();
 			if (currentSource.onPickSetup) currentSource.onPickSetup(favorite);
@@ -427,6 +440,7 @@ export function AgentModelPicker({
 	pickRef.current = (event, harness, id) => { stayOpen(event); pickModel(harness, id); };
 	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
 	const pickAgent = (id: string) => {
+		markModelPick();
 		if (id === currentHarness) keepCurrent();
 		else if (id !== pending?.harness) onPendingChange({ harness: id });
 	};
@@ -440,6 +454,16 @@ export function AgentModelPicker({
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
 	const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
+	// A setting changed in the menu is a choice too, so closing after it is not an abandon.
+	// It is not a model change.
+	const withPick = (toggle: ((next: boolean) => void) | undefined) => toggle && ((next: boolean) => {
+		markModelPick();
+		toggle(next);
+	});
+	const pickAccount = (id: string) => {
+		markModelPick();
+		agentSwitch.account?.onPick(id);
+	};
 
 	// The chosen agent's settings, under its models and kept in view while they scroll.
 	const settingsRows = [
@@ -460,6 +484,7 @@ export function AgentModelPicker({
 							radio
 							disabled={!source.onPickEffort}
 							onSelect={() => {
+								markModelPick();
 								if (choice.value !== source.effort) source.onPickEffort?.(choice.value);
 							}}
 							className="text-xs text-foreground"
@@ -477,21 +502,25 @@ export function AgentModelPicker({
 			</OptionMenuSub>
 		) : null,
 		// One account has nothing to switch to, so the row is only for two or more.
-		showAccount && agentSwitch.account ? <AccountRows key="account" account={agentSwitch.account} /> : null,
+		showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
 	].filter(Boolean);
 	const settingsGroups = [
 		settingsRows.length > 0 ? settingsRows : null,
 		settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
 			<>
-				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={source.onToggleFast} />
-				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={source.onToggleThinking} />
+				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={withPick(source.onToggleFast)} />
+				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
 		) : null,
-		extras && !pending ? extras : null,
+		extras && !pending ? extras(markModelPick) : null,
 		offersAutoCompact ? (
 			<AutoCompactRow
 				value={pending?.autoCompactWindow}
-				onChange={(value) => pending && onPendingChange({ ...pending, autoCompactWindow: value })}
+				onChange={(value) => {
+					if (!pending) return;
+					markModelPick();
+					onPendingChange({ ...pending, autoCompactWindow: value });
+				}}
 				title={t("agentSwitch.autoCompactHint")}
 			/>
 		) : null,
@@ -513,6 +542,7 @@ export function AgentModelPicker({
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
+				data-telemetry-id={terminal ? undefined : "composer.model_picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
 				{loadingModels && !savedLabel && !pending && !terminal ? (
@@ -840,6 +870,34 @@ export function catalogProblem(catalog: Pick<AgentModelCatalog, "refreshError" |
 	return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
+/**
+ * Two routes to one model read the same once shortened. Their router tells them
+ * apart, and where the router repeats too, only the full ID does.
+ */
+function nameSharedLabels<T extends { id: string; label: string }>(models: T[]): T[] {
+	const routed = (model: T) => {
+		const slash = model.id.indexOf("/");
+		return slash < 0 ? model.label : `${model.label} (${model.id.slice(0, slash)})`;
+	};
+	const uses = new Map<string, number>();
+	const routes = new Map<string, number>();
+	for (const model of models) {
+		uses.set(model.label, (uses.get(model.label) ?? 0) + 1);
+		routes.set(routed(model), (routes.get(routed(model)) ?? 0) + 1);
+	}
+	return models.map((model) => {
+		if (!model.id.includes("/") || (uses.get(model.label) ?? 0) < 2) return model;
+		return { ...model, label: (routes.get(routed(model)) ?? 0) > 1 ? model.id : routed(model) };
+	});
+}
+
+/** The running agent's models told apart, the picker button naming the chosen one the same way. */
+function nameSharedModels(source: PickerSource): PickerSource {
+	const models = nameSharedLabels(source.models);
+	const chosen = source.models.findIndex((model) => model.id === source.modelId);
+	return { ...source, models, modelLabel: source.models[chosen]?.label === source.modelLabel ? models[chosen].label : source.modelLabel };
+}
+
 /** Another agent's models and settings. Nothing changes until the switch runs; each pick is held as pending. */
 function otherAgentSource(
 	harness: string,
@@ -848,7 +906,7 @@ function otherAgentSource(
 	onPick: (next: PendingAgentSwitch) => void,
 	t: TFunction,
 ): PickerSource {
-	const listed = (catalog ?? [])
+	const listed = nameSharedLabels((catalog ?? [])
 		.filter((model) => !/^\[|\s/.test(model.id))
 		.map((model) => ({
 			id: model.id,
@@ -856,12 +914,7 @@ function otherAgentSource(
 			group: modelGroupLabel(model.provider, harness),
 			hint: model.isDefault ? "default" : undefined,
 			unavailableReason: model.unavailableReason,
-		}));
-	// Two routes to one model read the same once shortened; their router tells them apart.
-	const shared = new Set(listed.filter((entry, index) => listed.findIndex((other) => other.label === entry.label) !== index).map((entry) => entry.label));
-	for (const entry of listed) {
-		if (entry.id.includes("/") && shared.has(entry.label)) entry.label = `${entry.label} (${entry.id.slice(0, entry.id.indexOf("/"))})`;
-	}
+		})));
 	if (listsModelVariants(harness)) {
 		// With no model picked, the agent's default is shown as chosen; it is what starts.
 		return variantSource(listed, pending?.model ?? listed.find((model) => model.hint === "default")?.id, agentLabel(harness), (variant, modelLabel) => onPick({

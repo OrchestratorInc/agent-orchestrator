@@ -22,6 +22,7 @@ import { STANDALONE_AGENTS_FEATURE } from "../lib/cloud-offering";
 import { standaloneAgentProjectId } from "../lib/cloud-standalone-agents";
 import type { ApprovalMode, ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
+import { mergeChatSkills, useAgentSkillsQuery } from "../hooks/useAgentSkillsQuery";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
 import { ChatWorkspace } from "./chat/ChatWorkspace";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
@@ -168,7 +169,13 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		writeChatAttachments(draftScope, []);
 	}
 	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
-	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId, projectId), [hostId, projectId, task.agent.value, task.isCloudProject]);
+	// The host reads the agent's skill folders, so a first chat with an agent lists
+	// them too; the list a session of this agent last reported comes first.
+	const scannedSkills = useAgentSkillsQuery(task.agent.value, projectId, hostId, !task.isCloudProject);
+	const skills = useMemo(
+		() => task.isCloudProject ? [] : mergeChatSkills(readChatSkills(task.agent.value, hostId, projectId), scannedSkills),
+		[hostId, projectId, scannedSkills, task.agent.value, task.isCloudProject],
+	);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],

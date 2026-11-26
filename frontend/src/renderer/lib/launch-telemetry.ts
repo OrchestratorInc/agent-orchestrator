@@ -1,5 +1,5 @@
 import { aoBridge } from "./bridge";
-import type { LaunchTimingStart } from "../../shared/performance-telemetry";
+import type { LaunchSteps, LaunchTimingStart } from "../../shared/performance-telemetry";
 
 /**
  * Launch timings for ao.launches.timed. Main hands each shell page its launch
@@ -8,7 +8,9 @@ import type { LaunchTimingStart } from "../../shared/performance-telemetry";
  *
  * to_visible_ms ends at the first contentful paint. to_usable_ms ends at the
  * frame that shows the sidebar with live sessions, the same frame main's
- * "launch timing" log line ends at (the shell's reportSessionsShown).
+ * "launch timing" log line ends at (the shell's reportSessionsShown). A cold
+ * launch also carries main's steps on the way there, so a slow launch shows
+ * whether the window, the daemon or the first workspace load took the time.
  */
 
 const LAUNCH_VERSION_KEY = "ao.telemetry.launchVersion";
@@ -43,7 +45,7 @@ export function markLaunchUsable(): void {
 	resolveUsable?.(usableAtMs);
 }
 
-function readLaunchKind(kind: "cold" | "warm", appVersion: string): "cold" | "warm" | "update" {
+function readLaunchKind(start: LaunchTimingStart, appVersion: string): "first" | "cold" | "warm" | "update" {
 	let previous: string | null = null;
 	try {
 		previous = window.localStorage.getItem(LAUNCH_VERSION_KEY);
@@ -51,7 +53,26 @@ function readLaunchKind(kind: "cold" | "warm", appVersion: string): "cold" | "wa
 	} catch {
 		// Without storage an update launch reads as cold.
 	}
-	return kind === "cold" && previous !== null && previous !== appVersion ? "update" : kind;
+	if (start.kind === "cold" && start.firstRun) return "first";
+	return start.kind === "cold" && previous !== null && previous !== appVersion ? "update" : start.kind;
+}
+
+/** Main's steps of a cold launch, as ao.launches.timed properties. */
+async function readLaunchSteps(): Promise<Record<string, unknown>> {
+	let steps: LaunchSteps | null = null;
+	try {
+		steps = (await aoBridge.telemetry.launchSteps?.()) ?? null;
+	} catch {
+		return {};
+	}
+	if (!steps) return {};
+	return {
+		to_app_ready_ms: steps.appReadyMs,
+		to_window_shown_ms: steps.windowShownMs,
+		to_server_spawn_ms: steps.serverSpawnMs,
+		to_server_ready_ms: steps.serverReadyMs,
+		server_reused: steps.serverReused,
+	};
 }
 
 function firstContentfulPaintAt(): number | undefined {
@@ -79,14 +100,15 @@ export async function launchProperties(
 	appVersion: string,
 	sendOnClose?: (properties: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown> | undefined> {
-	const launchKind = readLaunchKind(start.kind, appVersion);
-	const properties = (usableAt: number | undefined): Record<string, unknown> => {
+	const launchKind = readLaunchKind(start, appVersion);
+	const properties = (usableAt: number | undefined, steps: Record<string, unknown> = {}): Record<string, unknown> => {
 		if (hiddenDuringLaunch) return { launch_kind: launchKind };
 		const visibleAt = firstContentfulPaintAt();
 		return {
 			launch_kind: launchKind,
 			...(visibleAt === undefined ? {} : { to_visible_ms: visibleAt - start.startedAtMs }),
 			...(usableAt === undefined ? {} : { to_usable_ms: usableAt - start.startedAtMs }),
+			...steps,
 		};
 	};
 	let timer = 0;
@@ -107,6 +129,11 @@ export async function launchProperties(
 		}),
 	]);
 	window.clearTimeout(timer);
+	// Main's steps are measured from process start, so only a cold launch has
+	// them. The close handler stays on while they are read, so a window closed
+	// meanwhile still reports the launch, once.
+	const steps = !sentOnClose && start.kind === "cold" ? await readLaunchSteps() : {};
 	window.removeEventListener("pagehide", onPageHide);
-	return sentOnClose ? undefined : properties(usableAt);
+	if (sentOnClose) return undefined;
+	return properties(usableAt, steps);
 }

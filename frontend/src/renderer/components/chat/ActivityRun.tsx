@@ -155,7 +155,7 @@ export function ActivityRun({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pt-1">
+						<div className="chat-tree flex flex-col gap-1 pt-1">
 							{subgroups.length === 1
 								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
@@ -340,7 +340,7 @@ function ActivitySubgroup({
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1">
+						<div className="chat-tree flex flex-col gap-1">
 							{renderActivityRows(activities, nodesByActivityID)}
 						</div>
 					</motion.div>
@@ -476,7 +476,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 						animate={{ height: "auto", opacity: 1 }}
 						exit={{ height: 0, opacity: 0 }}
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
-						className="border-t border-border/70"
+						className="chat-tree border-t border-border/70"
 					>
 					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} />)}
 					</motion.div>
