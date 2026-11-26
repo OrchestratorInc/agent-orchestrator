@@ -1,0 +1,19 @@
+diff --git a/node_modules/@react-native/virtualized-lists/Lists/VirtualizeUtils.js b/node_modules/@react-native/virtualized-lists/Lists/VirtualizeUtils.js
+index 2264507..f1a0a65 100644
+--- a/node_modules/@react-native/virtualized-lists/Lists/VirtualizeUtils.js
++++ b/node_modules/@react-native/virtualized-lists/Lists/VirtualizeUtils.js
+@@ -53,6 +53,14 @@ export function elementsThatOverlapOffsets(
+         break;
+       }
+     }
++    // No cell contains the offset: it falls between two cells' metrics, as when
++    // a cell measured earlier and since unmounted kept an offset that content
++    // above it has moved past. It belongs to the next cell. Left unresolved, a
++    // window edge read as index 0 and the list mounted a batch of cells toward
++    // the top, only to drop them once they measured.
++    if (result[offsetIndex] == null && left > 0 && left < itemCount) {
++      result[offsetIndex] = left;
++    }
+   }
+ 
+   return result;

@@ -70,6 +70,7 @@ import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
 import { atTail, followsAfterRest, matchesSend, newestSequence, sentItemId, openingRow, optimisticSentItem, RESUME_SLOP, SENT_ROOM_SHARE, sentTurnRoom, type Release, type SendAnchor } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 import { ReplyPacingContext, usePacedReply, type ReplyPacing } from "./usePacedReply";
+import { LiveRepliesContext, useLiveReplyText, type LiveReplies } from "./liveReplies";
 import { FollowScrollView, glideStyles, useFollowGlide } from "./followGlide";
 import { useReducedMotion } from "../useReducedMotion";
 
@@ -199,6 +200,7 @@ function Timeline({
 	composerGrowth,
 	jumpHidden,
 	sendAnchor,
+	liveReplies,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -250,6 +252,8 @@ function Timeline({
 	 * list once, with room left below it for the reply (see `sentTurnRoom`).
 	 */
 	sendAnchor?: SendAnchor;
+	/** Streaming replies' newer text than `snapshot` has (see useConversation's `liveReplies`). */
+	liveReplies?: LiveReplies;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -752,6 +756,7 @@ function Timeline({
 			<ConversationHarness.Provider value={snapshot.harness}>
 				<LatestWorkerUpdates.Provider value={latestUpdates}>
 				<ReplyPacingContext.Provider value={pacing}>
+				<LiveRepliesContext.Provider value={liveReplies ?? null}>
 					<Animated.View style={[styles.timelineWrap, growthLift]}>
 						<RevealFocusedField.Provider value={revealField}>
 						<FlatList<ConversationGroup>
@@ -866,6 +871,7 @@ function Timeline({
 						{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}
 						{renderScrollComponent ? <Animated.View pointerEvents="none" style={[glideStyles.commit, glide.commitStyle]} /> : null}
 					</Animated.View>
+				</LiveRepliesContext.Provider>
 				</ReplyPacingContext.Provider>
 				</LatestWorkerUpdates.Provider>
 			</ConversationHarness.Provider>
@@ -1004,8 +1010,10 @@ function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: numbe
  * render, and unselectable, until the paced text has caught up.
  */
 function AssistantReply({ message, conversationId, completed }: { message: ConversationMessage; conversationId: string; completed: boolean }) {
-	const text = usePacedReply(message.id, message.text, message.streaming);
-	const revealing = text.length < message.text.length;
+	// What the agent has written so far, newer than `message` while only its text grows.
+	const written = useLiveReplyText(message);
+	const text = usePacedReply(message.id, written, message.streaming);
+	const revealing = text.length < written.length;
 	return <ChatMarkdown text={text} streaming={message.streaming || revealing} continuousSelection selectionSource={completed && !message.streaming && !revealing ? { conversationId, messageId: message.id, revision: message.revision } : undefined} />;
 }
 

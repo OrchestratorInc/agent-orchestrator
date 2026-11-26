@@ -70,10 +70,13 @@ describe("streaming response layout", () => {
 	});
 
 	// Snapshots land in bursts; the reply's text is paced (replyPacer) and stays
-	// a streaming, unselectable render until the paced text has caught up.
+	// a streaming, unselectable render until the paced text has caught up. Text
+	// newer than the conversation's (liveReplies) reaches the reply alone.
 	it("paces a live reply and treats it as streaming until it has caught up", () => {
 		const reply = source.slice(source.indexOf("function AssistantReply"), source.indexOf("const TimelineItem"));
-		expect(reply).toContain("const text = usePacedReply(message.id, message.text, message.streaming);");
+		expect(reply).toContain("const written = useLiveReplyText(message);");
+		expect(reply).toContain("const text = usePacedReply(message.id, written, message.streaming);");
+		expect(reply).toContain("const revealing = text.length < written.length;");
 		expect(reply).toContain("streaming={message.streaming || revealing}");
 		expect(reply).toContain("completed && !message.streaming && !revealing ?");
 		expect(source).toContain("<AssistantReply message={item} conversationId={conversationId} completed={completed} />");

@@ -1,6 +1,6 @@
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -22,6 +22,7 @@ import type { ChatExcerpt } from "./types";
 import { sessionLink } from "./automationMessages";
 import { chatFileReference, isBareFileReference } from "./fileLinks";
 import { useFilesNavigation } from "../files/navigation";
+import { sameJson } from "../keepUnchanged";
 
 // The diagram renderer (a WebView and the engine's loader) loads on the first
 // Mermaid fence, so text without one never pulls it in.
@@ -113,7 +114,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
-	const blocks = parseBlocks(text, { relativeImages: Boolean(resolveImage) });
+	const blocks = useStableBlocks(parseBlocks(text, { relativeImages: Boolean(resolveImage) }));
 	const openFiles = Boolean(useFilesNavigation());
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep each run of response text
@@ -222,7 +223,7 @@ function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Arra
 }
 
 /** One native text surface for selecting across a run of response blocks. */
-export function SelectableResponseText({ blocks, source, onSelect }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text">; onSelect?: (text: string) => void }) {
+export const SelectableResponseText = memo(function SelectableResponseText({ blocks, source, onSelect }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text">; onSelect?: (text: string) => void }) {
 	const t = useTheme();
 	const addToChat = useContext(AddResponseToChat);
 	// In a conversation, only a finished message (one with a source) can be quoted.
@@ -233,17 +234,44 @@ export function SelectableResponseText({ blocks, source, onSelect }: { blocks: A
 	const openFiles = Boolean(useFilesNavigation());
 	const selectionColor = textSelectionColors(t).selectionColor;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
-		{blocks.map((block, index) => {
-			const separator = index > 0 ? "\n\n" : "";
-			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, true, undefined, openFiles)}</Text>)}</Text>;
-			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
-			return <Text key={index}>{separator}────────</Text>;
-		})}
+		{blocks.map((block, index) => <ResponseTextBlock key={index} block={block} index={index} styles={styles} openFiles={openFiles} />)}
 	</Text>;
+}, (before, after) => before.source === after.source && before.onSelect === after.onSelect && sameItems(before.blocks, after.blocks));
+
+/**
+ * One block of a response's text surface. Memoized on the block, which keeps its
+ * identity while its text does (useStableBlocks): a streaming reply re-renders
+ * only the block that grew, not every span of every paragraph above it, each
+ * time the paced text moves on.
+ */
+const ResponseTextBlock = memo(function ResponseTextBlock({ block, index, styles, openFiles }: { block: Exclude<MarkdownBlock, TableBlock>; index: number; styles: ReturnType<typeof makeStyles>; openFiles: boolean }) {
+	const separator = index > 0 ? "\n\n" : "";
+	if (block.kind === "heading") return <Text style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+	if (block.kind === "paragraph") return <Text>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+	if (block.kind === "quote") return <Text style={styles.quoteText}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+	if (block.kind === "list") return <Text>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, true, undefined, openFiles)}</Text>)}</Text>;
+	if (block.kind === "code") return <Text style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
+	if (block.kind === "image") return <Text style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
+	return <Text>{separator}────────</Text>;
+});
+
+function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
+	return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+/**
+ * The parsed blocks, each one that has not changed since the last parse kept as
+ * the object it was then. A streaming reply is parsed whole at every paced
+ * step; without this every block came back new and every memo below missed.
+ */
+function useStableBlocks(blocks: MarkdownBlock[]): MarkdownBlock[] {
+	const previous = useRef<MarkdownBlock[]>([]);
+	const stable = blocks.map((block, index) => {
+		const before = previous.current[index];
+		return before && sameJson(before, block) ? before : block;
+	});
+	previous.current = stable;
+	return stable;
 }
 
 function SelectableInlineText({ value, selectionColor, style, styles, codeStyle }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles>; codeStyle?: StyleProp<TextStyle> }) {
@@ -257,13 +285,13 @@ function SelectableInlineText({ value, selectionColor, style, styles, codeStyle 
 
 let preferredCodeWrap = false;
 
-function MarkdownImage({ alt, url, selectionColor, showCaption = true, resolve }: { alt: string; url: string; selectionColor: string; showCaption?: boolean; resolve?: (url: string) => MarkdownImageSource | undefined }) {
+const MarkdownImage = memo(function MarkdownImage({ alt, url, selectionColor, showCaption = true, resolve }: { alt: string; url: string; selectionColor: string; showCaption?: boolean; resolve?: (url: string) => MarkdownImageSource | undefined }) {
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
 	const source = resolve ? resolve(url) : { uri: url };
 	if (failed || !source) return <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
 	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={source.headers ? imageSourceForPlatform(source) : source} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
-}
+});
 
 // React Native has no grid layout, so a column's width is estimated from its
 // longest cell and every row uses that width; that keeps columns aligned.
@@ -280,7 +308,7 @@ function tableColumnWidth(cells: string[]): number {
 	return Math.min(TABLE_COLUMN_MAX, Math.max(TABLE_COLUMN_MIN, Math.ceil(chars * TABLE_CHAR_WIDTH) + space.sm * 2));
 }
 
-function MarkdownTable({ headers, align, rows, selectionColor, nestedScroll }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string; nestedScroll: boolean }) {
+const MarkdownTable = memo(function MarkdownTable({ headers, align, rows, selectionColor, nestedScroll }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string; nestedScroll: boolean }) {
 	const styles = useThemedStyles(makeStyles);
 	const widths = headers.map((header, column) => tableColumnWidth([header, ...rows.map((row) => row[column] ?? "")]));
 	const row = (cells: string[], header: boolean) => headers.map((_, column) => <View key={column} style={[styles.tableCell, column === 0 && styles.tableFirstCell, { width: widths[column], flexGrow: widths[column] }]}>
@@ -292,12 +320,12 @@ function MarkdownTable({ headers, align, rows, selectionColor, nestedScroll }: {
 			{rows.map((cells, index) => <View key={index} style={styles.tableRow}>{row(cells, false)}</View>)}
 		</View>
 	</ScrollView>;
-}
+});
 
 /** How long Copy shows its checkmark before it turns back. */
 const COPIED_MS = 1_400;
 
-function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: string; language?: string; streaming?: boolean; nestedScroll?: boolean }) {
+const CodeBlock = memo(function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: string; language?: string; streaming?: boolean; nestedScroll?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("icon");
@@ -345,7 +373,7 @@ function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: 
 			</ScrollView>
 		</View>
 	);
-}
+});
 
 function MarkdownLink({ url, label, style }: { url: string; label: string; style: StyleProp<TextStyle> }) {
 	const provided = useContext(OpenChatLink);

@@ -1,5 +1,6 @@
 import { Stack, useIsFocused, useRoute } from "expo-router";
 import { useNavigationState } from "expo-router/react-navigation";
+import { ScreenActiveContext } from "./screenActivity";
 import { largeTitleScreenOptions, stackScreenOptions } from "./stackScreenOptions";
 import { FrozenAppScope } from "./store";
 import { useTheme } from "./ThemeProvider";
@@ -22,12 +23,17 @@ export function TabStack({ screen, title }: { screen: string; title: string }) {
 	// Focus turns over in the same render as the tab does, so the page has the
 	// latest state before its focus effects run; the selection only reaches this
 	// a commit later. Selection keeps the tab live under a page pushed over it.
-	const live = useIsFocused() || selected;
+	const focused = useIsFocused();
+	const live = focused || selected;
+	// Under a page pushed over it: live data, rendered in the background, and no
+	// decoration redrawn every frame.
 	return (
-		<FrozenAppScope frozen={!live}>
-			<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>
-				<Stack.Screen name={screen} options={{ title }} />
-			</Stack>
+		<FrozenAppScope frozen={!live} background={!focused}>
+			<ScreenActiveContext.Provider value={focused}>
+				<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>
+					<Stack.Screen name={screen} options={{ title }} />
+				</Stack>
+			</ScreenActiveContext.Provider>
 		</FrozenAppScope>
 	);
 }

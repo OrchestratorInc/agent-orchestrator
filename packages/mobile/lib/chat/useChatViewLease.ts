@@ -27,7 +27,8 @@ export function coveredOnlyBySheets(routes: readonly StackRoute[] | undefined, k
  * wakes a hibernated chat before it answers that request and reports the wake no
  * other way, so this is when the screen should read the conversation again.
  */
-export function useChatViewLease(config: ServerConfig | null, sessionId: string, onViewing?: () => void): void {
+/** Returns whether the chat is being viewed: focused, or under nothing but chat sheets. */
+export function useChatViewLease(config: ServerConfig | null, sessionId: string, onViewing?: () => void): boolean {
 	const focused = useIsFocused();
 	const navigation = useNavigation();
 	const { key } = useRoute();
@@ -99,4 +100,5 @@ export function useChatViewLease(config: ServerConfig | null, sessionId: string,
 			}
 		};
 	}, [config, sessionId, viewing]);
+	return viewing;
 }

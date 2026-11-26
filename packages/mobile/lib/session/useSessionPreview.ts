@@ -26,7 +26,10 @@ export function isLivePreview(preview: { entry: string } | null): boolean {
  * unbuilt page. Chat and the terminal share it, so their globes agree.
  */
 export function useSessionPreview(config: ServerConfig | null | undefined, sessionId: string, enabled = true): boolean {
-	const [preview, setPreview] = useState<{ entry: string } | null>(null);
+	// The entry itself, not an object around it: an answer that has not changed
+	// then leaves the screen alone, where a new object every poll re-rendered
+	// the whole chat every five seconds.
+	const [entry, setEntry] = useState<string | null>(null);
 	useEffect(() => {
 		if (!enabled || !config || !isConfigured(config)) return;
 		let cancelled = false;
@@ -35,7 +38,7 @@ export function useSessionPreview(config: ServerConfig | null | undefined, sessi
 			try {
 				const found = await getPreview(config, sessionId);
 				if (cancelled) return;
-				setPreview(found ? { entry: found.entry } : null);
+				setEntry(found ? found.entry : null);
 			} catch {
 				/* transient - keep polling */
 			}
@@ -47,5 +50,5 @@ export function useSessionPreview(config: ServerConfig | null | undefined, sessi
 			if (timer) clearTimeout(timer);
 		};
 	}, [config, enabled, sessionId]);
-	return isLivePreview(preview);
+	return isLivePreview(entry === null ? null : { entry });
 }

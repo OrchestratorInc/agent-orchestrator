@@ -10,6 +10,7 @@ import Animated, {
 	type SharedValue,
 } from "react-native-reanimated";
 
+import { useScreenActive } from "../screenActivity";
 import { useReducedMotion } from "../useReducedMotion";
 import {
 	LATTICE_INNER_OPACITY,
@@ -45,13 +46,15 @@ const ORIGINS = Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) =>
  */
 export const LatticeLoader = memo(function LatticeLoader({ color }: { color: string }) {
 	const reduceMotion = useReducedMotion();
+	// Off screen (a board row under an open chat) the lap stops where it is.
+	const seen = useScreenActive();
 	const lap = useSharedValue(0);
 	useEffect(() => {
-		if (reduceMotion) return;
+		if (reduceMotion || !seen) return;
 		lap.value = 0;
 		lap.value = withRepeat(withTiming(1, { duration: LATTICE_LAP_MS, easing: Easing.linear }), -1);
 		return () => cancelAnimation(lap);
-	}, [lap, reduceMotion]);
+	}, [lap, reduceMotion, seen]);
 	return (
 		<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.lattice} testID="lattice-loader">
 			{Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) => {
@@ -65,8 +68,16 @@ export const LatticeLoader = memo(function LatticeLoader({ color }: { color: str
 	);
 });
 
+/**
+ * The lap read in steps of a fortieth of a second. The dots are a few pixels
+ * across, yet at a 120 Hz display's every frame twelve of them set an opacity
+ * on the UI thread. In between steps a dot's opacity holds, and Reanimated
+ * leaves a style that did not change alone.
+ */
+const LATTICE_STEPS = Math.round(LATTICE_LAP_MS / 25);
+
 function TrailDot({ lap, offset, style }: { lap: SharedValue<number>; offset: number; style: StyleProp<ViewStyle> }) {
-	const trail = useAnimatedStyle(() => ({ opacity: latticeTrailOpacity(lap.value - offset) }));
+	const trail = useAnimatedStyle(() => ({ opacity: latticeTrailOpacity(Math.floor(lap.value * LATTICE_STEPS) / LATTICE_STEPS - offset) }));
 	return <Animated.View style={[style, trail]} />;
 }
 

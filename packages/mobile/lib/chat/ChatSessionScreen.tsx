@@ -65,6 +65,7 @@ import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
+import { ScreenActiveContext } from "../screenActivity";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
@@ -138,7 +139,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		void refreshOnView();
 		void loadTurnOptionsOnView({ refresh: true, ifMissing: true }).catch(() => {});
 	}, [loadTurnOptionsOnView, refreshOnView]);
-	useChatViewLease(config, session.id, onViewing);
+	// Whether the chat can be seen: on top, or under nothing but a chat sheet.
+	const chatViewing = useChatViewLease(config, session.id, onViewing);
 	// Plain focus, not the lease's "focused or under chat sheets": every chat
 	// sheet is a bottom sheet over the composer, where the MCP note sits.
 	const chatFocused = useIsFocused();
@@ -1018,6 +1020,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// One keyboard handler for the composer, its follower and the conversation
 	// (see KeyboardMotionScope).
 	return (
+		<ScreenActiveContext.Provider value={chatViewing}>
 		<KeyboardMotionScope>
 		<View style={styles.screen}>
 		{/* Not padded for the keyboard: the timeline moves its content with the
@@ -1032,6 +1035,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				<TurnRecoveryContext.Provider value={turnRecovery}>
 				{timelineMounted ? <ChatTimeline
 					snapshot={snapshot}
+					liveReplies={conversation.liveReplies}
 					loadingOlder={conversation.loadingOlder}
 					onLoadOlder={conversation.loadOlder}
 					approvalPending={conversation.pendingActions.includes("approval")}
@@ -1164,6 +1168,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		</KeyboardFollower>
 		</View>
 		</KeyboardMotionScope>
+		</ScreenActiveContext.Provider>
 	);
 }
 
