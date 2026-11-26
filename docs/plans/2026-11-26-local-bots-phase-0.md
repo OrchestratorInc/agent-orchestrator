@@ -96,9 +96,15 @@ $AO_DATA_DIR/bots/<bot-id>/
 - **Location.** The folder is under `$AO_DATA_DIR`, per the `~/.ao`-only hard rule. It is never in the repo or a worktree.
 - **Write path.** The bot never writes these files directly. A bot session's workspace is a repo checkout, and harness sandboxes may block writes outside it. The bot uses `ao bot memory append|replace` instead. The daemon then:
   - checks size (MEMORY.md is capped at 16 KiB);
-  - rejects content matching credential patterns, since the bot must never save a secret;
+  - rejects content matching known credential formats (best-effort; see below);
   - snapshots the previous version to `.history/`;
   - emits a change event.
+- **Secrets: reduce the risk; no guarantee.** AO cannot guarantee that a secret never reaches bot memory. The credential-format check only catches text in recognizable formats, such as provider token prefixes and private-key blocks. A password written as ordinary prose passes it. Phase 0 layers these controls on top:
+  - Memory content is always owner-visible. Every write shows up as a diff in the Memory tab.
+  - `ao bot memory purge` removes a value from `MEMORY.md`, every `.history/` snapshot, and the `journal/` files, for when a secret slips through.
+  - The bot skill and system prompt tell the bot not to store secrets, and to refer to credentials by name only. This is a model instruction, not enforcement.
+  - Memory never leaves the home in Phase 0. It is not synced, uploaded, or sent in telemetry.
+  - Moving or exporting a bot in a later phase must re-run the check and show the owner the memory before it leaves the machine.
 - **SOUL.md is owner-only.** It is edited in the UI, the API, or a text editor. The bot can propose a SOUL change only as a bot ask.
 - **Injection.** At every bot-session start (first start, wake, recycle), the system prompt gets SOUL.md, MEMORY.md, the bot's open asks, and a crew summary. It goes through the existing `writeSystemPromptFile` path in `session_manager/manager.go`.
 - **Portability rule.** Memory must not contain absolute paths or daemon-local session IDs as load-bearing references. The tidy prompt says so, and the folder must be able to move to another home unchanged.
@@ -259,6 +265,7 @@ Thin clients over new daemon routes, following `backend/internal/cli` patterns. 
 ao bot create --project <p> --handle <h> --name <n> [--purpose ...] [--agent ...] [--template ...]
 ao bot ls | get <handle> | send <handle> <text> | pause | resume | archive | rm
 ao bot memory show | append <text> | replace --file <f> | history | undo   # agent-facing writes
+ao bot memory purge <text>                                               # owner only; scrubs MEMORY.md, .history/ and journal/
 ao bot ask --kind decision|approval|review|info "<question>" [--option ...] [--subject <ref>]
 ao inbox [--bot <handle>]
 ```
@@ -284,7 +291,7 @@ Ten PRs of about two weeks' total work, each with tests for the boundary it chan
 2. The bot conversation migration (decision 2), plus rebinding tests that copy the project-conversation tests.
 3. `KindBot`, plus the `KindOrchestrator` audit with one pinned behaviour test per site.
 4. The bot service with create, get, list, pause, resume, archive, and delete; HTTP routes and DTOs (`npm run api`); and the CLI.
-5. The bot folder and memory routes: size cap, secret check, history and undo, and system-prompt injection.
+5. The bot folder and memory routes: size cap, best-effort credential check, history and undo, purge, and system-prompt injection.
 6. Crew attribution, permissions inheritance, the worker cap, and report routing to the bot conversation.
 7. Hibernate and wake for bots, and recycle with a handoff note.
 8. Automations targeting bots, with bundled templates as bot templates.
