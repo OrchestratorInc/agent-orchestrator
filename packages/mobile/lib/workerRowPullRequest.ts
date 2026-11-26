@@ -87,8 +87,8 @@ export function workerRowAccessibilityLabel({ title, project, indicator, display
 			: displayStatus || statusLabel;
 	const parts = [title, state];
 	if (pr) parts.push(`Pull request ${pr.number}, ${pr.lifecycle}${pr.more ? `, and ${pr.more} more` : ""}`);
-	parts.push(project);
-	if (machine) parts.push(`on ${machine}`);
+	// One sentence for where it runs: "web on Studio", not "web. on Studio".
+	parts.push(machine ? `${project} on ${machine}` : project);
 	if (updated) parts.push(`Updated ${spokenAge(updated)}`);
 	return `${parts.join(". ")}.${unreachable ? " Last known; its machine can't be reached." : ""}`;
 }

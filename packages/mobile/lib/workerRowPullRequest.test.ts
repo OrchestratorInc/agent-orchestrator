@@ -42,7 +42,7 @@ describe("workerRowAccessibilityLabel", () => {
 			updated: "1h",
 			unreachable: true,
 		});
-		expect(label).toBe("Fix login. Ready to merge. Pull request 15, open, and 1 more. web. on Studio. Updated 1 hour ago. Last known; its machine can't be reached.");
+		expect(label).toBe("Fix login. Ready to merge. Pull request 15, open, and 1 more. web on Studio. Updated 1 hour ago. Last known; its machine can't be reached.");
 	});
 
 	it("says just now for a fresh row", () => {
