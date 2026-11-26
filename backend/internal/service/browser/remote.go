@@ -621,9 +621,24 @@ func (s *Service) remoteData(ctx context.Context, args ...string) (map[string]in
 const remoteDescribeScript = `(() => {
 const req = %s;
 const clean = (v) => (v || "").replace(/\s+/g, " ").trim().slice(0, 120);
+// Implicit roles as the panel's describer and the snapshot assign them, so a
+// snapshot ref's role matches the element it names.
 const roleOf = (el) => {
-  const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
-  return el.getAttribute("role") || (tag === "a" ? "link" : tag === "button" || ["submit", "button", "image"].includes(type) ? "button" : tag === "textarea" || tag === "input" ? "textbox" : "");
+  const explicit = el.getAttribute("role");
+  if (explicit) return explicit.split(/\s+/)[0].toLowerCase();
+  const tag = el.tagName.toLowerCase(), type = (el.type || "text").toLowerCase();
+  if (tag === "a") return "link";
+  if (tag === "button" || tag === "summary") return "button";
+  if (tag === "textarea") return "textbox";
+  if (tag === "select") return "combobox";
+  if (tag === "input") {
+    if (["submit", "button", "reset", "image"].includes(type)) return "button";
+    if (type === "checkbox" || type === "radio") return type;
+    if (type === "search") return "searchbox";
+    if (type === "number") return "spinbutton";
+    return "textbox";
+  }
+  return el.isContentEditable ? "textbox" : "";
 };
 const nameOf = (el) => {
   const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
@@ -632,9 +647,13 @@ const nameOf = (el) => {
   // An editable field's content is what the agent typed: name it only by its
   // label or hint, never by its text, so typed values stay out of the prompt.
   const editable = tag === "textarea" || el.isContentEditable || (tag === "input" && !["submit", "button", "image", "reset", "checkbox", "radio"].includes(type));
-  if (editable) {
-    const wrap = name ? null : el.closest("label");
+  // A wrapping label names its field; its own text nodes only, so a field's
+  // content (what the agent typed) never becomes the name.
+  if (!name && (editable || tag === "input" || tag === "select")) {
+    const wrap = el.closest("label");
     if (wrap) name = clean([...wrap.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" "));
+  }
+  if (editable) {
     return name || clean(el.placeholder || el.getAttribute("aria-placeholder") || el.getAttribute("data-placeholder") || el.title);
   }
   return name || clean(el.innerText || el.textContent || el.placeholder);
