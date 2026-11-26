@@ -224,6 +224,7 @@ if (typeof window !== "undefined") {
 			},
 			getWindowTransparency: async () => ({ supported: false, enabled: false, reason: "unsupported" }),
 			onWindowTransparency: () => () => undefined,
+			setInterfaceV2: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,

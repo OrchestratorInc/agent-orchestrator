@@ -537,6 +537,9 @@ const api = {
 			ipcRenderer.on(WINDOW_TRANSPARENCY_CHANGED, listener);
 			return () => { ipcRenderer.removeListener(WINDOW_TRANSPARENCY_CHANGED, listener); };
 		},
+		// macOS only: Interface v2 moves the native window buttons with its wider
+		// edge spacing.
+		setInterfaceV2: (enabled: boolean) => ipcRenderer.invoke("theme:set-interface-v2", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,

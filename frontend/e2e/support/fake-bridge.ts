@@ -159,6 +159,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setWindowTranslucent: async (enabled: boolean) => ({ supported: /Mac|Win/.test(navigator.platform), enabled: enabled && /Mac|Win/.test(navigator.platform), reason: /Mac|Win/.test(navigator.platform) ? null : "unsupported" as const }),
 					getWindowTransparency: async () => ({ supported: /Mac|Win/.test(navigator.platform), enabled: false, reason: null }),
 					onWindowTransparency: unsubscribe,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: {
@@ -1195,6 +1196,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setWindowTranslucent: async (enabled: boolean) => ({ supported: /Mac|Win/.test(navigator.platform), enabled: enabled && /Mac|Win/.test(navigator.platform), reason: /Mac|Win/.test(navigator.platform) ? null : "unsupported" as const }),
 					getWindowTransparency: async () => ({ supported: /Mac|Win/.test(navigator.platform), enabled: false, reason: null }),
 					onWindowTransparency: unsubscribe,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: { writeText: async () => undefined, readText: async () => "", writeImage: async () => undefined },

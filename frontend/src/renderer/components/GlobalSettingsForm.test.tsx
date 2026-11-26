@@ -998,7 +998,7 @@ describe("GlobalSettingsForm", () => {
 		expect(`${github.origin}${github.pathname}`).toBe("https://github.com/OrchestratorInc/agent-orchestrator/issues/new");
 		expect(github.searchParams.get("body")).toContain("Safe diagnostics");
 		expect(openExternal).toHaveBeenCalledWith("https://discord.gg/WjKNa7EbB8");
-		expect(openExternal).toHaveBeenCalledWith("mailto:prasad@untrivial.ai?cc=prateek@untrivial.ai");
+		expect(openExternal).toHaveBeenCalledWith("mailto:prasad@untrivial.ai?cc=prateek@orchestrator.inc");
 		expect(writeText).not.toHaveBeenCalled();
 	});
 

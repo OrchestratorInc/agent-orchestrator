@@ -97,6 +97,7 @@ export const aoBridge: AoBridge =
 			setWindowTranslucent: async () => ({ supported: false, enabled: false, reason: "unsupported" as const }),
 			getWindowTransparency: async () => ({ supported: false, enabled: false, reason: "unsupported" as const }),
 			onWindowTransparency: () => () => undefined,
+			setInterfaceV2: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
