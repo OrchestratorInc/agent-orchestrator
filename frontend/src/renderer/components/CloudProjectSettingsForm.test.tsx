@@ -782,7 +782,7 @@ describe("Cloud project sandbox settings", () => {
 	});
 
 	it("shows both switches read-only when the server says this user cannot edit them", async () => {
-		project = { ...project, canEditSandbox: false } as CloudCpProject;
+		project = { ...project, canEditSandbox: false };
 		mount("sandbox");
 		const docker = await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" });
 		const sudo = screen.getByRole("switch", { name: "Agents can use sudo" });
@@ -803,7 +803,7 @@ describe("Cloud project sandbox settings", () => {
 
 	it("goes read-only when a save answers that this user can no longer edit", async () => {
 		mocks.patch.mockImplementationOnce(async (_org: string, _id: string, patch: CloudCpProjectSettingsRequest) => {
-			project = { ...project, config: { ...project.config, ...patch.config }, canEditSandbox: false } as CloudCpProject;
+			project = { ...project, config: { ...project.config, ...patch.config } as CloudCpProject["config"], canEditSandbox: false };
 			return { project };
 		});
 		mount("sandbox");

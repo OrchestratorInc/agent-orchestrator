@@ -142,12 +142,6 @@ function configKeyUnsupported(error: unknown, key: string): boolean {
 		error.message === `unsupported or null config.${key}`;
 }
 
-/** Whether the signed-in user may change the sandbox settings (project.canEditSandbox); undefined when the server does not say. */
-function canEditSandboxOf(project: CloudCpProject): boolean | undefined {
-	const value = (project as { canEditSandbox?: unknown }).canEditSandbox;
-	return typeof value === "boolean" ? value : undefined;
-}
-
 type SandboxConfigKey = "sandboxDocker" | "agentsCanUseSudo";
 
 /**
@@ -161,7 +155,7 @@ export function CloudProjectSandboxSettings({ project, showDocker }: { project: 
 	// false means this user may not change them; absent (an older server) means
 	// unknown, so the switches stay editable and the server's 403 answers. Read
 	// from the current project: a save or refetch puts the server's answer there.
-	const rowProps = { project, readOnly: canEditSandboxOf(project) === false };
+	const rowProps = { project, readOnly: project.canEditSandbox === false };
 	return <SettingsGroup title={t("settings.project.sandbox.title")} titleHidden grouped>
 		{showDocker ? <SandboxSwitchRow {...rowProps} configKey="sandboxDocker" id="project-sandbox-docker"
 			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}

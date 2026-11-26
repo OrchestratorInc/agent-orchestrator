@@ -258,7 +258,7 @@ export interface CloudCpProjectListQuery extends CloudCpListQuery {
 // ---------------------------------------------------------------------------
 
 import type { AddAgentAccountInput, CloudAgentAccount, SessionAgentAccount } from "../../../../../packages/cloud-client/src/types";
-import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
+import type { Project as CloudProjectSchema, ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
 
 export type CloudCpProjectAgentConfig = ProjectAgentConfig;
 /** A project's environment variables; `value` only for an owner or admin (`editable`). */
@@ -351,6 +351,12 @@ export interface CloudCpProject {
 	 * Absent from older control planes.
 	 */
 	standaloneAgent?: boolean;
+	/**
+	 * Whether the caller may change config.sandboxDocker and
+	 * config.agentsCanUseSudo. Absent from older control planes, where only the
+	 * settings PATCH's 403 says so.
+	 */
+	canEditSandbox?: CloudProjectSchema["canEditSandbox"];
 	createdAt: string;
 	updatedAt: string;
 }
