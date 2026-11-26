@@ -4357,7 +4357,7 @@ describe("useTaskLaunch agent choices", () => {
 			.toEqual(["claude-code", "codex: Not installed", "goose: Not signed in"]));
 	});
 
-	it("offers Antigravity dimmed with its setup reason instead of hiding it (#7640)", async () => {
+	it("passes a not-installed Antigravity to the picker with its setup reason instead of dropping it (#7640)", async () => {
 		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
 		h.agentCatalog = { agents: [
 			agentReadiness("claude-code", "Claude Code"),
