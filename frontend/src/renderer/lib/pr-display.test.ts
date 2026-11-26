@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import type { PullRequestFacts, SessionBranchState, WorkspaceSession } from "../types/workspace";
 import {
+	readinessSignals,
 	noPRDetails,
 	prBrowserUrl,
 	prCanMerge,
@@ -611,6 +612,33 @@ describe("merge readiness rows", () => {
 	it("shows a merge conflict in the conflicts row", () => {
 		const pr = summary({ mergeability: { state: "conflicting", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } });
 		expect(prCardPresentation(pr).readinessRows?.[0]).toMatchObject({ label: "Merge conflict", tone: "error" });
+	});
+});
+
+describe("readinessSignals", () => {
+	const review = (over: Partial<SessionPRSummary["review"]>) => summary({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [], ...over } });
+	const approved = (reviewerId: string) => ({ reviewerId, verdict: "approved" as const, submittedAt: "2026-10-20T10:00:00Z" });
+
+	it("says nothing with no open comments and no reviews", () => {
+		expect(readinessSignals(review({}))).toEqual([]);
+	});
+
+	it("counts unresolved comments, falling back to the reviewers' counts", () => {
+		expect(readinessSignals(review({ unresolvedThreadCount: 2 }))).toEqual([{ key: "comments", count: 2, tone: "warning", label: "2 unresolved comments" }]);
+		expect(readinessSignals(review({ unresolvedBy: [{ reviewerId: "lin", count: 3, links: [] }] }))[0]).toMatchObject({ key: "comments", count: 3 });
+		expect(readinessSignals(review({ unresolvedThreadCount: 0, resolvedBy: [{ reviewerId: "lin", count: 4, links: [] }] }))).toEqual([]);
+	});
+
+	it("counts approvals, in the colour of where the review stands", () => {
+		expect(readinessSignals(review({ decision: "approved", reviews: [approved("lin")] }))).toEqual([{ key: "approvals", count: 1, tone: "success", label: "Approved by lin" }]);
+		expect(readinessSignals(review({ decision: "review_required", reviews: [approved("lin")] }))[0]).toMatchObject({ count: 1, tone: "warning" });
+		expect(readinessSignals(review({ decision: "review_required" }))[0]).toMatchObject({ count: 0, tone: "warning" });
+		expect(readinessSignals(review({ decision: "changes_requested", reviews: [{ reviewerId: "sam", verdict: "changes_requested", submittedAt: "2026-10-20T10:00:00Z" }] }))[0]).toMatchObject({ count: 0, tone: "error", label: "Changes requested by sam" });
+	});
+
+	it("puts them on the card's presentation only when there is something to say", () => {
+		expect(prCardPresentation(review({ decision: "approved", reviews: [approved("lin")] })).readinessSignals).toHaveLength(1);
+		expect(prCardPresentation(review({})).readinessSignals).toBeUndefined();
 	});
 });
 

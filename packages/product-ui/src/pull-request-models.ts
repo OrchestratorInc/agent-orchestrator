@@ -86,7 +86,16 @@ export type PRCardPresentation = {
 		detail: string;
 		tone: PRDisplayTone;
 	};
+	/**
+	 * Small counts at the right of the readiness line: unresolved comments, and
+	 * approvals when the repo asks for review or someone has reviewed. Absent
+	 * when there is nothing to say.
+	 */
+	readinessSignals?: PRCardSignal[];
 };
+
+/** One small count beside the readiness line; `label` says it in words, for its tooltip and screen readers. */
+export type PRCardSignal = { key: "comments" | "approvals"; count: number; tone: PRDisplayTone; label: string };
 
 /** The person behind a pull request AO opened through its GitHub App. */
 export type PROpener = {

@@ -1,11 +1,12 @@
 import { Fragment, useId, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
-import { ArrowUpRightIcon, CheckStateIcon, ChevronIcon, GitBranchIcon } from "./icons";
+import { ArrowUpRightIcon, CheckStateIcon, ChevronIcon, GitBranchIcon, MessageSquareIcon, UserCheckIcon } from "./icons";
 import { UserAvatar } from "./UserAvatar";
 import { scmUserAvatarUrl } from "./scm-avatar";
 import type {
 	PRCardPresentation,
+	PRCardSignal,
 	PRCardStatus,
 	PRCheckState,
 	PRChecksTally,
@@ -320,6 +321,7 @@ export function PRCardStatusSummary({
 				readiness={presentation.readiness}
 				reviewDetailsAction={reviewDetailsAction}
 				rows={presentation.readinessRows}
+				signals={presentation.readinessSignals}
 			/>
 		);
 	}
@@ -422,6 +424,7 @@ function StatusRow({
 	dot = false,
 	externalLink: ExternalLink,
 	reviewDetailsAction,
+	signals,
 	status,
 }: {
 	/** What opens from this row (such as which checks failed). */
@@ -430,9 +433,12 @@ function StatusRow({
 	dot?: boolean;
 	externalLink: ExternalLinkComponent;
 	reviewDetailsAction?: ReactNode;
+	/** Small counts at the line's right edge, before its chevron. */
+	signals?: PRCardSignal[];
 	status: PRCardStatus;
 }) {
 	const [open, setOpen] = useState(false);
+	const signalCounts = signals && signals.length > 0 ? <ReadinessSignals signals={signals} /> : null;
 	const regionId = useId();
 	const reduceMotion = useReducedMotion();
 	// The checks row says its counts instead of a verdict; their glyphs carry the state.
@@ -471,7 +477,8 @@ function StatusRow({
 							type="button"
 						>
 							{line ?? <span className="min-w-0 truncate">{status.label}</span>}
-							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", plain && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
+							{signalCounts}
+							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", plain && !signalCounts && "ml-auto", plain && "text-muted-foreground")} direction={open ? "up" : "down"} />
 						</button>
 						{status.href ? (
 							<ExternalLink
@@ -484,7 +491,7 @@ function StatusRow({
 						) : null}
 					</>
 				) : line ? (
-					line
+					<>{line}{signalCounts}</>
 				) : (
 					<PRCardStatusLink externalLink={ExternalLink} status={status} />
 				)}
@@ -525,8 +532,8 @@ const checkStateClass: Record<PRCheckState, string> = {
 const rowLabelClass = "text-foreground";
 // Joined outside cn(): tailwind-merge reads this size as a colour and drops it for one.
 const rowStateClass = "text-micro";
-// What belongs to a row sits in from it.
-const rowChildClass = "pl-4";
+// What belongs to a row sits in from it, slightly.
+const rowChildClass = "pl-1.5";
 
 /** A state that is in the way takes its colour on the words too; one that is fine stays plain. */
 const attentionClass: Partial<Record<PRDisplayTone, string>> = {
@@ -548,6 +555,29 @@ export function CheckStateGlyph({ className, size = "xs", state }: { className?:
 			className={cn(glyphSizeClass[size], "shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
 			state={state}
 		/>
+	);
+}
+
+const signalIcon = { comments: MessageSquareIcon, approvals: UserCheckIcon };
+
+/**
+ * Unresolved comments and approvals as small counts at the line's right edge.
+ * The number is what shows; the words are its tooltip and what a screen reader hears.
+ */
+function ReadinessSignals({ signals }: { signals: PRCardSignal[] }) {
+	return (
+		<span className="ml-auto flex shrink-0 items-center gap-2.5" data-testid="pr-readiness-signals">
+			{signals.map((signal) => {
+				const Icon = signalIcon[signal.key];
+				return (
+					<span className={`${rowStateClass} ${cn("inline-flex items-center gap-1 tabular-nums", toneClass[signal.tone])}`} data-signal={signal.key} key={signal.key} title={signal.label}>
+						<Icon className="size-icon-xs shrink-0" />
+						<span aria-hidden="true">{signal.count}</span>
+						<span className="sr-only">{signal.label}</span>
+					</span>
+				);
+			})}
+		</span>
 	);
 }
 
@@ -600,6 +630,7 @@ function ReadinessFacts({
 	readiness,
 	reviewDetailsAction,
 	rows,
+	signals,
 }: {
 	action?: ReactNode;
 	className?: string;
@@ -609,6 +640,7 @@ function ReadinessFacts({
 	readiness: NonNullable<PRCardPresentation["readiness"]>;
 	reviewDetailsAction?: ReactNode;
 	rows: PRCardStatus[];
+	signals?: PRCardSignal[];
 }) {
 	// A passive row ("No reviews yet") decides nothing.
 	const facts = rows.filter((status) => status.tone !== "passive");
@@ -633,6 +665,7 @@ function ReadinessFacts({
 					details={more}
 					externalLink={externalLink}
 					reviewDetailsAction={reviewDetailsAction}
+					signals={signals}
 					status={lead ?? { key: "merge", label: readiness.label, links: [], tone: readiness.tone }}
 				/>
 			</div>

@@ -828,9 +828,13 @@ describe("SessionInspector PR section", () => {
     expect(screen.getByText("Pull request")).toBeInTheDocument();
     expect(screen.queryByText(/Pull requests \(/)).not.toBeInTheDocument();
     expect(prSection("Pull request").getByText("PR #7")).toBeInTheDocument();
-    fireEvent.click(prSection("Pull request").getByRole("button", { name: "Checks passing" }));
+    fireEvent.click(prSection("Pull request").getByRole("button", { name: /^Checks passing/ }));
     expect(prSection("Pull request").getByText("Conflicts")).toBeInTheDocument();
-    expect(prSection("Pull request").getByText("Approved")).toBeInTheDocument();
+    // The review row in the dropdown, and the approvals count at the line's right (its words read out).
+    expect(prSection("Pull request").getAllByText("Approved")).toHaveLength(2);
+    const approvals = prSection("Pull request").getByTestId("pr-readiness-signals").querySelector("[data-signal='approvals']");
+    expect(approvals).toHaveAttribute("title", "Approved");
+    expect(approvals).toHaveTextContent("1Approved");
     expect(
       prSection("Pull request").getByText("Checks passing"),
     ).toBeInTheDocument();
@@ -2101,7 +2105,7 @@ describe("SessionInspector PR section", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled());
     // With no review rule and no reviews, review decides nothing, so it stays out.
-    fireEvent.click(prSection("Pull request").getByRole("button", { name: "Checks passing" }));
+    fireEvent.click(prSection("Pull request").getByRole("button", { name: /^Checks passing/ }));
     expect(prSection("Pull request").getByText("Conflicts")).toBeInTheDocument();
     expect(prSection("Pull request").queryByText("No reviews yet")).not.toBeInTheDocument();
     expect(prSection("Pull request").queryByText("No review required")).not.toBeInTheDocument();
@@ -7149,17 +7153,17 @@ describe("SessionInspector branch summary", () => {
     expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks2 failing1 running1 pending2 passed1 skipped");
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     const checks = await screen.findByTestId("pr-checks");
-    const groups = [...checks.querySelectorAll("section")].map((group) => [group.getAttribute("data-state"), [...group.querySelectorAll("li")].map((item) => item.textContent)]);
-    expect(groups).toEqual([
-      ["failed", ["lint failed", "typecheck skipped"]],
-      ["running", ["e2e running"]],
-      ["pending", ["deploy running"]],
-      ["passed", ["build passed", "test-a passed"]],
-      // Skipped checks fold behind their heading.
-      ["skipped", []],
-    ]);
-    expect(within(checks).getByRole("link", { name: /lint/ })).toHaveAttribute("href", "https://github.com/acme/repo/runs/1");
-    await userEvent.click(within(checks).getByRole("button", { name: /Skipped/ }));
+    // What needs a look is listed, worst first, its state in words at the right.
+    const listed = [...checks.querySelectorAll(":scope > ul > li")].map((item) => item.textContent);
+    expect(listed).toEqual(["lintFailing", "typecheckFailing", "e2eRunning", "deployPending"]);
+    // Passed and skipped are one line each, folded while something needs a look.
+    const folds = [...checks.querySelectorAll("section")].map((group) => [group.getAttribute("data-state"), group.querySelector("button")?.textContent, group.querySelectorAll("li").length]);
+    expect(folds).toEqual([["passed", "2 passed", 0], ["skipped", "1 skipped", 0]]);
+    // The name is the link, with no arrow after it.
+    const lint = within(checks).getByRole("link", { name: /lint/ });
+    expect(lint).toHaveAttribute("href", "https://github.com/acme/repo/runs/1");
+    expect(lint.querySelector("svg")).toBeNull();
+    await userEvent.click(within(checks).getByRole("button", { name: /1 skipped/ }));
     expect(within(checks).getByText("docs")).toBeInTheDocument();
   });
 
@@ -7182,10 +7186,23 @@ describe("SessionInspector branch summary", () => {
     const checks = within(await screen.findByTestId("pr-checks"));
     expect(checks.getAllByRole("listitem").map((item) => item.textContent).at(-1)).toBe("+2 more");
     expect(checks.getByRole("link", { name: /\+2 more/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7/checks");
-    // Four passes are more than three, so they wait behind their heading.
+    // Passes wait behind their line while something fails.
     expect(checks.queryByText("ok-0")).not.toBeInTheDocument();
-    await userEvent.click(checks.getByRole("button", { name: /Passed/ }));
+    await userEvent.click(checks.getByRole("button", { name: /4 passed/ }));
     expect(checks.getByText("ok-0")).toBeInTheDocument();
+  });
+
+  it("shows the passes at once when nothing needs a look", async () => {
+    const green = prSummary(7, "open", {
+      ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [{ name: "build", status: "passed" }, { name: "docs", status: "skipped" }] },
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [green] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [green]));
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Checks/ }));
+    const checks = within(await screen.findByTestId("pr-checks"));
+    expect(checks.getByText("build")).toBeInTheDocument();
+    expect(checks.getByRole("button", { name: /1 skipped/ })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("says a PR can't merge through what blocks it, without a verdict on top", async () => {
@@ -7216,8 +7233,8 @@ describe("SessionInspector branch summary", () => {
     const tally = screen.getByTestId("pr-checks-tally");
     expect(within(tally).getByText("Checks")).toHaveClass("text-foreground");
     expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-error");
-    // What opens under a row sits in from it.
-    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-4");
+    // What opens under a row sits in from it, slightly.
+    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-1.5");
     // The label keeps the row's size and its state sits two sizes below it.
     expect(screen.getByText("Conflicts")).not.toHaveClass("text-micro");
     expect(conflicts.querySelector("[data-state='passed']")).toHaveClass("text-micro");

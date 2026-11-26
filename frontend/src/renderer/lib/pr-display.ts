@@ -3,6 +3,7 @@ import { sortedPRs, type PRState, type PullRequestFacts, type SessionBranchState
 import { appI18n, type PluralMessageKey } from "../i18n";
 import type {
 	PRCardPresentation,
+	PRCardSignal,
 	PRCardStatus,
 	PRCheckState,
 	PRChecksTally,
@@ -228,7 +229,40 @@ export function prStatusRows(pr: SessionPRSummary): PRStatusRow[] {
  * `noChecks` (see prHasNoChecks) stops a PR that nothing checks from
  * waiting on checks; the classic card leaves it unset.
  */
+/**
+ * The card's status: its rows, what decides the merge, and, beside the
+ * readiness line, unresolved comments and approvals as small counts.
+ */
 export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): PRCardPresentation {
+	const presentation = cardPresentation(pr, options);
+	if (!presentation.readinessRows) return presentation;
+	const signals = readinessSignals(pr);
+	return signals.length > 0 ? { ...presentation, readinessSignals: signals } : presentation;
+}
+
+/**
+ * Unresolved comments when there are any; approvals when the repo asks for
+ * review or someone has given a verdict. Nothing to say, no count.
+ */
+export function readinessSignals(pr: SessionPRSummary): PRCardSignal[] {
+	const signals: PRCardSignal[] = [];
+	const unresolved = pr.review.unresolvedThreadCount ?? pr.review.unresolvedBy.reduce((sum, reviewer) => sum + reviewer.count, 0);
+	if (unresolved > 0) signals.push({ key: "comments", count: unresolved, tone: "warning", label: appI18n.t("inspector.unresolvedCount", { count: unresolved }) });
+	const { approvedBy, changesRequestedBy } = latestReviewers(pr.review.reviews);
+	const decision = pr.review.decision;
+	const approvedLine = approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : undefined;
+	if (decision === "changes_requested" || (decision === "none" && changesRequestedBy.length > 0)) {
+		const label = changesRequestedBy.length > 0 ? appI18n.t("pr.review.changesRequestedBy", { names: changesRequestedBy.join(", ") }) : appI18n.t("pr.review.changesRequested");
+		signals.push({ key: "approvals", count: approvedBy.length, tone: "error", label: [label, approvedLine].filter(Boolean).join(" · ") });
+	} else if (decision === "review_required") {
+		signals.push({ key: "approvals", count: approvedBy.length, tone: "warning", label: [appI18n.t("pr.card.reviewRequired"), approvedLine].filter(Boolean).join(" · ") });
+	} else if (decision === "approved" || approvedBy.length > 0) {
+		signals.push({ key: "approvals", count: Math.max(1, approvedBy.length), tone: "success", label: approvedLine ?? appI18n.t("pr.review.approved") });
+	}
+	return signals;
+}
+
+function cardPresentation(pr: SessionPRSummary, options: { noChecks?: boolean }): PRCardPresentation {
 	// CI "unknown" means checks are still being read, unless the PR has none.
 	const awaitingChecks = pr.ci.state === "unknown" && !options.noChecks;
 	const queued = prMergeQueueEntry(pr);
