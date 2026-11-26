@@ -85,6 +85,15 @@ describe("permission picker", () => {
 		expect(rows.map((row) => row.props.accessibilityState)).toEqual([{ checked: false }, { checked: true }, { checked: false }]);
 	});
 
+	// A screen narrower than the list must not push it past the composer.
+	it("caps the list at the width the overlay leaves", () => {
+		act(() => { renderer = create(<PermissionPicker choices={modes("auto")} onChoose={() => {}} />); });
+		const list = renderer!.root.findAll((node) => hostType(node) === "View" && node.props.testID === "permission-picker")[0];
+		// Stretched across what the overlay leaves rather than a fixed width.
+		expect(list.props.style).toMatchObject({ alignSelf: "stretch" });
+		expect(list.props.style.width).toBeUndefined();
+	});
+
 	it("draws an agent's own tier, which maps to no mode, as asking", () => {
 		act(() => { renderer = create(<PermissionPicker choices={[{ value: "plan", label: "Plan", selected: true }]} onChoose={() => {}} />); });
 		expect(all("Hand")).toHaveLength(1);

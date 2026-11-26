@@ -56,14 +56,18 @@ export function approvalCopy(harness: string | undefined): Record<ApprovalMode, 
 }
 
 /**
- * The modes an agent is offered, in desktop's order. The phone leaves out
- * "Use agent permissions": it hands the decision back to the agent rather
- * than choosing one. Where the same mode has a name of its own (Codex's Full
- * access, Antigravity's Ask for approval) it is a real choice and stays.
+ * The modes an agent is offered. "Use agent permissions" hands the decision
+ * back to the agent rather than choosing one, so the phone lists it last,
+ * after the modes that choose; it stays, because a chat that never set a mode
+ * runs in it and must show it as the one in force, and be able to go back to
+ * it. Where the same mode has a name of its own (Codex's Full access,
+ * Antigravity's Ask for approval) it is a real choice and keeps desktop's
+ * place, first.
  */
 export function approvalOrder(harness: string | undefined): ApprovalMode[] {
-	const offered = harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
-	return harness === "codex" || harness === "agy" ? offered : offered.filter((mode) => mode !== "default");
+	if (harness === "codex") return APPROVAL_ORDER;
+	if (harness === "agy") return APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions");
+	return [...APPROVAL_ORDER.filter((mode) => mode !== "default"), "default"];
 }
 
 /**

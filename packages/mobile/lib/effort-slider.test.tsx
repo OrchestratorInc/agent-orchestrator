@@ -395,4 +395,22 @@ describe("effort slider", () => {
 		await act(async () => renderer!.update(<EffortSlider choices={three} onChoose={() => {}} />));
 		expect(blobCentre()).toBe(120);
 	});
+
+	// Kept mounted between opens. The owner shows its pick as the chosen level
+	// until the save is confirmed, and drops it when the save fails; the
+	// slider must follow it back rather than keep showing the failed level.
+	it("goes back to the chosen level when a failed save drops the pick", async () => {
+		const props = { onChoose: () => {}, bottom: "100%" as const };
+		await act(async () => { renderer = create(<EffortSliderOverlay visible choices={levels("low")} {...props} />); });
+		const root = renderer!.root;
+		const label = () => root.findAll((node) => hostType(node) === "Text" && node.props.testID === "effort-slider-value")[0].props.children;
+		const track = () => root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider")[0];
+		await act(async () => track().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
+		expect(label()).toBe("Medium");
+		// Closed with the pick held, then the save fails and the pick goes.
+		await act(async () => renderer!.update(<EffortSliderOverlay visible={false} choices={levels("medium")} {...props} />));
+		await act(async () => renderer!.update(<EffortSliderOverlay visible={false} choices={levels("low")} {...props} />));
+		await act(async () => renderer!.update(<EffortSliderOverlay visible choices={levels("low")} {...props} />));
+		expect(label()).toBe("Low");
+	});
 });

@@ -417,7 +417,7 @@ describe("default labels", () => {
 		expect(codex.find((row) => row.id === "approvals")?.value).toBe("Full access");
 		const other = turnSettingsRows(snapshot({ harness: "gemini", capabilities: [], settings: {} }), [], []);
 		expect(other.find((row) => row.id === "approvals")?.choices.map((choice) => choice.label)).toEqual([
-			"Accept edits", "Auto-approve", "Bypass permissions",
+			"Accept edits", "Auto-approve", "Bypass permissions", "Use agent permissions",
 		]);
 	});
 
@@ -426,11 +426,12 @@ describe("default labels", () => {
 	it("names each mode as desktop does, per agent, with a line on what it does", () => {
 		const approvals = (harness: string) => turnSettingsRows(snapshot({ harness, capabilities: [], settings: {} }), [], [])
 			.find((row) => row.id === "approvals")?.choices.map((choice) => [choice.value, choice.label, choice.description]);
-		// "Use agent permissions" is not offered on the phone.
+		// "Use agent permissions" hands the choice back, so it comes last.
 		expect(approvals("claude-code")).toEqual([
 			["accept-edits", "Accept edits", "Edits files without asking"],
 			["auto", "Auto-approve", "Asks only about risky actions"],
 			["bypass-permissions", "Bypass permissions", "Never asks before acting"],
+			["default", "Use agent permissions", "Follows the agent's own settings"],
 		]);
 		expect(approvals("codex")).toEqual([
 			["default", "Full access", "Edits and runs commands freely"],
@@ -444,7 +445,17 @@ describe("default labels", () => {
 			["accept-edits", "Accept edits", "Edits files without asking"],
 			["auto", "Auto-approve", "Asks only about risky actions"],
 		]);
-		expect(approvals("hermes")?.map(([value]) => value)).toEqual(["accept-edits", "auto", "bypass-permissions"]);
+		expect(approvals("hermes")?.map(([value]) => value)).toEqual(["accept-edits", "auto", "bypass-permissions", "default"]);
+		expect(approvals("hermes")?.at(-1)?.[2]).toBe("Asks before file edits only");
+	});
+
+	// A chat that never set a mode runs in the agent's default; the picker
+	// must show that as the mode in force and offer the way back to it.
+	it("shows the agent's own permissions as in force for a chat that never set a mode", () => {
+		const approvals = turnSettingsRows(snapshot({ harness: "claude-code", capabilities: [], settings: {} }), [], []).find((row) => row.id === "approvals");
+		expect(approvals?.choices.filter((choice) => choice.selected).map((choice) => choice.value)).toEqual(["default"]);
+		const set = turnSettingsRows(snapshot({ harness: "claude-code", capabilities: [], settings: { approvalMode: "auto" } }), [], []).find((row) => row.id === "approvals");
+		expect(set?.choices.map((choice) => choice.value)).toContain("default");
 	});
 
 	it("shows the provider's model as selected instead of hinting at it", () => {

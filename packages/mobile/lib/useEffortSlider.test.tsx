@@ -83,4 +83,22 @@ describe("effort slider open", () => {
 		act(() => { vi.advanceTimersByTime(EFFORT_SLIDER_TIMEOUT_MS); rootTouchStart(); });
 		expect(slider.open).toBe(false);
 	});
+
+	// A request card replacing the composer unmounts the slider's host
+	// mid-pick; the owner's commit must still hear the close.
+	it("tells its owner it closed when it goes away while up", () => {
+		const { onClose } = render();
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("says nothing on going away while closed", () => {
+		const { onClose } = render();
+		act(() => slider.toggle());
+		expect(onClose).toHaveBeenCalledOnce();
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		expect(onClose).toHaveBeenCalledOnce();
+	});
 });

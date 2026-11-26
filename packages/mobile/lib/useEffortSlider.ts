@@ -91,6 +91,8 @@ export function useEffortSliderOpen(
 	closeRef.current = onClose;
 	const wasShown = useRef(false);
 	const close = useCallback(() => store.setOpen(false), [store]);
+	// Unmounting while shown is a close too: the owner's commit must hear it.
+	useEffect(() => () => { if (wasShown.current) closeRef.current?.(); }, []);
 	useEffect(() => {
 		if (wasShown.current && !shown) closeRef.current?.();
 		wasShown.current = shown;

@@ -45,6 +45,7 @@ describe("chat permissions", () => {
 			["accept-edits", "Accept edits", false, "accept-edits"],
 			["auto", "Auto-approve", true, "auto"],
 			["bypass-permissions", "Bypass permissions", false, "bypass-permissions"],
+			["default", "Use agent permissions", false, "default"],
 		]);
 	});
 
