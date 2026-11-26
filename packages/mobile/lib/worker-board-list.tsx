@@ -282,6 +282,12 @@ function WorkerBoard({
 	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<BoardRow>[] }) => {
 		visibleRows.set(new Set(viewableItems.map((token) => token.key)));
 	}).current;
+	// Tabs keep the board mounted while another screen shows, so its lattices
+	// also rest while the board is out of focus, and resume on its return.
+	useFocusEffect(useCallback(() => {
+		visibleRows.focus(true);
+		return () => visibleRows.focus(false);
+	}, [visibleRows]));
 	// Where the list's top rests: iOS insets a list under a clear header by the
 	// bars' share of its safe area (`contentInsetAdjustmentBehavior`), so the top
 	// is at minus that, and offset 0 leaves the first rows under the bar. Measured

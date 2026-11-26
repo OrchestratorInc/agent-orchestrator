@@ -27,6 +27,28 @@ describe("visible board rows", () => {
 		expect(a).not.toHaveBeenCalled();
 		expect(b).toHaveBeenCalledOnce();
 	});
+
+	it("counts no row as on screen while the board is out of focus, and keeps the last report for its return", () => {
+		const rows = createVisibleRows();
+		rows.set(new Set(["a"]));
+		const a = vi.fn();
+		const b = vi.fn();
+		rows.subscribe("a", a);
+		rows.subscribe("b", b);
+		rows.focus(false);
+		expect(rows.visible("a")).toBe(false);
+		expect(a).toHaveBeenCalledOnce();
+		expect(b).not.toHaveBeenCalled();
+		// A report while away is kept, but shows nothing until the board returns.
+		rows.set(new Set(["a", "b"]));
+		expect(rows.visible("b")).toBe(false);
+		expect(b).not.toHaveBeenCalled();
+		rows.focus(true);
+		expect(rows.visible("a")).toBe(true);
+		expect(rows.visible("b")).toBe(true);
+		expect(a).toHaveBeenCalledTimes(2);
+		expect(b).toHaveBeenCalledOnce();
+	});
 });
 
 describe("a board row's scope", () => {
@@ -51,6 +73,10 @@ describe("a board row's scope", () => {
 		act(() => rows.set(new Set(["worker-2"])));
 		expect(seen.at(-1)).toBe(false);
 		act(() => rows.set(new Set(["worker-1"])));
+		expect(seen.at(-1)).toBe(true);
+		act(() => rows.focus(false));
+		expect(seen.at(-1)).toBe(false);
+		act(() => rows.focus(true));
 		expect(seen.at(-1)).toBe(true);
 	});
 });
