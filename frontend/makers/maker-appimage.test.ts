@@ -60,4 +60,16 @@ describe("MakerAppImage", () => {
 		const [, options] = buildForge.mock.calls[0];
 		expect(options.config.toolsets?.appimage).toBe("1.0.3");
 	});
+
+	it("writes the menu category into the AppImage desktop entry", async () => {
+		const maker = new MakerAppImage(
+			{ appId: "dev.agent-orchestrator.desktop", icon: "assets/icon.png", category: "Development" },
+			["linux"],
+		);
+		await maker.prepareConfig(makeOptions.targetArch);
+		await maker.make(makeOptions);
+
+		const [, options] = buildForge.mock.calls[0];
+		expect(options.config.linux).toEqual({ icon: "assets/icon.png", category: "Development" });
+	});
 });
