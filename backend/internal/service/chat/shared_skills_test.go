@@ -48,7 +48,9 @@ func TestSkillsAddWhatTheAgentDoesNotList(t *testing.T) {
 	for _, skill := range skills {
 		got = append(got, skill.Name+":"+skill.Source)
 	}
-	if want := "review:agent skill:pi-one:agent deploy:orchestrator"; strings.Join(got, " ") != want {
+	// A name with a space, such as "Poteto Mode", is offered too: agents list
+	// skills under their frontmatter name.
+	if want := "review:agent skill:pi-one:agent deploy:orchestrator two words:orchestrator"; strings.Join(got, " ") != want {
 		t.Fatalf("skills = %v, want %s", got, want)
 	}
 }
@@ -229,4 +231,46 @@ func TestPromotedSkillRecordsWhatTheAgentReceived(t *testing.T) {
 		}
 	}
 	t.Fatal("no steer activity recorded what the agent received")
+}
+
+// A skill's name may have spaces. The message names it when it starts with the
+// whole name, ignoring case, followed by a space or the end; the longest name
+// wins, so "/deploy prod" is not "/deploy" with "prod" after it.
+func TestSharedSkillNamesWithSpaces(t *testing.T) {
+	for _, tc := range []struct {
+		text, skill, rest string
+	}{
+		{"/Poteto Mode", "Poteto Mode", ""},
+		{"  /poteto mode answer this", "Poteto Mode", "answer this"},
+		{"/deploy prod now", "deploy prod", "now"},
+		{"/deploy staging", "deploy", "staging"},
+		{"/Poteto", "", ""},
+		{"/Poteto Moderate", "", ""},
+		{"/Poteto Mode/x", "", ""},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			h := newHarness(t)
+			shareSkills(t, h, shareSkill(t, "Poteto Mode", "Answer as a potato."), shareSkill(t, "deploy", "Ship it."), shareSkill(t, "deploy prod", "Ship to prod."))
+			msg := ports.ChatUserMessage{Text: tc.text, ClientMessageID: "m-1", Origin: domain.MessageOriginHuman}
+			if _, err := h.svc.Send(context.Background(), testSession, msg); err != nil {
+				t.Fatal(err)
+			}
+			h.conv.mu.Lock()
+			sent := h.conv.sent[len(h.conv.sent)-1].Text
+			h.conv.mu.Unlock()
+			if tc.skill == "" {
+				if sent != tc.text {
+					t.Fatalf("sent %q, want the message as written", sent)
+				}
+				return
+			}
+			want := "Use the \"" + tc.skill + "\" skill."
+			if tc.rest != "" {
+				want += "\n\n" + tc.rest
+			}
+			if !strings.HasPrefix(sent, want+"\n\n<user_skill name=\""+tc.skill+"\"") || strings.Count(sent, "<user_skill ") != 1 {
+				t.Fatalf("sent %q, want it to start %q with one skill", sent, want)
+			}
+		})
+	}
 }

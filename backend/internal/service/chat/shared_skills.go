@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -19,8 +20,10 @@ const sharedSkillSource = "orchestrator"
 // maxSharedSkills bounds how many skills one message can bring in.
 const maxSharedSkills = 4
 
-// sharedSkillToken is one /name at the start of a message.
-var sharedSkillToken = regexp.MustCompile(`^\s*/([^\s/]+)(\s|$)`)
+// sharedSkillToken is a slash command at the start of a message. A skill's
+// name may have spaces ("Poteto Mode"), so the name is matched against the
+// shared skills' names rather than read up to the first space.
+var sharedSkillToken = regexp.MustCompile(`^\s*/[^\s/]`)
 
 // withSharedSkills adds the user's skills the agent did not list itself.
 func withSharedSkills(skills []ports.ChatSkill, shared []skillbridge.Skill) []ports.ChatSkill {
@@ -44,9 +47,32 @@ func skillNameSet(skills []ports.ChatSkill) map[string]bool {
 	return names
 }
 
-// invocable reports whether a skill's name can be typed as one /name word.
+// invocable reports whether a skill's name can be typed after a slash: one
+// line, no slash, and no space at either end. Spaces inside are allowed, as
+// agents list skills such as "Poteto Mode" under their frontmatter name.
 func invocable(name string) bool {
-	return name != "" && !strings.ContainsAny(name, "/ \t\r\n")
+	return name != "" && name == strings.TrimSpace(name) && !strings.ContainsAny(name, "/\t\r\n")
+}
+
+// leadingSkill finds the shared skill whose /name starts text: the longest
+// name followed by a space or the end, ignoring case. end is where the name
+// stops in text.
+func leadingSkill(text string, names []string) (name string, end int, ok bool) {
+	start := len(text) - len(strings.TrimLeft(text, " \t\r\n"))
+	if !strings.HasPrefix(text[start:], "/") {
+		return "", 0, false
+	}
+	start++
+	for _, candidate := range names {
+		stop := start + len(candidate)
+		if stop > len(text) || !strings.EqualFold(text[start:stop], candidate) {
+			continue
+		}
+		if stop == len(text) || strings.ContainsRune(" \t\r\n", rune(text[stop])) {
+			return candidate, stop, true
+		}
+	}
+	return "", 0, false
 }
 
 // withSharedSkillInstructions hands the agent the instructions of the skills a
@@ -74,30 +100,31 @@ func withSharedSkillInstructions(
 		return msg
 	}
 	shared := map[string]skillbridge.Skill{}
+	var sharedNames []string
 	for _, skill := range skillbridge.ReadIndex(dataDir, string(id)) {
-		if invocable(skill.Name) {
-			shared[strings.ToLower(skill.Name)] = skill
+		if key := strings.ToLower(skill.Name); invocable(skill.Name) && shared[key].Name == "" {
+			shared[key] = skill
+			sharedNames = append(sharedNames, skill.Name)
 		}
 	}
 	if len(shared) == 0 {
 		return msg
 	}
+	// Longest first, so "/deploy prod" names "deploy prod" before "deploy".
+	slices.SortStableFunc(sharedNames, func(a, b string) int { return len(b) - len(a) })
 	rest := msg.Text
 	var names, sections []string
 	var own map[string]bool
 	added := map[string]bool{}
 	for len(names) < maxSharedSkills {
-		token := sharedSkillToken.FindStringSubmatchIndex(rest)
-		if token == nil {
-			break
-		}
-		key := strings.ToLower(rest[token[2]:token[3]])
-		skill, ok := shared[key]
+		name, end, ok := leadingSkill(rest, sharedNames)
 		if !ok {
 			break
 		}
+		key := strings.ToLower(name)
+		skill := shared[key]
 		if added[key] {
-			rest = rest[token[3]:]
+			rest = rest[end:]
 			continue
 		}
 		if own == nil {
@@ -113,7 +140,7 @@ func withSharedSkillInstructions(
 		added[key] = true
 		names = append(names, fmt.Sprintf("%q", skill.Name))
 		sections = append(sections, section)
-		rest = rest[token[3]:]
+		rest = rest[end:]
 	}
 	if len(names) == 0 {
 		return msg
