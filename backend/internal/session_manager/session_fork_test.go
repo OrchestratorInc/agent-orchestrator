@@ -686,7 +686,10 @@ func TestRestoreRecreatedForkGetsItsStartingFilesBack(t *testing.T) {
 	m.workspace = adapter
 	seeds := &recordingForkSeeds{}
 	m.forkSeeds = seeds
-	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir()}
+	// A git project's fork; the scratch adapter stands in for its worktrees,
+	// since it recreates a missing folder without a repository. A real
+	// Scratch project's fork is a plain folder and keeps no starting files.
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindSingleRepo, Path: t.TempDir()}
 	fork := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker,
 		Metadata: domain.SessionMetadata{WorkspacePath: filepath.Join(managed, "scratch", "workers", "scratch-1")}}
 	plain := domain.SessionRecord{ID: "scratch-2", ProjectID: "scratch", Kind: domain.KindWorker,

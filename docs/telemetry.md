@@ -1349,8 +1349,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   while the daemon is still starting. HTTP 409 responses are dropped only for
   `POST /api/v1/sessions/:id/workspace/diffs`,
   `GET /api/v1/sessions/:id/conversation/config-options`,
-  `GET /api/v1/sessions/:id/conversation/models`, and
-  `GET /api/v1/sessions/:id/conversation/skills`. Codex
+  `GET /api/v1/sessions/:id/conversation/models`,
+  `GET /api/v1/sessions/:id/conversation/skills`, and
+  `GET /api/v1/agents/:id/skills`; none of these 4xx responses go to Sentry,
+  so a remote host too old to scan skills for the new chat page stays quiet. Codex
   account management being unwired, and an already-closed shell terminal, are
   not analytics events. A GitHub token rejected after refresh still reports
   `GITHUB_AUTH_INVALID` (with that `error_code`). A temporary refresh outage reports

@@ -1,6 +1,6 @@
 # Shared harness model catalogs
 
-Settings → Harness → Models, New Task, project role settings and reviewer
+Settings → Agents → Models, New Task, project role settings and reviewer
 pickers use one persisted catalog for each harness and scope. The daemon's
 `loadModels` path discovers, refreshes and saves it; `Discoverer.Discover`
 combines the harness-specific sources. There is no separate Settings catalog

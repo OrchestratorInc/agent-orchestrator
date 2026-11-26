@@ -8,7 +8,7 @@ import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, MousePointerClick, Package, Smartphone, SquareTerminal } from "@/components/app-icons";
 import { ComputerUsePanel } from "./ComputerUsePanel";
-import { useComputerUseTimeline } from "../hooks/useComputerUseTimeline";
+import { localComputerUseSessionId, useComputerUseTimeline } from "../hooks/useComputerUseTimeline";
 import { useSettings } from "../hooks/useSettings";
 import { DevicePanel } from "./DevicePanel";
 import { useDevicesEnabled } from "../lib/devices-enabled";
@@ -50,7 +50,7 @@ import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
-import { isLocal, sessionUiKey } from "../lib/hosts";
+import { sessionUiKey } from "../lib/hosts";
 import { useBackgroundTasks, useReleaseTaskOutputs } from "../hooks/useBackgroundTasks";
 import { BackgroundTasksPanel } from "./BackgroundTaskPanel";
 import { supportsLocalBackgroundTasks } from "./BackgroundTasks";
@@ -93,7 +93,7 @@ import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
 import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
-import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import { sessionIsActive, type SessionArtifact, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
@@ -276,10 +276,10 @@ export const SessionInspector = memo(function SessionInspector({
 	const inspectorQueryClient = useQueryClient();
 	// Computer use runs on this machine only, so only a local session has a
 	// timeline. The tab appears once the session has made a call.
-	const computerUseSessionId = session && !session.cloud && (!hostId || isLocal(hostId)) ? session.id : undefined;
+	const computerUseSessionId = localComputerUseSessionId(session, hostId);
 	const { settings: localSettings } = useSettings(undefined, computerUseSessionId !== undefined);
 	const computerUseTimeline = useComputerUseTimeline(computerUseSessionId, {
-		live: localSettings?.computerUse === true,
+		live: localSettings?.computerUse === true && session !== undefined && sessionIsActive(session),
 		open: requestedView === "computerUse" && isInspectorVisible,
 	});
 	const computerUseEntries = computerUseTimeline.data ?? [];
@@ -330,11 +330,13 @@ export const SessionInspector = memo(function SessionInspector({
 	// local worker sessions only until remote and cloud providers exist, and
 	// only with Developer mode on.
 	const deviceAvailable = devicesEnabled && session !== undefined && !session.cloud && !hostId && !orchestrator;
-	// The orchestrator's rail also offers its chat's Subagents panel while it lists
-	// any, and Background tasks once its composer strip has opened one.
+	// The orchestrator's rail also offers its chat's Side chat and Subagents panels
+	// while the host passes them, and Background tasks once its composer strip has
+	// opened one. Its chat accepts /btw, so Side chat must be able to open here.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
 		|| (entry.id === "computerUse" && hasComputerUse)
+		|| (entry.id === "sideChat" && sideChatView !== undefined)
 		|| (entry.id === "subagents" && subagentsView !== undefined)
 		|| (entry.id === "task" && Boolean(taskTabs?.length))
 		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))

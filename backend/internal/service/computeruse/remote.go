@@ -763,12 +763,11 @@ func (s *Service) callRemote(ctx context.Context, target RemoteTarget, credentia
 		return CallResult{}, err
 	}
 	body := RemoteCallRequest{Tool: strings.TrimSpace(request.Tool), Arguments: request.Arguments, SessionID: request.SessionID, Caller: caller, CallerName: callerName}
-	started := time.Now()
 	var response RemoteCallResult
 	if err := s.remoteRequest(ctx, target, credential, http.MethodPost, "call", body, remoteCallTimeout, &response); err != nil {
 		// The step shows in this session's timeline, with why the other
 		// computer refused it or could not be reached.
-		s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, started, nil, err)
+		s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, nil, err)
 		return CallResult{}, err
 	}
 	saved := &savedImages{store: s.images, scope: scope, tool: body.Tool, images: []Image{}}
@@ -789,7 +788,7 @@ func (s *Service) callRemote(ctx context.Context, target RemoteTarget, credentia
 	if response.StepError != "" {
 		stepErr = errors.New(response.StepError)
 	}
-	s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, started, saved.images, stepErr)
+	s.recordCallOn(scope, target.Label, body.Tool, request.Arguments, saved.images, stepErr)
 	return CallResult{Tool: body.Tool, Result: replacePaths(response.Result, local), Images: saved.images}, nil
 }
 

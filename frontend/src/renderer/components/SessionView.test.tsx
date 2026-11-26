@@ -2,7 +2,7 @@ import { StrictMode, useEffect, type ReactNode } from "react";
 import { noPRDetails } from "../lib/pr-display";
 import { queryShown } from "../lib/dom-selectors";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { sessionUiKey } from "../lib/hosts";
+import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -77,6 +77,7 @@ const interfaceTransitionState = vi.hoisted(() => ({
 // exercise the daemon's Chat harness list set it explicitly.
 const settingsState = vi.hoisted(() => ({
 	chatHarnesses: undefined as string[] | undefined,
+	computerUse: undefined as boolean | undefined,
 }));
 const reviewGetMock = vi.hoisted(() => vi.fn());
 const chatViewPostMock = vi.hoisted(() => vi.fn());
@@ -132,17 +133,26 @@ vi.mock("../lib/platform", () => ({
 	isLinuxPlatform: () => false,
 }));
 // Each test sets the session's computer-use steps; undefined is a timeline not yet read.
-const computerUseTimelineState = vi.hoisted(() => ({ steps: undefined as { id: string; at: string }[] | undefined }));
+const computerUseTimelineState = vi.hoisted(() => ({
+	steps: undefined as { id: string; at: string }[] | undefined,
+	sessionId: undefined as string | undefined,
+	live: undefined as boolean | undefined,
+}));
 // A step made before the test's session came on screen, and one made after.
 const stepBefore = (id: string) => ({ id, at: "2020-01-01T00:00:00Z" });
 const stepNow = (id: string) => ({ id, at: new Date(Date.now() + 1_000).toISOString() });
-vi.mock("../hooks/useComputerUseTimeline", () => ({
-	useComputerUseTimeline: () => ({
+vi.mock("../hooks/useComputerUseTimeline", async (importOriginal) => ({
+	localComputerUseSessionId: (await importOriginal<typeof import("../hooks/useComputerUseTimeline")>()).localComputerUseSessionId,
+	useComputerUseTimeline: (sessionId: string | undefined, options: { live: boolean }) => {
+		computerUseTimelineState.sessionId = sessionId;
+		computerUseTimelineState.live = options.live;
+		return {
 		data: computerUseTimelineState.steps,
 		isSuccess: computerUseTimelineState.steps !== undefined,
 		isFetchedAfterMount: computerUseTimelineState.steps !== undefined,
 		isPending: computerUseTimelineState.steps === undefined,
-	}),
+		};
+	},
 	computerUseScreenshotUrl: (sessionId: string, name: string) => `http://127.0.0.1:3001/${sessionId}/${name}`,
 }));
 vi.mock("../hooks/useWindowFullScreen", () => ({
@@ -331,7 +341,10 @@ vi.mock("./NotificationCenter", () => ({
 }));
 vi.mock("../hooks/useSettings", () => ({
 	useSettings: () => ({
-		settings: settingsState.chatHarnesses ? { chatHarnesses: settingsState.chatHarnesses } : undefined,
+		settings:
+			settingsState.chatHarnesses || settingsState.computerUse !== undefined
+				? { chatHarnesses: settingsState.chatHarnesses, computerUse: settingsState.computerUse }
+				: undefined,
 		isLoading: false,
 		error: undefined,
 	}),
@@ -6330,6 +6343,35 @@ describe("SessionView", () => {
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
 		} finally {
 			computerUseTimelineState.steps = undefined;
+		}
+	});
+
+	it("opens Computer use for a local session opened under the local host's id", () => {
+		computerUseTimelineState.steps = undefined;
+		const uiKey = sessionUiKey("sess-1", LOCAL_HOST);
+		const view = render(<SessionView hostId={LOCAL_HOST} sessionId="sess-1" />);
+		try {
+			expect(computerUseTimelineState.sessionId).toBe("sess-1");
+			computerUseTimelineState.steps = [stepNow("1")];
+			view.rerender(<SessionView hostId={LOCAL_HOST} sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("computerUse");
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
+	it("polls the computer-use timeline only while the session runs", () => {
+		const worker = workerSession("sess-1");
+		settingsState.computerUse = true;
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			expect(computerUseTimelineState.live).toBe(true);
+			worker.isTerminated = true;
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(computerUseTimelineState.live).toBe(false);
+		} finally {
+			settingsState.computerUse = undefined;
+			delete worker.isTerminated;
 		}
 	});
 

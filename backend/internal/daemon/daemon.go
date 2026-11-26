@@ -739,7 +739,7 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	// The mode-aware messenger, so a Chat original is told as a chat message.
-	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
+	sessionForkSvc := wireSessionFork(cfg.DataDir, store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
 		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
@@ -1616,7 +1616,7 @@ func Run(buildVersion string) (retErr error) {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
-				reapForkSeeds(ctx, store, log)
+				reapForkSeeds(ctx, cfg.DataDir, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {

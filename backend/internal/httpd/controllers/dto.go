@@ -650,7 +650,8 @@ type SessionArtifactView struct {
 // RegisterArtifactsRequest is the body of POST
 // /api/v1/sessions/{sessionId}/artifact-registrations.
 type RegisterArtifactsRequest struct {
-	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	Paths      []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	WorkingDir string   `json:"workingDir,omitempty" description:"The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there."`
 }
 
 // RegisterArtifactsResponse reports what a registration did, so the agent can
@@ -725,6 +726,11 @@ type SpawnSessionRequest struct {
 	// AccountID is the subscription account the agent starts on. Empty uses the
 	// provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -1551,6 +1557,11 @@ type DelegateTaskRequest struct {
 	// AccountID is the subscription account the worker starts on. Empty uses
 	// the provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path
@@ -2347,6 +2358,12 @@ type AgentAuthenticationObservation = domain.AgentAuthenticationObservation
 type AgentModelsQuery struct {
 	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background."`
 	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
+}
+
+// AgentSkillsQuery names the project whose own skill folders are scanned
+// alongside the user's.
+type AgentSkillsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Project whose skill folders are read before the user's. Omitted scans only the user's own skills."`
 }
 
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
@@ -3702,7 +3719,7 @@ type ProviderSwitchRequest struct {
 	Effort            string `json:"effort,omitempty" maxLength:"64"`
 	FastMode          bool   `json:"fastMode,omitempty"`
 	Ultracode         bool   `json:"ultracode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	Force          bool   `json:"force,omitempty"`
@@ -3970,7 +3987,7 @@ type ConversationTurnSettingsPayload struct {
 	// The rest are described on domain.ConversationSettings.
 	FastMode          bool   `json:"fastMode,omitempty"`
 	PlanMode          bool   `json:"planMode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 }
 
 // InterruptConversationRequest is the optional body of a chat Stop. TurnID is
@@ -4023,6 +4040,7 @@ type ConversationTurnResponse struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool                            `json:"hasEventPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
 	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`

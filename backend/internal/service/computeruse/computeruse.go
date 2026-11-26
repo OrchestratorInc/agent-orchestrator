@@ -448,7 +448,6 @@ func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, adm
 	if admitted != nil {
 		admitted()
 	}
-	started := time.Now()
 	result, stepErr, err := s.run(ctx, binary, scope, tool, request.SessionID, arguments)
 	// A run_steps batch whose step failed still returns its report to the
 	// agent; the timeline records it as failed, with the step's reason.
@@ -456,7 +455,7 @@ func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, adm
 	if recorded == nil {
 		recorded = stepErr
 	}
-	s.recordCall(scope, tool, request.Arguments, started, result.Images, recorded)
+	s.recordCall(scope, tool, request.Arguments, result.Images, recorded)
 	return result, stepErr, err
 }
 

@@ -46,6 +46,7 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { prefetchEditorHandoffState } from "../hooks/useEditorHandoff";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/context-menu";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
@@ -290,6 +291,8 @@ function DesktopSessionCard({
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [renameOpen, setRenameOpen] = useState(false);
+	const menuPrefetchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(menuPrefetchTimer.current), []);
 	const summaries = sessionPRDisplaySummaries(
 		session,
 		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
@@ -446,7 +449,19 @@ function DesktopSessionCard({
 		<>
 			<ContextMenu>
 				<ContextMenuTrigger asChild>
-					<div>{card}</div>
+					{/* The menu opens on its final rows: its data is read when the pointer
+					    rests on the card, or at once on a press or focus. */}
+					<div
+						onFocusCapture={() => prefetchEditorHandoffState(queryClient, session)}
+						onPointerDownCapture={() => prefetchEditorHandoffState(queryClient, session)}
+						onPointerEnter={() => {
+							clearTimeout(menuPrefetchTimer.current);
+							menuPrefetchTimer.current = setTimeout(() => prefetchEditorHandoffState(queryClient, session), 100);
+						}}
+						onPointerLeave={() => clearTimeout(menuPrefetchTimer.current)}
+					>
+						{card}
+					</div>
 				</ContextMenuTrigger>
 				<ContextMenuContent className="min-w-44">
 					<SessionContextMenuItems

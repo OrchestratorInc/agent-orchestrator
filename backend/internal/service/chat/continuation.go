@@ -13,6 +13,7 @@ import (
 )
 
 const continuationTextBudget = 8 * 1024
+const continuationPrompt = "Continue from where you stopped."
 const continuationContextMarker = "Interrupted task context (JSON):\n"
 
 // ErrContinuationUnavailable refuses a stale Continue intent without starting
@@ -51,7 +52,7 @@ func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader
 	if err != nil {
 		return msg, fmt.Errorf("read interrupted conversation: %w", err)
 	}
-	reminder := stoppedContinuationContext(rows)
+	reminder := continuationContext(rows, ContinuableTurnID(rows.Turns), "", "")
 	if reminder == "" {
 		return msg, ErrContinuationUnavailable
 	}
@@ -82,11 +83,10 @@ func continuationRelevantTurn(turn domain.ConversationTurn) bool {
 		(turn.State != domain.TurnStateInterrupted || turn.StartedAt != nil || turn.ProviderTurnID != "")
 }
 
-// stoppedContinuationContext consumes the active-lineage snapshot, never another
+// continuationContext consumes the active-lineage snapshot, never another
 // session's history. It supplies a task reminder, not a replacement transcript or
 // an execution checkpoint. Reasoning and tool outputs are deliberately omitted.
-func stoppedContinuationContext(rows ConversationRows) string {
-	stoppedID := ContinuableTurnID(rows.Turns)
+func continuationContext(rows ConversationRows, stoppedID, startID, request string) string {
 	if stoppedID == "" {
 		return ""
 	}
@@ -120,10 +120,10 @@ func stoppedContinuationContext(rows ConversationRows) string {
 	}
 	for _, message := range rows.Messages {
 		_, visible := turns[message.TurnID]
-		if !visible || message.Sequence > cutoff {
+		if !visible || message.Role != domain.MessageRoleUser {
 			continue
 		}
-		if message.Role == domain.MessageRoleUser && !message.Continuation {
+		if message.TurnID == startID || (startID == "" && message.Sequence <= cutoff && !message.Continuation) {
 			original = message
 		}
 	}
@@ -166,12 +166,13 @@ func stoppedContinuationContext(rows ConversationRows) string {
 		}
 	}
 
-	request := original.Text
-	requestTruncated := len(request) > continuationTextBudget
+	requestTruncated := request == "" && len(original.Text) > continuationTextBudget
 	if requestTruncated {
-		request = truncateUTF8Head(request, continuationTextBudget/2) +
+		request = truncateUTF8Head(original.Text, continuationTextBudget/2) +
 			"\n[Middle of original request omitted]\n" +
-			continuationTail(request, continuationTextBudget/2)
+			continuationTail(original.Text, continuationTextBudget/2)
+	} else if request == "" {
+		request = original.Text
 	}
 	encodedContext, _ := json.Marshal(struct {
 		OriginalRequest   string `json:"originalRequest"`
