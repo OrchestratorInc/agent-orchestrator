@@ -1,6 +1,6 @@
 import type { ApprovalMode, ChatConfigChoice, ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 import { can } from "./types";
-import { approvalCopy, approvalOrder } from "./approvalCopy";
+import { approvalChoiceCopy, approvalCopy, approvalOrder } from "./approvalCopy";
 
 export type TurnSettingChoice = {
 	value: string;
@@ -57,7 +57,7 @@ const FOLLOW_AGENT = {
  * `approvalSettings`), so it is not the agent's own permissions there.
  */
 export function approvalLabel(mode: ApprovalMode, harness: string): string {
-	return approvalCopy(harness)[mode]?.label ?? mode;
+	return approvalChoiceCopy(harness, mode)?.label ?? mode;
 }
 
 /** A mode by AO's generic name, for a provider's own choice that maps to it. */
@@ -323,7 +323,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 			choices: approvalOrder(snapshot.harness, approval).map((mode) => ({
 				value: mode,
 				label: approvalLabel(mode, snapshot.harness),
-				description: approvalCopy(snapshot.harness)[mode].description,
+				description: approvalChoiceCopy(snapshot.harness, mode).description,
 				selected: mode === approval,
 				permissionMode: mode,
 			})),

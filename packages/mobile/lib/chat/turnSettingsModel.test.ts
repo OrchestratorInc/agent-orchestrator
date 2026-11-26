@@ -455,11 +455,14 @@ describe("default labels", () => {
 	// still runs in it: the picker must show it as the mode in force.
 	it("keeps a saved mode the agent is not offered, selected, rather than showing none", () => {
 		const approvals = turnSettingsRows(snapshot({ harness: "agy", capabilities: [], settings: { approvalMode: "bypass-permissions" } }), [], []).find((row) => row.id === "approvals");
-		expect(approvals?.value).toBe("Auto-approve");
+		// Named generically: Antigravity's copy calls it "Auto-approve", as `auto` is.
+		expect(approvals?.value).toBe("Bypass permissions");
 		expect(approvals?.choices.map((choice) => [choice.value, choice.selected])).toEqual([
 			["default", false], ["accept-edits", false], ["auto", false], ["bypass-permissions", true],
 		]);
-		expect(approvals?.choices.at(-1)).toMatchObject({ label: "Auto-approve", description: "Approves everything", permissionMode: "bypass-permissions" });
+		expect(approvals?.choices.at(-1)).toMatchObject({ label: "Bypass permissions", description: "Never asks before acting", permissionMode: "bypass-permissions" });
+		const labels = approvals?.choices.map((choice) => choice.label) ?? [];
+		expect(new Set(labels).size).toBe(labels.length);
 		// A mode the agent offers adds nothing.
 		const offered = turnSettingsRows(snapshot({ harness: "agy", capabilities: [], settings: { approvalMode: "auto" } }), [], []).find((row) => row.id === "approvals");
 		expect(offered?.choices.map((choice) => choice.value)).toEqual(["default", "accept-edits", "auto"]);

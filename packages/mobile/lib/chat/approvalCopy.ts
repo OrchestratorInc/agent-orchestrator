@@ -73,6 +73,16 @@ export function approvalOrder(harness: string | undefined, current?: ApprovalMod
 	return current && !order.includes(current) ? [...order, current] : order;
 }
 
+/**
+ * A mode's name and description as a chat shows it: the agent's own copy for a
+ * mode it is offered, else AO's generic copy. A mode kept only because the chat
+ * runs in it (Antigravity's bypass-permissions, which its copy names
+ * "Auto-approve" like `auto`) would otherwise read the same as another row.
+ */
+export function approvalChoiceCopy(harness: string | undefined, mode: ApprovalMode): ApprovalCopy {
+	return offeredApprovals(harness).includes(mode) ? approvalCopy(harness)[mode] : APPROVAL_COPY[mode];
+}
+
 function offeredApprovals(harness: string | undefined): ApprovalMode[] {
 	if (harness === "codex") return APPROVAL_ORDER;
 	if (harness === "agy") return APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions");
