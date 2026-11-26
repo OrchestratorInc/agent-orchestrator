@@ -4909,6 +4909,14 @@ describe("agent browser runtime", () => {
 			expect((await tabs()).find((tab) => tab.active)?.id).toBe("a1");
 		});
 
+		it("keeps a preview tab marked as one through a profile switch", async () => {
+			const profile: BrowserProfile = { id: "22222222-2222-4222-8222-222222222222", name: "Work", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+			const { host, invoke, viewId, tabs } = await openAgent(fakeBrowserProfileStore(profile, { "sess-1": profile.id }));
+			await invoke("browser:navigate", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/" });
+			await host.switchProfile(viewId, null);
+			expect((await tabs()).find((tab) => tab.id === "t1")).toMatchObject({ preview: true });
+		});
+
 		it("leaves Cmd+F in an agent tab to its viewer, whose find searches the agent's page", async () => {
 			const { invoke, views, viewId, sent } = await openAgent();
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });

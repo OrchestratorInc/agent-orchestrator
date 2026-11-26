@@ -3194,7 +3194,7 @@ export function createBrowserViewHost(
   // agentTab and viewer: an agent tab's binding and, until it is first shown,
   // its viewer (BrowserEntry). They are kept as is: its address says nothing
   // while its host is away.
-  type SavedBrowserTab = { tabId: string; url?: string; agentTab?: string; viewer?: string };
+  type SavedBrowserTab = { tabId: string; url?: string; agentTab?: string; viewer?: string; preview?: boolean };
 
   const disposeSessionTabs = (session: BrowserSessionEntry): void => {
     for (const entry of session.tabs.values()) {
@@ -3213,17 +3213,18 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
   ): SavedBrowserTab[] =>
     [...session.tabs.values()].map((entry) => {
-      const { tabId, agentTab, viewer } = entry;
+      const { tabId, agentTab, viewer, preview } = entry;
       try {
         const url = entry.view.webContents.getURL();
         return {
           tabId,
           agentTab,
           viewer,
+          preview,
           ...(isAllowedBrowserURL(url, options.rendererOrigin) ? { url } : {}),
         };
       } catch {
-        return { tabId, agentTab, viewer };
+        return { tabId, agentTab, viewer, preview };
       }
     });
 
@@ -3253,6 +3254,7 @@ export function createBrowserViewHost(
       // An agent tab stays one, bound to the same page.
       entry.agentTab = saved.agentTab;
       entry.viewer = saved.viewer;
+      entry.preview = saved.preview;
     }
     session.nextTabNumber = Math.max(nextTabNumber, highestTabNumber + 1);
     // Activate before reloading: pages can take seconds to load in the new
@@ -3844,9 +3846,12 @@ export function createBrowserViewHost(
       }
       const cached = cache.get(origin);
       if (cached) return cached;
-      const pending = fetchFaviconFromSession(
-        tabSession,
-        `${origin}/favicon.ico`,
+      const routed = entry.hostId
+        ? Promise.resolve(options.routeBrowserPartition?.(entry.profilePartition, entry.hostId))
+        : Promise.resolve();
+      const pending = routed.then(
+        () => fetchFaviconFromSession(tabSession, `${origin}/favicon.ico`),
+        () => undefined,
       ).then((favicon) => {
         if (!favicon) cache?.delete(origin);
         return favicon;

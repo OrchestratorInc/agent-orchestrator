@@ -81,7 +81,7 @@ export function canOpenInUserBrowser(rawUrl: string, options: { onHost?: boolean
 	}
 }
 
-function isLoopbackHost(hostname: string): boolean {
+export function isLoopbackHost(hostname: string): boolean {
 	const host = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
 	if (host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
 	if (host === "::1" || host === "0.0.0.0" || host === "::") return true;

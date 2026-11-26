@@ -19,6 +19,7 @@ import { connect as netConnect, isIP, type AddressInfo, type Socket } from "node
 import type { Readable, Writable } from "node:stream";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocket, createWebSocketStream } from "ws";
@@ -50,7 +51,7 @@ export type ActiveProxy = {
 	isRenderUrl: (url: string) => boolean;
 	/** A preview's address for a browser outside AO; any other URL unchanged. */
 	externalUrl: (url: string) => string;
-	openLoopbackTunnel: (port: number) => Promise<Duplex>;
+	openLoopbackTunnel: (port: number, host?: string) => Promise<Duplex>;
 	loopbackReach: () => Promise<boolean>;
 	close: () => Promise<void>;
 };
@@ -546,7 +547,12 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		res.end('{"error":"remote daemon unreachable","code":"UPSTREAM_UNAVAILABLE","message":"remote daemon unreachable"}');
 	};
 
-	const openLoopbackTunnel = async (loopbackPort: number): Promise<Duplex> => {
+	const openLoopbackTunnel = async (loopbackPort: number, host?: string): Promise<Duplex> => {
+		if (host && previewHosts.has(host) && (loopbackPort === port || loopbackPort === securePort)) {
+			const local = netConnect(loopbackPort, "127.0.0.1");
+			await once(local, "connect");
+			return local;
+		}
 		await verifyUpstream();
 		if (closing) throw new AoError("LOOPBACK_TUNNEL_CLOSED", "the host is disconnected");
 		const socket = new WebSocket(`${secure ? "wss" : "ws"}://${upstream.host}${prefix}/api/v1/loopback-tunnel?port=${loopbackPort}`, {

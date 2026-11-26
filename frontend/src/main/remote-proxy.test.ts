@@ -400,6 +400,20 @@ describe("startRemoteProxy", () => {
 		expect(await request()).toContain("ao preview start");
 	});
 
+	it("serves its own preview origin locally and sends that hostname's other ports to the host", async () => {
+		const tunnels: string[] = [];
+		const { port } = await startUpstream((req) => {
+			if (req.url?.startsWith("/api/v1/loopback-tunnel")) tunnels.push(req.url);
+			return { status: 404, body: "" };
+		});
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const local = await proxy.openLoopbackTunnel(Number(preview.port), preview.hostname);
+		local.destroy();
+		await expect(proxy.openLoopbackTunnel(3001, preview.hostname)).rejects.toThrow();
+		expect(tunnels).toEqual(["/api/v1/loopback-tunnel?port=3001"]);
+	});
+
 	it("sends an unmanaged preview to its own address on a host with the tunnel", async () => {
 		let tunnel: { status: number; headers?: Record<string, string> } = { status: 502, headers: { "x-ao-loopback-refused": "1" } };
 		const { port } = await startUpstream((req) => req.url?.startsWith("/api/v1/loopback-tunnel")

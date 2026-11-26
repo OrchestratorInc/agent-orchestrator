@@ -2,7 +2,7 @@ import { createServer, type AddressInfo, type Server, type Socket } from "node:n
 import type { Duplex } from "node:stream";
 import { readRequest, refuse, reply, REPLY_HOST_UNREACHABLE, REPLY_OK, SocketReader } from "./render-check-proxy";
 
-type OpenTunnel = (hostId: string, port: number) => Promise<Duplex>;
+type OpenTunnel = (hostId: string, port: number, host: string) => Promise<Duplex>;
 
 export type RoutedSession = {
 	setProxy(config: Electron.ProxyConfig): Promise<void>;
@@ -14,7 +14,7 @@ export type RoutedSession = {
 	};
 };
 
-const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
+const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10";
 const UNSPECIFIED_URLS = ["0.0.0.0", "[::]"].flatMap((host) => ["*", "ws", "wss"].map((scheme) => `${scheme}://${host}/*`));
 
 function unspecifiedResponse(url: string): Electron.CallbackResponse {
@@ -62,7 +62,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		const reader = new SocketReader(client);
 		const target = await readRequest(client, reader);
 		if (!target) return;
-		const tunnel = await openTunnel(hostId, target.port).catch(() => null);
+		const tunnel = await openTunnel(hostId, target.port, target.host).catch(() => null);
 		if (!tunnel || client.destroyed) {
 			tunnel?.destroy();
 			return refuse(client, REPLY_HOST_UNREACHABLE);

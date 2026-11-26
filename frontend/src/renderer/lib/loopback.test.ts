@@ -8,6 +8,7 @@ describe("hostLoopbackUrl", () => {
 		["https://[::1]:8443/x", "https://[::1]:8443/x"],
 		["http://0.0.0.0:3000", "http://0.0.0.0:3000/"],
 		["http://app.localhost:3000/", "http://app.localhost:3000/"],
+		["http://[::ffff:127.0.0.1]:3000/", "http://[::ffff:7f00:1]:3000/"],
 	])("takes %s as the host's own address", (target, url) => {
 		expect(hostLoopbackUrl(target)).toBe(url);
 	});

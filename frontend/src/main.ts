@@ -1056,7 +1056,10 @@ const userBrowser = createUserBrowser({
 
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
 	const hostPrefix = `${partition.replace(/^persist:/, "")}-host-`.toLowerCase();
-	const hostPartitions = (await readdir(path.join(app.getPath("userData"), "Partitions")).catch(() => []))
+	const hostPartitions = (await readdir(path.join(app.getPath("userData"), "Partitions")).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	}))
 		.filter((name) => name.toLowerCase().startsWith(hostPrefix))
 		.map((name) => `persist:${name}`);
 	await Promise.all([partition, ...hostPartitions].map((name) => {
@@ -3827,7 +3830,7 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
-const routeLoopback = createLoopbackTunnels((hostId, port) => remoteRegistry.openLoopbackTunnel(hostId, port));
+const routeLoopback = createLoopbackTunnels((hostId, port, host) => remoteRegistry.openLoopbackTunnel(hostId, port, host));
 setPasswordCipher(() => protectedStorageAvailable() ? {
 	encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
 	decrypt: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),

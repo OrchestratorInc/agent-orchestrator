@@ -87,10 +87,10 @@ export class RemoteRegistry {
 		return connected.proxy.externalUrl(url);
 	}
 
-	openLoopbackTunnel(hostId: string, port: number): Promise<Duplex> {
+	openLoopbackTunnel(hostId: string, port: number, host?: string): Promise<Duplex> {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
 		if (!connected) return Promise.reject(new AoError("LOOPBACK_TUNNEL_CLOSED", `Host ${hostId} is not connected`));
-		return connected.proxy.openLoopbackTunnel(port);
+		return connected.proxy.openLoopbackTunnel(port, host);
 	}
 
 	loopbackReach(hostId: string): Promise<boolean> {
