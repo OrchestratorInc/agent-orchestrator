@@ -67,6 +67,23 @@ describe("background task queries", () => {
 		client.clear();
 	});
 
+	it("stops polling a host that has no background task endpoint", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		getMock.mockResolvedValue({ error: { message: "not found" }, response: { status: 404 } });
+		function Consumer() {
+			const query = useBackgroundTasks("s", true);
+			return <span>{query.isError ? "unavailable" : "loading"}</span>;
+		}
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Consumer /></QueryClientProvider>);
+		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		view.unmount();
+		client.clear();
+		vi.useRealTimers();
+	});
+
 	it.each([
 		["session", { status: "ok" }],
 		["session", { sessionId: "s", availability: "ready", tasks: null }],

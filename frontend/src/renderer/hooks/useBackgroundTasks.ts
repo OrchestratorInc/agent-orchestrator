@@ -16,6 +16,8 @@ function isTaskReading(data: BackgroundTaskReading | undefined): data is Backgro
 		&& ["ready", "partial", "unavailable"].includes(data.availability);
 }
 
+const missingTaskRoute = new Error("This host does not report background tasks");
+
 const selectReadings = (data: components["schemas"]["ListBackgroundTasksResponse"]) =>
 	new Map(data.sessions.map((reading) => [reading.sessionId, reading]));
 
@@ -53,14 +55,15 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = f
 		queryKey: [...backgroundTasksQueryRoot, sessionUiKey(sessionId, hostId)],
 		enabled,
 		queryFn: async ({ signal }) => {
-			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/background-tasks", {
+			const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/background-tasks", {
 				params: { path: { sessionId } }, signal,
 			});
+			if (response?.status === 404) throw missingTaskRoute;
 			if (error) throw error;
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
 			return data;
 		},
-		refetchInterval: fast ? 2_000 : 5_000,
+		refetchInterval: (query) => query.state.error === missingTaskRoute ? false : fast ? 2_000 : 5_000,
 		staleTime: 1_000,
 		retry: false,
 	});
