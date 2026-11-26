@@ -6,7 +6,7 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { AgentZap, Brain, ChevronRight, Loader2, Settings2, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
+import { Brain, ChevronRight, Loader2, Settings2, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
 import { Fragment, memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -475,7 +475,9 @@ export function AgentModelPicker({
 				{t("agentSwitch.loadingSettings")}
 			</OptionMenuItem>
 		) : null,
-		settable && !waiting && source.efforts.length > 0 ? (
+		// Ultracode lives in the effort's side menu, so it opens for Ultracode alone when there are no levels
+		// to pick (a starting agent's), and Ultracode stays reachable.
+		settable && !waiting && (source.efforts.length > 0 || source.ultracode !== undefined) ? (
 			<OptionMenuSub key="effort" closeOnSelect>
 				<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
 				<OptionMenuSubContent align="end" sideOffset={10} className={SUB_CLASS}>
@@ -495,6 +497,18 @@ export function AgentModelPicker({
 							<span className={isUltraEffort(choice.value) ? "ultra-text" : undefined}>{choice.label}</span>
 						</OptionMenuItem>
 					))}
+					{/* Claude Code's Ultracode works at any level, so it is a switch under them, not one of them. */}
+					{source.ultracode !== undefined ? (
+						<>
+							{source.efforts.length > 0 ? <div role="separator" className="-mx-(--space-1) my-1 border-t border-border" /> : null}
+							<ToggleRow
+								label={t("agentSwitch.ultracode")}
+								title={t("agentSwitch.ultracodeHint")}
+								checked={source.ultracode}
+								onChange={withPick(source.onToggleUltracode)}
+							/>
+						</>
+					) : null}
 				</OptionMenuSubContent>
 			</OptionMenuSub>
 		) : settable && !waiting && !modelsProblem ? (
@@ -524,8 +538,7 @@ export function AgentModelPicker({
 			shownCompact.onChange(value);
 		},
 	};
-	// Fast mode, Ultracode and auto-compact share one row. Fast mode and Ultracode show only where the
-	// model offers them; auto-compact is always there, shown off and disabled where the agent lacks it.
+	// Fast mode and auto-compact share one row. Fast mode shows only where the model offers it; auto-compact is always there, shown off and disabled where the agent lacks it.
 	const showToggles = settable && !waiting && (!modelsProblem || source.fast !== undefined || source.thinking !== undefined);
 	const notOffered = t("agentSwitch.notOffered");
 	const settingsGroups = [
@@ -541,18 +554,6 @@ export function AgentModelPicker({
 							checked={source.fast}
 							onChange={withPick(source.onToggleFast)}
 							hint={t("agentSwitch.fastModeHint")}
-						/>
-					) : null}
-					{/* Claude Code's Ultracode is a mode beside Fast mode, not an effort level. */}
-					{source.ultracode !== undefined ? (
-						<IconToggle
-							icon={AgentZap}
-							iconClassName="h-3.5 w-auto"
-							label={t("agentSwitch.ultracode")}
-							checked={source.ultracode}
-							onChange={withPick(source.onToggleUltracode)}
-							hint={t("agentSwitch.ultracodeHint")}
-							onClassName="ultra-icon"
 						/>
 					) : null}
 					<AutoCompactChoices {...(compact ?? { onChange: () => {}, disabled: true, unavailable: true, title: notOffered })} className="ml-auto mr-2" />
@@ -596,9 +597,10 @@ export function AgentModelPicker({
 				{terminal ? <ChevronRight aria-hidden="true" className="ml-auto size-icon-sm shrink-0 text-muted-foreground" /> : (
 					<>
 						{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
-						{shownUltracode ? <AgentZap aria-label={t("agentSwitch.ultracode")} className="ultra-icon h-3 w-auto shrink-0 fill-current" /> : null}
 						{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
 						{shownEffort ? <span className={cn("shrink-0", ultraEffort ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
+						{/* Ultracode is named after the effort it runs at, in the ultra colours. */}
+						{shownUltracode ? <span className="shrink-0 ultra-text">{t("agentSwitch.ultracode")}</span> : null}
 						{mark}
 					</>
 				)}
@@ -862,22 +864,18 @@ export function ToggleRow({ label, checked, onChange, title, className }: { labe
 }
 
 /**
- * A mode as an icon button (Fast mode's lightning, Ultracode's agent and bolt): filled and lit when on, an
+ * A mode as an icon button (Fast mode's lightning): filled and lit when on, an
  * outline when off. It is still a menu row, so the arrow keys reach it and Enter toggles it without
  * closing the menu. The icon alone does not say what the mode is, so hovering names it and says what
  * it does, and a screen reader reads the same hint as the row's description.
  */
-function IconToggle({ icon: Icon, label, hint, checked, onChange, onClassName = "text-foreground", iconClassName = "size-3.5" }: {
+function IconToggle({ icon: Icon, label, hint, checked, onChange }: {
 	icon: AppIcon;
-	/** The icon's size: square by default; a wider icon gives a height and lets its width follow. */
-	iconClassName?: string;
 	label: string;
 	/** What the mode does, under its name in the tooltip. */
 	hint: string;
 	checked: boolean;
 	onChange?: (next: boolean) => void;
-	/** The icon's colour when on. */
-	onClassName?: string;
 }) {
 	const hintId = useId();
 	return (
@@ -893,10 +891,10 @@ function IconToggle({ icon: Icon, label, hint, checked, onChange, onClassName = 
 						onSelect={(event) => { event.preventDefault(); onChange?.(!checked); }}
 						className={cn(
 							"size-7 shrink-0 justify-center p-0 data-disabled:opacity-50",
-							checked ? cn(onClassName, "before:bg-interactive-active") : "text-muted-foreground",
+							checked ? "text-foreground before:bg-interactive-active" : "text-muted-foreground",
 						)}
 					>
-						<Icon aria-hidden="true" className={cn(iconClassName, checked && "fill-current")} />
+						<Icon aria-hidden="true" className={cn("size-3.5", checked && "fill-current")} />
 						{/* The tooltip is only there on hover, so the hint a screen reader reads is kept in the row. */}
 						<span id={hintId} className="sr-only">{hint}</span>
 					</OptionMenuItem>

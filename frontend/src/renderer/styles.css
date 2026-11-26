@@ -6623,11 +6623,6 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	-webkit-text-fill-color: transparent;
 }
 
-/* Ultracode's icon when on: the middle of the ultra colours. */
-.ultra-icon {
-	color: #9b6dff;
-}
-
 @media (prefers-reduced-motion: reduce) {
 	.ultra-text { animation: none; }
 }
