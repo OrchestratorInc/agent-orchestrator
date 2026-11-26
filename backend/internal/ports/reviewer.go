@@ -149,6 +149,10 @@ type ReviewInvocation struct {
 	ReviewIndex int
 	// Config carries the reviewer's resolved agent configuration override.
 	Config domain.AgentConfig
+	// ProjectEnv is the project's configured environment, which the launcher
+	// merges under the reviewer command's own Env for the pane. Adapters that
+	// probe the CLI before launch use it so the probe sees what the pane sees.
+	ProjectEnv map[string]string
 	// WorkspacePath is the worker's checkout the reviewer reads.
 	WorkspacePath string
 	// DataDir is AO's owned state root. Reviewer prelaunch hooks may use it for

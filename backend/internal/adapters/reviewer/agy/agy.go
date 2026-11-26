@@ -13,6 +13,7 @@ import (
 	"time"
 
 	agentagy "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -79,7 +80,9 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err := r.verifyCompatibility(ctx, binary, envVars); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
-	if err := r.verifySignedIn(ctx, binary, env.ConfigRoot, envVars); err != nil {
+	// Probe with the pane's environment: project env under the reviewer roots,
+	// as the launcher merges it, so project-level gateway settings count.
+	if err := r.verifySignedIn(ctx, binary, env.ConfigRoot, agentlaunch.MergeEnv(inv.ProjectEnv, envVars)); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
 	prompt := inv.Prompt
@@ -144,7 +147,7 @@ func (r *Reviewer) verifySignedIn(ctx context.Context, binary, configRoot string
 	if !strings.Contains(strings.ToLower(string(out)), "please sign in") {
 		return nil
 	}
-	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in once in the reviewer home by running `HOME=%q XDG_CONFIG_HOME=%q %q` and choosing a login method, then retry the review.", configRoot, configRoot, binary)}
+	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in in this worker session's reviewer home by running `HOME=%q XDG_CONFIG_HOME=%q %q` and choosing a login method, then retry the review. The sign-in applies to this worker session's reviewer only.", configRoot, configRoot, binary)}
 }
 
 func appendEnvironment(base []string, overrides map[string]string) []string {
@@ -168,9 +171,10 @@ func (*Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 }
 
 // onboardingFlags are the cache/onboarding.json keys Agy's TUI reads to decide
-// whether to show its first-run setup wizard. Enterprise onboarding is left
-// untouched because it depends on the account, not on local setup.
-var onboardingFlags = []string{"consumerOnboardingComplete", "onboardingComplete"}
+// whether to show its first-run setup wizard. Consumer and enterprise sign-ins
+// (e.g. an AGY_LLM_GATEWAY_URL gateway) each check their own flag, so all are
+// set.
+var onboardingFlags = []string{"consumerOnboardingComplete", "enterpriseOnboardingComplete", "onboardingComplete"}
 
 // seedOnboardingComplete marks Agy's first-run setup as done inside the
 // isolated reviewer home. Without it the reviewer TUI opens on the setup

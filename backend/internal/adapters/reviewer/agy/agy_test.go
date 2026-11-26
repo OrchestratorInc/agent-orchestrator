@@ -65,6 +65,37 @@ func TestReviewCommandSignInProbe(t *testing.T) {
 	}
 }
 
+func TestReviewCommandSignInProbeUsesProjectEnv(t *testing.T) {
+	const gateway = "AGY_LLM_GATEWAY_URL"
+	var probeEnv map[string]string
+	r := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9")
+	base := r.run
+	r.run = func(ctx context.Context, env map[string]string, binary string, args ...string) ([]byte, error) {
+		if slices.Equal(args, []string{"models"}) {
+			probeEnv = env
+			if env[gateway] == "" {
+				return []byte("Error: Please sign in to view available models."), nil
+			}
+			return []byte("gateway-model\tGateway Model\n"), nil
+		}
+		return base(ctx, env, binary, args...)
+	}
+	dataDir := t.TempDir()
+	inv := ports.ReviewInvocation{
+		DataDir: dataDir, ReviewerID: "review-worker-1", TaskPromptRoot: "/ao/prompts", WorkspacePath: "/worker", Prompt: "p",
+		ProjectEnv: map[string]string{gateway: "https://gateway.example", "HOME": "/project/home"},
+	}
+	if _, err := r.ReviewCommand(context.Background(), inv); err != nil {
+		t.Fatalf("ReviewCommand with project gateway env: %v", err)
+	}
+	if probeEnv[gateway] != "https://gateway.example" {
+		t.Fatalf("probe env missing project %s: %#v", gateway, probeEnv)
+	}
+	if want := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config"); probeEnv["HOME"] != want {
+		t.Fatalf("probe HOME = %q, want reviewer home %q", probeEnv["HOME"], want)
+	}
+}
+
 func TestReviewCommandPreflightShapeOnlyResolvesBinary(t *testing.T) {
 	spec, err := testReviewer("", "").ReviewCommand(context.Background(), ports.ReviewInvocation{WorkspacePath: "/worker"})
 	if err != nil {
@@ -146,7 +177,7 @@ func TestSeedOnboardingCompletePreservesExistingState(t *testing.T) {
 		t.Fatalf("seedOnboardingComplete: %v", err)
 	}
 	state := assertOnboardingComplete(t, path)
-	if string(state["other"]) != `"kept"` || string(state["enterpriseOnboardingComplete"]) != "false" {
+	if string(state["other"]) != `"kept"` {
 		t.Fatalf("existing keys not preserved: %s", state)
 	}
 
@@ -186,7 +217,7 @@ func assertOnboardingComplete(t *testing.T, path string) map[string]json.RawMess
 	if err := json.Unmarshal(raw, &state); err != nil {
 		t.Fatalf("decode onboarding state %q: %v", raw, err)
 	}
-	for _, key := range []string{"consumerOnboardingComplete", "onboardingComplete"} {
+	for _, key := range []string{"consumerOnboardingComplete", "enterpriseOnboardingComplete", "onboardingComplete"} {
 		if string(state[key]) != "true" {
 			t.Fatalf("%s = %s, want true (state %s)", key, state[key], raw)
 		}
