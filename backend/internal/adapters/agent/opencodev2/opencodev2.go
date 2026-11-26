@@ -29,6 +29,7 @@ var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
+var _ ports.AgentPromptReadinessProvider = (*Plugin)(nil)
 
 // Manifest describes the adapter.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -77,17 +78,112 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, err == nil, err
 }
 
+// GetPromptDeliveryStrategy types the first task into the TUI once AO's agent
+// is active whenever AO selects one. OpenCode 2 loads config agents and
+// providers in the background, and its TUI submits --prompt as soon as any
+// agent is listed, so a --prompt task can start on the built-in build agent
+// and the fallback model (#9067). Without an AO agent, build is the intended
+// agent and --prompt stays.
+func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	prompt, err := systemPrompt(cfg)
+	if err != nil {
+		return "", err
+	}
+	if selectsAOAgent(prompt, cfg.Config.Model, cfg.Permissions) {
+		return ports.PromptDeliveryAfterStart, nil
+	}
+	return ports.PromptDeliveryInCommand, nil
+}
+
+// PromptReadinessHints holds the first task until the TUI footer names AO's
+// agent ("Ao-W-1 · model", or "Ao-W-1 auto · model" in auto mode), which shows
+// the inline config has loaded for the session the task creates. While
+// starting, the footer can name AO's agent before any provider has loaded
+// ("No provider selected"); Enter then opens the connect dialog instead of
+// sending, so that state holds delivery. If the agent never appears, AO still
+// types the task when the wait ends.
+func (p *Plugin) PromptReadinessHints(ctx context.Context, cfg ports.LaunchConfig) (ports.PromptReadinessHints, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.PromptReadinessHints{}, err
+	}
+	return ports.PromptReadinessHints{
+		InitialDelay:     500 * time.Millisecond,
+		Patterns:         []string{agentLabel(aoAgentName(cfg.SessionID))},
+		BlockingPatterns: []string{noProviderSelected},
+		PollInterval:     250 * time.Millisecond,
+		Timeout:          45 * time.Second,
+		Lines:            200,
+		// The footer never ends with a newline, so only the rendered screen shows it.
+		RenderedScreen: true,
+	}, nil
+}
+
+// noProviderSelected is the TUI footer's model label before any provider loads.
+const noProviderSelected = "No provider selected"
+
+// agentLabel is how the TUI footer names an agent: Locale.titlecase, which
+// upper-cases each word character that follows a non-word character.
+func agentLabel(name string) string {
+	word := func(b byte) bool {
+		return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
+	}
+	label := []byte(name)
+	for i := range label {
+		if word(label[i]) && (i == 0 || !word(label[i-1])) && label[i] >= 'a' && label[i] <= 'z' {
+			label[i] -= 'a' - 'A'
+		}
+	}
+	return string(label)
+}
+
+func systemPrompt(cfg ports.LaunchConfig) (string, error) {
+	if cfg.SystemPrompt != "" || cfg.SystemPromptFile == "" {
+		return cfg.SystemPrompt, nil
+	}
+	data, err := os.ReadFile(cfg.SystemPromptFile)
+	if err != nil {
+		return "", fmt.Errorf("opencode-v2: read system prompt: %w", err)
+	}
+	return string(data), nil
+}
+
+// selectsAOAgent reports whether prepareConfigContent selects AO's agent.
+func selectsAOAgent(prompt, model string, mode ports.PermissionMode) bool {
+	mode = ports.NormalizePermissionMode(mode)
+	return prompt != "" || strings.TrimSpace(model) != "" || mode == ports.PermissionModeAcceptEdits || mode == ports.PermissionModeBypassPermissions
+}
+
+// cliConfigEnv carries OpenCode 2's TUI settings, merged over the user's
+// cli.json. After an OpenCode update the first TUI opens a "What's new" dialog
+// that hides the agent marker and takes the typed task, so AO turns release
+// highlights off whenever it types the task itself.
+const cliConfigEnv = "OPENCODE_CLI_CONFIG_CONTENT"
+
+func prepareCLIConfigContent(existing string) (string, error) {
+	config := map[string]json.RawMessage{}
+	if strings.TrimSpace(existing) != "" {
+		if err := json.Unmarshal([]byte(existing), &config); err != nil || config == nil {
+			return "", fmt.Errorf("opencode-v2: %s must be a JSON object", cliConfigEnv)
+		}
+	}
+	config["highlights"] = json.RawMessage("false")
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // The v2 root TUI has no --model/--agent flags. Select the AO agent through
 // default_agent in the highest-precedence inline config. --prompt=<value>
 // keeps even leading-dash prompts a single string value in the Effect CLI.
 func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeID string) ([]string, error) {
-	prompt := cfg.SystemPrompt
-	if prompt == "" && cfg.SystemPromptFile != "" {
-		data, err := os.ReadFile(cfg.SystemPromptFile)
-		if err != nil {
-			return nil, fmt.Errorf("opencode-v2: read system prompt: %w", err)
-		}
-		prompt = string(data)
+	prompt, err := systemPrompt(cfg)
+	if err != nil {
+		return nil, err
 	}
 	content, err := prepareConfigContent(os.Getenv("OPENCODE_CONFIG_CONTENT"), cfg.SessionID, prompt, cfg.Config.Model, cfg.Permissions)
 	if err != nil {
@@ -104,6 +200,16 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	envArgs = append(envArgs, "XDG_DATA_HOME="+dataHome)
 	if content != "" {
 		envArgs = append(envArgs, "OPENCODE_CONFIG_CONTENT="+content)
+	}
+	// A fresh launch with an AO agent gets its task typed by AO, so the manager
+	// has cleared cfg.Prompt (see GetPromptDeliveryStrategy); a launch with no
+	// task looks the same and gets the same setting.
+	if content != "" && cfg.Prompt == "" && nativeID == "" {
+		cliContent, err := prepareCLIConfigContent(os.Getenv(cliConfigEnv))
+		if err != nil {
+			return nil, err
+		}
+		envArgs = append(envArgs, cliConfigEnv+"="+cliContent)
 	}
 	var cmd []string
 	if len(envArgs) > 0 {
