@@ -402,3 +402,10 @@ func TestSaveChecksTheVersionSegmentPerHarness(t *testing.T) {
 		t.Fatalf("claude-code with /v1: err = %v, want a message naming /v1", err)
 	}
 }
+
+// Codex requests start right under its base URL, so the version stays in it.
+func TestSaveKeepsTheVersionInACodexBaseURL(t *testing.T) {
+	if _, err := NewStore(t.TempDir()).Save("codex", Input{BaseURL: "https://gateway.example.com/v1", APIKey: "k"}, testNow); err != nil {
+		t.Fatalf("codex with /v1: %v", err)
+	}
+}
