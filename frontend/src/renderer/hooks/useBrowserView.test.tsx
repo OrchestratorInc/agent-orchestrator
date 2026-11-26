@@ -1876,15 +1876,25 @@ describe("useBrowserView", () => {
 				await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId: cloudViewId, url: agentUrl }));
 			});
 
-			it("closes every agent tab when the panel closes, which ends their streams", async () => {
-				const browser = setupBridge();
-				vi.spyOn(aoBridge.cloudCp, "agentBrowserUrl").mockResolvedValue(agentUrl);
-				const preview = { id: "t1", url: "http://localhost:3000/", title: "First", active: false };
-				browser.openTab.mockResolvedValue({ viewId: cloudViewId, activeTabId: "a1", tabs: [preview, agentTab("a1"), agentTab("a2")] });
-				const { rerender } = renderHook((props: { active: boolean }) => useBrowserView({ ...cloud, ...props }), { initialProps: { active: true } });
-				await waitFor(() => expect(browser.openTab).toHaveBeenCalled());
-				rerender({ active: false });
-				await waitFor(() => expect(browser.closeTab.mock.calls.map(([call]) => call.tabId)).toEqual(["a1", "a2"]));
+			it("never closes the agent's pages when the panel closes or the window is hidden", async () => {
+				let visibility: DocumentVisibilityState = "visible";
+				const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+				try {
+					const browser = setupBridge();
+					vi.spyOn(aoBridge.cloudCp, "agentBrowserUrl").mockResolvedValue(agentUrl);
+					const preview = { id: "t1", url: "http://localhost:3000/", title: "First", active: false };
+					browser.openTab.mockResolvedValue({ viewId: cloudViewId, activeTabId: "a1", tabs: [preview, agentTab("a1"), agentTab("a2")] });
+					const { rerender } = renderHook((props: { active: boolean }) => useBrowserView({ ...cloud, ...props }), { initialProps: { active: true } });
+					await waitFor(() => expect(browser.openTab).toHaveBeenCalled());
+					rerender({ active: false });
+					visibility = "hidden";
+					act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+					await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+					// Closing an agent tab would close the agent's own page in its sandbox.
+					expect(browser.closeTab).not.toHaveBeenCalled();
+				} finally {
+					spy.mockRestore();
+				}
 			});
 
 			it("opens nothing while the window is hidden, and opens once it is shown", async () => {

@@ -1207,31 +1207,13 @@ export function useBrowserView({
 	);
 
 	// A cloud agent tab streams the sandbox's screen for as long as it is open,
-	// which costs the sandbox CPU, memory and bandwidth. It is only open while
-	// someone can see it: the Browser panel on screen in a visible window.
+	// which costs the sandbox CPU, memory and bandwidth, so it is only opened
+	// once someone can see it: the Browser panel on screen in a visible window.
+	// It is never closed here when they stop looking: closing an agent tab
+	// closes the agent's own page in the sandbox (closeAgentTab with closePage).
+	// Main pauses the stream of a tab that is off screen instead.
 	const windowVisible = useSyncExternalStore(subscribePageVisibility, pageVisible, () => true);
 	const cloudAgentStreamable = active && windowVisible;
-	useEffect(() => {
-		if (!cloudAgentBrowser || cloudAgentStreamable || !hasNativeBrowser || !viewId) return;
-		const agentTabs = tabsStateRef.current.tabs.filter((tab) => tab.remote);
-		if (agentTabs.length === 0) return;
-		let cancelled = false;
-		void (async () => {
-			for (const tab of agentTabs) {
-				if (cancelled || viewIdRef.current !== viewId) return;
-				try {
-					const state = await window.ao!.browser.closeTab({ viewId, tabId: tab.id });
-					if (viewIdRef.current === state.viewId) setTabsState(state);
-				} catch (error) {
-					console.warn("Unable to close the agent browser tab", error);
-				}
-			}
-		})();
-		return () => {
-			cancelled = true;
-		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [Boolean(cloudAgentBrowser), cloudAgentStreamable, hasNativeBrowser, viewId]);
 
 	// A remote or cloud session's agent browser (the host's or sandbox's
 	// Chromium its agent drives, streamed) is part of the session's surface:
