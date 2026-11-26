@@ -1839,7 +1839,9 @@ paths:
       description: >-
         The organization's automations, newest first, each with its latest
         run. Every member sees every automation of the organization's
-        projects. Offered when offering.features lists automations; every
+        projects, including those of a deleted project, which are turned off
+        (disabledReason says why) until someone deletes them. Offered when
+        offering.features lists automations; every
         /automations route answers 404 otherwise.
       parameters:
         - name: projectId
@@ -1872,16 +1874,20 @@ paths:
         repository_not_accessible when AO's GitHub App cannot reach the
         project's repository, or repository_unreachable when the caller's
         GitHub token cannot reach it with push rights (a project on a
-        personal access token); and, for an enabled automation, 402
+        personal access token), while a standalone project (one with no
+        repository) has no repository to check and its runs start in an
+        empty folder; and, for an enabled automation, 402
         PLAN_REQUIRED when the organization has no active plan, or the
         plan-limit refusal (such as 409 WORKER_SLOTS_FULL, with limit 0) or
         409 SANDBOX_QUOTA_EXCEEDED only when that limit is zero, so no run
         could ever start. How full the organization or plan is when it is
         saved is not checked: each run's start checks it, and a full one
         skips its occurrence. Refused with 409
-        AUTOMATION_LIMIT_REACHED when the organization has as many as it may,
-        422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project,
-        and 422 validation_error for an invalid field or schedule.
+        AUTOMATION_LIMIT_REACHED when the organization has as many as it may
+        (a deleted project's automations do not count), 422
+        AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project
+        (checked before the credential and repository checks), and 422
+        validation_error for an invalid field or schedule.
       requestBody:
         required: true
         content:
@@ -1939,6 +1945,8 @@ paths:
         while enabled, an active plan whose limits are not zero). Turning it off
         changes only enabled. The next run is computed afresh, so
         turning an automation back on never runs the occurrences it missed.
+        Refused with 409 AUTOMATION_PROJECT_DELETED once the automation's
+        project was deleted.
       requestBody:
         required: true
         content:
@@ -1965,7 +1973,8 @@ paths:
       description: >-
         Delete an automation and its run history. The session of a run in
         flight ends with it; every run's transcript and artifacts stay.
-        Allowed to whoever may edit it.
+        Allowed to whoever may edit it. An automation whose project was
+        deleted can still be deleted.
       responses:
         "204":
           description: Automation deleted.
@@ -2001,7 +2010,9 @@ paths:
         in flight. The control plane does not replay this command for a
         reused Idempotency-Key: a retry while the run is in flight gets
         AUTOMATION_RUN_ACTIVE, and one after it finished starts another run.
-        The run starts within seconds; follow it in the run list.
+        The run starts within seconds; follow it in the run list. Refused
+        with 409 AUTOMATION_PROJECT_DELETED once the automation's project
+        was deleted.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
@@ -7655,9 +7666,11 @@ components:
             for the harness (agent_provider_required) or is no longer in the
             organization (forbidden), or because the organization has no
             active plan (PLAN_REQUIRED, whether it would start a new session
-            or wake a kept one), turns the automation off at once, and an
-            automation whose project was deleted is turned off when it next
-            comes due.
+            or wake a kept one), turns the automation off at once. Deleting
+            a project turns its automations off at once, with "Turned off:
+            its project was deleted. Delete the automation, or move its
+            prompt to another project."; such an automation can only be
+            deleted (409 AUTOMATION_PROJECT_DELETED to a change or Run now).
         subscribed:
           type: boolean
           description: Whether the caller is notified of its runs.
