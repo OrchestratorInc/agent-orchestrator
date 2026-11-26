@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
-index 6ba79e2..9bc84a9 100644
+index 6ba79e2..1be624d 100644
 --- a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
 +++ b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
 @@ -2,10 +2,20 @@
@@ -62,7 +62,7 @@ index 6ba79e2..9bc84a9 100644
      }
    }
  }
-@@ -247,3 +266,139 @@
+@@ -247,3 +266,145 @@
      stateWrapper?.updateState(newStateData)
    }
  }
@@ -108,20 +108,26 @@ index 6ba79e2..9bc84a9 100644
 +  // The host view is the display's size, not the window's: the window itself
 +  // is cut short at the touch region, and React must still lay out the whole
 +  // screen. A rotation, a foldable unfolding or a split-screen resize changes
-+  // the display, so the host view follows it.
++  // the display, so the host view follows it: on a configuration change while
++  // shown, and on each show, since a change while hidden reaches no view.
 +  override fun onConfigurationChanged(newConfig: Configuration?) {
 +    super.onConfigurationChanged(newConfig)
++    syncHostSize()
++  }
++
++  override fun onAttachedToWindow() {
++    super.onAttachedToWindow()
++    syncHostSize()
++    viewTreeObserver.addOnPreDrawListener(preDraw)
++  }
++
++  private fun syncHostSize() {
 +    val display = reactContext.getDisplaySize()
 +    val params = hostView.layoutParams ?: return
 +    if (params.width == display.x && params.height == display.y) return
 +    params.width = display.x
 +    params.height = display.y
 +    hostView.layoutParams = params
-+  }
-+
-+  override fun onAttachedToWindow() {
-+    super.onAttachedToWindow()
-+    viewTreeObserver.addOnPreDrawListener(preDraw)
 +  }
 +
 +  override fun onDetachedFromWindow() {
