@@ -15,6 +15,14 @@ export type ConversationGroup = {
 	turn?: ConversationTurn;
 	/** The turn's plan when this turn should show it; see attachCurrentPlans. */
 	plan?: ConversationPlan;
+	/** The group opens at a steer, not at the turn's prompt (see splitAtSteers). */
+	continuesTurn?: boolean;
+	/**
+	 * False on the part of a turn a later steer cut off: its `turn` is a settled
+	 * view of just that stretch, and the turn's actions, diff and plan draw under
+	 * the last part. Unset on groups that are not a turn.
+	 */
+	endsTurn?: boolean;
 };
 
 export type ActivityNode = {
@@ -101,7 +109,46 @@ export function groupConversationByTurn(
 	}
 	groups.sort((left, right) => left.anchor - right.anchor);
 	attachCurrentPlans(groups);
-	return groups;
+	return groups.flatMap(splitAtSteers);
+}
+
+/**
+ * A steer is the person speaking, so it opens a new visual turn even though the
+ * provider keeps running the same one, as on the desktop: the work before it
+ * settles into its own "Worked for" row instead of folding the steer away with
+ * it, and the steer starts a fresh Working row and reply. Only the last part
+ * carries the real turn's live state, outcome, actions and plan. A steer another
+ * session sent stays in the work.
+ */
+function splitAtSteers(group: ConversationGroup): ConversationGroup[] {
+	const turn = group.turn;
+	if (!turn) return [group];
+	if (turn.state === "queued") return [{ ...group, endsTurn: true }];
+	const starts = group.items.flatMap((item, index) => index > 0 && isHumanSteer(item) ? [index] : []);
+	if (starts.length === 0) return [{ ...group, endsTurn: true }];
+	const bounds = [0, ...starts, group.items.length];
+	const startedAt = (index: number) => index === 0 ? turn.startedAt ?? turn.requestedAt : group.items[bounds[index]].createdAt;
+	return bounds.slice(0, -1).map((from, index) => {
+		const items = group.items.slice(from, bounds[index + 1]);
+		const last = index === starts.length;
+		const part: ConversationGroup = {
+			key: index === 0 ? group.key : `${group.key}:steer:${items[0].id}`,
+			turnId: group.turnId,
+			anchor: index === 0 ? group.anchor : items[0].sequence,
+			items,
+			turn: last
+				? { ...turn, startedAt: startedAt(index) }
+				: { id: turn.id, state: "completed", requestedAt: turn.requestedAt, startedAt: startedAt(index), completedAt: startedAt(index + 1), hasHumanPrompt: turn.hasHumanPrompt },
+			endsTurn: last,
+		};
+		if (index > 0) part.continuesTurn = true;
+		if (last && group.plan) part.plan = group.plan;
+		return part;
+	});
+}
+
+function isHumanSteer(item: ConversationItem): boolean {
+	return item.kind === "activity" && isSteerItem(item) && !item.detail?.senderSessionId;
 }
 
 /**

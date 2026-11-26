@@ -381,3 +381,54 @@ describe("settledTurnItems", () => {
 		expect((settledTurnItems([command("failed")], turn("completed"))[0] as ConversationActivity).status).toBe("failed");
 	});
 });
+
+describe("steers split a turn", () => {
+	const at = (second: number) => `2026-08-05T00:00:${String(second).padStart(2, "0")}Z`;
+	const user = (id: string, sequence: number, text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role: "user", origin: "human", text, streaming: false, createdAt: at(sequence) });
+	const reply = (id: string, sequence: number, text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role: "assistant", origin: "provider", text, streaming: false, createdAt: at(sequence) });
+	const command = (id: string, sequence: number): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "completed", summary: id, createdAt: at(sequence) } as ConversationActivity);
+	const steer = (id: string, sequence: number, detail: Record<string, unknown> = {}): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "system", status: "completed", summary: id, createdAt: at(sequence), detail: { event: "steer", text: id, ...detail } } as ConversationActivity);
+	const chat = (state: ConversationTurn["state"], items: ConversationItem[]): ConversationSnapshot => ({
+		...snapshot(),
+		turns: [{ id: "t", state, providerTurnId: "p", requestedAt: at(0), startedAt: at(1), ...(state === "running" ? {} : { completedAt: at(50) }), plan: { steps: [{ text: "Fix", status: "completed" }] } }],
+		items,
+	});
+	const ids = (group: { items: ConversationItem[] }) => group.items.map((item) => item.id);
+
+	it("starts a new segment at each steer the person typed, so it never folds into Worked for", () => {
+		const value = chat("completed", [user("u", 1, "go"), command("ls", 2), reply("r1", 3, "Looking"), steer("s1", 10), command("cat", 11), steer("s2", 20), reply("r2", 21, "Done")]);
+		const groups = groupConversationByTurn(value);
+		expect(groups.map(ids)).toEqual([["u", "ls", "r1"], ["s1", "cat"], ["s2", "r2"]]);
+		expect(groups.map((group) => group.key)).toEqual(["turn-t", "turn-t:steer:s1", "turn-t:steer:s2"]);
+		expect(groups.every((group) => group.turnId === "t")).toBe(true);
+		// Each earlier segment settles as worked up to the steer; the last keeps the turn's own outcome.
+		expect(groups.map((group) => [group.turn?.state, group.turn?.startedAt, group.turn?.completedAt])).toEqual([
+			["completed", at(1), at(10)],
+			["completed", at(10), at(20)],
+			["completed", at(20), at(50)],
+		]);
+		expect(groups.map((group) => group.continuesTurn ?? false)).toEqual([false, true, true]);
+		expect(groups.map((group) => group.endsTurn)).toEqual([false, false, true]);
+		// The plan, diff and actions belong to the real turn, drawn under its last segment.
+		expect(groups.map((group) => Boolean(group.plan))).toEqual([false, false, true]);
+		expect(partitionTurnItems(groups[1].items, groups[1].turn)!.prompt.map((item) => item.id)).toEqual(["s1"]);
+	});
+
+	it("settles the work before a steer while the turn keeps running after it", () => {
+		const groups = groupConversationByTurn(chat("running", [user("u", 1, "go"), command("ls", 2), steer("s1", 10), command("cat", 11)]));
+		expect(groups.map((group) => group.turn?.state)).toEqual(["completed", "running"]);
+		expect(groups[1].turn?.startedAt).toBe(at(10));
+	});
+
+	it("keeps a steer another session sent inside the work", () => {
+		const groups = groupConversationByTurn(chat("completed", [user("u", 1, "go"), steer("s1", 10, { senderSessionId: "worker-1" }), reply("r", 11, "ok")]));
+		expect(groups.map(ids)).toEqual([["u", "s1", "r"]]);
+		expect(groups[0].endsTurn).toBe(true);
+	});
+
+	it("leaves a queued turn whole", () => {
+		const value = chat("queued", [user("u", 1, "go"), steer("s1", 10)]);
+		const groups = groupConversationByTurn(value, value.items);
+		expect(groups.map(ids)).toEqual([["u", "s1"]]);
+	});
+});

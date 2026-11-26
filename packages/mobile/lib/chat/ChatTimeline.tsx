@@ -634,13 +634,13 @@ function Timeline({
 								group={group}
 								sessionId={snapshot.sessionId}
 								conversationId={snapshot.conversationId}
-								canRollBack={Boolean(group.turn && onRollback && canRollbackTurn(snapshot, group.turn))}
+								canRollBack={Boolean(group.turn && group.endsTurn !== false && onRollback && canRollbackTurn(snapshot, group.turn))}
 								approvalPending={approvalPending}
 								inputPending={inputPending}
 								onDecide={rowHandlers.onDecide}
 								onResolveInput={rowHandlers.onResolveInput}
 								onRollback={onRollback ? rowHandlers.onRollback : undefined}
-								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? rowHandlers.onFork : undefined}
+								onFork={onFork && group.endsTurn !== false && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? rowHandlers.onFork : undefined}
 								editableTurns={edits?.editable}
 								onEditMessage={onEditMessage ? rowHandlers.startEdit : undefined}
 								editDraft={editDraft}
@@ -650,7 +650,7 @@ function Timeline({
 								answeredBelow={answeredBelow}
 								workedOpen={openWorked.has(group.key)}
 								onToggleWorked={rowHandlers.toggleWorked}
-								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
+								startup={placement === "turn" && group.turnId === openingTurnId && !group.continuesTurn ? startup : undefined}
 							/>}
 						/>
 						</RevealFocusedField.Provider>
@@ -725,10 +725,13 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
+	// A stretch a later steer cut off is not where the turn ends: its actions,
+	// diff and plan draw once, under the last stretch.
+	const endsTurn = group.endsTurn !== false;
+	const summary = group.turn && endsTurn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
-	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} />;
+	const actions = endsTurn ? <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} /> : null;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
