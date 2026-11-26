@@ -1,4 +1,3 @@
-import type { ItemAction } from "./item-actions-menu.types";
 import type { ReviewerPickerProps } from "./reviewer-picker.types";
 
 export type ReviewPolicyKey = "autoReviewEnabled" | "autoInjectReview" | "autoInjectCI";
@@ -21,31 +20,6 @@ export type ExternalReviewerRow = {
 	busy: boolean;
 };
 
-/** A review summary or an inline comment, with its "⋯" actions. */
-export type ReviewFeedbackItem = {
-	key: string;
-	author: string;
-	/** The verdict, or where a comment came from and whether it is resolved. */
-	meta: string;
-	/** `file:line` for an inline comment. */
-	location?: string;
-	/** The text, or what to say when there is none. */
-	body: string;
-	bodyMissing: boolean;
-	notInjected: boolean;
-	sent: boolean;
-	menuLabel: string;
-	actions: ItemAction[];
-	working: boolean;
-};
-
-export type ReviewFeedbackSection = {
-	id: "reviews" | "unresolved" | "resolved";
-	title: string;
-	footer: string;
-	items: ReviewFeedbackItem[];
-};
-
 /**
  * Everything the review actions sheet shows, worked out by the route. Each
  * platform lays it out natively: a SwiftUI Form on iOS, Material list items in
@@ -63,7 +37,4 @@ export type ReviewActionsSheetProps = {
 	reviewer?: ReviewerPickerProps;
 	externalReviewers: ExternalReviewerRow[];
 	onRerequest: (id: string) => void;
-	feedback: ReviewFeedbackSection[];
-	/** Set when GitHub has nothing for this pull request yet. */
-	emptyFeedback?: string;
 };

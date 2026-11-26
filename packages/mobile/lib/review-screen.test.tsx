@@ -27,7 +27,13 @@ vi.mock("react-native", async () => {
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
-vi.mock("lucide-react-native/icons/git-commit-horizontal", () => ({ default: "GitCommitHorizontal" }));
+// The Comments section renders for real; only its native leaves are stood in for.
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}) } }));
+vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
+vi.mock("./AccountAvatar", () => ({ AccountAvatar: "AccountAvatar" }));
+vi.mock("./chat/AutomationMessage", () => ({ GitHubComment: "GitHubComment", WorkerSessionsProvider: ({ children }: { children: unknown }) => children }));
+vi.mock("./review-comment-filter", () => ({ ReviewCommentFilter: "ReviewCommentFilter" }));
+vi.mock("./ReviewReplyDock", () => ({ ReviewReplyDock: "ReviewReplyDock" }));
 vi.mock("./Spinner", () => ({ Spinner: "Spinner" }));
 vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ pressed: {}, android_ripple: undefined }) }));
 vi.mock("./refreshControlColors", () => ({ refreshControlColors: () => ({}) }));
@@ -68,7 +74,6 @@ vi.mock("./ui", () => ({ Button: "Button", Dot: "Dot", EmptyState: "EmptyState",
 vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
 vi.mock("./SwipeToMerge", () => ({ SwipeToMerge: "SwipeToMerge" }));
 vi.mock("./item-actions-menu", () => ({ ItemActionsMenu: "ItemActionsMenu" }));
-vi.mock("./chat/ChatMarkdown", () => ({ ChatMarkdown: "ChatMarkdown" }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn() } }));
 vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
@@ -182,20 +187,26 @@ it("shows a failed restore under the Worker row, and a reload does not clear it"
 	expect(alerts()).toEqual(["The worktree is gone."]);
 });
 
-it("names each Open for screen readers, and fills the reviewer's only without a Worker row", async () => {
+const reviewerMenu = () => renderer!.root.find((node) => (node.type as unknown) === "ItemActionsMenu" && node.props.accessibilityLabel === "Reviewer session actions");
+
+// Desktop's Reviewer section: one Review now button beside the agent, its session in a menu.
+it("opens the reviewer from its row or its menu, beside the worker's own Open", async () => {
 	fixtures.reviewerSurface = { mode: "chat", reviewId: "review-1", harness: "codex" };
 	fixtures.sessions = [worker()];
 	await render();
-	expect(pill("Open")).toHaveLength(0);
 	expect(pill("Open worker")).toHaveLength(1);
-	expect(outlined(pill("Open reviewer")[0])).toBe(true);
+	expect(reviewerMenu().props.actions.map((action: { id: string; label: string }) => [action.id, action.label])).toEqual([["open", "Open reviewer chat"]]);
+	const row = renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Open reviewer chat. "));
+	expect(row).toHaveLength(1);
+	expect(row[0]!.props.accessibilityLabel).toBe("Open reviewer chat. Not reviewed yet");
+});
 
-	act(() => renderer!.unmount());
-	fixtures.sessions = [];
-	fixtures.getSession.mockRejectedValue(new Error("not found"));
+// Automatic review no longer locks the button, as on desktop.
+it("keeps Review now available while automatic review is on", async () => {
+	fixtures.sessions = [worker({ autoReviewEnabled: true })];
 	await render();
-	expect(workerRow()).toHaveLength(0);
-	expect(outlined(pill("Open reviewer")[0])).toBe(false);
+	const reviewNow = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Review now");
+	expect(reviewNow.props.disabled).toBe(false);
 });
 
 describe("a Cloud worker's pull request", () => {
@@ -246,7 +257,7 @@ describe("a Cloud worker's pull request", () => {
 	it("says when the head commit was already reviewed", async () => {
 		const client = signedIn();
 		await render();
-		const start = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Start review");
+		const start = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Review now");
 		await act(async () => { start.props.onPress(); });
 		expect(client.triggerSessionReviews).toHaveBeenCalledWith("org-1", "worker-1");
 		expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && String(node.props.children).startsWith("This commit has already been reviewed"))).toHaveLength(1);
@@ -256,10 +267,7 @@ describe("a Cloud worker's pull request", () => {
 	it("opens the reviewer's conversation and offers nothing a Cloud reviewer cannot do", async () => {
 		signedIn({ reviewerSurface: { mode: "chat", reviewId: "run-1", harness: "codex" } });
 		await render();
-		expect(pill("Open reviewer")).toHaveLength(1);
-		expect(pill("Restore reviewer")).toHaveLength(0);
-		const menus = renderer!.root.findAll((node) => (node.type as unknown) === "ItemActionsMenu" && node.props.accessibilityLabel === "Reviewer session actions");
-		expect(menus[0]?.props.actions).toEqual([]);
+		expect(reviewerMenu().props.actions.map((action: { id: string }) => action.id)).toEqual(["open"]);
 	});
 
 	// As the desktop does: Cloud sends the stored run, and marks it sent.
@@ -270,7 +278,9 @@ describe("a Cloud worker's pull request", () => {
 			sendMessage: vi.fn(),
 		});
 		await render();
-		const send = renderer!.root.findAll((node) => (node.type as unknown) === "ItemActionsMenu").flatMap((node) => (node.props.actions ?? []) as { id: string; onPress(): void }[]).find((action) => action.id === "send");
+		// The Orchestrator's review is the Comments section's first row, open with Send to agent in reach.
+		const sendButton = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Send to agent");
+		const send = { onPress: sendButton.props.onPress as () => void };
 		await act(async () => { send!.onPress(); });
 		expect(client.sendReviewToWorker).toHaveBeenCalledWith("org-1", "worker-1", "run-1");
 		expect(client.sendMessage).not.toHaveBeenCalled();

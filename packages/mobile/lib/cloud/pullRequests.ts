@@ -14,6 +14,7 @@ export function cloudPRSummary(pr: CloudPullRequestSummary): SessionPRSummary {
 		number: pr.number,
 		title: pr.title,
 		state: pr.state,
+		provider: pr.provider === "github" || pr.provider === "gitlab" ? pr.provider : undefined,
 		repo: pr.repository,
 		author: pr.author,
 		headSha: pr.headSha || undefined,

@@ -1,9 +1,8 @@
 import { Host } from "@expo/ui";
 import { Button, Form, HStack, Image, Label, ProgressView, Section, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
-import { accessibilityHint, disabled, foregroundStyle, italic, lineLimit, listRowBackground, scrollContentBackground, textSelection, tint } from "@expo/ui/swift-ui/modifiers";
+import { accessibilityHint, disabled, foregroundStyle, listRowBackground, scrollContentBackground, tint } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet, View } from "react-native";
-import { ItemActionsPullDown } from "./item-actions-menu.ios";
-import type { ReviewActionsSheetProps, ReviewFeedbackItem, ReviewPolicyRow } from "./review-actions-sheet.types";
+import type { ReviewActionsSheetProps, ReviewPolicyRow } from "./review-actions-sheet.types";
 import { ReviewerPicker } from "./reviewer-picker.ios";
 import { reviewerSectionFooter } from "./reviewer-picker.types";
 import { symbols } from "./symbols";
@@ -19,7 +18,7 @@ import { useAnnounceAlerts } from "./useAnnounceAlerts";
  * The review actions sheet as a SwiftUI Form: switches, menu pickers and
  * button rows in grouped sections, with each section's hint as its footer.
  */
-export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, externalReviewers, onRerequest, feedback, emptyFeedback }: ReviewActionsSheetProps) {
+export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, externalReviewers, onRerequest }: ReviewActionsSheetProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
@@ -63,12 +62,6 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 							))}
 						</Section>
 					) : null}
-					{feedback.map((section) => (
-						<Section key={section.id} title={section.title} footer={<Text>{section.footer}</Text>}>
-							{section.items.map((item) => <FeedbackRow key={item.key} item={item} locked={locked} />)}
-						</Section>
-					))}
-					{emptyFeedback ? <Section><Text modifiers={[appFont("subheadline"), secondary, row]}>{emptyFeedback}</Text></Section> : null}
 				</Form>
 			</Host>
 		</View>
@@ -96,24 +89,6 @@ function PolicyToggle({ policy, locked, onChange }: { policy: ReviewPolicyRow; l
 			{title}
 			{description}
 		</Toggle>
-	);
-}
-
-function FeedbackRow({ item, locked }: { item: ReviewFeedbackItem; locked: boolean }) {
-	const t = useTheme();
-	return (
-		<VStack alignment="leading" spacing={space.xs} modifiers={[listRowBackground(t.bgElevated)]}>
-			<HStack spacing={space.sm}>
-				<Text modifiers={[appFont("subheadline", { weight: "600" }), lineLimit(1)]}>{item.author}</Text>
-				<Spacer />
-				<Text modifiers={[appFont("footnote"), secondary, lineLimit(1)]}>{item.meta}</Text>
-				{item.working ? <ProgressView /> : <ItemActionsPullDown actions={item.actions} accessibilityLabel={item.menuLabel} disabled={locked} tintColor={t.textSecondary} />}
-			</HStack>
-			{item.notInjected ? <Text modifiers={[appFont("footnote"), foregroundStyle(t.amber)]}>Not automatically sent to the worker</Text> : null}
-			{item.location ? <Text modifiers={[appFont("footnote", { mono: true }), secondary]}>{item.location}</Text> : null}
-			<Text modifiers={item.bodyMissing ? [appFont("subheadline"), secondary, italic()] : [appFont("subheadline"), textSelection(true)]}>{item.body}</Text>
-			{item.sent ? <Label title="Sent to worker" systemImage={symbols.checkmark.ios} modifiers={[appFont("footnote", { weight: "600" }), foregroundStyle(t.green)]} /> : null}
-		</VStack>
 	);
 }
 

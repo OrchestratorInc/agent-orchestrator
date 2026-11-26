@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
-import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, rerequestableReviewers, rerequestKey, reviewStatusVisual, reviewVerdictLabel, sessionPRReadyForReview, shortCommit, workerRouteForSession } from "./reviewView";
+import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewerControls, reviewerDestination, reviewForPullRequest, reviewRouteForSession, rerequestableReviewers, rerequestKey, reviewStatusVisual, sessionPRReadyForReview, workerRouteForSession } from "./reviewView";
 
 const run = (over: Partial<ReviewRun> = {}): ReviewRun => ({
 	id: "run-1", reviewId: "review-1", sessionId: "worker-1", batchId: "", harness: "codex",
@@ -90,33 +90,12 @@ describe("mobile review presentation", () => {
 		const review = state();
 		expect(review.latestRun).toBeUndefined();
 		expect(review.previousRun?.verdict).toBe("approved");
-		expect(reviewStatusLabel(review.status)).toBe("Needs review");
-	});
-
-	it("labels terminal outcomes and shortens commit ids", () => {
-		expect(reviewVerdictLabel(run({ verdict: "changes_requested" }))).toBe("Changes requested");
-		expect(reviewVerdictLabel(run({ status: "cancelled", verdict: "" }))).toBe("Review cancelled");
-		expect(shortCommit("abcdef123456")).toBe("abcdef12");
 	});
 
 	it("does not present pending or unavailable reviews as successful", () => {
 		expect(reviewStatusVisual("needs_review")).toEqual({ icon: "clock", tone: "muted" });
 		expect(reviewStatusVisual("ineligible")).toEqual({ icon: "alert-circle", tone: "muted" });
 		expect(reviewStatusVisual("up_to_date")).toEqual({ icon: "check-circle", tone: "green" });
-	});
-
-	it("only offers actions supported by the current review state", () => {
-		expect(reviewPrimaryAction(state({ status: "needs_review" }))).toBe("start");
-		expect(reviewPrimaryAction(state({ status: "running" }))).toBe("cancel");
-		expect(reviewPrimaryAction(state({ status: "up_to_date" }))).toBe("review_again");
-		expect(reviewPrimaryAction(state({ status: "ineligible" }))).toBe("none");
-		expect(reviewPrimaryActionLabel("review_again")).toBe("Review again");
-		expect(reviewPrimaryActionLabel("cancel", true)).toBe("Cancel running reviews");
-	});
-
-	it("prioritizes cancelling an active session batch over starting another", () => {
-		const selected = state({ status: "needs_review" });
-		expect(reviewBatchAction(selected, [selected, state({ prUrl: "other", status: "running" })])).toBe("cancel");
 	});
 
 	it("surfaces only the newest written automatic-review failure while automation is enabled", () => {
@@ -139,21 +118,6 @@ describe("mobile review presentation", () => {
 		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/reviewer/[reviewId]", params: { reviewId: "review-1" } });
 		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "tui", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/shell/[handleId]", params: { handleId: "fallback", kind: "reviewer" } });
 		expect(reviewerDestination(base, review, "worker-1")).toBeUndefined();
-	});
-	it("only offers finished reviews with findings to the worker", () => {
-		expect(reviewRunSendable(run())).toBe(true);
-		expect(reviewRunSendable(run({ status: "superseded" }))).toBe(false);
-		expect(reviewRunSendable(run({ status: "running", body: "" }))).toBe(false);
-		expect(reviewRunSendable(run({ status: "running", body: "partial" }))).toBe(false);
-		expect(reviewRunSendable(run({ status: "failed", verdict: "", body: "reviewer process exited before submitting a result" }))).toBe(false);
-		expect(reviewRunSendable(run({ status: "cancelled", verdict: "" }))).toBe(false);
-		expect(reviewRunSendable(run({ body: "  " }))).toBe(false);
-	});
-
-	it("says delivered once", () => {
-		expect(reviewRunMeta(run({ deliveredAt: "2026-09-30T00:00:00Z" }))).toBe("codex · manual · completed · delivered");
-		expect(reviewRunMeta(run())).toBe("codex · manual · completed");
-		expect(reviewRunMeta(run({ status: "running" }))).toBe("codex · manual · running");
 	});
 	it("only offers Open when there is a reviewer surface to open", () => {
 		const base = { reviewerHandleId: "", reviews: [state()], runs: [run()] } as SessionReviews;

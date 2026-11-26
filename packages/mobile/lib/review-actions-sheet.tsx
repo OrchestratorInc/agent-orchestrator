@@ -2,10 +2,7 @@ import { CircularProgressIndicator, Column, Host, Icon, ListItem, Switch, Text a
 import { alpha, clickable, size, testID, toggleable } from "@expo/ui/jetpack-compose/modifiers";
 import type { ReactNode } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { AppSymbol } from "./AppSymbol";
-import { rowDividerWidth } from "./divider";
-import { ItemActionsMenu } from "./item-actions-menu";
-import type { ExternalReviewerRow, ReviewActionsSheetProps, ReviewFeedbackItem, ReviewPolicyRow } from "./review-actions-sheet.types";
+import type { ExternalReviewerRow, ReviewActionsSheetProps, ReviewPolicyRow } from "./review-actions-sheet.types";
 import { ReviewerPicker } from "./reviewer-picker";
 import { reviewerSectionFooter } from "./reviewer-picker.types";
 import type { Theme } from "./theme";
@@ -20,7 +17,7 @@ import { SHEET_SCROLL_CONTENT, SheetHeader } from "./ui";
  * scroll view stays React Native because it is what cooperates with the
  * bottom sheet's drag; a Compose list there would fight it for every swipe.
  */
-export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, externalReviewers, onRerequest, feedback, emptyFeedback }: ReviewActionsSheetProps) {
+export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, externalReviewers, onRerequest }: ReviewActionsSheetProps) {
 	const styles = useThemedStyles(makeStyles);
 	return (
 		<ScrollView style={styles.screen} contentContainerStyle={SHEET_SCROLL_CONTENT} nestedScrollEnabled keyboardShouldPersistTaps="handled">
@@ -43,14 +40,6 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 					</MaterialList>
 				</Section>
 			) : null}
-			{feedback.map((section) => (
-				<Section key={section.id} title={section.title} footer={section.footer}>
-					<View style={styles.cards}>
-						{section.items.map((item) => <FeedbackCard key={item.key} item={item} locked={locked} />)}
-					</View>
-				</Section>
-			))}
-			{emptyFeedback ? <Text style={styles.empty}>{emptyFeedback}</Text> : null}
 		</ScrollView>
 	);
 }
@@ -127,29 +116,6 @@ function RerequestItem({ item, locked, onPress }: { item: ExternalReviewerRow; l
 	);
 }
 
-function FeedbackCard({ item, locked }: { item: ReviewFeedbackItem; locked: boolean }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<View style={styles.card}>
-			<View style={styles.cardHeading}>
-				<Text style={styles.author} numberOfLines={1}>{item.author}</Text>
-				<Text style={styles.meta} numberOfLines={1}>{item.meta}</Text>
-				<ItemActionsMenu accessibilityLabel={item.menuLabel} actions={item.actions} disabled={locked} loading={item.working} />
-			</View>
-			{item.notInjected ? <Text style={styles.notInjected}>Not automatically sent to the worker</Text> : null}
-			{item.location ? <Text style={styles.location}>{item.location}</Text> : null}
-			<Text selectable={!item.bodyMissing} style={item.bodyMissing ? styles.bodyMissing : styles.body}>{item.body}</Text>
-			{item.sent ? (
-				<View style={styles.sent}>
-					<AppSymbol name="checkmark" size={iconSize.sm} color={t.green} />
-					<Text style={styles.sentText}>Sent to worker</Text>
-				</View>
-			) : null}
-		</View>
-	);
-}
-
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgSurface },
 	alert: { ...type.footnote, color: t.red, backgroundColor: t.tintRed, borderRadius: radius.md, borderCurve: "continuous", padding: space.md, marginBottom: space.sm },
@@ -158,16 +124,5 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	sectionFooter: { ...type.footnote, color: t.textTertiary },
 	// Material list items carry their own 16dp inset; this lines their text up with the sheet's.
 	list: { marginHorizontal: -space.lg },
-	cards: { borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
-	card: { paddingVertical: space.md, gap: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
-	cardHeading: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	author: { ...type.subheadline, fontFamily: font.semibold, fontWeight: "600", flexShrink: 1, color: t.textPrimary },
-	meta: { ...type.footnote, flex: 1, textAlign: "right", color: t.textTertiary },
-	notInjected: { ...type.footnote, color: t.amber },
-	location: { ...type.footnote, fontFamily: t.fontMono, color: t.textSecondary },
-	body: { ...type.subheadline, color: t.textSecondary },
-	bodyMissing: { ...type.subheadline, fontStyle: "italic", color: t.textTertiary },
-	sent: { flexDirection: "row", alignItems: "center", gap: space.xs },
-	sentText: { ...type.footnote, fontFamily: font.semibold, fontWeight: "600", color: t.green },
 	empty: { ...type.footnote, color: t.textTertiary, paddingVertical: space.md },
 });

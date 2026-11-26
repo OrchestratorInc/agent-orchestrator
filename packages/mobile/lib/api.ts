@@ -1298,6 +1298,8 @@ export type SessionPRSummary = {
 	number: number;
 	title: string;
 	state: "draft" | "open" | "merged" | "closed";
+	/** Which forge hosts it; the daemon always says, an older Cloud may not. */
+	provider?: "github" | "gitlab";
 	repo: string;
 	author: string;
 	/** The head commit the merge is fenced to, so a newer push is never merged unseen. */
@@ -1365,6 +1367,9 @@ export type ReviewRun = {
 	body: string;
 	githubReviewId: string;
 	createdAt: string;
+	/** When the daemon began launching the reviewer, then when the task reached it. */
+	launchingAt?: string | null;
+	startedAt?: string | null;
 	deliveredAt?: string | null;
 	autoInjectReview: boolean;
 };
@@ -1483,6 +1488,34 @@ export async function resolveSessionReviewComment(
 	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/comments/resolve`, {
 		method: "POST",
 		body: JSON.stringify({ pullRequestUrl, commentUrl }),
+	});
+}
+
+/**
+ * Posts a reply on the provider as the machine's signed-in GitHub account:
+ * into a review thread when `threadId` is set, else a top-level PR comment.
+ */
+export async function postPRComment(
+	cfg: ServerConfig,
+	pr: { number: number; url: string },
+	body: string,
+	threadId?: string,
+): Promise<void> {
+	await req(cfg, `${API}/prs/${encodeURIComponent(String(pr.number))}/comments`, {
+		method: "POST",
+		body: JSON.stringify({ prUrl: pr.url, body, ...(threadId ? { threadId } : {}) }),
+	});
+}
+
+/**
+ * Asks the daemon to read a PR's details (threads, top-level comments,
+ * requested reviewers) when none are stored. The SCM observer reads them only
+ * for the open PRs it follows; the next GET /sessions/{id}/pr carries them.
+ */
+export async function loadPRDetails(cfg: ServerConfig, pr: { number: number; url: string }): Promise<void> {
+	await req(cfg, `${API}/prs/${encodeURIComponent(String(pr.number))}/details`, {
+		method: "POST",
+		body: JSON.stringify({ prUrl: pr.url }),
 	});
 }
 
