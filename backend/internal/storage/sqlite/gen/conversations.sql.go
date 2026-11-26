@@ -953,8 +953,9 @@ SET queue_held_turn_id = ?1
 WHERE conversations.id = ?2
   AND EXISTS (
       SELECT 1 FROM conversation_messages
-      JOIN conversation_turns AS turn ON turn.id = conversation_messages.turn_id
-      WHERE conversation_messages.turn_id = ?1
+      JOIN conversation_turns AS member ON member.id = conversation_messages.turn_id
+      JOIN conversation_turns AS turn ON turn.id = ?1
+      WHERE (member.id = turn.id OR member.promoted_to_turn_id = turn.id)
         AND conversation_messages.role = 'user'
         AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
         AND (conversations.scope <> 'project' OR turn.handled_by_session_id = conversations.current_session_id)
