@@ -6694,6 +6694,29 @@ describe("browser human pointer and annotated screenshots", () => {
 		await expect(host.execute("sess-1", "describe", { action: "click", ref: "e1" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
 	});
 
+	it("dispatches an approved drag only onto the drop target approved", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		const drags = () =>
+			(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "drag").length;
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const tabId = tabs.activeTabId;
+		// The binding names the drop target (e2); the source is e1.
+		for (const binding of [
+			{ tabId, document: 99, ref: "e2" },
+			{ tabId: "t-other", document: 0, ref: "e2" },
+			{ tabId, document: 0, ref: "e7" },
+		]) {
+			await expect(host.execute("sess-1", "drag", { ref: "e1", targetRef: "e2", approvalBinding: binding })).rejects.toMatchObject({
+				code: "BROWSER_TARGET_CHANGED",
+			});
+		}
+		expect(drags()).toBe(0);
+		await host.execute("sess-1", "drag", { ref: "e1", targetRef: "e2", approvalBinding: { tabId, document: 0, ref: "e2" } });
+		expect(drags()).toBe(1);
+	});
+
 	it("answers an approved dialog only on the tab the user approved", async () => {
 		const { host, runtime, invoke, emit } = setupPointerHost();
 		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };

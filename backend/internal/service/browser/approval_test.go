@@ -771,3 +771,17 @@ func TestDescribeCapturesOnlyWhenTheUserWillBeAsked(t *testing.T) {
 		t.Fatalf("prompt image = %q", p.Image)
 	}
 }
+
+func TestApprovedDragCarriesTheDropTargetBinding(t *testing.T) {
+	// The runtimes check at dispatch that the drag still drops onto the
+	// approved target: the binding must name it.
+	rt := &scriptedRuntime{describe: dropTarget("Delete forever")}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "drag", map[string]interface{}{"ref": "e1", "targetRef": "e2"}); err != nil {
+		t.Fatal(err)
+	}
+	if binding, _ := rt.lastArgs["approvalBinding"].(map[string]interface{}); binding["ref"] != "e2" {
+		t.Fatalf("dispatched args = %v", rt.lastArgs)
+	}
+}
