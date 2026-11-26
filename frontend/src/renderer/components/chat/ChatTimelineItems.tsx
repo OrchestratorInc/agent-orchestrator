@@ -179,6 +179,7 @@ import {
 	type DiffStatus,
 	type FileChangeFile,
 	type ConversationItem,
+	type SessionEndedBy,
 	type TurnArtifactChange,
 	type TurnDiff,
 } from "../../types/conversation";
@@ -610,6 +611,14 @@ const TURN_OUTCOME_COPY = {
 		tone: "text-muted-foreground",
 		iconTone: "text-muted-foreground/70",
 	},
+	// A Cloud session ended under the turn (deleted, or killed by its orchestrator):
+	// nobody stopped it. The label names who ended it (sessionEndedLabel).
+	session_ended: {
+		label: "Stopped when the session ended",
+		icon: CircleStop,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
 	failed: {
 		label: "The agent ran into a problem",
 		icon: CircleAlert,
@@ -632,6 +641,20 @@ const TURN_OUTCOME_COPY = {
 	},
 } as const;
 
+/** What an interrupted turn says when its session's end cut it off, by who ended the session. */
+export function sessionEndedLabel(endedBy: SessionEndedBy): string {
+	switch (endedBy.kind) {
+		case "orchestrator":
+			return "The orchestrator ended this session";
+		case "you":
+			return "You ended this session";
+		case "user":
+			return endedBy.name ? `${endedBy.name} ended this session` : "Someone else ended this session";
+		default:
+			return TURN_OUTCOME_COPY.session_ended.label;
+	}
+}
+
 /**
  * How a turn ended when it did not end with an answer: in the answer's place, and
  * closing on the same action row a finished answer gets.
@@ -643,6 +666,7 @@ const TURN_OUTCOME_COPY = {
  */
 export function TurnOutcome({
 	state,
+	sessionEnded,
 	error,
 	failureCode,
 	onConfigure,
@@ -655,6 +679,8 @@ export function TurnOutcome({
 	timestamp,
 }: {
 	state: "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
+	/** An interrupted Cloud turn its session's end cut off: who ended the session, in place of "interrupted by you". */
+	sessionEnded?: SessionEndedBy;
 	error?: string;
 	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
@@ -714,7 +740,9 @@ export function TurnOutcome({
 			</div>
 		);
 	}
-	const copy = TURN_OUTCOME_COPY[state];
+	const endedWithSession = state === "interrupted" && sessionEnded ? sessionEnded : undefined;
+	const copy = endedWithSession ? TURN_OUTCOME_COPY.session_ended : TURN_OUTCOME_COPY[state];
+	const label = endedWithSession ? sessionEndedLabel(endedWithSession) : copy.label;
 	const Icon = copy.icon;
 	const needsDeepSeekKey = state === "failed" && failureCode === "provider_key_missing" && onConfigure;
 	return (
@@ -724,7 +752,7 @@ export function TurnOutcome({
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
 				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>
-					{needsDeepSeekKey ? "DeepSeek needs an API key for this model route" : copy.label}
+					{needsDeepSeekKey ? "DeepSeek needs an API key for this model route" : label}
 				</span>
 			</div>
 			{needsDeepSeekKey ? (

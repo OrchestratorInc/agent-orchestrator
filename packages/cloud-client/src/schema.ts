@@ -5895,10 +5895,27 @@ export interface components {
                 /** @description 0 for a turn stopped while still queued, before the agent started on it. */
                 attempt: number;
                 /**
-                 * @description Why a turn ended before it started. deleted: the person took the queued message back (cancelTurn), so a client drops it from the transcript. interface_switch: a stop-now switch to the terminal ended the queued message, which a client keeps, shown interrupted. steered: the message was steered into the running turn instead (chat.turn_steered with this turn as its queuedTurnId), so a client shows it there, as the steer, and drops it from the queue. Absent for a stopped running turn and for events written before reasons existed; a client reads a missing or unknown reason as a plain interruption and keeps the message.
+                 * @description Why a turn ended before it started. deleted: the person took the queued message back (cancelTurn), so a client drops it from the transcript. interface_switch: a stop-now switch to the terminal ended the queued message, which a client keeps, shown interrupted. steered: the message was steered into the running turn instead (chat.turn_steered with this turn as its queuedTurnId), so a client shows it there, as the steer, and drops it from the queue. session_ended: the turn, running or queued, ended because its session ended (deleted, killed by its orchestrator, or cleaned up), not because anyone stopped it; endedBy says who ended the session when that is known. A client keeps the message, shown interrupted. Absent for a stopped running turn and for events written before reasons existed; a client reads a missing or unknown reason as a plain interruption and keeps the message.
                  * @enum {string}
                  */
-                reason?: "deleted" | "interface_switch" | "steered";
+                reason?: "deleted" | "interface_switch" | "session_ended" | "steered";
+                /** @description With reason session_ended, who ended the session. orchestrator: the orchestrator session sessionId killed this worker (ao kill). user: the person userId deleted the session or its project. Absent when nobody is known to have ended it (a system cleanup, or a control plane that does not record enders). */
+                endedBy?: {
+                    /** @enum {string} */
+                    kind: "orchestrator" | "user";
+                    /**
+                     * Format: uuid
+                     * @description The orchestrator's session, for kind orchestrator.
+                     */
+                    sessionId?: string;
+                    /**
+                     * Format: uuid
+                     * @description The person, for kind user.
+                     */
+                    userId?: string;
+                    /** @description For kind user, a snapshot of the person's display name when the session ended, as a prompt's authorName is. Absent when it could not be read. */
+                    name?: string;
+                };
             };
             /** Format: date-time */
             createdAt: string;

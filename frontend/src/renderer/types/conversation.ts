@@ -116,9 +116,26 @@ export interface ConversationUsageLimit {
 	resumeError?: string;
 }
 
+/**
+ * Who ended a Cloud session whose end cut a turn off: its orchestrator (an
+ * `ao kill`), the viewer, another person (with their name when the control plane
+ * sent it), or nobody known (a system cleanup).
+ */
+export type SessionEndedBy =
+	| { kind: "orchestrator" }
+	| { kind: "you" }
+	| { kind: "user"; name?: string }
+	| { kind: "unknown" };
+
 export interface ConversationTurn {
 	id: string;
 	state: TurnState;
+	/**
+	 * An interrupted Cloud turn its session's end cut off (chat.turn_interrupted of
+	 * reason session_ended), not a Stop: it reads as the session ending, with who
+	 * ended it, rather than as the viewer's interruption.
+	 */
+	sessionEnded?: SessionEndedBy;
 	/**
 	 * An undo discarded this turn. Its messages and activities are absent from the
 	 * snapshot, because the agent no longer remembers them; the turn is still

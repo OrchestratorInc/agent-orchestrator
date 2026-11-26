@@ -6741,6 +6741,7 @@ const TurnGroup = memo(function TurnGroup({
 			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
 				<TurnOutcome
 					state={group.outcome.state}
+					sessionEnded={group.outcome.sessionEnded}
 					error={group.outcome.error}
 					failureCode={group.outcome.failureCode}
 					onConfigure={harness === "deepseek-harness" && group.outcome.failureCode === "provider_key_missing"
@@ -7408,6 +7409,8 @@ type TimelineGroup = {
 		 * `not_run`: it ended before the agent started on it (ConversationTurn.notRun).
 		 */
 		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
+		/** An interrupted Cloud turn its session's end cut off (ConversationTurn.sessionEnded). */
+		sessionEnded?: ConversationTurn["sessionEnded"];
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
@@ -8008,6 +8011,7 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
 			state: turn.notRun ? "not_run" : turn.state,
+			sessionEnded: turn.state === "interrupted" ? turn.sessionEnded : undefined,
 			usageLimit: turn.usageLimit,
 			// A turn that never started did no work to time: one refused, or a
 			// queued one a Stop or a switch ended before it was sent.
