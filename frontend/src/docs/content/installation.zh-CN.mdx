@@ -80,7 +80,7 @@ alias ao='"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"'
 | 外部编程代理（在 Orchestrator 中称为 harness） | 使用已安装 CLI 的代理会话 | 安装受支持的工具，例如 Claude Code、Codex、Cursor、Aider 或 OpenCode。当前列表和界面支持情况请参阅[代理目录](/plugins/agents)。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。 |
 | tmux | macOS 预检，以及旧版或回退的终端会话 | macOS 和 Linux 的桌面安装包已包含它。从源码启动时可能需要系统中的 tmux；请参阅 [Runtime](/plugins/runtimes)。 |
 
-Orchestrator 使用你电脑上已经安装并登录的编程代理。**Settings → Harness** 会显示每个受支持代理的就绪状态，并为支持的代理提供 **Install** 和 **Login**。Unreal Agent 是一个例外：它是内置的、仅用于 Chat 的代理，有自己的平台和权限限制。请参阅[代理目录](/plugins/agents)。
+Orchestrator 使用你电脑上已经安装并登录的编程代理。**Settings → Agents** 会显示每个受支持代理的就绪状态，并为支持的代理提供 **Install** 和 **Login**。Unreal Agent 是一个例外：它是内置的、仅用于 Chat 的代理，有自己的平台和权限限制。请参阅[代理目录](/plugins/agents)。
 
 <span id="set-up-ao" />
 <span id="set-up-orchestrator" />
@@ -119,7 +119,7 @@ gh auth status
 <span id="install-and-sign-in-to-an-external-agent" />
 ### 安装并登录外部代理
 
-打开 **Settings → Harness**，选择要使用的代理。如果它尚未安装，选择 **Install**（或 **Open installation guide**）。如果它尚未登录，选择 **Login** 并完成打开的登录流程。当 Settings 显示它已安装并已登录时，代理就准备好了。你已经在使用并已登录的代理会被自动检测到。
+打开 **Settings → Agents**，选择要使用的代理。如果它尚未安装，选择 **Install**（或 **Open installation guide**）。如果它尚未登录，选择 **Login** 并完成打开的登录流程。当 Settings 显示它已安装并已登录时，代理就准备好了。你已经在使用并已登录的代理会被自动检测到。
 
 如果你更喜欢终端，可以改用代理自己的命令登录，例如 `codex login`，或运行 `claude` 后使用 `/login`。然后运行 `ao agent ls --refresh`，让 Orchestrator 重新检查。
 
@@ -177,7 +177,7 @@ Orchestrator 的所有应用状态默认都存放在 `~/.ao` 下，包括守护�
 
 <Accordions>
 	<Accordion title="没有可用的代理">
-		打开 **Settings → Harness**，选择代理，然后使用 **Install** 或 **Login**。在终端中，先用代理自己的登录命令登录，再运行 `ao agent ls --refresh`。如果新安装的代理仍未出现，请退出并重新打开 Orchestrator，让守护进程读取更新后的 shell `PATH`。Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat；直接选择它即可，无需安装 CLI。
+		打开 **Settings → Agents**，选择代理，然后使用 **Install** 或 **Login**。在终端中，先用代理自己的登录命令登录，再运行 `ao agent ls --refresh`。如果新安装的代理仍未出现，请退出并重新打开 Orchestrator，让守护进程读取更新后的 shell `PATH`。Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat；直接选择它即可，无需安装 CLI。
 	</Accordion>
 	<Accordion title="缺少 GitHub 数据">
 		运行 `gh auth status`。确认当前账户能够访问该仓库及其拉取请求。

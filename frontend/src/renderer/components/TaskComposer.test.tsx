@@ -2541,6 +2541,54 @@ describe("TaskComposer", () => {
 		);
 	});
 
+	// #5679: Codex lists only the models an account offers, so a project can pin
+	// one the list lacks. It stays a selectable row, noted, and the task runs it.
+	it("lists a project-pinned model the account's catalog lacks, with a note", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }],
+						allowCustom: false,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return {
+				data: {
+					status: "ok",
+					project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } } },
+				},
+			};
+		});
+		h.post.mockResolvedValueOnce({ data: { workerId: "sess-2" } });
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="proj-1" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("gpt-5.4-mini"));
+		await userEvent.click(model);
+		const pinned = screen.getByRole("menuitem", { name: /gpt-5\.4-mini/ });
+		expect(pinned).toHaveTextContent("Set for this project · Codex doesn't list it for this account");
+		expect(pinned).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole("menuitem", { name: /GPT-5\.1/ })).not.toHaveTextContent("Set for this project");
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Run on the pinned model" } });
+		fireEvent.click(screen.getByText("Start task"));
+
+		// The project's model applies on the daemon, as for any inherited model;
+		// the composer sends no override that could replace it.
+		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
+		expect(h.post.mock.calls[0][1].body).toEqual(expect.objectContaining({ agent: "codex" }));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+	});
+
 	function mockDisabledModels(disabledModels: string[]) {
 		h.get.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/settings") {
@@ -4674,6 +4722,29 @@ describe("useTaskLaunch on the new chat page", () => {
 			expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
 		},
 	);
+
+	it("gives the new chat page a project-pinned model the catalog lacks, noted, and never as its default", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }], allowCustom: false, refreshRecommended: false } };
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } } } } };
+		});
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() {
+			task = useTaskLaunch({ projectId: "proj-1" });
+			return null;
+		}
+		render(<Wrap><Launcher /></Wrap>);
+		const pinned = { id: "gpt-5.4-mini", displayName: "gpt-5.4-mini", default: false, hint: "Set for this project · Codex doesn't list it for this account" };
+		await waitFor(() => expect(task.chatModels).toEqual([expect.objectContaining({ id: "gpt-5.1", default: true }), pinned]));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.1" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.1"));
+		expect(task.chatModels).toContainEqual(pinned);
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.4-mini" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+	});
 
 	it("says at once that Scratchpad has no ready agent", async () => {
 		h.agentCatalog = { agents: [agentReadiness("goose", "Goose", { authentication: "unauthorized" })] };

@@ -266,7 +266,7 @@ func (c *SessionsController) registerArtifacts(w http.ResponseWriter, r *http.Re
 		envelope.WriteError(w, r, apierr.Invalid("INVALID_ARTIFACT_PATHS", fmt.Sprintf("paths must list 1 to %d paths", domain.MaxArtifactRegistrationPaths), nil))
 		return
 	}
-	result, err := c.Svc.RegisterArtifacts(r.Context(), sessionID(r), in.Paths)
+	result, err := c.Svc.RegisterArtifacts(r.Context(), sessionID(r), in.WorkingDir, in.Paths)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
