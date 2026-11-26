@@ -6956,7 +6956,8 @@ describe("remote session partitions", () => {
 		expect(remoteHostOfBrowserSession(remote)).toBe("h_box/1");
 		expect(remoteHostOfBrowserSession("s-1")).toBeUndefined();
 		expect(remoteHostOfBrowserSession("remote:%E0%A4:s")).toBeUndefined();
-		expect(sessionBrowserPartition(profile, "h_box/1")).toBe(`${browserProfilePartition(profile)}-host-h_box_1`);
+		expect(sessionBrowserPartition(profile, "h_box/1")).toMatch(new RegExp(`^${browserProfilePartition(profile)}-host-[0-9a-f]{32}$`));
+		expect(sessionBrowserPartition(profile, "h_box/1")).not.toBe(sessionBrowserPartition(profile, "h_box_1"));
 		expect(sessionBrowserPartition(profile)).toBe(browserProfilePartition(profile));
 		expect(sessionBrowserPartition(null, "h_box")).not.toContain("-host-");
 	});

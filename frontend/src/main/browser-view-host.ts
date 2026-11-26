@@ -15,7 +15,7 @@ import type {
   OpenDevToolsOptions,
 } from "electron";
 import { nativeImage } from "electron";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BrowserCloseFailure } from "./browser-close-diagnostics";
 import type {
   BrowserAnnotationCancelPayload,
@@ -886,7 +886,7 @@ export function remoteHostOfBrowserSession(sessionId: string): string | undefine
 export function sessionBrowserPartition(profileId: BrowserProfileId | null, hostId?: string): string {
   if (!profileId) return temporaryBrowserPartition();
   const partition = browserProfilePartition(profileId);
-  return hostId ? `${partition}-host-${hostId.replace(/[^A-Za-z0-9_-]/g, "_")}` : partition;
+  return hostId ? `${partition}-host-${createHash("sha256").update(hostId).digest("hex").slice(0, 32)}` : partition;
 }
 
 function isTemporaryBrowserPartition(partition: string): boolean {
