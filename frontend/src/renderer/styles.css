@@ -7873,6 +7873,12 @@ html[data-new-desktop-ui] .cursor-chat-composer {
 	padding: var(--composer-inset);
 }
 
+/* The user's message bubble tightens by 1px on every side: 9px above and
+ * below and 11px at the sides (10px and 12px with the flag off). */
+html[data-new-desktop-ui] .cursor-chat-human-message {
+	padding: 9px 11px;
+}
+
 /* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
  * no layout space and follows the corners). Light keeps its own ring and
  * shadow. */
