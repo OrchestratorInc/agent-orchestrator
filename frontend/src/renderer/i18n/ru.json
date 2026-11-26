@@ -2345,6 +2345,7 @@
 	"settings.harness.connectors.noAccount": "Аккаунта Claude Code пока нет. Войдите на вкладке «Аккаунт».",
 	"settings.harness.connectors.checking": "Проверка коннекторов…",
 	"settings.harness.connectors.loadFailed": "Не удалось загрузить коннекторы",
+	"settings.harness.connectors.accountsFailed": "Не удалось загрузить аккаунты Claude Code",
 	"settings.harness.connectors.checkFailed": "Не удалось проверить коннекторы",
 	"settings.harness.connectors.empty": "В этом аккаунте нет коннекторов",
 	"settings.harness.connectors.emptyDescription": "Добавьте Gmail, Calendar, Drive и другие на claude.ai. Новые сеансы их загрузят.",

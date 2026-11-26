@@ -6,13 +6,17 @@ import { CLAUDE_CONNECTORS_URL, HarnessConnectorsTab } from "./HarnessConnectors
 
 const h = vi.hoisted(() => ({
 	accounts: [] as Array<Record<string, unknown>>,
+	accountsError: undefined as Error | undefined,
+	refetchAccounts: vi.fn(),
 	fetchConnectors: vi.fn(),
 	openExternal: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../hooks/useAgentAccounts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../hooks/useAgentAccounts")>()),
-	useAgentAccounts: () => ({ data: h.accounts, isPending: false }),
+	useAgentAccounts: () => h.accountsError
+		? { data: undefined, error: h.accountsError, isPending: false, refetch: h.refetchAccounts }
+		: { data: h.accounts, error: null, isPending: false, refetch: h.refetchAccounts },
 	fetchAgentAccountConnectors: h.fetchConnectors,
 }));
 vi.mock("../../../lib/bridge", () => ({ aoBridge: { app: { openExternal: h.openExternal } } }));
@@ -33,6 +37,8 @@ const renderTab = (onOpenAccount = vi.fn()) => {
 
 afterEach(() => {
 	h.accounts = [];
+	h.accountsError = undefined;
+	h.refetchAccounts.mockReset();
 	h.fetchConnectors.mockReset();
 	h.openExternal.mockClear();
 });
@@ -80,5 +86,25 @@ describe("HarnessConnectorsTab", () => {
 		h.fetchConnectors.mockResolvedValue({ accountId: "device-claude", connectors: [] });
 		renderTab();
 		expect(await screen.findByText("No connectors on this account")).toBeInTheDocument();
+	});
+
+	it("shows a failed account request with a retry instead of saying there is no account", async () => {
+		h.accountsError = new Error("daemon unreachable");
+		renderTab();
+		expect(screen.getByText("Couldn’t load Claude Code accounts")).toBeInTheDocument();
+		expect(screen.queryByText(/No Claude Code account yet/)).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(h.refetchAccounts).toHaveBeenCalled();
+	});
+
+	it("keeps Check again available when the first connector request fails", async () => {
+		h.accounts = [claudeAccount({})];
+		h.fetchConnectors.mockRejectedValueOnce(new Error("timed out"));
+		renderTab();
+		expect(await screen.findByText("Couldn’t load connectors")).toBeInTheDocument();
+		h.fetchConnectors.mockResolvedValue({ accountId: "device-claude", connectors: [{ name: "Gmail", status: "connected" }] });
+		await userEvent.click(screen.getByRole("button", { name: /Check again/ }));
+		expect(await screen.findByText("Gmail")).toBeInTheDocument();
+		expect(h.fetchConnectors).toHaveBeenLastCalledWith("device-claude", true, undefined);
 	});
 });

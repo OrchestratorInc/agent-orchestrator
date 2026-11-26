@@ -14,10 +14,6 @@ import (
 // provider's site; "Check again" reads it at once.
 const connectorsTTL = 10 * time.Minute
 
-// connectorsJustRead is how recent a reading must be for a refresh that
-// waited on another read to take it instead of reading again.
-const connectorsJustRead = 5 * time.Second
-
 // connectorLister is a provider whose accounts carry connectors of their own
 // provider account (Claude: claude.ai connectors).
 type connectorLister interface {
@@ -86,14 +82,15 @@ func (s *Service) Connectors(ctx context.Context, accountID string, refresh bool
 		return reading, nil
 	}
 
+	requested := s.now()
 	inflight := s.connectors.lock(account.ID)
 	inflight.Lock()
 	defer inflight.Unlock()
 	if cached, ok := s.connectors.get(account.ID); ok {
-		age := s.now().Sub(cached.CheckedAt)
-		// A refresh still reuses a read that finished while it waited for
-		// the lock: that read is the "check again" it asked for.
-		if (!refresh && age < connectorsTTL) || (refresh && age < connectorsJustRead) {
+		// A refresh reuses only a read that finished after it was asked
+		// for, one it waited on behind the lock: that read is the "check
+		// again" it wanted. Any older reading may predate a change.
+		if (!refresh && s.now().Sub(cached.CheckedAt) < connectorsTTL) || (refresh && cached.CheckedAt.After(requested)) {
 			return cached, nil
 		}
 	}

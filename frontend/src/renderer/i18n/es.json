@@ -3482,6 +3482,7 @@
 	"settings.harness.connectors.noAccount": "Aún no hay una cuenta de Claude Code. Inicia sesión en la pestaña Cuenta.",
 	"settings.harness.connectors.checking": "Comprobando conectores…",
 	"settings.harness.connectors.loadFailed": "No se pudieron cargar los conectores",
+	"settings.harness.connectors.accountsFailed": "No se pudieron cargar las cuentas de Claude Code",
 	"settings.harness.connectors.checkFailed": "No se pudieron comprobar los conectores",
 	"settings.harness.connectors.empty": "Esta cuenta no tiene conectores",
 	"settings.harness.connectors.emptyDescription": "Añade Gmail, Calendar, Drive y más en claude.ai. Las sesiones nuevas los cargan.",

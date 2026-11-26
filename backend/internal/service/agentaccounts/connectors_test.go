@@ -156,3 +156,21 @@ func TestConnectorsUnknownAccount(t *testing.T) {
 		t.Fatalf("error = %v, want unknown account", err)
 	}
 }
+
+// A refresh moments after a finished read still reads again: the user may
+// have just added a connector, and that earlier reading predates it.
+func TestConnectorsRefreshRightAfterAReadReadsAgain(t *testing.T) {
+	provider := &fakeConnectorClaude{}
+	svc, now := connectorTestService(t, provider)
+	id := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if _, err := svc.Connectors(context.Background(), id, false); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(2 * time.Second)
+	if _, err := svc.Connectors(context.Background(), id, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(provider.reads()); got != 2 {
+		t.Fatalf("reads = %d, want a fresh read for the refresh", got)
+	}
+}

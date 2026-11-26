@@ -3412,6 +3412,7 @@
 	"settings.harness.connectors.noAccount": "Noch kein Claude-Code-Konto. Melden Sie sich im Tab Konto an.",
 	"settings.harness.connectors.checking": "Connectors werden geprüft…",
 	"settings.harness.connectors.loadFailed": "Connectors konnten nicht geladen werden",
+	"settings.harness.connectors.accountsFailed": "Claude Code-Konten konnten nicht geladen werden",
 	"settings.harness.connectors.checkFailed": "Connectors konnten nicht geprüft werden",
 	"settings.harness.connectors.empty": "Keine Connectors für dieses Konto",
 	"settings.harness.connectors.emptyDescription": "Fügen Sie Gmail, Calendar, Drive und mehr auf claude.ai hinzu. Neue Sitzungen laden sie.",

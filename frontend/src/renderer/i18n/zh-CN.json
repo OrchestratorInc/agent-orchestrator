@@ -3482,6 +3482,7 @@
 	"settings.harness.connectors.noAccount": "还没有 Claude Code 账户。请在“账户”标签页登录。",
 	"settings.harness.connectors.checking": "正在检查连接器…",
 	"settings.harness.connectors.loadFailed": "无法加载连接器",
+	"settings.harness.connectors.accountsFailed": "无法加载 Claude Code 账户",
 	"settings.harness.connectors.checkFailed": "无法检查连接器",
 	"settings.harness.connectors.empty": "此账户没有连接器",
 	"settings.harness.connectors.emptyDescription": "在 claude.ai 上添加 Gmail、Calendar、Drive 等。新会话会加载它们。",

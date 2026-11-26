@@ -2311,6 +2311,7 @@
 	"settings.harness.connectors.noAccount": "Henüz Claude Code hesabı yok. Hesap sekmesinden oturum açın.",
 	"settings.harness.connectors.checking": "Bağlayıcılar denetleniyor…",
 	"settings.harness.connectors.loadFailed": "Bağlayıcılar yüklenemedi",
+	"settings.harness.connectors.accountsFailed": "Claude Code hesapları yüklenemedi",
 	"settings.harness.connectors.checkFailed": "Bağlayıcılar denetlenemedi",
 	"settings.harness.connectors.empty": "Bu hesapta bağlayıcı yok",
 	"settings.harness.connectors.emptyDescription": "Gmail, Calendar, Drive ve daha fazlasını claude.ai’de ekleyin. Yeni oturumlar bunları yükler.",

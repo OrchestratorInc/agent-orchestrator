@@ -3412,6 +3412,7 @@
 	"settings.harness.connectors.noAccount": "Claude Code アカウントがまだありません。アカウント タブでサインインしてください。",
 	"settings.harness.connectors.checking": "コネクタを確認中…",
 	"settings.harness.connectors.loadFailed": "コネクタを読み込めませんでした",
+	"settings.harness.connectors.accountsFailed": "Claude Code アカウントを読み込めませんでした",
 	"settings.harness.connectors.checkFailed": "コネクタを確認できませんでした",
 	"settings.harness.connectors.empty": "このアカウントにコネクタはありません",
 	"settings.harness.connectors.emptyDescription": "claude.ai で Gmail、Calendar、Drive などを追加してください。新しいセッションで読み込まれます。",

@@ -66,6 +66,15 @@ export function HarnessConnectorsTab({ hostId, onOpenAccount }: { hostId?: HostI
 	const manage = () => void aoBridge.app.openExternal(CLAUDE_CONNECTORS_URL);
 
 	if (accountsQuery.isPending) return <ConnectorsLoading label={t("settings.harness.connectors.loadingAccounts")} />;
+	if (accountsQuery.error && !accountsQuery.data) {
+		return <HarnessDetailGroup title={t("settings.harness.connectors.title")}>
+			<HarnessDetailRow label={t("settings.harness.connectors.accountsFailed")} description={accountsQuery.error.message}>
+				<Button type="button" size="sm" variant="secondary" onClick={() => void accountsQuery.refetch()}>
+					{t("settings.harness.retry")}
+				</Button>
+			</HarnessDetailRow>
+		</HarnessDetailGroup>;
+	}
 	if (!account) {
 		return <p className="text-sm text-settings-muted">{t("settings.harness.connectors.noAccount")}</p>;
 	}
@@ -105,7 +114,7 @@ export function HarnessConnectorsTab({ hostId, onOpenAccount }: { hostId?: HostI
 					<HarnessStateText tone={connectorTone[connector.status]}>{t(`settings.harness.connectors.status.${connector.status}`)}</HarnessStateText>
 				</HarnessDetailRow>)}
 		</HarnessDetailGroup>
-		{reading && !reading.unavailable ? <div className="flex flex-wrap items-center gap-2">
+		{(reading || connectors.error) && !reading?.unavailable ? <div className="flex flex-wrap items-center gap-2">
 			<Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void checkAgain()}>
 				{busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
 				{t(busy ? "settings.harness.connectors.checking" : "settings.harness.health.checkAgain")}
@@ -113,7 +122,7 @@ export function HarnessConnectorsTab({ hostId, onOpenAccount }: { hostId?: HostI
 			<Button type="button" size="sm" variant="ghost" onClick={manage}>
 				{t("settings.harness.connectors.manage")}<ExternalLink aria-hidden="true" />
 			</Button>
-			{hasValidTimestamp(reading.checkedAt) ? <span className="ml-auto text-xs text-settings-muted">
+			{reading && hasValidTimestamp(reading.checkedAt) ? <span className="ml-auto text-xs text-settings-muted">
 				{t("settings.harness.connectors.checkedAt")} <HarnessTimestamp value={reading.checkedAt} />
 			</span> : null}
 		</div> : null}

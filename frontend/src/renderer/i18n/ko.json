@@ -3412,6 +3412,7 @@
 	"settings.harness.connectors.noAccount": "아직 Claude Code 계정이 없습니다. 계정 탭에서 로그인하세요.",
 	"settings.harness.connectors.checking": "커넥터 확인 중…",
 	"settings.harness.connectors.loadFailed": "커넥터를 불러오지 못했습니다",
+	"settings.harness.connectors.accountsFailed": "Claude Code 계정을 불러오지 못했습니다",
 	"settings.harness.connectors.checkFailed": "커넥터를 확인하지 못했습니다",
 	"settings.harness.connectors.empty": "이 계정에 커넥터가 없습니다",
 	"settings.harness.connectors.emptyDescription": "claude.ai에서 Gmail, Calendar, Drive 등을 추가하세요. 새 세션에서 불러옵니다.",
