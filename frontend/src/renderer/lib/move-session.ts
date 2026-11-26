@@ -445,6 +445,12 @@ export interface MoveHereDeps {
 	 * started instead of starting a second one.
 	 */
 	onImport?: (projectId: string) => void;
+	/**
+	 * Called when an import got no clear answer (no reply, a server error, or a
+	 * replay this computer could not settle): the caller keeps it, and passes
+	 * importUnsettled on every later attempt of this move.
+	 */
+	onImportUnsettled?: () => void;
 }
 
 /** The repository to clone when no project here has it, and the folder to clone it into. */
@@ -495,6 +501,13 @@ export async function moveSessionHere(
 		exportMoveId?: string;
 		/** The session's branch, as Cloud's preview named it, for what a failed export may have pushed. */
 		branch?: string;
+		/**
+		 * An earlier attempt's import got no clear answer, so a session may be
+		 * running here under this moveId. Cloud's agent then stays stopped on
+		 * any failure until the import is reconciled (Try again returns that
+		 * session) or this computer refuses it outright.
+		 */
+		importUnsettled?: boolean;
 	},
 	deps: MoveHereDeps,
 ): Promise<MoveHereResult> {
@@ -551,6 +564,14 @@ export async function moveSessionHere(
 	} catch (error) {
 		deps.onStep?.("export");
 		if (error instanceof MoveError) throw error;
+		// An earlier import may have started the session here: Cloud's agent
+		// must not run beside it, so nothing starts it again.
+		if (input.importUnsettled) {
+			throw new MoveError(
+				`${apiErrorMessage(error, "Orchestrator Cloud did not finish the export.")} ${IMPORT_UNSETTLED}`,
+				"export", errorCode(error), false, undefined, "settle", input.branch,
+			);
+		}
 		// Cloud pushed but could not save the latest conversation: the Cloud
 		// session is kept and its agent starts again.
 		if (error instanceof CloudCpError && error.code === TRANSCRIPT_NOT_CAPTURED) {
@@ -619,6 +640,7 @@ export async function moveSessionHere(
 	// No answer may still mean the session started here, and Try again returns
 	// it under the same move id, so Cloud's agent stays stopped.
 	const imported = await importing.catch(() => {
+		deps.onImportUnsettled?.();
 		throw new MoveError(
 			"This computer's Orchestrator did not answer, so the session may already be starting here. The Cloud agent stays stopped; Try again finishes the move.",
 			"import",
@@ -629,6 +651,20 @@ export async function moveSessionHere(
 		);
 	});
 	if (imported.error || !imported.data) {
+		// Only a refusal proves no session started here. A server error, or a
+		// replay that could not settle an earlier import, does not: an earlier
+		// attempt may have started it, so Cloud's agent stays stopped.
+		if (input.importUnsettled || !importRefused(imported)) {
+			deps.onImportUnsettled?.();
+			throw new MoveError(
+				`${apiErrorMessage(imported.error, "Could not start the session on this computer")} ${IMPORT_UNSETTLED}`,
+				"import",
+				apiErrorCode(imported.error),
+				false,
+				pushed,
+				"settle",
+			);
+		}
 		throw new MoveError(
 			apiErrorMessage(imported.error, "Could not start the session on this computer"),
 			"import",
@@ -689,6 +725,22 @@ async function cloneForMove(daemon: DaemonClient, clone: MoveHereClone): Promise
 		return fail(undefined, otherRepository);
 	}
 	return added.data.project.id;
+}
+
+/** Said when a session may already run here under this move: Cloud's agent stays stopped. */
+const IMPORT_UNSETTLED = "The session may already be running on this computer, so the Cloud agent stays stopped; Try again finishes the move.";
+
+/** Answers from a move/import replay that say a session under this moveId exists here but is not settled. */
+const IMPORT_REPLAY_UNSETTLED = new Set(["CLIENT_REQUEST_INCOMPLETE", "CLIENT_REQUEST_CONFLICT"]);
+
+/**
+ * Whether move/import refused outright, so no session started here: a 4xx
+ * answer other than an unsettled replay. A 5xx, or an answer without a
+ * status, proves nothing.
+ */
+function importRefused(answer: { error?: unknown; response?: { status?: number } }): boolean {
+	const status = answer.response?.status;
+	return status !== undefined && status >= 400 && status < 500 && !IMPORT_REPLAY_UNSETTLED.has(apiErrorCode(answer.error) ?? "");
 }
 
 /** Cloud answered and refused; a 5xx or no answer may still have created the session. */

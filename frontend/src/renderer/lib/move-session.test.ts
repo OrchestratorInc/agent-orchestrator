@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
 import { cloudReasoningEffort, MOVE_EXPORT_BUDGET_MS, MOVE_EXPORT_TIMED_OUT, MOVE_IN_PROGRESS, MoveError, moveLeftSessionAsItWas, moveSession, moveSessionHere, TRANSCRIPT_NOT_CAPTURED, type MoveDeps, type MoveHereDeps } from "./move-session";
 
-type Reply = { data?: unknown; error?: unknown };
+type Reply = { data?: unknown; error?: unknown; response?: { status: number } };
 
 // fakeDaemon answers requests by route and records each call in order.
 function fakeDaemon(replies: Record<string, Reply>, calls: string[]) {
@@ -21,7 +21,8 @@ const exported = {
 	changes: 3,
 };
 const ok = (data: unknown = {}): Reply => ({ data });
-const fail = (code: string, message = code): Reply => ({ error: { code, message } });
+// A daemon refusal; the move routes answer one with 409 unless status says otherwise.
+const fail = (code: string, message = code, status = 409): Reply => ({ error: { code, message }, response: { status } });
 const target = { orgId: "org-1", projectId: "proj-1", harness: "claude-code" };
 const cloud = (impl: () => Promise<unknown> = async () => ({ session: { id: "cloud-9" } }), createProject: () => Promise<unknown> = async () => ({ project: { id: "cloud-new" } })) =>
 	({ createSession: vi.fn(impl), createProject: vi.fn(createProject) }) as unknown as MoveDeps["cloud"] & Record<"createSession" | "createProject", ReturnType<typeof vi.fn>>;
@@ -530,6 +531,56 @@ describe("moveSessionHere", () => {
 		expect(error).toMatchObject({ step: "import", rolledBack: false, pushed: { branch: "feat/login", tip, wip: true } });
 		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
 		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud agent stopped when the import fails with a server error", async () => {
+		const cp = cloudFake();
+		let unsettled = 0;
+		const error = await moveSessionHere(input, {
+			daemon: daemon(fail("MOVE_IMPORT_FAILED", "spawn failed", 500)), cloud: cp, onImportUnsettled: () => unsettled++,
+		}).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "import", rolledBack: false, followUp: "settle", pushed: { branch: "feat/login", tip, wip: true } });
+		expect(unsettled).toBe(1);
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud agent stopped when a retry cannot settle an earlier unanswered import", async () => {
+		// The first import got no answer; this retry's replay fails with a 500.
+		const cp = cloudFake();
+		let unsettled = 0;
+		const error = await moveSessionHere({ ...input, importUnsettled: true }, {
+			daemon: daemon(fail("INTERNAL", "replay failed", 500)), cloud: cp, onImportUnsettled: () => unsettled++,
+		}).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "import", rolledBack: false, followUp: "settle" });
+		expect(unsettled).toBe(1);
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud agent stopped after an earlier unanswered import even when this one is refused", async () => {
+		// A refusal now does not prove the earlier attempt started nothing.
+		const cp = cloudFake();
+		const error = await moveSessionHere({ ...input, importUnsettled: true }, { daemon: daemon(fail("MOVE_BRANCH_CHECKED_OUT")), cloud: cp }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "import", rolledBack: false, followUp: "settle" });
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud agent stopped when the replay finds this move's session still starting", async () => {
+		const cp = cloudFake();
+		for (const code of ["CLIENT_REQUEST_INCOMPLETE", "CLIENT_REQUEST_CONFLICT"]) {
+			const error = await moveSessionHere(input, { daemon: daemon(fail(code)), cloud: cp }).catch((e: unknown) => e);
+			expect(error).toMatchObject({ step: "import", code, rolledBack: false, followUp: "settle" });
+		}
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+	});
+
+	it("does not start the Cloud agent again on an export failure after an unanswered import", async () => {
+		const cp = cloudFake({ exportSessionMove: async () => { throw new CloudCpError("worker gone", { status: 502, code: "WORKER_REQUEST_FAILED" }); } });
+		const calls: string[] = [];
+		const error = await moveSessionHere({ ...input, importUnsettled: true }, { daemon: daemon(ok(), calls), cloud: cp }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "export", rolledBack: false, followUp: "settle" });
+		expect(calls).toEqual([]);
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
 	});
 
 	it("says the agent stayed stopped when Cloud cannot start it again", async () => {

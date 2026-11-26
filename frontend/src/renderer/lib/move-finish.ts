@@ -257,6 +257,8 @@ export interface UnsettledMoveHere {
 	projectId?: string;
 	/** An export Orchestrator Cloud is still running for this move (a 202), which Try again waits on. */
 	exportMoveId?: string;
+	/** An import of this move got no clear answer: Cloud's agent stays stopped until it is reconciled. */
+	importUnsettled?: boolean;
 }
 
 const UNSETTLED_HERE_KEY = "ao.move.here";

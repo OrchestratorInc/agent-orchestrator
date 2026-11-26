@@ -9,7 +9,7 @@ import { useUnfinishedMoveStore, useUnsettledMoveHereStore, useUnsettledMoveStor
 import { TooltipProvider } from "./ui/tooltip";
 import type { WorkspaceSession } from "../types/workspace";
 
-type Reply = { data?: unknown; error?: unknown };
+type Reply = { data?: unknown; error?: unknown; response?: { status: number } };
 type PostReply = Reply | (() => Reply);
 
 const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
@@ -546,7 +546,7 @@ describe("moving a Cloud session to this computer", () => {
 	});
 
 	it("starts the Cloud agent again and names the pushed commit when this computer refuses", async () => {
-		daemon.posts = { "/api/v1/sessions/move/import": { error: { code: "MOVE_LOCAL_AHEAD", message: "feat/login here has commits that Orchestrator Cloud's does not. Push them first." } } };
+		daemon.posts = { "/api/v1/sessions/move/import": { error: { code: "MOVE_LOCAL_AHEAD", message: "feat/login here has commits that Orchestrator Cloud's does not. Push them first." }, response: { status: 409 } } };
 		renderHere();
 		const user = userEvent.setup();
 		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
@@ -560,7 +560,7 @@ describe("moving a Cloud session to this computer", () => {
 	it("says a session in Chat carries on in Cloud and takes messages again when the move fails", async () => {
 		// Cloud answers agent/restart for a session in Chat with requested: false.
 		cloud.restartSessionAgent.mockResolvedValue({ requested: false });
-		daemon.posts = { "/api/v1/sessions/move/import": { error: { code: "MOVE_LOCAL_AHEAD", message: "feat/login here has commits that Orchestrator Cloud's does not. Push them first." } } };
+		daemon.posts = { "/api/v1/sessions/move/import": { error: { code: "MOVE_LOCAL_AHEAD", message: "feat/login here has commits that Orchestrator Cloud's does not. Push them first." }, response: { status: 409 } } };
 		renderHere({ ...cloudSession, mode: "chat" } as WorkspaceSession);
 		const user = userEvent.setup();
 		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
@@ -638,6 +638,29 @@ describe("moving a Cloud session to this computer", () => {
 		expect(await screen.findByText(/^feat\/login may already be pushed to GitHub, with the session's uncommitted work as a WIP commit\. Nothing moved to this computer\./)).toBeTruthy();
 		expect(cloud.restartSessionAgent).toHaveBeenCalledTimes(1);
 		expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+	});
+
+	it("keeps Cloud's agent stopped on Try again after an unanswered import, and remembers that past a relaunch", async () => {
+		let imports = 0;
+		daemon.posts = {
+			"/api/v1/sessions/move/import": () => {
+				imports++;
+				// The first import got no answer; Try again's replay fails with a server error.
+				if (imports === 1) throw new Error("connection reset");
+				return { error: { code: "INTERNAL", message: "replay failed" }, response: { status: 500 } };
+			},
+		};
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		await screen.findByRole("button", { name: "Try again" });
+		expect(Object.values(useUnsettledMoveHereStore.getState().moves)).toEqual([expect.objectContaining({ importUnsettled: true, projectId: "app" })]);
+		await user.click(screen.getByRole("button", { name: "Try again" }));
+		await waitFor(() => expect(imports).toBe(2));
+		await screen.findByRole("button", { name: "Try again" });
+		expect(cloud.restartSessionAgent).not.toHaveBeenCalled();
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
+		expect(Object.values(useUnsettledMoveHereStore.getState().moves)).toEqual([expect.objectContaining({ importUnsettled: true })]);
 	});
 
 	it("waits on the export an earlier attempt left running, under its moveId", async () => {

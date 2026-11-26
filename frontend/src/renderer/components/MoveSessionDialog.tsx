@@ -522,6 +522,9 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const savedHere = storedHere?.projectId ? storedHere : undefined;
 	// An export Orchestrator Cloud is still running for this move: Try again waits on it.
 	const exportMove = useRef<string | undefined>(storedHere?.exportMoveId);
+	// An import of this move got no clear answer: a session may run here, so
+	// every later attempt keeps Cloud's agent stopped until it is reconciled.
+	const importUnsettled = useRef(storedHere?.importUnsettled === true);
 	const [exportRunning, setExportRunning] = useState(false);
 	// One move per dialog: Try again reuses its id, so this computer returns
 	// the session it already started instead of starting a second one.
@@ -601,7 +604,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 		setExportRunning(false);
 		// Keeps what a relaunch needs to finish this move: its id, a running
 		// export and the project an import ran in.
-		const keep = (change: { projectId?: string; exportMoveId?: string }) => {
+		const keep = (change: { projectId?: string; exportMoveId?: string; importUnsettled?: boolean }) => {
 			const next = { ...useUnsettledMoveHereStore.getState().moves[hereKey], moveId, ...change };
 			useUnsettledMoveHereStore.getState().set(hereKey, next.projectId || next.exportMoveId ? next : undefined);
 		};
@@ -615,6 +618,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 					expectTranscript: Boolean(preview.data?.transcript),
 					...(exportMove.current ? { exportMoveId: exportMove.current } : {}),
 					...(branch ? { branch } : {}),
+					...(importUnsettled.current ? { importUnsettled: true } : {}),
 					settings: {
 						autoReview: session.autoReviewEnabled ?? false,
 						terminateOnPrMerge: session.terminateOnPrMerge ?? false,
@@ -630,6 +634,10 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 						cloned.current = id;
 					},
 					onImport: (projectId) => keep({ projectId }),
+					onImportUnsettled: () => {
+						importUnsettled.current = true;
+						keep({ importUnsettled: true });
+					},
 					onExportMove: (id) => {
 						exportMove.current = id;
 						keep({ exportMoveId: id });
