@@ -185,7 +185,10 @@ const buttonStyles = StyleSheet.create({
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		list: { width: PICKER_WIDTH, gap: space.hair },
+		// At most PICKER_WIDTH, and no wider than the overlay leaves (its stack
+		// is capped to the composer), so a narrow screen truncates the rows'
+		// text rather than spilling the list past the composer's edges.
+		list: { width: PICKER_WIDTH, maxWidth: "100%", gap: space.hair },
 		row: {
 			flexDirection: "row",
 			alignItems: "center",
