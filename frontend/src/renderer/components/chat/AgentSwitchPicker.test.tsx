@@ -468,11 +468,11 @@ describe("AgentModelPicker", () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", { params: { query: { agents: "claude-code,codex,grok,agy,hermes" } } });
+		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", { params: { query: { agents: "claude-code,codex,agy,grok,hermes" } } });
 		const rail = within(screen.getByRole("radiogroup", { name: "Agents" }));
 		await vi.waitFor(() => expect(rail.queryByRole("radio", { name: /^Hermes/ })).not.toBeInTheDocument());
 		expect(rail.getAllByRole("radio").map((radio) => radio.getAttribute("aria-label") ?? radio.textContent))
-			.toEqual(["Claude Code", "Codex", "Grok", "AGY"]);
+			.toEqual(["Claude Code", "Codex", "AGY", "Grok"]);
 	});
 
 	it("hides agents that are not installed or signed in", async () => {
