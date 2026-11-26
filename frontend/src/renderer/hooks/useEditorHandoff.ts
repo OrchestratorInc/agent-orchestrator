@@ -98,12 +98,22 @@ export function prefetchEditorHandoffState(
 ) {
 	if (!session.id) return;
 	const awaitWorkspace = shouldAwaitWorkspace({ sessionCreatedAt: session.createdAt, sessionTerminated: session.isTerminated });
-	void queryClient.prefetchQuery({
-		queryKey: editorHandoffQueryKey(session.id),
-		staleTime: 10_000,
-		retry: false,
-		queryFn: ({ signal }) => readEditorHandoffState(session.id, awaitWorkspace, signal),
-	});
+	const queryKey = editorHandoffQueryKey(session.id);
+	void queryClient
+		.prefetchQuery({
+			queryKey,
+			staleTime: 10_000,
+			retry: false,
+			queryFn: ({ signal }) => readEditorHandoffState(session.id, awaitWorkspace, signal),
+		})
+		.then(() => {
+			// A hover can come well before the menu opens. A missing workspace may
+			// appear in between, so leave that answer stale: a menu opening later
+			// reads again. A found workspace stays fresh.
+			if (queryClient.getQueryData<EditorHandoffState>(queryKey)?.workspaceAvailable === false) {
+				void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
+			}
+		});
 }
 
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {

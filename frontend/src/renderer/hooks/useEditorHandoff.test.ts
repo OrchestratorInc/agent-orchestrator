@@ -44,12 +44,14 @@ describe("editorHandoffErrorMessage", () => {
 describe("prefetchEditorHandoffState", () => {
 	const getState = vi.mocked(aoBridge.editorHandoff.getState);
 
-	it("reads an older session's workspace once", async () => {
+	it("reads an older session's workspace once and leaves a missing one stale", async () => {
 		const queryClient = new QueryClient();
 		getState.mockReset().mockResolvedValue({ workspaceAvailable: false, targets: [] } as never);
 		prefetchEditorHandoffState(queryClient, { id: "s1", createdAt: "2026-01-01T00:00:00Z" });
 		await vi.waitFor(() => expect(queryClient.getQueryData(editorHandoffQueryKey("s1"))).toEqual({ workspaceAvailable: false, targets: [] }));
 		expect(getState).toHaveBeenCalledTimes(1);
+		// A later menu opening reads again: the workspace may have appeared since.
+		await vi.waitFor(() => expect(queryClient.getQueryState(editorHandoffQueryKey("s1"))?.isInvalidated).toBe(true));
 	});
 
 	it("waits out a new session's workspace like the menu's own read, so a menu opening mid-read gets the final answer", async () => {
@@ -64,5 +66,6 @@ describe("prefetchEditorHandoffState", () => {
 			{ timeout: 3000 },
 		);
 		expect(getState).toHaveBeenCalledTimes(2);
+		expect(queryClient.getQueryState(editorHandoffQueryKey("s2"))?.isInvalidated).toBe(false);
 	});
 });
