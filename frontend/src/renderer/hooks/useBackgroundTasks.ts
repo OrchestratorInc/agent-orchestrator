@@ -122,9 +122,10 @@ export function useBackgroundTaskOutput(
 		queryKey,
 		enabled,
 		queryFn: async ({ signal }) => {
-			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
+			const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
 				params: { path: { sessionId, taskId } }, signal,
 			});
+			if (response?.status === 404) throw missingTaskRoute;
 			if (error) throw error;
 			if (!data || typeof data.output !== "string" || (data.availability !== "ready" && data.availability !== "unavailable")) {
 				throw new AoError("BACKGROUND_TASK_OUTPUT_INVALID", "Invalid background task output response");
@@ -150,7 +151,7 @@ export function useBackgroundTaskOutput(
 			}
 			return data as BackgroundTaskOutput;
 		},
-		refetchInterval: live ? 1_000 : false,
+		refetchInterval: (query) => live && query.state.error !== missingTaskRoute ? 1_000 : false,
 		gcTime: Infinity,
 		retry: false,
 	});
