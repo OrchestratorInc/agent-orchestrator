@@ -1,14 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEndpointStatus } from "../../hooks/useAgentEndpoint";
-import { AgentEndpointDialog, endpointHost } from "./AgentEndpointDialog";
+import type { AgentEndpointStatus } from "../../../hooks/useAgentEndpoint";
+import { CustomEndpointMethod, endpointHost, endpointSaved } from "./CustomEndpointMethod";
 
 const endpointMocks = vi.hoisted(() => ({
 	setAgentEndpoint: vi.fn(),
 	clearAgentEndpoint: vi.fn(),
 }));
 
-vi.mock("../../hooks/useAgentEndpoint", () => ({
+vi.mock("../../../hooks/useAgentEndpoint", () => ({
 	setAgentEndpoint: endpointMocks.setAgentEndpoint,
 	clearAgentEndpoint: endpointMocks.clearAgentEndpoint,
 }));
@@ -29,11 +29,11 @@ const configured: AgentEndpointStatus = {
 	authStyle: "bearer",
 };
 
-function renderDialog(endpoint: AgentEndpointStatus) {
-	const onOpenChange = vi.fn();
+function renderMethod(endpoint: AgentEndpointStatus, open = true) {
+	const onToggle = vi.fn();
 	const onChanged = vi.fn();
-	render(<AgentEndpointDialog agentId="claude-code" agentName="Claude Code" endpoint={endpoint} hostId="host-a" open onOpenChange={onOpenChange} onChanged={onChanged} />);
-	return { onOpenChange, onChanged };
+	render(<CustomEndpointMethod agentId="claude-code" endpoint={endpoint} hostId="host-a" open={open} onToggle={onToggle} onChanged={onChanged} />);
+	return { onToggle, onChanged };
 }
 
 afterEach(() => {
@@ -41,10 +41,24 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-describe("AgentEndpointDialog", () => {
+describe("CustomEndpointMethod", () => {
+	it("is one collapsed sign-in option that says whether an endpoint is saved", () => {
+		const { onToggle } = renderMethod(unconfigured, false);
+		const row = screen.getByRole("button", { name: "Custom base URL" });
+		expect(row).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByText("Not set")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+		fireEvent.click(row);
+		expect(onToggle).toHaveBeenCalled();
+
+		cleanup();
+		renderMethod(configured, false);
+		expect(screen.getByText("Using gateway.example.com")).toBeInTheDocument();
+	});
+
 	it("needs a base URL and key before saving, then sends them to the host", async () => {
 		endpointMocks.setAgentEndpoint.mockResolvedValue({ ...configured });
-		const { onOpenChange, onChanged } = renderDialog(unconfigured);
+		const { onChanged } = renderMethod(unconfigured);
 		const save = screen.getByRole("button", { name: "Save" });
 		expect(save).toBeDisabled();
 
@@ -61,48 +75,56 @@ describe("AgentEndpointDialog", () => {
 			apiKey: "sk-test",
 			model: "claude-sonnet",
 		}, "host-a");
-		expect(onOpenChange).toHaveBeenCalledWith(false);
 	});
 
-	it("keeps the saved key when the key field stays empty", async () => {
+	it("keeps the saved key when the key field stays empty, and saves on Enter", async () => {
 		endpointMocks.setAgentEndpoint.mockResolvedValue({ ...configured });
-		renderDialog(configured);
+		const { onChanged } = renderMethod(configured);
 		expect(screen.getByLabelText("Base URL")).toHaveValue("https://gateway.example.com");
-		fireEvent.click(screen.getByRole("button", { name: "Save" }));
-		await waitFor(() => expect(endpointMocks.setAgentEndpoint).toHaveBeenCalled());
+		fireEvent.keyDown(screen.getByLabelText("Base URL"), { key: "Enter" });
+		await waitFor(() => expect(onChanged).toHaveBeenCalled());
 		expect(endpointMocks.setAgentEndpoint.mock.calls[0][1]).not.toHaveProperty("apiKey");
 	});
 
 	it("shows the daemon's error and stays open when saving fails", async () => {
-		endpointMocks.setAgentEndpoint.mockRejectedValue(new Error("base URL must use http or https"));
-		const { onOpenChange, onChanged } = renderDialog(configured);
+		endpointMocks.setAgentEndpoint.mockRejectedValue(new Error("Use https for a remote endpoint."));
+		const { onChanged } = renderMethod(configured);
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("base URL must use http or https");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Use https for a remote endpoint.");
 		expect(onChanged).not.toHaveBeenCalled();
-		expect(onOpenChange).not.toHaveBeenCalledWith(false);
+		expect(screen.getByLabelText("Base URL")).toBeInTheDocument();
 	});
 
-	it("removes a configured endpoint", async () => {
+	it("removes a saved endpoint", async () => {
 		endpointMocks.clearAgentEndpoint.mockResolvedValue({ ...unconfigured });
-		const { onChanged } = renderDialog(configured);
+		const { onChanged } = renderMethod(configured);
 		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 		await waitFor(() => expect(onChanged).toHaveBeenCalled());
 		expect(endpointMocks.clearAgentEndpoint).toHaveBeenCalledWith("claude-code", "host-a");
 	});
 
-	it("offers Remove and asks for a new key when the saved endpoint can't be used", async () => {
+	it("offers no Remove before an endpoint is saved", () => {
+		renderMethod(unconfigured);
+		expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+	});
+
+	it("marks an unusable endpoint, asks for a new key and offers Remove", async () => {
 		endpointMocks.clearAgentEndpoint.mockResolvedValue({ ...unconfigured });
-		const { onChanged } = renderDialog({ ...unconfigured, error: "The saved custom endpoint can't be used." });
-		fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://gateway.example.com" } });
+		const unusable = { ...configured, error: "The saved custom endpoint can't be used." };
+		const { onChanged } = renderMethod(unusable);
+		expect(screen.getByText("Saved endpoint can't be used")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+		fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-new" } });
+		expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
 		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 		await waitFor(() => expect(onChanged).toHaveBeenCalled());
-		expect(endpointMocks.clearAgentEndpoint).toHaveBeenCalledWith("claude-code", "host-a");
 	});
 
 	it("summarizes the endpoint by host", () => {
 		expect(endpointHost("https://gateway.example.com:8443/v1")).toBe("gateway.example.com:8443");
 		expect(endpointHost("not a url")).toBe("not a url");
 		expect(endpointHost(undefined)).toBe("");
+		expect(endpointSaved(unconfigured)).toBe(false);
+		expect(endpointSaved({ ...unconfigured, error: "x" })).toBe(true);
 	});
 });

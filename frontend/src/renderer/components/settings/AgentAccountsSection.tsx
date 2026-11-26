@@ -3,12 +3,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { getAgentUILogin, type AgentLoginSnapshot } from "../../hooks/useAgentAuth";
+import { useRefreshAfterEndpointChange, type AgentEndpointStatus } from "../../hooks/useAgentEndpoint";
 import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { apiErrorCode, apiErrorDetails } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
 import { formatRelativeTime } from "../../lib/usage-format";
+import { agentLabel, type AgentId } from "../../lib/agent-options";
 import { cn } from "../../lib/utils";
 import { useSettings, useUpdateAccountHandoff } from "../../hooks/useSettings";
 import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
@@ -19,6 +21,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { endpointHost, endpointSaved } from "./harness/CustomEndpointMethod";
 import { HarnessLoginPanel } from "./harness/HarnessLoginPanel";
 import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
 
@@ -63,7 +66,14 @@ export type CliLoginControls = {
  * accounts added in AO, with their limits, default and sign-in. loginMethods
  * are the harness's own sign-in methods; adding an account or signing one in
  * again offers those that suit it in the same panel, instead of a terminal. */
-export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostId, loginMethods }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls; hostId?: string; loginMethods?: LoginMethod[] }) {
+export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostId, loginMethods, customEndpoint }: {
+	provider: AgentAccountProvider;
+	cliLogin?: CliLoginControls;
+	hostId?: string;
+	loginMethods?: LoginMethod[];
+	/** The harness's custom base URL, offered as a sign-in option when it supports one. */
+	customEndpoint?: AgentEndpointStatus;
+}) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts(true, hostId);
 	const usage = useAgentAccountUsage(30, hostId);
@@ -79,7 +89,9 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	// The in-app sign-in: adding an account, or signing one in again. The
 	// account's own sign-in it started is kept to save or cancel it.
-	const [signIn, setSignIn] = useState<{ account?: AgentAccount } | null>(null);
+	// endpoint opens it on the custom base URL, as Edit on a saved one does.
+	const [signIn, setSignIn] = useState<{ account?: AgentAccount; endpoint?: boolean } | null>(null);
+	const refreshEndpoint = useRefreshAfterEndpointChange(hostId);
 	// The computer's own sign-in waits while an account signs in: both run the
 	// same harness's sign-in, which takes one at a time.
 	const cliLogin = cliLoginControls && { ...cliLoginControls, disabled: cliLoginControls.disabled || signIn !== null };
@@ -171,8 +183,9 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	};
 	// Opens the in-app sign-in for a new account, or for account again; with no
 	// method that suits it, the CLI's own sign-in runs in a terminal instead.
-	const openSignIn = (account?: AgentAccount) => {
-		if (methodsFor(account).length === 0) {
+	const openSignIn = (account?: AgentAccount, endpoint = false) => {
+		// Adding a sign-in also offers the custom base URL, which needs no method.
+		if (methodsFor(account).length === 0 && !(customEndpoint && !account)) {
 			if (!panelOnly(account)) void startLogin(account?.id);
 			return;
 		}
@@ -185,7 +198,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 		accountOperation.current = undefined;
 		finishedAccount.current = undefined;
 		if (pending) void actions.cancelLogin(pending).catch(() => undefined);
-		setSignIn({ account });
+		setSignIn({ account, endpoint });
 	};
 	// A sign-in that finished at once (a key or token) leaves nothing to follow.
 	const finishedAtOnce = (method: string): AgentLoginSnapshot => ({ id: "", agentId: harness, method, status: "succeeded", expiresAt: new Date().toISOString() });
@@ -343,6 +356,14 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 					closeSignIn();
 					await startLogin(signInTarget?.id);
 				}}
+				endpoint={customEndpoint && !signInTarget ? {
+					status: customEndpoint,
+					initiallyOpen: signIn.endpoint,
+					onChanged: async () => {
+						closeSignIn();
+						await refreshEndpoint(harness);
+					},
+				} : undefined}
 			/> : null}
 			{hasTerminal(login) ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
@@ -352,6 +373,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				<p className="truncate text-sm font-medium text-foreground">{t("settings.agentAccounts.cliLoginOf", { provider: providerNames[provider] })}</p>
 				<Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.harness.login")}</Button>
 			</div> : null}
+			{customEndpoint && endpointSaved(customEndpoint) ? <EndpointRow endpoint={customEndpoint} agent={harness} disabled={busy !== null || signIn !== null} onEdit={() => openSignIn(undefined, true)} /> : null}
 			{rows.map((account) => { const cliTwin = cliTwinOf(account); return <AccountRow
 				key={account.id}
 				account={account}
@@ -377,6 +399,28 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 			onOpenChange={(open) => { if (!open) setRemoving(null); }}
 		/> : null}
 	</>;
+}
+
+/** The saved custom base URL. Every session of the harness sends its requests
+ * there instead of an account's sign-in, so it leads the list; Edit reopens it
+ * in the sign-in options, where it is also removed. */
+function EndpointRow({ endpoint, agent, disabled, onEdit }: { endpoint: AgentEndpointStatus; agent: string; disabled: boolean; onEdit: () => void }) {
+	const { t } = useTranslation();
+	const unusable = Boolean(endpoint.error);
+	return <div className="px-3 py-2.5" data-custom-endpoint-row="">
+		<div className="flex items-start justify-between gap-3">
+			<div className="min-w-0">
+				<p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+					<span className="truncate">{t("settings.harness.endpoint.method")}</span>
+					<Badge>{endpointHost(endpoint.baseUrl) || t("settings.harness.endpoint.badge")}</Badge>
+				</p>
+				<p className={cn("mt-0.5 truncate text-xs", unusable ? "text-error" : "text-muted-foreground")}>
+					{unusable ? t("settings.harness.endpoint.unusableSummary") : t("settings.harness.endpoint.inUse", { agent: agentLabel(agent as AgentId) })}
+				</p>
+			</div>
+			<Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={onEdit}>{t("settings.harness.endpoint.edit")}</Button>
+		</div>
+	</div>;
 }
 
 function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onReplaceKey, onRemove }: {
