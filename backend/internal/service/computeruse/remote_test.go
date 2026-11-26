@@ -721,3 +721,96 @@ func TestRemoteFailedBatchShowsAsFailedHere(t *testing.T) {
 		t.Fatalf("Timeline() = %+v, %v", entries, err)
 	}
 }
+
+// Stop means stop: turning sharing off cancels another computer's call that
+// is already running, and that call reports sharing is off.
+func TestStoppingSharingCancelsRunningRemoteCalls(t *testing.T) {
+	ctx := context.Background()
+	started := make(chan struct{})
+	driver := &fakeDriver{daemonUp: true, onCallCtx: func(ctx context.Context, _ []string) ([]byte, []byte, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}}
+	remote := newTestService(t, driver, "darwin")
+	if _, err := remote.SetAllowRemote(ctx, true); err != nil {
+		t.Fatalf("SetAllowRemote() error = %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := remote.ServeRemoteCall(ctx, RemoteCallRequest{Tool: "list_windows", Caller: "abc"})
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the remote call never reached the driver")
+	}
+	if _, err := remote.SetAllowRemote(ctx, false); err != nil {
+		t.Fatalf("SetAllowRemote(false) error = %v", err)
+	}
+	select {
+	case err := <-result:
+		wantCode(t, err, "COMPUTER_USE_REMOTE_OFF")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the running call was not cancelled when sharing turned off")
+	}
+	remote.mu.Lock()
+	running := len(remote.remoteCalls)
+	remote.mu.Unlock()
+	if running != 0 {
+		t.Fatalf("%d calls still tracked after they finished", running)
+	}
+}
+
+// Another computer's screenshot folder is removed once its newest file is
+// older than remoteScopeMaxAge; this computer's own session folders stay.
+func TestOldRemoteScreenshotFoldersExpire(t *testing.T) {
+	remote := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	now := time.Now()
+	old := now.Add(-remoteScopeMaxAge - time.Hour)
+	folder := func(name string, at time.Time) string {
+		dir := filepath.Join(remote.images.root, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(dir, "20260101T000000.000Z-00.png")
+		if err := os.WriteFile(file, []byte("png"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{file, dir} {
+			if err := os.Chtimes(path, at, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	stale := folder("remote-abc-ao-1-0011", old)
+	fresh := folder("remote-abc-ao-2-0022", now)
+	own := folder("ao-3", old)
+
+	remote.sweepRemoteScopes(now)
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale remote folder still there: %v", err)
+	}
+	for _, dir := range []string{fresh, own} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("%s was removed: %v", dir, err)
+		}
+	}
+	// Sweeps are spaced out: another one within the interval does nothing.
+	again := folder("remote-abc-ao-4-0044", old)
+	remote.sweepRemoteScopes(now.Add(time.Minute))
+	if _, err := os.Stat(again); err != nil {
+		t.Fatalf("a sweep ran again within the interval: %v", err)
+	}
+}
+
+func TestRemoteCallerIDIsBounded(t *testing.T) {
+	remote := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	if _, err := remote.SetAllowRemote(context.Background(), true); err != nil {
+		t.Fatalf("SetAllowRemote() error = %v", err)
+	}
+	_, err := remote.ServeRemoteCall(context.Background(), RemoteCallRequest{Tool: "list_windows", Caller: strings.Repeat("a", maxRemoteCallerBytes+1)})
+	wantCode(t, err, "COMPUTER_USE_INVALID_CALLER")
+}

@@ -71,6 +71,15 @@ const (
 	// remoteActiveWindow is how long after its last call another computer
 	// still counts as using this one; a pause longer than this starts a new run.
 	remoteActiveWindow = 2 * time.Minute
+	// maxRemoteCallerBytes bounds the ID another computer sends for itself.
+	maxRemoteCallerBytes = 128
+	// MaxRemoteCallBodyBytes bounds one call's request body from another
+	// computer: a tool's arguments, or a run_steps batch.
+	MaxRemoteCallBodyBytes = 4 << 20
+	// remoteScopeMaxAge is how long another computer's screenshot folder
+	// outlives its last screenshot; remoteSweepInterval spaces the sweeps.
+	remoteScopeMaxAge   = 7 * 24 * time.Hour
+	remoteSweepInterval = time.Hour
 )
 
 var (
@@ -349,10 +358,60 @@ func (s *Service) SetAllowRemote(ctx context.Context, allow bool) (RemoteSetting
 			return RemoteSettings{}, errNotInstalled
 		}
 	}
-	return s.updateRemote(!allow, func(state *remoteState) error {
+	settings, err := s.updateRemote(!allow, func(state *remoteState) error {
 		state.AllowRemote = allow
 		return nil
 	})
+	if err == nil && !allow {
+		// Stop means stop: calls already running stop acting on the screen.
+		s.cancelRemoteCalls()
+	}
+	s.sweepRemoteScopes(time.Now())
+	return settings, err
+}
+
+// trackRemoteCall registers a call from another computer, so turning sharing
+// off cancels it. done unregisters it.
+func (s *Service) trackRemoteCall(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	s.mu.Lock()
+	if s.remoteCalls == nil {
+		s.remoteCalls = map[uint64]context.CancelCauseFunc{}
+	}
+	s.remoteCallSeq++
+	id := s.remoteCallSeq
+	s.remoteCalls[id] = cancel
+	s.mu.Unlock()
+	return ctx, func() {
+		s.mu.Lock()
+		delete(s.remoteCalls, id)
+		s.mu.Unlock()
+		cancel(nil)
+	}
+}
+
+// cancelRemoteCalls cancels every call from another computer running now.
+func (s *Service) cancelRemoteCalls() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, cancel := range s.remoteCalls {
+		cancel(errRemoteOff)
+	}
+}
+
+// sweepRemoteScopes removes other computers' screenshot folders whose newest
+// file is older than remoteScopeMaxAge, at most once per remoteSweepInterval.
+// Best effort.
+func (s *Service) sweepRemoteScopes(now time.Time) {
+	s.mu.Lock()
+	due := now.Sub(s.remoteSweptAt) >= remoteSweepInterval
+	if due {
+		s.remoteSweptAt = now
+	}
+	s.mu.Unlock()
+	if due {
+		s.images.expireRemoteScopes(now.Add(-remoteScopeMaxAge))
+	}
 }
 
 // SetRemoteTarget makes this computer's agents run computer use on another
@@ -486,9 +545,16 @@ func (s *Service) RemoteAgentTools(ctx context.Context) ([]AgentTool, error) {
 // ServeRemoteCall runs one call from an agent on another computer, with every
 // rule a local call has, and returns its screenshots inline.
 func (s *Service) ServeRemoteCall(ctx context.Context, request RemoteCallRequest) (RemoteCallResult, error) {
+	if len(request.Caller) > maxRemoteCallerBytes {
+		return RemoteCallResult{}, apierr.Invalid("COMPUTER_USE_INVALID_CALLER", fmt.Sprintf("caller may be at most %d bytes.", maxRemoteCallerBytes), nil)
+	}
+	// Registered before the check, so a Stop between the two still cancels it.
+	ctx, done := s.trackRemoteCall(ctx)
+	defer done()
 	if err := s.requireRemoteAllowed(); err != nil {
 		return RemoteCallResult{}, err
 	}
+	s.sweepRemoteScopes(time.Now())
 	// Another computer's call runs in its own driver session, never one it
 	// names: a session argument could otherwise reach this computer's sessions.
 	arguments := make(map[string]any, len(request.Arguments))
@@ -502,6 +568,9 @@ func (s *Service) ServeRemoteCall(ctx context.Context, request RemoteCallRequest
 		Arguments: arguments,
 		SessionID: remoteScope(request.Caller, request.SessionID),
 	}, func() { s.noteRemoteCall(request.Caller, request.CallerName, time.Now()) })
+	if errors.Is(context.Cause(ctx), errRemoteOff) {
+		return RemoteCallResult{}, errRemoteOff
+	}
 	if err != nil {
 		return RemoteCallResult{}, err
 	}

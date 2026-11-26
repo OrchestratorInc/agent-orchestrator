@@ -85,6 +85,42 @@ func (s imageStore) prune(dir string) {
 	}
 }
 
+// remoteScopePrefix starts the folders that hold other computers' screenshots.
+const remoteScopePrefix = "remote-"
+
+// expireRemoteScopes removes other computers' screenshot folders whose newest
+// file is older than cutoff. Best effort.
+func (s imageStore) expireRemoteScopes(cutoff time.Time) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), remoteScopePrefix) {
+			continue
+		}
+		dir := filepath.Join(s.root, entry.Name())
+		if newestFile(dir).Before(cutoff) {
+			_ = os.RemoveAll(dir)
+		}
+	}
+}
+
+// newestFile is when dir or a file in it last changed.
+func newestFile(dir string) time.Time {
+	newest := time.Time{}
+	if info, err := os.Stat(dir); err == nil {
+		newest = info.ModTime()
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		if info, err := entry.Info(); err == nil && info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	return newest
+}
+
 // dropImageFiles removes click's debug_image_out from a call, and it and
 // screenshot_out_file from each of its steps, so no image the driver writes
 // lands outside AO's folder. run_steps takes a get_window_state step as its

@@ -186,6 +186,12 @@ type Service struct {
 	// activity is which other computers' agents used this one recently, by
 	// caller ID; guarded by mu.
 	activity map[string]RemoteActivity
+	// remoteCalls cancels the calls from other computers running now, by a
+	// sequence number; guarded by mu, as is remoteSweptAt, when other
+	// computers' screenshot folders were last swept.
+	remoteCalls   map[uint64]context.CancelCauseFunc
+	remoteCallSeq uint64
+	remoteSweptAt time.Time
 }
 
 // SetEnabled supplies the "Let agents use this computer" setting, which Call

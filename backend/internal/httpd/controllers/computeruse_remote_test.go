@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 )
 
@@ -118,5 +119,42 @@ func TestRemoteComputerUseCallPassesTheServiceAnswerThrough(t *testing.T) {
 	c.remoteOffer(w, httptest.NewRequest(http.MethodGet, "/api/v1/remote-computer-use/status", nil))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"offered":true`) {
 		t.Fatalf("offer: status=%d body=%s", w.Code, w.Body)
+	}
+}
+
+// The name shown on the used computer comes from the paired device that
+// authenticated the call, not from its body; other credentials keep the body's.
+func TestRemoteComputerUseCallerNameComesFromThePairedDevice(t *testing.T) {
+	svc := &remoteComputerUseService{}
+	c := &ComputerUseController{Svc: svc, DeviceName: func(id string) (string, bool) {
+		return "Studio Mac", id == "dev-1"
+	}}
+	body := `{"tool":"list_windows","caller":"abc","callerName":"Anything I like"}`
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/remote-computer-use/call", strings.NewReader(body))
+	request = request.WithContext(requestscope.WithCredential(request.Context(), requestscope.Credential{Kind: requestscope.CredentialDevice, DeviceID: "dev-1"}))
+	w := httptest.NewRecorder()
+	c.remoteCall(w, request)
+	if w.Code != http.StatusOK || svc.call == nil || svc.call.CallerName != "Studio Mac" {
+		t.Fatalf("device call: status=%d call=%+v", w.Code, svc.call)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/remote-computer-use/call", strings.NewReader(body))
+	request = request.WithContext(requestscope.WithCredential(request.Context(), requestscope.Credential{Kind: requestscope.CredentialPassword}))
+	w = httptest.NewRecorder()
+	c.remoteCall(w, request)
+	if w.Code != http.StatusOK || svc.call.CallerName != "Anything I like" {
+		t.Fatalf("password call: status=%d call=%+v", w.Code, svc.call)
+	}
+}
+
+func TestRemoteComputerUseCallBodyIsBounded(t *testing.T) {
+	svc := &remoteComputerUseService{}
+	c := &ComputerUseController{Svc: svc}
+	body := `{"tool":"type_text","arguments":{"text":"` + strings.Repeat("a", computeruse.MaxRemoteCallBodyBytes) + `"}}`
+	w := httptest.NewRecorder()
+	c.remoteCall(w, httptest.NewRequest(http.MethodPost, "/api/v1/remote-computer-use/call", strings.NewReader(body)))
+	if w.Code != http.StatusBadRequest || svc.call != nil {
+		t.Fatalf("oversized body: status=%d call=%+v", w.Code, svc.call)
 	}
 }

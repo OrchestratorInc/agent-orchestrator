@@ -9,6 +9,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 )
 
@@ -40,6 +41,9 @@ type ComputerUse interface {
 // call until the user lets other computers use this one.
 type ComputerUseController struct {
 	Svc ComputerUse
+	// DeviceName names a paired device by ID. A call that a device token
+	// authenticated is shown under that name, not the one in its body.
+	DeviceName func(id string) (string, bool)
 }
 
 // Register mounts the computer-use routes on the supplied router.
@@ -203,10 +207,16 @@ func (c *ComputerUseController) remoteCall(w http.ResponseWriter, r *http.Reques
 		apispec.NotImplemented(w, r, "POST", "/api/v1/remote-computer-use/call")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, computeruse.MaxRemoteCallBodyBytes)
 	var request RemoteComputerUseCallRequest
 	if err := decodeJSONStrict(r, &request); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_COMPUTER_USE_CALL", "invalid computer-use call", nil)
 		return
+	}
+	if credential := requestscope.CredentialFrom(r.Context()); credential.Kind == requestscope.CredentialDevice && c.DeviceName != nil {
+		if name, ok := c.DeviceName(credential.DeviceID); ok && name != "" {
+			request.CallerName = name
+		}
 	}
 	result, err := c.Svc.ServeRemoteCall(r.Context(), request)
 	if err != nil {

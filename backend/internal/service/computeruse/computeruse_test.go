@@ -27,6 +27,8 @@ type fakeDriver struct {
 	startErr error
 	calls    [][]string
 	onCall   func(args []string) ([]byte, []byte, error)
+	// onCallCtx, when set, runs instead of onCall and sees the call's context.
+	onCallCtx func(ctx context.Context, args []string) ([]byte, []byte, error)
 	started  int
 	startsUp bool
 }
@@ -38,7 +40,7 @@ func (f *fakeDriver) Locate(context.Context) (string, error) {
 	return "/opt/cua-driver", nil
 }
 
-func (f *fakeDriver) Run(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+func (f *fakeDriver) Run(ctx context.Context, _ string, args ...string) ([]byte, []byte, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, args)
 	up := f.daemonUp
@@ -55,6 +57,9 @@ func (f *fakeDriver) Run(_ context.Context, _ string, args ...string) ([]byte, [
 		return []byte(`{"latest_version":"0.37.0","update_available":true,"release_notes_url":"https://example.test/notes"}`), nil, nil
 	case "permissions":
 		return []byte(`{"accessibility":true,"screen_recording":false}`), nil, nil
+	}
+	if f.onCallCtx != nil {
+		return f.onCallCtx(ctx, args)
 	}
 	if f.onCall != nil {
 		return f.onCall(args)

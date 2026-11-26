@@ -267,7 +267,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
-		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
+		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse, DeviceName: accessDeviceName(deps.AccessDevices)},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		prPreview:     &controllers.PRPreviewController{Svc: deps.PRPreview},
@@ -552,4 +552,20 @@ func deviceCommandRoute(req *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// accessDeviceName looks a paired device's name up by ID, or nil without a
+// device registry.
+func accessDeviceName(devices *mobilebridge.AccessDevices) func(id string) (string, bool) {
+	if devices == nil {
+		return nil
+	}
+	return func(id string) (string, bool) {
+		for _, device := range devices.List() {
+			if device.ID == id {
+				return device.Name, true
+			}
+		}
+		return "", false
+	}
 }
