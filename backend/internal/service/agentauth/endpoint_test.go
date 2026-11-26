@@ -153,14 +153,16 @@ func TestEndpointStatusReportsUnusableEndpoint(t *testing.T) {
 }
 
 // The key is sent the way the endpoint accepts: Bearer first, then the
-// x-api-key header, and the style that worked is saved.
+// x-api-key header, and the style that worked is saved. The model is not asked
+// on the form: the first model the endpoint lists becomes the default, and a
+// model the user picks later is kept when the key changes.
 func TestSetEndpointDetectsTheAuthStyleTheEndpointAccepts(t *testing.T) {
 	t.Parallel()
 	var probes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		probes.Add(1)
-		if r.URL.Path == "/v1/models" && r.Header.Get("x-api-key") == "sk-header" {
-			w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/v1/models" && strings.HasPrefix(r.Header.Get("x-api-key"), "sk-header") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"gateway-large"},{"id":"gateway-small"}]}`))
 			return
 		}
 		w.WriteHeader(http.StatusUnauthorized)
@@ -173,16 +175,37 @@ func TestSetEndpointDetectsTheAuthStyleTheEndpointAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetEndpoint: %v", err)
 	}
-	if status.AuthStyle != harnessendpoint.AuthAPIKey || probes.Load() != 2 {
-		t.Fatalf("status = %+v after %d probes, want api-key after trying Bearer first", status, probes.Load())
+	if status.AuthStyle != harnessendpoint.AuthAPIKey || status.Model != "gateway-large" || probes.Load() != 2 {
+		t.Fatalf("status = %+v after %d probes, want api-key after trying Bearer first, and the first listed model", status, probes.Load())
 	}
 
-	// Changing only the model keeps the style that works, without asking again.
-	if status, err = svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, Model: "gateway-model"}); err != nil {
+	// Picking another default keeps the style that works, without asking again.
+	if status, err = svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, Model: "gateway-small"}); err != nil {
 		t.Fatalf("SetEndpoint model only: %v", err)
 	}
-	if status.AuthStyle != harnessendpoint.AuthAPIKey || probes.Load() != 2 {
+	if status.AuthStyle != harnessendpoint.AuthAPIKey || status.Model != "gateway-small" || probes.Load() != 2 {
 		t.Fatalf("status = %+v after %d probes, want the saved style kept without a probe", status, probes.Load())
+	}
+
+	// A new key is checked again, and the chosen model stays.
+	if status, err = svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, APIKey: "sk-header-2"}); err != nil {
+		t.Fatalf("SetEndpoint new key: %v", err)
+	}
+	if status.AuthStyle != harnessendpoint.AuthAPIKey || status.Model != "gateway-small" || probes.Load() != 4 {
+		t.Fatalf("status = %+v after %d probes, want the new key checked and the chosen model kept", status, probes.Load())
+	}
+}
+
+// An endpoint that does not list models leaves the harness on its own default.
+func TestSetEndpointWithoutAModelListingSavesNoModel(t *testing.T) {
+	t.Parallel()
+	svc, _ := newEndpointService(t)
+	status, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-test"})
+	if err != nil {
+		t.Fatalf("SetEndpoint: %v", err)
+	}
+	if !status.Configured || status.Model != "" || status.AuthStyle != harnessendpoint.AuthBearer {
+		t.Fatalf("status = %+v, want a configured endpoint with the default style and no model", status)
 	}
 }
 

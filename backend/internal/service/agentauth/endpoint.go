@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
@@ -44,12 +45,8 @@ func (s *Service) SetEndpoint(ctx context.Context, agentID string, in harnessend
 	if err := s.requireEndpointTarget(agentID); err != nil {
 		return harnessendpoint.Status{}, err
 	}
-	if in.AuthStyle == "" {
-		style, err := s.detectEndpointAuthStyle(ctx, agentID, in)
-		if err != nil {
-			return harnessendpoint.Status{}, err
-		}
-		in.AuthStyle = style
+	if err := s.completeEndpointInput(ctx, agentID, &in); err != nil {
+		return harnessendpoint.Status{}, err
 	}
 	status, err := s.endpoints().Save(agentID, in, time.Now())
 	if err != nil {
@@ -79,29 +76,61 @@ func (s *Service) ClearEndpoint(ctx context.Context, agentID string) (harnessend
 	return status, nil
 }
 
-// detectEndpointAuthStyle picks how the key is sent when the client leaves it
-// open: the endpoint is asked with each style the harness supports, and the
-// first it accepts is saved. A save that keeps the saved URL and key keeps the
-// style that already works. Without a key yet, Save reports the missing key.
-func (s *Service) detectEndpointAuthStyle(ctx context.Context, agentID string, in harnessendpoint.Input) (harnessendpoint.AuthStyle, error) {
-	target, ok, err := s.endpoints().ProbeTarget(agentID, in)
+// completeEndpointInput fills what the client leaves open. The auth style is
+// never asked: the endpoint's model listing is tried with each style the
+// harness supports, and the first it accepts is saved. The default model is
+// not asked on the form either: a save that keeps the saved base URL keeps the
+// saved model, and otherwise the first model the endpoint lists becomes the
+// default until the user picks another in Models. A save that keeps the saved
+// URL and key keeps the style that already works, without asking. Without a
+// key yet, Save reports the missing key.
+func (s *Service) completeEndpointInput(ctx context.Context, agentID string, in *harnessendpoint.Input) error {
+	spec, _ := harnessendpoint.Lookup(agentID)
+	needStyle := in.AuthStyle == ""
+	needModel := strings.TrimSpace(in.Model) == "" && spec.ModelEnv != ""
+	if !needStyle && !needModel {
+		return nil
+	}
+	target, ok, err := s.endpoints().ProbeTarget(agentID, *in)
 	if err != nil {
-		return "", endpointError(err)
+		return endpointError(err)
 	}
 	if !ok {
-		return "", nil
+		return nil
 	}
-	if target.SavedStyle != "" {
-		return target.SavedStyle, nil
+	if needStyle && target.SavedStyle != "" {
+		in.AuthStyle, needStyle = target.SavedStyle, false
 	}
-	style, err := harnessendpoint.DetectAuthStyle(ctx, s.endpointProbeClient, agentID, target.BaseURL, target.Key)
+	if needModel && target.SavedModel != "" {
+		in.Model, needModel = target.SavedModel, false
+	}
+	var models []string
+	switch {
+	case needStyle:
+		detection, err := harnessendpoint.Detect(ctx, s.endpointProbeClient, agentID, target.BaseURL, target.Key)
+		if err != nil {
+			return endpointProbeError(err)
+		}
+		in.AuthStyle, models = detection.Style, detection.Models
+	case needModel:
+		// The style is known; a listing the endpoint cannot give only leaves
+		// the harness on its own default model.
+		models, err = harnessendpoint.ListModels(ctx, s.endpointProbeClient, agentID, target.BaseURL, in.AuthStyle, target.Key)
+		if errors.Is(err, harnessendpoint.ErrKeyRejected) || ctx.Err() != nil {
+			return endpointProbeError(err)
+		}
+	}
+	if needModel && len(models) > 0 {
+		in.Model = models[0]
+	}
+	return nil
+}
+
+func endpointProbeError(err error) error {
 	if errors.Is(err, harnessendpoint.ErrKeyRejected) {
-		return "", apierr.Invalid("AGENT_ENDPOINT_KEY_REJECTED", "The endpoint rejected this key. Check the key and the base URL.", nil)
+		return apierr.Invalid("AGENT_ENDPOINT_KEY_REJECTED", "The endpoint rejected this key. Check the key and the base URL.", nil)
 	}
-	if err != nil {
-		return "", err
-	}
-	return style, nil
+	return err
 }
 
 func (s *Service) requireEndpointTarget(agentID string) error {

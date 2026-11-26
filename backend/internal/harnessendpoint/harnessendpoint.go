@@ -52,11 +52,13 @@ type Spec struct {
 	// it away from BaseURLEnv. Without this a subscription token from a bound
 	// account or the daemon's environment could reach the custom endpoint.
 	ClearEnv []string
-	// ProbePath is a read-only GET under the base URL that needs the key, used
-	// to tell which auth style an endpoint accepts. Empty means no probe.
-	ProbePath string
-	// ProbeHeaders are sent with the probe beside the key.
-	ProbeHeaders map[string]string
+	// ModelsPath is the endpoint's model listing under the base URL, a
+	// read-only GET that needs the key and answers {"data":[{"id":...}]}. AO
+	// asks it on save to learn the auth style the endpoint accepts and its
+	// models, and when the model picker refreshes. Empty means no listing.
+	ModelsPath string
+	// ModelsHeaders are sent with the model listing beside the key.
+	ModelsHeaders map[string]string
 }
 
 // AuthStyles returns the spec's supported auth styles in stable order.
@@ -99,8 +101,8 @@ var specs = map[string]Spec{
 		DefaultAuthStyle: AuthBearer,
 		ModelEnv:         "ANTHROPIC_MODEL",
 		// Claude Code's gateway check lists models the same way.
-		ProbePath:    "/v1/models",
-		ProbeHeaders: map[string]string{"anthropic-version": "2023-06-01"},
+		ModelsPath:    "/v1/models",
+		ModelsHeaders: map[string]string{"anthropic-version": "2023-06-01"},
 	},
 	"codex": {
 		AgentID:    "codex",
@@ -186,6 +188,9 @@ type ProbeTarget struct {
 	// style that already works is kept, so a save that changes only the model
 	// never re-probes, and a gateway that is briefly down cannot reset it.
 	SavedStyle AuthStyle
+	// SavedModel is the saved default model when the save keeps the saved base
+	// URL, so editing the key keeps the model the user chose.
+	SavedModel string
 }
 
 // AgentIDs lists every harness with a custom endpoint spec, sorted.
@@ -217,7 +222,7 @@ type Input struct {
 	BaseURL   string    `json:"baseUrl" description:"Absolute http(s) provider endpoint URL."`
 	AuthStyle AuthStyle `json:"authStyle,omitempty" enum:"bearer,api-key" description:"Credential form; defaults per harness."`
 	APIKey    string    `json:"apiKey,omitempty" description:"API key; omit to keep the stored key."`
-	Model     string    `json:"model,omitempty" description:"Optional model override."`
+	Model     string    `json:"model,omitempty" description:"Default model. Omit it to keep the saved model or use the first model the endpoint lists."`
 }
 
 // Status is the display-safe view of one harness's endpoint support.
@@ -346,18 +351,24 @@ func (s *Store) ProbeTarget(agentID string, in Input) (ProbeTarget, bool, error)
 	if err != nil {
 		return ProbeTarget{}, false, err
 	}
-	if cfg.APIKey != "" {
-		return ProbeTarget{BaseURL: cfg.BaseURL, Key: cfg.APIKey}, true, nil
-	}
 	// Load reports nothing saved when the saved file is unreadable too: there
 	// is no key to probe with, and Save itself reports the missing key.
 	existing, saved, _ := s.Load(agentID)
+	sameURL := saved && strings.TrimRight(existing.BaseURL, "/") == cfg.BaseURL
+	if cfg.APIKey != "" {
+		target := ProbeTarget{BaseURL: cfg.BaseURL, Key: cfg.APIKey}
+		if sameURL {
+			target.SavedModel = existing.Model
+		}
+		return target, true, nil
+	}
 	if !saved {
 		return ProbeTarget{}, false, nil
 	}
 	target := ProbeTarget{BaseURL: cfg.BaseURL, Key: existing.APIKey}
-	if strings.TrimRight(existing.BaseURL, "/") == cfg.BaseURL {
+	if sameURL {
 		target.SavedStyle = existing.AuthStyle
+		target.SavedModel = existing.Model
 	}
 	return target, true, nil
 }

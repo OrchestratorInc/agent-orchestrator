@@ -2264,8 +2264,6 @@
 	"settings.harness.endpoint.apiKey": "API anahtarı",
 	"settings.harness.endpoint.apiKeyPlaceholder": "API anahtarınızı yapıştırın",
 	"settings.harness.endpoint.apiKeyKeep": "Kayıtlı anahtarı korumak için boş bırakın",
-	"settings.harness.endpoint.model": "Model (isteğe bağlı)",
-	"settings.harness.endpoint.modelPlaceholder": "Varsayılan modeli kullan",
 	"settings.harness.endpoint.storageNote": "Bu oturumları çalıştıran ana bilgisayarda Orchestrator'ın veri klasöründe saklanır ve yalnızca sahibi olan hesap tarafından okunabilir. Anahtar bir daha gösterilmez.",
 	"settings.harness.endpoint.save": "Kaydet",
 	"settings.harness.endpoint.remove": "Kaldır",

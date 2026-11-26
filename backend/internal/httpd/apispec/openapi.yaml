@@ -26763,7 +26763,7 @@ components:
           description: Absolute http(s) provider endpoint URL.
           type: string
         model:
-          description: Optional model override.
+          description: Default model. Omit it to keep the saved model or use the first model the endpoint lists.
           type: string
       required:
       - baseUrl
