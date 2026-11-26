@@ -50,7 +50,7 @@ func TestRemoteErrorsAreClassified(t *testing.T) {
 		}
 	}
 	other := &gitError{args: []string{"push"}, stderr: "something else", err: errors.New("exit status 1")}
-	if got := remoteError(other, ""); got != error(other) {
+	if got := remoteError(other, ""); !errors.Is(got, other) || got.Error() != other.Error() {
 		t.Errorf("unclassified error changed: %v", got)
 	}
 }

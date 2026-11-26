@@ -60,7 +60,7 @@ func (p *Plugin) ImportConversation(ctx context.Context, data []byte, cwd string
 	if _, err := p.run(ctx, cwd, env, "session", "import", moved, "--directory", cwd, "--standalone"); err != nil {
 		if previous != nil {
 			if restoreErr := p.restoreConversation(ctx, previous, env); restoreErr != nil {
-				return "", fmt.Errorf("%w; the copy from before could not be put back: %v", err, restoreErr)
+				return "", fmt.Errorf("%w; the copy from before could not be put back: %w", err, restoreErr)
 			}
 		}
 		return "", err

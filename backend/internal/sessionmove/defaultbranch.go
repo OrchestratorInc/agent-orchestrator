@@ -31,8 +31,12 @@ func RefuseDefaultBranch(ctx context.Context, worktree, configured string) (stri
 	if def == "" {
 		def = originDefault
 	}
+	// A detached HEAD is on no branch, so it is not on the default one.
 	branch, err := gitLine(ctx, worktree, "symbolic-ref", "-q", "--short", "HEAD")
-	if err != nil || branch == "" {
+	if err != nil {
+		branch = ""
+	}
+	if branch == "" {
 		return def, nil
 	}
 	if branch == configured || branch == originDefault {

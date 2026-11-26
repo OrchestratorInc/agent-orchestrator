@@ -300,12 +300,12 @@ func checkStatus(ctx context.Context, wt string) ([]string, error) {
 		if len(parts) < 9 || !strings.HasPrefix(parts[2], "S") || len(parts[2]) != 4 {
 			continue
 		}
-		sub, path := parts[2], parts[len(parts)-1]
+		sub, subPath := parts[2], parts[len(parts)-1]
 		if sub[2] == 'M' || sub[3] == 'U' {
-			return nil, fmt.Errorf("%w: %s", ErrDirtySubmodule, path)
+			return nil, fmt.Errorf("%w: %s", ErrDirtySubmodule, subPath)
 		}
 		if sub[1] == 'C' {
-			moved = append(moved, path)
+			moved = append(moved, subPath)
 		}
 	}
 	return moved, nil
@@ -331,13 +331,13 @@ func copyIndex(ctx context.Context, wt string) (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
-	path := tmp.Name()
-	cleanup := func() { _ = os.Remove(path) }
+	indexCopy := tmp.Name()
+	cleanup := func() { _ = os.Remove(indexCopy) }
 	data, err := os.ReadFile(indexPath)
 	if err == nil {
 		_, err = tmp.Write(data)
 	} else if errors.Is(err, os.ErrNotExist) {
-		err = os.Remove(path) // git creates a missing index
+		err = os.Remove(indexCopy) // git creates a missing index
 	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
@@ -346,7 +346,7 @@ func copyIndex(ctx context.Context, wt string) (string, func(), error) {
 		cleanup()
 		return "", nil, err
 	}
-	return path, cleanup, nil
+	return indexCopy, cleanup, nil
 }
 
 // resetPaths puts excluded paths back to base in the temp index, which also
