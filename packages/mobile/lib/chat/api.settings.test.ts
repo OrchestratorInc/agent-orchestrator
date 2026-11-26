@@ -22,3 +22,13 @@ it("keeps the chat's fast mode, and reads anything but true as off", async () =>
 	request.mockResolvedValueOnce(page({ model: "opus" }));
 	expect((await getConversationPage(config, "session")).settings.fastMode).toBeUndefined();
 });
+
+// The daemon replaces the whole set on each save, so what the phone does not
+// show must still come back in the snapshot every save is built from.
+it("keeps desktop's plan mode and auto-compact window, which every save carries", async () => {
+	const page = (settings: Record<string, unknown>) => ({ json: async () => ({ controller: "ready", latestSequence: 0, settings }) });
+	request.mockResolvedValueOnce(page({ model: "opus", planMode: true, autoCompactWindow: "1m" }));
+	expect((await getConversationPage(config, "session")).settings).toEqual({ model: "opus", planMode: true, autoCompactWindow: "1m" });
+	request.mockResolvedValueOnce(page({ model: "opus", planMode: false, autoCompactWindow: "" }));
+	expect((await getConversationPage(config, "session")).settings).toEqual({ model: "opus" });
+});

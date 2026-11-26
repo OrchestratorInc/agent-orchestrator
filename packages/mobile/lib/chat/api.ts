@@ -594,6 +594,10 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			// Fast mode, where the model has one: dropped here, it always read Off,
 			// and the bolt fell back to Off once its save went unconfirmed.
 			fastMode: wire.settings?.fastMode === true || undefined,
+			// Not shown on the phone, but carried into every save: the daemon
+			// replaces the whole set, and leaving these out cleared them.
+			planMode: wire.settings?.planMode === true || undefined,
+			autoCompactWindow: wire.settings?.autoCompactWindow || undefined,
 		},
 		turns: (wire.turns ?? []).map(toTurn),
 		items: [...messages, ...activities].sort((a, b) => a.sequence - b.sequence),

@@ -30,6 +30,13 @@ export type TurnSettings = {
 	approvalMode?: ApprovalMode;
 	/** The agent runs the model in its fast mode, where the model offers one (`ChatModel.supportsFast`). */
 	fastMode?: boolean;
+	/**
+	 * Settings the phone does not show but must carry: the daemon replaces the
+	 * whole set on each save, so leaving them out of a save turned desktop's
+	 * Plan mode off and reset its auto-compact window.
+	 */
+	planMode?: boolean;
+	autoCompactWindow?: string;
 };
 
 export type PlanStep = { text: string; status: "pending" | "in_progress" | "completed" };

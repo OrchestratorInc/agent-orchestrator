@@ -181,6 +181,8 @@ describe("turn settings menus", () => {
 		expect(turnSettingWrite({}, fast, true)).toEqual({ kind: "option", id: "fast", value: { enabled: true } });
 		const approvals = rows().find((row) => row.id === "approvals")!;
 		expect(turnSettingWrite({ model: "gpt" }, approvals, "auto")).toEqual({ kind: "settings", settings: { model: "gpt", approvalMode: "auto" } });
+		// The daemon replaces the whole set: what the phone does not show rides along.
+		expect(turnSettingWrite({ model: "gpt", planMode: true, autoCompactWindow: "1m" }, approvals, "auto")).toEqual({ kind: "settings", settings: { model: "gpt", planMode: true, autoCompactWindow: "1m", approvalMode: "auto" } });
 	});
 });
 
