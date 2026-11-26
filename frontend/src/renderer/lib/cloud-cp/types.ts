@@ -270,6 +270,11 @@ export type CloudCpCue = Cue;
 export type CloudCpCueDefinition = CueDefinitionInput;
 export type CloudCpInvokeCueResult = InvokeCueResult;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+/**
+ * Where a Coder project's orchestrator runs (config.orchestratorSandboxProvider):
+ * "freestyle", the default and the same as absent, or "coder".
+ */
+export type CloudCpOrchestratorSandboxProvider = NonNullable<ProjectConfig["orchestratorSandboxProvider"]>;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
  * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
@@ -1440,6 +1445,46 @@ export interface CloudCpHarnessVersionsResponse {
 	/** The caller administers the organization, so may change the versions. */
 	editable: boolean;
 	agents: CloudCpHarnessVersion[];
+}
+
+// ---------------------------------------------------------------------------
+// Data retention (GET/PUT /me/data-retention)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the signed-in user's Cloud sessions and their conversation content
+ * are kept: every session they started, in any organization, team sessions
+ * included. A session older than `retentionDays`, counted from its creation,
+ * has its content deleted once it has ended (a running session is never ended
+ * for it). Each user sets their own.
+ */
+export interface CloudCpDataRetention {
+	retentionDays: number;
+	/** The deployment's default period; always one of `options`. */
+	defaultDays: number;
+	/**
+	 * True while the user has no period of their own and follows `defaultDays`.
+	 * Absent from a control plane that predates going back to the default.
+	 */
+	followsDefault?: boolean;
+	/** The periods the user may choose, in days, ascending. */
+	options: number[];
+	/** When the user last chose the period; null while they never chose one. */
+	updatedAt: string | null;
+}
+
+/** PUT /me/data-retention. */
+export interface CloudCpPutDataRetentionRequest {
+	/** One of `options`, or null to follow the deployment's default again. */
+	retentionDays: number | null;
+	/** Only count the sessions the period would delete; change nothing. */
+	dryRun?: boolean;
+}
+
+/** The retention as stored (unchanged by a dry run) and what the requested period deletes. */
+export interface CloudCpDataRetentionChange extends CloudCpDataRetention {
+	/** The user's sessions older than the requested period whose content is not deleted yet. */
+	sessionsToDelete: number;
 }
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */

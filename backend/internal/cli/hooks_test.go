@@ -717,6 +717,71 @@ func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
 	}
 }
 
+// Kimi fires StopFailure, not Stop, when a provider error such as an invalid
+// API key ends the turn and Kimi returns to its prompt (#3387). It must report
+// idle as a turn boundary without recording the error as the turn's answer.
+func TestHooks_KimiStopFailureReportsIdle(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"hook_event_name":"StopFailure","session_id":"kimi-native-1","cwd":"/work","error_type":"ChatProviderError","error_message":"[provider.auth_error] 401 The API Key appears to be invalid or may have expired."}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "kimi", "stop-failure")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capture.hits != 1 {
+		t.Fatalf("daemon calls = %d, want 1", capture.hits)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.Event != "stop-failure" || req.AgentSessionID != "kimi-native-1" {
+		t.Fatalf("request = %#v, want idle stop-failure for kimi-native-1", req)
+	}
+	if req.FinalAssistantMessage != "" || req.TurnUserRequest != "" || req.LatestAssistantUpdate != "" {
+		t.Fatalf("stop-failure reported conversation facts: %#v", req)
+	}
+}
+
+// Kimi's child hooks derive no state; they reach lifecycle only because the
+// payload carries session_id. Lifecycle counts open children from them.
+func TestHooks_KimiSubagentHooksReachLifecycle(t *testing.T) {
+	for event, payload := range map[string]string{
+		"subagent-start": `{"hook_event_name":"SubagentStart","session_id":"kimi-native-1","session_title":"Map the importer","client_type":"kimi_code_cli","cwd":"/work","agent_name":"explore","prompt":"Find the importer"}`,
+		"subagent-stop":  `{"hook_event_name":"SubagentStop","session_id":"kimi-native-1","session_title":"Map the importer","client_type":"kimi_code_cli","cwd":"/work","agent_name":"explore","response":"Found it"}`,
+	} {
+		t.Run(event, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "kimi", event)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if capture.hits != 1 {
+				t.Fatalf("daemon calls = %d, want 1", capture.hits)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.Event != event || req.Harness != "kimi" || req.AgentSessionID != "kimi-native-1" {
+				t.Fatalf("request = %#v, want %s from kimi for kimi-native-1", req, event)
+			}
+		})
+	}
+}
+
 func TestHooks_ClaudeStopCarriesRunningSubagents(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
@@ -2901,6 +2966,7 @@ func TestClaudeHookDeniesFirstArtifactUseOnly(t *testing.T) {
 	if got.HookSpecificOutput.HookEventName != "PreToolUse" ||
 		got.HookSpecificOutput.PermissionDecision != "deny" ||
 		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "html_render") ||
+		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "call Artifact again") ||
 		strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "ao report") {
 		t.Fatalf("unexpected decision: %+v", got)
 	}

@@ -105,8 +105,10 @@ import {
 	Pin as MynaPin,
 	Plus as MynaPlus,
 	Presentation as MynaPresentation,
+	Question as MynaQuestion,
 	QuestionCircle as MynaQuestionCircle,
 	Refresh as MynaRefresh,
+	Repeat as MynaRepeat,
 	Rows as MynaRows,
 	Save as MynaSave,
 	Search as MynaSearch,
@@ -134,6 +136,8 @@ import {
 	Upload as MynaUpload,
 	User as MynaUser,
 	Users as MynaUsers,
+	VolumeHigh as MynaVolumeHigh,
+	VolumeX as MynaVolumeX,
 	Building as MynaBuilding,
 	Mail as MynaMail,
 	SearchMinus as MynaSearchMinus,
@@ -218,6 +222,7 @@ import {
 	Ungroup as LucideUngroup,
 	Check as LucideCheck,
 	Ellipsis as LucideEllipsis,
+	GalleryHorizontal as LucideGalleryHorizontal,
 	EllipsisVertical as LucideEllipsisVertical,
 	GripVertical as LucideGripVertical,
 	Pause as LucidePause,
@@ -317,6 +322,7 @@ export const CircleArrowUp = fromMyna(MynaArrowUpCircle, "circle-arrow-up");
 export const CircleCheck = fromMyna(MynaCheckCircle, "circle-check");
 export const CircleDashed = fromMyna(MynaCircleDashed, "circle-dashed");
 export const CircleHelp = fromMyna(MynaQuestionCircle, "circle-help");
+export const QuestionMark = fromMyna(MynaQuestion, "question-mark");
 export const CircleMinus = fromMyna(MynaMinusCircle, "circle-minus");
 export const CircleStop = fromMyna(MynaStopCircle, "circle-stop");
 export const CircleX = fromMyna(MynaXCircle, "circle-x");
@@ -362,6 +368,7 @@ export const FolderOpen = fromLucide(LucideFolderOpen, "folder-open");
 export const FolderPlus = fromMyna(MynaFolderPlus, "folder-plus");
 export const FolderTree = fromLucide(LucideFolderTree, "folder-tree");
 export const Folders = fromLucide(LucideFolders, "folders");
+export const GalleryHorizontal = fromLucide(LucideGalleryHorizontal, "gallery-horizontal");
 export const Gauge = fromLucide(LucideGauge, "gauge");
 export const GitBranch = fromMyna(MynaGitBranch, "git-branch");
 export const GitCommitHorizontal = fromMyna(MynaGitCommit, "git-commit-horizontal");
@@ -446,6 +453,7 @@ export const QrCode = fromLucide(LucideQrCode, "qr-code");
 export const Quote = fromLucide(LucideQuote, "quote");
 export const RefreshCw = fromMyna(MynaRefresh, "refresh-cw");
 export const Regex = fromLucide(LucideRegex, "regex");
+export const Repeat = fromMyna(MynaRepeat, "repeat");
 export const RotateCcw = fromLucide(LucideRotateCcw, "rotate-ccw");
 export const RotateCw = fromLucide(LucideRotateCw, "rotate-cw");
 export const Route = fromLucide(LucideRoute, "route");
@@ -489,6 +497,8 @@ export const Undo2 = fromLucide(LucideUndo2, "undo-2");
 export const User = fromMyna(MynaUser, "user");
 export const UserRound = fromMyna(MynaUser, "user-round");
 export const Users = fromMyna(MynaUsers, "users");
+export const Volume2 = fromMyna(MynaVolumeHigh, "volume-2");
+export const VolumeX = fromMyna(MynaVolumeX, "volume-x");
 export const Video = fromMyna(MynaVideo, "video");
 export const WandSparkles = fromMyna(MynaSparkles, "wand-sparkles");
 export const Workflow = fromLucide(LucideWorkflow, "workflow");

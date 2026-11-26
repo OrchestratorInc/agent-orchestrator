@@ -6,11 +6,13 @@ import claudeCodeLogo from "../../assets/agents/claude-code.svg";
 import codexLogo from "../../assets/agents/codex.svg";
 import { toggleModelFavorite } from "../../lib/model-favorites";
 import { useUiStore } from "../../stores/ui-store";
-import { AgentModelPicker, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
+import { agentReadiness, type AgentReadinessSnapshot } from "../../test/agent-readiness-fixtures";
+import { AgentModelPicker, type AccountChoice, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
 
 const unavailableGet = vi.hoisted(() => vi.fn());
+const readiness = vi.hoisted(() => ({ agents: [] as unknown[] }));
 vi.mock("../../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: unavailableGet }) }));
-vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [] } }) }));
+vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: readiness.agents } }) }));
 vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: undefined }) }));
 const cloudModels = vi.hoisted(() => vi.fn());
 vi.mock("../../hooks/useCloudCp", () => ({
@@ -28,12 +30,17 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 				? [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }]
 				: agent === "cursor"
 					? ["claude-opus-4-8-high", "claude-opus-4-8-thinking-high"].map((id) => ({ id, label: id }))
-					: [],
+					: agent === "opencode"
+						? [
+							{ id: "fireworks/accounts/fireworks/models/kimi", label: "kimi" },
+							{ id: "fireworks/accounts/team/models/kimi", label: "team/kimi" },
+						]
+						: [],
 		}),
 	}),
 }));
 
-function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string) {
+function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string, account?: AccountChoice) {
 	const onPendingChange = vi.fn();
 	const current: PickerSource = {
 		models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }],
@@ -54,7 +61,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 				loading={loading}
 				loadingModels={loadingModels}
 				savedModel={savedModel}
-				agentSwitch={{ projectId: "p", pending, onPendingChange }}
+				agentSwitch={{ projectId: "p", pending, onPendingChange, account }}
 			/>
 		</QueryClientProvider>,
 	);
@@ -65,15 +72,22 @@ describe("AgentModelPicker", () => {
 	beforeEach(() => {
 		useUiStore.setState({ developerMode: false });
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
+		readiness.agents = [];
 		window.localStorage.clear();
 	});
 
-	it("is one menu of Agent, Model and Effort rows for the running agent", async () => {
+	it("lists the running agent's models under the agent rail, with its effort", async () => {
 		const user = userEvent.setup();
 		const { current } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.getByRole("menuitem", { name: /Agent.*Claude Code/ })).toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: /Model.*Opus/ })).toBeInTheDocument();
+		const rail = screen.getByRole("radiogroup", { name: "Agents" });
+		expect(within(rail).getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
+		expect(within(rail).getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toHaveAttribute("aria-checked", "true");
+		expect(screen.getByRole("menuitemradio", { name: /^Sonnet/ })).toHaveAttribute("aria-checked", "false");
+		// The agent is the rail's; there is no Agent or Model row to open.
+		expect(screen.queryByRole("menuitem", { name: /^Agent/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Model/ })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("menuitem", { name: /Effort.*High/ }));
 		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
 		expect(current.onPickEffort).toHaveBeenCalledWith("max");
@@ -81,16 +95,91 @@ describe("AgentModelPicker", () => {
 		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
 	});
 
-	it.each(["Opus", "Sonnet"])("closes only the submenu after selecting model %s", async (model) => {
+	// A routed catalog offers one model through several providers. The New task
+	// composer's menu lists the running agent's models, browsed and searched.
+	it("names the provider of the running agent's models that share a name", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "crush", {
+			models: [
+				{ id: "deepseek/deepseek-v4-pro", label: "deepseek-v4-pro" },
+				{ id: "fireworks/accounts/fireworks/models/deepseek-v4-pro", label: "deepseek-v4-pro" },
+				{ id: "venice/only-here", label: "only-here" },
+			],
+			modelId: "deepseek/deepseek-v4-pro",
+			modelLabel: "deepseek-v4-pro",
+		});
+		const button = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(button).toHaveTextContent("deepseek-v4-pro (deepseek)");
+		await user.click(button);
+		const names = () => screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+		expect(names()).toEqual([
+			expect.stringContaining("deepseek-v4-pro (deepseek)"),
+			expect.stringContaining("deepseek-v4-pro (fireworks)"),
+			expect.stringMatching(/^only-here(?! \()/),
+		]);
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "deepseek-v4-pro");
+		expect(names()).toEqual([
+			expect.stringContaining("deepseek-v4-pro (deepseek)"),
+			expect.stringContaining("deepseek-v4-pro (fireworks)"),
+		]);
+	});
+
+	it("shows the full ID where models that share a name share a provider too", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "crush", {
+			models: [
+				{ id: "fireworks/kimi", label: "kimi" },
+				{ id: "fireworks/accounts/fireworks/models/kimi", label: "kimi" },
+			],
+			modelId: "fireworks/kimi",
+			modelLabel: "kimi",
+		});
+		const button = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(button).toHaveTextContent("fireworks/kimi");
+		await user.click(button);
+		expect(screen.getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual([
+			expect.stringContaining("fireworks/kimi"),
+			expect.stringContaining("fireworks/accounts/fireworks/models/kimi"),
+		]);
+	});
+
+	// Another agent's names are cut to their last part, so an account's
+	// deployment reads the same as the public model it is named after.
+	it("tells another agent's deployment apart from the public model", async () => {
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "kimi");
+		expect(await screen.findByText("fireworks/accounts/team/models/kimi")).toBeInTheDocument();
+		expect(screen.getByText("fireworks/accounts/fireworks/models/kimi")).toBeInTheDocument();
+	});
+
+	it("lists Claude's newest models first and keeps the older releases below them", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "claude-code", {
+			models: [
+				{ id: "claude-opus-4-5-20251101", label: "Opus 4.5" },
+				{ id: "claude-opus-5-5", label: "Opus 5.5" },
+				{ id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
+			],
+			modelId: "claude-opus-5-5",
+		});
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		// The newest of each family leads, then the release it superseded: the older one costs no
+		// height under the row cap, and a scroll or a search still reaches it.
+		const labels = screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+		expect(labels).toEqual([expect.stringContaining("Opus 5.5"), expect.stringContaining("Sonnet 4.5"), expect.stringContaining("Opus 4.5")]);
+	});
+
+	it.each(["Opus", "Sonnet"])("keeps the menu open, effort under it, after picking model %s", async (model) => {
 		const user = userEvent.setup();
 		const { current } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.click(screen.getByRole("menuitem", { name: /Model.*Opus/ }));
-		fireEvent.click(await screen.findByRole("menuitemradio", { name: new RegExp(`^${model}`) }));
+		fireEvent.click(screen.getByRole("menuitemradio", { name: new RegExp(`^${model}`) }));
 		if (model === "Sonnet") expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
 		else expect(current.onPickModel).not.toHaveBeenCalled();
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
-		expect(screen.queryByRole("menuitemradio", { name: /^Sonnet/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
 	});
 
 	it.each(["Fast mode", "Thinking"])("keeps the parent menu open after toggling %s", async (label) => {
@@ -158,7 +247,6 @@ describe("AgentModelPicker", () => {
 		const { current } = open(undefined, false, "codex", { models: [], modelId: undefined, modelLabel: "Codex" }, false, true, "gpt-x");
 		await screen.findByText("GPT X");
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.click(screen.getByRole("menuitem", { name: /Model/ }));
 		const row = await screen.findByRole("menuitemradio", { name: /GPT X/ });
 		expect(row).toHaveAttribute("aria-checked", "true");
 		expect(row).toHaveAttribute("aria-disabled", "true");
@@ -172,7 +260,6 @@ describe("AgentModelPicker", () => {
 		try {
 			open(undefined, false, "claude-code", { models: [{ id: "claude-opus-5-5", label: "Opus", aliases: ["opus"] }], modelId: "claude-opus-5-5" });
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			await user.click(screen.getByRole("menuitem", { name: /Model/ }));
 			// One star for the favourite row at the top, one on the model row it folded into.
 			expect(await screen.findAllByRole("button", { name: "Remove from favourites" })).toHaveLength(2);
 		} finally {
@@ -180,80 +267,34 @@ describe("AgentModelPicker", () => {
 		}
 	});
 
-	it("names each favourite's agent when the same model is saved for different agents", async () => {
+	it("lists only the chosen agent's favourites, without agent logos", async () => {
 		const user = userEvent.setup();
 		const favorites = [
 			{ harness: "claude-code", row: "opus", model: "opus", label: "Opus" },
-			{ harness: "cursor", row: "claude-opus-4-8", model: "claude-opus-4-8-high", label: "Opus" },
+			{ harness: "cursor", row: "claude-opus-4-8", model: "claude-opus-4-8-high", label: "Opus 4.8" },
 		];
 		favorites.forEach(toggleModelFavorite);
 		try {
 			open();
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			expect(screen.getByRole("menuitemradio", { name: "Opus, Claude Code" })).toBeInTheDocument();
-			expect(screen.getByRole("menuitemradio", { name: "Opus, Cursor" })).toBeInTheDocument();
+			// The favourite at the top and its model row below it.
+			const rows = screen.getAllByRole("menuitemradio", { name: /^Opus/ });
+			expect(rows).toHaveLength(2);
+			expect(rows[0].querySelector("img")).not.toBeInTheDocument();
+			expect(screen.queryByRole("menuitemradio", { name: /^Opus 4\.8/ })).not.toBeInTheDocument();
 		} finally {
 			act(() => favorites.forEach(toggleModelFavorite));
 		}
 	});
 
-	it("shows a favourite's logo without its agent's name, as before #7822", async () => {
-		const user = userEvent.setup();
-		const saved = { harness: "codex", row: "gpt-x", model: "gpt-x", label: "GPT X" };
-		toggleModelFavorite(saved);
-		try {
-			open();
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			const row = await screen.findByRole("menuitemradio", { name: "GPT X, Codex" });
-			expect(row.querySelector("img")).toBeInTheDocument();
-			expect(within(row).queryByText("Codex")).not.toBeInTheDocument();
-		} finally {
-			act(() => toggleModelFavorite(saved));
-		}
-	});
-
-	it("draws the agent's name on a lone favourite whose logo another agent shares", async () => {
-		const user = userEvent.setup();
-		const saved = { harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" };
-		toggleModelFavorite(saved);
-		try {
-			open();
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			const row = await screen.findByRole("menuitemradio", { name: "GPT X, OpenCode 2" });
-			expect(row.querySelector("img")).toBeInTheDocument();
-			expect(within(row).getByText("OpenCode 2")).toHaveAttribute("aria-hidden", "true");
-		} finally {
-			act(() => toggleModelFavorite(saved));
-		}
-	});
-
-	it("draws the agent's name where two agents' favourites share a logo and a model name", async () => {
-		const user = userEvent.setup();
-		const favorites = [
-			{ harness: "opencode", row: "gpt-x", model: "gpt-x", label: "GPT X" },
-			{ harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" },
-		];
-		favorites.forEach(toggleModelFavorite);
-		try {
-			open();
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			const first = await screen.findByRole("menuitemradio", { name: "GPT X, OpenCode" });
-			const second = screen.getByRole("menuitemradio", { name: "GPT X, OpenCode 2" });
-			expect(within(first).getByText("OpenCode")).toHaveAttribute("aria-hidden", "true");
-			expect(within(second).getByText("OpenCode 2")).toHaveAttribute("aria-hidden", "true");
-		} finally {
-			act(() => favorites.forEach(toggleModelFavorite));
-		}
-	});
-
-	it("reads a favourite's agent after its model's settings", async () => {
+	it("shows the pending agent's favourites with their settings", async () => {
 		const user = userEvent.setup();
 		const saved = { harness: "codex", row: "gpt-x", model: "gpt-x", label: "GPT X", effort: "high", effortLabel: "High", fast: true };
 		toggleModelFavorite(saved);
 		try {
-			open();
+			open({ harness: "codex" });
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			expect(await screen.findByRole("menuitemradio", { name: /^GPT X.*Fast mode.*High, Codex$/ })).toBeInTheDocument();
+			expect((await screen.findAllByRole("menuitemradio", { name: /^GPT X.*Fast mode.*High/ }))).toHaveLength(1);
 		} finally {
 			act(() => toggleModelFavorite(saved));
 		}
@@ -264,7 +305,7 @@ describe("AgentModelPicker", () => {
 		const gone = { harness: "codex", row: "gpt-gone", model: "gpt-gone", label: "GPT Gone" };
 		toggleModelFavorite(gone);
 		try {
-			open();
+			open({ harness: "codex" });
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			const row = await screen.findByRole("menuitemradio", { name: /GPT Gone/ });
 			// Codex's list loads with only gpt-x.
@@ -274,25 +315,94 @@ describe("AgentModelPicker", () => {
 		}
 	});
 
-	it("holds another agent as pending when it is picked", async () => {
+	it("holds another agent as pending when its logo is picked, keeping the menu open", async () => {
 		const user = userEvent.setup();
 		const { onPendingChange } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
-		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Codex" }));
+		await user.click(screen.getByRole("radio", { name: "Codex" }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "codex" });
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
 
-	it("shows the agent's logo on a chat picker and its agent rows (#8129)", async () => {
+	it("keeps the rail in one order whichever agent runs, so a pick never moves a logo", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "codex", { modelLabel: "Codex" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const names = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"));
+		expect(names.slice(0, 2)).toEqual(["Claude Code", "Codex"]);
+		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("goes on from the rail to the settings rows when the agent lists no models", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "claude-code", { models: [], modelId: undefined });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitem", { name: /Effort/ })).toHaveFocus();
+		await user.keyboard("{ArrowUp}");
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveFocus();
+		await user.keyboard("{ArrowDown}");
+		await user.keyboard("{Shift>}{Tab}{/Shift}");
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveFocus();
+	});
+
+	it("skips an unavailable first model when going from the rail into the list", async () => {
+		const user = userEvent.setup();
+		// Codex keeps its list in the order given, so the unavailable model stays first.
+		open(undefined, false, "codex", {
+			models: [{ id: "old", label: "Old", unavailableReason: "Needs a newer Codex" }, { id: "sonnet", label: "Sonnet" }],
+			modelId: undefined,
+			modelLabel: "Codex",
+		});
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		act(() => screen.getByRole("radio", { name: "Codex" }).focus());
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemradio", { name: /^Sonnet/ })).toHaveFocus();
+	});
+
+	it("goes back to the running agent when its logo is picked", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open({ harness: "codex" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
+		await user.click(screen.getByRole("radio", { name: "Claude Code" }));
+		expect(onPendingChange).toHaveBeenCalledWith(undefined);
+	});
+
+	it("shows the agent's logo on a chat picker and on the rail (#8129)", async () => {
 		const user = userEvent.setup();
 		open();
 		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
 		expect(trigger.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
 		await user.click(trigger);
-		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
-		const codex = await screen.findByRole("menuitemradio", { name: "Codex" });
-		expect(codex.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+		const codex = screen.getByRole("radio", { name: "Codex" });
+		expect(codex.querySelector("img")).toHaveAttribute("src", codexLogo);
+		// A logo only; its name is the tooltip and the accessible name.
+		expect(codex.textContent).toBe("");
+	});
+
+	it("moves along the rail with the arrow keys, choosing as it goes, then into and out of the models", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const claude = screen.getByRole("radio", { name: "Claude Code" });
+		expect(claude).toHaveAttribute("tabindex", "0");
+		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("tabindex", "-1");
+		act(() => claude.focus());
+		await user.keyboard("{ArrowRight}");
+		expect(screen.getByRole("radio", { name: "Codex" })).toHaveFocus();
+		expect(onPendingChange).toHaveBeenCalledWith({ harness: "codex" });
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toHaveFocus();
+		await user.keyboard("{ArrowUp}");
+		expect(claude).toHaveFocus();
+		await user.keyboard("{ArrowUp}");
+		expect(screen.getByPlaceholderText("Search agents and models")).toHaveFocus();
+		await user.keyboard("{ArrowDown}");
+		expect(claude).toHaveFocus();
+		await user.keyboard("{Tab}");
+		expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toHaveFocus();
 	});
 
 	it("shows the pending agent's logo on the chat picker", () => {
@@ -302,24 +412,67 @@ describe("AgentModelPicker", () => {
 		expect(trigger.querySelector("img")).not.toHaveAttribute("src", claudeCodeLogo);
 	});
 
-	it("shows each agent's logo on chat search rows", async () => {
+	it("groups search matches under each agent's logo and name, the chosen agent first", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "o");
+		await screen.findByRole("menuitemradio", { name: /^GPT X.*Codex/ });
+		const row = screen.getByRole("menuitemradio", { name: /^Opus.*Claude Code/ });
+		expect(row.querySelector("img")).not.toBeInTheDocument();
+		const headings = screen.getAllByText(/^(Claude Code|Codex)$/);
+		expect(headings.map((heading) => heading.textContent)).toEqual(["Claude Code", "Codex"]);
+		expect(headings[1].querySelector("img")).toHaveAttribute("src", codexLogo);
+		// Typing never changes the agent.
+		expect(onPendingChange).not.toHaveBeenCalled();
+	});
+
+	it("hides the agent rail while searching, and brings it back once the search is cleared", async () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
-		const row = await screen.findByRole("menuitemradio", { name: /GPT X.*Codex/ });
-		expect(row.querySelector("img")).toHaveAttribute("src", codexLogo);
+		const search = screen.getByPlaceholderText("Search agents and models");
+		await user.type(search, "gpt");
+		expect(screen.queryByRole("radiogroup", { name: "Agents" })).not.toBeInTheDocument();
+		await user.clear(search);
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
 	});
 
-	it("leaves out a chat agent whose chat adapter is missing", async () => {
+	it("hides a chat agent whose chat adapter is missing", async () => {
 		unavailableGet.mockResolvedValue({ data: { agents: [{ agent: "pi", reason: "pi-acp is not installed" }] }, error: undefined });
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
-		expect(await screen.findByRole("menuitemradio", { name: "Codex" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitemradio", { name: "Pi" })).not.toBeInTheDocument();
 		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", expect.anything());
+		await vi.waitFor(() => expect(screen.queryByRole("radio", { name: /^Pi/ })).not.toBeInTheDocument());
+	});
+
+	it("hides agents that are not installed or signed in", async () => {
+		readiness.agents = [
+			agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
+			agentReadiness("cursor", "Cursor", { installation: "not_installed" }),
+		] satisfies AgentReadinessSnapshot[];
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const rail = within(screen.getByRole("radiogroup", { name: "Agents" }));
+		// Not there at all, under any name, rather than there without a reason.
+		expect(rail.queryByRole("radio", { name: /^Codex/ })).not.toBeInTheDocument();
+		expect(rail.queryByRole("radio", { name: /^Cursor/ })).not.toBeInTheDocument();
+		expect(rail.getAllByRole("radio")[0]).toHaveAccessibleName("Claude Code");
+		// Usable agents stay: only the unusable ones are left out.
+		expect(rail.getByRole("radio", { name: "OpenCode" })).not.toHaveAttribute("aria-disabled");
+	});
+
+	it("keeps a pending agent that stops being usable on the rail, dimmed, with none of its models pickable", async () => {
+		readiness.agents = [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] satisfies AgentReadinessSnapshot[];
+		const user = userEvent.setup();
+		open({ harness: "codex" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const codex = screen.getByRole("radio", { name: "Codex · Not signed in" });
+		expect(codex).toHaveAttribute("aria-checked", "true");
+		expect(codex).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByRole("menuitemradio", { name: /^GPT X/ })).toHaveAttribute("data-disabled");
 	});
 
 	it("searches every agent's models and picks one with its agent", async () => {
@@ -331,6 +484,16 @@ describe("AgentModelPicker", () => {
 		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-x" }));
 	});
 
+	it("picks the running agent's searched model without a switch", async () => {
+		const user = userEvent.setup();
+		const { current, onPendingChange } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "sonn");
+		await user.click(await screen.findByRole("menuitemradio", { name: /^Sonnet/ }));
+		expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
+		expect(onPendingChange).not.toHaveBeenCalled();
+	});
+
 	it("lists Cloud's models for the account for a Cloud task, not this computer's", async () => {
 		cloudModels.mockResolvedValue({ source: "worker", cliVersion: "0.165.0", models: [{ id: "gpt-cloud", displayName: "GPT Cloud", default: true }] });
 		const onPendingChange = vi.fn();
@@ -339,24 +502,26 @@ describe("AgentModelPicker", () => {
 				<AgentModelPicker
 					currentHarness="claude-code"
 					current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], onPickEffort: vi.fn() }}
-					agentSwitch={{ projectId: "", cloudOrgId: "org-1", onPendingChange }}
+					agentSwitch={{ projectId: "", cloudOrgId: "org-1", pending: { harness: "codex" }, onPendingChange }}
 				/>
 			</QueryClientProvider>,
 		);
 		const user = userEvent.setup();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
-		await user.click(await screen.findByRole("menuitemradio", { name: /GPT Cloud.*Codex/ }));
+		const row = await screen.findByRole("menuitemradio", { name: /GPT Cloud/ });
 		expect(screen.queryByRole("menuitemradio", { name: /GPT X/ })).not.toBeInTheDocument();
 		expect(cloudModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
+		await user.click(row);
 		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-cloud" }));
 	});
 
-	it("shows the pending agent's own model and effort rows", async () => {
+	it("shows the pending agent's own models and effort", async () => {
 		const user = userEvent.setup();
 		open({ harness: "codex" });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(await screen.findByRole("menuitem", { name: /Model.*GPT X/ })).toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
+		expect(await screen.findByRole("menuitemradio", { name: /^GPT X/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: /^Opus/ })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
 	});
 
@@ -375,25 +540,69 @@ describe("AgentModelPicker", () => {
 		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "cursor", model: "claude-opus-4-8-thinking-high" }));
 	});
 
-	it("offers only the agent row for a terminal's running agent", async () => {
+	it("keeps Home, End and the wrap among the agents, reaching the gear only past the last one", async () => {
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const radios = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio");
+		const gear = screen.getByRole("button", { name: "Manage agents…" });
+		act(() => radios[0].focus());
+		await user.keyboard("{End}");
+		expect(radios[radios.length - 1]).toHaveFocus();
+		await user.keyboard("{Home}");
+		expect(radios[0]).toHaveFocus();
+		await user.keyboard("{ArrowLeft}");
+		expect(radios[radios.length - 1]).toHaveFocus();
+		await user.keyboard("{ArrowRight}");
+		expect(gear).toHaveFocus();
+		await user.keyboard("{ArrowRight}");
+		expect(radios[0]).toHaveFocus();
+	});
+
+	it("says why switching is refused while the agent is working", async () => {
+		const user = userEvent.setup();
+		const onPendingChange = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<AgentModelPicker
+					currentHarness="claude-code"
+					current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], onPickEffort: vi.fn() }}
+					agentSwitch={{ projectId: "p", disabled: true, onPendingChange }}
+				/>
+			</QueryClientProvider>,
+		);
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const codex = screen.getByRole("radio", { name: "Codex · The agent is working. Switch when it is idle." });
+		expect(codex).toHaveAttribute("aria-disabled", "true");
+		await user.click(codex);
+		expect(onPendingChange).not.toHaveBeenCalled();
+	});
+
+	it("moves Tab from a terminal's rail to the search when nothing is listed below it", async () => {
 		const user = userEvent.setup();
 		open(undefined, true);
 		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
-		expect(screen.getByRole("menuitem", { name: /Agent/ })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /Model/ })).not.toBeInTheDocument();
-		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
-		expect(await screen.findByRole("menuitemradio", { name: "Codex" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitemradio", { name: "Claude Code" })).not.toBeInTheDocument();
+		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
+		await user.keyboard("{Tab}");
+		expect(screen.getByPlaceholderText("Search agents and models")).toHaveFocus();
 	});
 
-	it("greys out DeepSeek for a terminal and says why on hover", async () => {
+	it("marks a terminal's running agent on the rail and lists no models until another is picked", async () => {
+		const user = userEvent.setup();
+		open(undefined, true);
+		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
+		expect(screen.getByRole("radio", { name: "Codex" })).toBeInTheDocument();
+		expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
+		expect(screen.getByText("Switch to another agent")).toBeInTheDocument();
+	});
+
+	it("greys out DeepSeek for a terminal and says why", async () => {
 		const user = userEvent.setup();
 		const { onPendingChange } = open(undefined, true);
 		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
-		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
-		const deepseek = await screen.findByRole("menuitemradio", { name: "DeepSeek" });
+		const deepseek = screen.getByRole("radio", { name: /^DeepSeek · .*exits in a terminal/ });
 		expect(deepseek).toHaveAttribute("aria-disabled", "true");
-		expect(deepseek).toHaveAttribute("title", expect.stringContaining("exits in a terminal"));
 		fireEvent.click(deepseek);
 		expect(onPendingChange).not.toHaveBeenCalled();
 	});
@@ -402,7 +611,24 @@ describe("AgentModelPicker", () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.getByRole("menuitem", { name: /Agent.*Claude Code/ })).toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: /Model.*Opus/ })).toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
+		expect(screen.getByRole("radio", { name: "Codex" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toBeInTheDocument();
+	});
+
+	it("offers the account switch only with two or more accounts", async () => {
+		const user = userEvent.setup();
+		const one = { options: [{ id: "a", label: "me@work" }], value: "a", onPick: vi.fn() };
+		open(undefined, false, "claude-code", {}, false, false, undefined, one);
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(screen.queryByRole("menuitem", { name: /^Account/ })).not.toBeInTheDocument();
+	});
+
+	it("shows the account switch with two accounts", async () => {
+		const user = userEvent.setup();
+		const two = { options: [{ id: "a", label: "me@work" }, { id: "b", label: "me@home" }], value: "a", onPick: vi.fn() };
+		open(undefined, false, "claude-code", {}, false, false, undefined, two);
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(screen.getByRole("menuitem", { name: /^Account.*me@work/ })).toBeInTheDocument();
 	});
 });

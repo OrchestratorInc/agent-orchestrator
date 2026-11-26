@@ -300,6 +300,23 @@ func summarizePR(pr domain.PullRequest, checks []domain.PullRequestCheck, review
 		ObservedAt:       pr.ObservedAt,
 		CIObservedAt:     pr.CIObservedAt,
 		ReviewObservedAt: pr.ReviewObservedAt,
+
+		MergeQueueRequired: pr.MergeQueueRequired,
+		MergeQueue:         summarizeMergeQueue(pr),
+	}
+}
+
+// summarizeMergeQueue is the PR's queue entry while it is open; a merged or
+// closed PR has left the queue whatever was last stored.
+func summarizeMergeQueue(pr domain.PullRequest) *contract.PullRequestMergeQueueEntry {
+	if pr.MergeQueue == nil || pr.Merged || pr.Closed {
+		return nil
+	}
+	return &contract.PullRequestMergeQueueEntry{
+		State:                   string(pr.MergeQueue.State),
+		Position:                pr.MergeQueue.Position,
+		EstimatedSecondsToMerge: pr.MergeQueue.EstimatedSecondsToMerge,
+		EnqueuedAt:              pr.MergeQueue.EnqueuedAt,
 	}
 }
 
@@ -363,22 +380,14 @@ func checkStatusRank(status domain.PRCheckStatus) int {
 func summarizeCI(pr domain.PullRequest, checks []domain.PullRequestCheck) PRCISummary {
 	state := ciOrUnknown(pr.CI)
 	out := PRCISummary{State: state, AutoInjectCI: pr.AutoInjectCI, Checks: summarizeChecks(pr, checks)}
-	// Failing lists what failed. Unknown lists cancelled checks, so clients can
-	// show a run cancelled with no replacement as settled rather than loading.
-	var listed domain.PRCheckStatus
-	switch state {
-	case domain.CIFailing:
-		listed = domain.PRCheckFailed
-	case domain.CIUnknown:
-		listed = domain.PRCheckCancelled
-	default:
+	if state != domain.CIFailing {
 		return out
 	}
 	if pr.Merged || pr.Closed {
 		return out
 	}
 	for _, ch := range checks {
-		if ch.Status != listed {
+		if ch.Status != domain.PRCheckFailed && ch.Status != domain.PRCheckCancelled {
 			continue
 		}
 		if pr.HeadSHA != "" && ch.CommitHash != "" && !strings.EqualFold(ch.CommitHash, pr.HeadSHA) {

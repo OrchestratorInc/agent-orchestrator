@@ -124,6 +124,7 @@ function notifyCtxChange() {
 	for (const listener of ctx.listeners) listener();
 }
 
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 	useParams: () => {
@@ -1027,18 +1028,34 @@ describe("CommandPalette actions", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
 		ctx.params = { projectId: "proj-2" };
 		ctx.workspaces[1].orchestratorAgent = undefined;
+		spawnMock.mockResolvedValue("proj-2-orch-new");
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-2" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+		// The daemon fills the empty role as it starts the orchestrator.
+		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-2", "command_palette"));
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("opens local project agent settings when the daemon requires an orchestrator agent", async () => {
+		ctx.params = { projectId: "proj-2" };
+		ctx.workspaces[1].orchestratorAgent = undefined;
+		spawnMock.mockRejectedValueOnce(Object.assign(new Error("Configure an orchestrator agent"), { code: "AGENT_REQUIRED" }));
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-2", section: "agents",
+		}));
 		await waitFor(() => expect(paletteInput()).toBeNull());
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("navigates and closes when selecting a project", async () => {
@@ -1134,8 +1151,9 @@ describe("CommandPalette actions", () => {
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.change(input, { target: { value: "toggle theme" } });
 		fireEvent.keyDown(input, { key: "Enter" });
-		expect(useUiStore.getState().resolvedTheme).toBe("light");
 		expect(input).toHaveValue("toggle theme");
+		// The toggle reads the OS appearance first, so the switch lands a tick later.
+		await waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("light"));
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 

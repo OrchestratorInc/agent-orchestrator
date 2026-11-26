@@ -15,11 +15,13 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionid"
 )
 
-var component = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var generationComponent = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const maxInstructionChunks = 64
 
@@ -50,7 +52,7 @@ type witness struct {
 }
 
 func witnessPath(data, session, generation string) (string, error) {
-	if !component.MatchString(session) || !component.MatchString(generation) || !filepath.IsAbs(data) {
+	if !sessionid.Valid(session) || !generationComponent.MatchString(generation) || !filepath.IsAbs(data) {
 		return "", errors.New("invalid memcode launch witness location")
 	}
 	return filepath.Join(data, "agent-launches", "memcode", session, generation, "witness.json"), nil
@@ -74,6 +76,7 @@ func readWitness(data, session, generation string) (witness, error) {
 
 // AugmentRuntimeLaunchEnv implements the native TUI adapter contract.
 func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, data string, id domain.SessionID, generation string) {
+	providerenv.Capture(env)
 	env["AO_MEMCODE_DATA_DIR"] = data
 	env["AO_MEMCODE_GENERATION"] = generation
 	env["AO_MEMCODE_SESSION"] = string(id)
@@ -122,11 +125,19 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !component.MatchString(cfg.SessionID) {
+	if !sessionid.Valid(cfg.SessionID) {
 		return errors.New("invalid Orchestrator-managed session identity")
 	}
 	if cfg.Config.Model != "" && cfg.Env["MEMCODE_ENDPOINT_URL"] != "" {
 		return errors.New("memcode custom endpoint models must be selected in the native TUI")
+	}
+	if cfg.Config.Model == "sol" && cfg.ImportConfigDir != "" {
+		if err := pinMemcodeSol(ctx, cfg.WorkspacePath); err != nil {
+			return err
+		}
+		if cfg.Env != nil {
+			cfg.Env[importedSolPinEnv] = "1"
+		}
 	}
 	instructions := []byte(cfg.SystemPrompt)
 	if cfg.SystemPromptFile != "" {
@@ -187,7 +198,7 @@ func (*Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConf
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !component.MatchString(cfg.SessionID) || !filepath.IsAbs(cfg.DataDir) {
+	if !sessionid.Valid(cfg.SessionID) || !filepath.IsAbs(cfg.DataDir) {
 		return errors.New("invalid private memcode cleanup location")
 	}
 	path := filepath.Join(cfg.DataDir, "agent-launches", "memcode", cfg.SessionID)
@@ -247,7 +258,7 @@ func EmitInstructionChunk(out io.Writer, event string) error {
 		return errors.New("invalid memcode context chunk")
 	}
 	data, session := os.Getenv("AO_MEMCODE_DATA_DIR"), os.Getenv("AO_MEMCODE_SESSION")
-	if !component.MatchString(session) || !filepath.IsAbs(data) {
+	if !sessionid.Valid(session) || !filepath.IsAbs(data) {
 		return errors.New("invalid private memcode context location")
 	}
 	count := 0

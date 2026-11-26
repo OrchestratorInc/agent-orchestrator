@@ -190,7 +190,8 @@ Use layered controls:
    `ao.projects.*`, `ao.tasks.*`, `ao.orchestrators.*`, `ao.reviews.*`,
    `ao.harnesses.*`, `ao.requests.failed`, `ao.daemon.failed`, `ao.app.*`,
    `ao.cli.*`, `ao.routes.viewed`, `ao.usage.*`, `ao.setup.checked`,
-   `mobile.app.*`, and the rest of the table in
+   `ao.launches.timed`, `ao.surfaces.viewed`, `ao.features.first_used`,
+   `ao.ui.*`, `mobile.app.*`, and the rest of the table in
    [Product telemetry](telemetry.md#event-names)) before the release ships.
 4. Keep current-client caps in AO:
    - renderer captures are bounded per event name per minute and per day

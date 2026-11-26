@@ -1,0 +1,184 @@
+package controllers_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+)
+
+type backgroundTasksService struct {
+	fakeConversationService
+	reading chatsvc.BackgroundTaskSnapshot
+	err     error
+	project domain.ProjectID
+	stopped []string
+	stopErr error
+	output  ports.ChatBackgroundTaskOutput
+	outErr  error
+	read    []string
+}
+
+func (s *backgroundTasksService) BackgroundTaskOutput(_ context.Context, _ domain.SessionID, task string) (ports.ChatBackgroundTaskOutput, error) {
+	s.read = append(s.read, task)
+	return s.output, s.outErr
+}
+
+func (s *backgroundTasksService) StopBackgroundTask(_ context.Context, _ domain.SessionID, task string) error {
+	s.stopped = append(s.stopped, task)
+	return s.stopErr
+}
+
+func (s *backgroundTasksService) BackgroundTasks(context.Context, domain.SessionID) (chatsvc.BackgroundTaskSnapshot, error) {
+	return s.reading, s.err
+}
+func (s *backgroundTasksService) ListBackgroundTasks(_ context.Context, project domain.ProjectID) ([]chatsvc.BackgroundTaskSnapshot, error) {
+	s.project = project
+	return []chatsvc.BackgroundTaskSnapshot{s.reading}, s.err
+}
+
+func TestBackgroundTasksRoutesPreserveAvailabilityAndErrors(t *testing.T) {
+	svc := &backgroundTasksService{reading: chatsvc.BackgroundTaskSnapshot{SessionID: "s", Availability: "unavailable"}}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	request := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
+		return r
+	}
+	r := request("/sessions/s/background-tasks")
+	var reading controllers.BackgroundTasksResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &reading); err != nil || r.Code != 200 || reading.Availability != "unavailable" || reading.Tasks == nil {
+		t.Fatalf("response=%s status=%d err=%v", r.Body, r.Code, err)
+	}
+	r = request("/sessions/background-tasks?projectId=p")
+	if r.Code != 200 || svc.project != "p" {
+		t.Fatalf("batch=%d project=%q", r.Code, svc.project)
+	}
+	svc.err = ports.ErrSessionNotFound
+	r = request("/sessions/missing/background-tasks")
+	if r.Code != 404 {
+		t.Fatalf("missing session=%d %s", r.Code, r.Body)
+	}
+}
+
+func TestBackgroundTasksRouteAlwaysSendsAKnownCommand(t *testing.T) {
+	svc := &backgroundTasksService{reading: chatsvc.BackgroundTaskSnapshot{SessionID: "s", Availability: "ready", Tasks: []ports.ChatBackgroundTask{
+		{ID: "codex", Kind: "shell", Description: "npm run dev", Command: "npm run dev", State: "running"},
+		{ID: "claude", Kind: "shell", Description: "Start the dev server", State: "running"},
+	}}}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	r := httptest.NewRecorder()
+	router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/sessions/s/background-tasks", nil))
+	var reading controllers.BackgroundTasksResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &reading); err != nil || len(reading.Tasks) != 2 {
+		t.Fatalf("response=%s err=%v", r.Body, err)
+	}
+	// An unknown command stays empty, so a client cannot mistake prose for one.
+	if reading.Tasks[0].Command != "npm run dev" || reading.Tasks[1].Command != "" {
+		t.Fatalf("commands = %q, %q", reading.Tasks[0].Command, reading.Tasks[1].Command)
+	}
+}
+
+func TestStopBackgroundTaskRouteMapsOutcomes(t *testing.T) {
+	svc := &backgroundTasksService{}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	stop := func() *httptest.ResponseRecorder {
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/sessions/s/background-tasks/bash-1/stop", nil))
+		return r
+	}
+	if r := stop(); r.Code != http.StatusNoContent || len(svc.stopped) != 1 || svc.stopped[0] != "bash-1" {
+		t.Fatalf("stop=%d stopped=%v", r.Code, svc.stopped)
+	}
+	svc.stopErr = ports.ErrBackgroundTaskNotStoppable
+	if r := stop(); r.Code != http.StatusConflict {
+		t.Fatalf("not stoppable=%d %s", r.Code, r.Body)
+	}
+	svc.stopErr = ports.ErrSessionNotFound
+	if r := stop(); r.Code != http.StatusNotFound {
+		t.Fatalf("missing session=%d %s", r.Code, r.Body)
+	}
+}
+
+func TestStopBackgroundTaskRouteDecodesTaskID(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"bash-1", "bash-1"},
+		{"bash%2D1", "bash-1"},
+		{"native%2Ftask", "native/task"},
+		{"bash%252D1", "bash%2D1"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			svc := &backgroundTasksService{}
+			router := chi.NewRouter()
+			(&controllers.ConversationsController{Svc: svc}).Register(router)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/sessions/s/background-tasks/"+tc.path+"/stop", nil))
+			if response.Code != http.StatusNoContent || len(svc.stopped) != 1 || svc.stopped[0] != tc.want {
+				t.Fatalf("status=%d stopped=%q, want %q", response.Code, svc.stopped, tc.want)
+			}
+		})
+	}
+}
+
+func TestStopBackgroundTaskRouteRejectsMalformedEscape(t *testing.T) {
+	svc := &backgroundTasksService{}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	request := httptest.NewRequest(http.MethodPost, "/sessions/s/background-tasks/task/stop", nil)
+	request.URL.RawPath = "/sessions/s/background-tasks/bad%ZZ/stop"
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || len(svc.stopped) != 0 {
+		t.Fatalf("status=%d stopped=%q body=%s", response.Code, svc.stopped, response.Body)
+	}
+}
+
+func TestBackgroundTaskOutputRouteReportsUnavailableAsAnAnswer(t *testing.T) {
+	svc := &backgroundTasksService{output: ports.ChatBackgroundTaskOutput{Text: "ready on :3000", Truncated: true, Stale: true}}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	read := func(path string) (*httptest.ResponseRecorder, controllers.BackgroundTaskOutputResponse) {
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
+		var body controllers.BackgroundTaskOutputResponse
+		_ = json.Unmarshal(r.Body.Bytes(), &body)
+		return r, body
+	}
+	r, body := read("/sessions/s/background-tasks/native%2Ftask/output")
+	if r.Code != http.StatusOK || body.Availability != "ready" || body.Output != "ready on :3000" || !body.Truncated || !body.Stale ||
+		body.TaskID != "native/task" || len(svc.read) != 1 || svc.read[0] != "native/task" {
+		t.Fatalf("status=%d body=%+v read=%q", r.Code, body, svc.read)
+	}
+	svc.outErr = ports.ErrBackgroundTaskOutputUnavailable
+	if r, body = read("/sessions/s/background-tasks/bash-1/output"); r.Code != http.StatusOK || body.Availability != "unavailable" || body.Output != "" {
+		t.Fatalf("unavailable status=%d body=%+v", r.Code, body)
+	}
+	svc.outErr = ports.ErrSessionNotFound
+	if r, _ = read("/sessions/missing/background-tasks/bash-1/output"); r.Code != http.StatusNotFound {
+		t.Fatalf("missing session=%d %s", r.Code, r.Body)
+	}
+}
+
+func TestBackgroundTaskOutputRouteRejectsMalformedEscape(t *testing.T) {
+	svc := &backgroundTasksService{}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	request := httptest.NewRequest(http.MethodGet, "/sessions/s/background-tasks/task/output", nil)
+	request.URL.RawPath = "/sessions/s/background-tasks/bad%ZZ/output"
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || len(svc.read) != 0 {
+		t.Fatalf("status=%d read=%q body=%s", response.Code, svc.read, response.Body)
+	}
+}
