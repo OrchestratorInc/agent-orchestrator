@@ -2557,7 +2557,6 @@ function ChatWorkspaceContent({
 											<ComposerModeItems
 												configOptions={configOptions ?? []}
 												settings={stableSettings}
-												models={models}
 												nativePlan={can(snapshot, "plan_mode")}
 												onChange={newWorkDisabled ? undefined : onChooseSettings}
 												onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}

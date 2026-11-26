@@ -693,9 +693,9 @@ export function AgentModelPicker({
 													active={active}
 													radio
 													disabled={!source.onPickModel || !usable(shownHarness) || Boolean(model.unavailableReason)}
-													// The menu stays open, with the model's effort right under it.
+													// A pick closes the menu, as a search match does; a terminal's stays open for its Switch button.
 													onSelect={(event) => {
-														event.preventDefault();
+														stayOpen(event);
 														if (!active) pickModel(shownHarness, model.id);
 													}}
 													className="text-xs text-foreground"

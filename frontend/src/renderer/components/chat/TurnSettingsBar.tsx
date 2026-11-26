@@ -19,7 +19,7 @@
 
 import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
+import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, type AppIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -1491,11 +1491,13 @@ export function withUltracode(text: string): string {
 	return /\bultracode\b/i.test(text) ? text : `Ultracode:\n${text}`;
 }
 
-/** The agent's on/off settings as add-menu rows: plan mode, fast mode and any other switch it advertises. */
+/**
+ * The agent's on/off settings as add-menu rows: plan mode and any other switch it advertises.
+ * Fast mode is not one of them: it is set in the agent picker, under the effort.
+ */
 export function ComposerModeItems({
 	configOptions,
 	settings,
-	models,
 	nativePlan = false,
 	onChange,
 	onChangeConfigOption,
@@ -1503,8 +1505,6 @@ export function ComposerModeItems({
 }: {
 	configOptions: ChatConfigOption[];
 	settings: TurnSettings;
-	/** The provider's own model list, for settings AO sends per turn. */
-	models?: ChatModel[];
 	/** The provider takes plan mode as a per-turn setting from AO. */
 	nativePlan?: boolean;
 	onChange?: (next: TurnSettings) => void;
@@ -1527,17 +1527,10 @@ export function ComposerModeItems({
 	const togglePlan = executionMode
 		? planTarget ? () => apply(executionMode.id, { value: planTarget }) : undefined
 		: nativePlan && onChange ? () => onChange({ ...settings, planMode: settings.planMode ? undefined : true }) : undefined;
-	const model = models?.find((entry) => entry.id === settings.model) ?? models?.find((entry) => entry.default);
 	const rows = [
 		...(togglePlan ? [{ icon: ListTodo, title: "Plan mode", on: planOn, toggle: togglePlan }] : []),
-		...(model?.supportsFast && onChange ? [{
-			icon: Zap,
-			title: "Fast mode",
-			on: Boolean(settings.fastMode),
-			toggle: () => onChange({ ...settings, fastMode: settings.fastMode ? undefined : true }),
-		}] : []),
-		...(onChangeConfigOption ? grouped.toggles : []).map((option) => ({
-			icon: isFastOption(option) ? Zap : SlidersHorizontal,
+		...(onChangeConfigOption ? grouped.toggles.filter((option) => !isFastOption(option)) : []).map((option) => ({
+			icon: SlidersHorizontal,
 			title: option.name,
 			on: optionIsEnabled(option),
 			toggle: () => setConfigToggle(option, !optionIsEnabled(option), apply),
