@@ -307,7 +307,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 			label: "Approvals",
 			value: approvalLabel(approval, snapshot.harness),
 			kind: "select",
-			choices: approvalOrder(snapshot.harness).map((mode) => ({
+			choices: approvalOrder(snapshot.harness, approval).map((mode) => ({
 				value: mode,
 				label: approvalLabel(mode, snapshot.harness),
 				description: approvalCopy(snapshot.harness)[mode].description,

@@ -55,6 +55,15 @@ describe("chat permissions", () => {
 		expect(permissions.choices[0]).toMatchObject({ label: "Full access", look: "bypass-permissions", selected: true });
 	});
 
+	// Antigravity is not offered bypass-permissions, yet an older chat can be
+	// saved with it; the button must still show it, in the warning look.
+	it("keeps an Antigravity chat's saved bypass mode selected, with its warning look", () => {
+		render({ snapshot: snapshot({ harness: "agy", settings: { model: "opus", approvalMode: "bypass-permissions" } }) });
+		expect(permissions.choices.filter((choice) => choice.selected)).toEqual([
+			expect.objectContaining({ value: "bypass-permissions", label: "Auto-approve", look: "bypass-permissions" }),
+		]);
+	});
+
 	it("saves a new mode and leaves the one in force alone", () => {
 		const { onSettings } = render();
 		act(() => permissions.choose("auto"));
