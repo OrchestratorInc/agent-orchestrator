@@ -89,7 +89,12 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 		turned.current = false;
 		setAt({ agent: chosenAgent, model: chosenModel ?? "" });
 	}, [chosenAgent, chosenModel, visible]);
+	// A wheel still coasting as the wheels close settles after they are hidden;
+	// that is no choice, and kept would be chosen on the next close.
+	const shown = useRef(visible);
+	shown.current = visible;
 	const move = (next: WheelPosition) => {
+		if (!shown.current) return;
 		turned.current = true;
 		setAt(next);
 		onMove(next);

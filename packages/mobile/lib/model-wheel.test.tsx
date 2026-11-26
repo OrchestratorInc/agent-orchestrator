@@ -110,6 +110,17 @@ describe("model wheel", () => {
 		expect(modelsWheel().props.index).toBe(0);
 	});
 
+	// A wheel still coasting as the wheels close settles after they are hidden.
+	it("drops a settle that lands after the wheels close", () => {
+		const { slider, choose, settle, modelsWheel } = render();
+		act(() => slider.setOpen(false));
+		settle("model-wheel-models", 1);
+		expect(modelsWheel().props.index).toBe(0);
+		act(() => slider.setOpen(true));
+		act(() => slider.setOpen(false));
+		expect(choose).not.toHaveBeenCalled();
+	});
+
 	// With a switch to Codex picked, rolling back to Claude returns to the
 	// model Claude runs, not Claude's first listed one.
 	it("returns the running agent to its own model while a switch is picked", () => {
