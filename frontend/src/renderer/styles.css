@@ -7410,6 +7410,18 @@ html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--floating-topbar >
 	border-color: color-mix(in srgb, var(--color-border-strong) 15%, transparent);
 }
 
+/* In dark the strong hairline at 30% all but vanishes against the frame, so
+ * the edge is a slight text tint instead, a step lighter than the frame it
+ * meets: 3%, 2% with the sidebar closed. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .center-panel-surface {
+	--center-panel-edge: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface,
+html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: color-mix(in srgb, var(--color-text-primary) 2%, transparent);
+}
+
 /* A page with no top bar (new chat) keeps the floating frame with its top at
  * the window inset. Closing the sidebar reserves the bar's band for the
  * traffic lights, so the top edge slides down to it, in step with the sidebar,
@@ -7667,6 +7679,17 @@ html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot
 	box-shadow: none;
 }
 
+/* In dark, a dropdown trigger brightens under the pointer and a step more
+ * while pressed or open, like every other hover on a dark surface; darkening
+ * read as the control sinking. Light keeps the deepening face. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):hover:not(:disabled, [aria-disabled="true"]) {
+	--button-face: color-mix(in oklab, var(--button-color), #fff 6%);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):is(:active, [aria-pressed="true"], [data-state="open"], [data-active="true"]):not(:disabled, [aria-disabled="true"]) {
+	--button-face: color-mix(in oklab, var(--button-color), #fff 10%);
+}
+
 /*!
  * The classic button rules below are adapted from Radix Themes, with values
  * from Radix Colors.
@@ -7709,6 +7732,18 @@ html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot
 html[data-new-desktop-ui] .button-raised:not(.button-classic) {
 	border-color: color-mix(in oklch, var(--color-text-primary) 4%, transparent);
 	box-shadow: none;
+}
+
+/* Dropdown triggers keep their quieter 2% edge: this repeats the trigger rule
+ * above so it lands after the general one, which otherwise wins on order. */
+html[data-new-desktop-ui] .button-raised:not(.button-classic):is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+	border-color: color-mix(in oklch, var(--color-text-primary) 2%, transparent);
+}
+
+/* In dark the trigger's face is itself a light tint, and any edge on top of it
+ * adds up into a ring, so the face alone draws the shape. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:not(.button-classic):is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+	border-color: transparent;
 }
 
 html[data-new-desktop-ui] .button-classic {
@@ -7827,11 +7862,23 @@ html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"]):
 	content: none;
 }
 
+/* The composer: an 18px corner (20px with the flag off) and 10px of padding
+ * (12px). Its controls take its radius less that padding (18 - 10 = 8px), so
+ * their corners run concentric with its own. */
+html[data-new-desktop-ui] {
+	--radius-chat-composer: 18px;
+}
+
+html[data-new-desktop-ui] .cursor-chat-composer {
+	--composer-inset: 10px;
+	padding: var(--composer-inset);
+}
+
 /* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
  * no layout space and follows the corners). Light keeps its own ring and
  * shadow. */
 html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 6%, transparent);
 	transition: none;
 }
 
@@ -7842,7 +7889,7 @@ html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
  * start where the composer's corners end; its total height is unchanged. */
 html[data-new-desktop-ui]:not([data-theme="light"]) :is([data-composer-tray], .chat-composer-tray) {
 	--composer-merge-fillet: 6px;
-	--composer-merge-edge: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+	--composer-merge-edge: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
 	--composer-merge-fill: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
@@ -7898,9 +7945,13 @@ html[data-new-desktop-ui] {
 	--radius-topbar-control: var(--radius-center-panel);
 }
 
-html[data-new-desktop-ui] .cursor-chat-composer button:is(.rounded-full, .rounded-lg),
 html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::before {
 	border-radius: var(--radius-control);
+}
+
+/* The composer's add, picker, dictate and send controls, one padding inside its corner. */
+html[data-new-desktop-ui] .cursor-chat-composer button:is(.rounded-full, .rounded-lg) {
+	border-radius: calc(var(--radius-chat-composer) - var(--composer-inset));
 }
 
 /* Sidebar row actions (project and session rows, section "+") keep their

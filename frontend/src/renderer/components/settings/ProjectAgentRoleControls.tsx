@@ -38,6 +38,7 @@ export function AgentModelField({
 	independentMode = false,
 	cloudOrgId,
 	warningClassName,
+	pinCatalogDefaults = false,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
 	variant?: "settings" | "task";
@@ -67,6 +68,11 @@ export function AgentModelField({
 	 * Cloud has no list for the agent (an older control plane, opencode).
 	 */
 	cloudOrgId?: string;
+	/**
+	 * Saves a pick of the agent's default model or effort as a pin instead of
+	 * as "follow the agent" (#8008), and offers "Use agent model" to undo it.
+	 */
+	pinCatalogDefaults?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -217,6 +223,14 @@ export function AgentModelField({
 		onModelChange(value);
 		if (!independentMode) onModeChange("");
 	};
+	// Only a local catalog marks defaults; Cloud saves every explicit pick.
+	const pinDefaults = pinCatalogDefaults && followCatalogDefaults;
+	const pinned = pinDefaults && (isConcreteModelID(model) || effort !== "");
+	const followAgentDefault = () => {
+		onModelChange("");
+		onEffortChange("");
+		if (!independentMode) onModeChange("");
+	};
 	// No wrapper: the pickers and the effort warning join the caller's row, so the
 	// warning takes its own line there instead of widening the model's column.
 	return (
@@ -238,6 +252,9 @@ export function AgentModelField({
 				disabled={catalogFetching || agentId === ""}
 				onChange={selectCatalogModel}
 				onCustom={selectCustomModel}
+				preserveDefaultSelection={pinDefaults}
+				onUseDefault={pinned ? followAgentDefault : undefined}
+				useDefaultLabel={pinDefaults ? t("settings.models.useAgentModel") : undefined}
 				triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
 				compact
 				recentScope={agentId}

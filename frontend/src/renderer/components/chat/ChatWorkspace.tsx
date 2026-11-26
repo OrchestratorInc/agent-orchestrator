@@ -7516,7 +7516,10 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 	// still makes the final failed group retryable, even when it is in an earlier one.
 	// A usage limit and a refused login are offered on their own (the limit's notice,
 	// the login band), so the daemon's word that the turn has a prompt is enough
-	// for them, even when history paging left that prompt out.
+	// for them, even when history paging left that prompt out. So is a turn an event
+	// started (a review comment, a CI failure) that failed for another reason, such
+	// as a timeout: such a turn often runs long enough to page its prompt out, and
+	// the daemon sends the event again as it was.
 	const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
 		item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
 			? [item.turnId]
@@ -7530,7 +7533,8 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 					Boolean(turn.providerTurnId) &&
 					!consumed.has(turn.id) &&
 					(humanPromptTurnIds.has(turn.id) ||
-						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt)),
+						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt) ||
+						Boolean(!turn.usageLimit && turn.hasEventPrompt)),
 			)
 			.map((turn) => [turn.id, turn]),
 	);
