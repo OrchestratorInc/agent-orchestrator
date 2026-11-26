@@ -6746,6 +6746,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		Role:       promptRoleForKind(kind),
 		Standalone: projectID == "",
 		Project:    promptProjectContext(projectID, project),
+		Docker:     dockerAvailable(),
 	}
 
 	switch kind {
