@@ -7412,14 +7412,14 @@ html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--floating-topbar >
 
 /* In dark the strong hairline at 30% all but vanishes against the frame, so
  * the edge is a slight text tint instead, a step lighter than the frame it
- * meets: 5%, 3% with the sidebar closed. */
+ * meets: 3%, 2% with the sidebar closed. */
 html[data-new-desktop-ui]:not([data-theme="light"]) .center-panel-surface {
-	--center-panel-edge: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+	--center-panel-edge: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
 html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface,
 html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
-	border-color: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+	border-color: color-mix(in srgb, var(--color-text-primary) 2%, transparent);
 }
 
 /* A page with no top bar (new chat) keeps the floating frame with its top at
