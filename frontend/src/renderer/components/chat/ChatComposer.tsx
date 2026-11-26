@@ -2482,7 +2482,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const files = Array.from(clipboard?.files ?? []);
 		const text = typeof clipboard?.getData === "function" ? clipboard.getData("text/plain") : "";
 		const taken = [...visibleRetainedAttachments, ...fileAttachments.attachments, ...pendingAttachments, ...files].map((file) => file.name);
-		const textAsFile = !asText && !holdAttachments && !historyBrowse.current && text.length >= PASTED_TEXT_ATTACHMENT_CHARS && taken.length < MAX_ATTACHMENTS;
+		const textAsFile = !asText && !holdAttachments && !historyBrowse.current && !heldSubmitRef.current && !heldDuringSubmit.current && text.length >= PASTED_TEXT_ATTACHMENT_CHARS && taken.length < MAX_ATTACHMENTS;
 		if (textAsFile) files.push(new globalThis.File([text], pastedTextFileName(text, taken), { type: "text/plain" }));
 		else if (files.length === 0) return;
 		// A copy carrying both an image and text still pastes its text, unless that

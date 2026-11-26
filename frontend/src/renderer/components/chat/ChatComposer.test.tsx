@@ -428,6 +428,23 @@ describe("send keys", () => {
 		await waitFor(() => expect(composerWireText(field)).toBe("e".repeat(5000)));
 		expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
 	});
+	it("puts a long text paste in the box while a send waits, so that send doesn't take it", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-x.txt"]);
+		const view = render(<ChatComposer busy onSend={onSend} onStageAttachments={stage} willQueue />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+
+		fireEvent.paste(field, { clipboardData: textClipboard("d".repeat(5000)) });
+		await waitFor(() => expect(composerWireText(field)).toContain("d".repeat(5000)));
+		view.rerender(<ChatComposer onSend={onSend} onStageAttachments={stage} willQueue />);
+		await act(async () => {});
+
+		expect(stage).not.toHaveBeenCalled();
+		expect(onSend).not.toHaveBeenCalled();
+	});
 	it("puts a long text paste in the box when no attachment slot is left", async () => {
 		const names = Array.from({ length: 8 }, (_, index) => `f${index}.txt`);
 		const stage = vi.fn().mockResolvedValue(names.map((name) => `.ao/attachments/${name}`));
