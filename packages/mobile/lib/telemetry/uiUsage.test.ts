@@ -221,10 +221,10 @@ describe("session opens", () => {
 		t.tracker.setRoute("board");
 		t.tracker.setRoute("session");
 		t.tracker.sessionOpened("h|a");
-		t.tracker.openedBy("notification", "a");
+		t.tracker.openedBy("notification", { sessionId: "a" });
 		t.tracker.sessionOpened("h|b");
 		t.tracker.setRoute("board");
-		t.tracker.openedBy("notification", "c");
+		t.tracker.openedBy("notification", { sessionId: "c" });
 		t.tracker.setRoute("session");
 		t.tracker.sessionOpened("h|c");
 		expect(summaryAfter(t)).toMatchObject({
@@ -235,11 +235,24 @@ describe("session opens", () => {
 		});
 	});
 
+	// Session ids repeat across machines: a push names its machine too.
+	it("credits a mark only on the machine it names", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.openedBy("notification", { sessionId: "web-1", hostId: "a" });
+		t.tracker.setRoute("session");
+		// Another machine's session with the same id does not take the mark...
+		t.tracker.sessionOpened("b|web-1");
+		// ...which is still there for the session it names.
+		t.tracker.sessionOpened("a|web-1");
+		expect(summaryAfter(t)).toMatchObject({ session_open_count: 2, session_open_from_board_count: 1, session_open_from_notification_count: 1 });
+	});
+
 	// A link to a session that takes a while to load is still the link's.
 	it("keeps a mark whose session screen came up in time until that session loads", () => {
 		const t = setup();
 		t.tracker.setRoute("board");
-		t.tracker.openedBy("deep_link", "s1");
+		t.tracker.openedBy("deep_link", { sessionId: "s1" });
 		t.tracker.setRoute("session");
 		t.advance(12_000);
 		t.tracker.sessionOpened("h|s1");
@@ -249,7 +262,7 @@ describe("session opens", () => {
 	it("drops a waiting mark when the app leaves the session screen without it", () => {
 		const t = setup();
 		t.tracker.setRoute("board");
-		t.tracker.openedBy("deep_link", "s1");
+		t.tracker.openedBy("deep_link", { sessionId: "s1" });
 		t.tracker.setRoute("session");
 		t.tracker.setRoute("board");
 		t.tracker.setRoute("session");

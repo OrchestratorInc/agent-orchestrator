@@ -35,7 +35,7 @@ describe("redirectSystemPath", () => {
 		redirectSystemPath({ path: "ao-app://callback?code=01M6", initial: true });
 		expect(openedBy).not.toHaveBeenCalled();
 		redirectSystemPath({ path: "aomobile://session/abc", initial: true });
-		expect(openedBy).toHaveBeenCalledWith("deep_link", "abc");
+		expect(openedBy).toHaveBeenCalledWith("deep_link", { sessionId: "abc" });
 	});
 
 	// expo-router passes the root URL for a plain launch from the home screen.

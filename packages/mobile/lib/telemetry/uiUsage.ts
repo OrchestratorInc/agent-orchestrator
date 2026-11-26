@@ -26,6 +26,8 @@ export const SESSION_OPEN_SOURCES = [
 ] as const;
 export type SessionOpenSource = (typeof SESSION_OPEN_SOURCES)[number];
 export type OpenedBySource = "notification" | "deep_link" | "restore";
+/** The session a mark is for; `hostId` when the route names its machine. */
+export type SessionTarget = { sessionId: string; hostId?: string };
 
 export const ERROR_PRESENTATIONS = ["toast", "screen", "sheet"] as const;
 export type ErrorPresentation = (typeof ERROR_PRESENTATIONS)[number];
@@ -108,10 +110,11 @@ export type UiUsageTracker = {
 	sessionReturned(key: string): void;
 	/**
 	 * A push, a link or the launch's restore is about to open a session, named by
-	 * `sessionId` when known: the source is then credited only to that session,
-	 * so a push for the session already on screen cannot claim the next one.
+	 * `target` when known: the source is then credited only to that session (on
+	 * that machine, when named), so a push for the session already on screen, or
+	 * for a same-id session on another machine, cannot claim the next one.
 	 */
-	openedBy(source: OpenedBySource, sessionId?: string): void;
+	openedBy(source: OpenedBySource, target?: SessionTarget): void;
 	errorShown(presentation: ErrorPresentation, kind: ErrorKind): void;
 	/** Restores what an earlier run saved; sends it first if its window is over. */
 	restore(saved: PersistedUiUsage | null): void;
@@ -183,6 +186,15 @@ function mergeWindows(earlier: UsageWindow, later: UsageWindow): UsageWindow {
 	};
 }
 
+// Whether a mark is for the session `key` ("<host>|<id>") names: the same id,
+// and the same machine when the mark names one. A mark without a target fits any.
+function targets(target: SessionTarget | undefined, key: string): boolean {
+	if (!target) return true;
+	const split = key.lastIndexOf("|");
+	if (target.sessionId !== key.slice(split + 1)) return false;
+	return target.hostId === undefined || target.hostId === key.slice(0, split);
+}
+
 // A saved window is only trusted in the shape this file writes.
 function isWindow(value: unknown): value is UsageWindow {
 	const w = value as UsageWindow | null;
@@ -208,7 +220,7 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 	let countedSession: string | null = null;
 	// `latched` once the session screen came up in time: the mark then waits for
 	// that session to load, however long it takes, until the app leaves it.
-	let pendingSource: { source: SessionOpenSource; at: number; sessionId?: string; latched?: boolean } | null = null;
+	let pendingSource: { source: SessionOpenSource; at: number; target?: SessionTarget; latched?: boolean } | null = null;
 	const pendingLive = (now: number) => !!pendingSource && (pendingSource.latched || now - pendingSource.at <= OPENED_BY_MS);
 	const lastErrorAt = new Map<string, number>();
 	let lastSaveAt = start;
@@ -333,9 +345,7 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			// Only what marked itself (a push, a link, the launch's restore) for this
 			// session, or the screen it was opened from, names the source; nothing is
 			// guessed. A mark for another session is left for that one.
-			const marked = pendingSource && pendingLive(now)
-				&& (pendingSource.sessionId === undefined || pendingSource.sessionId === key.slice(key.lastIndexOf("|") + 1))
-				? pendingSource : null;
+			const marked = pendingSource && pendingLive(now) && targets(pendingSource.target, key) ? pendingSource : null;
 			const source: SessionOpenSource = marked
 				? marked.source
 				: fromSession ? "session"
@@ -346,8 +356,8 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 		sessionReturned(key) {
 			if (enabled) countedSession = key;
 		},
-		openedBy(source, sessionId) {
-			pendingSource = { source, at: deps.now(), ...(sessionId ? { sessionId } : {}) };
+		openedBy(source, target) {
+			pendingSource = { source, at: deps.now(), ...(target ? { target } : {}) };
 		},
 		errorShown(presentation, kind) {
 			if (!enabled) return;

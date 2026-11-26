@@ -74,7 +74,7 @@ describe("RouteRestorer", () => {
 		await launch(null);
 		expect(mocks.push).toHaveBeenCalledWith("/session/web-1?hostId=a");
 		// The reopened session counts as restored, not opened from the board.
-		expect(mocks.openedBy).toHaveBeenCalledWith("restore", "web-1");
+		expect(mocks.openedBy).toHaveBeenCalledWith("restore", { sessionId: "web-1", hostId: "a" });
 	});
 
 	it("marks no restore for a screen that is not a session", async () => {
