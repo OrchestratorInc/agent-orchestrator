@@ -447,6 +447,25 @@ describe("AgentModelPicker", () => {
 		await vi.waitFor(() => expect(screen.queryByRole("radio", { name: /^Pi/ })).not.toBeInTheDocument());
 	});
 
+	it("offers Antigravity as a chat switch target, checking its chat adapter (#7640)", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", {
+			params: { query: { agents: expect.stringMatching(/(^|,)agy(,|$)/) } },
+		});
+		await user.click(within(screen.getByRole("radiogroup", { name: "Agents" })).getByRole("radio", { name: "AGY" }));
+		expect(onPendingChange).toHaveBeenCalledWith({ harness: "agy" });
+	});
+
+	it("still offers Antigravity on a terminal switch", async () => {
+		const user = userEvent.setup();
+		open(undefined, true);
+		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
+		const names = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"));
+		expect(names.filter((name) => name === "AGY")).toHaveLength(1);
+	});
+
 	it("hides agents that are not installed or signed in", async () => {
 		readiness.agents = [
 			agentReadiness("codex", "Codex", { authentication: "unauthorized" }),

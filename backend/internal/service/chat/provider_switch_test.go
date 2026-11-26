@@ -772,6 +772,66 @@ func TestProviderSwitchSavesTheModelATargetRunsWhenThePickDidNotTake(t *testing.
 	}
 }
 
+// variantModelConversation lists base models with the reasoning level in a
+// separate option, as Antigravity's chat does, and runs a level-suffixed id as
+// its base model at that level.
+type variantModelConversation struct {
+	*fakeConversation
+}
+
+func (c variantModelConversation) ListConfigOptions(context.Context) ([]ports.ChatConfigOption, error) {
+	return []ports.ChatConfigOption{{
+		ID: "model", Category: "model", Type: ports.ChatConfigOptionSelect,
+		Current: ports.ChatConfigOptionValue{Select: "gemini-3.8-flash"},
+		Choices: []ports.ChatConfigOptionChoice{{Value: "gemini-3.8-flash"}, {Value: "gemini-3.8-pro"}},
+	}, {
+		ID: "thought_level", Category: "thought_level", Type: ports.ChatConfigOptionSelect,
+		Current: ports.ChatConfigOptionValue{Select: "low"},
+		Choices: []ports.ChatConfigOptionChoice{{Value: "low"}, {Value: "high"}},
+	}}, nil
+}
+
+func (c variantModelConversation) SetConfigOption(context.Context, string, ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
+	return c.ListConfigOptions(context.Background())
+}
+
+func (c variantModelConversation) ModelVariantBase(model string) (string, bool) {
+	base, found := strings.CutSuffix(model, "-low")
+	return base, found && (base == "gemini-3.8-flash" || base == "gemini-3.8-pro")
+}
+
+func TestProviderSwitchKeepsAPickThatRunsAsABaseModelAndLevel(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	driver.target = func(conv *fakeConversation) ports.ChatConversation { return variantModelConversation{conv} }
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessAgy, Model: "gemini-3.8-flash-low",
+	}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil || conversation.Settings.Model != "gemini-3.8-flash-low" {
+		t.Fatalf("saved model = %q, %v; want the picked gemini-3.8-flash-low, so a restart keeps its level", conversation.Settings.Model, err)
+	}
+}
+
+func TestProviderSwitchSavesTheLiveModelWhenAVariantPickDidNotTake(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	driver.target = func(conv *fakeConversation) ports.ChatConversation { return variantModelConversation{conv} }
+	// The pick resolves to the offered pro base, but the chat kept running
+	// flash, so the base differs from the live model.
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessAgy, Model: "gemini-3.8-pro-low",
+	}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil || conversation.Settings.Model != "gemini-3.8-flash" {
+		t.Fatalf("saved model = %q, %v; want the gemini-3.8-flash the target runs", conversation.Settings.Model, err)
+	}
+}
+
 func TestFailedSwitchRestoresAnUnansweredTargetThatStartsFresh(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()

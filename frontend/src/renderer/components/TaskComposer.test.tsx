@@ -4356,6 +4356,17 @@ describe("useTaskLaunch agent choices", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
 			.toEqual(["claude-code", "codex: Not installed", "goose: Not signed in"]));
 	});
+
+	it("passes a not-installed Antigravity to the picker with its setup reason instead of dropping it (#7640)", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("agy", "Antigravity", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["agy: Not installed", "claude-code"]));
+	});
 });
 
 describe("useTaskLaunch Cloud start on send", () => {
