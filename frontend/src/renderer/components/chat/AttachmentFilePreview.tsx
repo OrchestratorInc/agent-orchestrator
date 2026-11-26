@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
@@ -77,7 +78,7 @@ async function saveFile(src: string, name: string) {
 	let url = src;
 	if (!local) {
 		const response = await fetch(rawTextUrl(src));
-		if (!response.ok) throw new Error(`Save failed: ${response.status}`);
+		if (!response.ok) throw new AoError("ATTACHMENT_TEXT_SAVE_FAILED", `Save failed: ${response.status}`);
 		url = URL.createObjectURL(await response.blob());
 	}
 	const link = document.createElement("a");
@@ -105,7 +106,7 @@ function TextViewer({ src, name, start, onOpenChange }: {
 			headers: src.startsWith("blob:") ? undefined : { Range: `bytes=0-${TEXT_VIEWER_BYTES}` },
 		})
 			.then((response) => {
-				if (!response.ok) throw new Error(`Read failed: ${response.status}`);
+				if (!response.ok) throw new AoError("ATTACHMENT_TEXT_READ_FAILED", `Read failed: ${response.status}`);
 				return readTextUpTo(response, TEXT_VIEWER_BYTES);
 			})
 			.then(setFull)
