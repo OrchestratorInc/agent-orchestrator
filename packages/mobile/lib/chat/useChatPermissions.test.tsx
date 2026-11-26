@@ -60,8 +60,10 @@ describe("chat permissions", () => {
 	it("keeps an Antigravity chat's saved bypass mode selected, with its warning look", () => {
 		render({ snapshot: snapshot({ harness: "agy", settings: { model: "opus", approvalMode: "bypass-permissions" } }) });
 		expect(permissions.choices.filter((choice) => choice.selected)).toEqual([
-			expect.objectContaining({ value: "bypass-permissions", label: "Auto-approve", look: "bypass-permissions" }),
+			expect.objectContaining({ value: "bypass-permissions", label: "Bypass permissions", look: "bypass-permissions" }),
 		]);
+		// Not a second "Auto-approve" beside `auto`.
+		expect(permissions.choices.filter((choice) => choice.label === "Auto-approve").map((choice) => choice.value)).toEqual(["auto"]);
 	});
 
 	it("saves a new mode and leaves the one in force alone", () => {
