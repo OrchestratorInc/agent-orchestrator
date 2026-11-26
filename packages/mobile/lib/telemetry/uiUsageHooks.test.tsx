@@ -2,9 +2,16 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Runs the focus callback like a screen that has focus; a re-run on new deps too.
+const focus = vi.hoisted(() => ({ focused: true }));
+// Runs the focus callback while focused, like a screen in front; again on new deps or on refocus.
 vi.mock("expo-router", async () => {
 	const react = await import("react");
-	return { useFocusEffect: (callback: () => void) => react.useEffect(callback, [callback]) };
+	return {
+		useFocusEffect: (callback: () => void) => {
+			const focused = focus.focused;
+			react.useEffect(() => { if (focused) callback(); }, [callback, focused]);
+		},
+	};
 });
 
 import { useToast } from "../useToast";
@@ -17,8 +24,9 @@ let renderer: ReactTestRenderer | undefined;
 let tracker: { [K in keyof UiUsageTracker]: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
+	focus.focused = true;
 	tracker = {
-		setRoute: vi.fn(), setVariant: vi.fn(), setForeground: vi.fn(), sessionOpened: vi.fn(), openedBy: vi.fn(),
+		setRoute: vi.fn(), setVariant: vi.fn(), setForeground: vi.fn(), sessionOpened: vi.fn(), sessionReturned: vi.fn(), openedBy: vi.fn(),
 		errorShown: vi.fn(), restore: vi.fn(), setEnabled: vi.fn(), current: vi.fn(),
 	};
 	setUiUsageTracker(tracker as unknown as UiUsageTracker);
@@ -75,12 +83,37 @@ describe("useSessionSurface", () => {
 		act(() => renderer!.update(<Probe form="tui" />));
 		expect(tracker.setVariant).toHaveBeenLastCalledWith("session", "session_tui");
 		expect(tracker.sessionOpened.mock.calls).toEqual([["h|s1"]]);
+		expect(tracker.sessionReturned).toHaveBeenCalledWith("h|s1");
 		// The same route showing another session is a new opening.
 		act(() => renderer!.update(<Probe form="tui" id="s2" />));
 		expect(tracker.sessionOpened.mock.calls).toEqual([["h|s1"], ["h|s2"]]);
 		act(() => renderer!.unmount());
 		renderer = undefined;
 		expect(tracker.setVariant).toHaveBeenLastCalledWith("session", null);
+	});
+});
+
+describe("useSessionSurface focus", () => {
+	function Probe({ form }: { form: "chat" | null }) {
+		useSessionSurface(form, "h|s1");
+		return null;
+	}
+
+	// A session mounted under another one can finish loading out of sight.
+	it("counts a session only once it is in front, and a return is not a new opening", () => {
+		focus.focused = false;
+		act(() => { renderer = create(<Probe form={null} />); });
+		act(() => renderer!.update(<Probe form="chat" />));
+		expect(tracker.sessionOpened).not.toHaveBeenCalled();
+		focus.focused = true;
+		act(() => renderer!.update(<Probe form="chat" />));
+		expect(tracker.sessionOpened.mock.calls).toEqual([["h|s1"]]);
+		focus.focused = false;
+		act(() => renderer!.update(<Probe form="chat" />));
+		focus.focused = true;
+		act(() => renderer!.update(<Probe form="chat" />));
+		expect(tracker.sessionOpened).toHaveBeenCalledTimes(1);
+		expect(tracker.sessionReturned).toHaveBeenCalledWith("h|s1");
 	});
 });
 

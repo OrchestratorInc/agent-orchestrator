@@ -1,5 +1,5 @@
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { Surface } from "./surfaces";
 import { uiUsage } from "./uiUsageRegistry";
 
@@ -12,16 +12,27 @@ const VARIANT = { chat: "session_chat", tui: "session_tui", cloud: "session_clou
  * `form` is null while the route is still loading or showing an error. `key`
  * names the session (host and id) so another session counts as a new opening;
  * it stays on the phone.
+ *
+ * Reported only while this route is in front: a session left mounted under
+ * another one can finish loading out of sight, and is counted when it is
+ * shown. Each route instance counts its session once; coming back to it, or a
+ * chat/terminal switch, only says it is the session in front again.
  */
 export function useSessionSurface(form: keyof typeof VARIANT | null | undefined, key: string): void {
 	const variant: Surface | null = form ? VARIANT[form] : null;
+	const counted = useRef<string | null>(null);
 	useFocusEffect(useCallback(() => {
-		if (variant) uiUsage()?.setVariant("session", variant);
-	}, [variant]));
+		if (!variant) return;
+		const tracker = uiUsage();
+		tracker?.setVariant("session", variant);
+		if (counted.current === key) {
+			tracker?.sessionReturned(key);
+		} else {
+			counted.current = key;
+			tracker?.sessionOpened(key);
+		}
+	}, [variant, key]));
 	const shown = variant !== null;
-	useEffect(() => {
-		if (shown) uiUsage()?.sessionOpened(key);
-	}, [shown, key]);
 	useEffect(() => () => {
 		if (shown) uiUsage()?.setVariant("session", null);
 	}, [shown]);

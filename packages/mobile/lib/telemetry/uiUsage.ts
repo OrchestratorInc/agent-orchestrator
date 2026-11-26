@@ -104,6 +104,8 @@ export type UiUsageTracker = {
 	 * opening but going straight to another session is.
 	 */
 	sessionOpened(key: string): void;
+	/** The session screen showing `key` is in front again; not a new opening. */
+	sessionReturned(key: string): void;
 	/**
 	 * A push, a link or the launch's restore is about to open a session, named by
 	 * `sessionId` when known: the source is then credited only to that session,
@@ -204,7 +206,10 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 	let lastOutsideSession: Surface | null = null;
 	// The session counted since the app last left the session screens.
 	let countedSession: string | null = null;
-	let pendingSource: { source: SessionOpenSource; at: number; sessionId?: string } | null = null;
+	// `latched` once the session screen came up in time: the mark then waits for
+	// that session to load, however long it takes, until the app leaves it.
+	let pendingSource: { source: SessionOpenSource; at: number; sessionId?: string; latched?: boolean } | null = null;
+	const pendingLive = (now: number) => !!pendingSource && (pendingSource.latched || now - pendingSource.at <= OPENED_BY_MS);
 	const lastErrorAt = new Map<string, number>();
 	let lastSaveAt = start;
 	let enabled = true;
@@ -265,6 +270,10 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			if (!isSessionSurface(next)) {
 				lastOutsideSession = next;
 				countedSession = null;
+				// Its session screen came and went without the session opening.
+				if (pendingSource?.latched) pendingSource = null;
+			} else if (pendingSource && pendingLive(now)) {
+				pendingSource.latched = true;
 			}
 		}
 		if (now - lastSaveAt >= 60_000) save(now);
@@ -324,7 +333,7 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			// Only what marked itself (a push, a link, the launch's restore) for this
 			// session, or the screen it was opened from, names the source; nothing is
 			// guessed. A mark for another session is left for that one.
-			const marked = pendingSource && now - pendingSource.at <= OPENED_BY_MS
+			const marked = pendingSource && pendingLive(now)
 				&& (pendingSource.sessionId === undefined || pendingSource.sessionId === key.slice(key.lastIndexOf("|") + 1))
 				? pendingSource : null;
 			const source: SessionOpenSource = marked
@@ -333,6 +342,9 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 					: lastOutsideSession ? SOURCE_BY_SURFACE[lastOutsideSession] ?? "other" : "other";
 			if (marked) pendingSource = null;
 			window.sessionOpens[source] = (window.sessionOpens[source] ?? 0) + 1;
+		},
+		sessionReturned(key) {
+			if (enabled) countedSession = key;
 		},
 		openedBy(source, sessionId) {
 			pendingSource = { source, at: deps.now(), ...(sessionId ? { sessionId } : {}) };

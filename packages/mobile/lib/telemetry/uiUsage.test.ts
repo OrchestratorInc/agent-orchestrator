@@ -235,6 +235,41 @@ describe("session opens", () => {
 		});
 	});
 
+	// A link to a session that takes a while to load is still the link's.
+	it("keeps a mark whose session screen came up in time until that session loads", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.openedBy("deep_link", "s1");
+		t.tracker.setRoute("session");
+		t.advance(12_000);
+		t.tracker.sessionOpened("h|s1");
+		expect(summaryAfter(t)).toMatchObject({ session_open_from_deep_link_count: 1 });
+	});
+
+	it("drops a waiting mark when the app leaves the session screen without it", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.openedBy("deep_link", "s1");
+		t.tracker.setRoute("session");
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|s1");
+		expect(summaryAfter(t)).toMatchObject({ session_open_from_board_count: 1 });
+	});
+
+	// Back on a session after a sheet or the files page: it is the one in front again.
+	it("treats a session returned to as the current one", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|a");
+		t.tracker.setRoute("files");
+		t.tracker.setRoute("session");
+		t.tracker.sessionReturned("h|a");
+		t.tracker.sessionOpened("h|b");
+		expect(summaryAfter(t)).toMatchObject({ session_open_count: 2, session_open_from_board_count: 1, session_open_from_session_count: 1 });
+	});
+
 	it("does not credit a push that opened nothing", () => {
 		const t = setup();
 		t.tracker.setRoute("board");
