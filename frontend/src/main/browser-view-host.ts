@@ -5224,7 +5224,7 @@ export function createBrowserViewHost(
             // Probe, verify and insert run in the session's operation queue, like
             // every other agent action: nothing else can move focus between
             // the verification and the insert.
-            return queueNativeOperation(
+            return queueNativeOperation<unknown>(
               session,
               () => {
                 if (action === "vault-describe") {
