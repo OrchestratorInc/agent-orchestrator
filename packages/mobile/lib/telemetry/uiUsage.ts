@@ -104,8 +104,12 @@ export type UiUsageTracker = {
 	 * opening but going straight to another session is.
 	 */
 	sessionOpened(key: string): void;
-	/** A push, a link or the launch's restore is about to open a session. */
-	openedBy(source: OpenedBySource): void;
+	/**
+	 * A push, a link or the launch's restore is about to open a session, named by
+	 * `sessionId` when known: the source is then credited only to that session,
+	 * so a push for the session already on screen cannot claim the next one.
+	 */
+	openedBy(source: OpenedBySource, sessionId?: string): void;
 	errorShown(presentation: ErrorPresentation, kind: ErrorKind): void;
 	/** Restores what an earlier run saved; sends it first if its window is over. */
 	restore(saved: PersistedUiUsage | null): void;
@@ -200,7 +204,7 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 	let lastOutsideSession: Surface | null = null;
 	// The session counted since the app last left the session screens.
 	let countedSession: string | null = null;
-	let pendingSource: { source: SessionOpenSource; at: number } | null = null;
+	let pendingSource: { source: SessionOpenSource; at: number; sessionId?: string } | null = null;
 	const lastErrorAt = new Map<string, number>();
 	let lastSaveAt = start;
 	let enabled = true;
@@ -317,17 +321,21 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			const fromSession = countedSession !== null;
 			countedSession = key;
 			const now = deps.now();
-			// Only what marked itself (a push, a link, the launch's restore) or the
-			// screen the session was opened from names the source; nothing is guessed.
-			const source: SessionOpenSource = pendingSource && now - pendingSource.at <= OPENED_BY_MS
-				? pendingSource.source
+			// Only what marked itself (a push, a link, the launch's restore) for this
+			// session, or the screen it was opened from, names the source; nothing is
+			// guessed. A mark for another session is left for that one.
+			const marked = pendingSource && now - pendingSource.at <= OPENED_BY_MS
+				&& (pendingSource.sessionId === undefined || pendingSource.sessionId === key.slice(key.lastIndexOf("|") + 1))
+				? pendingSource : null;
+			const source: SessionOpenSource = marked
+				? marked.source
 				: fromSession ? "session"
 					: lastOutsideSession ? SOURCE_BY_SURFACE[lastOutsideSession] ?? "other" : "other";
-			pendingSource = null;
+			if (marked) pendingSource = null;
 			window.sessionOpens[source] = (window.sessionOpens[source] ?? 0) + 1;
 		},
-		openedBy(source) {
-			pendingSource = { source, at: deps.now() };
+		openedBy(source, sessionId) {
+			pendingSource = { source, at: deps.now(), ...(sessionId ? { sessionId } : {}) };
 		},
 		errorShown(presentation, kind) {
 			if (!enabled) return;

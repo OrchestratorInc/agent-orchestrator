@@ -34,7 +34,7 @@ vi.mock("react-native", () => ({ AppState: { addEventListener: (_: string, liste
 	mocks.appState.listener = listener;
 	return { remove: () => { mocks.appState.listener = null; } };
 } } }));
-vi.mock("./telemetry/uiUsageRegistry", () => ({ reportOpenedBy: mocks.openedBy }));
+vi.mock("./telemetry/uiUsageRegistry", async (importOriginal) => ({ ...(await importOriginal<object>()), reportOpenedBy: mocks.openedBy }));
 vi.mock("./launchNotification", () => ({
 	launchNotificationResponse: () => new Promise((resolve) => { mocks.launch.resolve = resolve; }),
 }));
@@ -74,7 +74,7 @@ describe("RouteRestorer", () => {
 		await launch(null);
 		expect(mocks.push).toHaveBeenCalledWith("/session/web-1?hostId=a");
 		// The reopened session counts as restored, not opened from the board.
-		expect(mocks.openedBy).toHaveBeenCalledWith("restore");
+		expect(mocks.openedBy).toHaveBeenCalledWith("restore", "web-1");
 	});
 
 	it("marks no restore for a screen that is not a session", async () => {

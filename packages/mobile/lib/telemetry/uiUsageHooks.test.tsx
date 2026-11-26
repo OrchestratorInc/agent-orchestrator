@@ -89,16 +89,26 @@ describe("reportOpenedBy", () => {
 	it("hands a source that arrived before the tracker to it when it registers", async () => {
 		const { reportOpenedBy } = await import("./uiUsageRegistry");
 		setUiUsageTracker(null);
-		reportOpenedBy("deep_link", () => 1_000);
+		reportOpenedBy("deep_link", "s9", () => 1_000);
 		setUiUsageTracker(tracker as unknown as UiUsageTracker, () => 2_000);
-		expect(tracker.openedBy).toHaveBeenCalledWith("deep_link");
+		expect(tracker.openedBy).toHaveBeenCalledWith("deep_link", "s9");
 	});
 
 	it("drops a source that waited too long", async () => {
 		const { reportOpenedBy } = await import("./uiUsageRegistry");
 		setUiUsageTracker(null);
-		reportOpenedBy("deep_link", () => 1_000);
+		reportOpenedBy("deep_link", "s9", () => 1_000);
 		setUiUsageTracker(tracker as unknown as UiUsageTracker, () => 60_000);
 		expect(tracker.openedBy).not.toHaveBeenCalled();
+	});
+});
+
+describe("sessionIdInPath", () => {
+	it("reads the session id from a route or a link, and nothing else", async () => {
+		const { sessionIdInPath } = await import("./uiUsageRegistry");
+		expect(sessionIdInPath("/session/web-1?hostId=a")).toBe("web-1");
+		expect(sessionIdInPath("aomobile://session/worker%2F7")).toBe("worker/7");
+		expect(sessionIdInPath("aomobile:///session/abc#x")).toBe("abc");
+		for (const path of ["aomobile:///", "/files/web-1", "/sessions", "aomobile://pair?code=x"]) expect(sessionIdInPath(path)).toBeUndefined();
 	});
 });

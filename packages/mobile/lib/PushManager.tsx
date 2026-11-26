@@ -139,7 +139,7 @@ export function PushManager(): null {
 			}
 			if (org && data.notificationId && (!data.orgId || data.orgId === org.id)) void client.markNotificationRead(org.id, data.notificationId).catch(() => {});
 			// Only a tap that opens a session credits the notification for it.
-			if (data.sessionId) reportOpenedBy("notification");
+			if (data.sessionId) reportOpenedBy("notification", data.sessionId);
 			router.navigate(cloudTarget);
 			return;
 		}
@@ -163,7 +163,7 @@ export function PushManager(): null {
 			markNotificationRead(source.config, data.notificationId).catch(() => {});
 		}
 		// A review opens as a page even when a sheet is up when the tap arrives.
-		if (target === "session") reportOpenedBy("notification");
+		if (target === "session") reportOpenedBy("notification", data.sessionId);
 		if (target === "review") openPage(destination as Href);
 		else router.navigate(destination);
 	}

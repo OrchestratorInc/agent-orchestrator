@@ -214,6 +214,27 @@ describe("session opens", () => {
 		expect(summaryAfter(t)).toMatchObject({ session_open_count: 2, session_open_from_board_count: 1, session_open_from_session_count: 1 });
 	});
 
+	// A push for the session already on screen opens nothing new; the next
+	// session the person opens is theirs, not the push's.
+	it("credits a mark only to the session it names", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|a");
+		t.tracker.openedBy("notification", "a");
+		t.tracker.sessionOpened("h|b");
+		t.tracker.setRoute("board");
+		t.tracker.openedBy("notification", "c");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|c");
+		expect(summaryAfter(t)).toMatchObject({
+			session_open_count: 3,
+			session_open_from_board_count: 1,
+			session_open_from_session_count: 1,
+			session_open_from_notification_count: 1,
+		});
+	});
+
 	it("does not credit a push that opened nothing", () => {
 		const t = setup();
 		t.tracker.setRoute("board");

@@ -4,7 +4,7 @@ import { useGlobalSearchParams, usePathname, useRootNavigationState, useRouter, 
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import { launchNotificationResponse } from "./launchNotification";
-import { reportOpenedBy } from "./telemetry/uiUsageRegistry";
+import { reportOpenedBy, sessionIdInPath } from "./telemetry/uiUsageRegistry";
 import { LAST_ROUTE_KEY, parseLastRoute, restorableHref, routeHref, routeToRestore, type LastRoute } from "./lastRoute";
 
 /**
@@ -76,7 +76,8 @@ export function RouteRestorer() {
 				reopen = launchedElsewhere ? null : routeToRestore(parseLastRoute(raw), Date.now());
 				if (reopen) {
 					// A session reopened here counts as restored, not opened from the board.
-					if (reopen.startsWith("/session")) reportOpenedBy("restore");
+					const sessionId = sessionIdInPath(reopen);
+					if (sessionId) reportOpenedBy("restore", sessionId);
 					router.push(reopen as Href);
 				}
 			} catch {
