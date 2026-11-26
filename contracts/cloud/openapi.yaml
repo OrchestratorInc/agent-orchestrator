@@ -1572,10 +1572,13 @@ paths:
         repository_not_accessible when AO's GitHub App cannot reach the
         project's repository, or repository_unreachable when the caller's
         GitHub token cannot reach it with push rights (a project on a
-        personal access token); and, for an enabled automation, the refusal
-        a session create would get when the organization or its plan has no
-        room (409 SANDBOX_QUOTA_EXCEEDED, 402 PLAN_REQUIRED, 409
-        WORKER_SLOTS_FULL and the other plan limits). Refused with 409
+        personal access token); and, for an enabled automation, 402
+        PLAN_REQUIRED when the organization has no active plan, or the
+        plan-limit refusal (such as 409 WORKER_SLOTS_FULL, with limit 0) or
+        409 SANDBOX_QUOTA_EXCEEDED only when that limit is zero, so no run
+        could ever start. How full the organization or plan is when it is
+        saved is not checked: each run's start checks it, and a full one
+        skips its occurrence. Refused with 409
         AUTOMATION_LIMIT_REACHED when the organization has as many as it may,
         422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project,
         and 422 validation_error for an invalid field or schedule.
@@ -1633,7 +1636,7 @@ paths:
         credential: a caller without a validated credential for the harness
         gets 422 agent_provider_required. Such a change, and turning it on,
         runs the same preflight as createAutomation (repository access and,
-        while enabled, room in the organization and its plan). Turning it off
+        while enabled, an active plan whose limits are not zero). Turning it off
         changes only enabled. The next run is computed afresh, so
         turning an automation back on never runs the occurrences it missed.
       requestBody:
@@ -7162,9 +7165,9 @@ components:
             START_FAILED, or the create-session refusal's own code (such as
             agent_provider_required when the person it runs as has no valid
             credential for the harness, forbidden when they are no longer an
-            active member of the organization, or PLAN_REQUIRED when they
-            have no plan). Clients show errorMessage for a code they do not
-            know.
+            active member of the organization, or PLAN_REQUIRED when the
+            organization has no active plan). Clients show errorMessage for a
+            code they do not know.
         errorMessage:
           type: string
           description: The reason in words, for a person to read.
@@ -7275,7 +7278,8 @@ components:
             Scheduled runs in a row that failed or timed out; a completed
             scheduled run resets it, and skipped and manual runs leave it. At 5
             the automation is turned off. A scheduled run refused with
-            agent_provider_required or forbidden turns it off at once.
+            agent_provider_required, forbidden or PLAN_REQUIRED turns it off
+            at once.
         disabledReason:
           type: string
           description: >-
@@ -7284,7 +7288,9 @@ components:
             read. Absent while enabled or turned off by a person. A scheduled
             run refused because the person it runs as has no valid credential
             for the harness (agent_provider_required) or is no longer in the
-            organization (forbidden) turns the automation off at once, and an
+            organization (forbidden), or because the organization has no
+            active plan (PLAN_REQUIRED, whether it would start a new session
+            or wake a kept one), turns the automation off at once, and an
             automation whose project was deleted is turned off when it next
             comes due.
         subscribed:
