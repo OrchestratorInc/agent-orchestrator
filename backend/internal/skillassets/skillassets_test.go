@@ -296,9 +296,32 @@ func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
 		"attach it with `ao report --artifact <path>`",
 		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` also shows in the thread.",
 		"add `--artifact` to `ao render` (or set `artifact: true` in `html_render`). Do this only when the user asks to keep the page.",
+		"A before/after for one round of feedback is a review visual, not a deliverable: render it in the thread.",
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("render guidance missing %q", want)
+		}
+	}
+}
+
+// Agents registered a new image for every feedback round, burying the real
+// deliverables, so the guide says a later round revises the existing artifact.
+func TestArtifactGuidanceTreatsIterationAsRevision(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/artifact.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"## Iterating on a deliverable",
+		"A later round on the same thread or topic is a revision, not a new deliverable",
+		"Rename it with `mv` to retitle it for the latest state",
+		"keep one HTML page per thread",
+		"register it once, and add each round to it",
+		"Review visuals nobody asked to keep go in the chat thread",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("artifact guidance missing %q", want)
 		}
 	}
 }

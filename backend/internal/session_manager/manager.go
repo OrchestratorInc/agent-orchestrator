@@ -7267,9 +7267,11 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		return ""
 	}
 	inThread, keptRender := "", ""
+	reviewVisuals := "in the system temp directory"
 	if chat {
 		inThread = "In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory.\n\n"
 		keptRender = " Neither does keeping a render with `ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns."
+		reviewVisuals = "in the thread with `html_render` or in the system temp directory"
 	}
 	return "## Session Artifacts\n\n" +
 		"Write deliverables that are not part of a pull request to `" + dir + "`, never into the git workspace, even temporarily or under `docs/` or `notes/`.\n\n" +
@@ -7277,10 +7279,13 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		"Everything produced along the way is working material and goes in the system temp directory unless the user asked for it: intermediate outputs such as frames or partial renders, drafts, downloaded inputs, caches, build output, logs, and the scripts that generate the deliverable. " +
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.\n\n" +
 		inThread +
-		"Only files you register appear as this session's artifacts. Run `ao artifact add <path>` once for each deliverable as soon as it exists, and again for a copy; edits, and renames or moves inside the directory, need no further command. " +
+		"Only files you register appear as this session's artifacts. Run `ao artifact add <path>` once per deliverable, when it first exists. Edits, overwrites, and renames or moves inside the directory need no further command and keep its version history and share link; a copy is a new file. " +
 		"Other files stay in the directory, so links between them keep working, but they are not listed. `ao report --artifact` does not register a file." + keptRender + "\n\n" +
 		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in chat or Orchestrator report notes. " +
-		"Prefer one consolidated deliverable, and revise it in place instead of adding copies. " +
+		"Prefer one consolidated deliverable.\n\n" +
+		"A later round on the same thread or topic is a revision, not a new deliverable, even when it covers a new detail. Edit or overwrite the existing artifact, and rename it with `mv` to retitle it for the latest state. " +
+		"For running before/after comparisons, keep one HTML page per thread, register it once, and add each round to it. " +
+		"Review visuals nobody asked to keep go " + reviewVisuals + ", not here.\n\n" +
 		"Saving a file here or attaching it to an Orchestrator report does not authorize external publishing. " +
 		"Only the user publishes an artifact, with Share in the Orchestrator desktop; after that, `ao session get " + string(id) + "` lists each artifact with its public link."
 }

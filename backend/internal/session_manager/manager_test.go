@@ -7181,6 +7181,11 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.",
 		"does not authorize external publishing",
 		"`ao session get mer-7` lists each artifact with its public link",
+		// A feedback round revises the artifact it already made.
+		"A later round on the same thread or topic is a revision, not a new deliverable",
+		"rename it with `mv` to retitle it for the latest state",
+		"keep one HTML page per thread, register it once, and add each round to it",
+		"Review visuals nobody asked to keep go in the system temp directory, not here.",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("system prompt missing artifact boundary %q", want)
@@ -7205,6 +7210,10 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	const keptRender = "`ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns"
 	if !strings.Contains(chatPrompt, keptRender) {
 		t.Fatalf("chat session prompt missing %q", keptRender)
+	}
+	const chatReviewVisuals = "Review visuals nobody asked to keep go in the thread with `html_render` or in the system temp directory, not here."
+	if !strings.Contains(chatPrompt, chatReviewVisuals) {
+		t.Fatalf("chat session prompt missing %q", chatReviewVisuals)
 	}
 	if strings.Contains(sp, "ao render --artifact") {
 		t.Fatalf("terminal session prompt names ao render:\n%s", sp)
