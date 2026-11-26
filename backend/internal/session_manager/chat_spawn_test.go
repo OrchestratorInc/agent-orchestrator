@@ -1480,10 +1480,31 @@ func TestUnrealSpawnRejectsImplicitBypassAboveProjectCeiling(t *testing.T) {
 			if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
 				t.Fatalf("spawn error = %v, want project permission ceiling refusal", err)
 			}
+			if tc.parentKind == "" && !strings.Contains(err.Error(), "Unreal Agent requires bypass-permissions") {
+				t.Fatalf("direct Unreal spawn error = %q, want actionable bypass guidance", err)
+			}
 			if runtime.created != 0 || len(launcher.preflighted) != 0 || len(launcher.started) != 0 {
 				t.Fatal("a refused Unreal spawn created a runtime or chat controller")
 			}
 		})
+	}
+}
+
+func TestUnrealDirectSpawnCanChooseBypassAboveProjectDefault(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, st, _ := newChatManager(launcher)
+	project := st.projects[string(chatTestProject)]
+	project.Config.Worker.AgentConfig.Permissions = domain.PermissionModeDefault
+	st.projects[string(chatTestProject)] = project
+	_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessUnreal,
+		AgentConfig: ports.AgentConfig{Permissions: ports.PermissionModeBypassPermissions},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.started) != 1 || launcher.started[0].Permissions != ports.PermissionModeBypassPermissions {
+		t.Fatalf("started controllers = %#v, want one bypass-permissions controller", launcher.started)
 	}
 }
 

@@ -1187,7 +1187,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// sets none for the role (#4898, #5954). A spawn from any session in the
 	// project may request a stricter mode, but cannot exceed the project ceiling.
 	resolvedHarness := effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
-	projectPermission := effectiveAgentConfig(resolvedHarness, cfg.Kind, project.Config).Permissions
+	// Only saved project/role permissions form a ceiling. Harness defaults such
+	// as Mastra Code's native "default" mode are applied later at launch.
+	projectPermission := project.Config.AgentConfig.Permissions
+	if rolePermission := roleOverride(cfg.Kind, project.Config).AgentConfig.Permissions; rolePermission != "" {
+		projectPermission = rolePermission
+	}
 	if cfg.ParentSessionID != "" {
 		parentPermission, isOrchestrator, sameProject, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
 		if err != nil {
@@ -1260,7 +1265,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if cfg.Harness == domain.HarnessUnreal {
 		if cfg.AgentConfig.Permissions == "" {
 			if projectPermission != "" && projectPermission != ports.PermissionModeBypassPermissions {
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: requested %q exceeds %q", ErrSpawnPermissionExceedsPolicy, ports.PermissionModeBypassPermissions, projectPermission)
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: Unreal Agent requires bypass-permissions; choose it explicitly to start this session with project permission %q", ErrSpawnPermissionExceedsPolicy, projectPermission)
 			}
 			cfg.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 		}

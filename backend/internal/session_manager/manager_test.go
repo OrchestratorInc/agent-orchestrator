@@ -2042,6 +2042,52 @@ func TestSpawn_OrchestratorPermissionCeilingUsesParentSessionWithoutChat(t *test
 	}
 }
 
+func TestSpawn_MastraDefaultDoesNotBecomeProjectPermissionCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		parentKind domain.SessionKind
+		project    domain.PermissionMode
+		role       domain.PermissionMode
+		requested  domain.PermissionMode
+		want       domain.PermissionMode
+		wantError  bool
+	}{
+		{"orchestrator explicit auto", domain.KindOrchestrator, "", "", domain.PermissionModeAuto, domain.PermissionModeAuto, false},
+		{"orchestrator inherits auto", domain.KindOrchestrator, "", "", "", domain.PermissionModeAuto, false},
+		{"worker explicit auto", domain.KindWorker, "", "", domain.PermissionModeAuto, domain.PermissionModeAuto, false},
+		{"project default blocks auto", domain.KindOrchestrator, domain.PermissionModeDefault, "", domain.PermissionModeAuto, "", true},
+		{"role default blocks auto", domain.KindOrchestrator, "", domain.PermissionModeDefault, domain.PermissionModeAuto, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.AgentConfig.Permissions = tc.project
+			project.Config.Worker.AgentConfig.Permissions = tc.role
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: tc.parentKind}
+			st.conversations["mer-0"] = domain.ConversationRecord{
+				SessionID: "mer-0", Settings: domain.ConversationSettings{ApprovalMode: domain.PermissionModeAuto},
+			}
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessMastraCode,
+				ParentSessionID: "mer-0", AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			})
+			if tc.wantError {
+				if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) || rt.created != 0 {
+					t.Fatalf("spawn error = %v, runtimes = %d, want permission ceiling refusal", err, rt.created)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.want) {
+				t.Fatalf("permission environment = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSpawn_WorkerParentCannotExceedProjectPermission(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
