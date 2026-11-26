@@ -2,6 +2,7 @@ package kilocode
 
 import (
 	"context"
+	"maps"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -14,6 +15,18 @@ func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 // NativeConversationExists requires readable, exact local history before an
 // unattended restart. An unknown ID must never become a fresh conversation.
 func (p *Plugin) NativeConversationExists(ctx context.Context, ref ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
+	if configDir := ref.Metadata[ports.MetadataKeyImportConfigDir]; configDir != "" {
+		if err := validateKiloImportedWorkspace(ports.WorkspaceHookConfig{ImportConfigDir: configDir, NativeSessionID: nativeID, Env: env}); err != nil {
+			return false, err
+		}
+		// History preflight runs before the restore argv can pin the database.
+		// Keep this export on the same stable store used by import preparation.
+		env = maps.Clone(env)
+		if env == nil {
+			env = make(map[string]string)
+		}
+		env["KILO_DB"] = "kilo.db"
+	}
 	binary, err := p.kilocodeBinary(ctx)
 	if err != nil {
 		return false, err

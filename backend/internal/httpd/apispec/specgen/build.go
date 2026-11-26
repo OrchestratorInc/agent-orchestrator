@@ -2906,6 +2906,16 @@ func agentOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/agents/{agent}/skills", id: "listAgentSkills", tag: "agents",
+			summary:    "List the skills an agent offers in a project, read from its skill folders without a session",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentSkillsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ConversationSkillsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/agents/{agent}/models/refresh", id: "refreshAgentModels", tag: "agents",
 			summary:    "Refresh and cache the model picker for one agent",
 			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentModelsRefreshQuery{}},

@@ -46,6 +46,7 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.RWMutex
 	resolvedBinary string
+	importVersion  func(context.Context) (string, error)
 }
 
 // New returns a ready-to-register Agy adapter.
@@ -150,6 +151,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if agentSessionID == "" {
+		if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+			return nil, false, ports.ErrNativeHistoryUnavailable
+		}
 		return nil, false, nil
 	}
 
@@ -159,6 +163,29 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 
 	cmd = []string{binary}
+
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]
+		if cfg.Session.Metadata[ports.MetadataKeyImportResumeNativeID] != "" && cfg.Session.Metadata[ports.MetadataKeyImportResumeNativeID] != agentSessionID {
+			return nil, false, ports.ErrNativeHistoryUnavailable
+		}
+		launch, err := filepath.EvalSymlinks(cfg.Session.WorkspacePath)
+		if err != nil {
+			return nil, false, err
+		}
+		store := CLIStorageDir
+		// A Chat-to-Terminal preflight validates the still-owning ACP copy.
+		// The manager supplies this source-mode hint only during preflight;
+		// actual terminal launches must validate the bridged CLI copy.
+		if cfg.Session.Metadata[ports.MetadataKeySessionMode] == string(domain.SessionModeChat) {
+			store = ACPStorageDir
+		}
+		ref := ports.NativeSessionRef{NativeSessionID: agentSessionID, ConfigDir: root, TranscriptPath: filepath.Join(root, store, "conversations", agentSessionID+".db")}
+		if err := validatePreparedImport(ctx, ref, launch, nil); err != nil {
+			return nil, false, err
+		}
+		cmd = append(cmd, "--gemini-dir", root)
+	}
 
 	if cfg.Session.WorkspacePath != "" {
 		cmd = append(cmd, "--add-dir", cfg.Session.WorkspacePath)

@@ -187,6 +187,19 @@ Orchestrator.inc sends structured events in a few broad categories:
   (`duration_ms`) and the names and line numbers of the four innermost code
   functions that held it (`caller`). It never includes file paths, database
   contents, or message text
+- Daemon startup time: once the daemon's API starts listening,
+  `ao.daemon.ready` sends `startup_ms`, the milliseconds from the daemon
+  process starting, split into back-to-back steps that add up to it:
+  `prepare_ms`, `lock_wait_ms` (waiting for a previous daemon to release the
+  data directory), `store_open_ms` (opening and migrating the database),
+  `lifecycle_setup_ms`, `chat_setup_ms`, `session_setup_ms`,
+  `install_recovery_ms` (agent installs left by a previous run),
+  `services_setup_ms`, `codex_recovery_ms`, `startup_reconcile_ms` (the
+  session safety check that must finish before the API opens), and
+  `listen_ms`. When the restore that starts alongside the API ends,
+  `ao.daemon.startup_reconciled` sends `reconcile_ms` split into
+  `chat_hosts_ms`, `reviewer_recovery_ms`, `sessions_ms`, and `runtime_ms`.
+  Both carry durations only
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and
   daemon events carry the operating system name (`$os`) and version
@@ -729,8 +742,30 @@ heatmap and no session replay.
   `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
   `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
   `PROVIDER_KEY_MISSING`, or `USAGE_LIMIT` when the agent's account hit its
-  usage limit). Any other code is dropped, and it is omitted when there is
-  none.
+  usage limit). Any other chat turn failure is named by matching its error text,
+  in the app, against fixed patterns: `QUOTA_EXCEEDED`, `RATE_LIMITED`,
+  `PROVIDER_OVERLOADED`, `CONTEXT_TOO_LONG`, `MODEL_UNAVAILABLE`,
+  `NETWORK_ERROR`, `TIMED_OUT`, `PROVIDER_SERVER_ERROR`, `AGENT_NOT_INSTALLED`,
+  `AGENT_EXITED`, or `CONTENT_REFUSED`. The error text itself is never sent. A
+  failed composer send is one of the app's own reasons (`ANNOTATION_LIMIT`,
+  `EXCERPT_TOO_LONG`, `MESSAGE_TOO_LONG`, `FILE_REFERENCES_UNSUPPORTED`,
+  `ATTACHMENTS_UNAVAILABLE`, `ATTACHMENT_UNREADABLE`, `COMPACT_UNAVAILABLE`,
+  `COMPACT_FAILED`, `CONTINUE_FAILED`, `QUEUE_SAVE_FAILED`, `SEND_FAILED`,
+  `SEND_REJECTED`, `UNSENT_RETRY_FAILED`) or the API code that refused the send,
+  in upper case (`AGENT_SWITCH_FAILED`, `TASK_CREATE_FAILED`,
+  `SESSION_RESTORE_FAILED`, `CHAT_FILE_REFERENCE_INVALID`,
+  `CHAT_ANNOTATION_LIMIT`, `CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED`,
+  `VALIDATION_ERROR`, `INVALID_BODY`, `CHAT_MESSAGE_EMPTY`, `INVALID_RESOURCE`,
+  `UNSUPPORTED_ATTACHMENT_TYPE`, `INVALID_ATTACHMENT_DATA`,
+  `ATTACHMENT_TOO_LARGE`, `TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`,
+  `SESSION_NOT_FOUND`, `SESSION_MODE_MISMATCH`, `CHAT_CONTROLLER_NOT_READY`,
+  `CHAT_RESUME_FAILED`, `CHAT_INTERFACE_TRANSITION`, `CHAT_OPEN_ELSEWHERE`,
+  `COMPOSER_LOCKED`, `COMPOSER_LEASE_LOST`, `CHAT_EXCERPT_INVALID`,
+  `CHAT_EXCERPT_STALE`, `CHAT_SIDE_UNAVAILABLE`, `CHAT_SIDE_UNSUPPORTED`,
+  `CHAT_SIDE_ANCHOR_UNAVAILABLE`, `CHAT_SIDE_INVALID_REQUEST`,
+  `CHAT_SIDE_NOT_READY`, `CHAT_SIDE_RECREATE_REQUIRED`, `CHAT_SIDE_CLOSED`,
+  `CHAT_SIDE_IDEMPOTENCY_CONFLICT`). Any other code is dropped, and it is
+  omitted when there is none or no pattern matches.
 - `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
   for a toast, the surface you used in the 10 seconds before it. It is omitted
   when neither is known.
@@ -891,35 +926,44 @@ milliseconds, buckets, and the closed values listed here; like every event,
 they also carry the shared context described above, such as `app_version` and
 `install_id`. They never include a
 session, project or file name, path, URL, message text, script URL, function
-name, element text, or CSS selector, and the summary does not say which session
-a measurement came from.
+name, element id, text or attribute, or CSS selector, and the summary does not
+say which session a measurement came from. The only names they carry are the
+app's own: a browser entry point type such as `BUTTON.onclick`, and the name
+of one of the app's code bundles such as `SessionView`.
 
 | Event | When it is sent | Performance properties |
 | --- | --- | --- |
-| `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
+| `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms`, and on a `first` or `cold` launch `to_app_ready_ms`, `to_window_shown_ms`, `to_server_spawn_ms`, `to_server_ready_ms`, `server_reused` |
 | `ao.usage.ui_performance` | At the end of each window, 45 to 60 minutes of elapsed time (random in that range) that includes idle and hidden time, so a window can hold much less use than that. A window cut short by quitting is kept and sent at the next launch if its end has passed, otherwise when the rest of it runs out. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
 
 Properties on `ao.launches.timed`:
 
-- `launch_kind` is `cold` (a new app process), `warm` (a window reopened while
-  the app kept running), or `update` (the first cold launch on a new
-  `app_version`).
+- `launch_kind` is `first` (a new app process that found no database, the
+  first run on this data directory), `cold` (a new app process), `warm` (a
+  window reopened while the app kept running), or `update` (the first cold
+  launch on a new `app_version`).
 - `to_visible_ms` is the time from the start of the launch to the window's
   first contentful paint. `to_usable_ms` is the time to the frame that first
   shows the sidebar with live sessions, the same frame the desktop log's
   "launch timing" line ends at. A cold launch starts when the app process
   starts; a warm one when the window is requested.
+- A `first` or `cold` launch also sends the app's steps on the way, in ms
+  from the app process starting: `to_app_ready_ms` (Electron ready),
+  `to_window_shown_ms`, `to_server_spawn_ms` (the daemon process started) and
+  `to_server_ready_ms` (the daemon's API answered). `server_reused` is true
+  when the app attached to a daemon that was already running instead of
+  starting one. A step that had not happened is left out.
 - A launch whose window was hidden after it first appeared but before it
   became usable (the user minimized it or switched away) sends `launch_kind`
   only. Hiding it after it became usable keeps the timings. The window is
   created hidden and shown once the page loads; that wait is part of the
   launch.
 - A window closed before it became usable sends the event as it closes,
-  without `to_usable_ms`.
+  without `to_usable_ms` or the app's steps.
 
 Properties on `ao.usage.ui_performance`:
 
-- Window: `measurement_schema_version` (2), `flush_reason` (`interval` or
+- Window: `measurement_schema_version` (3), `flush_reason` (`interval` or
   `startup`), `window_seconds` (elapsed time while the app was running, so a
   window kept across a quit leaves out the time the app was closed; never less
   than `active_seconds`),
@@ -947,14 +991,32 @@ Properties on `ao.usage.ui_performance`:
   40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
   fallback, not a measured duration.
 - Frozen frames: `long_frame_count` (frames that took over 50 ms),
-  `long_frame_blocking_ms` (their total blocking time), and
-  `long_frame_top_cause`, the kind of work that took longest inside them:
-  `rendering` (style, layout and paint), a script's invoker type
-  (`event-listener`, `user-callback` for timers and animation frames,
-  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`), or
-  `other`, the rest of those frames' time. The browser credits only scripts
-  that ran over 5 ms, so shorter scripts count as `other`. Version 1 summaries
-  put rendering-only frames under `other`.
+  `long_frame_blocking_ms` (their total blocking time), `long_frame_ms` (their
+  total duration), `long_frame_max_ms` (the longest one), and
+  `long_frame_no_script_count` (those the browser listed no script for). Each
+  frame's time is split by phase into causes, and each cause's total is sent
+  as `long_frame_<cause>_ms` with dashes as underscores, such as
+  `long_frame_frame_callbacks_ms`: before rendering starts, each script the
+  browser listed counts under its invoker type (`event-listener`,
+  `user-callback` for timers and animation frames, `resolve-promise`,
+  `reject-promise`, `classic-script`, `module-script`), less the style and
+  layout it forced (`forced-layout`), and the rest of that time is `unlisted`;
+  from the start of rendering to style and layout, listed scripts count the
+  same way and the rest is `frame-callbacks` (animation frame and observer
+  callbacks); style, layout and paint is `rendering`, less listed scripts that
+  ran inside it (such as ResizeObserver callbacks), which count under their
+  invoker type. The browser lists only
+  scripts over 5 ms, so `unlisted` holds shorter scripts (React splits its work
+  into slices of about 5 ms), garbage collection, parsing, other browser work,
+  and gaps between tasks. `long_frame_top_cause` names the cause with the most
+  time. `long_frame_top_invoker` is the entry point whose listed scripts took
+  longest, reduced to its interface or HTML tag and member, such as
+  `Window.requestAnimationFrame`, `MessagePort.onmessage` or `BUTTON.onclick`,
+  with no ids, attributes or URLs; script loads are not named.
+  `long_frame_top_bundle` is the app code bundle whose listed scripts took
+  longest, such as `SessionView`, and is left out for code from anywhere else.
+  Version 2 summaries put `unlisted` and `frame-callbacks` time under `other`,
+  and version 1 also put rendering there.
 - Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
   messages were not in memory, from the click to the frame that shows them.
 - Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
@@ -1287,8 +1349,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   while the daemon is still starting. HTTP 409 responses are dropped only for
   `POST /api/v1/sessions/:id/workspace/diffs`,
   `GET /api/v1/sessions/:id/conversation/config-options`,
-  `GET /api/v1/sessions/:id/conversation/models`, and
-  `GET /api/v1/sessions/:id/conversation/skills`. Codex
+  `GET /api/v1/sessions/:id/conversation/models`,
+  `GET /api/v1/sessions/:id/conversation/skills`, and
+  `GET /api/v1/agents/:id/skills`; none of these 4xx responses go to Sentry,
+  so a remote host too old to scan skills for the new chat page stays quiet. Codex
   account management being unwired, and an already-closed shell terminal, are
   not analytics events. A GitHub token rejected after refresh still reports
   `GITHUB_AUTH_INVALID` (with that `error_code`). A temporary refresh outage reports

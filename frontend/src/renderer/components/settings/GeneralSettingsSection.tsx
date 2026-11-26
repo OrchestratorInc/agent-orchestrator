@@ -554,6 +554,7 @@ export function GeneralSettingsSection({
 				<CliLinkSettings enabled={developerMode} />
 				<CliShadowSettingsRow />
 				{developerMode && <SplitPanesRow />}
+				{developerMode && <NewDesktopUiRow />}
 				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
 				{developerMode && <CommitAttributionRow />}
@@ -671,6 +672,18 @@ function CommitAttributionRow() {
 				disabled={saving || !settings}
 				onCheckedChange={update}
 			/>
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode preview, off by default: Interface v2. Off is the current UI. */
+function NewDesktopUiRow() {
+	const { t } = useTranslation();
+	const newDesktopUi = useUiStore((state) => state.newDesktopUi);
+	const setNewDesktopUi = useUiStore((state) => state.setNewDesktopUi);
+	return (
+		<SettingsRow label={t("settings.newDesktopUi")} description={t("settings.newDesktopUiHint")}>
+			<Switch aria-label={t("settings.newDesktopUi")} checked={newDesktopUi} onCheckedChange={setNewDesktopUi} />
 		</SettingsRow>
 	);
 }

@@ -112,6 +112,17 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			if env[disableWorkspaceTrustEnvVar] == "" {
 				env[disableWorkspaceTrustEnvVar] = "1"
 			}
+			root, err := agy.GeminiHome(env)
+			if err != nil {
+				return acpdriver.Launch{}, err
+			}
+			binary := target.path
+			if !target.cli {
+				binary = ""
+			}
+			if err := agy.ValidateImportedACP(ctx, root, cfg.ProviderConversationID, cfg.WorkspacePath, binary); err != nil {
+				return acpdriver.Launch{}, err
+			}
 			if target.cli {
 				return acpdriver.Launch{Command: target.path, Args: cliLaunchArgs(env, resolve.getenv), Env: env}, nil
 			}
