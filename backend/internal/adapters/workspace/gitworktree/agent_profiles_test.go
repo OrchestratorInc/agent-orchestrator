@@ -168,6 +168,8 @@ func TestIsExcludedAgentProfilePath(t *testing.T) {
 	cases := map[string]bool{
 		".github/agents/ao-reviewer.agent.md": true,
 		".github/agents/ao-.agent.md":         true,
+		".github/agents/AO-reviewer.Agent.md": true,
+		".GitHub/Agents/ao-reviewer.agent.md": true,
 		".github/agents/my-reviewer.agent.md": false,
 		".github/agents/ao-reviewer.md":       false,
 		".github/agents/nested/ao-x.agent.md": false,
@@ -216,5 +218,49 @@ func TestDestroyRefusesUnreadableAgentProfile(t *testing.T) {
 	}
 	if _, statErr := os.Stat(profile); statErr != nil {
 		t.Fatalf("unreadable agent profile was not preserved: %v", statErr)
+	}
+}
+
+// Under core.ignoreCase (the macOS and Windows default) git folds case when
+// matching the lowercase AO glob, so a mixed-case user profile is hidden
+// too: teardown must still refuse and the stash must still capture it.
+func TestUserAuthoredAgentProfileProtectedUnderIgnoreCase(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/one"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	outputGit(t, git, repo, "config", "core.ignoreCase", "true")
+	poisonCopilotExclude(t, repo)
+	profile := writeAgentProfile(t, info.Path, "AO-Reviewer.Agent.md", "# my hand-written reviewer agent\n")
+	if status := strings.TrimSpace(string(outputGit(t, git, info.Path, "status", "--porcelain"))); status != "" {
+		t.Fatalf("precondition: git status should not see the case-folded profile, got %q", status)
+	}
+
+	ref, err := ws.StashUncommitted(ctx, info)
+	if err != nil {
+		t.Fatalf("StashUncommitted: %v", err)
+	}
+	if ref == "" {
+		t.Fatal("StashUncommitted read a worktree holding a case-folded user profile as clean")
+	}
+	tree := string(outputGit(t, git, info.Path, "ls-tree", "-r", "--name-only", ref))
+	if !strings.Contains(tree, ".github/agents/AO-Reviewer.Agent.md") {
+		t.Fatalf("preserve ref does not contain the case-folded profile, tree:\n%s", tree)
+	}
+
+	err = ws.Destroy(ctx, info)
+	if !errors.Is(err, ports.ErrWorkspaceDirty) {
+		t.Fatalf("destroy error = %v, want ports.ErrWorkspaceDirty", err)
+	}
+	if _, statErr := os.Stat(profile); statErr != nil {
+		t.Fatalf("case-folded agent profile was not preserved: %v", statErr)
 	}
 }

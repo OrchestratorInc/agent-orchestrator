@@ -62,8 +62,12 @@ func (w *Workspace) unmanagedExcludedAgentProfiles(ctx context.Context, worktree
 // isExcludedAgentProfilePath reports whether a git-relative path matches
 // AO's /.github/agents/ao-*.agent.md exclude glob. Git always reports
 // slash-separated paths, so this uses package path rather than filepath,
-// whose Windows separator would never match.
+// whose Windows separator would never match. Matching ignores case because
+// git folds case for exclude rules under core.ignoreCase (the default on
+// macOS and Windows); over-matching only preserves an ignored file, which is
+// the safe direction.
 func isExcludedAgentProfilePath(entry string) bool {
+	entry = strings.ToLower(entry)
 	if entry == "" || path.Dir(entry) != ".github/agents" {
 		return false
 	}
