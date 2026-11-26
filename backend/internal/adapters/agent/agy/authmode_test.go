@@ -3,6 +3,7 @@ package agy
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -25,8 +26,11 @@ func TestAuthModeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		t.Fatalf("auth-mode permissions = %v, want owner-only", perm)
+	// Windows reports writable files as 0666; owner-only bits are Unix-only.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			t.Fatalf("auth-mode permissions = %v, want owner-only", perm)
+		}
 	}
 }
 
