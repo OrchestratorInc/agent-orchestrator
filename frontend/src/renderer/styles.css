@@ -4078,6 +4078,13 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	transition-property: background-color, border-color, color, box-shadow, opacity, gap, padding-inline;
 }
 
+/* A search field in the bar (board, artifacts, automations) stands as tall as
+ * the buttons beside it. */
+.workspace-topbar-actions [data-slot="input"] {
+	-webkit-app-region: no-drag;
+	height: var(--size-topbar-control);
+}
+
 .workspace-topbar-actions .group\/button:disabled {
 	pointer-events: auto;
 	cursor: not-allowed;
