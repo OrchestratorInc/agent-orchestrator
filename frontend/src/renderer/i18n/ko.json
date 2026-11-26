@@ -3321,6 +3321,8 @@
 	"settings.harness.endpoint.edit": "편집",
 	"settings.harness.endpoint.active": "{{host}} 사용 중",
 	"settings.harness.endpoint.notSet": "설정 안 됨",
+	"settings.harness.endpoint.unusable": "저장된 엔드포인트를 사용할 수 없음",
+	"settings.harness.endpoint.unusableSummary": "새 API 키로 수정하거나 제거할 때까지 세션이 시작되지 않습니다.",
 	"settings.harness.endpoint.summary": "기본 로그인 대신 자체 기본 URL과 API 키를 사용합니다.",
 	"settings.harness.endpoint.title": "사용자 지정 API 엔드포인트",
 	"settings.harness.endpoint.description": "자체 기본 URL과 API 키로 {{agent}}을(를) 실행합니다. Orchestrator는 기본 로그인 대신 시작하는 모든 {{agent}} 세션에 이 값을 전달합니다.",

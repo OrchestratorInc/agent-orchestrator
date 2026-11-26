@@ -17413,6 +17413,8 @@ components:
           - bearer
           - api-key
           type: string
+        error:
+          type: string
         hasApiKey:
           type: boolean
         model:

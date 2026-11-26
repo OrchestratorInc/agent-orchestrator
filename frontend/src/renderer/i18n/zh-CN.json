@@ -3391,6 +3391,8 @@
 	"settings.harness.endpoint.edit": "编辑",
 	"settings.harness.endpoint.active": "正在使用 {{host}}",
 	"settings.harness.endpoint.notSet": "未设置",
+	"settings.harness.endpoint.unusable": "无法使用已保存的端点",
+	"settings.harness.endpoint.unusableSummary": "在你使用新的 API 密钥编辑或将其删除之前，会话不会启动。",
 	"settings.harness.endpoint.summary": "使用你自己的基础 URL 和 API 密钥，而不是原生登录。",
 	"settings.harness.endpoint.title": "自定义 API 端点",
 	"settings.harness.endpoint.description": "使用你自己的基础 URL 和 API 密钥运行 {{agent}}。Orchestrator 会将它们传给它启动的每个 {{agent}} 会话，以替代原生登录。",

@@ -17,15 +17,21 @@ export function HarnessCustomEndpointGroup({ agentId, endpoint, hostId, disabled
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const refresh = useRefreshAfterEndpointChange(hostId);
+	// A saved endpoint that cannot be used stops launches, so it reads as a
+	// problem the user can fix with Edit or Remove, never as "Not set".
+	const unusable = Boolean(endpoint.error);
+	const saved = endpoint.configured || unusable;
 	return <HarnessDetailGroup title={t("settings.harness.endpoint.title")}>
 		<HarnessDetailRow
-			label={endpoint.configured
-				? <span className="inline-flex items-center gap-2"><HarnessStatusDot tone="ok" />{t("settings.harness.endpoint.active", { host: endpointHost(endpoint.baseUrl) })}</span>
-				: t("settings.harness.endpoint.notSet")}
-			description={t("settings.harness.endpoint.summary")}
+			label={unusable
+				? <span className="inline-flex items-center gap-2"><HarnessStatusDot tone="error" />{t("settings.harness.endpoint.unusable")}</span>
+				: endpoint.configured
+					? <span className="inline-flex items-center gap-2"><HarnessStatusDot tone="ok" />{t("settings.harness.endpoint.active", { host: endpointHost(endpoint.baseUrl) })}</span>
+					: t("settings.harness.endpoint.notSet")}
+			description={t(unusable ? "settings.harness.endpoint.unusableSummary" : "settings.harness.endpoint.summary")}
 		>
 			<Button type="button" size="default" variant="secondary" className="min-w-20" disabled={disabled} onClick={() => setOpen(true)}>
-				{t(endpoint.configured ? "settings.harness.endpoint.edit" : "settings.harness.endpoint.open")}
+				{t(saved ? "settings.harness.endpoint.edit" : "settings.harness.endpoint.open")}
 			</Button>
 		</HarnessDetailRow>
 		<AgentEndpointDialog

@@ -2104,9 +2104,9 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
 	// A harness on a custom endpoint sends its key, not an account's sign-in.
 	accounts.SetCustomEndpoint(func(p domain.AgentAccountProvider) bool {
-		for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
-			if provider, ok := domain.AgentAccountProviderFor(harness); ok && provider == p {
-				configured, err := harnessendpoint.ForDataDir(cfg.DataDir).Configured(string(harness))
+		for _, agentID := range harnessendpoint.AgentIDs() {
+			if provider, ok := domain.AgentAccountProviderFor(domain.AgentHarness(agentID)); ok && provider == p {
+				configured, err := harnessendpoint.ForDataDir(cfg.DataDir).Configured(agentID)
 				return err == nil && configured
 			}
 		}

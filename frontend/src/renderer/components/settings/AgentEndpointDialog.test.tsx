@@ -90,6 +90,16 @@ describe("AgentEndpointDialog", () => {
 		expect(endpointMocks.clearAgentEndpoint).toHaveBeenCalledWith("claude-code", "host-a");
 	});
 
+	it("offers Remove and asks for a new key when the saved endpoint can't be used", async () => {
+		endpointMocks.clearAgentEndpoint.mockResolvedValue({ ...unconfigured });
+		const { onChanged } = renderDialog({ ...unconfigured, error: "The saved custom endpoint can't be used." });
+		fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://gateway.example.com" } });
+		expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+		await waitFor(() => expect(onChanged).toHaveBeenCalled());
+		expect(endpointMocks.clearAgentEndpoint).toHaveBeenCalledWith("claude-code", "host-a");
+	});
+
 	it("summarizes the endpoint by host", () => {
 		expect(endpointHost("https://gateway.example.com:8443/v1")).toBe("gateway.example.com:8443");
 		expect(endpointHost("not a url")).toBe("not a url");

@@ -165,7 +165,7 @@ export function AgentEndpointDialog({
 					</div>
 
 					<div className={settingsDialogFooterClass}>
-						{endpoint.configured ? (
+						{endpoint.configured || endpoint.error ? (
 							<Button disabled={busy} onClick={() => void remove()} type="button" variant="destructive-ghost">
 								{pending === "remove" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
 								{t("settings.harness.endpoint.remove")}

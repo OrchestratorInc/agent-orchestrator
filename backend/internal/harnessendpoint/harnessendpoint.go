@@ -88,6 +88,20 @@ func Lookup(agentID string) (Spec, bool) {
 	return spec, ok
 }
 
+// AgentIDs lists every harness with a custom endpoint spec, sorted.
+func AgentIDs() []string {
+	ids := make([]string, 0, len(specs))
+	for id := range specs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// UnusableMessage is the display-safe reason a saved endpoint cannot be used.
+// Launches of the harness stop until the user replaces or removes it.
+const UnusableMessage = "The saved custom endpoint can't be used. Edit it with a new API key, or remove it."
+
 // Config is one harness's stored endpoint.
 type Config struct {
 	BaseURL   string    `json:"baseUrl"`
@@ -115,6 +129,7 @@ type Status struct {
 	HasAPIKey        bool        `json:"hasApiKey"`
 	AuthStyles       []AuthStyle `json:"authStyles"`
 	DefaultAuthStyle AuthStyle   `json:"defaultAuthStyle" enum:"bearer,api-key"`
+	Error            string      `json:"error,omitempty"`
 	SupportsModel    bool        `json:"supportsModel"`
 }
 
@@ -201,6 +216,9 @@ func (s *Store) Status(agentID string) (Status, bool, error) {
 	}
 	cfg, found, err := s.Load(agentID)
 	if err != nil {
+		// Launches stop on this config, so say so: the user can replace it
+		// with a new key or remove it.
+		status.Error = UnusableMessage
 		return status, true, err
 	}
 	if found {
@@ -209,6 +227,9 @@ func (s *Store) Status(agentID string) (Status, bool, error) {
 		status.AuthStyle = cfg.AuthStyle
 		status.Model = cfg.Model
 		status.HasAPIKey = true
+		if !secureEndpoint(cfg.BaseURL) {
+			status.Error = UnusableMessage
+		}
 	}
 	return status, true, nil
 }

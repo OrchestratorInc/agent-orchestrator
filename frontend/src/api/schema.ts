@@ -5825,6 +5825,7 @@ export interface components {
             configured: boolean;
             /** @enum {string} */
             defaultAuthStyle: "bearer" | "api-key";
+            error?: string;
             hasApiKey: boolean;
             model?: string;
             supportsModel: boolean;

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -116,5 +117,23 @@ func TestLauncherRejectsBrokenEndpointBeforeStartingOrReplacingProcess(t *testin
 	}
 	if rt.created || rt.destroyed != "" {
 		t.Fatal("an endpoint error must be returned before touching the runtime")
+	}
+}
+
+func TestProjectEnvValueMatchesNamesLikeTheSessionPath(t *testing.T) {
+	project := map[string]string{"anthropic_base_url": "https://project.example.com"}
+	if _, ok := projectEnvValue(project, "ANTHROPIC_AUTH_TOKEN"); ok {
+		t.Fatal("an unset variable must not match")
+	}
+	value, ok := projectEnvValue(project, "ANTHROPIC_BASE_URL")
+	if runtime.GOOS == "windows" {
+		if !ok || value != "https://project.example.com" {
+			t.Fatalf("windows lookup = %q, %v; want the project value", value, ok)
+		}
+	} else if ok {
+		t.Fatalf("lookup = %q; names are case-sensitive off Windows", value)
+	}
+	if value, ok := projectEnvValue(map[string]string{"ANTHROPIC_BASE_URL": "x"}, "ANTHROPIC_BASE_URL"); !ok || value != "x" {
+		t.Fatalf("exact lookup = %q, %v", value, ok)
 	}
 }

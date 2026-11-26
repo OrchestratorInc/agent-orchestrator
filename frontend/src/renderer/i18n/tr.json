@@ -2225,6 +2225,8 @@
 	"settings.harness.endpoint.edit": "Düzenle",
 	"settings.harness.endpoint.active": "{{host}} kullanılıyor",
 	"settings.harness.endpoint.notSet": "Ayarlanmadı",
+	"settings.harness.endpoint.unusable": "Kayıtlı uç nokta kullanılamıyor",
+	"settings.harness.endpoint.unusableSummary": "Yeni bir API anahtarıyla düzenleyene veya kaldırana kadar oturumlar başlamaz.",
 	"settings.harness.endpoint.summary": "Yerel oturum açma yerine kendi temel URL'nizi ve API anahtarınızı kullanın.",
 	"settings.harness.endpoint.title": "Özel API uç noktası",
 	"settings.harness.endpoint.description": "{{agent}} aracını kendi temel URL'niz ve API anahtarınızla çalıştırın. Orchestrator bunları, yerel oturum açma yerine başlattığı her {{agent}} oturumuna iletir.",

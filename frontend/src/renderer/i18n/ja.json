@@ -3321,6 +3321,8 @@
 	"settings.harness.endpoint.edit": "編集",
 	"settings.harness.endpoint.active": "{{host}} を使用中",
 	"settings.harness.endpoint.notSet": "未設定",
+	"settings.harness.endpoint.unusable": "保存済みのエンドポイントを使用できません",
+	"settings.harness.endpoint.unusableSummary": "新しい API キーで編集するか削除するまで、セッションは開始されません。",
 	"settings.harness.endpoint.summary": "ネイティブのサインインの代わりに、独自のベース URL と API キーを使用します。",
 	"settings.harness.endpoint.title": "カスタム API エンドポイント",
 	"settings.harness.endpoint.description": "独自のベース URL と API キーで {{agent}} を実行します。Orchestrator はネイティブのサインインの代わりに、起動するすべての {{agent}} セッションにこれらを渡します。",

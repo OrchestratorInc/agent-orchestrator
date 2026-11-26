@@ -687,6 +687,23 @@ func outputContainsAny(output string, patterns []string) bool {
 	return false
 }
 
+// projectEnvValue looks key up in the project's env the way the session path
+// does: environment names are case-insensitive on Windows.
+func projectEnvValue(projectEnv map[string]string, key string) (string, bool) {
+	if value, ok := projectEnv[key]; ok {
+		return value, true
+	}
+	if runtime.GOOS != "windows" {
+		return "", false
+	}
+	for name, value := range projectEnv {
+		if strings.EqualFold(name, key) {
+			return value, true
+		}
+	}
+	return "", false
+}
+
 func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base, endpointEnv map[string]string) map[string]string {
 	env := agentlaunch.MergeEnv(spec.ProjectEnv, base)
 	delete(env, sessionmanager.EnvSessionID)
@@ -713,7 +730,7 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 	// goes on last so no inherited credential rides along to it; a variable
 	// the project sets keeps the project's value.
 	for key, value := range endpointEnv {
-		if override, ok := spec.ProjectEnv[key]; ok {
+		if override, ok := projectEnvValue(spec.ProjectEnv, key); ok {
 			value = override
 		}
 		if runtime.GOOS == "windows" {
