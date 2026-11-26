@@ -1,7 +1,6 @@
 import { Host, Icon, LazyColumn, Text } from "@expo/ui/jetpack-compose";
 import { fillMaxSize, graphicsLayer } from "@expo/ui/jetpack-compose/modifiers";
 import * as Clipboard from "expo-clipboard";
-import { Stack } from "expo-router";
 import { useMemo, useState, type ComponentProps } from "react";
 import { Platform } from "react-native";
 import { GroupedRow, GroupedSection, groupedListPadding } from "./composeGroupedList.android";
@@ -16,6 +15,7 @@ import { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type Machine
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { space } from "./tokens";
 import { useGlassBarInset } from "./useHeaderOverlap";
+import { HeaderPillButton, PillHeaderRight } from "./headerPill";
 import { materialDrawable } from "./toolbarIcon.android";
 
 export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
@@ -35,10 +35,11 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 	const primary = primaryEnvironmentEndpoint(endpoints);
 	const others = endpoints.filter((endpoint) => endpoint.key !== primary?.key);
 	const busy = switching || forgetting;
+	// On a pill of its own over the clear bar, beside the title pill.
 	const headerItems = useMemo(() => (
-		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={materialDrawable("edit")} accessibilityLabel={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} />
-		</Stack.Toolbar>
+		<PillHeaderRight>
+			<HeaderPillButton icon="rename" label={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} testID="machine-edit" />
+		</PillHeaderRight>
 	), [forgetting, host.name, onEdit]);
 
 	function copyAddress(authority: string) {

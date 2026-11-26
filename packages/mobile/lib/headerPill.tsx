@@ -1,6 +1,6 @@
-import { useRouter, type NativeStackNavigationOptions } from "expo-router";
+import { useNavigation, useRouter, type NativeStackNavigationOptions } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
-import type { ReactElement, ReactNode } from "react";
+import { useLayoutEffect, type ReactElement, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
 import type { AppSymbolProps } from "./AppSymbol.types";
@@ -97,6 +97,21 @@ function PillTitle({ children }: { children: string }) {
 	);
 }
 
+/**
+ * A page's trailing action under `pillHeaderOptions`, set as the bar's
+ * `headerRight`: a native toolbar button would float bare over the frost,
+ * which thins to nearly clear by the bar's end, with rows showing through
+ * behind it. Pass a memoised `HeaderPillButton`, or nothing for no action.
+ */
+export function PillHeaderRight({ children }: { children: ReactElement | null }) {
+	const navigation = useNavigation();
+	useLayoutEffect(() => {
+		navigation.setOptions({ headerRight: children ? () => children : undefined });
+		return () => navigation.setOptions({ headerRight: undefined });
+	}, [navigation, children]);
+	return null;
+}
+
 /** A pill's height: a round button's diameter, and a capsule's. */
 export const HEADER_PILL_SIZE = 44;
 
@@ -135,10 +150,12 @@ export function HeaderPillButton({
 	onPress,
 	icon,
 	children,
+	disabled = false,
 	testID,
 }: {
 	label: string;
 	onPress(): void;
+	disabled?: boolean;
 	icon?: AppSymbolProps["name"];
 	/** Drawn in place of `icon`, for a glyph `AppSymbol` does not have. */
 	children?: ReactNode;
@@ -151,12 +168,14 @@ export function HeaderPillButton({
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={label}
+			accessibilityState={{ disabled }}
 			android_ripple={feedback.android_ripple}
 			// The pill is smaller than a touch target; the slop makes up the rest.
 			hitSlop={space.xxs}
+			disabled={disabled}
 			onPress={onPress}
 			testID={testID}
-			style={({ pressed }) => [styles.surface, styles.round, pressed && feedback.pressed]}
+			style={({ pressed }) => [styles.surface, styles.round, pressed && feedback.pressed, disabled && styles.disabled]}
 		>
 			{children ?? (icon ? <AppSymbol name={icon} size={iconSize.xl} color={t.textPrimary} /> : null)}
 		</Pressable>
@@ -176,6 +195,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 		justifyContent: "center",
 	},
 	round: { width: HEADER_PILL_SIZE },
+	disabled: { opacity: 0.4 },
 	// Hugs what it holds, from the bar's leading edge, rather than stretching
 	// over the slot the bar gives it and centring its content in the middle; the
 	// margin keeps it off the action pill when a long title fills the slot.

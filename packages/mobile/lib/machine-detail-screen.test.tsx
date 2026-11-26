@@ -29,6 +29,13 @@ const fixtures = vi.hoisted(() => ({
 }));
 
 vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0, useHeaderOverlap: () => 0 }));
+vi.mock("./headerPill", async () => {
+	const React = await import("react");
+	return {
+		PillHeaderRight: ({ children }: { children?: React.ReactNode }) => children ?? null,
+		HeaderPillButton: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("HeaderPillButton", props, children),
+	};
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -320,10 +327,10 @@ describe("a machine's page on Android", () => {
 	}
 	const click = (node: ReactTestInstance) => (modifiersOf(node).find((m) => m.$type === "clickable")?.args[0] as (() => void) | undefined);
 
-	it("edits from the top app bar and shows the status and active route", async () => {
+	it("edits from a pill over the clear bar and shows the status and active route", async () => {
 		const handlers = await render();
-		const edit = renderer!.root.findByType("StackToolbarButton" as never);
-		expect(edit.props.accessibilityLabel).toBe("Edit Studio Mac");
+		const edit = renderer!.root.findByType("HeaderPillButton" as never);
+		expect(edit.props).toMatchObject({ label: "Edit Studio Mac", icon: "rename", disabled: false });
 		act(() => edit.props.onPress());
 		expect(handlers.onEdit).toHaveBeenCalledOnce();
 		const status = byTestID("machine-status").findByType("ListItem.TrailingContent" as never).findByType("Text" as never);

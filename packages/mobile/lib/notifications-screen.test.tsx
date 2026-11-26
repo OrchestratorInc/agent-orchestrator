@@ -7,6 +7,8 @@ const fixtures = vi.hoisted(() => {
 		mac: { host: "mac.local", httpPort: "3011", muxPort: "3012", secure: false, password: "secret", hostId: "mac" },
 	};
 	return {
+		os: "ios" as "ios" | "android",
+		navigation: { setOptions: vi.fn() },
 		configs,
 		offline: new Set<string>(),
 		clearNotification: vi.fn(async () => {}),
@@ -44,7 +46,7 @@ vi.mock("react-native", async () => {
 	return {
 		ActivityIndicator: host("ActivityIndicator"),
 		Alert: { alert: fixtures.alert },
-		Platform: { OS: "ios" },
+		Platform: { get OS() { return fixtures.os; } },
 		Pressable: host("Pressable"),
 		RefreshControl: host("RefreshControl"),
 		ScrollView: host("ScrollView"),
@@ -81,6 +83,7 @@ vi.mock("expo-router", async () => {
 	return {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 		useRouter: () => fixtures.router,
+		useNavigation: () => fixtures.navigation,
 		// Runs the effect while focused and its cleanup on blur, like react-navigation.
 		useFocusEffect: (effect: () => (() => void) | void) => {
 			const focused = React.useSyncExternalStore(fixtures.focus.subscribe, () => fixtures.focus.value);
@@ -389,6 +392,24 @@ describe("NotificationsScreen", () => {
 		fixtures.getNotifications.mockClear();
 		await act(async () => { list().props.onEndReached(); });
 		expect(fixtures.getNotifications).toHaveBeenCalledWith(fixtures.configs.dev, expect.objectContaining({ cursor: "cursor-1" }));
+	});
+
+	// Android's bar is the chat's clear pill bar: a bare toolbar icon would
+	// float over a frost that thins to nearly clear by the bar's end.
+	it("puts Clear all on a pill of its own on Android", async () => {
+		fixtures.os = "android";
+		fixtures.navigation.setOptions.mockClear();
+		try {
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never))).toHaveLength(0);
+			const set = fixtures.navigation.setOptions.mock.calls.map(([options]) => options as { headerRight?: () => React.ReactElement<{ icon: string; label: string; onPress(): void }> });
+			const pill = set.filter((options) => options.headerRight).at(-1)!.headerRight!();
+			expect(pill.props).toMatchObject({ icon: "delete", label: "Clear all" });
+			act(() => pill.props.onPress());
+			expect(fixtures.alert).toHaveBeenCalledOnce();
+		} finally {
+			fixtures.os = "ios";
+		}
 	});
 
 	it("hides Clear all when there is nothing to clear", async () => {

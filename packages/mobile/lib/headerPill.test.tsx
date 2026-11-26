@@ -1,7 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const fixtures = vi.hoisted(() => ({ platform: "android" as "android" | "ios", router: { canGoBack: () => true, back: () => {}, replace: () => {} } }));
+const fixtures = vi.hoisted(() => ({ platform: "android" as "android" | "ios", router: { canGoBack: () => true, back: () => {}, replace: () => {} }, navigation: { setOptions: vi.fn() } }));
 
 vi.mock("react-native", () => ({
 	Platform: { get OS() { return fixtures.platform; } },
@@ -10,7 +10,7 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
-vi.mock("expo-router", () => ({ useRouter: () => fixtures.router }));
+vi.mock("expo-router", () => ({ useRouter: () => fixtures.router, useNavigation: () => fixtures.navigation }));
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 80 }));
 vi.mock("./frost", () => ({ Frost: "Frost", BAR_SEAM: 16, pillFrostStops: (height: number, tail: number) => [[0, height], [1, tail]] }));
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
@@ -21,7 +21,7 @@ vi.mock("./ThemeProvider", () => {
 	return { useTheme: () => theme, useThemedStyles: (make: (t: typeof theme) => object) => make(theme) };
 });
 
-import { HeaderPill, pillBackOptions, pillHeaderOptions, pillScreenLayout } from "./headerPill";
+import { HeaderPill, HeaderPillButton, PillHeaderRight, pillBackOptions, pillHeaderOptions, pillScreenLayout } from "./headerPill";
 import { usePillHeaderInset } from "./pillHeaderInset";
 
 let renderer: ReactTestRenderer | undefined;
@@ -97,5 +97,33 @@ describe("pillScreenLayout", () => {
 		const frost = renderer!.root.findByType("Frost" as never);
 		expect(frost.props).toMatchObject({ from: "top", stops: [[0, 80], [1, 16]] });
 		expect(Object.assign({}, ...[frost.props.style].flat())).toMatchObject({ position: "absolute", top: 0, height: 96 });
+	});
+});
+
+describe("PillHeaderRight", () => {
+	it("sets the page's trailing action as the bar's headerRight, and takes it back on the way out", () => {
+		fixtures.navigation.setOptions.mockClear();
+		const pill = <HeaderPillButton icon="delete" label="Clear all" onPress={() => {}} />;
+		act(() => { renderer = create(<PillHeaderRight>{pill}</PillHeaderRight>); });
+		const [[first]] = fixtures.navigation.setOptions.mock.calls as [[{ headerRight?: () => unknown }]];
+		expect(first.headerRight?.()).toBe(pill);
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		expect(fixtures.navigation.setOptions).toHaveBeenLastCalledWith({ headerRight: undefined });
+	});
+
+	it("leaves the slot empty with no action", () => {
+		fixtures.navigation.setOptions.mockClear();
+		act(() => { renderer = create(<PillHeaderRight>{null}</PillHeaderRight>); });
+		expect(fixtures.navigation.setOptions).toHaveBeenCalledWith({ headerRight: undefined });
+	});
+});
+
+describe("HeaderPillButton", () => {
+	it("dims and holds its press while disabled, and says so", () => {
+		act(() => { renderer = create(<HeaderPillButton icon="checkmark" label="Save" disabled onPress={() => {}} />); });
+		const button = renderer!.root.findByType("Pressable" as never);
+		expect(button.props.disabled).toBe(true);
+		expect(button.props.accessibilityState).toEqual({ disabled: true });
 	});
 });
