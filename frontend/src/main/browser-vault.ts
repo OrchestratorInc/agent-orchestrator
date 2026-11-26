@@ -78,6 +78,22 @@ export function normalizeVaultOrigin(input: string): string {
   return url.origin;
 }
 
+/**
+ * Whether a secret may go to this origin: HTTPS, or plain HTTP only to this
+ * computer (localhost, *.localhost, 127.0.0.0/8, [::1]) for local development.
+ */
+export function secureCredentialOrigin(origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "https:") return true;
+  const host = url.hostname;
+  return url.protocol === "http:" && (host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host));
+}
+
 /** Exact origin match: scheme, host and port. No subdomain or suffix matching. */
 export function originAllowed(itemOrigins: readonly string[], pageURL: string): boolean {
   let origin: string;

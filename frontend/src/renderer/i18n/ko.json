@@ -5609,5 +5609,11 @@
 	"settings.passwords.field.password": "비밀번호",
 	"settings.passwords.field.totp": "2FA 코드",
 	"settings.passwords.field.login": "로그인",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "저장된 비밀번호를 열 수 없습니다. 이를 보호하는 키가 없거나 변경되었습니다.",
+	"settings.passwords.reset": "저장된 비밀번호 초기화",
+	"settings.passwords.resetTitle": "저장된 비밀번호를 초기화할까요?",
+	"settings.passwords.resetDescription": "이 컴퓨터에 저장된 모든 비밀번호와 2FA 키가 삭제됩니다. 로그인 활동은 유지됩니다.",
+	"settings.passwords.resetConfirm": "초기화",
+	"settings.passwords.resetFailed": "저장된 비밀번호를 초기화하지 못했습니다."
 }

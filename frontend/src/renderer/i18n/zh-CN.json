@@ -5591,5 +5591,11 @@
 	"settings.passwords.field.password": "密码",
 	"settings.passwords.field.totp": "2FA 验证码",
 	"settings.passwords.field.login": "登录",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "无法打开已保存的密码：保护它们的密钥缺失或已更改。",
+	"settings.passwords.reset": "重置已保存的密码",
+	"settings.passwords.resetTitle": "重置已保存的密码？",
+	"settings.passwords.resetDescription": "这将删除此电脑上所有已保存的密码及其 2FA 密钥。登录记录会保留。",
+	"settings.passwords.resetConfirm": "重置",
+	"settings.passwords.resetFailed": "无法重置已保存的密码。"
 }

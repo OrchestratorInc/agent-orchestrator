@@ -5956,5 +5956,11 @@
 	"settings.passwords.field.password": "пароль",
 	"settings.passwords.field.totp": "код 2FA",
 	"settings.passwords.field.login": "вход",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "Не удаётся открыть сохранённые пароли: ключ, который их защищает, отсутствует или изменился.",
+	"settings.passwords.reset": "Сбросить сохранённые пароли",
+	"settings.passwords.resetTitle": "Сбросить сохранённые пароли?",
+	"settings.passwords.resetDescription": "Будут удалены все сохранённые пароли и их ключи 2FA на этом компьютере. Активность входа сохранится.",
+	"settings.passwords.resetConfirm": "Сбросить",
+	"settings.passwords.resetFailed": "Не удалось сбросить сохранённые пароли."
 }

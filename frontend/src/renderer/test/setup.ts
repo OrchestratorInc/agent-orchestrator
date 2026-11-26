@@ -446,6 +446,7 @@ if (typeof window !== "undefined") {
 			},
 			delete: async () => undefined,
 			audit: async () => [],
+			reset: async () => undefined,
 		},
 		browserProfiles: {
 			list: async () => ({ profiles: [], defaultProfileId: null }),

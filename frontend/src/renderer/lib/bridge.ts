@@ -397,6 +397,7 @@ export const aoBridge: AoBridge =
 			},
 			delete: async () => undefined,
 			audit: async () => [],
+			reset: async () => undefined,
 		},
 		browserProfiles: {
 			list: async () => ({ profiles: [], defaultProfileId: null }),

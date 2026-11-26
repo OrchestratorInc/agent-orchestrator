@@ -6965,7 +6965,9 @@ describe("browser view host credential fills", () => {
 			if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "top", url: `${ORIGIN}/login` } } };
 			if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
 			if (method === "Runtime.evaluate") {
-				return String(params?.expression).includes("ao-vault:probe")
+				const expression = String(params?.expression);
+				if (expression.includes("ao-vault:find")) return { result: { value: { username: 0, password: 1 } } };
+				return expression.includes("ao-vault:probe")
 					? { result: { value: { tag: "INPUT", type: "password" } } }
 					: { result: { value: true } };
 			}
@@ -7099,6 +7101,35 @@ describe("browser view host credential fills", () => {
 		);
 		const value = await host.execute("sess-1", "get", { property: "value", ref: "e2" });
 		expect(JSON.stringify(value)).not.toContain(edited);
+	});
+
+	it("runs a credential fill in the session's operation queue, so no action can move focus mid-fill", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		let release: () => void = () => undefined;
+		const fillSecret = vi.fn(() => new Promise((resolve) => (release = () => resolve({ filled: true, value: "••••" }))));
+		const filler = {
+			fillSecret,
+			keyPressBlocked: async () => undefined,
+			scrub: <T,>(_s: string, v: T) => v,
+			scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v,
+			forget: () => undefined,
+		};
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		const fill = page.host.execute("sess-1", "fill-secret", { ref: "e2", itemId: "i1", field: "password", projectId: "p", approvedOrigin: "http://localhost:4173" });
+		await vi.waitFor(() => expect(fillSecret).toHaveBeenCalled());
+		const click = page.host.execute("sess-1", "click", { ref: "e9" });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const actions = () => vi.mocked(runtime.runAction).mock.calls.map((call) => call[1]);
+		expect(actions()).not.toContain("click");
+		release();
+		await fill;
+		await click;
+		expect(actions()).toContain("click");
 	});
 
 	it("refuses fills without a daemon-stamped project", async () => {

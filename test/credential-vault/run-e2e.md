@@ -40,13 +40,15 @@ Spawn a Claude Code worker in the project with this prompt:
 > it again and submit. Stop on the Welcome page and tell me where you ended.
 
 Expected:
-- The approval prompt appears once, naming the session, `http://localhost:4173`
-  and "Demo app" / `alice@example.test`. Choose **Always allow on this site**.
+- The approval prompt names the session, `http://localhost:4173` and
+  "Demo app" / `alice@example.test`, and says plain HTTP on this computer is
+  asked every time. Allow it. The `/2fa` step asks again (loopback is never
+  remembered); on an HTTPS site, **Always allow** would cover it.
 - The agent's `login` prints `Signed in fields username, password on
-  http://localhost:4173 (••••)`, then `totp` on `/2fa`, with no second prompt.
+  http://localhost:4173 (••••)`, then `totp` on `/2fa`.
 - The page reaches `/welcome`; `site.log` shows `POST /login ok`, `POST /2fa ok`.
 - Settings › Browser › Sign-in activity lists two `Filled` rows; the approvals
-  log lists one `allow-site` then `site-allowed`.
+  log lists `allow-once` (or `allow-site`, not remembered) for each loopback prompt.
 
 Negative checks, same session:
 - `ao browser open https://example.com && ao browser login http://localhost:4173`

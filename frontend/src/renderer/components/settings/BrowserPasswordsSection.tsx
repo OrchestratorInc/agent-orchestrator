@@ -60,6 +60,10 @@ export function BrowserPasswordsSection() {
 	const projectName = (id: string) => projects.find((project) => project.id === id)?.name ?? id;
 	const [items, setItems] = useState<Item[]>([]);
 	const [available, setAvailable] = useState(true);
+	const [keyLost, setKeyLost] = useState(false);
+	const [resetting, setResetting] = useState(false);
+	const [resetBusy, setResetBusy] = useState(false);
+	const [resetError, setResetError] = useState("");
 	const [audit, setAudit] = useState<AuditEntry[]>([]);
 	const [loading, setLoading] = useState(Boolean(bridge));
 	const [error, setError] = useState("");
@@ -78,6 +82,7 @@ export function BrowserPasswordsSection() {
 			if (requestId !== latestRefresh.current) return;
 			setItems(list.items);
 			setAvailable(list.available);
+			setKeyLost(Boolean(list.keyLost));
 			setAudit(entries.slice(0, AUDIT_ROWS));
 			setError("");
 		} catch (reason) {
@@ -91,6 +96,21 @@ export function BrowserPasswordsSection() {
 	useEffect(() => {
 		void refresh();
 	}, [refresh]);
+
+	const confirmReset = async () => {
+		if (!bridge) return;
+		setResetBusy(true);
+		try {
+			await bridge.reset();
+			setResetting(false);
+			setResetError("");
+			await refresh();
+		} catch (reason) {
+			setResetError(vaultError(reason, t("settings.passwords.resetFailed")));
+		} finally {
+			setResetBusy(false);
+		}
+	};
 
 	const confirmDelete = async () => {
 		if (!bridge || !deleting) return;
@@ -114,13 +134,20 @@ export function BrowserPasswordsSection() {
 				sectionId="passwords"
 				grouped
 				action={
-					<Button disabled={!bridge || !available} onClick={() => setEditing("new")} size="sm" type="button" variant="quiet">
+					<Button disabled={!bridge || !available || keyLost} onClick={() => setEditing("new")} size="sm" type="button" variant="quiet">
 						<Plus aria-hidden="true" className="size-icon-base" />
 						{t("settings.passwords.add")}
 					</Button>
 				}
 			>
 				{error ? <div className="settings-row-bar text-xs text-error" role="alert">{error}</div> : null}
+				{keyLost ? (
+					<SettingsRow label={<span className="text-error">{t("settings.passwords.keyLost")}</span>} role="alert">
+						<Button onClick={() => setResetting(true)} size="sm" type="button" variant="quiet">
+							{t("settings.passwords.reset")}
+						</Button>
+					</SettingsRow>
+				) : null}
 				{!available ? (
 					<div className="settings-row-bar text-xs text-error" role="alert">{t("settings.passwords.keychainUnavailable")}</div>
 				) : null}
@@ -205,6 +232,21 @@ export function BrowserPasswordsSection() {
 					}}
 				/>
 			) : null}
+			<ConfirmDialog
+				open={resetting}
+				onOpenChange={(open) => {
+					if (open || resetBusy) return;
+					setResetting(false);
+					setResetError("");
+				}}
+				title={t("settings.passwords.resetTitle")}
+				description={t("settings.passwords.resetDescription")}
+				confirmLabel={t("settings.passwords.resetConfirm")}
+				destructive
+				busy={resetBusy}
+				error={resetError || null}
+				onConfirm={() => void confirmReset()}
+			/>
 			<ConfirmDialog
 				open={deleting !== null}
 				onOpenChange={(open) => {

@@ -109,7 +109,7 @@ func (r *vaultRuntime) Execute(_ context.Context, _ domain.SessionID, action str
 
 func describedDemo() map[string]interface{} {
 	return map[string]interface{}{
-		"origin": "http://localhost:4173", "pageUrl": "http://localhost:4173/login", "pageTitle": "Sign in",
+		"origin": "https://app.example.test", "pageUrl": "https://app.example.test/login", "pageTitle": "Sign in",
 		"item": map[string]interface{}{"id": "i1", "label": "Demo app", "username": "alice@example.test"},
 	}
 }
@@ -165,15 +165,15 @@ func TestCredentialFillAsksTheApprovalGateWithoutTheSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := <-asked
-	if prompt.Kind != approval.KindSavedLogin || prompt.Category != approval.CategoryCredential || prompt.Site != "http://localhost:4173 · alice@example.test (i1)" {
+	if prompt.Kind != approval.KindSavedLogin || prompt.Category != approval.CategoryCredential || prompt.Site != "https://app.example.test · alice@example.test (i1)" {
 		t.Fatalf("prompt = %+v", prompt.Request)
 	}
-	for _, want := range []string{"alice@example.test", "Demo app", "http://localhost:4173"} {
+	for _, want := range []string{"alice@example.test", "Demo app", "https://app.example.test"} {
 		if !strings.Contains(prompt.Action, want) {
 			t.Fatalf("prompt action %q missing %q", prompt.Action, want)
 		}
 	}
-	if rt.last["approvedOrigin"] != "http://localhost:4173" || rt.last["projectId"] != "proj-a" {
+	if rt.last["approvedOrigin"] != "https://app.example.test" || rt.last["projectId"] != "proj-a" {
 		t.Fatalf("dispatched args = %v", rt.last)
 	}
 	if got := strings.Join(rt.calls, ","); got != "vault-describe,fill-secret" {
@@ -211,7 +211,7 @@ func TestCredentialFillRefusedWhenDeniedEvenWithApprovalsOff(t *testing.T) {
 
 func TestCredentialLoginListsCandidatesWithoutAsking(t *testing.T) {
 	rt := &vaultRuntime{describe: map[string]interface{}{
-		"origin":     "http://localhost:4173",
+		"origin":     "https://app.example.test",
 		"candidates": []interface{}{map[string]interface{}{"id": "i1", "label": "A", "username": "a"}},
 	}}
 	svc, _, token := gatedVaultService(t, rt)
@@ -294,7 +294,7 @@ func TestAlwaysAllowCoversOnlyTheApprovedSavedLogin(t *testing.T) {
 
 	// Another login saved for the same origin needs its own first yes.
 	rt.describe = map[string]interface{}{
-		"origin": "http://localhost:4173", "pageUrl": "http://localhost:4173/login",
+		"origin": "https://app.example.test", "pageUrl": "https://app.example.test/login",
 		"item": map[string]interface{}{"id": "admin-9f8e7d6c5b", "label": "Admin", "username": "admin@example.test"},
 	}
 	asked := answerNext(t, gate, approval.DecisionDeny)
@@ -321,4 +321,30 @@ func TestAlwaysAllowCoversOnlyTheApprovedSavedLogin(t *testing.T) {
 	if got := strings.Join(decisions, ","); got != "allow-site,deny,site-allowed" {
 		t.Fatalf("audit decisions = %s", got)
 	}
+}
+
+func TestLoopbackHTTPLoginsAskEveryTime(t *testing.T) {
+	rt := &vaultRuntime{describe: map[string]interface{}{
+		"origin": "http://localhost:4173", "pageUrl": "http://localhost:4173/login", "pageTitle": "Sign in",
+		"item": map[string]interface{}{"id": "i1", "label": "Demo app", "username": "alice@example.test"},
+	}}
+	svc, gate, token := gatedVaultService(t, rt)
+
+	// Even "always allow" is not remembered for plain HTTP on this computer:
+	// any local process (the agent's own server, say) can answer there.
+	asked := answerNext(t, gate, approval.DecisionAllowSite)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); err != nil {
+		t.Fatal(err)
+	}
+	if prompt := <-asked; !strings.Contains(prompt.Reason, "this computer") {
+		t.Fatalf("reason = %q", prompt.Reason)
+	}
+	if rules := gate.SiteRules(); len(rules) != 0 {
+		t.Fatalf("loopback rule was remembered: %+v", rules)
+	}
+	asked = answerNext(t, gate, approval.DecisionDeny)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("second login err = %v", err)
+	}
+	<-asked
 }

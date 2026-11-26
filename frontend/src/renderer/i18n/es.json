@@ -5788,5 +5788,11 @@
 	"settings.passwords.field.password": "contraseña",
 	"settings.passwords.field.totp": "código 2FA",
 	"settings.passwords.field.login": "inicio de sesión",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "No se pueden abrir las contraseñas guardadas: falta la clave que las protege o ha cambiado.",
+	"settings.passwords.reset": "Restablecer contraseñas guardadas",
+	"settings.passwords.resetTitle": "¿Restablecer las contraseñas guardadas?",
+	"settings.passwords.resetDescription": "Se eliminarán todas las contraseñas guardadas y sus claves 2FA en este equipo. Se conserva la actividad de inicio de sesión.",
+	"settings.passwords.resetConfirm": "Restablecer",
+	"settings.passwords.resetFailed": "No se pudieron restablecer las contraseñas guardadas."
 }

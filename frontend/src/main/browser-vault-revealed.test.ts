@@ -106,3 +106,22 @@ describe("tagging filled fields", () => {
     expect((0, eval)(selectVerified("t3", "password"))).toBe(false);
   });
 });
+
+describe("focus probe", () => {
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ width: 100, height: 20 } as DOMRect);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  it("does not treat a textarea with type=password as a password field", async () => {
+    const { probeFocus } = await import("./browser-vault-fill");
+    document.body.innerHTML = `<textarea type="password"></textarea><input type="PASSWORD">`;
+    (document.querySelector("textarea") as HTMLTextAreaElement).focus();
+    expect((0, eval)(probeFocus("t"))).toMatchObject({ tag: "TEXTAREA", type: "" });
+    (document.querySelector("input") as HTMLInputElement).focus();
+    expect((0, eval)(probeFocus("t"))).toMatchObject({ tag: "INPUT", type: "password" });
+  });
+});

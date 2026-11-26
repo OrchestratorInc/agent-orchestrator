@@ -5609,5 +5609,11 @@
 	"settings.passwords.field.password": "Passwort",
 	"settings.passwords.field.totp": "2FA-Code",
 	"settings.passwords.field.login": "Anmeldung",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "Gespeicherte Passwörter können nicht geöffnet werden: Der Schlüssel, der sie schützt, fehlt oder hat sich geändert.",
+	"settings.passwords.reset": "Gespeicherte Passwörter zurücksetzen",
+	"settings.passwords.resetTitle": "Gespeicherte Passwörter zurücksetzen?",
+	"settings.passwords.resetDescription": "Damit werden alle gespeicherten Passwörter und ihre 2FA-Schlüssel auf diesem Computer gelöscht. Die Anmeldeaktivität bleibt erhalten.",
+	"settings.passwords.resetConfirm": "Zurücksetzen",
+	"settings.passwords.resetFailed": "Gespeicherte Passwörter konnten nicht zurückgesetzt werden."
 }

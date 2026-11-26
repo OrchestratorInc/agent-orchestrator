@@ -5589,5 +5589,11 @@
 	"settings.passwords.field.password": "password",
 	"settings.passwords.field.totp": "2FA code",
 	"settings.passwords.field.login": "sign-in",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "Saved passwords can't be opened: the key that protects them is missing or has changed.",
+	"settings.passwords.reset": "Reset saved passwords",
+	"settings.passwords.resetTitle": "Reset saved passwords?",
+	"settings.passwords.resetDescription": "This deletes every saved password and its 2FA key on this computer. Sign-in activity is kept.",
+	"settings.passwords.resetConfirm": "Reset",
+	"settings.passwords.resetFailed": "Could not reset saved passwords."
 }

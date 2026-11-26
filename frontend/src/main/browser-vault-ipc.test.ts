@@ -7,11 +7,15 @@ import { VaultStore } from "./browser-vault-store";
 
 type Handler = (event: { sender: unknown }, ...args: unknown[]) => unknown;
 
-async function setup(available = true) {
+async function setupWithDir(dir: string) {
+  return setup(true, dir);
+}
+
+async function setup(available = true, existingDir?: string) {
   const handlers = new Map<string, Handler>();
   const shell = { id: 1 };
   const store = new VaultStore({
-    dir: await mkdtemp(path.join(os.tmpdir(), "ao-vault-ipc-")),
+    dir: existingDir ?? (await mkdtemp(path.join(os.tmpdir(), "ao-vault-ipc-"))),
     protector: { available: () => available, encrypt: (d) => Buffer.from(d), decrypt: (d) => Buffer.from(d) },
   });
   const ipc = registerBrowserVaultIpc({
@@ -64,6 +68,18 @@ describe("vault IPC", () => {
   it("reports an unavailable keychain instead of storing", async () => {
     const { call } = await setup(false);
     await expect(call("vault:list")).resolves.toEqual({ available: false, items: [] });
+  });
+
+  it("reports a lost key instead of a crypto error, and resets on request", async () => {
+    const { call, store } = await setup();
+    await call("vault:save", { origins: ["https://a.test"], username: "u", password: "pw-123456", allowedProjects: [] });
+    const { rm } = await import("node:fs/promises");
+    await rm(path.join((store as unknown as { dir: string }).dir, "key.bin"));
+    const fresh = await setupWithDir((store as unknown as { dir: string }).dir);
+    await expect(fresh.call("vault:list")).resolves.toEqual({ available: true, items: [], keyLost: true });
+    await expect(fresh.call("vault:reset", undefined, { id: 2 })).rejects.toThrow(/not allowed/i);
+    await fresh.call("vault:reset");
+    await expect(fresh.call("vault:list")).resolves.toEqual({ available: true, items: [] });
   });
 
   it("deletes items and removes handlers on dispose", async () => {

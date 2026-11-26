@@ -5788,5 +5788,11 @@
 	"settings.passwords.field.password": "mot de passe",
 	"settings.passwords.field.totp": "code 2FA",
 	"settings.passwords.field.login": "connexion",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "Impossible d'ouvrir les mots de passe enregistrés : la clé qui les protège est absente ou a changé.",
+	"settings.passwords.reset": "Réinitialiser les mots de passe enregistrés",
+	"settings.passwords.resetTitle": "Réinitialiser les mots de passe enregistrés ?",
+	"settings.passwords.resetDescription": "Tous les mots de passe enregistrés et leurs clés 2FA seront supprimés de cet ordinateur. L'activité de connexion est conservée.",
+	"settings.passwords.resetConfirm": "Réinitialiser",
+	"settings.passwords.resetFailed": "Impossible de réinitialiser les mots de passe enregistrés."
 }

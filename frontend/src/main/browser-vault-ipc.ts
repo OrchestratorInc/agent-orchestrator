@@ -1,9 +1,10 @@
 // Settings UI access to the vault. Secrets are write-only: the renderer can
 // save a password or TOTP seed but no channel ever returns one.
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
-import type { VaultAuditEntry, VaultItemInput, VaultItemSummary, VaultStore } from "./browser-vault-store";
+import { VaultKeyLostError, type VaultAuditEntry, type VaultItemInput, type VaultItemSummary, type VaultStore } from "./browser-vault-store";
 
-export type VaultListResult = { available: boolean; items: VaultItemSummary[] };
+/** `keyLost`: saved items exist but their key is gone; Settings offers a reset. */
+export type VaultListResult = { available: boolean; items: VaultItemSummary[]; keyLost?: true };
 
 export function registerBrowserVaultIpc(options: {
   ipcMain: Pick<IpcMain, "handle" | "removeHandler">;
@@ -23,7 +24,16 @@ export function registerBrowserVaultIpc(options: {
 
   handle("vault:list", async (event): Promise<VaultListResult> => {
     if (!trusted(event) || !options.keychainAvailable()) return { available: false, items: [] };
-    return { available: true, items: await options.store.list() };
+    try {
+      return { available: true, items: await options.store.list() };
+    } catch (error) {
+      if (error instanceof VaultKeyLostError) return { available: true, items: [], keyLost: true };
+      throw error;
+    }
+  });
+  handle("vault:reset", async (event) => {
+    requireTrusted(event);
+    await options.store.reset();
   });
   handle("vault:save", async (event, input) => {
     requireTrusted(event);

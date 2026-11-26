@@ -33,6 +33,10 @@ type FakeFrame = {
   focusOnFilled?: boolean;
   // Current values of the fields Orchestrator filled (after any edits).
   filledValues?: string[];
+  // Page script moves focus right after the text goes in.
+  focusMovesAfterTyping?: boolean;
+  // In-page scripts whose marker appears here throw instead of answering.
+  throwsIn?: string;
 };
 
 function fakeCdp(frames: FakeFrame[]) {
@@ -62,6 +66,12 @@ function fakeCdp(frames: FakeFrame[]) {
       if (method === "Runtime.evaluate") {
         const frame = contexts.get(params.contextId as number)!;
         const expression = String(params.expression);
+        if (frame.throwsIn && expression.includes(frame.throwsIn)) {
+          return { exceptionDetails: { text: "Uncaught TypeError" } };
+        }
+        if (expression.includes("ao-vault:after-insert")) {
+          return { result: { value: !frame.focusMovesAfterTyping } };
+        }
         if (expression.includes("ao-vault:filled-focus")) {
           return { result: { value: Boolean(frame.focusOnFilled) } };
         }
@@ -226,18 +236,18 @@ describe("credential filler", () => {
     ["http://127.0.0.1:9000", false],
     ["http://[::1]:3000", false],
     ["https://accounts.example.test", false],
-  ])("on %s refuses an unencrypted fill: %s", async (origin, refused) => {
-    const id = (await store.save({ origins: [origin], username: "u", password: "pw-transport-1", allowedProjects: [] })).id;
+  ])("on %s, refuses plain-HTTP secrets: %s", async (origin, refused) => {
+    const saved = store.save({ origins: [origin], username: "u", password: "pw-transport-1", allowedProjects: [] });
+    if (refused) {
+      // Refused when saved, so it can never reach a page.
+      await expect(saved).rejects.toThrow(/HTTPS/);
+      return;
+    }
+    const id = (await saved).id;
     const filler = createCredentialFiller({ store });
     const t = { ...target([{ id: "top", url: `${origin}/login`, focused: { tag: "INPUT", type: "password" } }]), approvedOrigin: origin };
-    const fill = filler.fillSecret(t, { itemId: id, field: "password" });
-    if (refused) {
-      await expect(fill).rejects.toThrow(/HTTPS/);
-      expect(t.inserted).toEqual([]);
-    } else {
-      await fill;
-      expect(t.inserted).toEqual(["pw-transport-1"]);
-    }
+    await filler.fillSecret(t, { itemId: id, field: "password" });
+    expect(t.inserted).toEqual(["pw-transport-1"]);
   });
 
   it("refuses when the verified field is no longer focused when typing starts", async () => {
@@ -337,6 +347,44 @@ describe("credential filler", () => {
     await expect(filler.scrubLive("s1", "tab1:0", failing, { value: PASSWORD })).resolves.toEqual({ value: "••••" });
   });
 
+  it("clears the field and fails when focus moved while the text went in", async () => {
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/login`, focusMovesAfterTyping: true, focused: { tag: "INPUT", type: "password" } }];
+    const filler = createCredentialFiller({ store });
+    const t = { ...target(frames), documentKey: () => "tab1:0" };
+    await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/focus moved/i);
+    expect((await store.readAudit())[0]).toMatchObject({ outcome: "denied", reason: "focus moved" });
+  });
+
+  it("holds the screenshot when the in-page check throws", async () => {
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }];
+    const filler = createCredentialFiller({ store });
+    const t = { ...target(frames), documentKey: () => "tab1:0" };
+    await filler.fillSecret(t, { itemId, field: "password" });
+    frames[0].throwsIn = "ao-vault:revealed";
+    await expect(filler.screenshotBlocked("s1", "tab1:0", t.cdp)).resolves.toMatch(/could not check/i);
+  });
+
+  it("login refuses a 2FA page when the saved login has no 2FA key, before asking", async () => {
+    const noSeed = (await store.save({ origins: [ORIGIN], username: "bob", password: "pw-bob-1234", allowedProjects: ["proj"] })).id;
+    const filler = createCredentialFiller({ store });
+    const page = () => target([{ id: "top", url: `${ORIGIN}/2fa`, fields: [{ tag: "INPUT", type: "text", role: "totp" }] }]);
+    await expect(filler.describe(page(), { action: "login", itemId: noSeed })).rejects.toThrow(/no 2FA key/);
+    const t = page();
+    await expect(filler.login(t, { itemId: noSeed })).rejects.toThrow(/no 2FA key/);
+    expect(t.inserted).toEqual([]);
+  });
+
+  it("login types nothing when a planned field cannot be filled", async () => {
+    const id = (await store.save({ origins: [ORIGIN], username: "carol", password: "abc", allowedProjects: [] })).id;
+    const filler = createCredentialFiller({ store });
+    const t = target([
+      { id: "top", url: `${ORIGIN}/login`, fields: [{ tag: "INPUT", type: "email", role: "username" }, { tag: "INPUT", type: "password", role: "password" }] },
+    ]);
+    await expect(filler.login(t, { itemId: id })).rejects.toThrow(/too short/);
+    // The username was not typed either: no half-filled form.
+    expect(t.inserted).toEqual([]);
+  });
+
   it("refuses a project the item is not allowed in", async () => {
     const filler = createCredentialFiller({ store });
     const t = { ...target([{ id: "top", url: `${ORIGIN}/`, focused: { tag: "INPUT", type: "password" } }]), projectId: "other" };
@@ -379,7 +427,7 @@ describe("credential filler", () => {
 
   it("describes a fill with the label and username only", async () => {
     const filler = createCredentialFiller({ store });
-    const t = { ...target([{ id: "top", url: `${ORIGIN}/login` }]), pageTitle: () => "Sign in" };
+    const t = { ...target([{ id: "top", url: `${ORIGIN}/login`, fields: [{ tag: "INPUT", type: "email", role: "username" }, { tag: "INPUT", type: "password", role: "password" }] }]), pageTitle: () => "Sign in" };
     const described = await filler.describe(t, { action: "login" });
     expect(described).toEqual({
       origin: ORIGIN,
@@ -397,7 +445,7 @@ describe("credential filler", () => {
     const redirected = { ...target([{ id: "top", url: "https://sso.evil.test/login" }]), requestedOrigin: "http://localhost:4173" };
     await expect(filler.describe(redirected, { action: "login" })).rejects.toThrow(/redirected/);
     await expect(filler.login({ ...redirected, approvedOrigin: ORIGIN }, {})).rejects.toThrow();
-    const same = { ...target([{ id: "top", url: `${ORIGIN}/login` }]), requestedOrigin: "http://localhost:4173/login" };
+    const same = { ...target([{ id: "top", url: `${ORIGIN}/login`, fields: [{ tag: "INPUT", type: "email", role: "username" }, { tag: "INPUT", type: "password", role: "password" }] }]), requestedOrigin: "http://localhost:4173/login" };
     await expect(filler.describe(same, { action: "login" })).resolves.toMatchObject({ origin: ORIGIN });
     const wrongScheme = { ...target([{ id: "top", url: `${ORIGIN}/login` }]), requestedOrigin: "localhost:4173" };
     await expect(filler.describe(wrongScheme, { action: "login" })).rejects.toThrow(/not https:\/\/localhost:4173/);

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { VaultStore, type VaultKeyProtector } from "./browser-vault-store";
+import { VaultKeyLostError, VaultStore, type VaultKeyProtector } from "./browser-vault-store";
 
 // Stands in for Electron safeStorage: reversible, but not plaintext.
 const fakeProtector: VaultKeyProtector = {
@@ -115,6 +115,41 @@ describe("VaultStore", () => {
     await rm(sealed, { recursive: true });
     await writeFile(sealed, kept);
     expect((await store.list()).map((i) => i.username)).toEqual(["alice"]);
+  });
+
+  it("refuses plain-HTTP sites other than this computer at save time", async () => {
+    await expect(
+      store.save({ origins: ["http://intranet.example.test"], username: "u", password: "pw-1234-x", allowedProjects: [] }),
+    ).rejects.toThrow(/HTTPS/);
+    for (const origin of ["http://localhost:3000", "http://127.0.0.1:8080", "http://[::1]:9000", "http://app.localhost"]) {
+      await expect(store.save({ origins: [origin], username: "u", password: "pw-1234-x", allowedProjects: [] })).resolves.toMatchObject({ origins: [origin] });
+    }
+  });
+
+  it("does not replace a lost key over existing items, and can be reset", async () => {
+    await addDemo();
+    const sealed = path.join(dir, "items.sealed");
+    const kept = await readFile(sealed, "utf8");
+    await rm(path.join(dir, "key.bin"));
+    const reopened = new VaultStore({ dir, protector: fakeProtector });
+    await expect(reopened.list()).rejects.toBeInstanceOf(VaultKeyLostError);
+    await expect(
+      reopened.save({ origins: ["https://b.test"], username: "b", password: "pw-bbbb-1", allowedProjects: [] }),
+    ).rejects.toBeInstanceOf(VaultKeyLostError);
+    // Nothing was overwritten, so a restored key would still open the items.
+    expect(await readFile(sealed, "utf8")).toBe(kept);
+    await reopened.reset();
+    expect(await reopened.list()).toEqual([]);
+    await expect(
+      reopened.save({ origins: ["https://b.test"], username: "b", password: "pw-bbbb-1", allowedProjects: [] }),
+    ).resolves.toMatchObject({ username: "b" });
+  });
+
+  it("reports a keychain that now hands back a different key as a lost key", async () => {
+    await addDemo();
+    const otherKeychain: VaultKeyProtector = { ...fakeProtector, decrypt: (data) => Buffer.from(data.map((b) => b ^ 0x33)) };
+    const reopened = new VaultStore({ dir, protector: otherKeychain });
+    await expect(reopened.list()).rejects.toBeInstanceOf(VaultKeyLostError);
   });
 
   it("deletes an item", async () => {

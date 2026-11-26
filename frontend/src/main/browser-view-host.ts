@@ -5221,16 +5221,25 @@ export function createBrowserViewHost(
               approvedOrigin: optional("approvedOrigin"),
               requestedOrigin: optional("origin"),
             };
-            if (action === "vault-describe") {
-              return filler.describe(fillTarget, { action: describedAction ?? "login", itemId: optional("itemId") });
-            }
-            if (action === "fill-secret") {
-              return filler.fillSecret(fillTarget, {
-                itemId: optional("itemId")!,
-                field: field as "username" | "password" | "totp",
-              });
-            }
-            return filler.login(fillTarget, { itemId: optional("itemId") });
+            // Probe, verify and insert run in the session's operation queue, like
+            // every other agent action: nothing else can move focus between
+            // the verification and the insert.
+            return queueNativeOperation(
+              session,
+              () => {
+                if (action === "vault-describe") {
+                  return filler.describe(fillTarget, { action: describedAction ?? "login", itemId: optional("itemId") });
+                }
+                if (action === "fill-secret") {
+                  return filler.fillSecret(fillTarget, {
+                    itemId: optional("itemId")!,
+                    field: field as "username" | "password" | "totp",
+                  });
+                }
+                return filler.login(fillTarget, { itemId: optional("itemId") });
+              },
+              signal,
+            );
           }
           case "console":
             return normalizeNativeMessages(await runNative(action), action);

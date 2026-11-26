@@ -909,6 +909,7 @@ const api = {
 		save: (input: VaultItemInput) => ipcRenderer.invoke("vault:save", input) as Promise<VaultItemSummary>,
 		delete: (id: string) => ipcRenderer.invoke("vault:delete", { id }) as Promise<void>,
 		audit: () => ipcRenderer.invoke("vault:audit") as Promise<VaultAuditEntry[]>,
+		reset: () => ipcRenderer.invoke("vault:reset") as Promise<void>,
 	},
 	browserProfiles: {
 		list: () => ipcRenderer.invoke("browserProfiles:list") as Promise<BrowserProfileListState>,

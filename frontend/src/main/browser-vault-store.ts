@@ -6,9 +6,9 @@
 // items.sealed every item, AES-256-GCM under the data key.
 // audit.jsonl one line per fill attempt; never holds a secret.
 import { randomBytes, randomUUID } from "node:crypto";
-import { appendFile, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { normalizeVaultOrigin, openSealed, originAllowed, seal, totpCode } from "./browser-vault";
+import { normalizeVaultOrigin, openSealed, originAllowed, seal, secureCredentialOrigin, totpCode } from "./browser-vault";
 
 export type VaultKeyProtector = {
   available(): boolean;
@@ -63,6 +63,18 @@ type Contents = { items: StoredItem[] };
 
 const AUDIT_READ_LIMIT = 500;
 
+/**
+ * The saved items exist but cannot be opened: the key file is gone, or the OS
+ * keychain now hands back a different key (a keychain reset). The items are
+ * left untouched; the user can reset the vault to start again.
+ */
+export class VaultKeyLostError extends Error {
+  readonly code = "VAULT_KEY_LOST";
+  constructor() {
+    super("Saved passwords can't be opened: the key that protects them is missing or has changed. Reset saved passwords to start again.");
+  }
+}
+
 export class VaultStore {
   private readonly dir: string;
   private readonly protector: VaultKeyProtector;
@@ -84,6 +96,10 @@ export class VaultStore {
     return this.mutate((contents) => {
       const origins = [...new Set(input.origins.map(normalizeVaultOrigin))];
       if (!origins.length) throw new Error("Add at least one site");
+      const insecure = origins.find((origin) => !secureCredentialOrigin(origin));
+      if (insecure) {
+        throw new Error(`${insecure} uses plain HTTP. Saved passwords only fill over HTTPS, or http:// on this computer.`);
+      }
       const time = new Date(this.now()).toISOString();
       const existing = input.id ? contents.items.find((item) => item.id === input.id) : undefined;
       if (input.id && !existing) throw new Error("Credential not found");
@@ -150,6 +166,17 @@ export class VaultStore {
     return totpCode(item.totpSeed, this.now());
   }
 
+  /** Deletes every saved item and the key, for a vault whose key was lost. */
+  reset(): Promise<void> {
+    const run = this.queue.then(async () => {
+      await rm(path.join(this.dir, "items.sealed"), { force: true });
+      await rm(path.join(this.dir, "key.bin"), { force: true });
+      this.key = undefined;
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
   async audit(entry: Omit<VaultAuditEntry, "time" | "itemLabel">): Promise<void> {
     let itemLabel: string | undefined;
     try {
@@ -204,6 +231,9 @@ export class VaultStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (!create) return undefined;
+    // Never start a new key over items sealed with the old one: they would be
+    // unreadable forever. That is a lost key, and only reset() clears it.
+    if (await exists(path.join(this.dir, "items.sealed"))) throw new VaultKeyLostError();
     const key = randomBytes(32);
     await this.ensureDir();
     await atomicWrite(file, this.protector.encrypt(key));
@@ -222,8 +252,13 @@ export class VaultStore {
       throw error;
     }
     const key = await this.dataKey(false);
-    if (!key) throw new Error("Vault key is missing");
-    return openSealed<Contents>(key, sealed);
+    if (!key) throw new VaultKeyLostError();
+    try {
+      return openSealed<Contents>(key, sealed);
+    } catch {
+      // A different key (keychain reset) fails authentication.
+      throw new VaultKeyLostError();
+    }
   }
 
   private mutate<T>(change: (contents: Contents) => T): Promise<T> {
@@ -255,6 +290,16 @@ function summarize(item: StoredItem): VaultItemSummary {
 
 function projectAllowed(item: StoredItem, projectId: string): boolean {
   return item.allowedProjects.length === 0 || item.allowedProjects.includes(projectId);
+}
+
+async function exists(file: string): Promise<boolean> {
+  try {
+    await stat(file);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function atomicWrite(file: string, data: string | Buffer): Promise<void> {

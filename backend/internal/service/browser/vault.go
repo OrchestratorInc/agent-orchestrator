@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -88,19 +91,44 @@ func (s *Service) credentialPreflight(
 	// session's approval mode. The rule key is one saved login on one exact
 	// origin: "always allow" for alice never covers another port, nor another
 	// login saved later for the same site (an admin account, say).
+	site := savedLoginSite(description.Origin, description.Item)
+	reason := "An agent wants to sign in with a saved password. Orchestrator types it; the agent never sees it."
+	// Plain HTTP on this computer can be served by any local process,
+	// including one the agent starts. Never remember "always allow" there:
+	// ask every time, and say why.
+	loopback := loopbackHTTP(description.Origin)
+	var forgetRule func() error
+	if loopback {
+		rules, ok := s.approvals.(interface {
+			RemoveSiteRule(site, category string) error
+		})
+		if !ok {
+			return nil, nil, apierr.Invalid("BROWSER_VAULT_UNAVAILABLE", "This approval prompt cannot ask every time for a local site", nil)
+		}
+		forgetRule = func() error { return rules.RemoveSiteRule(site, approval.CategoryCredential) }
+		if err := forgetRule(); err != nil {
+			return nil, nil, err
+		}
+		reason = "This site is plain HTTP on this computer, which any local program (including one an agent starts) can serve, so Orchestrator asks every time. The agent never sees the password."
+	}
 	outcome, err := s.approvals.Request(ctx, approval.Request{
 		Kind:      approval.KindSavedLogin,
 		SessionID: string(session.ID),
-		Site:      savedLoginSite(description.Origin, description.Item),
+		Site:      site,
 		URL:       description.PageURL,
 		PageTitle: description.PageTitle,
 		Action:    summary,
 		Category:  approval.CategoryCredential,
-		Reason:    "An agent wants to sign in with a saved password. Orchestrator types it; the agent never sees it.",
+		Reason:    reason,
 		Timeout:   s.approvalTimeout,
 	})
 	if err != nil {
 		return nil, nil, err
+	}
+	if forgetRule != nil && outcome.Decision == approval.DecisionAllowSite {
+		if err := forgetRule(); err != nil {
+			return nil, nil, err
+		}
 	}
 	if !outcome.Allowed() {
 		return nil, nil, approvalRefusal(outcome.Decision, summary, s.approvalTimeout)
@@ -123,4 +151,19 @@ func savedLoginSite(origin string, item *vaultItemRef) string {
 		id = id[:8]
 	}
 	return fmt.Sprintf("%s · %s (%s)", origin, name, id)
+}
+
+// loopbackHTTP reports a plain-HTTP origin on this computer (localhost,
+// *.localhost, 127.0.0.0/8, [::1]): one any local process can serve.
+func loopbackHTTP(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

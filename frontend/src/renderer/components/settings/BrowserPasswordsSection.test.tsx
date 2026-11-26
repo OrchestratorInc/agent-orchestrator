@@ -40,6 +40,7 @@ function mockBridge(overrides: Partial<AoBridge["vault"]> = {}): AoBridge["vault
 		list: vi.fn(async () => ({ available: true, items: [item] })),
 		save: vi.fn(async () => item),
 		delete: vi.fn(async () => undefined),
+		reset: vi.fn(async () => undefined),
 		audit: vi.fn(async () => [
 			{ time: "2026-11-15T10:00:00.000Z", origin: "http://localhost:4173", sessionId: "ao-7", itemId: "item-1", itemLabel: "Demo login", field: "password" as const, outcome: "filled" as const },
 			{ time: "2026-11-15T09:00:00.000Z", origin: "https://evil.test", sessionId: "ao-7", itemId: "item-1", itemLabel: "Demo login", field: "password" as const, outcome: "denied" as const, reason: "origin mismatch" },
@@ -179,6 +180,23 @@ describe("BrowserPasswordsSection", () => {
 		await userEvent.click(within(group).getByRole("checkbox", { name: "gone-1" }));
 		await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ allowedProjects: ["proj-a", "proj-b"] })));
+	});
+
+	it("explains a lost key and resets the saved passwords after confirming", async () => {
+		const list = vi
+			.fn<AoBridge["vault"]["list"]>()
+			.mockResolvedValueOnce({ available: true, items: [], keyLost: true })
+			.mockResolvedValue({ available: true, items: [] });
+		const bridge = mockBridge({ list });
+		window.ao!.vault = bridge;
+		renderSection();
+		expect(await screen.findByText(/can't be opened/)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Add password" })).toBeDisabled();
+		await userEvent.click(screen.getByRole("button", { name: "Reset saved passwords" }));
+		expect(bridge.reset).not.toHaveBeenCalled();
+		await userEvent.click(await screen.findByRole("button", { name: "Reset" }));
+		await waitFor(() => expect(bridge.reset).toHaveBeenCalledOnce());
+		await waitFor(() => expect(screen.queryByText(/can't be opened/)).not.toBeInTheDocument());
 	});
 
 	it("disables adding when the keychain is unavailable", async () => {

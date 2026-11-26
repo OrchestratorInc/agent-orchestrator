@@ -5609,5 +5609,11 @@
 	"settings.passwords.field.password": "パスワード",
 	"settings.passwords.field.totp": "2FA コード",
 	"settings.passwords.field.login": "サインイン",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "保存済みパスワードを開けません。保護しているキーが見つからないか、変更されています。",
+	"settings.passwords.reset": "保存済みパスワードをリセット",
+	"settings.passwords.resetTitle": "保存済みパスワードをリセットしますか？",
+	"settings.passwords.resetDescription": "このコンピューター上のすべての保存済みパスワードと 2FA キーが削除されます。サインイン履歴は残ります。",
+	"settings.passwords.resetConfirm": "リセット",
+	"settings.passwords.resetFailed": "保存済みパスワードをリセットできませんでした。"
 }

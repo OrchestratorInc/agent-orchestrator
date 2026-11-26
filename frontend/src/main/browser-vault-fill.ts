@@ -2,7 +2,7 @@
 // vault straight into CDP Input.insertText; callers get back only a mask, and
 // the session's redactor scrubs the value from every later result.
 import { randomBytes } from "node:crypto";
-import { MIN_REDACT_LENGTH, SECRET_MASK, createRedactor, normalizeVaultOrigin, type Redactor } from "./browser-vault";
+import { MIN_REDACT_LENGTH, SECRET_MASK, createRedactor, normalizeVaultOrigin, secureCredentialOrigin, type Redactor } from "./browser-vault";
 import type { VaultField, VaultItemSummary, VaultStore } from "./browser-vault-store";
 
 export type CdpLike = {
@@ -40,14 +40,15 @@ const WORLD = "ao-vault";
 
 // Runs in an isolated world: page scripts cannot patch what it reads, and the
 // token it sets on the element is a property only this world can see.
-const probeFocus = (token: string) => `/*ao-vault:probe*/(() => {
+export const probeFocus = (token: string) => `/*ao-vault:probe*/(() => {
   const el = document.activeElement;
   if (!el || el === document.body) return null;
   el.__aoVaultToken = ${JSON.stringify(token)};
   const r = el.getBoundingClientRect();
   const s = getComputedStyle(el);
   const visible = r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) > 0 && !el.disabled && !el.readOnly;
-  return { tag: el.tagName, type: (el.getAttribute("type") || "").toLowerCase(), visible, hasFocus: document.hasFocus() };
+  const type = el.tagName === "INPUT" ? el.type : "";
+  return { tag: el.tagName, type, visible, hasFocus: document.hasFocus() };
 })()`;
 
 // Right before typing: the element verified by the probe must still hold
@@ -97,18 +98,16 @@ export const revealedSecretsCheck = (ignore: string[]) => `/*ao-vault:revealed $
   return false;
 })()`;
 
-/** HTTPS, or plain HTTP only to this machine (local development). */
-function secureTransport(origin: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (url.protocol === "https:") return true;
-  const host = url.hostname;
-  return url.protocol === "http:" && (host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host));
-}
+// Right after typing: the verified element must still hold focus. If a page
+// script moved focus mid-insert, clear the field that took the text.
+const afterInsert = (token: string) => `/*ao-vault:after-insert*/(() => {
+  const el = document.activeElement;
+  if (el && el.__aoVaultToken === ${JSON.stringify(token)}) return true;
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) el.value = "";
+  return false;
+})()`;
+
+const secureTransport = secureCredentialOrigin;
 
 export const FIND = `/*ao-vault:find*/(() => {
   const visible = (el) => {
@@ -215,7 +214,9 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
       expression,
       contextId: executionContextId,
       returnByValue: true,
-    })) as { result?: { value?: T } };
+    })) as { result?: { value?: T }; exceptionDetails?: { text?: string } };
+    // A script that threw has no answer; callers fail closed on this.
+    if (response.exceptionDetails) throw new Error(`In-page check failed: ${response.exceptionDetails.text ?? "exception"}`);
     return response.result?.value as T;
   };
 
@@ -302,6 +303,9 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
     }
     ensureLive();
     await target.cdp.sendCommand("Input.insertText", { text: secret });
+    if (!(await evaluate<boolean>(target.cdp, frame.id, afterInsert(token)))) {
+      throw new FillRefused("Focus moved while the secret went in; that field was cleared", "focus moved");
+    }
     if (field !== "username") {
       const documents = filledDocuments.get(target.sessionId) ?? new Map<string, FilledDocument>();
       const key = target.documentKey();
@@ -348,6 +352,40 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
     }
   };
 
+  /**
+   * The fields `login` will fill on this page, checked before the prompt and
+   * before anything is typed: a code field needs a 2FA key, and every secret
+   * must be fillable (HTTPS or this computer, long enough to mask). So a
+   * login never stops half way through a form.
+   */
+  const planLogin = async (target: FillTarget, item: VaultItemSummary) => {
+    const topFrame = (await frames(target.cdp))[0];
+    if (!item.origins.includes(originOf(topFrame.url)) || !item.origins.includes(originOf(target.pageURL()))) {
+      throw new FillRefused("Page origin does not match this credential", "origin mismatch");
+    }
+    const roles = await evaluate<Partial<Record<VaultField, number>>>(target.cdp, topFrame.id, FIND);
+    const found = (["username", "password", "totp"] as const).filter((role) => roles?.[role] !== undefined);
+    if (!found.length) throw new FillRefused("No sign-in fields found on this page", "no fields");
+    const planned = found.filter((role) => role !== "totp" || item.hasTotp);
+    if (!planned.length) {
+      throw new FillRefused(`"${item.label}" has no 2FA key for the code field on this page`, "no 2FA key");
+    }
+    const origin = originOf(target.pageURL());
+    for (const role of planned) {
+      if (role === "username") continue;
+      if (!secureTransport(origin)) {
+        throw new FillRefused(`Saved secrets are only filled over HTTPS (or on this computer); ${origin} is not`, "insecure transport");
+      }
+      if (role === "password") {
+        const secret = await options.store.resolveSecret({ itemId: item.id, field: role, pageURL: target.pageURL(), projectId: target.projectId });
+        if (secret.length < MIN_REDACT_LENGTH) {
+          throw new FillRefused("This secret is too short to mask in later output, so it is not filled", "secret too short");
+        }
+      }
+    }
+    return { topFrame, roles: roles!, planned };
+  };
+
   /** Refuses when `login <origin>` was asked for and the page is elsewhere. */
   const checkRequestedOrigin = (target: FillTarget) => {
     if (!target.requestedOrigin) return;
@@ -391,6 +429,8 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
         }
         item = candidates[0];
       }
+      // Refuse before the prompt when `login` could fill nothing here.
+      if (request.action === "login") await planLogin(target, item);
       return { ...base, item: { id: item.id, label: item.label, username: item.username } };
     },
 
@@ -424,16 +464,9 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
         checkRequestedOrigin(target);
         const item = await itemFor(chosen);
         checkProject(item, target.projectId);
-        const topFrame = (await frames(target.cdp))[0];
-        if (!item.origins.includes(originOf(topFrame.url)) || !item.origins.includes(originOf(target.pageURL()))) {
-          throw new FillRefused("Page origin does not match this credential", "origin mismatch");
-        }
-        const roles = await evaluate<Partial<Record<VaultField, number>>>(target.cdp, topFrame.id, FIND);
-        const order = (["username", "password", "totp"] as const).filter((role) => roles?.[role] !== undefined);
-        if (!order.length) throw new FillRefused("No sign-in fields found on this page", "no fields");
+        const { topFrame, roles, planned } = await planLogin(target, item);
         const filled: VaultField[] = [];
-        for (const role of order) {
-          if (role === "totp" && !item.hasTotp) continue;
+        for (const role of planned) {
           if (!(await evaluate<boolean>(target.cdp, topFrame.id, focusField(roles[role]!)))) {
             throw new FillRefused(`Could not focus the ${role} field`, "focus failed");
           }

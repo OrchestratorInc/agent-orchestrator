@@ -5589,5 +5589,11 @@
 	"settings.passwords.field.password": "parola",
 	"settings.passwords.field.totp": "2FA kodu",
 	"settings.passwords.field.login": "oturum açma",
-	"settings.passwords.sitesPlaceholder": "https://github.com"
+	"settings.passwords.sitesPlaceholder": "https://github.com",
+	"settings.passwords.keyLost": "Kayıtlı parolalar açılamıyor: onları koruyan anahtar eksik ya da değişmiş.",
+	"settings.passwords.reset": "Kayıtlı parolaları sıfırla",
+	"settings.passwords.resetTitle": "Kayıtlı parolalar sıfırlansın mı?",
+	"settings.passwords.resetDescription": "Bu bilgisayardaki tüm kayıtlı parolalar ve 2FA anahtarları silinir. Oturum açma etkinliği korunur.",
+	"settings.passwords.resetConfirm": "Sıfırla",
+	"settings.passwords.resetFailed": "Kayıtlı parolalar sıfırlanamadı."
 }
