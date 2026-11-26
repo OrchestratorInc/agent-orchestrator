@@ -101,3 +101,14 @@ func TestProbeTargetKeepsTheSavedStyleForTheSameEndpoint(t *testing.T) {
 		t.Fatal("a cleartext remote URL must be rejected before any probe")
 	}
 }
+
+// Codex sends its key one way only, so its endpoint is never asked.
+func TestDetectAuthStyleSkipsSingleStyleHarnesses(t *testing.T) {
+	var probes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { probes.Add(1) }))
+	defer server.Close()
+	got, err := DetectAuthStyle(context.Background(), server.Client(), "codex", server.URL+"/v1", "sk-test")
+	if err != nil || got != AuthBearer || probes.Load() != 0 {
+		t.Fatalf("DetectAuthStyle = %q, %v after %d probes; want bearer without a probe", got, err, probes.Load())
+	}
+}
