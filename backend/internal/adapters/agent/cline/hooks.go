@@ -153,8 +153,8 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 }
 
 // PrepareRuntimeLaunch refreshes workspace hooks after AO assigns the new
-// runtime launch ID. A shared Cline hub supplies its starter's environment to
-// every hook, so each wrapper must carry the owning workspace's callback route.
+// runtime launch ID. Worker callbacks use the workspace's route; reviewers of
+// that worker retain their inherited review route and launch generation.
 func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	return p.GetAgentHooks(ctx, cfg)
 }
@@ -264,8 +264,9 @@ func renderClineHookScript(subcommand, executable string, cfg ports.WorkspaceHoo
 }
 
 func clineHookEnvironment(cfg ports.WorkspaceHookConfig) map[string]string {
-	// Pin only callback routing, never the provider's credentials or project env.
-	// Empty values deliberately clear the hub starter's reviewer routing too.
+	// These are worker defaults, applied only when the inherited environment
+	// does not identify this worker's reviewer. Never pin provider credentials
+	// or project env. An explicitly different worker's reviewer route is cleared.
 	return map[string]string{
 		"AO_SESSION_ID":               cfg.SessionID,
 		"AO_RUNTIME_LAUNCH_ID":        cfg.Env["AO_RUNTIME_LAUNCH_ID"],
@@ -280,13 +281,21 @@ func renderBashClineHookScript(subcommand, executable string, cfg ports.Workspac
 	var b strings.Builder
 	b.WriteString("#!/usr/bin/env bash\n")
 	b.WriteString(clineHookMarker + "\n")
+	command := "'" + strings.ReplaceAll(executable, "'", `'"'"'`) + "' " + clineHookArgumentsPrefix + subcommand + " || true\n"
+	// The reviewer shares this worktree's scripts but owns a different launch.
+	// Older reviewers may omit the worker id; retain their review route too.
+	b.WriteString("if [[ \"${AO_REVIEW_SESSION_ID:-}\" =~ [^[:space:]] ]] &&\n")
+	b.WriteString("   { [[ -z \"${AO_REVIEW_WORKER_SESSION_ID:-}\" ]] || [[ \"${AO_REVIEW_WORKER_SESSION_ID}\" = '" + strings.ReplaceAll(cfg.SessionID, "'", `'"'"'`) + "' ]]; }; then\n")
+	b.WriteString("  " + command)
+	b.WriteString("else\n")
 	env := clineHookEnvironment(cfg)
 	for _, key := range slices.Sorted(maps.Keys(env)) {
 		b.WriteString(key + "='" + strings.ReplaceAll(env[key], "'", `'"'"'`) + "' ")
 	}
 	// Forward stdin to the AO dispatcher; ignore its exit code so a missing/old
 	// `ao` binary can never block Cline's own execution.
-	b.WriteString("'" + strings.ReplaceAll(executable, "'", `'"'"'`) + "' " + clineHookArgumentsPrefix + subcommand + " || true\n")
+	b.WriteString(command)
+	b.WriteString("fi\n")
 	// Cline requires a JSON result on stdout; never block the agent.
 	b.WriteString(`echo '{"cancel": false}'` + "\n")
 	return b.String()
@@ -311,10 +320,12 @@ func renderPowerShellClineHookScript(subcommand, executable string, cfg ports.Wo
 	b.WriteString("  $psi.UseShellExecute = $false\n")
 	b.WriteString("  $psi.CreateNoWindow = $true\n")
 	b.WriteString("  $psi.RedirectStandardInput = $true\n")
+	b.WriteString("  if ([string]::IsNullOrWhiteSpace($env:AO_REVIEW_SESSION_ID) -or (-not [string]::IsNullOrEmpty($env:AO_REVIEW_WORKER_SESSION_ID) -and $env:AO_REVIEW_WORKER_SESSION_ID -cne '" + strings.ReplaceAll(cfg.SessionID, "'", "''") + "')) {\n")
 	env := clineHookEnvironment(cfg)
 	for _, key := range slices.Sorted(maps.Keys(env)) {
-		b.WriteString("  $psi.EnvironmentVariables['" + key + "'] = '" + strings.ReplaceAll(env[key], "'", "''") + "'\n")
+		b.WriteString("    $psi.EnvironmentVariables['" + key + "'] = '" + strings.ReplaceAll(env[key], "'", "''") + "'\n")
 	}
+	b.WriteString("  }\n")
 	b.WriteString("  $p = [System.Diagnostics.Process]::Start($psi)\n")
 	b.WriteString("  if ([Console]::IsInputRedirected) { [Console]::OpenStandardInput().CopyTo($p.StandardInput.BaseStream) }\n")
 	b.WriteString("  $p.StandardInput.Close()\n")

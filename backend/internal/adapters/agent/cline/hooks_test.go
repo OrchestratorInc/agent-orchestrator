@@ -16,7 +16,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-func TestClineHookWrappersOverrideSharedHubEnvironment(t *testing.T) {
+func buildClineHookDispatcher(t *testing.T) (string, string) {
+	t.Helper()
 	goBinary, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,11 @@ func TestClineHookWrappersOverrideSharedHubEnvironment(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build dispatcher fixture: %v\n%s", err, out)
 	}
+	return dir, executable
+}
+
+func TestClineHookWrappersOverrideSharedHubEnvironment(t *testing.T) {
+	dir, executable := buildClineHookDispatcher(t)
 	for _, shell := range []string{"bash", "powershell"} {
 		t.Run(shell, func(t *testing.T) {
 			shellPath, err := exec.LookPath(shell)
@@ -92,6 +98,71 @@ func TestClineHookWrappersOverrideSharedHubEnvironment(t *testing.T) {
 					}
 					if !reflect.DeepEqual(got.Env, wantEnv) || !reflect.DeepEqual(got.Args, []string{"hooks", "cline", event}) || got.Payload != payload {
 						t.Fatalf("%s/%s wrong callback: %+v", sessionID, event, got)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestClineHookWrappersPreserveReviewerEnvironment(t *testing.T) {
+	dir, executable := buildClineHookDispatcher(t)
+	for _, shell := range []string{"bash", "powershell"} {
+		t.Run(shell, func(t *testing.T) {
+			shellPath, err := exec.LookPath(shell)
+			if err != nil {
+				t.Skipf("%s unavailable: %v", shell, err)
+			}
+			capturePath := filepath.Join(dir, "review-capture.json")
+			t.Setenv("CLINE_TEST_CAPTURE", capturePath)
+			cfg := ports.WorkspaceHookConfig{
+				SessionID: "cl-5", DataDir: dir,
+				Env: map[string]string{"AO_RUNTIME_LAUNCH_ID": "worker-launch", "AO_RUN_FILE": "worker-running.json"},
+			}
+			// A current reviewer names its worker. Older reviewer environments
+			// may only name the review; neither may inherit the worker's launch.
+			for _, workerID := range []string{"cl-5", ""} {
+				wantEnv := map[string]string{
+					"AO_SESSION_ID": "", "AO_REVIEW_SESSION_ID": "review-cl-5", "AO_REVIEW_WORKER_SESSION_ID": workerID,
+					"AO_RUNTIME_LAUNCH_ID": "review-launch", "AO_DATA_DIR": "review-data-dir", "AO_RUN_FILE": "review-running.json",
+					"CLINE_TEST_PROVIDER_ENV": "provider-env-kept",
+				}
+				for key, value := range wantEnv {
+					t.Setenv(key, value)
+				}
+				for _, event := range []string{"session-start", "permission-resolved", "stop"} {
+					script := renderBashClineHookScript(event, filepath.ToSlash(executable), cfg)
+					scriptPath := filepath.Join(dir, "review-hook")
+					args := []string{filepath.ToSlash(scriptPath)}
+					if shell == "powershell" {
+						script = renderPowerShellClineHookScript(event, executable, cfg)
+						scriptPath += ".ps1"
+						args = []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath}
+					}
+					if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					payload := `{"sessionContext":{"rootSessionId":"review-native-root"}}`
+					cmd := process.CommandContext(t.Context(), shellPath, args...)
+					cmd.Stdin = strings.NewReader(payload)
+					out, err := cmd.CombinedOutput()
+					if err != nil || strings.TrimSpace(string(out)) != `{"cancel": false}` {
+						t.Fatalf("%s continuation: %v\n%s", event, err, out)
+					}
+					data, err := os.ReadFile(capturePath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var got struct {
+						Args    []string
+						Env     map[string]string
+						Payload string
+					}
+					if err := json.Unmarshal(data, &got); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got.Env, wantEnv) || !reflect.DeepEqual(got.Args, []string{"hooks", "cline", event}) || got.Payload != payload {
+						t.Fatalf("%s (worker %q) lost reviewer routing: %+v", event, workerID, got)
 					}
 				}
 			}

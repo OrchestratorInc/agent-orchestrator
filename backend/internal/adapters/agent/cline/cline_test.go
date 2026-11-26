@@ -709,8 +709,13 @@ func TestRenderBashClineHookScript(t *testing.T) {
 	got := renderBashClineHookScript("session-start", "ao", ports.WorkspaceHookConfig{})
 	want := "#!/usr/bin/env bash\n" +
 		clineHookMarker + "\n" +
+		"if [[ \"${AO_REVIEW_SESSION_ID:-}\" =~ [^[:space:]] ]] &&\n" +
+		"   { [[ -z \"${AO_REVIEW_WORKER_SESSION_ID:-}\" ]] || [[ \"${AO_REVIEW_WORKER_SESSION_ID}\" = '' ]]; }; then\n" +
+		"  'ao' hooks cline session-start || true\n" +
+		"else\n" +
 		"AO_DATA_DIR='' AO_REVIEW_SESSION_ID='' AO_REVIEW_WORKER_SESSION_ID='' " +
 		"AO_RUNTIME_LAUNCH_ID='' AO_RUN_FILE='' AO_SESSION_ID='' 'ao' hooks cline session-start || true\n" +
+		"fi\n" +
 		`echo '{"cancel": false}'` + "\n"
 	if got != want {
 		t.Fatalf("bash hook script\nwant: %q\n got: %q", want, got)
