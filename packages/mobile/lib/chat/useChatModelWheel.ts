@@ -136,6 +136,9 @@ export function useChatModelWheel({ snapshot, models, options, disabled, onSetti
 		agents,
 		chosenAgent,
 		chosenModel,
+		/** The agent the chat runs now and its model, whatever switch is picked. */
+		runningAgent: current,
+		runningModel: modelRow?.choices.find((choice) => choice.selected)?.value,
 		settings,
 		/** Switching agents waits while the agent works. */
 		agentsLocked: Boolean(otherAgents?.disabled),

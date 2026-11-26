@@ -36,7 +36,7 @@ export type WheelItem = {
 	mark?: string;
 };
 
-export function WheelPicker({ items, index, onSettle, disabled = false, align = "center", testID }: {
+export function WheelPicker({ items, index, onSettle, disabled = false, align = "center", accessibilityLabel, testID }: {
 	items: readonly WheelItem[];
 	/** The row chosen; the wheel rests on it whenever no finger turns it. */
 	index: number;
@@ -44,6 +44,8 @@ export function WheelPicker({ items, index, onSettle, disabled = false, align = 
 	onSettle: (index: number) => void;
 	disabled?: boolean;
 	align?: "center" | "left" | "right";
+	/** What the wheel picks, for a screen reader ("Model"). */
+	accessibilityLabel?: string;
 	testID?: string;
 }) {
 	const styles = useThemedStyles(makeStyles);
@@ -83,6 +85,15 @@ export function WheelPicker({ items, index, onSettle, disabled = false, align = 
 		onSettle(row);
 	};
 	const y = (event: NativeSyntheticEvent<NativeScrollEvent>) => event.nativeEvent.contentOffset.y;
+	// A screen reader's swipe up or down steps a row, as the wheel coming to
+	// rest on it would; it reads the row in the band as the wheel's value.
+	const step = (by: number) => {
+		const next = Math.max(index, 0) + by;
+		if (disabled || next < 0 || next >= items.length) return;
+		clear();
+		haptics.detent();
+		onSettle(next);
+	};
 
 	return (
 		<Animated.ScrollView
@@ -109,7 +120,13 @@ export function WheelPicker({ items, index, onSettle, disabled = false, align = 
 				settleTimer.current = setTimeout(() => settle(at), SETTLE_AFTER_DRAG_MS);
 			}}
 			onMomentumScrollEnd={(event) => settle(y(event))}
+			accessible
 			accessibilityRole="adjustable"
+			accessibilityLabel={accessibilityLabel}
+			accessibilityValue={{ text: items[index]?.label ?? items[0]?.label }}
+			accessibilityState={{ disabled }}
+			accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+			onAccessibilityAction={(event) => step(event.nativeEvent.actionName === "increment" ? 1 : -1)}
 		>
 			{items.map((item, i) => (
 				<WheelRow key={item.key} label={item.label} starred={item.starred} mark={item.mark} at={i} offset={offset} align={align} />

@@ -88,6 +88,9 @@ describe("chat model wheel", () => {
 		const { onPick } = render({ harness: "codex", model: "fable-5", modelLabel: "Fable 5" });
 		expect(wheel.chosenAgent).toBe("codex");
 		expect(wheel.chosenModel).toBe("fable-5");
+		// What the chat runs now, for the wheels to return to.
+		expect(wheel.runningAgent).toBe("claude-code");
+		expect(wheel.runningModel).toBe("opus");
 		act(() => wheel.choose("codex", "fable-5"));
 		expect(onPick).not.toHaveBeenCalled();
 		act(() => wheel.choose("claude-code", "opus"));

@@ -926,7 +926,9 @@ function Composer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} permissions={{ choices: permissions.choices, slider: permissions.slider }} modelWheel={{ slider: modelWheel.slider }} />
+						{/* With no agent or model to roll, the wheels have nothing to show:
+						    the capsule keeps its menu, so the provider's settings stay reachable. */}
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} permissions={{ choices: permissions.choices, slider: permissions.slider }} modelWheel={modelWheel.agents.length ? { slider: modelWheel.slider } : undefined} />
 					</View>
 					{steerAction}
 				</Animated.View>
@@ -950,6 +952,8 @@ function Composer({
 					agents={modelWheel.agents}
 					chosenAgent={modelWheel.chosenAgent}
 					chosenModel={modelWheel.chosenModel}
+					runningAgent={modelWheel.runningAgent}
+					runningModel={modelWheel.runningModel}
 					settings={modelWheel.settings}
 					agentsLocked={modelWheel.agentsLocked}
 					choose={modelWheel.choose}

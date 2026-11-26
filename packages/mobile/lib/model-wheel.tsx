@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Pressable } from "react-native-gesture-handler";
 import type { WheelAgent, WheelSetting } from "./chat/useChatModelWheel";
@@ -22,36 +22,85 @@ export type ModelWheelProps = {
 	agents: readonly WheelAgent[];
 	chosenAgent: string;
 	chosenModel?: string;
+	/** The agent the chat runs now and its model, which the wheels return to when it is rolled back to. */
+	runningAgent?: string;
+	runningModel?: string;
 	settings: readonly WheelSetting[];
 	agentsLocked: boolean;
 	choose: (agentId: string, modelKey: string) => void;
 	toggleSetting: (id: string) => void;
 };
 
+/** Where the wheels stand: an agent and one of its models. */
+export type WheelPosition = { agent: string; model: string };
+
 /**
  * The wheels over the composer, wired to its switch as the effort slider is:
  * built hidden once the screen is idle, revealed on open, closed by a tap
  * outside, back, or the keyboard. No timeout: a list to read.
+ *
+ * The wheels only look while they are open: where they stand is kept here,
+ * and chosen once, as the wheels close (`choose` does nothing for the pair
+ * already in force). Choosing at every stop saved a model change, which
+ * resets the effort and Fast mode, for each model rolled past on the way, and
+ * recorded an agent switch for every agent looked at.
  */
 export const ModelWheelHost = memo(function ModelWheelHost({ slider, busy, ...wheel }: ModelWheelProps & { slider: EffortSliderSwitch; busy: boolean }) {
-	const { open } = useEffortSliderOpen(wheel.agents.length ? [{ selected: true }] : [], busy, undefined, slider, null);
+	const moved = useRef<WheelPosition | undefined>(undefined);
+	const chooseRef = useRef(wheel.choose);
+	chooseRef.current = wheel.choose;
+	const commit = useCallback(() => {
+		const at = moved.current;
+		moved.current = undefined;
+		if (at) chooseRef.current(at.agent, at.model);
+	}, []);
+	const { open } = useEffortSliderOpen(wheel.agents.length ? [{ selected: true }] : [], busy, commit, slider, null);
+	// As the effort slider's host: a request card replacing the composer must
+	// not leave the wheels to reopen by themselves when the card goes.
+	useEffect(() => () => slider.setOpen(false), [slider]);
+	const onMove = useCallback((at: WheelPosition) => { moved.current = at; }, []);
 	const warm = useWarmAfterIdle();
 	if (!(open || warm) || !wheel.agents.length) return null;
 	return (
 		<ComposerOverlay overKeyboard visible={open} onDismiss={() => slider.setOpen(false)} fill>
-			<ModelWheel {...wheel} />
+			<ModelWheel {...wheel} visible={open} onMove={onMove} />
 		</ComposerOverlay>
 	);
 });
 
-export function ModelWheel({ agents, chosenAgent, chosenModel, settings, agentsLocked, choose, toggleSetting }: ModelWheelProps) {
+/** The model an agent starts on: its starred default, else its first. */
+function defaultModel(agent: WheelAgent): string | undefined {
+	return (agent.models.find((model) => model.starred) ?? agent.models[0])?.key;
+}
+
+export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, runningModel, settings, toggleSetting, agentsLocked, visible = true, onMove }: Omit<ModelWheelProps, "choose"> & {
+	visible?: boolean;
+	/** The wheels came to rest here. */
+	onMove: (at: WheelPosition) => void;
+}) {
 	const styles = useThemedStyles(makeStyles);
-	const chosenAgentIndex = Math.max(0, agents.findIndex((agent) => agent.id === chosenAgent));
-	// The agent the left wheel rests on: it leads the right wheel's list.
-	const [agentIndex, setAgentIndex] = useState(chosenAgentIndex);
-	useEffect(() => { setAgentIndex(chosenAgentIndex); }, [chosenAgentIndex]);
+	const chosen = { agent: chosenAgent, model: chosenModel ?? "" };
+	const [at, setAt] = useState<WheelPosition>(chosen);
+	// Back where the chat stands each time the wheels are put away, and when
+	// it changes from outside while they have not been turned.
+	const turned = useRef(false);
+	useEffect(() => {
+		if (visible && turned.current) return;
+		turned.current = false;
+		setAt({ agent: chosenAgent, model: chosenModel ?? "" });
+	}, [chosenAgent, chosenModel, visible]);
+	const move = (next: WheelPosition) => {
+		turned.current = true;
+		setAt(next);
+		onMove(next);
+	};
+	// An agent not in the list (one with no models to show) leaves the agent
+	// wheel on its first row without that standing for a choice: nothing is
+	// chosen until a wheel is turned.
+	const agentIndex = Math.max(0, agents.findIndex((agent) => agent.id === at.agent));
 	const agent = agents[Math.min(agentIndex, agents.length - 1)];
-	const modelIndex = agent.id === chosenAgent ? Math.max(0, agent.models.findIndex((model) => model.key === chosenModel)) : 0;
+	const found = agent.models.findIndex((model) => model.key === at.model);
+	const modelIndex = found >= 0 ? found : Math.max(0, agent.models.findIndex((model) => model.key === defaultModel(agent)));
 
 	return (
 		<View style={styles.panel} testID="model-wheel">
@@ -65,28 +114,34 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, settings, agentsL
 							index={agentIndex}
 							disabled={agentsLocked}
 							align="right"
+							accessibilityLabel="Agent"
 							testID="model-wheel-agents"
 							onSettle={(index) => {
 								const next = agents[index];
-								if (!next || index === agentIndex) return;
-								setAgentIndex(index);
-								// The running agent rests on its own model; another starts on
-								// its first, its default, unless it is the switch already picked.
-								const first = next.id === chosenAgent ? chosenModel ?? next.models[0]?.key : next.models[0]?.key;
-								if (first !== undefined) choose(next.id, first);
+								if (!next || next.id === agent.id) return;
+								// The pair in force rests on its model, the running agent on
+								// its own; another starts on its default.
+								const model = next.id === chosenAgent && chosenModel !== undefined
+									? chosenModel
+									: next.id === runningAgent && runningModel !== undefined ? runningModel : defaultModel(next);
+								if (model !== undefined) move({ agent: next.id, model });
 							}}
 						/>
 					</View>
 				) : null}
 				<View style={styles.modelColumn}>
+					{/* Keyed by agent: a settle still pending on the last agent's list
+					    is dropped with it rather than landing on the new agent. */}
 					<WheelPicker
+						key={agent.id}
 						items={agent.models}
 						index={modelIndex}
 						align={agents.length > 1 ? "left" : "center"}
+						accessibilityLabel="Model"
 						testID="model-wheel-models"
 						onSettle={(index) => {
 							const model = agent.models[index];
-							if (model) choose(agent.id, model.key);
+							if (model) move({ agent: agent.id, model: model.key });
 						}}
 					/>
 				</View>
