@@ -7410,6 +7410,18 @@ html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--floating-topbar >
 	border-color: color-mix(in srgb, var(--color-border-strong) 15%, transparent);
 }
 
+/* In dark the strong hairline at 30% all but vanishes against the frame, so
+ * the edge is a slight text tint instead, a step lighter than the frame it
+ * meets: 10%, 7% with the sidebar closed. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .center-panel-surface {
+	--center-panel-edge: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface,
+html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
 /* A page with no top bar (new chat) keeps the floating frame with its top at
  * the window inset. Closing the sidebar reserves the bar's band for the
  * traffic lights, so the top edge slides down to it, in step with the sidebar,
@@ -7665,6 +7677,17 @@ html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot
 	border-color: color-mix(in oklch, var(--color-text-primary) 2%, transparent);
 	background-image: none;
 	box-shadow: none;
+}
+
+/* In dark, a dropdown trigger brightens under the pointer and a step more
+ * while pressed or open, like every other hover on a dark surface; darkening
+ * read as the control sinking. Light keeps the deepening face. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):hover:not(:disabled, [aria-disabled="true"]) {
+	--button-face: color-mix(in oklab, var(--button-color), #fff 6%);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):is(:active, [aria-pressed="true"], [data-state="open"], [data-active="true"]):not(:disabled, [aria-disabled="true"]) {
+	--button-face: color-mix(in oklab, var(--button-color), #fff 10%);
 }
 
 /*!
