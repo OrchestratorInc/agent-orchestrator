@@ -1,13 +1,12 @@
 # Plan: Local bots, Phase 0
 
 > **Status:** Design spec, not yet implemented. Written 2026-11-26.
-> Background and competitor research: [Bots: competitive landscape and AO implementation plan](../research/bots-competitive-landscape-2026-11.md).
 
 ## Goal
 
 Ship **bots** on the desktop daemon. A bot is a named, long-lived agent that owns an outcome in one project, remembers what it learns, delegates code work to worker sessions, and surfaces only what needs its owner in a **Needs you** inbox.
 
-Phase 0 is local-only: you reach a bot from AO's own chat, the CLI, mobile, and schedules. The design is hybrid from the start. Every decision here must keep a later move possible, so that one bot can live on a laptop, a self-hosted remote host, or an AO Cloud sandbox and move between them. That hybrid is the gap no competitor fills. See the research doc's "Where bots run" section.
+Phase 0 is local-only: you reach a bot from AO's own chat, the CLI, mobile, and schedules. The design is hybrid from the start. Every decision here must keep a later move possible, so that one bot can live on a laptop, a self-hosted remote host, or an AO Cloud sandbox and move between them.
 
 ## Non-goals for Phase 0
 
