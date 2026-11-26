@@ -84,6 +84,7 @@ import { usageLimitedTurn } from "./usageLimit";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
+import { rememberChatSkills } from "./rememberedSkills";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -372,6 +373,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const title = sessionName || conversation.snapshot?.title || session.id;
 	const projectName = conversationProjectLabel(session, projects);
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
+	// What this chat's agent offers on "/", kept for the New task page's list
+	// (see rememberedSkills), so a task started next lists the same skills.
+	const skillsHarness = conversation.snapshot?.harness || session.harness || undefined;
+	useEffect(() => {
+		rememberChatSkills(currentHostId ?? undefined, skillsHarness, session.projectId || undefined, conversation.skills);
+	}, [conversation.skills, currentHostId, session.projectId, skillsHarness]);
 	const headerState = conversation.snapshot?.controller.state;
 	// The PR ready for review, as a chip over the composer that opens it.
 	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
