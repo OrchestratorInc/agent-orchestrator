@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
 import { TriangleAlert } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
@@ -187,7 +187,13 @@ function SandboxSwitchRow({ project, readOnly, configKey, id, label, description
 	// server's answer there.
 	const saved = checkedOf(project.config);
 	const [unsupported, setUnsupported] = useState(false);
+	// One sandbox save at a time across both rows: each response carries the
+	// whole project and is written to the cache, so overlapping saves could
+	// land out of order and show the other switch's old value.
+	const mutationKey = ["cloud-project-sandbox-settings", baseUrl, project.orgId, project.id];
+	const anySaving = useIsMutating({ mutationKey }) > 0;
 	const save = useMutation({
+		mutationKey,
 		mutationFn: (value: boolean) => client.updateProjectSettings(project.orgId, project.id, { config: { [configKey]: value } }),
 		onSuccess: (response) => {
 			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
@@ -203,7 +209,7 @@ function SandboxSwitchRow({ project, readOnly, configKey, id, label, description
 		</span>
 	) : description;
 	return <SettingsRow label={label} description={shownDescription}>
-		<Switch id={id} aria-label={label} checked={shown} disabled={unsupported || readOnly || save.isPending}
+		<Switch id={id} aria-label={label} checked={shown} disabled={unsupported || readOnly || anySaving}
 			onCheckedChange={(checked) => save.mutate(checked)} />
 	</SettingsRow>;
 }

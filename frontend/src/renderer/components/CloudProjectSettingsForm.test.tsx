@@ -811,4 +811,18 @@ describe("Cloud project sandbox settings", () => {
 		await waitFor(() => expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeDisabled());
 		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeChecked();
 	});
+
+	it("keeps both switches disabled while either one saves, so saves cannot overlap", async () => {
+		let finish: (() => void) | undefined;
+		mocks.patch.mockImplementationOnce((_org: string, _id: string, patch: CloudCpProjectSettingsRequest) => new Promise((resolve) => {
+			finish = () => { project = { ...project, config: { ...project.config, ...patch.config } as CloudCpProject["config"] }; resolve({ project }); };
+		}));
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" }));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeDisabled());
+		act(() => finish?.());
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeEnabled());
+		expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeChecked();
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+	});
 });
