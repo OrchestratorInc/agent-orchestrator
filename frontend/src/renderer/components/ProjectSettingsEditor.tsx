@@ -117,8 +117,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(initialValues);
 	const saved = useRef(JSON.stringify(initialValues));
-	// What the project holds now, so a pick that fails to save leaves the saved one offered.
-	const [savedModelValues, setSavedModelValues] = useState(initialValues);
 	const failedKey = useRef<{ draft: string; validity?: string; section?: SettingsSection; field?: ValidationField } | undefined>(undefined);
 	const [error, setError] = useState<string>();
 	const [replacementError, setReplacementError] = useState<string>();
@@ -130,7 +128,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		onSuccess: (result, values) => {
 			const normalized = result.values ?? values;
 			saved.current = JSON.stringify(normalized);
-			setSavedModelValues(normalized);
 			failedKey.current = undefined;
 			setDraft((current) => JSON.stringify(current) === JSON.stringify(values) ? normalized : current);
 			setReplacementError(result.replacementError ?? undefined);
@@ -248,10 +245,10 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					// The saved model is read the same way from what the project holds, so a
 					// reviewer that inherited the worker's model keeps it once a pick sets the
 					// reviewer's own agent, until that pick is saved.
-					const savedSelected = savedModelValues[fields.agent];
-					const savedAgent = savedSelected || (role === "reviewer" ? defaultReviewer(savedModelValues) : "");
-					const savedInherits = role === "reviewer" && !savedSelected && savedAgent !== "" && savedAgent === savedModelValues.workerAgent;
-					const savedModel = savedAgent !== agent ? "" : savedInherits ? savedModelValues.workerModel : savedModelValues[fields.model];
+					const savedSelected = savedValues[fields.agent];
+					const savedAgent = savedSelected || (role === "reviewer" ? defaultReviewer(savedValues) : "");
+					const savedInherits = role === "reviewer" && !savedSelected && savedAgent !== "" && savedAgent === savedValues.workerAgent;
+					const savedModel = savedAgent !== agent ? "" : savedInherits ? savedValues.workerModel : savedValues[fields.model];
 					const updateConfig = (key: RoleFields["model"] | RoleFields["mode"] | RoleFields["effort"] | RoleFields["permissions"], value: string) => setDraft((current) => ({
 						...current,
 						...(role === "reviewer" && !current.reviewerHarness && agent
