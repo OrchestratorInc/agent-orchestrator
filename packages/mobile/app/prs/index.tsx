@@ -27,10 +27,12 @@ import { useToast } from "../../lib/useToast";
 import { Button, EmptyState } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import type { DashboardPR } from "../../lib/api";
 import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
 import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
 import type { ArchivedPRState } from "../../lib/api";
+import { useLastVerifiedConfigs } from "../../lib/useLastVerifiedConfig";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -66,6 +68,9 @@ export default function PRsScreen() {
 
 function PRList() {
 	const t = useTheme();
+	// Android's clear pill bar: the list starts below it (iOS insets itself).
+	const glassInset = useGlassBarInset();
+	const barInset = Platform.OS === "android" ? glassInset : 0;
 	const styles = useThemedStyles(makeStyles);
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();
 	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId, cloud } = useApp();
@@ -160,6 +165,9 @@ function PRList() {
 		return config ? [{ config, sessionId: session.id }] : [];
 	}), [shownRows, summaryReach, archivedKeys, configForHost]);
 	const summaries = usePRSummaries(summaryTargets);
+	// Cards read their detail with the last verified connection of their machine,
+	// so it stays through an app switch. Fetches above use only the live one.
+	const summaryConfigFor = useLastVerifiedConfigs(configForHost);
 	// A cloud session's detail comes from Orchestrator Cloud, not a daemon,
 	// stamped with its pull requests' states: one merged or closed in Cloud
 	// reads afresh rather than keeping its open card until the reuse runs out.
@@ -199,7 +207,7 @@ function PRList() {
 		return (
 			<View style={styles.screen} collapsable={false}>
 				<StackRootBack />
-				<TabPageScroll>
+				<TabPageScroll topInset={barInset}>
 					<UnpairedState />
 				</TabPageScroll>
 			</View>
@@ -232,13 +240,13 @@ function PRList() {
 				keyExtractor={listKey}
 				onViewableItemsChanged={onViewableItemsChanged}
 				contentInsetAdjustmentBehavior="automatic"
-				contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
+				contentContainerStyle={{ flexGrow: 1, paddingTop: barInset, paddingBottom: space.xxl }}
 				stickySectionHeadersEnabled={false}
 				ListHeaderComponent={listHeader}
-				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
+				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} progressViewOffset={barInset} {...refreshControlColors(t)} />}
 				renderSectionHeader={({ section }) => <PRSectionHeader label={section.label} count={section.data.length} />}
 				renderItem={({ item: { pr, session }, index, section }) => {
-					const config = configForHost(session.hostId);
+					const config = summaryConfigFor(session.hostId);
 					return <PRCard
 						pr={pr}
 						session={session}

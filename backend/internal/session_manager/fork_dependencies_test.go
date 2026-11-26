@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -32,7 +33,7 @@ func TestForkClonesDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	cloned, err := cloneForkDependencies(context.Background(), src, dst)
-	if errors.Is(err, errCloneUnsupported) {
+	if errors.Is(err, dirseed.ErrCloneUnsupported) {
 		t.Skip("copy-on-write clones are not supported here")
 	}
 	if err != nil {
@@ -60,7 +61,7 @@ func TestForkKeepsExistingDependencies(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
 	writeTestFile(t, filepath.Join(src, "node_modules", "a.js"), "source")
 	writeTestFile(t, filepath.Join(dst, "node_modules", "a.js"), "fork")
-	if _, err := cloneForkDependencies(context.Background(), src, dst); err != nil && !errors.Is(err, errCloneUnsupported) {
+	if _, err := cloneForkDependencies(context.Background(), src, dst); err != nil && !errors.Is(err, dirseed.ErrCloneUnsupported) {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dst, "node_modules", "a.js")); string(b) != "fork" {
@@ -74,7 +75,7 @@ func TestForkSetupRunsWithAOFork(t *testing.T) {
 	project := domain.ProjectRecord{ID: "mer", Path: t.TempDir()}
 	project.Config.PostCreate = []string{`printf '%s' "$AO_FORK" > fork-flag`}
 	m.markForkWorkspace(ws)
-	if err := m.provisionWorkspace(context.Background(), project, ws); err != nil {
+	if err := m.provisionWorkspace(context.Background(), project, "", ws); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(ws, "fork-flag"))
@@ -82,7 +83,7 @@ func TestForkSetupRunsWithAOFork(t *testing.T) {
 		t.Fatalf("AO_FORK = %q", b)
 	}
 	plain := t.TempDir()
-	if err := m.provisionWorkspace(context.Background(), project, plain); err != nil {
+	if err := m.provisionWorkspace(context.Background(), project, "", plain); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(plain, "fork-flag")); strings.TrimSpace(string(b)) != "" {

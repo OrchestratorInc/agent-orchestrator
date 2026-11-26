@@ -49,7 +49,6 @@ import {
 	Copy,
 	CornerDownLeft,
 	CornerDownRight,
-	File as FileIcon,
 	FileDiff,
 	FilePen,
 	FilePlus,
@@ -185,6 +184,7 @@ import {
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
 import { WorkspacePathSegments } from "../ChangedFilesList";
+import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -976,8 +976,10 @@ function useUserTextRenderer(sessionId: string, body: string, attachments: strin
 }
 
 // A list, quote or code block at either end of a message sits flush with the
-// bubble's padding instead of adding its own outer margin.
-const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+// bubble's padding instead of adding its own outer margin. Lines wrap normally:
+// `text-wrap: pretty` pulls words down to avoid a short last line after the bubble
+// has already sized itself to the full line, leaving empty room on the right.
+const USER_BODY_CLASS = "break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0";
 
 const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
 
@@ -4246,7 +4248,7 @@ export function TurnChangedFiles({
 					const body = (
 						<>
 							<span className="sr-only">{status.label}</span>
-							<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+							<WorkspaceEntryIcon kind="file" name={fileBasename(openPath)} />
 							<span
 								className="flex min-w-0 flex-1 text-xs"
 								title=""
@@ -4291,7 +4293,7 @@ export function TurnChangedFiles({
 							) : (
 								<div className={rowClass}>
 									<span className="sr-only">{status.label}</span>
-									<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+									<WorkspaceEntryIcon kind="file" name={fileBasename(openPath)} />
 									<FileLocationLabel
 										path={openPath}
 										showFullPath

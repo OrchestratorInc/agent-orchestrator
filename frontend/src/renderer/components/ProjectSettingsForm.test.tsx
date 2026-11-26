@@ -10,7 +10,7 @@ function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, setOrchestratorReplacementErrorMock, captureOrchestratorReplacementFailureMock, ensureAgentReadinessMock, trackerIntakeGate } = vi.hoisted(() => ({
+const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, setOrchestratorReplacementErrorMock, captureOrchestratorReplacementFailureMock, ensureAgentReadinessMock, trackerIntakeGate, commitAttributionGate, modelVisibilityGate } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	putMock: vi.fn(),
 	postMock: vi.fn(),
@@ -21,6 +21,8 @@ const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalS
 	captureOrchestratorReplacementFailureMock: vi.fn(),
 	ensureAgentReadinessMock: vi.fn(),
 	trackerIntakeGate: { enabled: true },
+	commitAttributionGate: { enabled: false },
+	modelVisibilityGate: { disabledModels: [] as string[] },
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
@@ -50,7 +52,7 @@ vi.mock("../lib/orchestrator-replacement-telemetry", () => ({
 }));
 
 vi.mock("../hooks/useSettings", () => ({
-	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
+	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled, commitAttribution: commitAttributionGate.enabled, harnessDefaults: { codex: { disabledModels: modelVisibilityGate.disabledModels } } }, isLoading: false, error: undefined }),
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -204,6 +206,8 @@ beforeEach(() => {
 	captureOrchestratorReplacementFailureMock.mockReset();
 	ensureAgentReadinessMock.mockReset();
 	trackerIntakeGate.enabled = true;
+	commitAttributionGate.enabled = false;
+	modelVisibilityGate.disabledModels = [];
 	putMock.mockResolvedValue({ data: { project: {} }, error: undefined });
 	postMock.mockResolvedValue({
 		data: { orchestrator: { id: "proj-1-orch-2" } },
@@ -502,6 +506,248 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(
 			expect.objectContaining({ model: "gpt-test", effort: "low" }),
 		);
+	});
+
+	// #8008: re-picking what the agent uses by default pins it, so the role keeps
+	// it when the agent's default changes, and "Use agent model" unpins it.
+	function mockCodexDefaults(agentConfig: Record<string, unknown>) {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [
+					{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
+					{ id: "gpt-6.1-mini", label: "GPT-6.1-Mini", efforts: ["low", "high"] },
+				],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+	}
+
+	it("pins the agent's default model and effort when they are picked explicitly", async () => {
+		mockCodexDefaults({ permissions: "auto" });
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-6.1-Sol"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-6.1-Sol" }));
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		await userEvent.click(effort);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(
+			expect.objectContaining({ model: "gpt-6.1-sol", effort: "low" }),
+		);
+	});
+
+	it("unpins a pinned default with Use agent model", async () => {
+		mockCodexDefaults({ model: "gpt-6.1-sol", effort: "low", permissions: "auto" });
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-6.1-Sol"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const saved = putMock.mock.calls[0][1].body.config.worker.agentConfig;
+		expect(saved).not.toHaveProperty("model");
+		expect(saved).not.toHaveProperty("effort");
+	});
+
+	it("leaves effort unpinned after Use agent model when the default model reports no default effort", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				// No defaultEffort: AO would otherwise fill in its own middle level.
+				models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", isDefault: true, efforts: ["low", "medium", "high"] }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { model: "gpt-6.1-sol", effort: "high", permissions: "auto" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-6.1-Sol"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const saved = putMock.mock.calls[0][1].body.config.worker.agentConfig;
+		expect(saved).not.toHaveProperty("model");
+		expect(saved).not.toHaveProperty("effort");
+	});
+
+	it.each([
+		["GPT-6.1-Sol", "gpt-6.1-sol"],
+		["GPT-6.1-Mini", "gpt-6.1-mini"],
+	])("reapplies AO's fallback effort when %s is picked again after Use agent model", async (label, model) => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [
+					{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", isDefault: true, efforts: ["low", "medium", "high"] },
+					{ id: "gpt-6.1-mini", label: "GPT-6.1-Mini", efforts: ["low", "medium", "high"] },
+				],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { permissions: "auto" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-6.1-Sol"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: label }));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: label }));
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("Medium");
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(
+			expect.objectContaining({ model, effort: "medium" }),
+		);
+	});
+
+	// #5679: a saved model the account's list lacks stays a noted row.
+	it("keeps a saved model the account's catalog lacks as a noted row", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("gpt-5.4-mini"));
+		await userEvent.click(picker);
+		const pinned = screen.getByRole("menuitem", { name: /gpt-5\.4-mini/ });
+		expect(pinned).toHaveTextContent("Set for this project · Codex doesn't list it for this account");
+		expect(pinned).not.toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(pinned);
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(expect.objectContaining({ model: "gpt-5.4-mini" }));
+	});
+
+	it("still offers the saved unlisted model after a replacement fails to save", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }, { id: "gpt-5.2", label: "GPT-5.2" }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		putMock.mockResolvedValue({ data: undefined, error: { message: "settings rejected" } });
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("gpt-5.4-mini"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: /GPT-5\.2/ }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-5.2"));
+		await userEvent.click(picker);
+		const pinned = screen.getByRole("menuitem", { name: /gpt-5\.4-mini/ });
+		expect(pinned).toHaveTextContent("Set for this project · Codex doesn't list it for this account");
+		await userEvent.click(pinned);
+		await waitFor(() => expect(picker).toHaveTextContent("gpt-5.4-mini"));
+	});
+
+	it("keeps a saved switched-off catalog model labelled as listed after a failed save", async () => {
+		modelVisibilityGate.disabledModels = ["gpt-5.4-mini"];
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }, { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		putMock.mockResolvedValue({ data: undefined, error: { message: "settings rejected" } });
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-5.4 Mini"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.1" }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		await userEvent.click(picker);
+		const saved = screen.getByRole("menuitem", { name: "GPT-5.4 Mini" });
+		expect(saved).not.toHaveTextContent("doesn't list it for this account");
+		expect(saved).not.toHaveAttribute("aria-disabled", "true");
+	});
+
+	it("still offers an inherited reviewer's unlisted model after a replacement fails to save", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }, { id: "gpt-5.2", label: "GPT-5.2" }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		putMock.mockResolvedValue({ data: undefined, error: { message: "settings rejected" } });
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Reviewer model" });
+		await waitFor(() => expect(picker).toHaveTextContent("gpt-5.4-mini"));
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: /GPT-5\.2/ }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.reviewers).toEqual([expect.objectContaining({ harness: "codex" })]);
+		await waitFor(() => expect(picker).toHaveTextContent("GPT-5.2"));
+		await userEvent.click(picker);
+		const pinned = screen.getByRole("menuitem", { name: /gpt-5\.4-mini/ });
+		expect(pinned).toHaveTextContent("Set for this project · Codex doesn't list it for this account");
+		await userEvent.click(pinned);
+		await waitFor(() => expect(picker).toHaveTextContent("gpt-5.4-mini"));
 	});
 
 	it("saves Claude effort from the effort chip beside the model picker", async () => {
@@ -863,6 +1109,27 @@ describe("ProjectSettingsForm", () => {
 		expect(await beginEdit("Session prefix")).toHaveValue("po");
 	});
 
+	it("shows orchestrator as the session prefix new sessions get when none is set", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "agent-a" },
+				orchestrator: { agent: "agent-b" },
+			},
+		});
+
+		renderSettings("proj-1", undefined, "general");
+
+		const input = await beginEdit("Session prefix");
+		expect(input).toHaveValue("");
+		expect(input).toHaveAttribute("placeholder", "orchestrator");
+	});
+
 	it("loads and saves the project auto review setting", async () => {
 		mockProject({
 			id: "proj-1",
@@ -921,6 +1188,67 @@ describe("ProjectSettingsForm", () => {
 		const request = putMock.mock.calls[0]?.[1];
 		expect(request?.body.config.workersRequestReview).toBe(true);
 		expect(request?.body.config.reviewers).toBeUndefined();
+	});
+
+	it("hides the attribution switches while the beta is off", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: { worker: { agent: "agent-a" }, orchestrator: { agent: "agent-b" } },
+		});
+		renderSettings("proj-1", undefined, "general");
+		await screen.findByRole("switch", { name: "Workers request a built-in review" });
+		expect(screen.queryByRole("switch", { name: "Credit Orchestrator on commits" })).toBeNull();
+		expect(screen.queryByRole("switch", { name: "Sign PRs" })).toBeNull();
+	});
+
+	it("shows attribution on by default and saves only the parts turned off", async () => {
+		commitAttributionGate.enabled = true;
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: { worker: { agent: "agent-a" }, orchestrator: { agent: "agent-b" } },
+		});
+		renderSettings("proj-1", undefined, "general");
+		const trailer = await screen.findByRole("switch", { name: "Credit Orchestrator on commits" });
+		const footer = screen.getByRole("switch", { name: "Sign PRs" });
+		expect(trailer).toBeChecked();
+		expect(footer).toBeChecked();
+
+		await userEvent.click(trailer);
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0]?.[1]?.body.config.attribution).toEqual({ disableCommitTrailer: true });
+	});
+
+	it("loads a turned-off PR footer and clears the opt-out when turned back on", async () => {
+		commitAttributionGate.enabled = true;
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: { worker: { agent: "agent-a" }, orchestrator: { agent: "agent-b" }, attribution: { disablePRFooter: true } },
+		});
+		renderSettings("proj-1", undefined, "general");
+		const footer = await screen.findByRole("switch", { name: "Sign PRs" });
+		expect(footer).not.toBeChecked();
+		expect(screen.getByRole("switch", { name: "Credit Orchestrator on commits" })).toBeChecked();
+
+		await userEvent.click(footer);
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0]?.[1]?.body.config.attribution).toBeUndefined();
 	});
 
 	// With no reviewer configured the daemon reviews with the default worker

@@ -210,12 +210,13 @@ describe("collapsed and expanded composer", () => {
 });
 
 describe("composer chips", () => {
-	// The session's PR, what it changed, the context meter and the account's
+	// The session's PR, what it changed, its device, the context meter and the account's
 	// quota sit over the composer, open or not.
 	it("shows the session's state as chips that say where they lead", () => {
-		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter || quotaChip ?");
+		expect(composer).toContain("const chips = activeReviewPR || changes || device || contextMeter || quotaChip ?");
 		expect(composer).toContain('accessibilityHint="Opens the pull request review" onPress={onOpenReview}');
 		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
+		expect(composer).toContain('accessibilityHint="Opens the device screen" onPress={device.onOpen}');
 		expect(composer).toContain('accessibilityHint="Opens context and usage" onPress={onOpenUsage}');
 	});
 

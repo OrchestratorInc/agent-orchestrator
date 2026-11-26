@@ -68,6 +68,7 @@ export type ConversationTurn = {
 	hasRetryAttempt?: boolean;
 	/** The turn answers a person's prompt, not an automation's. */
 	hasHumanPrompt?: boolean;
+	hasEventPrompt?: boolean;
 	/**
 	 * Where the turn sorts when its prompt is above the loaded history (a Cloud
 	 * chat read newest first): just before the loaded events, which its first
