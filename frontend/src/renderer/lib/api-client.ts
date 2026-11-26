@@ -137,6 +137,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/{agent}/models",
 	"/api/v1/agents/{agent}/models/refresh",
 	"/api/v1/agents/{agent}/probe",
+	"/api/v1/agents/{agent}/skills",
 	"/api/v1/agents/{agent}/verify",
 	"/api/v1/desktop/sessions/{sessionId}/workspace",
 	"/api/v1/events",
@@ -285,6 +286,9 @@ const EXPECTED_PROBE_CONFLICTS = new Set([
 	"GET /api/v1/sessions/:id/conversation/config-options",
 	"GET /api/v1/sessions/:id/conversation/models",
 	"GET /api/v1/sessions/:id/conversation/skills",
+	// A remote host older than the new chat page's skill scan answers 404; the
+	// page keeps the list a session last reported.
+	"GET /api/v1/agents/:id/skills",
 ]);
 
 function expectedProbeConflict(operation: string, status?: number): boolean {

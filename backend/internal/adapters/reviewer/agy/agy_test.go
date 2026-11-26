@@ -2,6 +2,9 @@ package agy
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -19,6 +22,92 @@ func testReviewer(help, version string) *Reviewer {
 			}
 			return []byte(version), nil
 		},
+	}
+}
+
+// signInReviewer answers `agy models` with the given output and error.
+func signInReviewer(models string, modelsErr error) *Reviewer {
+	r := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9")
+	base := r.run
+	r.run = func(ctx context.Context, env map[string]string, binary string, args ...string) ([]byte, error) {
+		if slices.Equal(args, []string{"models"}) {
+			return []byte(models), modelsErr
+		}
+		return base(ctx, env, binary, args...)
+	}
+	return r
+}
+
+func TestReviewCommandSignInProbe(t *testing.T) {
+	inv := func(dataDir string) ports.ReviewInvocation {
+		return ports.ReviewInvocation{DataDir: dataDir, ReviewerID: "review-worker-1", TaskPromptRoot: "/ao/prompts", WorkspacePath: "/worker", Prompt: "p"}
+	}
+
+	dataDir := t.TempDir()
+	_, err := signInReviewer("Fetching available models... Error: Please sign in to view available models.", nil).ReviewCommand(context.Background(), inv(dataDir))
+	home := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config")
+	if err == nil || !strings.Contains(err.Error(), "not signed in") || !strings.Contains(err.Error(), home) {
+		t.Fatalf("signed-out err = %v, want sign-in guidance naming %s", err, home)
+	}
+	var authErr *ports.ReviewerAuthRequiredError
+	if !errors.Is(err, ports.ErrChatAuthRequired) || !errors.As(err, &authErr) || !strings.Contains(authErr.Guidance, home) {
+		t.Fatalf("signed-out err = %#v, want ReviewerAuthRequiredError matching ErrChatAuthRequired", err)
+	}
+	if !strings.Contains(authErr.Guidance, "HOME="+shellQuote(home)+" XDG_CONFIG_HOME="+shellQuote(home)+" '/opt/agy/bin/agy'") {
+		t.Fatalf("guidance = %q, want single-quoted sign-in command", authErr.Guidance)
+	}
+
+	for name, r := range map[string]*Reviewer{
+		"signed in":   signInReviewer("gemini-3-flash\tGemini 3 Flash\n", nil),
+		"probe error": signInReviewer("", errors.New("deadline exceeded")),
+	} {
+		spec, err := r.ReviewCommand(context.Background(), inv(t.TempDir()))
+		if err != nil || !slices.Contains(spec.Argv, "--prompt-interactive") {
+			t.Fatalf("%s: spec = %+v, err = %v; want launch", name, spec, err)
+		}
+	}
+}
+
+func TestReviewCommandSignInProbeUsesProjectEnv(t *testing.T) {
+	const gateway = "AGY_LLM_GATEWAY_URL"
+	var probeEnv map[string]string
+	r := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9")
+	base := r.run
+	r.run = func(ctx context.Context, env map[string]string, binary string, args ...string) ([]byte, error) {
+		if slices.Equal(args, []string{"models"}) {
+			probeEnv = env
+			if env[gateway] == "" {
+				return []byte("Error: Please sign in to view available models."), nil
+			}
+			return []byte("gateway-model\tGateway Model\n"), nil
+		}
+		return base(ctx, env, binary, args...)
+	}
+	dataDir := t.TempDir()
+	inv := ports.ReviewInvocation{
+		DataDir: dataDir, ReviewerID: "review-worker-1", TaskPromptRoot: "/ao/prompts", WorkspacePath: "/worker", Prompt: "p",
+		ProjectEnv: map[string]string{gateway: "https://gateway.example", "HOME": "/project/home"},
+	}
+	if _, err := r.ReviewCommand(context.Background(), inv); err != nil {
+		t.Fatalf("ReviewCommand with project gateway env: %v", err)
+	}
+	if probeEnv[gateway] != "https://gateway.example" {
+		t.Fatalf("probe env missing project %s: %#v", gateway, probeEnv)
+	}
+	if want := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config"); probeEnv["HOME"] != want {
+		t.Fatalf("probe HOME = %q, want reviewer home %q", probeEnv["HOME"], want)
+	}
+}
+
+func TestShellQuoteKeepsPathsLiteral(t *testing.T) {
+	for in, want := range map[string]string{
+		"/ao/reviewer home/config": `'/ao/reviewer home/config'`,
+		"/data/$USER/config":       `'/data/$USER/config'`,
+		"/data/it's/config":        `'/data/it'"'"'s/config'`,
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
 	}
 }
 
@@ -53,10 +142,235 @@ func TestReviewCommandLaunchesHostTrustedInteractiveTUI(t *testing.T) {
 	if spec.Env["HOME"] != filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config") || spec.Env["AO_DATA_DIR"] != dataDir {
 		t.Fatalf("AO-owned environment = %#v", spec.Env)
 	}
+	assertOnboardingComplete(t, filepath.Join(spec.Env["HOME"], ".gemini", "antigravity-cli", "cache", "onboarding.json"))
+	if got := readTrusted(t, filepath.Join(spec.Env["HOME"], ".gemini", "antigravity-cli", "settings.json")); !slices.Equal(got, []string{"/worker"}) {
+		t.Fatalf("trusted workspaces = %#v, want only the reviewer workspace", got)
+	}
+}
+
+func TestReviewCommandPassesConfiguredModel(t *testing.T) {
+	inv := ports.ReviewInvocation{
+		DataDir:        t.TempDir(),
+		ReviewerID:     "review-worker-1",
+		TaskPromptRoot: "/ao/prompts/worker/reviewer",
+		WorkspacePath:  "/worker",
+		Prompt:         "Read and follow `/ao/task.md`.",
+	}
+	inv.Config.Model = "  gemini-3-pro  "
+	spec, err := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9").ReviewCommand(context.Background(), inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/opt/agy/bin/agy", "--sandbox", "--model", "gemini-3-pro", "--add-dir", "/worker", "--add-dir", "/ao/prompts/worker/reviewer", "--prompt-interactive", "Read and follow `/ao/task.md`."}
+	if !slices.Equal(spec.Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", spec.Argv, want)
+	}
+}
+
+func TestInteractiveArgvModelFlag(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		want  []string
+	}{
+		{"", []string{"agy", "--sandbox", "--prompt-interactive", "p"}},
+		{"   ", []string{"agy", "--sandbox", "--prompt-interactive", "p"}},
+		{"gemini-3-flash", []string{"agy", "--sandbox", "--model", "gemini-3-flash", "--prompt-interactive", "p"}},
+	} {
+		if got := interactiveArgv("agy", "", "", tc.model, "p"); !slices.Equal(got, tc.want) {
+			t.Errorf("interactiveArgv(model=%q) = %#v, want %#v", tc.model, got, tc.want)
+		}
+	}
+}
+
+func TestSeedOnboardingCompletePreservesExistingState(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "cache", "onboarding.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"consumerOnboardingComplete":false,"enterpriseOnboardingComplete":false,"onboardingComplete":false,"other":"kept"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedOnboardingComplete(root); err != nil {
+		t.Fatalf("seedOnboardingComplete: %v", err)
+	}
+	state := assertOnboardingComplete(t, path)
+	if string(state["other"]) != `"kept"` {
+		t.Fatalf("existing keys not preserved: %s", state)
+	}
+
+	// Corrupt state is replaced rather than blocking the reviewer launch.
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedOnboardingComplete(root); err != nil {
+		t.Fatalf("seedOnboardingComplete(corrupt): %v", err)
+	}
+	assertOnboardingComplete(t, path)
+
+	// Unreadable (write-only) state is replaced with a private, readable file.
+	if err := os.Chmod(path, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedOnboardingComplete(root); err != nil {
+		t.Fatalf("seedOnboardingComplete(unreadable): %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("onboarding state mode = %o, want 600", mode)
+	}
+	assertOnboardingComplete(t, path)
+}
+
+func TestSeedTrustedWorkspaceFreshSettingsTrustsOnlyWorkspace(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "worktrees", "worker-1")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seedTrustedWorkspace(root, workspace); err != nil {
+		t.Fatalf("seedTrustedWorkspace: %v", err)
+	}
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "settings.json")
+	want := []string{workspace}
+	if resolved != workspace {
+		want = append(want, resolved)
+	}
+	got := readTrusted(t, path)
+	if !slices.Equal(got, want) {
+		t.Fatalf("trusted = %#v, want %#v", got, want)
+	}
+	home, _ := os.UserHomeDir()
+	for _, entry := range got {
+		if entry == filepath.Dir(workspace) || entry == home || entry == "/" || entry == "~" {
+			t.Fatalf("trust broadened to %q", entry)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode = %v, %v; want 0600", info, err)
+	}
+}
+
+func TestSeedTrustedWorkspacePreservesExistingSettings(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permissions":{"allow":["Read"]},"trustedWorkspaces":["/existing/project",7]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // idempotent: a retry adds nothing
+		if err := seedTrustedWorkspace(root, "/worker"); err != nil {
+			t.Fatalf("seedTrustedWorkspace: %v", err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if string(settings["permissions"]) != `{"allow":["Read"]}` {
+		t.Fatalf("unrelated settings not preserved: %s", raw)
+	}
+	if string(settings["trustedWorkspaces"]) != `["/existing/project",7,"/worker"]` {
+		t.Fatalf("trustedWorkspaces = %s, want existing entries kept and /worker added once", settings["trustedWorkspaces"])
+	}
+}
+
+func TestSeedTrustedWorkspaceScopeAndInvalidInput(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "settings.json")
+	for _, workspace := range []string{"", "   ", "relative/worker"} {
+		if err := seedTrustedWorkspace(root, workspace); err != nil {
+			t.Fatalf("seedTrustedWorkspace(%q): %v", workspace, err)
+		}
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty or relative workspace wrote settings: %v", err)
+	}
+
+	// A symlinked workspace trusts the link and its target, nothing above them.
+	base := t.TempDir()
+	target := filepath.Join(base, "real", "worker")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seedTrustedWorkspace(root, link+"/"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTrusted(t, path); !slices.Equal(got, []string{link, resolvedTarget}) {
+		t.Fatalf("symlink trusted = %#v, want [%s %s]", got, link, resolvedTarget)
+	}
+
+	// Corrupt settings and a non-list trust value are replaced.
+	for _, content := range []string{"not json", `{"trustedWorkspaces":"oops"}`} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := seedTrustedWorkspace(root, "/worker"); err != nil {
+			t.Fatalf("seedTrustedWorkspace(%q): %v", content, err)
+		}
+		if got := readTrusted(t, path); !slices.Equal(got, []string{"/worker"}) {
+			t.Fatalf("after %q trusted = %#v", content, got)
+		}
+	}
+}
+
+func readTrusted(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings struct {
+		TrustedWorkspaces []string `json:"trustedWorkspaces"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatalf("decode settings %q: %v", raw, err)
+	}
+	return settings.TrustedWorkspaces
+}
+
+func assertOnboardingComplete(t *testing.T, path string) map[string]json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read onboarding state: %v", err)
+	}
+	state := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatalf("decode onboarding state %q: %v", raw, err)
+	}
+	for _, key := range []string{"consumerOnboardingComplete", "enterpriseOnboardingComplete", "onboardingComplete"} {
+		if string(state[key]) != "true" {
+			t.Fatalf("%s = %s, want true (state %s)", key, state[key], raw)
+		}
+	}
+	return state
 }
 
 func TestInteractiveArgvIsPermanentTUIOnly(t *testing.T) {
-	argv := interactiveArgv("agy", "/worker", "/ao/prompts", "Read and follow `/ao/task.md`.")
+	argv := interactiveArgv("agy", "/worker", "/ao/prompts", "", "Read and follow `/ao/task.md`.")
 	want := []string{"agy", "--sandbox", "--add-dir", "/worker", "--add-dir", "/ao/prompts", "--prompt-interactive", "Read and follow `/ao/task.md`."}
 	if !slices.Equal(argv, want) {
 		t.Fatalf("argv = %#v, want %#v", argv, want)

@@ -657,7 +657,8 @@ type SessionArtifactView struct {
 // RegisterArtifactsRequest is the body of POST
 // /api/v1/sessions/{sessionId}/artifact-registrations.
 type RegisterArtifactsRequest struct {
-	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	Paths      []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	WorkingDir string   `json:"workingDir,omitempty" description:"The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there."`
 }
 
 // RegisterArtifactsResponse reports what a registration did, so the agent can
@@ -2356,6 +2357,12 @@ type AgentModelsQuery struct {
 	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
 }
 
+// AgentSkillsQuery names the project whose own skill folders are scanned
+// alongside the user's.
+type AgentSkillsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Project whose skill folders are read before the user's. Omitted scans only the user's own skills."`
+}
+
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a device-wide model catalog.
 type AgentModelsRefreshQuery struct {
@@ -3980,6 +3987,7 @@ type ConversationTurnResponse struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool                            `json:"hasEventPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
 	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
