@@ -12,7 +12,8 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ t
 vi.mock("react-native-svg", () => ({ default: "Svg", Defs: "Defs", LinearGradient: "LinearGradient", Rect: "Rect", Stop: "Stop" }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ bgBase: "#bgBase" }) }));
 
-import { Frost, FROST_TAIL, frostStops, NAVIGATION_BAR_HEIGHT, useTabBarFrost } from "./frost";
+import { BOARD_BAR_HEIGHT, BOARD_BAR_MARGIN } from "./board-bar-layout";
+import { Frost, FROST_BAR, FROST_EDGE, FROST_TAIL, frostStops, useTabBarFrost } from "./frost";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -23,11 +24,14 @@ afterEach(() => {
 });
 
 describe("frostStops", () => {
-	it("is solid through the bar and dissolves over the tail", () => {
+	it("stays translucent through the bar and dissolves over the tail", () => {
 		const stops = frostStops(104);
 		const bar = 104 / (104 + FROST_TAIL);
-		expect(stops[0]).toEqual([0, 1]);
-		expect(stops.find(([offset]) => offset === bar)?.[1]).toBe(1);
+		expect(stops[0]).toEqual([0, FROST_EDGE]);
+		expect(stops.find(([offset]) => offset === bar)?.[1]).toBe(FROST_BAR);
+		// The page stays faintly visible at the edge, and the bar's items stay legible over it.
+		expect(FROST_EDGE).toBeLessThan(1);
+		expect(FROST_BAR).toBeGreaterThanOrEqual(0.85);
 		expect(stops.at(-1)).toEqual([1, 0]);
 		// Never thickens on the way out, and never jumps back.
 		for (let index = 1; index < stops.length; index++) {
@@ -55,10 +59,10 @@ describe("useTabBarFrost", () => {
 		return ref.current;
 	}
 
-	// Material's 80dp bar pads the system navigation below its items.
-	it("clears Android's bar and the system navigation under it, and frosts both", () => {
+	// The board bar floats its margin above the system navigation.
+	it("clears Android's board bar and the system navigation under it, and frosts both", () => {
 		const { inset, frost } = renderHook();
-		expect(inset).toBe(NAVIGATION_BAR_HEIGHT + 24);
+		expect(inset).toBe(BOARD_BAR_HEIGHT + BOARD_BAR_MARGIN + 24);
 		expect(frost).not.toBeNull();
 	});
 

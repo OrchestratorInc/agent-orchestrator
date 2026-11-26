@@ -35,6 +35,9 @@ type AgentConfig struct {
 	// project/role preference; new sessions fall back to Auto when none is saved.
 	// Other adapter callers retain their existing baseline for an empty value.
 	Permissions PermissionMode `json:"permissions,omitempty"`
+	// TerminateOnPRMerge controls whether sessions auto-terminate when their PR
+	// is merged. Nil falls back to surrounding project/global configuration.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 	// Launch carries one session's own launch choices to its adapter. It is
 	// never part of a saved or served project config.
 	Launch AgentLaunchOptions `json:"-"`

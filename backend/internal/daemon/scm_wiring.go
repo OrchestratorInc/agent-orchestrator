@@ -10,6 +10,7 @@ import (
 	scmgitlab "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/gitlab"
 	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -131,16 +132,22 @@ func newMultiSCMMerger(gitlabCfg config.GitLabConfig, logger *slog.Logger) *scmm
 	return scmmulti.NewMerger(named...)
 }
 
-// scmReviewRefresher hands review-refresh requests to the SCM observer once it
+// scmRefreshTarget is what the running observer offers early-refresh callers.
+type scmRefreshTarget interface {
+	reviewsvc.ThreadRefresher
+	RequestSessionRefresh(sessionID domain.SessionID)
+}
+
+// scmReviewRefresher hands early-refresh requests to the SCM observer once it
 // is running. Before then, or without any SCM provider, a request is dropped
-// and the observer's regular poll picks the review up.
+// and the observer's regular poll picks the change up.
 type scmReviewRefresher struct {
 	mu     sync.RWMutex
-	target reviewsvc.ThreadRefresher
+	target scmRefreshTarget
 }
 
 // Bind attaches the running observer.
-func (r *scmReviewRefresher) Bind(target reviewsvc.ThreadRefresher) {
+func (r *scmReviewRefresher) Bind(target scmRefreshTarget) {
 	if r == nil {
 		return
 	}
@@ -159,6 +166,16 @@ func (r *scmReviewRefresher) RequestReviewRefresh(prURL string) {
 	r.mu.RUnlock()
 	if target != nil {
 		target.RequestReviewRefresh(prURL)
+	}
+}
+
+// RequestSessionRefresh forwards to the bound observer without blocking.
+func (r *scmReviewRefresher) RequestSessionRefresh(id domain.SessionID) {
+	r.mu.RLock()
+	target := r.target
+	r.mu.RUnlock()
+	if target != nil {
+		target.RequestSessionRefresh(id)
 	}
 }
 

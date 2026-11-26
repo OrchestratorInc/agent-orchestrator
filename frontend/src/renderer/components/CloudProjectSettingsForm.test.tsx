@@ -110,26 +110,33 @@ describe("Cloud project settings", () => {
 			{ id: "other-model", label: "Other model", efforts: ["low", "high", "max"] },
 		] } });
 		const view = mount();
+		const approval = role === "orchestrator" ? "Orchestrator agent approval" : `${label} approval`;
+		const effort = role === "orchestrator" ? "Orchestrator agent Effort" : `${label} Effort`;
 		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeEnabled();
 		const model = await screen.findByRole("button", { name: `${label} model` });
 		// An unset model names the agent's real default instead of a placeholder.
-		await waitFor(() => expect(model).toHaveTextContent("Local default · High"));
+		await waitFor(() => expect(model).toHaveTextContent("Local default"));
 		expect(model).not.toHaveTextContent("Agent default");
+		expect(model).not.toHaveTextContent("High");
+		expect(screen.getByRole("button", { name: effort })).toHaveTextContent("High");
 		expect(model).toBeEnabled();
-		expect(screen.getByRole("button", { name: `${label} approval` })).toBeEnabled();
+		expect(screen.getByRole("button", { name: approval })).toBeEnabled();
 		const expectedPatch = (config: { model: string; effort: string; permissions: string }) => {
 			const agentConfig = { ...config, mode: "" };
 			return { config: role === "reviewer" ? { reviewers: [{ harness: agent, agentConfig }] } : { [role]: { agent, agentConfig } } };
 		};
-		await choose(`${label} approval`, "Bypass permissions");
+		await choose(approval, "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "", effort: "high", permissions: "bypass-permissions" })));
 		await choose(`${label} model`, "Other model");
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "high", permissions: "bypass-permissions" })));
+		await userEvent.click(screen.getByRole("button", { name: effort }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low"));
-		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
+		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model"));
+		expect(screen.getByRole("button", { name: effort })).toHaveTextContent("Low");
+		expect(screen.getByRole("button", { name: approval })).toHaveTextContent("Bypass permissions");
 		expect(screen.getByRole("button", { name: `${label} agent` })).toHaveTextContent(agent === "codex" ? "Codex" : "Claude Code");
 	});
 
@@ -169,8 +176,8 @@ describe("Cloud project settings", () => {
 		expect(await screen.findByRole("menuitem", { name: /^Opus 5/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /^Opus 5/ }));
-		// Picking the model asks for its effort, as for any role's model.
-		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+		// Effort has its own picker beside the model, so picking a model just closes the menu.
+		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: expect.objectContaining({ worker: { agent: "claude-code", agentConfig: expect.objectContaining({ model: "claude-opus-5" }) } }),
 		}));
@@ -208,7 +215,7 @@ describe("Cloud project settings", () => {
 		] } });
 		mocks.models.mockRejectedValue(new CloudCpError("Unavailable", { status: 503, code: "unavailable" }));
 		mount();
-		const warnings = await screen.findAllByText("Couldn't load AO Cloud's model list for Claude Code.");
+		const warnings = await screen.findAllByText("Couldn't load Orchestrator Cloud's model list for Claude Code.");
 		expect(warnings.length).toBeGreaterThan(0);
 		// A model ID can still be entered by hand.
 		const model = screen.getByRole("button", { name: "Worker model" });
@@ -221,7 +228,7 @@ describe("Cloud project settings", () => {
 		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
 		await userEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]);
 		await waitFor(() => expect(mocks.models.mock.calls.length).toBeGreaterThan(calls));
-		await waitFor(() => expect(screen.queryByText("Couldn't load AO Cloud's model list for Claude Code.")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByText("Couldn't load Orchestrator Cloud's model list for Claude Code.")).not.toBeInTheDocument());
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(await screen.findByRole("menuitem", { name: /^Opus/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
@@ -237,7 +244,7 @@ describe("Cloud project settings", () => {
 			return { source: "release", cliVersion: "test", models: [{ id: "opus", displayName: "Opus", default: true }] };
 		});
 		mount();
-		expect(await screen.findByText("AO Cloud has no model list for OpenCode. Enter a model ID.")).toBeInTheDocument();
+		expect(await screen.findByText("Orchestrator Cloud has no model list for OpenCode. Enter a model ID.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 	});
@@ -258,7 +265,8 @@ describe("Cloud project settings", () => {
 		mount();
 		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
 		expect(reviewer).toHaveTextContent("Codex");
-		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model · Max"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model"));
+		expect(screen.getByRole("button", { name: "Reviewer Effort" })).toHaveTextContent("Max");
 		await choose("Reviewer approval", "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: { reviewers: [{ harness: "codex", agentConfig: { model: "worker-model", mode: "", effort: "max", permissions: "bypass-permissions" } }] },
@@ -404,8 +412,58 @@ describe("Cloud project settings", () => {
 
 	it("turns on workers requesting review through the settings patch", async () => {
 		mount("general");
-		await userEvent.click(await screen.findByRole("switch", { name: "Workers request AO review" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Workers request a built-in review" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
+	});
+
+	it("turns off naming Orchestrator a commit co-author through the settings patch", async () => {
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		expect(toggle).toBeChecked();
+		// The page is read by admins too, for every session's commits: it promises nothing about who "you" are.
+		expect(screen.getByText("When enabled, commits the agents make in this project list the Orchestrator GitHub App as a co-author. The commit author does not change.")).toBeInTheDocument();
+		await userEvent.click(toggle);
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coAuthorCommits: false } }));
+	});
+
+	it("puts the co-author switch back on when the control plane does not support it yet", async () => {
+		// A control plane from before the setting rejects it as unknown.
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "validation_error" }));
+		useUiStore.setState({ globalToast: null, globalToasts: [] });
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "This Cloud control plane does not support the co-author setting yet, so it stays on.", tone: "error",
+		}));
+		await waitFor(() => expect(toggle).toBeChecked());
+		// Nothing else changed, so nothing else is sent, and the next edit does not resend the setting.
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		await userEvent.click(screen.getByRole("switch", { name: "Workers request a built-in review" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
+	});
+
+	// Only an older control plane's exact rejection of the unknown setting puts
+	// the switch back; any other failure, even one naming the setting, is a
+	// failure to save.
+	it.each([
+		["an outage", new CloudCpError("Cloud is unavailable", { status: 503, code: "unavailable" })],
+		["an outage that names the setting", new CloudCpError("Failed to persist coAuthorCommits", { status: 503, code: "unavailable" })],
+		["another validation error on the setting", new CloudCpError("coAuthorCommits must be a boolean", { status: 422, code: "validation_error" })],
+		["the older rejection with another status", new CloudCpError("unsupported or null config.coAuthorCommits", { status: 400, code: "validation_error" })],
+		["the older rejection with another code", new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "invalid_request" })],
+		["the older message without a control plane answer", new Error("unsupported or null config.coAuthorCommits")],
+	])("still reports %s when saving the co-author setting", async (_name, failure) => {
+		mocks.patch.mockRejectedValueOnce(failure);
+		useUiStore.setState({ globalToast: null, globalToasts: [] });
+		const onSaveState = vi.fn();
+		mount("general", onSaveState);
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: failure.message })));
+		expect(toggle).not.toBeChecked();
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().globalToast).toBeNull();
 	});
 });
 
@@ -542,6 +600,71 @@ describe("Cloud project Coder template", () => {
 		project.config.coder = { templateId: "tpl-1", workspaceNamePrefix: "legacy" };
 		mount("general");
 		expect(await screen.findByRole("button", { name: "Edit Workspace name prefix" })).toBeInTheDocument();
+	});
+});
+
+describe("Cloud project orchestrator placement", () => {
+	// A B2B org that may run Coder as its own, on a control plane offering both.
+	const withOrchestratorChoice = () => mocks.me.mockResolvedValue({ organizations: [], offering: {
+		providers: ["coder", "freestyle"], defaultProvider: "coder", billingMode: "contract", kind: "both", features: ["orchestrator-on-coder"],
+	} });
+
+	it("is offered only when the org's offering lists orchestrator-on-coder", async () => {
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByRole("button", { name: "Orchestrator runs on" })).not.toBeInTheDocument();
+	});
+
+	it("defaults to the instant VM and keeps the orchestrator on Coder through the settings patch", async () => {
+		withOrchestratorChoice();
+		const view = mount("general");
+		const placement = await screen.findByRole("button", { name: "Orchestrator runs on" });
+		expect(placement).toHaveTextContent("Instant VM (default)");
+		expect(screen.getByText("Workers run on Coder either way. Applies to the next orchestrator you start.")).toBeInTheDocument();
+		await choose("Orchestrator runs on", "Coder");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { orchestratorSandboxProvider: "coder" } }));
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Coder"));
+		expect(project.config.orchestratorSandboxProvider).toBe("coder");
+		// The project's other settings are left alone.
+		expect(project.config.coder).toEqual({ templateId: "preserve" });
+		view.unmount();
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Coder");
+	});
+
+	it("moves a saved Coder orchestrator back to the instant VM, and sends nothing for the current choice", async () => {
+		withOrchestratorChoice();
+		project.config.orchestratorSandboxProvider = "coder";
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Coder");
+		await choose("Orchestrator runs on", "Coder");
+		expect(mocks.patch).not.toHaveBeenCalled();
+		await choose("Orchestrator runs on", "Instant VM (default)");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { orchestratorSandboxProvider: "freestyle" } }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Instant VM (default)"));
+	});
+
+	it("keeps the saved choice and says why when the control plane refuses it", async () => {
+		withOrchestratorChoice();
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("Your organization is not enabled to run orchestrators on Coder.", { status: 422, code: "provider_unavailable" }));
+		mount("general");
+		await screen.findByRole("button", { name: "Orchestrator runs on" });
+		await choose("Orchestrator runs on", "Coder");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Your organization is not enabled to run orchestrators on Coder.");
+		expect(screen.getByRole("button", { name: "Orchestrator runs on" })).toHaveTextContent("Instant VM (default)");
+		expect(project.config.orchestratorSandboxProvider).toBeUndefined();
+	});
+
+	it("is not offered for a project whose sessions run on the instant VM", async () => {
+		withOrchestratorChoice();
+		project.config.sandboxProvider = "freestyle";
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByText("Coder template")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Orchestrator runs on" })).not.toBeInTheDocument();
 	});
 });
 

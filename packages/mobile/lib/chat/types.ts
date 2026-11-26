@@ -1,3 +1,4 @@
+import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
 import type { SessionMode } from "../api";
 
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
@@ -53,12 +54,43 @@ export type ConversationTurn = {
 	completedAt?: string;
 	rolledBack?: boolean;
 	diff?: TurnDiff;
+	/**
+	 * The session artifacts the daemon saw this turn create or edit, by artifact
+	 * path. Unlike the diff it also lists files written through a shell command.
+	 */
+	artifacts?: TurnArtifactChange[];
 	plan?: ConversationPlan;
+	/** Set when the provider refused the turn for a usage limit. */
+	usageLimit?: ConversationUsageLimit;
+	/** The failed turn this one sends again. */
+	retryOfTurnId?: string;
+	/** A retry of this turn has been asked for, even if it has no turn yet. */
+	hasRetryAttempt?: boolean;
+	/** The turn answers a person's prompt, not an automation's. */
+	hasHumanPrompt?: boolean;
+	hasEventPrompt?: boolean;
+	/**
+	 * Where the turn sorts when its prompt is above the loaded history (a Cloud
+	 * chat read newest first): just before the loaded events, which its first
+	 * loaded item would otherwise place it among.
+	 */
+	anchorSequence?: number;
 };
 
-export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "failed";
+/** A turn refused for a usage limit; the daemon owns resuming it at the reset. */
+export type ConversationUsageLimit = {
+	/** The person asked the daemon to send the prompt again at the reset. */
+	autoResume: boolean;
+	resetsAt?: string | null;
+	/** Why the last automatic retry failed. */
+	resumeError?: string;
+};
+
+export type DeliveryState ="queued" | "sending" | "accepted" | "uncertain" | "failed";
 export type ChatExcerpt = { conversationId: string; messageId: string; revision: number; text: string };
 export type ConversationContentSummary = { type: string; text?: string; sourceMessageId?: string; sourceRevision?: number };
+/** A file a message carries as an upload (a cloud session's attachment), not as a worktree path in its text. */
+export type MessageFile = { id: string; name: string; mimeType: string; size: number };
 export type ConversationMessage = {
 	kind: "message";
 	id: string;
@@ -69,6 +101,8 @@ export type ConversationMessage = {
 	origin: "human" | "automation" | "daemon" | "provider";
 	text: string;
 	content?: ConversationContentSummary[];
+	/** Uploaded files the message carries. */
+	files?: MessageFile[];
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
@@ -81,7 +115,8 @@ export type ConversationMessage = {
 	createdAt: string;
 };
 
-export type DecisionOption = { id: string; label: string };
+/** `kind` is the agent's own category for the option, when it sends one: allow_once, allow_always, reject_once, reject_always. */
+export type DecisionOption = { id: string; label: string; kind?: string };
 export type FileChange = DiffFile & { patch?: string; patchTruncated?: boolean };
 export type InputProperty = {
 	type?: "string" | "number" | "integer" | "boolean" | "array";
@@ -151,6 +186,16 @@ export type ActivityDetail = {
 	host?: string;
 	commandSource?: string;
 	event?: "compaction" | "model.rerouted" | "auth.reauth_required" | "steer" | "plan" | string;
+	/** provider.failure: the kind of failure ("limit", "connection") and how serious. */
+	category?: string;
+	severity?: string;
+	/** A provider_switch marker's sides, as the daemon records them (see providerSwitchModel). */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetEffort?: string;
+	targetAutoCompactWindow?: string;
 	/** steer: the AO session that sent it, when another agent did. */
 	senderSessionId?: string;
 	senderProjectId?: string;
@@ -179,6 +224,8 @@ export type ActivityDetail = {
 	url?: string;
 	elicitationId?: string;
 	decisions?: DecisionOption[];
+	/** What an approval asks to do (a command, a file change, an MCP tool), when the agent says. */
+	subjectKind?: ActivityKind;
 	[key: string]: unknown;
 };
 

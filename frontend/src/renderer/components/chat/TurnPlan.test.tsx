@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TurnPlan } from "./TurnPlan";
@@ -55,6 +55,63 @@ describe("TurnPlan", () => {
 		rerender(<TurnPlan plan={plan} />);
 		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
 		expect(container.querySelector(".animate-spin")).toHaveClass("opacity-0");
+	});
+
+	// Every step draws an arc; only the visible one turns. An SVG circle's spin is
+	// not composited, so a hidden one still repainted every frame.
+	it("turns only the visible arc, and stops it once it has faded", () => {
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(<TurnPlan plan={plan} live />);
+			expect(container.querySelectorAll(".animate-spin")).toHaveLength(3);
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(1);
+			expect(screen.getByLabelText("Run the backend tests — in progress").querySelector("[data-turning]")).not.toBeNull();
+
+			rerender(<TurnPlan plan={plan} />);
+			// Still turning while it fades out.
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(1);
+			act(() => {
+				vi.advanceTimersByTime(200);
+			});
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(0);
+			expect(container.querySelectorAll(".animate-spin")).toHaveLength(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops a completed step's arc after its fade while the turn continues", () => {
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(<TurnPlan plan={plan} live />);
+			rerender(<TurnPlan plan={{ ...plan, steps: plan.steps.map((step) => ({ ...step, status: step.status === "in_progress" ? "completed" : step.status })) }} live />);
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(1);
+			act(() => {
+				vi.advanceTimersByTime(200);
+			});
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps the arc turning when the turn resumes during the fade", () => {
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(<TurnPlan plan={plan} live />);
+			rerender(<TurnPlan plan={plan} />);
+			act(() => {
+				vi.advanceTimersByTime(100);
+			});
+			rerender(<TurnPlan plan={plan} live />);
+			act(() => {
+				vi.advanceTimersByTime(200);
+			});
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(1);
+			expect(container.querySelector(".animate-spin[data-turning]")).not.toHaveClass("opacity-0");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	// A finished plan is not still planning, even on a turn that is technically live.

@@ -16,13 +16,14 @@ import { ChatMarkdown } from "../../src/renderer/components/chat/ChatMarkdown";
 import { AssistantMessage } from "../../src/renderer/components/chat/ChatTimelineItems";
 import { ChatWorkspace } from "../../src/renderer/components/chat/ChatWorkspace";
 import { chatFixtureLongHistory } from "../../src/renderer/lib/chat-fixture";
-import { highlight } from "../../src/renderer/lib/code-highlight";
+import { highlightSync } from "../../src/renderer/lib/code-highlight";
 import { createEventTransport } from "../../src/renderer/lib/event-transport";
 import { useUiStore } from "../../src/renderer/stores/ui-store";
 import { setApiBaseUrl } from "../../src/renderer/lib/api-client";
 import type { ConversationMessage } from "../../src/renderer/types/conversation";
 import type { ReviewTarget } from "../../src/renderer/hooks/useSessionWorkspaceFiles";
 import "../../src/renderer/styles.css";
+import { chatRenderCostWorkload } from "./chat-render-cost";
 
 const root = createRoot(document.getElementById("performance-root")!);
 const client = new QueryClient({
@@ -58,6 +59,7 @@ function assistant(text: string, streaming = true): ConversationMessage {
 }
 
 export const performanceHarness = {
+	chatRenderCost: chatRenderCostWorkload(render, frame),
 	async largeReview() {
 		const [{ WorkspaceReviewPane }, { largeReviewFiles, largeReviewPatch }] = await Promise.all([
 			import("../../src/renderer/components/diffs/WorkspaceReviewPane"),
@@ -212,9 +214,7 @@ export const performanceHarness = {
 	},
 
 	async highlighting() {
-		// Load the existing grammar chunk first so this isolates large-block work,
-		// not network/module fetch differences. The worker still starts lazily.
-		await highlight("const warmup = 1", "typescript");
+		highlightSync("const warmup = 1", "typescript");
 		const code = Array.from(
 			{ length: 10000 },
 			(_, index) => `const value${index}: string = "Unicode 👨‍👩‍👧‍👦 ${index}";`,
@@ -228,7 +228,7 @@ export const performanceHarness = {
 		}, 4);
 		await wait(30);
 		const started = performance.now();
-		const tree = await highlight(code, "typescript");
+		const tree = highlightSync(code, "typescript");
 		const elapsedMs = performance.now() - started;
 		await wait(30);
 		clearInterval(timer);
@@ -306,3 +306,4 @@ export const performanceHarness = {
 ).performanceHarness = performanceHarness;
 
 if (new URLSearchParams(window.location.search).get("workload") === "largeReview") void performanceHarness.largeReview();
+if (new URLSearchParams(window.location.search).get("workload") === "chatRenderCost") void performanceHarness.chatRenderCost();

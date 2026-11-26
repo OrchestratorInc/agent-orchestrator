@@ -4,17 +4,21 @@ import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBa
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversationOnce } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, forgetRemoteConversationRereads, refreshLocalConversationTail, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
 } from "../hooks/useReviewerConversation";
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
+import { backgroundTasksQueryRoot } from "../hooks/useBackgroundTasks";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
+import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
+import { persistLocalChats } from "./local-chat-cache";
 import { persistRemoteCache } from "./remote-chat-cache";
 
 export type EventTransport = {
@@ -28,6 +32,12 @@ const INVALIDATE_WINDOW_MS = 150;
 // the window above and refetched the whole workspace every window for hours
 // (#6763), so they refresh it at most once per this interval.
 const ID_ONLY_WORKSPACE_REFRESH_MS = 5_000;
+// The daemon writes a heartbeat frame every 10 s (backend/internal/httpd/events.go).
+// A stream that goes this long without any frame has stopped delivering, whatever
+// the browser reports: open chats then sat on "Thinking" with no text until the
+// user interrupted, because nothing else reopened it. Checked this often.
+export const EVENT_STREAM_STALL_MS = 35_000;
+const EVENT_STREAM_STALL_CHECK_MS = 5_000;
 // EventSource.CLOSED, referenced numerically so test stubs without the static
 // constants still work.
 const EVENTSOURCE_CLOSED = 2;
@@ -71,6 +81,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
 			let workspaceInvalidationPending = false;
+			let backgroundMembershipInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
 			// Reviews, interface transitions and model catalogs are otherwise only
@@ -85,6 +96,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
+			// When the current local stream last delivered a frame (or was created), on the
+			// monotonic clock so a wall-clock change cannot disarm the check, and whether
+			// this daemon has shown it sends heartbeats. A daemon from before the
+			// heartbeat is never judged stalled, so an idle stream to it is left alone.
+			let lastFrameAt = 0;
+			let heartbeatBaseUrl: string | undefined;
 			// Base URL of a daemon that rejected ?after=latest (built before the cursor
 			// existed). Its stream connects without one, replaying history as before.
 			let cursorUnsupportedBaseUrl: string | undefined;
@@ -99,6 +116,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					.finally(() => controller.abort());
 			};
 			const stopPersistingRemoteCache = persistRemoteCache(queryClient);
+			const stopPersistingLocalChats = persistLocalChats(queryClient);
 			let disposed = false;
 			type RemoteConnection = {
 				base: string;
@@ -150,12 +168,50 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				};
 				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
 			};
+			// An open local chat with nothing loading reads only the rows that can still
+			// change, as a remote chat does, so a streaming turn stops refetching the
+			// whole history on every event. A closed chat, one still loading, and every
+			// tail that cannot be merged take the full invalidation above. Both share the
+			// one-in-flight, one-catch-up bookkeeping.
+			const refreshLocalChat = (sessionId: string) => {
+				if (disposed) return;
+				const queryKey = conversationQueryKey(sessionId);
+				const key = JSON.stringify(queryKey);
+				const running = refreshes.get(key);
+				if (running) {
+					running.dirty = true;
+					return;
+				}
+				if (!queryClient.getQueryCache().find({ queryKey, type: "active" }) || queryClient.isFetching({ queryKey }) > 0) {
+					invalidate(queryKey);
+					return;
+				}
+				const state = { dirty: false };
+				refreshes.set(key, state);
+				const settled = () => {
+					refreshes.delete(key);
+					if (state.dirty && !disposed) refreshLocalChat(sessionId);
+				};
+				void refreshLocalConversationTail(queryClient, sessionId)
+					.then((merged) => {
+						if (disposed) return undefined;
+						// A query fetch that started during the tail read (an older page, a
+						// mount) may predate this event, or write back the live page it
+						// captured before the merge. Catch up once it has finished.
+						if (queryClient.isFetching({ queryKey }) > 0) state.dirty = true;
+						if (merged) return undefined;
+						return queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+					})
+					.then(settled, settled);
+			};
 			const refreshRemote = (hostId: string, reconnect = false) => {
 				const connection = remoteSources.get(hostId);
 				if (connection) connection.lastRefreshAt = Date.now();
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
+				// A reconnect may follow a host restart, which settles stranded rows.
+				if (reconnect) forgetRemoteConversationRereads(queryClient, hostId);
 				if (reconnect) invalidate(["remote-conversation", hostId]);
 				if (reconnect) invalidate(["reviewer-conversation", hostId]);
 				invalidate(["session-scm-summary", hostId]);
@@ -208,7 +264,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 								const decoded = JSON.parse(String((event as MessageEvent).data)) as {
 									type?: unknown;
 									sessionId?: unknown;
-									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown };
+									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown };
 								};
 								const payload = typeof decoded.payload === "object" && decoded.payload !== null ? decoded.payload : undefined;
 								const sessionId = typeof decoded.sessionId === "string" && decoded.sessionId ? decoded.sessionId : undefined;
@@ -217,6 +273,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 									conversationOnly = typeof payload.conversationId === "string";
 								} else if (sessionId && typeof payload?.conversationId === "string") {
 									refreshOpenRemoteChat(hostId, sessionId);
+									conversationOnly = true;
+								} else if (typeof payload?.shellTerminalHandleId === "string") {
+									invalidate(shellTerminalsQueryKeyForHost(hostId));
 									conversationOnly = true;
 								} else if (decoded.type === "session_updated" && sessionId && typeof payload?.interfaceTransitionId !== "string") {
 									idOnlySessionUpdate = payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
@@ -277,8 +336,14 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(reviewerConversationQueryRoot);
 					allConversationsInvalidationPending = false;
 				}
+				if (backgroundMembershipInvalidationPending) {
+					invalidate(backgroundTasksQueryRoot);
+					backgroundMembershipInvalidationPending = false;
+				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
+					// A deleted session or removed project changes what is kept.
+					invalidate(keptArtifactsQueryKey);
 					invalidate(sessionScmSummaryQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
@@ -302,7 +367,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					pendingEditorHandoffSessions.clear();
 				}
 				for (const sessionId of pendingConversationSessions) {
-					invalidate(conversationQueryKey(sessionId));
+					refreshLocalChat(sessionId);
 				}
 				pendingConversationSessions.clear();
 				for (const sessionId of pendingReviewSessions) {
@@ -368,6 +433,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
 				let idOnlySessionUpdate = false;
+				if (event === undefined || event.type === "session_created" || event.type === "session_deleted") backgroundMembershipInvalidationPending = true;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -386,6 +452,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							type?: unknown;
 							payload?: unknown;
 						};
+						if (decoded.type === "session_created" || decoded.type === "session_deleted") backgroundMembershipInvalidationPending = true;
 						// The SSE endpoint sends the complete durable CDC event. Routing
 						// fields such as sessionId live on that envelope, while trigger-built
 						// details such as conversationId live inside its payload. Do not
@@ -397,11 +464,18 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										conversationId?: unknown;
 										reviewId?: unknown;
 										interfaceTransitionId?: unknown;
+										activity?: unknown;
+										shellTerminalHandleId?: unknown;
 										kind?: unknown;
 										agentId?: unknown;
 										projectId?: unknown;
 								  })
 								: undefined;
+						// A shell's program title changed; only the shell list shows it.
+						if (typeof payload?.shellTerminalHandleId === "string") {
+							void queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
+							conversationOnly = true;
+						}
 						// A review run can start or finish without this window asking for
 						// it: an agent ran `ao review trigger`, auto-review fired, or a
 						// reviewer submitted. Refresh that session's reviews so the
@@ -450,7 +524,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof decoded.sessionId === "string" &&
 							decoded.sessionId &&
 							typeof payload?.conversationId !== "string" &&
-							typeof payload?.interfaceTransitionId !== "string"
+							typeof payload?.interfaceTransitionId !== "string" &&
+							typeof payload?.shellTerminalHandleId !== "string"
 						) {
 							idOnlySessionUpdate =
 								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
@@ -463,6 +538,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							// refetching for each one reloaded its whole page every few seconds.
 							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
 								pendingConversationSessions.add(decoded.sessionId);
+							}
+							// Native identity and provisioning changes carry the session-row
+							// activity field. Recheck switch readiness even after its poll
+							// budget expires, without reacting to id-only usage updates.
+							if (typeof payload?.activity === "string") {
+								pendingInterfaceTransitionSessions.add(decoded.sessionId);
 							}
 							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}
@@ -509,9 +590,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				// a continuation of the dead one: do not make it serve the delay the
 				// old port earned.
 				if (sourceBaseUrl && sourceBaseUrl !== baseUrl) retries = 0;
+				if (heartbeatBaseUrl !== baseUrl) heartbeatBaseUrl = undefined;
 				source?.close();
 				source = undefined;
 				sourceBaseUrl = baseUrl;
+				lastFrameAt = performance.now();
 				try {
 					// Start at the newest event. Without a cursor the daemon replays the
 					// whole change_log (up to 100k rows under retention) on every connect,
@@ -524,8 +607,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;
 					let opened = false;
+					const sawFrame = () => {
+						if (source === connectedSource) lastFrameAt = performance.now();
+					};
 					source.onopen = () => {
 						if (disposed || source !== connectedSource) return;
+						sawFrame();
 						opened = true;
 						healthAttempt += 1;
 						retries = 0;
@@ -557,14 +644,28 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							},
 						);
 					};
-					source.onmessage = refreshWorkspaces; // unnamed events, if any
+					const delivered = (event: Event) => {
+						sawFrame();
+						refreshWorkspaces(event);
+					};
+					source.onmessage = delivered; // unnamed events, if any
 					for (const type of CDC_EVENT_TYPES) {
-						source.addEventListener(type, refreshWorkspaces);
+						source.addEventListener(type, delivered);
 					}
+					source.addEventListener("cursor", sawFrame);
+					source.addEventListener("heartbeat", () => {
+						if (source !== connectedSource) return;
+						sawFrame();
+						heartbeatBaseUrl = baseUrl;
+					});
 					// EventSource auto-reconnects and resumes via Last-Event-ID while
 					// CONNECTING; scheduleRetry only covers the terminal CLOSED state.
 				} catch {
+					// No source means no error event and nothing for the stall check or a
+					// status echo to reopen, so retry here or the stream never comes back.
 					source = undefined;
+					setEventsConnectionState("disconnected");
+					scheduleRetry();
 				}
 			};
 
@@ -575,11 +676,24 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let lastDaemonStatusKey: string | undefined;
 			const removeDaemonListener = aoBridge.daemon.onStatus((status) => {
 				const key = `${status?.state}:${status?.port ?? ""}:${status?.pid ?? ""}`;
-				if (key === lastDaemonStatusKey) return;
+				const changed = key !== lastDaemonStatusKey;
 				lastDaemonStatusKey = key;
-				connectSource();
-				refreshWorkspaces();
+				// An echo also reopens a stream the browser closed without an error, which
+				// scheduled no retry (one that did keeps its backoff). Without this, that
+				// stream stayed closed until the daemon's status changed.
+				if (changed || (source?.readyState === EVENTSOURCE_CLOSED && !retryTimer)) connectSource();
+				if (changed) refreshWorkspaces();
 			});
+			// A stream to a daemon that sends heartbeats and has gone quiet is rebuilt.
+			// Its onopen refreshes every open chat, so a stalled turn catches up at once.
+			// A pending retry already owns the next attempt, and keeps its backoff.
+			const stallWatch = setInterval(() => {
+				if (disposed || retryTimer || !source || heartbeatBaseUrl !== sourceBaseUrl) return;
+				if (performance.now() - lastFrameAt < EVENT_STREAM_STALL_MS) return;
+				source.close();
+				setEventsConnectionState("disconnected");
+				connectSource();
+			}, EVENT_STREAM_STALL_CHECK_MS);
 			// Rebind when the daemon comes back on a different port, independent of
 			// status-event ordering.
 			const removeBaseUrlListener = subscribeApiBaseUrl(connectSource);
@@ -598,6 +712,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				pendingModelCatalogScopes.clear();
 				refreshes.clear();
 				if (retryTimer) clearTimeout(retryTimer);
+				clearInterval(stallWatch);
 				removeDaemonListener();
 				removeBaseUrlListener();
 				removeConnectedHostsListener();
@@ -609,6 +724,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				remoteSources.clear();
 				stopPersistingRemoteCache();
+				stopPersistingLocalChats();
 				setEventsConnectionState("idle");
 			};
 		},

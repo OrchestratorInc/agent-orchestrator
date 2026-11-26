@@ -249,7 +249,9 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);
 		const media = await screen.findByLabelText(path);
 		expect(media).toHaveAttribute("src", expect.stringContaining(`/api/v1/sessions/sess-1/preview/files/${path}?raw=true`));
-		expect(media).toHaveAttribute("controls");
+		// Videos play under the app's own controls; audio keeps the native ones.
+		if (media.tagName === "VIDEO") expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+		else expect(media).toHaveAttribute("controls");
 		expect(getMock.mock.calls.some(([route]) => route.endsWith("/revision"))).toBe(false);
 	});
 
@@ -447,7 +449,7 @@ describe("FileContentPane", () => {
 			</AppBrowserLinkContext.Provider>,
 		);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Open in AO Browser" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open in Orchestrator Browser" }));
 		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("reports/index.html");
 	});
 

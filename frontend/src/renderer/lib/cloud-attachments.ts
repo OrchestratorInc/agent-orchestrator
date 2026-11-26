@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 // Files attached to a cloud session. The control plane keeps their bytes in
 // its storage and lists them on the message they ride; the worker places them
 // in the sandbox before the agent reads the message. Uploads and downloads are
@@ -78,11 +79,11 @@ async function binaryRequest(
 		return await raceAbort(aoBridge.cloudCp.requestBinary({ ...init, requestId, timeoutMs }), signal);
 	} catch (error) {
 		if (options.signal?.aborted) throw options.signal.reason ?? error;
-		if (guard.aborted || isAbort(error)) throw new Error("AO Cloud did not answer in time. Try again.");
+		if (guard.aborted || isAbort(error)) throw new Error("Orchestrator Cloud did not answer in time. Try again.");
 		const message = (error instanceof Error ? error.message : String(error))
 			.replace(/^Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?/, "").trim();
 		if (/fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|network/i.test(message)) {
-			throw new Error("Couldn’t reach AO Cloud. Check the connection and try again.");
+			throw new Error("Couldn’t reach Orchestrator Cloud. Check the connection and try again.");
 		}
 		throw new Error(message || "The attachment request failed.");
 	} finally {
@@ -123,7 +124,7 @@ export async function uploadCloudAttachment(
 		headers: { "Content-Type": "application/octet-stream", [SHA256_HEADER]: await sha256Hex(bytes) },
 		body: bytes,
 	}, { signal: options.signal, timeoutMs: uploadTimeoutMs(bytes.byteLength) });
-	if (response.status !== 201) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 201) throw new AoError("CLOUD_ATTACHMENT_UPLOAD_FAILED", errorMessage(response.body, response.status));
 	const parsed = JSON.parse(new TextDecoder().decode(response.body)) as { attachment: CloudAttachment };
 	return parsed.attachment;
 }
@@ -141,7 +142,7 @@ export async function fetchCloudAttachment(
 		path: `${sessionPath(orgId, sessionId)}/${encodeURIComponent(attachment.id)}`,
 		method: "GET",
 	}, options);
-	if (response.status !== 200) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 200) throw new AoError("CLOUD_ATTACHMENT_READ_FAILED", errorMessage(response.body, response.status));
 	return new Blob([response.body as BlobPart], { type: attachment.contentType });
 }
 
@@ -161,7 +162,7 @@ export async function placeCloudAttachment(
 		path: `${sessionPath(orgId, sessionId)}/${encodeURIComponent(attachmentId)}/place`,
 		method: "POST",
 	}, options);
-	if (response.status !== 200) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 200) throw new AoError("CLOUD_ATTACHMENT_PLACE_FAILED", errorMessage(response.body, response.status));
 	const parsed = JSON.parse(new TextDecoder().decode(response.body)) as { path?: unknown };
 	if (typeof parsed.path !== "string" || parsed.path === "") throw new Error("The worker did not place the attachment.");
 	return parsed.path;

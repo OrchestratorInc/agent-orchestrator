@@ -1,4 +1,4 @@
-import { Ban, Folder, FolderOpen, Pause, Play, Trash2, X } from "lucide-react";
+import { Ban, Folder, FolderOpen, Pause, Play, Trash2, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { BrowserDownload, BrowserDownloadAction } from "../../shared/browser-downloads";
 import { Button } from "./ui/button";

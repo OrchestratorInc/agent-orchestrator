@@ -74,6 +74,12 @@ type SessionTeardowner interface {
 	TeardownProject(ctx context.Context, project domain.ProjectID) error
 }
 
+// autoSpawnPauser is the session service's view of paused automatic starts.
+// Optional, so focused fakes need not implement it.
+type autoSpawnPauser interface {
+	AutoSpawnPauses(ctx context.Context, project domain.ProjectRecord) []domain.AutoSpawnPause
+}
+
 // Service implements project registration and lookup use-cases for controllers.
 type Service struct {
 	store          Store
@@ -82,6 +88,7 @@ type Service struct {
 	telemetry      ports.EventSink
 	milestones     ports.InstallMilestones
 	defaultHarness domain.AgentHarness
+	preferredAgent func(context.Context) domain.AgentHarness
 	logger         *slog.Logger
 	githubRepos    ports.GitHubRepositoryResolver
 	// addMu serialises the whole body of Add. Workspace registration performs
@@ -100,6 +107,13 @@ type Deps struct {
 	// DefaultHarness is the daemon's configured default agent (AO_AGENT).
 	// When empty, the service falls back to config.DefaultAgent.
 	DefaultHarness domain.AgentHarness
+	// PreferredAgent ranks this machine's agents the way the desktop does
+	// (installed and signed in first, then AO's priority) and returns the top
+	// one, or "" when AO has found no launchable agent installed. A new project
+	// gets it for any role it names no agent for; when it returns "", those
+	// roles stay empty so session start can fill them once an agent is
+	// installed. Left nil, DefaultHarness is used.
+	PreferredAgent func(context.Context) domain.AgentHarness
 	Store          Store
 	Sessions       SessionTeardowner
 	Clock          func() time.Time
@@ -133,6 +147,7 @@ func NewWithDeps(d Deps) *Service {
 		telemetry:      d.Telemetry,
 		milestones:     d.Milestones,
 		defaultHarness: defaultHarness,
+		preferredAgent: d.PreferredAgent,
 		logger:         d.Logger,
 		githubRepos:    d.GitHubRepos,
 	}
@@ -169,6 +184,9 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
 			FolderMissing:     folderMissing,
 		})
+		if pauser, ok := m.sessions.(autoSpawnPauser); ok {
+			out[len(out)-1].AutoSpawnPauses = pauser.AutoSpawnPauses(ctx, row)
+		}
 	}
 	return out, nil
 }
@@ -371,6 +389,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := row.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
+		// Fill empty roles only after path and config validation succeed so
+		// rejected adds never wait on readiness checks.
+		if row.Config.MissingRoleAgent() {
+			row.Config.FillRoleAgents(m.PreferredAgent(ctx))
+		}
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
@@ -407,10 +430,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}()
 	probes.Wait()
 	if !isRepo {
-		return Project{}, apierr.Invalid("NOT_A_GIT_REPO", "AO needs a Git repository with an initial commit before it can create agent workspaces.", nil)
+		return Project{}, apierr.Invalid("NOT_A_GIT_REPO", "Orchestrator needs a Git repository with an initial commit before it can create agent workspaces.", nil)
 	}
 	if !hasCommit {
-		return Project{}, apierr.Invalid("PROJECT_UNBORN", "AO needs a Git repository with an initial commit before it can create agent workspaces.", map[string]any{
+		return Project{}, apierr.Invalid("PROJECT_UNBORN", "Orchestrator needs a Git repository with an initial commit before it can create agent workspaces.", map[string]any{
 			"path":         path,
 			"suggestedFix": "Run `git commit --allow-empty -m \"initial commit\"` in this folder, then try again.",
 		})
@@ -418,6 +441,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	row.RepoOriginURL = originURL
 	if err := row.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+	}
+	// Fill empty roles only after repository and config validation succeed so
+	// rejected adds never wait on readiness checks.
+	if row.Config.MissingRoleAgent() {
+		row.Config.FillRoleAgents(m.PreferredAgent(ctx))
 	}
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register project")
@@ -442,15 +470,42 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 	if err != nil {
 		return InitializeRepositoryResult{}, err
 	}
-	if err := ensureDirectoryPath(path); err != nil {
-		return InitializeRepositoryResult{}, err
-	}
+
+	// Before anything is made: a create the check refuses must leave no folders,
+	// and MkdirAll would otherwise make the path's missing parents first.
 	if err := validateRepositorySetupPathSafety(path); err != nil {
 		return InitializeRepositoryResult{}, err
 	}
 
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
+
+	recordCreateID := false
+	if in.Create {
+		if in.CreateID != "" && !projectCreateIDPattern.MatchString(in.CreateID) {
+			return InitializeRepositoryResult{}, apierr.Invalid("INVALID_CREATE_ID", "createId must be 1-64 letters, digits, or hyphens, starting with a letter or digit.", nil)
+		}
+		if in.CreateID != "" && createdByRequest(ctx, path, in.CreateID) {
+			// A retry of a create whose response was lost: the folder is this
+			// request's own. Done if it got its first commit; otherwise go on.
+			if repoHasCommit(ctx, path) {
+				return InitializeRepositoryResult{Path: path}, nil
+			}
+		} else {
+			if err := createProjectFolder(path); err != nil {
+				return InitializeRepositoryResult{}, err
+			}
+			defer func() {
+				if retErr != nil {
+					_ = os.RemoveAll(path)
+				}
+			}()
+			recordCreateID = in.CreateID != ""
+		}
+	}
+	if err := ensureDirectoryPath(path); err != nil {
+		return InitializeRepositoryResult{}, err
+	}
 
 	target, err := classifyRepositorySetupTarget(ctx, path)
 	if err != nil {
@@ -472,6 +527,11 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not initialize a Git repository in this folder.", map[string]any{"error": err.Error()})
 		}
 	}
+	if recordCreateID {
+		if _, err := gitOutput(ctx, path, "config", "--local", projectCreateIDConfigKey, in.CreateID); err != nil {
+			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not record the new project in its repository.", map[string]any{"error": err.Error()})
+		}
+	}
 	if err := gitdefault.New("git", nil).RecordInitialBranch(ctx, path); err != nil {
 		return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not record the default branch for this repository.", map[string]any{"error": err.Error()})
 	}
@@ -489,7 +549,7 @@ func classifyRepositorySetupTarget(ctx context.Context, path string) (repository
 	if isBareGitRepository(ctx, path) {
 		return repositorySetupPlainFolder, apierr.Invalid("PROJECT_BARE_REPOSITORY", "Selected folder must be a non-bare Git repository or a plain folder.", map[string]any{
 			"path":         path,
-			"suggestedFix": "Use a normal checkout, or select a plain folder for AO to initialize.",
+			"suggestedFix": "Use a normal checkout, or select a plain folder for Orchestrator to initialize.",
 		})
 	}
 
@@ -501,7 +561,7 @@ func classifyRepositorySetupTarget(ctx context.Context, path string) (repository
 	}
 
 	if hasGitMetadata(path) {
-		return repositorySetupPlainFolder, apierr.Invalid("UNSUPPORTED_GIT_REPO", "Selected folder contains Git metadata that AO could not inspect.", map[string]any{
+		return repositorySetupPlainFolder, apierr.Invalid("UNSUPPORTED_GIT_REPO", "Selected folder contains Git metadata that Orchestrator could not inspect.", map[string]any{
 			"path":         path,
 			"suggestedFix": "Repair the Git repository or select a plain folder.",
 		})
@@ -533,7 +593,7 @@ func validateRepositorySetupPathSafety(path string) error {
 
 	aoState := comparablePath(filepath.Join(home, ".ao"))
 	if samePath(clean, aoState) || isDescendantPath(clean, aoState) {
-		return unsafeRepositorySetupPathError(path, "AO state directory")
+		return unsafeRepositorySetupPathError(path, "Orchestrator state directory")
 	}
 	return nil
 }
@@ -692,7 +752,7 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		return
 	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_project_added",
+		Name:       "ao.projects.first_added",
 		Source:     "project_service",
 		OccurredAt: at,
 		Level:      ports.TelemetryLevelInfo,
@@ -1026,6 +1086,43 @@ func folderExists(path string) (bool, error) {
 	return true, nil
 }
 
+// projectCreateIDConfigKey records, in a new project's repository, the create
+// request that made it, so a retry of that request can resume it.
+const projectCreateIDConfigKey = "ao.createId"
+
+var projectCreateIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
+
+// createdByRequest reports whether path is a repository a create request with
+// id made: it exists and its local Git config carries the same id.
+func createdByRequest(ctx context.Context, path, id string) bool {
+	if info, err := os.Stat(path); err != nil || !info.IsDir() || !hasGitMetadata(path) {
+		return false
+	}
+	out, err := gitOutput(ctx, path, "config", "--local", "--get", projectCreateIDConfigKey)
+	return err == nil && strings.TrimSpace(out) == id
+}
+
+// createProjectFolder makes the folder for a new, empty project. It refuses a
+// path that already exists, so a new project never takes over an existing
+// folder; adding an existing folder is POST /projects.
+func createProjectFolder(path string) error {
+	failed := func(err error) error {
+		return apierr.Invalid("PROJECT_FOLDER_CREATE_FAILED", "Orchestrator could not create the project folder.", map[string]any{"path": path, "error": err.Error()})
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return failed(err)
+	}
+	// Mkdir, not MkdirAll: it fails when the folder exists, even if it appeared
+	// a moment ago, so the cleanup after a failed setup only removes ours.
+	if err := os.Mkdir(path, 0o750); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return apierr.Conflict("PATH_EXISTS", "A folder with this name already exists.", map[string]any{"path": path})
+		}
+		return failed(err)
+	}
+	return nil
+}
+
 func ensureDirectoryPath(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -1065,9 +1162,22 @@ func normalizeGitReportedPath(base, reported string) string {
 func comparablePath(path string) string {
 	clean := filepath.Clean(path)
 	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		clean = resolved
+		return filepath.Clean(resolved)
 	}
-	return filepath.Clean(clean)
+	// Not there yet (a folder a create is about to make): resolve the nearest
+	// folder that is, so a path under a symlinked home still compares as under it.
+	rest := []string{}
+	for dir := clean; ; {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return clean
+		}
+		rest = append([]string{filepath.Base(dir)}, rest...)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+	}
 }
 
 func samePath(a, b string) bool {
@@ -1148,6 +1258,18 @@ func sessionPrefix(id string) string {
 		return id
 	}
 	return id[:12]
+}
+
+// PreferredAgent is the agent a project gets for a role it names none for.
+// When a ranker is wired, only an installed launchable agent is returned (""
+// when none is found, so empty roles remain eligible for spawn-time filling
+// once an agent is installed). When no ranker is wired, the daemon's default
+// agent is returned.
+func (m *Service) PreferredAgent(ctx context.Context) domain.AgentHarness {
+	if m.preferredAgent != nil {
+		return m.preferredAgent(ctx)
+	}
+	return m.defaultHarness
 }
 
 // SetPermissions remembers the approval policy for future sessions of either role.

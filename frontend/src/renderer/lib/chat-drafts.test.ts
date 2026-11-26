@@ -54,6 +54,43 @@ class MemoryStorage implements DraftStorage {
 	}
 }
 
+it("persists and prepares a chart-only annotation without inventing selected text", () => {
+	const storage = new MemoryStorage();
+	const ref = { id: "chart", conversationId: "c", messageId: "m", revision: 1, role: "assistant" as const, text: "", snapshot: { version: 1, referenceFormat: "numbered-v1" as const, captureMode: "block" as const, containsFlowchart: true, badgeOnly: true, rawText: "```mermaid\nflowchart LR; A-->B\n```" } };
+	const anchored = { ...ref, snapshot: { ...ref.snapshot, sourceRange: { start: 50, end: 50 + ref.snapshot.rawText.length, offsetUnit: "utf-16" as const }, diagramRange: { start: 50, end: 50 + ref.snapshot.rawText.length, offsetUnit: "utf-16" as const } } };
+	writeChatExcerptReferences("anchored-chart-draft", [anchored], storage);
+	expect(readChatSessionDraft("anchored-chart-draft", storage).composer.excerpts).toEqual([anchored]);
+	expect(writeChatExcerptReferences("chart-draft", [ref], storage).ok).toBe(true);
+	expect(readChatSessionDraft("chart-draft", storage).composer.excerpts).toEqual([ref]);
+	const prepared = prepareChatComposerDelivery("chart-draft", { kind: "send", composerText: "", requestText: "", attachments: [], excerpts: [ref], clientMessageId: "chart-delivery" }, storage);
+	expect(prepared.ok).toBe(true);
+	expect(readChatSessionDraft("chart-draft", storage).composer.delivery?.excerpts).toEqual([ref]);
+	const invalid = { ...ref, snapshot: { ...ref.snapshot, rawText: "" } };
+	writeChatExcerptReferences("invalid-chart-draft", [invalid], storage);
+	expect(readChatSessionDraft("invalid-chart-draft", storage).composer.excerpts ?? []).not.toContainEqual(invalid);
+});
+
+it("keeps an annotation added while an annotated send is in flight, without resending the sent text", () => {
+	const storage = new MemoryStorage();
+	const scope = "annotate-during-delivery";
+	const sent = { id: "sent", conversationId: "c", messageId: "m", revision: 1, role: "assistant" as const, text: "first", comment: "shorter" };
+	const added = { ...sent, id: "added", text: "second", comment: undefined };
+	const edited = { ...sent, comment: "much shorter" };
+	writeChatComposerText(scope, "question", storage);
+	writeChatExcerptReferences(scope, [sent], storage);
+	const prepared = prepareChatComposerDelivery(scope, { kind: "send", optimistic: true, composerText: "question", requestText: "question", attachments: [], excerpts: [sent], clientMessageId: "annotated" }, storage);
+	expect(prepared.ok && prepared.mutation.draft).toBeUndefined();
+	const delivery = prepared.ok ? prepared.mutation : undefined;
+	expect(writeChatExcerptReferences(scope, [edited, added], storage).ok).toBe(true);
+	expect(readChatSessionDraft(scope, storage).composer.revision).toBe(delivery?.revision);
+	markChatComposerDeliveryAccepted(scope, "annotated", delivery!.revision, storage);
+	expect(clearAcceptedChatComposer(scope, delivery!.revision, storage).cleared).toBe(true);
+	const composer = readChatSessionDraft(scope, storage).composer;
+	expect(composer.text).toBe("");
+	expect(composer.excerpts).toEqual([edited, added]);
+	expect(readChatSessionDraft(scope, storage).composer.delivery).toBeUndefined();
+});
+
 it("refuses file reference writes during reserved preparation and accepts them after release", () => {
 	const storage = new MemoryStorage();
 	const scope = "reserved-file-intake";

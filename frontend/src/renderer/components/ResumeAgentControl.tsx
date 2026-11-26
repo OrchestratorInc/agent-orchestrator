@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Play } from "lucide-react";
+import { Play } from "@/components/app-icons";
 import { aoBridge } from "../lib/bridge";
 import { clientForSessionHost } from "../lib/host-clients";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -82,7 +82,7 @@ export function ResumeAgentControl({
 				onClick={() => resume.mutate()}
 				size="sm"
 				type="button"
-				variant="outline"
+				variant="secondary"
 			>
 				<Play className="size-icon-sm" aria-hidden="true" />
 				{t("inspector.resumeAgent")}

@@ -79,12 +79,20 @@ func canonicalizeCurrentHeadReviewRuns(prs []domain.PRFacts, runs []domain.Curre
 
 	out := make([]domain.CurrentHeadReviewRun, 0, len(runs))
 	byCanonicalAndHarness := make(map[string]int, len(runs))
+	lastVerdict := make(map[string]domain.CurrentHeadReviewRun, len(runs))
+	inheritedRequest := make(map[string]bool, len(runs))
 	for _, run := range runs {
 		normalized := run
 		if canonicalURL, ok := canonicalByURL[run.PRURL]; ok {
 			normalized.PRURL = canonicalURL
 		}
 		key := normalized.PRURL + "\x00" + string(normalized.Harness)
+		inheritedRequest[key] = inheritedRequest[key] || normalized.LastVerdictChangesRequested
+		if normalized.Verdict != domain.VerdictNone {
+			if prior, ok := lastVerdict[key]; !ok || currentHeadRunOutranks(normalized, prior) {
+				lastVerdict[key] = normalized
+			}
+		}
 		if idx, ok := byCanonicalAndHarness[key]; ok {
 			if currentHeadRunOutranks(normalized, out[idx]) {
 				out[idx] = normalized
@@ -93,6 +101,13 @@ func canonicalizeCurrentHeadReviewRuns(prs []domain.PRFacts, runs []domain.Curre
 		}
 		byCanonicalAndHarness[key] = len(out)
 		out = append(out, normalized)
+	}
+	for key, idx := range byCanonicalAndHarness {
+		if verdict, ok := lastVerdict[key]; ok {
+			out[idx].LastVerdictChangesRequested = verdict.Verdict == domain.VerdictChangesRequested
+		} else {
+			out[idx].LastVerdictChangesRequested = inheritedRequest[key]
+		}
 	}
 	return out
 }
@@ -119,6 +134,14 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 		if next.HeadSHA == "" {
 			next.HeadSHA = current.HeadSHA
 		}
+		// The parent is derived from the target branch, so only a record aimed
+		// at the same base can lend it one.
+		if next.StackParent == 0 && sameTargetBranch(next.TargetBranch, current.TargetBranch) {
+			next.StackParent = current.StackParent
+		}
+		if next.Repo == "" {
+			next.Host, next.Repo = current.Host, current.Repo
+		}
 		return next
 	}
 	current.ReviewComments = current.ReviewComments || next.ReviewComments
@@ -133,6 +156,12 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 	}
 	if current.HeadSHA == "" {
 		current.HeadSHA = next.HeadSHA
+	}
+	if current.StackParent == 0 && sameTargetBranch(current.TargetBranch, next.TargetBranch) {
+		current.StackParent = next.StackParent
+	}
+	if current.Repo == "" {
+		current.Host, current.Repo = next.Host, next.Repo
 	}
 	return current
 }
@@ -164,6 +193,12 @@ func pullRequestAliasKey(rawURL string, number int, sourceBranch, targetBranch, 
 
 func normalizedAliasPart(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// sameTargetBranch compares branch names the way Git and the stack-parent
+// lookup do: case matters, so feat/Base is not feat/base.
+func sameTargetBranch(a, b string) bool {
+	return strings.TrimSpace(a) == strings.TrimSpace(b)
 }
 
 func githubPRURLIdentity(raw string) (host, owner, repoName string, number int, ok bool) {

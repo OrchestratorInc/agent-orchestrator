@@ -64,7 +64,10 @@ export function Composer({
 	const listening = voice.state === "starting" || voice.state === "recording";
 	const transcribing = voice.state === "transcribing";
 	const dictating = listening || transcribing;
-	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
+	// A denied mic still dictates from here: its tap opens Settings, where the
+	// microphone can be turned back on.
+	const canDictate = voice.state !== "unavailable";
+	const micDenied = voice.state === "denied";
 	const primary = listening ? "stopDictation" : transcribing ? "transcribing" : !hasDraft && canDictate ? "dictate" : "send";
 
 	// No haptic of its own on send: the screen confirms the send, or its failure,
@@ -85,7 +88,7 @@ export function Composer({
 		</Pressable>
 		: <Pressable
 			accessibilityRole="button"
-			accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : "Dictate a message"}
+			accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : micDenied ? "Turn on microphone access in Settings" : "Dictate a message"}
 			accessibilityState={{ disabled: transcribing, busy: transcribing }}
 			disabled={transcribing}
 			android_ripple={sendFeedback.android_ripple}
@@ -93,7 +96,7 @@ export function Composer({
 			style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed]}
 		>
 			<View style={[styles.roundDisc, primary === "stopDictation" ? styles.roundLive : styles.roundAccent]}>
-				{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
+				{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : micDenied ? "micOff" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
 			</View>
 		</Pressable>;
 
@@ -113,6 +116,11 @@ export function Composer({
 						placeholder={toTerminal ? "Send to terminal…" : "Message the agent…"}
 						placeholderTextColor={t.textFaint}
 						maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
+						// A command goes to the shell as typed: the keyboard turned
+						// "ls" into "Ls" and corrected flags into words.
+						autoCapitalize={toTerminal ? "none" : "sentences"}
+						autoCorrect={!toTerminal}
+						spellCheck={!toTerminal}
 						multiline
 						keyboardAppearance={scheme}
 						{...textSelectionColors(t)}

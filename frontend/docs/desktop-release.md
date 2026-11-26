@@ -35,8 +35,9 @@ is never bypassed by publishing directly from this repository.
 
 `.github/workflows/build-artifacts.yml` remains intentionally dispatchable. It
 accepts an explicit public ref/SHA and version, builds the four supported
-desktop targets, and uploads unsigned workflow artifacts plus their SHA-256
-digests. It has read-only repository permissions, does not use release signing
+desktop targets plus the headless Linux arm64 host package
+(`ao-host-linux-arm64.tar.gz`, from `linux-arm64-host.yml`), and uploads
+unsigned workflow artifacts plus their SHA-256 digests. It has read-only repository permissions, does not use release signing
 secrets, and does not create, edit, or publish GitHub Releases.
 
 The private conductor pins the immutable source SHA before dispatch and treats
@@ -88,6 +89,37 @@ stable DMG is `Orchestrator-darwin-<arch>.dmg`, and the conductor rejects the ol
 `release-latest-guard.yml` fails if an asset linked from `README.md`,
 `translations/` or the docs `InstallDownloads` table is missing. It does not
 check the Grok setup skill, orchestrator.inc or other docs pages.
+
+## Local lifecycle logs
+
+Two more local records sit in the same `logs/` directory (normally `~/.ao/logs`):
+
+- `desktop-lifecycle.jsonl`: Electron main's start (with the Linux cgroup and
+  OOM score), quit sequence and process exit code, uncaught exceptions and
+  unhandled rejections, `render-process-gone` and `child-process-gone`, a
+  `previous_run_unclean` record when the last run never reached a clean exit,
+  and every daemon spawn, exit (code, signal, uptime), restart decision and
+  cancellation. A respawn's reason is written before the respawn.
+- `daemon-lifecycle.jsonl`: the daemon's start, supervisor-link loss, the
+  shutdown cause (signal name, request, or server error) and the error `Run`
+  returned. `daemon-crash.log` receives Go's fatal crash output (panics,
+  runtime faults such as SIGBUS) through `debug.SetCrashOutput`.
+
+Each JSONL file rotates at 2 MiB and keeps two older generations; the crash log
+rotates at 1 MiB. Files are mode `0600`. Records hold fixed event names and
+scalar facts; error text is scrubbed of URLs, credentials, long opaque tokens and
+long quoted strings, and the home directory is shown as `~`. Prompts and terminal
+output are never written. Nothing is uploaded.
+
+On Linux, `AO_DAEMON_SCOPE=systemd` (experimental) starts the daemon in its own
+transient user scope in `app-ao.slice`, so the daemon, tmux and agents leave the
+desktop app's scope. `AO_DAEMON_MEMORY_HIGH` / `AO_DAEMON_MEMORY_MAX` (systemd
+values such as `12G` or `80%`) limit that scope. Without a reachable systemd user
+manager (Flatpak, containers, non-systemd distros) it raises the daemon's
+`oom_score_adj` to 300 instead, which agents inherit. The probe uses the same
+slice and memory properties as the launch; if a scoped daemon still exits before
+it is ready, AO stops using the scope for that run and retries once with the
+`oom_score_adj` fallback.
 
 ## Local updater diagnostics
 

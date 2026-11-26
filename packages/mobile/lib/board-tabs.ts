@@ -11,10 +11,6 @@ import type { DashboardSession } from "./api";
 export const boardTabs = [
 	{ name: "(workers)", title: "Workers", href: "/" },
 	{ name: "(projects)", title: "Projects", href: "/projects" },
-	// Android only: iOS opens these as sheets from the board's bar, and hides
-	// the tabs (see app/(tabs)/_layout).
-	{ name: "(pull-requests)", title: "Pull Requests", href: "/pull-requests" },
-	{ name: "(preferences)", title: "Settings", href: "/preferences" },
 ] as const;
 
 export type BoardTab = (typeof boardTabs)[number];

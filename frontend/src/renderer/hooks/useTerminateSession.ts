@@ -1,8 +1,9 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useSyncExternalStore } from "react";
-import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { hashKey, type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { cloudSessionsQueryKey, remoteSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import {
 	applyTerminatedSession,
 	clearOptimisticSessionKill,
@@ -17,6 +18,7 @@ import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+import { prepareUnpublish, sessionDeleteTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { useUiStore } from "../stores/ui-store";
 
 type TerminateSessionOptions = {
@@ -35,8 +37,29 @@ export const terminateSessionMutationKey = ["terminate-session"] as const;
  */
 export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
 
+type TerminateResult = {
+	/** Whether the daemon or control plane confirmed it deleted the artifacts. */
+	artifactsDeleted: boolean;
+	/** How many of the deleted artifacts' public links could not be unpublished. */
+	linksLive: number;
+};
+
+/**
+ * Archives the session. With deleteArtifacts, its published links are looked
+ * up first and unpublished once the files are confirmed deleted: an archive
+ * that keeps the files keeps their links too.
+ */
+async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<TerminateResult> {
+	const baseUrl = session.deleteArtifacts ? queryClient.getQueryData<Settings>(settingsQueryKey)?.cloudControlPlaneUrl ?? "" : "";
+	const links = session.deleteArtifacts
+		? await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ hostId: session.hostId, sessionId: session.id }] })
+		: undefined;
+	const artifactsDeleted = await archiveSession(queryClient, session);
+	return { artifactsDeleted, linksLive: artifactsDeleted && links ? await links.unpublish() : 0 };
+}
+
 /** Resolves to whether the daemon or control plane confirmed it deleted the artifacts. */
-async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
+async function archiveSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 		const baseUrl = settings?.cloudControlPlaneUrl ?? "";
@@ -163,14 +186,15 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			}
 			return { workspace, cloud };
 		},
-		onSuccess: async (artifactsDeleted, session) => {
+		onSuccess: async ({ artifactsDeleted, linksLive }, session) => {
 			useUiStore.getState().resetFilesSelection(sessionUiKey(session.id, session.hostId));
-			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
+			void captureRendererEvent("ao.sessions.killed", { project_id: session.workspaceId });
 			// The archive stands either way. A failed delete, or a host whose daemon
 			// predates the option, leaves the files on disk, so say so.
 			if (session.deleteArtifacts && !artifactsDeleted) {
 				useUiStore.getState().showGlobalToast(t("archive.artifactsNotDeleted"), t("archive.artifactsNotDeletedBody"), "error");
 			}
+			warnLinksStillLive(t, linksLive);
 			// Reinforce before refresh; keep the optimistic id until this refetch finishes.
 			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			queryClient.setQueryData<WorkspaceSummary[]>(queryKey, (workspaces) =>
@@ -180,10 +204,11 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			// A cloud kill also lives in the cloud sessions query, which the board
 			// merges in separately, so refresh it too.
 			if (session.cloud) await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+			else reportArchiveCleanup(queryClient, session, t);
 			options.onSuccess?.(session);
 		},
 		onError: (_error, session, context) => {
-			void captureRendererEvent("ao.renderer.session_kill_failed", { project_id: session.workspaceId });
+			void captureRendererEvent("ao.sessions.kill_failed", { project_id: session.workspaceId });
 			// Restore the pre-mutation snapshots so a failed kill un-archives the card
 			// rather than leaving it wrongly terminated.
 			clearOptimisticSessionKill(session.id, session.hostId);
@@ -197,44 +222,129 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	});
 }
 
+type CleanupFacts = Pick<WorkspaceSession, "id" | "isTerminated" | "workspaceCleanup" | "workspaceCleanupReportOnly">;
+
 // `ao session cleanup` and the daemon's background pass record what they find
 // on sessions nobody archived; only a cleanup an archive started is the app's
 // to report.
-function archiveCleanup(session: WorkspaceSession | undefined): WorkspaceSession["workspaceCleanup"] {
+function archiveCleanup(session: CleanupFacts | undefined): WorkspaceSession["workspaceCleanup"] {
 	return session?.workspaceCleanupReportOnly ? undefined : session?.workspaceCleanup;
 }
 
-function workspaceCleanupErrorKey(session: WorkspaceSession | undefined): "shell.workspaceCleanupFailed" | "shell.workspaceCleanupDirty" | null {
+type WorkspaceCleanupErrorKey = "shell.workspaceCleanupFailed" | "shell.workspaceCleanupDirty";
+
+function workspaceCleanupErrorKey(session: CleanupFacts | undefined): WorkspaceCleanupErrorKey | null {
 	const cleanup = archiveCleanup(session);
 	if (cleanup === "failed") return "shell.workspaceCleanupFailed";
 	if (cleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
 	return null;
 }
 
-function useCachedWorkspaces(hostId?: string) {
-	const queryClient = useQueryClient();
-	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-	return useSyncExternalStore(subscribe, () => queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)));
+// Cleanup scripts are untimed and the daemon's retry sweep runs every 10 minutes.
+const CLEANUP_REPORT_WINDOW_MS = 30 * 60_000;
+const CLEANUP_NOTICE_MS = 10_000;
+
+function showWorkspaceCleanupNotice(session: WorkspaceSession, errorKey: WorkspaceCleanupErrorKey, t: TFunction) {
+	useUiStore.getState().showGlobalToast(t(errorKey), session.title, {
+		// A kept worktree protects the user's work; only a failed teardown is a failure.
+		tone: errorKey === "shell.workspaceCleanupFailed" ? "error" : "info",
+		dismissible: true,
+		durationMs: CLEANUP_NOTICE_MS,
+		dedupeKey: `workspace-cleanup:${sessionUiKey(session.id, session.hostId)}`,
+		// Cleanup sweeps by project, and the standalone workspace id is not one the daemon knows.
+		...(session.workspaceId !== STANDALONE_WORKSPACE_ID && {
+			action: { label: t("settings.project.retryCleanup"), run: () => void retryWorkspaceCleanup(session, t) },
+		}),
+	});
 }
 
-export function useTerminateSessionState(sessionId: string, hostId?: string) {
-	const { t } = useTranslation();
+async function retryWorkspaceCleanup(session: WorkspaceSession, t: TFunction) {
+	const { showGlobalToast } = useUiStore.getState();
+	try {
+		const { data, error } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/cleanup", {
+			params: { query: { project: session.workspaceId } },
+		});
+		if (error || !data) throw new Error("cleanup retry refused");
+		const skip = data.skipped.find(({ sessionId }) => sessionId === session.id);
+		if (skip) {
+			showWorkspaceCleanupNotice(session, skip.code === "dirty" ? "shell.workspaceCleanupDirty" : "shell.workspaceCleanupFailed", t);
+			return;
+		}
+		showGlobalToast(t("settings.project.cleanupRetryResult", {
+			cleaned: data.cleaned.length + data.alreadyGone.length,
+			skipped: data.skipped.length,
+		}), undefined, "success");
+	} catch {
+		showGlobalToast(t("settings.project.cleanupRetryFailed"), undefined, "error");
+	}
+}
+
+// preserved_dirty and failed are terminal: the daemon keeps them until someone
+// retries, so as page chrome they would sit on the project forever. Report the
+// outcome once, to the person whose archive produced it. Cleanup outlives the
+// kill request, so follow the session in the cache until it settles.
+function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSession, t: TFunction) {
+	// The shell always polls a host's session list; the host-wide key only has
+	// data while one of that host's pages is open.
+	const queryKey = session.hostId ? remoteSessionsQueryKey(session.hostId) : workspaceQueryKey;
+	const rows = (): CleanupFacts[] | undefined => session.hostId
+		? queryClient.getQueryData<CleanupFacts[]>(queryKey)
+		: queryClient.getQueryData<WorkspaceSummary[]>(queryKey)?.flatMap((workspace) => workspace.sessions);
+	const settled = () => {
+		const current = rows()?.find(({ id }) => id === session.id);
+		if (!current?.isTerminated) return true;
+		const cleanup = archiveCleanup(current);
+		if (cleanup === undefined || cleanup === "pending") return false;
+		const errorKey = workspaceCleanupErrorKey(current);
+		// A standalone agent's folder is its only copy of the work and is
+		// always kept while it has files, so keeping it is no news; only a
+		// failed teardown is reported.
+		const keptStandaloneFolder = errorKey === "shell.workspaceCleanupDirty" && session.workspaceId === STANDALONE_WORKSPACE_ID;
+		if (errorKey && !keptStandaloneFolder) showWorkspaceCleanupNotice(session, errorKey, t);
+		return true;
+	};
+	if (settled()) return;
+	const stop = () => {
+		unsubscribe();
+		window.clearTimeout(timer);
+	};
+	const queryHash = hashKey(queryKey);
+	const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+		if (event.query.queryHash === queryHash && settled()) stop();
+	});
+	const timer = window.setTimeout(stop, CLEANUP_REPORT_WINDOW_MS);
+}
+
+const noSubscription = () => () => {};
+
+function useCachedWorkspaces(hostId?: string, enabled = true) {
+	const queryClient = useQueryClient();
+	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
+	return useSyncExternalStore(
+		enabled ? subscribe : noSubscription,
+		() => (enabled ? queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) : undefined),
+	);
+}
+
+/**
+ * `enabled` false skips watching the board data (every card watching the whole
+ * query cache re-renders on every fetch anywhere); only this session's own
+ * archive mutations are then followed.
+ */
+export function useTerminateSessionState(sessionId: string, hostId?: string, enabled = true) {
 	// Observe existing board data; this does not start another network request.
-	const data = useCachedWorkspaces(hostId);
+	const data = useCachedWorkspaces(hostId, enabled);
 	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
-	const errorKey = workspaceCleanupErrorKey(session);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);
 	return {
-		error: (errorKey ? t(errorKey) : null) ??
-			(!summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
-				? summary.latest.error.message : null),
+		error: !summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
+			? summary.latest.error.message : null,
 		isPending: summary?.isPending === true || archiveCleanup(session) === "pending",
 	};
 }
 
 export function useProjectTerminateSessionStates(workspaceId: string | undefined, hostId?: string) {
-	const { t } = useTranslation();
 	const data = useCachedWorkspaces(hostId);
 	const sessions = data?.find((workspace) => workspace.id === workspaceId)?.sessions ?? [];
 	const states = summarizeBySession(useTerminateSessionMutations())
@@ -245,12 +355,9 @@ export function useProjectTerminateSessionStates(workspaceId: string | undefined
 			isPending, session, cleanupPending: false,
 		}));
 	for (const session of sessions) {
-		const errorKey = workspaceCleanupErrorKey(session);
-		const error = errorKey ? t(errorKey) : null;
-		const cleanupPending = archiveCleanup(session) === "pending";
-		if (!error && !cleanupPending) continue;
+		if (archiveCleanup(session) !== "pending") continue;
 		const previous = states.findIndex((state) => state.session.id === session.id);
-		const state = { error, isPending: cleanupPending, session, cleanupPending };
+		const state = { error: null, isPending: true, session, cleanupPending: true };
 		if (previous < 0) states.push(state);
 		else states[previous] = state;
 	}

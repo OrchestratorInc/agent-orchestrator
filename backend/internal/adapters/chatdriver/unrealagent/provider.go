@@ -317,10 +317,14 @@ func (runtime *providerRuntime) startCoordinator() error {
 	if len(skills) != 0 {
 		toolNames = append(toolNames, tool.SkillUseName)
 	}
+	operationDirectory := filepath.Join(runtime.cfg.DataDir, "agent-runtime", string(domain.HarnessUnreal), "operations", runtime.cfg.ProviderConversationID)
+	if err := os.MkdirAll(operationDirectory, 0o700); err != nil {
+		return fmt.Errorf("create Unreal Agent operation directory: %w", err)
+	}
 	registry := tool.NewRegistry(tool.StaticTranslators{
 		Bash: bash.New(bash.Config{
 			Shell: shell(), Directory: runtime.cfg.WorkspacePath,
-			BaseDirectory: filepath.Join(runtime.cfg.DataDir, "agent-runtime", string(domain.HarnessUnreal), "operations", runtime.cfg.ProviderConversationID),
+			BaseDirectory: operationDirectory,
 		}),
 		ViewImage: viewimage.New(viewimage.Config{Directory: runtime.cfg.WorkspacePath}),
 	}, toolNames...)
@@ -441,6 +445,7 @@ func (runtime *providerRuntime) observeModelResponse(turnID string, stored sessi
 			if call.Name == tool.BashName {
 				kind = domain.ActivityKindCommand
 			}
+
 			runtime.mu.Lock()
 			runtime.pendingTools[call.CallID] = kind
 			runtime.mu.Unlock()
@@ -466,8 +471,19 @@ func (runtime *providerRuntime) failTurn(turnID string, err error) {
 }
 
 func (runtime *providerRuntime) observeToolStatus(turnID string, status sessionstore.ToolCallStatus) {
-	if len(status.Status.WaitingFor) != 0 {
-		return
+	// WaitingFor identifies the operations even after reconciliation finishes.
+	// Only their actual states establish whether this foreground tool settled.
+	terminal := make(map[operation.ID]bool, len(status.Operations))
+	for _, value := range status.Operations {
+		switch value.Status {
+		case operation.StatusCompleted, operation.StatusFailed, operation.StatusCanceled:
+			terminal[value.ID] = true
+		}
+	}
+	for _, id := range status.Status.WaitingFor {
+		if !terminal[id] {
+			return
+		}
 	}
 	state := domain.ActivityStatusCompleted
 	if status.Status.Error != "" {
@@ -632,7 +648,7 @@ func newProviderClient(requestedModel string, getenv func(string) string) (provi
 		model = defaultOpenAIModel
 	}
 	if model == "" {
-		return nil, "", errors.New("unreal agent model must be set in AO or UNREAL_HARNESS_LLM_MODEL")
+		return nil, "", errors.New("unreal agent model must be set in Orchestrator or UNREAL_HARNESS_LLM_MODEL")
 	}
 	maxAttempts := responsesapi.DefaultMaxAttempts
 	if raw := strings.TrimSpace(getenv("UNREAL_HARNESS_LLM_MAX_ATTEMPTS")); raw != "" {

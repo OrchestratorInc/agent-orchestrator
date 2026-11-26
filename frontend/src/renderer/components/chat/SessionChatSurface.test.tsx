@@ -8,8 +8,13 @@ import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnap
 import type { WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
+
+// Background-task queries have their own hook/component and browser coverage.
+// Keep model-picker API fixtures scoped to the model-picker behavior here.
+vi.mock("../BackgroundTasks", () => ({ SessionBackgroundTasks: () => null }));
 
 const LINK = "http://localhost:5173";
 const REPORT_LINK = "reports/new-report.html";
@@ -92,13 +97,19 @@ const sideMocks = vi.hoisted(() => ({
 	show: vi.fn(),
 	addReference: vi.fn(),
 	sides: [] as { id: string; hasWork: boolean }[],
+	loaded: false,
+	pending: false,
 	activeId: "existing-side" as string | undefined,
 	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
+	stageAttachments: undefined as unknown,
+	settingsReady: undefined as boolean | undefined,
 	workspaceSend: undefined as
 		| undefined
-		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
+		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<unknown>),
+	sentOutsideTranscript: Symbol("chat.sentOutsideTranscript"),
 }));
+const stageAttachmentsMock = vi.hoisted(() => vi.fn());
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
@@ -147,7 +158,7 @@ vi.mock("../../hooks/useConversation", () => ({
 	}),
 	useConversationModels: vi.fn(() => ({ models: [], loaded: true })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
-	useStageAttachments: () => undefined,
+	useStageAttachments: () => stageAttachmentsMock,
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
@@ -156,10 +167,12 @@ vi.mock("./ChatWorkspace", async () => {
 	const { TurnSettingsBar } = await vi.importActual<typeof import("./TurnSettingsBar")>("./TurnSettingsBar");
 	return {
 		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
+		SENT_OUTSIDE_TRANSCRIPT: sideMocks.sentOutsideTranscript,
 		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
 			agentSwitch,
 			agentInputDisabled,
+			annotationNavigationRequest,
 			headerActions,
 			sessionTabAction,
 			newWorkDisabled,
@@ -175,12 +188,23 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget,
 			onAddToSideChat,
 			onSend,
+			onStageAttachments,
+			settingsReady,
 			composerNotice,
+			importBlock,
+			findRequest,
+			onFindRequestHandled,
 		}: {
+			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
+			onStageAttachments?: unknown;
+			settingsReady?: boolean;
 			onAddToSideChat?: typeof sideMocks.attach;
 			composerNotice?: ReactNode;
+			findRequest?: { id: string; query: string; messageId?: string };
+			onFindRequestHandled?: (id: string) => void;
 			agentSwitch?: AgentSwitchProps;
+			annotationNavigationRequest?: { id: string; text: string; messageId?: string };
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
 			sessionTabAction?: ReactNode;
@@ -193,10 +217,12 @@ vi.mock("./ChatWorkspace", async () => {
 			configOptions?: ChatConfigOption[];
 			models: ChatModel[];
 			promptSuggestion?: { id: string; text: string };
-			snapshot: Pick<ConversationSnapshot, "sessionId" | "harness" | "settings">;
+			snapshot: Pick<ConversationSnapshot, "conversationId" | "sessionId" | "harness" | "settings">;
 			shellTarget?: { handleId: string };
 		}) => {
 			sideMocks.workspaceSend = onSend;
+			sideMocks.stageAttachments = onStageAttachments;
+			sideMocks.settingsReady = settingsReady;
 			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
@@ -213,6 +239,7 @@ vi.mock("./ChatWorkspace", async () => {
 					{snapshot.sessionId ? <div>Mounted {mountedSessionId}</div> : null}
 					{snapshot.sessionId ? <div>Rendered {snapshot.sessionId}</div> : null}
 					{composerNotice}
+					{importBlock ? <div>Blocked {importBlock}</div> : null}
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					<div data-testid="config-option-error">{configOptionError}</div>
@@ -223,6 +250,11 @@ vi.mock("./ChatWorkspace", async () => {
 					))}
 					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
+					<div data-testid="conversation-id">{snapshot.conversationId}</div>
+					<div data-testid="find-request" data-request-id={findRequest?.id ?? ""}>{findRequest ? `${findRequest.query}@${findRequest.messageId ?? ""}` : ""}</div>
+					<button type="button" onClick={() => { if (findRequest) onFindRequestHandled?.(findRequest.id); }}>Apply find request</button>
+					<div data-testid="annotation-request">{annotationNavigationRequest?.messageId ?? ""}</div>
+					<div data-testid="annotation-text">{annotationNavigationRequest?.text ?? ""}</div>
 					<button type="button" onClick={() => { void Promise.resolve(onContinueTurn?.()).catch(() => {}); }}>Continue test turn</button>
 					{headerActions}
 					{sessionTabAction}
@@ -239,7 +271,13 @@ vi.mock("./ChatWorkspace", async () => {
 	};
 });
 
+import { sessionUiKey } from "../../lib/hosts";
 import { SessionChatSurface } from "./SessionChatSurface";
+import {
+	peekSessionSearchReveal,
+	requestSessionSearchReveal,
+	resetSessionSearchReveals,
+} from "../../lib/session-search-reveal";
 
 const session = {
 	id: "sess-1",
@@ -259,6 +297,7 @@ function Wrapper({ client, children }: { client: QueryClient; children: ReactNod
 }
 
 beforeEach(() => {
+	resetSessionSearchReveals();
 	workspacePathsState.paths = [];
 	configState.options = [];
 	configState.loaded = false;
@@ -274,6 +313,8 @@ beforeEach(() => {
 	sideMocks.agentSwitch = undefined;
 	sideMocks.activeId = "existing-side";
 	sideMocks.attach = undefined;
+	sideMocks.stageAttachments = undefined;
+	sideMocks.settingsReady = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -298,6 +339,9 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+// The skills hook also takes the remembered list; these tests are about gating.
+const catalogCall = (hook: unknown) => (hook as ReturnType<typeof vi.fn>).mock.lastCall?.slice(0, 3);
+
 describe("SessionChatSurface recovery", () => {
 	it.each<[string, WorkspaceSession, boolean]>([
 		["a live session", session, false],
@@ -305,7 +349,34 @@ describe("SessionChatSurface recovery", () => {
 		["a session read as terminated", { ...session, status: "terminated" }, true],
 	])("tells the commands whether %s can only be restored", (_name, target, terminated) => {
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={target} /></Wrapper>);
-		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated]);
+		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false, undefined]);
+	});
+
+	it("takes files only once an archived session is back", () => {
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		expect(sideMocks.stageAttachments).toBeUndefined();
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
+	});
+
+	it("shows an archived chat's saved settings before a message restores it", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" }, settings: { model: "gpt-5" } };
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		// A live session's stopped agent has no settings to show.
+		expect(sideMocks.settingsReady).toBe(false);
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		expect(sideMocks.settingsReady).toBe(true);
+	});
+
+	it("tells the commands which turn is active", () => {
+		conversationState.snapshot = {
+			capabilities: [],
+			turns: [{ id: "turn-1", state: "running", requestedAt: "2026-11-16T00:00:00Z" }],
+		};
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true, "turn-1"]);
 	});
 });
 
@@ -446,6 +517,174 @@ describe("SessionChatSurface pending switch effort", () => {
 		}));
 		expect(providerSwitchMock).not.toHaveBeenCalled();
 		expect(conversationCommandState.echoBeforeSend).not.toHaveBeenCalled();
+	});
+});
+
+describe("SessionChatSurface search reveal", () => {
+	it("forwards a search result's matched message to the timeline", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// A palette result hands its match over before navigating here.
+		requestSessionSearchReveal("sess-1", {
+			messageId: "msg-1",
+			text: "the flaky login test",
+		});
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		// The timeline is what scrolls to and highlights the match, so the surface
+		// must pass it through rather than only rendering the session.
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1"));
+		expect(screen.getByTestId("annotation-text")).toHaveTextContent("the flaky login test");
+		// Consumed once: remounting must not jump again.
+		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
+	});
+
+	// Found in review: a session first opened from a result consumed that target
+	// and never listened for the next, so picking another result in the same
+	// session (navigation keeps the surface mounted) left it pending.
+	it("follows a second result in the session a result opened, without remounting", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky" });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1"));
+
+		act(() => requestSessionSearchReveal("sess-1", { messageId: "msg-2", text: "timeout" }));
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-2"));
+		expect(screen.getByTestId("annotation-text")).toHaveTextContent("timeout");
+		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
+	});
+
+	// A match on another machine is keyed by host and id. This machine's open
+	// session with the same id must not take it, and that machine's session must.
+	it("takes only its own machine's search target", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const remoteKey = sessionUiKey("sess-1", "h_air");
+		requestSessionSearchReveal(remoteKey, { messageId: "msg-remote", text: "flaky", find: true });
+		const local = render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		expect(screen.getByTestId("annotation-request")).not.toHaveTextContent("msg-remote");
+		expect(peekSessionSearchReveal(remoteKey)).toMatchObject({ messageId: "msg-remote" });
+		local.unmount();
+
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} hostId="h_air" />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-remote"));
+		expect(peekSessionSearchReveal(remoteKey)).toBeUndefined();
+	});
+
+	// Main's find in chat (useChatFind) searches the whole history; a result
+	// opens it on the matched word, anchored at the opened message, so
+	// Enter/Shift+Enter step through that word's other occurrences.
+	it("opens find in chat on the matched word, anchored at the opened message", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky", find: true });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("find-request")).toHaveTextContent("flaky@msg-1"));
+		expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1");
+	});
+
+	it("sends a new find request for every result, even with the same word", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky", find: true });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("find-request")).toHaveTextContent("flaky@msg-1"));
+		const first = screen.getByTestId("find-request").dataset.requestId;
+
+		act(() => requestSessionSearchReveal("sess-1", { messageId: "msg-2", text: "flaky", find: true }));
+		await waitFor(() => expect(screen.getByTestId("find-request")).toHaveTextContent("flaky@msg-2"));
+		expect(screen.getByTestId("find-request").dataset.requestId).not.toBe(first);
+	});
+
+	// Found in review: an orchestrator with nothing cached first renders a
+	// placeholder conversation whose id is the session's. Find opened on it
+	// closed when the real conversation replaced it, and the unchanged request
+	// never opened it again. The match is held until its conversation is shown.
+	it("holds an orchestrator result's match until its conversation has loaded", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const orchestrator = { ...session, kind: "orchestrator" } satisfies WorkspaceSession;
+		const loaded = conversationState.snapshot;
+		conversationState.snapshot = undefined;
+		conversationState.isLoading = true;
+		try {
+			requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky", find: true });
+			const tree = () => <Wrapper client={client}><SessionChatSurface session={orchestrator} /></Wrapper>;
+			const view = render(tree());
+			// The placeholder is on screen, and the match is not handed to it.
+			expect(screen.getByTestId("conversation-id")).toHaveTextContent("sess-1");
+			expect(screen.getByTestId("find-request")).toBeEmptyDOMElement();
+			expect(screen.getByTestId("annotation-request")).toBeEmptyDOMElement();
+			// Taken from the hand-off all the same: a later visit must not replay it.
+			expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
+
+			conversationState.snapshot = loaded;
+			conversationState.isLoading = false;
+			view.rerender(tree());
+			await waitFor(() => expect(screen.getByTestId("find-request")).toHaveTextContent("flaky@msg-1"));
+			expect(screen.getByTestId("conversation-id")).toHaveTextContent("conv-sess-1");
+			expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1");
+		} finally {
+			conversationState.snapshot = loaded;
+			conversationState.isLoading = false;
+		}
+	});
+
+	it("drops the find request once the chat has applied it", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky", find: true });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("find-request")).toHaveTextContent("flaky@msg-1"));
+		await userEvent.click(screen.getByRole("button", { name: "Apply find request" }));
+		expect(screen.getByTestId("find-request")).toBeEmptyDOMElement();
+	});
+
+	// Find in chat searches user and assistant text only; a word matched in a
+	// command's output would open it on "No results".
+	it("opens no find for a match outside the message's words", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "ECONNRESET" });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1"));
+		expect(screen.getByTestId("find-request")).toBeEmptyDOMElement();
+	});
+
+	it("opens no find for a match without text", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "  ", find: true });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1"));
+		expect(screen.getByTestId("find-request")).toBeEmptyDOMElement();
 	});
 });
 
@@ -1079,13 +1318,40 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
+		}
+	});
+
+	it("blocks an imported chat whose agent is signed out", async () => {
+		const client = new QueryClient();
+		client.setQueryData(agentReadinessQueryKey, { agents: [{ id: "codex", installation: { state: "installed" }, authentication: { state: "unauthorized" } }] });
+		render(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} /></Wrapper>);
+		expect(await screen.findByText("Blocked signed_out")).toBeInTheDocument();
+	});
+
+	it("waits for a ready controller during native and imported resumes", () => {
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "connecting" } };
+		const client = new QueryClient();
+		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
+		}
+
+		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
+		}
+
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
+		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
 		}
 	});
 
@@ -1093,7 +1359,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 	});
 });
@@ -1158,24 +1424,22 @@ describe("SessionChatSurface continuation identity", () => {
 
 describe("side command routing", () => {
 	beforeEach(() => {
-		useUiStore.setState({ developerMode: true, sideChats: true });
+		// Developer mode stays off: side chats do not depend on it.
+		useUiStore.setState({ developerMode: false });
 		conversationState.snapshot = { ...conversationState.snapshot, capabilities: ["resume"] };
-	});
-	afterEach(() => {
-		useUiStore.setState({ developerMode: false, sideChats: false });
 	});
 
 	it.each([
-		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
-		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
-	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
-		useUiStore.setState(flags);
+		["the harness cannot resume", [], undefined],
+		["the session is on another machine", ["resume"], "h_air"],
+	] as const)("sends /btw to the main chat when %s", async (_case, capabilities, hostId) => {
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [...capabilities] };
 		sideMocks.create.mockReset();
 		const mainSend = conversationCommandState.send;
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(
 			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...session, provider }} />
+				<SessionChatSurface session={{ ...session, provider: "codex" }} hostId={hostId} />
 			</Wrapper>,
 		);
 		await act(async () => {
@@ -1183,6 +1447,35 @@ describe("side command routing", () => {
 		});
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+	});
+
+	it("reports whether the session has side chats, and is creating one, only once their list has loaded", () => {
+		const onSideChatsChange = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const surface = () => (
+			<Wrapper client={queryClient}>
+				{/* A fresh session object rerenders the memoized surface. */}
+				<SessionChatSurface session={{ ...session }} onSideChatsChange={onSideChatsChange} />
+			</Wrapper>
+		);
+		try {
+			const view = render(surface());
+			expect(onSideChatsChange).not.toHaveBeenCalled();
+			sideMocks.loaded = true;
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: false });
+			sideMocks.pending = true;
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: true });
+			sideMocks.pending = false;
+			sideMocks.sides = [{ id: "side-1", hasWork: false }];
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: true, creating: false });
+		} finally {
+			sideMocks.loaded = false;
+			sideMocks.pending = false;
+			sideMocks.sides = [];
+		}
 	});
 
 	it(
@@ -1196,11 +1489,14 @@ describe("side command routing", () => {
 					<SessionChatSurface session={session} />
 				</Wrapper>,
 			);
+			const results: unknown[] = [];
 			await act(async () => {
-				await sideMocks.workspaceSend!("/btw first", undefined, "submission-1");
-				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
-				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
+				results.push(await sideMocks.workspaceSend!("/btw first", undefined, "submission-1"));
+				results.push(await sideMocks.workspaceSend!("/btw second", undefined, "submission-2"));
+				results.push(await sideMocks.workspaceSend!("/btw second", undefined, "submission-2"));
 			});
+			// None went to the main transcript, so none moves its reader to the end.
+			expect(results).toEqual([sideMocks.sentOutsideTranscript, sideMocks.sentOutsideTranscript, sideMocks.sentOutsideTranscript]);
 			expect(sideMocks.create.mock.calls).toEqual([
 				[undefined, true, "submission-1"],
 				[undefined, true, "submission-2"],
@@ -1231,7 +1527,9 @@ describe("side command routing", () => {
 		const mainSend=vi.fn().mockResolvedValue(undefined);
 		(conversationCommandState as {send?:unknown}).send=mainSend;
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session}/></Wrapper>);
-		await act(async()=>{await sideMocks.workspaceSend!(text,undefined,"literal-side");});
+		let result: unknown;
+		await act(async()=>{result=await sideMocks.workspaceSend!(text,undefined,"literal-side");});
+		expect(result).not.toBe(sideMocks.sentOutsideTranscript);
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({text}));
 		delete (conversationCommandState as {send?:unknown}).send;
@@ -1282,7 +1580,6 @@ describe("SessionChatSurface startup recovery", () => {
 describe("selection side-chat operation ownership", () => {
 	const excerpt: ChatDraftExcerptReference = { id: "selection-operation", conversationId: "conv-sess-1", messageId: "message", revision: 1, text: "selected text", role: "assistant" };
 	function mount() {
-		useUiStore.setState({ developerMode:true, sideChats:true });
 		conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"] };
 		sideMocks.create.mockReset(); sideMocks.addReference.mockReset(); sideMocks.show.mockReset();
 		sideMocks.activeId = undefined; sideMocks.sides = [];

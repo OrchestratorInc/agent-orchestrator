@@ -8,6 +8,7 @@ import { haptics } from "./haptics";
 import { orchestratorLaunchRefusal, type OrchestratorProjectRow } from "./orchestratorView";
 import { hostedRowKey } from "./hostedRows";
 import { useApp } from "./store";
+import { isCloudHost } from "./cloud/mapping";
 
 function rowHostId(row: OrchestratorProjectRow, fallback?: string): string {
 	return "hostId" in row.project && typeof row.project.hostId === "string" ? row.project.hostId : fallback ?? "";
@@ -66,6 +67,11 @@ export function useOrchestratorLauncher() {
 			const refusal = orchestratorLaunchRefusal(cause);
 			if (refusal) {
 				Alert.alert(refusal.title, refusal.message);
+				return;
+			}
+			// Orchestrator Cloud's failures already arrive in words; there is no machine address to name.
+			if (isCloudHost(hostId)) {
+				Alert.alert("Couldn't start the orchestrator", cause instanceof Error && cause.message ? cause.message : "Try again.");
 				return;
 			}
 			const httpStatus = cause instanceof ApiError ? cause.status : undefined;

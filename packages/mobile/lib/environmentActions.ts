@@ -1,5 +1,6 @@
 import { ApiError, pingServer } from "./api";
 import { classifyConnectionFailure, describeConnectionFailure } from "./connectionError";
+import { resolveManualAddress } from "./connectionFields";
 import { probeEndpoint } from "./connectRuntime";
 import { forgetPairedHost, forgetServer } from "./disconnect";
 import { MachineSaveError, type EnvironmentMachineDraft } from "./environmentEditor";
@@ -13,33 +14,59 @@ import { IncompatibleHostVersionError } from "./race";
  * A changed route or password is checked against the machine before it is
  * stored (see persistManualHostEdit). Says whether the route changed, so the
  * caller can reconnect the default machine over the new one.
+ *
+ * The icon is written last and on its own: it is a phone-local write that can
+ * fail without the machine being at fault, after a route was already saved.
+ * Its failure comes back as `appearanceError` beside `routeChanged`, rather
+ * than as a connection failure that would hide the saved route.
  */
-export async function saveEnvironmentMachine(host: Host, draft: EnvironmentMachineDraft, platform: string): Promise<{ routeChanged: boolean }> {
+export async function saveEnvironmentMachine(
+	host: Host,
+	draft: EnvironmentMachineDraft,
+	platform: string,
+): Promise<{ routeChanged: boolean; appearanceError?: MachineSaveError }> {
 	const before = host.endpoints[draft.endpointIndex];
 	const appearanceChanged = machineAppearance(host).symbol !== draft.appearance.symbol;
+	let after: Host["endpoints"][number] | undefined;
 	try {
-		await persistManualHostEdit(host, draft.config, draft.machineName, draft.endpointIndex, {
+		const saved = await persistManualHostEdit(host, draft.config, draft.machineName, draft.endpointIndex, {
 			probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),
 			ping: pingServer,
 			saveHost,
 			renameHost,
 		});
-		if (appearanceChanged) await updateHostAppearance(host.id, draft.appearance);
+		after = saved.endpoints[draft.endpointIndex];
 	} catch (error) {
 		if (error instanceof DifferentMachineError || error instanceof AccountManagedHostError) throw new MachineSaveError(error.message, "host");
 		const status = error instanceof IncompatibleHostVersionError ? 426 : error instanceof ApiError ? error.status : undefined;
 		const kind = classifyConnectionFailure(status);
-		if (kind === "auth") throw new MachineSaveError("That password was rejected. Check it and try again.", "password");
-		const copy = describeConnectionFailure(kind, { host: draft.config.host, port: draft.config.httpPort, platform });
+		if (kind === "auth") throw new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password");
+		// Said against the port that was tried: an empty Port follows the address.
+		const address = resolveManualAddress(draft.config.host, draft.config.httpPort, before);
+		const tried = address.ok ? { port: address.port, secure: address.secure } : { port: draft.config.httpPort };
+		const copy = describeConnectionFailure(kind, { host: address.ok ? address.host : draft.config.host, platform, ...tried });
 		throw new MachineSaveError(copy.message, "host");
 	}
-	const routeChanged = !before || before.host !== draft.config.host.trim() || before.port !== Number(draft.config.httpPort) ||
-		before.secure !== Boolean(draft.config.secure) || host.token !== draft.config.password;
+	// Compared with what was saved: the typed address may have had no port, and
+	// whether it speaks TLS is only known once it answered.
+	const routeChanged = !before || !after || before.host !== after.host || before.port !== after.port ||
+		before.secure !== after.secure || host.token !== draft.config.password;
+	if (appearanceChanged) {
+		try {
+			await updateHostAppearance(host.id, draft.appearance);
+		} catch {
+			const message = routeChanged
+				? "The connection was saved, but the icon couldn't be. Try Save again."
+				: "The icon couldn't be saved. Try again.";
+			return { routeChanged, appearanceError: new MachineSaveError(message, "host") };
+		}
+	}
 	return { routeChanged };
 }
 
 /** Forgetting a machine failed and its saved connection is still there. */
 export class ForgetMachineError extends Error {
+	readonly code: string = "FORGET_MACHINE_ERROR";
 	constructor(message: string) {
 		super(message);
 		this.name = "ForgetMachineError";

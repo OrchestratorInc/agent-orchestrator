@@ -115,10 +115,17 @@ describe("ArtifactFileView", () => {
 		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(contentUrl);
 		expect(cancel).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		if (tag === "video") {
+			// Videos play under the app's own controls.
+			expect(media).not.toHaveAttribute("controls");
+			expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+		}
+		if (tag === "audio") expect(media).toHaveAttribute("controls");
 		if (tag !== "img") {
-			expect(media).toHaveAttribute("controls");
 			expect(media).toHaveAttribute("preload", "metadata");
-			expect(media).not.toHaveAttribute("autoplay");
+			// Videos start on their own in the app's player; audio waits for a press.
+			if (tag === "video") expect(media).toHaveAttribute("autoplay");
+			else expect(media).not.toHaveAttribute("autoplay");
 		}
 	});
 
@@ -168,6 +175,29 @@ describe("ArtifactFileView", () => {
 		expect(screen.getByText("Unable to load this file.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(screen.getByLabelText("clip.mp4")).toBeInTheDocument();
+	});
+
+	it("pauses a playing video when the view is hidden, as when the inspector closes", async () => {
+		const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+		try {
+			fetchMock.mockResolvedValue(new Response(null));
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = renderWithQuery(<ArtifactFileView active artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" />, client);
+			const player = await screen.findByLabelText<HTMLVideoElement>("clip.mp4");
+			expect(player).toHaveAttribute("autoplay");
+			Object.defineProperty(player, "paused", { configurable: true, value: false });
+
+			view.rerender(
+				<QueryClientProvider client={client}>
+					<TooltipProvider><ArtifactFileView active={false} artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" /></TooltipProvider>
+				</QueryClientProvider>,
+			);
+
+			expect(screen.getByLabelText("clip.mp4")).toBe(player);
+			expect(pause).toHaveBeenCalledTimes(1);
+		} finally {
+			pause.mockRestore();
+		}
 	});
 
 	it("fetches a local artifact through the explicit loopback artifact API and renders its content", async () => {
@@ -285,6 +315,52 @@ describe("ArtifactFileView", () => {
 
 		await waitFor(() => expect(screen.getByText("content")).toBeInTheDocument());
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+	});
+
+	it("offers no feedback for an archived session's artifact, by button or by selection", async () => {
+		fetchMock.mockImplementation(async () => new Response("# Plan\n\nCache the session list.", { status: 200 }));
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+
+		const live = renderWithQuery(<ArtifactFileView artifactName="plan.md" path="plan.md" rawUrl={RAW_URL} sessionId="sess-1" />);
+		await screen.findByText("Cache the session list.");
+		expect(screen.getByRole("button", { name: "Add feedback" })).toBeInTheDocument();
+		live.unmount();
+
+		renderWithQuery(<ArtifactFileView artifactName="plan.md" noFeedback path="plan.md" rawUrl={RAW_URL} readOnly sessionId="sess-1" />);
+		const paragraph = await screen.findByText("Cache the session list.");
+		expect(screen.queryByRole("button", { name: "Add feedback" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		const range = document.createRange();
+		range.selectNodeContents(paragraph);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(paragraph);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(screen.queryByRole("textbox", { name: /Feedback for plan\.md/ })).not.toBeInTheDocument();
+	});
+
+	it("closes feedback already open when the artifact's session is archived, and sends nothing", async () => {
+		fetchMock.mockImplementation(async () => new Response("content", { status: 200 }));
+		postMock.mockResolvedValue({ data: { status: "ok" } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = (noFeedback: boolean) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ArtifactFileView artifactName="notes.txt" feedbackRequestKey={1} noFeedback={noFeedback} path="notes.txt" rawUrl={RAW_URL} sessionId="sess-1" />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+
+		const { rerender } = render(view(false));
+		await userEvent.type(await screen.findByRole("textbox", { name: /Feedback for notes\.txt/ }), "Please tighten this.");
+		rerender(view(true));
+
+		await waitFor(() => expect(screen.queryByRole("textbox", { name: /Feedback for notes\.txt/ })).not.toBeInTheDocument());
+		expect(screen.queryByRole("button", { name: "Send feedback" })).not.toBeInTheDocument();
+		rerender(view(false));
+		await screen.findByText("content");
+		expect(screen.queryByRole("textbox", { name: /Feedback for notes\.txt/ })).not.toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalled();
 	});
 
 	it("does not offer editing for a truncated artifact", async () => {

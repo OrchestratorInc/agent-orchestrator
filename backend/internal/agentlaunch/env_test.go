@@ -3,6 +3,7 @@ package agentlaunch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,10 +25,15 @@ func TestProjectEnvMergeAndRedaction(t *testing.T) {
 	if got := RedactValues("long-secret", project); got != "[REDACTED]" {
 		t.Fatalf("redacted overlapping values = %q", got)
 	}
-	cause := errors.New("failed with long-secret")
+	sentinel := errors.New("agent requires authentication")
+	cause := fmt.Errorf("failed with long-secret: %w", sentinel)
 	redacted := RedactError(cause, project)
-	if redacted.Error() != "failed with [REDACTED]" || errors.Is(redacted, cause) {
+	var reached interface{ Unwrap() error }
+	if redacted.Error() != "failed with [REDACTED]: agent requires authentication" || errors.As(redacted, &reached) {
 		t.Fatalf("redacted error = %v, want hidden value without the original cause", redacted)
+	}
+	if !errors.Is(redacted, sentinel) {
+		t.Fatalf("redacted error = %v lost its sentinel", redacted)
 	}
 }
 
@@ -159,5 +165,20 @@ func TestProcessEnvForLaunchBinaryAddsNodeForNPMLauncher(t *testing.T) {
 	}
 	if !kept {
 		t.Fatal("process environment was not preserved")
+	}
+}
+
+func TestLaunchBinaryUnwrapsProviderEnvWrapper(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"sh", "-c", "export X=\"$Y\"; exec \"$@\"", ProviderEnvMarker, "/opt/agents/codewhale", "--resume", "id"}, "/opt/agents/codewhale"},
+		{[]string{"sh", "-c", "exec \"$@\"", ProviderEnvMarker, "env", "A=b", "prime-agent"}, "prime-agent"},
+		{[]string{"sh", "-c", "echo not-a-wrapper"}, "sh"},
+	} {
+		if got, ok := launchBinary(tc.argv); !ok || got != tc.want {
+			t.Fatalf("launchBinary(%q) = %q, %v; want %q", tc.argv, got, ok, tc.want)
+		}
 	}
 }

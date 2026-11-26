@@ -23,6 +23,7 @@ import { useOpenPage } from "./pageNavigation";
 import { iconSize, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 import { reviewRouteForSession } from "./reviewView";
+import { isCloudHost } from "./cloud/mapping";
 import { MachineIdentity } from "./MachineIdentity";
 import type { MachineAppearance } from "./machineAppearance";
 
@@ -33,6 +34,7 @@ export const WorkerListRow = memo(
 	rowKey,
 	projectName,
 	machine,
+	unreachable = false,
 	isRenaming,
 	activeSwipeId,
 	nowBucket,
@@ -52,6 +54,11 @@ export const WorkerListRow = memo(
 	rowKey?: string;
 	projectName?: string;
 	machine?: { name: string; appearance: MachineAppearance };
+	/**
+	 * The row's machine can't be reached, so what it shows is the last thing
+	 * heard. Dimmed rather than hidden: the rows are still worth reading.
+	 */
+	unreachable?: boolean;
 	isRenaming: boolean;
 	activeSwipeId?: string;
 	/**
@@ -165,6 +172,8 @@ export const WorkerListRow = memo(
 		});
 	}, [router, session, hostId]);
 
+	const cloudRow = isCloudHost(sessionHostId(session) ?? hostId);
+	// The PR page reads the worker's own host: its machine's daemon, or Orchestrator Cloud.
 	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? hostId);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
@@ -174,6 +183,7 @@ export const WorkerListRow = memo(
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
 		hasPr: Boolean(reviewRoute),
+		cloud: cloudRow,
 	});
 
 	const runAction = useCallback((id: WorkerActionId) => {
@@ -210,7 +220,7 @@ export const WorkerListRow = memo(
 			rowStyle={styles.row}
 			// No gesture hint: a screen reader reaches pin, rename and archive as
 			// the row's actions, and announces that it has them.
-			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
+			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.${unreachable ? " Last known; its machine can't be reached." : ""}`}
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}
@@ -227,6 +237,7 @@ export const WorkerListRow = memo(
 					prsTone={prs?.tone}
 					harness={session.harness}
 					machine={machine}
+					unreachable={unreachable}
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
@@ -245,6 +256,7 @@ export const WorkerListRow = memo(
 					prsTone={prs?.tone}
 					harness={session.harness}
 					machine={machine}
+					unreachable={unreachable}
 					styles={styles}
 					t={t}
 				/>
@@ -261,6 +273,7 @@ export const WorkerListRow = memo(
 		prev.hostId === next.hostId &&
 		prev.machine?.name === next.machine?.name &&
 		prev.machine?.appearance.symbol === next.machine?.appearance.symbol &&
+		prev.unreachable === next.unreachable &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
 		prev.session === next.session &&
@@ -278,6 +291,7 @@ function WorkerRowContents({
 	prsTone,
 	harness,
 	machine,
+	unreachable = false,
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
@@ -294,6 +308,7 @@ function WorkerRowContents({
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
 	machine?: { name: string; appearance: MachineAppearance };
+	unreachable?: boolean;
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
@@ -305,7 +320,7 @@ function WorkerRowContents({
 }) {
 	return (
 		<>
-			<View style={styles.eyebrow}>
+			<View style={[styles.eyebrow, unreachable && styles.lastKnown]}>
 				<AgentLogo harness={harness} size={14} />
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
@@ -352,13 +367,13 @@ function WorkerRowContents({
 					{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
 				</View>
 			) : (
-				<Text style={styles.title} numberOfLines={1}>
+				<Text style={[styles.title, unreachable && styles.lastKnown]} numberOfLines={1}>
 					{row.title}
 				</Text>
 			)}
 
 			{details || machine ? (
-				<View style={styles.metadata}>
+				<View style={[styles.metadata, unreachable && styles.lastKnown]}>
 					{details ? (
 						<Text style={[styles.details, prsTone && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
 							{details}
@@ -401,7 +416,7 @@ const makeStyles = (t: Theme) =>
 			paddingVertical: space.sm,
 			gap: space.hair,
 		},
-		// Inset to the text, as T3 Code's list rows are, and drawn inside the row
+		// Inset to the text, and drawn inside the row
 		// so it travels with a swipe instead of staying behind on the rail.
 		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
 		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xs },
@@ -410,6 +425,9 @@ const makeStyles = (t: Theme) =>
 		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		trailing: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
+		// A row whose machine can't be reached shows the last thing heard, so it
+		// must not read as live: the spinner and status stay, at a lower voice.
+		lastKnown: { opacity: 0.5 },
 		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
 		metadataSpacer: { flex: 1 },
 		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },

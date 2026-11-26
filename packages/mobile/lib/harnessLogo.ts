@@ -1,23 +1,16 @@
-// Per-harness brand marks, ported from the desktop's
-// frontend/src/renderer/assets/agents/. The desktop keeps 7 of these as .svg,
-// which React Native cannot render, so those were rasterised to PNG at 128px
-// during the port; the rest were copied as-is (crush re-encoded — it was a JPEG
-// with a .png name — and aider downscaled from 384px).
+// Per-harness brand marks, copied from the desktop by scripts/sync-harness-logos.mjs.
 //
-// Pure data + rules, no React, so the registry can be unit-tested.
+// The desktop is the source of truth (frontend/src/renderer/components/AgentAvatar.tsx).
+// Where a brand's mark only reads on one background, it ships a light/dark pair
+// and each theme draws its own, so no mark needs a backdrop chip behind it.
+//
+// Pure data + rules, no React, so the registry can be unit-tested. The `require`
+// calls live in harnessLogoAssets.ts, because Node cannot require a PNG.
 
-export type BackdropPolarity = "neutral" | "needs-dark" | "needs-light";
+import { HARNESS_LOGO_MANIFEST } from "./harnessLogoManifest";
 
-// Which harnesses ship a mark. The `require` calls themselves live in
-// harnessLogoAssets.ts so this module stays importable by a plain unit test —
-// Node cannot require a PNG. `harnessLogo.test.ts` checks the two against the
-// real asset directory, so they cannot drift apart silently.
-export const LOGO_KEYS: ReadonlySet<string> = new Set([
-	"agy", "aider", "amp", "auggie", "autohand", "claude-code", "cline", "codex",
-	"continue", "copilot", "crush", "cursor", "devin", "droid", "goose", "grok",
-	"kilocode", "kimi", "kiro", "muse", "opencode", "pi", "prime-agent", "qwen", "vibe",
-	"kimchi", "fx",
-]);
+/** Every harness that ships a mark, as the desktop does. */
+export const LOGO_KEYS: ReadonlySet<string> = new Set(Object.keys(HARNESS_LOGO_MANIFEST));
 
 /** Normalised lookup key, or "" when there is no usable harness. */
 export function logoKey(harness?: string | null): string {
@@ -27,59 +20,6 @@ export function logoKey(harness?: string | null): string {
 /** Whether a mark exists for this harness. */
 export function hasLogo(harness?: string | null): boolean {
 	return LOGO_KEYS.has(logoKey(harness));
-}
-
-// Which marks disappear against which background.
-//
-// These two sets are MEASURED, not guessed: for every asset, the share of its
-// visible pixels whose WCAG contrast against the target background falls below
-// 1.5:1. Anything over 50% is listed here.
-//
-// The problem is symmetric, which is easy to miss. `opencode` and `cursor` are
-// pure white and `cline` is #e6e6e6, so they vanish on a light card — that much
-// is visible in the desktop's SVG source. But `goose` and `kilocode` are pure
-// black and `devin`/`droid`/`pi`/`kimi` are near-black, so they vanish just as
-// completely on the dark card. Desktop has both bugs and renders every mark
-// bare on every theme.
-export const NEEDS_DARK_BACKDROP: ReadonlySet<string> = new Set(["opencode", "cursor", "cline", "continue", "grok"]);
-export const NEEDS_LIGHT_BACKDROP: ReadonlySet<string> = new Set(["kilocode", "goose", "devin", "droid", "pi", "kimi", "fx", "prime-agent"]);
-
-/**
- * What the mark needs behind it to stay visible.
- *
- * Keyed to the mark rather than the theme, so a chip is drawn only where one is
- * actually needed and its colour is fixed rather than following the palette —
- * a white mark needs something dark behind it in *both* themes.
- */
-export function backdropFor(harness?: string | null): BackdropPolarity {
-	const key = logoKey(harness);
-	if (!key) return "neutral";
-	if (NEEDS_DARK_BACKDROP.has(key)) return "needs-dark";
-	if (NEEDS_LIGHT_BACKDROP.has(key)) return "needs-light";
-	return "neutral";
-}
-
-/**
- * The chip colours. Deliberately not palette tokens: opencode's mark is pure
- * #ffffff, so it needs the same dark chip on the light theme as on the dark one,
- * and a token that followed the palette would put it on a light surface and make
- * it vanish again.
- */
-export const HARNESS_CHIP = { dark: "#24272e", light: "#ffffff" } as const;
-
-/**
- * The colour to draw behind a mark, or `undefined` when it can stand alone.
- *
- * Every surface that renders a brand mark has to ask this. Anything white (or
- * anything black) needs its own backdrop, and a path that draws the raw asset
- * loses the mark entirely on the theme it does not contrast with — the desktop
- * does exactly that, which is where opencode swallowed the logo whole.
- */
-export function chipColorFor(harness?: string | null): string | undefined {
-	const polarity = backdropFor(harness);
-	if (polarity === "needs-dark") return HARNESS_CHIP.dark;
-	if (polarity === "needs-light") return HARNESS_CHIP.light;
-	return undefined;
 }
 
 /**

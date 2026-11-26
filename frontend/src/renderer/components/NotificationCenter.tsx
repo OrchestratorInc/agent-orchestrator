@@ -1,4 +1,6 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { AppLink } from "./AppLink";
+import { CloudMark } from "./CloudMark";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useParams } from "@tanstack/react-router";
@@ -16,7 +18,7 @@ import {
 	MessageSquareDiff,
 	MessageSquareDot,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	useClearAllNotificationsMutation,
@@ -24,6 +26,7 @@ import {
 	useMarkAllNotificationsReadMutation,
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
+import { useAppMenuAction, useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -49,12 +52,13 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudOrg } from "../hooks/useCloudOrg";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
@@ -65,6 +69,8 @@ type NotificationCenterProps = {
 };
 
 const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
+const CLOUD_NOTIFICATION_PREFIX = "cloud-notification:";
+const EMPTY_CLOUD_NOTIFICATIONS: CloudCpNotification[] = [];
 const notificationKey = (hostId: HostId, id: string) => refKey({ host: hostId, id });
 
 function useNotificationTargetNavigation() {
@@ -74,7 +80,7 @@ function useNotificationTargetNavigation() {
 			const sessionId = notification.target.sessionId || notification.sessionId;
 			if (!sessionId) return;
 			recordManualWorkerOpen(sessionId);
-			void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+			void captureRendererEvent("ao.notifications.opened", { target: "session" });
 			navigateToSession(notification.projectId, sessionId, hostId);
 		},
 		[navigateToSession],
@@ -83,7 +89,7 @@ function useNotificationTargetNavigation() {
 	const openPrimary = useCallback(
 		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			if (notification.target.kind === "pr" && notification.target.prUrl) {
-				void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+				void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 				window.open(notification.target.prUrl, "_blank", "noopener,noreferrer");
 				return;
 			}
@@ -186,14 +192,28 @@ function NotificationWorkspaceState({
 export function NotificationRuntime() {
 	const queryClient = useQueryClient();
 	const { openPrimary } = useNotificationTargetNavigation();
+	const navigateToSession = useNavigateToSession();
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount;
+	// CloudNotificationRuntime keeps the Cloud list live; this only reads it,
+	// so Cloud rows reach the badge and the OS as local ones do.
+	const cloudAll = useCloudNotifications("all", { live: false });
+	const cloudItems = cloudAll.items ?? EMPTY_CLOUD_NOTIFICATIONS;
+	const cloudItemsRef = useRef(cloudItems);
+	cloudItemsRef.current = cloudItems;
+	const { userId: cloudUserId } = useCloudCp();
+	const { org: cloudOrg } = useCloudOrg();
+	// Whose Cloud inbox is loaded; a new account or organization is a new inbox.
+	const cloudScope = cloudAll.data ? `${cloudUserId}:${cloudOrg?.id ?? ""}` : undefined;
+	// The same count as the bell's.
+	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
 	const seenRemoteIds = useRef(new Map<HostId, Set<string>>());
 	const shownRemoteNotifications = useRef(new Map<string, NotificationDTO>());
+	const seenCloudIds = useRef<{ scope: string; ids: Set<string> } | undefined>(undefined);
+	const shownCloudNotifications = useRef(new Map<string, CloudCpNotification>());
 
 	// Being on the session route is not the same as watching the agent: its pane
 	// renders one terminal at a time, so a shell or reviewer tab hides the agent
@@ -254,8 +274,53 @@ export function NotificationRuntime() {
 		}
 	}, [remoteUnread.hosts]);
 
+	// A Cloud row that arrives while the list is loaded raises an OS
+	// notification, as a local one does; the list as first loaded (or after
+	// the account or organization changes it wholesale) is not replayed.
+	useEffect(() => {
+		if (cloudScope === undefined) return;
+		if (seenCloudIds.current?.scope !== cloudScope) {
+			seenCloudIds.current = { scope: cloudScope, ids: new Set(cloudItems.map((item) => item.id)) };
+			return;
+		}
+		const previous = seenCloudIds.current.ids;
+		for (const notification of cloudItems) {
+			if (previous.has(notification.id)) continue;
+			previous.add(notification.id);
+			if (previous.size > 512) previous.delete(previous.values().next().value!);
+			if (notification.status !== "unread" || notification.resolvedAt) continue;
+			const id = `${CLOUD_NOTIFICATION_PREFIX}${notification.id}`;
+			shownCloudNotifications.current.set(id, notification);
+			if (shownCloudNotifications.current.size > 256) {
+				shownCloudNotifications.current.delete(shownCloudNotifications.current.keys().next().value!);
+			}
+			const { hostId, sessionId } = routeRef.current;
+			const watched = notification.type === "needs_input" && !hostId && Boolean(sessionId) &&
+				sessionId === notification.sessionId && document.visibilityState === "visible" && document.hasFocus() &&
+				useUiStore.getState().visibleTerminalKindBySession[sessionUiKey(sessionId!)] === "worker";
+			void aoBridge.notifications.show({
+				id,
+				title: notification.title,
+				body: notification.body || undefined,
+				type: notification.type,
+				watched,
+			});
+		}
+	}, [cloudItems, cloudScope]);
+
 	useEffect(() => {
 		return aoBridge.notifications.onClick((id) => {
+			if (id.startsWith(CLOUD_NOTIFICATION_PREFIX)) {
+				const notificationId = id.slice(CLOUD_NOTIFICATION_PREFIX.length);
+				const notification = shownCloudNotifications.current.get(id) ??
+					cloudItemsRef.current.find((item) => item.id === notificationId);
+				if (notification?.sessionId && notification.projectId) {
+					recordManualWorkerOpen(notification.sessionId);
+					void captureRendererEvent("ao.notifications.opened", { target: "session" });
+					navigateToSession(notification.projectId, notification.sessionId);
+				}
+				return;
+			}
 			if (id.startsWith(REMOTE_NOTIFICATION_PREFIX)) {
 				try {
 					const { host, id: notificationId } = parseRefKey(id.slice(REMOTE_NOTIFICATION_PREFIX.length));
@@ -273,7 +338,7 @@ export function NotificationRuntime() {
 			);
 			if (notification) openPrimary(notification);
 		});
-	}, [openPrimary, queryClient]);
+	}, [navigateToSession, openPrimary, queryClient]);
 
 	return null;
 }
@@ -287,6 +352,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// when visibleUnreadKey is unchanged (removing ids from the ref alone does not).
 	const [ackRetryNonce, setAckRetryNonce] = useState(0);
 	const [open, setOpen] = useState(false);
+	const markNotificationPick = useTelemetrySurface("notifications_panel", open, { choice: true });
 	// Opening marks unread as read, which would drop the highlight under the
 	// cursor. Keep the open-time unread ids highlighted until the panel closes.
 	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
@@ -411,7 +477,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 		setMarkReadError(null);
 		void markAllMutate(newly)
-			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "all" }))
+			.then(() => captureRendererEvent("ao.notifications.read", { scope: "all" }))
 			.catch((error: unknown) => {
 				void captureRendererEvent("ao.renderer.notification_mark_read_failed", { scope: "all" });
 				for (const id of newly) acknowledgedIdsRef.current.delete(id);
@@ -497,15 +563,26 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}
 	}, [queryClient]);
 
+	// A fullscreen pane mounts its own bell and covers the panel's; only the bell
+	// the user can see answers the menu.
+	const anchorRef = useRef<HTMLSpanElement>(null);
+	useAppMenuAvailable("toggle-notifications", true);
+	useAppMenuAction("toggle-notifications", () => {
+		const fullscreenElement = document.fullscreenElement;
+		if (fullscreenElement && !fullscreenElement.contains(anchorRef.current)) return;
+		setPanelOpen(!openRef.current);
+	});
+
 	const retryMarkRead = () => {
 		setMarkReadError(null);
 		setAckRetryNonce((nonce) => nonce + 1);
 	};
 
 	const openSessionAndDismiss = useCallback((notification: NotificationDTO, hostId: HostId) => {
+		markNotificationPick();
 		openSession(notification, hostId);
 		setPanelOpen(false);
-	}, [openSession, setPanelOpen]);
+	}, [markNotificationPick, openSession, setPanelOpen]);
 
 	const restoreThenOpen = useCallback(async (
 		sessionId: string,
@@ -521,6 +598,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				? await restoreSession(sessionId, hostId)
 				: await restoreSession(sessionId);
 			if (result.status === "success") {
+				markNotificationPick();
 				openAfterRestore();
 				setPanelOpen(false);
 				return;
@@ -529,7 +607,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		} finally {
 			setRestoringSessionId(undefined);
 		}
-	}, [restoreSession, restoringSessionId, setPanelOpen, t]);
+	}, [markNotificationPick, restoreSession, restoringSessionId, setPanelOpen, t]);
 
 	const restoreAndOpen = useCallback((notification: NotificationDTO, hostId: HostId) => {
 		const sessionId = notification.target.sessionId || notification.sessionId;
@@ -541,14 +619,15 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// their cloud project, so they open through the same session route.
 	const openCloudSession = useCallback((projectId: string, sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
-		void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+		void captureRendererEvent("ao.notifications.opened", { target: "session" });
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
 	const openCloudSessionAndDismiss = useCallback((projectId: string, sessionId: string) => {
+		markNotificationPick();
 		openCloudSession(projectId, sessionId);
 		setPanelOpen(false);
-	}, [openCloudSession, setPanelOpen]);
+	}, [markNotificationPick, openCloudSession, setPanelOpen]);
 
 	const restoreCloudAndOpen = useCallback((projectId: string, sessionId: string) => {
 		void restoreThenOpen(sessionId, undefined, cloudRowKey(sessionId), () => openCloudSession(projectId, sessionId));
@@ -676,13 +755,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		<Popover onOpenChange={setPanelOpen} open={open}>
 			{/* Keep the drawer anchored to layout bounds while the bell scales on press. */}
 			<PopoverAnchor asChild>
-				<span className="inline-flex shrink-0">
+				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
-						<TopbarButton
+						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.notifications"
 							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
 							className="relative"
 							style={style}
-							variant="icon"
+							variant="quiet"
 						>
 							{unreadCount > 0 ? (
 								<BellRing className="size-icon-base fill-current text-foreground" aria-hidden="true" />
@@ -694,13 +774,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 									{unreadCount > 99 ? "99+" : unreadCount}
 								</span>
 							) : null}
-						</TopbarButton>
+						</Button>
 					</PopoverTrigger>
 				</span>
 			</PopoverAnchor>
 			<PopoverContent
 				align="end"
 				aria-label={t("notify.title")}
+				data-telemetry-surface="notifications_panel"
 				className="flex max-h-[calc(100dvh-5rem)] w-notification-width max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-lg p-0 [&_button]:transition-none [&_a]:transition-none"
 				sideOffset={6}
 			>
@@ -1010,7 +1091,7 @@ const NotificationItem = memo(function NotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start">
@@ -1030,7 +1111,7 @@ const NotificationItem = memo(function NotificationItem({
 										href={titleLink.url}
 										onClick={(event) => {
 											event.stopPropagation();
-											void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+											void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 										}}
 										rel="noopener noreferrer"
 										target="_blank"
@@ -1125,7 +1206,7 @@ const cloudRowKey = (id: string) => `cloud:${id}`;
 
 /**
  * Cloud rows mirror NotificationItem exactly (open, restore, clear, meta line,
- * motion), plus a small "Cloud" tag. A cloud row opens only once its session is
+ * motion), plus a small cloud mark. A cloud row opens only once its session is
  * in the workspace tree; otherwise the route would have nothing to render.
  */
 const CloudNotificationItem = memo(function CloudNotificationItem({
@@ -1199,7 +1280,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start gap-1.5">
@@ -1212,9 +1293,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						>
 							{notification.title}
 						</span>
-						<span className="mt-0.5 shrink-0 rounded-sm border border-border bg-surface px-1 py-0.5 text-caption leading-none text-muted-foreground">
-							{t("notify.cloud")}
-						</span>
+						<CloudMark className="h-5" />
 					</div>
 					{notification.body ? (
 						<p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">

@@ -38,6 +38,9 @@ const (
 	artifactFilesPath = "/api/v1/sessions/{sessionId}/artifact-files"
 	// Not under artifact-files/, where it would shadow a file named "events".
 	artifactEventsPath = "/api/v1/sessions/{sessionId}/artifact-events"
+	// artifactRegistrationsPath is the only way a path gets registered as a
+	// deliverable: it is what ao artifact add calls.
+	artifactRegistrationsPath = "/api/v1/sessions/{sessionId}/artifact-registrations"
 )
 
 // artifactFile serves a file from the session's artifact directory in the
@@ -52,7 +55,7 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 	}
 	// The session read fills in the default artifact directory for a row
 	// stored without one.
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	sess, _, err := c.artifactSession(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -207,7 +210,7 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 		apispec.NotImplemented(w, r, http.MethodDelete, artifactFilesPath)
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	sess, kept, err := c.artifactSession(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -225,11 +228,19 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 		envelope.WriteError(w, r, fmt.Errorf("delete artifact file: %w", err))
 		return
 	}
+	if kept {
+		c.forgetKeptArtifact(w, r, sess, clean)
+		return
+	}
 	if c.ArtifactVersions != nil {
 		if err := c.ArtifactVersions.DeleteVersions(r.Context(), sess.SessionRecord, clean); err != nil {
 			envelope.WriteError(w, r, fmt.Errorf("delete artifact versions: %w", err))
 			return
 		}
+	}
+	if err := c.Svc.UnregisterArtifact(r.Context(), sess.ID, clean); err != nil {
+		envelope.WriteError(w, r, fmt.Errorf("unregister artifact: %w", err))
+		return
 	}
 	updated, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {
@@ -237,6 +248,34 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
+}
+
+// registerArtifacts registers files in the session's artifact directory as its
+// deliverables.
+func (c *SessionsController) registerArtifacts(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, artifactRegistrationsPath)
+		return
+	}
+	var in RegisterArtifactsRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if len(in.Paths) == 0 || len(in.Paths) > domain.MaxArtifactRegistrationPaths {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_ARTIFACT_PATHS", fmt.Sprintf("paths must list 1 to %d paths", domain.MaxArtifactRegistrationPaths), nil))
+		return
+	}
+	result, err := c.Svc.RegisterArtifacts(r.Context(), sessionID(r), in.WorkingDir, in.Paths)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, RegisterArtifactsResponse{
+		Registered:     result.Registered,
+		OtherFiles:     result.OtherFiles,
+		OtherRootFiles: result.OtherRootFiles,
+	})
 }
 
 func listsArtifactFile(files []domain.SessionArtifactFile, relPath string) bool {
@@ -408,4 +447,22 @@ func writeArtifactTemp(root *os.Root, name string, perm fs.FileMode, content []b
 		return "", err
 	}
 	return temp, nil
+}
+
+// forgetKeptArtifact finishes deleting a file kept with a deleted session and
+// answers with what is left of it: no files once the last one is gone.
+func (c *SessionsController) forgetKeptArtifact(w http.ResponseWriter, r *http.Request, sess domain.Session, clean string) {
+	svc, ok := c.Svc.(keptArtifactsService)
+	if ok {
+		if err := svc.ForgetKeptArtifact(r.Context(), sess.ID, clean); err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("forget kept artifact: %w", err))
+			return
+		}
+	}
+	updated, _, err := c.artifactSession(r.Context(), sess.ID)
+	if err != nil {
+		updated = sess
+		updated.ArtifactFiles = nil
+	}
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }

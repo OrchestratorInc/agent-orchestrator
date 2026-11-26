@@ -6,9 +6,12 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Alert, Linking, Platform, StyleSheet, View } from "react-native";
-import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
+import { loadAccount, signInToAccount, type Account } from "../../lib/account";
 import { AccountAvatar, accountName } from "../../lib/AccountAvatar";
-import { clearAccountHosts, syncAccountHosts } from "../../lib/accountHosts";
+import { syncAccountHosts } from "../../lib/accountHosts";
+import { CloudPushRemovalError, useCloud } from "../../lib/cloud/CloudProvider";
+import { CLOUD_APPEARANCE, CLOUD_HOST_ID } from "../../lib/cloud/mapping";
+import { cloudSettingsStatus } from "../../lib/cloud/settingsStatus";
 import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../../lib/config";
@@ -57,6 +60,8 @@ import { useTheme, useThemeState } from "../../lib/ThemeProvider";
 import { preferenceLabel, type ThemePreference } from "../../lib/themePreference";
 import { ToastHost, type ToastController } from "../../lib/Toast";
 import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../../lib/updates";
+import { applyUpdate } from "../../lib/updateScreenState";
+import { reloadIntoUpdate } from "../../lib/updateResumeStore";
 import { useToast } from "../../lib/useToast";
 import { VERSION_FLOOR } from "../../lib/versionFloor";
 import { getThemeDefinition } from "../../../shared/theme/palettes";
@@ -83,6 +88,7 @@ export default function SettingsScreen() {
 	const [account, setAccount] = useState<Account | null>(null);
 	const [accountBusy, setAccountBusy] = useState(false);
 	const [accountLoading, setAccountLoading] = useState(true);
+	const cloud = useCloud();
 
 	useFocusEffect(useCallback(() => {
 		let current = true;
@@ -123,14 +129,27 @@ export default function SettingsScreen() {
 		}).finally(() => setAccountBusy(false));
 	}
 
-	function signOut() {
+	function signOut(options?: { keepPush?: boolean }) {
 		setAccountBusy(true);
-		void signOutOfAccount().then(async () => {
-			await clearAccountHosts();
+		// Through Orchestrator Cloud: it stops pushing to this phone before the
+		// account's token goes, then forgets the account's machines.
+		void cloud.signOut(options).then(async () => {
 			setAccount(null);
 			setPairedHosts(await loadHosts());
 			await reloadConfig();
-		}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
+		}).catch((error: unknown) => {
+			// Signing out anyway leaves the account's notifications coming until
+			// the phone signs in again, so it is the person's call.
+			if (error instanceof CloudPushRemovalError) {
+				Alert.alert("Couldn't turn off Cloud notifications", "This phone may keep getting this account's notifications until you sign in again.", [
+					{ text: "Cancel", style: "cancel" },
+					{ text: "Try again", onPress: () => signOut() },
+					{ text: "Sign out anyway", style: "destructive", onPress: () => signOut({ keepPush: true }) },
+				]);
+				return;
+			}
+			Alert.alert("Could not sign out", "Try again.");
+		}).finally(() => setAccountBusy(false));
 	}
 
 	if (!loaded) {
@@ -181,7 +200,7 @@ export default function SettingsScreen() {
 						<SettingsButtonRow icon="account" label="Sign in to Orchestrator" loading={accountLoading || accountBusy} onPress={signIn} testID="settings-sign-in" />
 					)}
 					{account ? (
-						<SettingsButtonRow icon="signOut" label="Sign out" destructive disabled={accountBusy} onPress={() => confirmSignOut(signOut)} testID="settings-sign-out" />
+						<SettingsButtonRow icon="signOut" label="Sign out" destructive disabled={accountBusy} onPress={() => confirmSignOut(() => signOut())} testID="settings-sign-out" />
 					) : null}
 				</SettingsSection>
 
@@ -217,6 +236,17 @@ export default function SettingsScreen() {
 							value={machineStatus.label}
 							tone={machineStatusTone(machineStatus.tone)}
 							testID="settings-machine-current"
+						/>
+					) : null}
+					{/* Orchestrator Cloud, while signed in: the account's own machine,
+					    after the paired ones and before the actions. Its page holds
+					    the organization, coding agents and GitHub access. */}
+					{account && cloud.status !== "signed-out" ? (
+						<MachineRow
+							host={{ id: CLOUD_HOST_ID, name: "Orchestrator Cloud", appearance: CLOUD_APPEARANCE }}
+							status={cloudSettingsStatus(cloud)}
+							isDefault={false}
+							onPress={() => router.push("/settings/cloud")}
 						/>
 					) : null}
 					{/* The fix for a default machine whose saved address or password
@@ -431,7 +461,7 @@ function SoftwareUpdateRow() {
 			return;
 		}
 		if (row.action === "restart") {
-			try { await Updates.reloadAsync(); } catch (error) { console.warn("[updates] reload failed", error); }
+			try { await applyUpdate({ reloadAsync: reloadIntoUpdate }); } catch (error) { console.warn("[updates] reload failed", error); }
 			return;
 		}
 		if (row.action !== "check") return;

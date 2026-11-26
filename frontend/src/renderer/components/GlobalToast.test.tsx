@@ -4,6 +4,17 @@ import { GlobalToast } from "./GlobalToast";
 import { useUiStore } from "../stores/ui-store";
 
 describe("GlobalToast", () => {
+	it("keeps a persistent actionable notice until the user acts", () => {
+		vi.useFakeTimers();
+		const acknowledge = vi.fn();
+		useUiStore.getState().showGlobalToast("Paused", undefined, { durationMs: 0, action: { label: "Acknowledge", run: acknowledge } });
+		render(<GlobalToast />);
+		act(() => vi.advanceTimersByTime(60_000));
+		expect(screen.getByText("Paused")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Acknowledge" }));
+		expect(acknowledge).toHaveBeenCalledOnce();
+		expect(screen.queryByText("Paused")).not.toBeInTheDocument();
+	});
 	afterEach(() => {
 		vi.useRealTimers();
 		useUiStore.getState().clearGlobalToast();
@@ -16,7 +27,7 @@ describe("GlobalToast", () => {
 		const toast = screen.getByRole("status");
 		expect(toast.parentElement).toHaveClass("left-1/2", "-translate-x-1/2", "bottom-3", "w-max");
 		expect(toast).toHaveClass("gap-2", "py-2");
-		expect(toast.querySelector("svg")).toHaveClass("lucide-check", "text-green-500");
+		expect(toast.querySelector("svg")).toHaveClass("icon-check", "text-green-500");
 		act(() => vi.advanceTimersByTime(3_499));
 		expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
 		act(() => vi.advanceTimersByTime(1));
