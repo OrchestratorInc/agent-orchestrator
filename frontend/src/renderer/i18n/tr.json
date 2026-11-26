@@ -4130,6 +4130,7 @@
 	"coder.templateOptions.settingsHint": "Değişiklikler yeni oturumlara uygulanır.",
 	"settings.models.selectModel": "Model seç",
 	"settings.models.useAgentModel": "Aracı modelini kullan",
+	"settings.models.pinnedNotListed": "Bu proje için ayarlandı · {{agent}} bu hesap için listelemiyor",
 	"settings.models.useAgentMode": "Aracı modunu kullan",
 	"settings.models.agentDefaultMode": "Aracı varsayılanı",
 	"settings.models.clearEffort": "Akıl yürütme düzeyini temizle",
