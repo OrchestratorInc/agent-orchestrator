@@ -1270,6 +1270,7 @@
 	"inspector.review.autoReviewLabel": "Авторевью",
 	"inspector.review.autoReviewHint": "Проверяет каждый новый push в PR этой сессии ревьюером выше. Выключите, чтобы проверять только по запросу.",
 	"inspector.review.reviewNow": "Проверить сейчас",
+	"inspector.review.reviewAll": "Ревью всех PR",
 	"inspector.review.retryReview": "Повторить ревью",
 	"inspector.review.moreActions": "Другие действия ревью",
 	"inspector.review.openReviewerNamed": "Открыть ревьюера {{agent}}",

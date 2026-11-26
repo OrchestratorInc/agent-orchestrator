@@ -1286,6 +1286,7 @@
 	"inspector.review.autoReviewLabel": "Otomatik inceleme",
 	"inspector.review.autoReviewHint": "Bu oturumun PR'larına yapılan her yeni push'u yukarıdaki inceleme aracısıyla inceler. Yalnızca siz istediğinizde incelemek için kapatın.",
 	"inspector.review.reviewNow": "Şimdi incele",
+	"inspector.review.reviewAll": "Tüm PR'ları incele",
 	"inspector.review.retryReview": "İncelemeyi yeniden dene",
 	"inspector.review.moreActions": "Diğer inceleme işlemleri",
 	"inspector.review.openReviewerNamed": "{{agent}} inceleme aracısını aç",

@@ -1290,6 +1290,7 @@
 	"inspector.review.autoReviewLabel": "Auto-Review",
 	"inspector.review.autoReviewHint": "Prüft jeden neuen Push auf die PRs dieser Sitzung mit dem Reviewer oben. Ausschalten, um nur auf Anfrage zu prüfen.",
 	"inspector.review.reviewNow": "Jetzt prüfen",
+	"inspector.review.reviewAll": "Alle PRs reviewen",
 	"inspector.review.retryReview": "Review wiederholen",
 	"inspector.review.moreActions": "Weitere Review-Aktionen",
 	"inspector.review.openReviewerNamed": "{{agent}}-Reviewer öffnen",

@@ -1310,6 +1310,7 @@
 	"inspector.review.autoReviewLabel": "Revue automatique",
 	"inspector.review.autoReviewHint": "Relit chaque nouveau push sur les PR de cette session avec le relecteur ci-dessus. Désactivez-la pour ne relire qu'à la demande.",
 	"inspector.review.reviewNow": "Relire maintenant",
+	"inspector.review.reviewAll": "Relire toutes les PR",
 	"inspector.review.retryReview": "Relancer la revue",
 	"inspector.review.moreActions": "Autres actions de revue",
 	"inspector.review.openReviewerNamed": "Ouvrir le relecteur {{agent}}",

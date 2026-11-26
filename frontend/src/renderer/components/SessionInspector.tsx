@@ -2952,7 +2952,10 @@ function ReviewPanel({
 										? t("inspector.review.starting")
 										: reviewFailure
 											? t("inspector.review.retryReview")
-											: t("inspector.review.reviewNow")}
+											// Beside per-PR rows, say that this one covers every PR.
+											: showPerPRRows
+												? t("inspector.review.reviewAll")
+												: t("inspector.review.reviewNow")}
 								</Button>
 							)}
 							{showMore ? (

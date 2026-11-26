@@ -5940,12 +5940,14 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.queryByRole("button", { name: "Review PR #3" })).not.toBeInTheDocument();
   });
 
-  it("keeps per-PR rows usable while auto-review is on, like Review now", async () => {
+  it("keeps per-PR rows usable while auto-review is on, like the session button", async () => {
     mockCommonGets([], "", [reviewState(3, "needs_review"), reviewState(4, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")], { autoReviewEnabled: true })} />);
     await openReviewsSection();
     expect(await screen.findByRole("button", { name: "Review PR #3" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Review now" })).toBeEnabled();
+    // Beside the per-PR rows the session button names its scope.
+    expect(screen.getByRole("button", { name: "Review all PRs" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Review now" })).not.toBeInTheDocument();
   });
 
   it("cancels the running review instead of allowing rerun", async () => {

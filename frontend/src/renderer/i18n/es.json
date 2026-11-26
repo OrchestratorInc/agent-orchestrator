@@ -1310,6 +1310,7 @@
 	"inspector.review.autoReviewLabel": "Revisión automática",
 	"inspector.review.autoReviewHint": "Revisa cada nuevo push a los PR de esta sesión con el revisor de arriba. Desactívala para revisar solo cuando lo pidas.",
 	"inspector.review.reviewNow": "Revisar ahora",
+	"inspector.review.reviewAll": "Revisar todos los PR",
 	"inspector.review.retryReview": "Reintentar revisión",
 	"inspector.review.moreActions": "Más acciones de revisión",
 	"inspector.review.openReviewerNamed": "Abrir revisor {{agent}}",

@@ -1286,6 +1286,7 @@
 	"inspector.review.autoReviewLabel": "Auto-review",
 	"inspector.review.autoReviewHint": "Reviews every new push to this session's PRs with the reviewer above. Turn off to review only when you ask.",
 	"inspector.review.reviewNow": "Review now",
+	"inspector.review.reviewAll": "Review all PRs",
 	"inspector.review.retryReview": "Retry review",
 	"inspector.review.moreActions": "More review actions",
 	"inspector.review.openReviewerNamed": "Open {{agent}} reviewer",
