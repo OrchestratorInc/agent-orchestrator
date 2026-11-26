@@ -102,7 +102,7 @@ export function useChatModelWheel({ snapshot, models, options, disabled, onSetti
 		void (change.kind === "option" ? option(change.id, change.value) : save(change.settings)).catch(() => {});
 	};
 
-	/** The wheels came to rest on this agent and model. */
+	/** The wheels closed standing on this agent and model; the pair already in force changes nothing. */
 	const choose = useCallback((agentId: string, modelKey: string) => {
 		const { snapshot: snap, modelRow: row, pending: held, otherAgents: switching, agents: list } = latest.current;
 		if (agentId === snap.harness) {

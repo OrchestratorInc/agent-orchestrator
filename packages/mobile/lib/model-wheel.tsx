@@ -14,8 +14,8 @@ import { WHEEL_ROW, WHEEL_ROWS, WheelPicker } from "./wheel-picker";
 /*
  * The model, picked on two wheels over the keyboard, as iOS's date picker
  * picks the time: the agent on the left, its models on the right, the pair in
- * force in one band across both. A wheel chooses where it comes to rest. The
- * provider's other settings are rows under the wheels.
+ * force in one band across both. The pair they stand on as they close is
+ * chosen. The provider's other settings are rows under the wheels.
  */
 
 export type ModelWheelProps = {
