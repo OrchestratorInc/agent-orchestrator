@@ -440,6 +440,23 @@ describe("steers split a turn", () => {
 		expect(settled[1].turn?.state).toBe("completed");
 	});
 
+	it("keys a page that opens on a steer by that steer, so loading the prompt above keeps each part's key", () => {
+		const page = chat("completed", [steer("s1", 10), command("cat", 11), reply("r2", 12, "Done")]);
+		const partial = groupConversationByTurn(page);
+		expect(partial.map((group) => group.key)).toEqual(["turn-t:steer:s1"]);
+		expect(partial[0]).toMatchObject({ continuesTurn: true, endsTurn: true });
+		expect(partial[0].turn?.startedAt).toBe(at(10));
+		const full = groupConversationByTurn({ ...page, items: [user("u", 1, "go"), command("ls", 2), ...page.items] });
+		expect(full.map((group) => group.key)).toEqual(["turn-t", "turn-t:steer:s1"]);
+	});
+
+	it("gives every part the real turn for its rows, so a command still running is not drawn finished", () => {
+		const value = chat("running", [user("u", 1, "go"), command("ls", 2), steer("s1", 10)]);
+		const groups = groupConversationByTurn(value);
+		expect(groups[0].turn?.state).toBe("completed");
+		expect(groups.map((group) => group.sourceTurn)).toEqual([value.turns[0], value.turns[0]]);
+	});
+
 	it("leaves a queued turn whole", () => {
 		const value = chat("queued", [user("u", 1, "go"), steer("s1", 10)]);
 		const groups = groupConversationByTurn(value, value.items);

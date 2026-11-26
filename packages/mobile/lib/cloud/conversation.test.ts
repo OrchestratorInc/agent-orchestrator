@@ -138,6 +138,22 @@ describe("cloud conversation projection", () => {
 		]);
 	});
 
+	it("starts a new reply after a steer, so the steer's part of the turn has its own answer", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Looking" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use staging" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Switching" }),
+			event("chat.assistant_delta", { turnId: "t1", text: " to staging." }),
+			event("chat.turn_completed", { turnId: "t1" }),
+		]);
+		const groups = groupConversationByTurn(snapshot);
+		const text = (items: typeof snapshot.items) => items.map((item) => item.kind === "message" ? item.text : item.kind === "activity" ? item.detail?.event : "");
+		expect(groups.map((group) => text(group.items))).toEqual([["Go", "Looking"], ["steer", "Switching to staging."]]);
+	});
+
 	it("shows automation prompts by their display text and drops Codex's stdin notice", () => {
 		sequence = 0;
 		const snapshot = cloudConversationSnapshot(session({ harness: "codex" }), [

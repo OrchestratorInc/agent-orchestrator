@@ -23,6 +23,12 @@ export type ConversationGroup = {
 	 * the last part. Unset on groups that are not a turn.
 	 */
 	endsTurn?: boolean;
+	/**
+	 * The daemon's record of the turn, which `turn` only presents: a part a later
+	 * steer cut off reads as settled while the real turn may still run, and its
+	 * rows' statuses follow the real one (settledTurnItems).
+	 */
+	sourceTurn?: ConversationTurn;
 };
 
 export type ActivityNode = {
@@ -123,23 +129,29 @@ export function groupConversationByTurn(
 function splitAtSteers(group: ConversationGroup): ConversationGroup[] {
 	const turn = group.turn;
 	if (!turn) return [group];
-	if (turn.state === "queued") return [{ ...group, endsTurn: true }];
-	const starts = group.items.flatMap((item, index) => index > 0 && isHumanSteer(item) ? [index] : []);
-	if (starts.length === 0) return [{ ...group, endsTurn: true }];
-	const bounds = [0, ...starts, group.items.length];
-	const startedAt = (index: number) => index === 0 ? turn.startedAt ?? turn.requestedAt : group.items[bounds[index]].createdAt;
+	if (turn.state === "queued") return [{ ...group, endsTurn: true, sourceTurn: turn }];
+	const starts = group.items.flatMap((item, index) => isHumanSteer(item) ? [index] : []);
+	if (starts.length === 0) return [{ ...group, endsTurn: true, sourceTurn: turn }];
+	// A loaded page can open on a steer, the prompt above it not loaded yet. That
+	// part is the steer's, keyed and timed by it, so loading the prompt later
+	// adds the opening part above it and moves no part's key.
+	const bounds = starts[0] === 0 ? [...starts, group.items.length] : [0, ...starts, group.items.length];
+	const opens = (from: number) => from === 0 && starts[0] !== 0;
+	const startedAt = (from: number) => opens(from) ? turn.startedAt ?? turn.requestedAt : group.items[from].createdAt;
 	return bounds.slice(0, -1).map((from, index) => {
-		const items = group.items.slice(from, bounds[index + 1]);
-		const last = index === starts.length;
+		const to = bounds[index + 1];
+		const items = group.items.slice(from, to);
+		const last = to === group.items.length;
 		const part: ConversationGroup = {
-			key: index === 0 ? group.key : `${group.key}:steer:${items[0].id}`,
+			key: opens(from) ? group.key : `${group.key}:steer:${items[0].id}`,
 			turnId: group.turnId,
 			anchor: index === 0 ? group.anchor : items[0].sequence,
 			items,
-			turn: segmentTurn(turn, last, startedAt(index), last ? undefined : startedAt(index + 1)),
+			turn: segmentTurn(turn, last, startedAt(from), last ? undefined : startedAt(to)),
 			endsTurn: last,
+			sourceTurn: turn,
 		};
-		if (index > 0) part.continuesTurn = true;
+		if (!opens(from)) part.continuesTurn = true;
 		if (last && group.plan) part.plan = group.plan;
 		return part;
 	});

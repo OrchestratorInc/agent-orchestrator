@@ -137,7 +137,7 @@ type TimelineRow =
 
 /**
  * The groups, with each one that has not changed since the last render kept as
- * the same object: same key, same turn and plan, and the same item objects
+ * the same object: same key, same turn (and the daemon's turn it presents) and plan, and the same item objects
  * (which the conversation keeps by identity while unchanged; see
  * reuseUnchangedRows). A memoized turn then skips its render.
  */
@@ -146,7 +146,7 @@ function useStableGroups(groups: ConversationGroup[]): ConversationGroup[] {
 	const next = new Map<string, ConversationGroup>();
 	const stable = groups.map((group) => {
 		const old = previous.current.get(group.key);
-		const kept = old && old.turn === group.turn && old.plan === group.plan && old.turnId === group.turnId && old.anchor === group.anchor &&
+		const kept = old && old.turn === group.turn && old.sourceTurn === group.sourceTurn && old.plan === group.plan && old.turnId === group.turnId && old.anchor === group.anchor &&
 			old.items.length === group.items.length && old.items.every((item, index) => item === group.items[index])
 			? old
 			: group;
@@ -701,10 +701,13 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
-	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
+	// Rows follow the daemon's turn: a part a later steer cut off reads as
+	// settled, but a command in it may still run.
+	const lifecycle = group.sourceTurn ?? group.turn;
+	const turnError = lifecycle?.state === "failed" ? lifecycle.errorMessage : undefined;
 	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
-		: group.items, group.turn);
+		: group.items, lifecycle);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
