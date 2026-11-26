@@ -178,6 +178,11 @@ func TestConversationImportPutsTheCopyBackWhateverStopsIt(t *testing.T) {
 			name:   "delete failed before removing it",
 			delete: `echo "database is locked" >&2; exit 1`, importMoved: `exit 0`,
 		},
+		{
+			name:   "import wrote the replacement, then failed",
+			delete: `rm -f "$S"`, importMoved: `cp "$3" "$S"; echo "read back failed" >&2; exit 1`,
+			wantRestored: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

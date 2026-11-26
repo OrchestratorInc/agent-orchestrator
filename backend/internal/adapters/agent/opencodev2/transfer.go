@@ -63,9 +63,8 @@ func (p *Plugin) ImportConversation(ctx context.Context, data []byte, cwd string
 			return "", fmt.Errorf("opencode-v2: the conversation here could not be backed up, so it was not replaced: its export is not session %s", id)
 		}
 		if _, err := p.run(ctx, cwd, env, "session", "delete", id, "--standalone"); err != nil {
-			// The delete may have removed it before it failed: put the backup
-			// back when OpenCode no longer has the session.
-			return "", p.putBackIfGone(ctx, id, previous, cwd, env, err)
+			// The delete may have removed it before it failed.
+			return "", p.putBack(ctx, id, previous, cwd, env, err)
 		}
 	case sessionNotFound(err, id):
 		// No copy here: nothing to back up or delete.
@@ -75,23 +74,31 @@ func (p *Plugin) ImportConversation(ctx context.Context, data []byte, cwd string
 	}
 	if _, err := p.run(ctx, cwd, env, "session", "import", moved, "--directory", cwd, "--standalone"); err != nil {
 		if previous != nil {
-			return "", p.putBackIfGone(ctx, id, previous, cwd, env, err)
+			return "", p.putBack(ctx, id, previous, cwd, env, err)
 		}
 		return "", err
 	}
 	return id, nil
 }
 
-// putBackIfGone restores backup, the copy deleted to make way for an import
-// that then failed with cause, unless OpenCode still has session id (its
-// delete failed before removing it). It runs even when ctx is cancelled, which
-// may be why the import failed: a cancelled move must not cost the copy that
-// was here. Each command it runs is bounded by run's own timeout.
-func (p *Plugin) putBackIfGone(ctx context.Context, id string, backup []byte, cwd string, env map[string]string, cause error) error {
+// putBack restores backup, the copy deleted to make way for an import that
+// then failed with cause. Session id as OpenCode holds it then decides: the
+// copy from before (its delete failed before removing it) is left; a session
+// the import wrote before it failed is deleted, since OpenCode refuses to
+// import over it; then the backup is imported. It runs even when ctx is
+// cancelled, which may be why the import failed: a cancelled move must not
+// cost the copy that was here. Each command is bounded by run's own timeout.
+func (p *Plugin) putBack(ctx context.Context, id string, backup []byte, cwd string, env map[string]string, cause error) error {
 	ctx = context.WithoutCancel(ctx)
-	if _, err := p.run(ctx, cwd, env, "session", "export", id, "--standalone"); err == nil {
+	current, err := p.run(ctx, cwd, env, "session", "export", id, "--standalone")
+	switch {
+	case err == nil && bytes.Equal(current, backup):
 		return cause
-	} else if !sessionNotFound(err, id) {
+	case err == nil:
+		if _, err := p.run(ctx, cwd, env, "session", "delete", id, "--standalone"); err != nil {
+			return fmt.Errorf("%w; the copy from before could not be put back: %w", cause, err)
+		}
+	case !sessionNotFound(err, id):
 		return fmt.Errorf("%w; could not tell whether the copy from before is still here: %w", cause, err)
 	}
 	if err := p.restoreConversation(ctx, backup, env); err != nil {
