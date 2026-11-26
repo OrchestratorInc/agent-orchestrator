@@ -13,9 +13,10 @@ ao report --stuck --note <text> [output flags]
 ao report --done --note <text> [output flags]
 ```
 
-`--note` and free-form text are each limited to 1000 characters. Put longer
-detail in a file in the session artifact directory and attach it with
-`--artifact`.
+`--note` and free-form text are each limited to 1000 characters. Summarize
+routine progress and validation within this limit. Use `--artifact` for longer
+detail only when it belongs in a requested or reviewable deliverable, or a
+requested diagnostic, in the session artifact directory.
 
 Output flags are repeatable:
 
