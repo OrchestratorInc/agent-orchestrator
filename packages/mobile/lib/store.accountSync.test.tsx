@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
 	finishSync: undefined as (() => void) | undefined,
 	hosts: [] as import("./hosts").Host[],
 }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ org: null, projects: [], sessions: [], connections: [], chatHarnesses: [], client: {}, upsertSession: () => {}, refreshSessions: async () => {}, refresh: async () => {} }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
 vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventListener: (_: string, callback: (value: string) => void) => {
 	state.onState = callback; return { remove: () => {} };

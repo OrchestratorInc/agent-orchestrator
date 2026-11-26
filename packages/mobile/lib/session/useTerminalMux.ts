@@ -18,6 +18,12 @@ export type TerminalMuxEvents = {
 	onExited(code: number): void;
 	onError(message: string): void;
 	onResize(cols: number, rows: number): void;
+	/**
+	 * Every chunk of terminal output, as it arrives. It may not be on screen yet:
+	 * while the WebView is (re)initializing, `write` holds it in
+	 * `pendingOutputRef` until `markXtermReady` drains it.
+	 */
+	onOutput?(bytes: Uint8Array): void;
 };
 
 /**
@@ -94,7 +100,9 @@ export function useTerminalMux(args: {
 		const mux = new MuxClient(config, {
 			onStatus: (status) => eventsRef.current.onStatus(status),
 			onTerminalData: (tid, bytes) => {
-				if (tid === terminalHandleId) write(bytes);
+				if (tid !== terminalHandleId) return;
+				write(bytes);
+				eventsRef.current.onOutput?.(bytes);
 			},
 			onTerminalExited: (tid, code) => {
 				if (tid === terminalHandleId) eventsRef.current.onExited(code);

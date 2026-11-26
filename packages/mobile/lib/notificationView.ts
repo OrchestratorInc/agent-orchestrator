@@ -81,6 +81,21 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
 			return { icon: "git-pull-request-arrow", color: t.green, label: "Review completed" };
 		case "review_changes_requested":
 			return { icon: "message-square-dot", color: t.amber, label: "Review changes requested" };
+		// Orchestrator Cloud's types, which share this list.
+		case "agent_failed":
+			return { icon: "bell", color: t.red, label: "Agent failed" };
+		case "agent_completed":
+			return { icon: "bell", color: t.green, label: "Completed" };
+		case "pr_opened":
+			return { icon: "git-pull-request-arrow", color: t.blue, label: "PR opened" };
+		case "review_feedback":
+			return { icon: "message-square-dot", color: t.amber, label: "Review feedback" };
+		case "merge_requested":
+			return { icon: "git-pull-request-arrow", color: t.amber, label: "Merge requested" };
+		case "merge_request_merged":
+			return { icon: "git-merge", color: t.purple, label: "Merged" };
+		case "merge_request_rejected":
+			return { icon: "git-pull-request-closed", color: t.red, label: "Merge rejected" };
 		default:
 			return { icon: "bell", color: t.textTertiary, label: type || "Notification" };
 	}

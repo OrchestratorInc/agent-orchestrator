@@ -16,6 +16,36 @@ import (
 
 const aoInternalReplayMetaKey = "ao.internalReplay"
 
+func (d *Driver) replayNativeHistory(ctx context.Context, c *conversation, cfg LaunchConfig, id string) error {
+	if d.cfg.NativeHistoryReplay == nil {
+		return nil
+	}
+	updates, available, err := d.cfg.NativeHistoryReplay(ctx, cfg, id)
+	if err != nil {
+		return err
+	}
+	if !available {
+		return nil
+	}
+	if len(updates) == 0 {
+		return fmt.Errorf("%w: empty native replay", ports.ErrChatHistoryUnavailable)
+	}
+	for _, update := range updates {
+		if string(update.SessionId) != id {
+			return fmt.Errorf("%w: native replay identity mismatch", ports.ErrChatHistoryUnavailable)
+		}
+	}
+	c.beginHistoryReplay(id)
+	for _, update := range updates {
+		c.captureReplayUpdate(update)
+	}
+	if err := c.drainAndFinishReplay(ctx); err != nil {
+		c.abortHistoryReplay()
+		return err
+	}
+	return nil
+}
+
 // refreshableConversation is returned only when the agent advertised
 // session/load. Calling session/load again on the already resumed ACP connection
 // asks the provider to replay its durable transcript again; it does not start a
@@ -164,6 +194,7 @@ func (c *conversation) beginHistoryReplay(sessionID string) {
 	c.sessionID = sessionID
 	c.activeTurn = ""
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -418,7 +449,7 @@ func (c *conversation) finishHistoryTurn(state domain.TurnState) {
 	turnID := c.history.turnID
 	c.historyMu.Unlock()
 
-	c.settleOpenItems(turnID, state)
+	c.settleOpenItems(turnID, nil, state)
 	if state != "" {
 		c.emit(ports.ChatEvent{
 			Kind:           ports.ChatEventTurnCompleted,
@@ -443,6 +474,7 @@ func (c *conversation) resetHistoryItems(turnID string) {
 	c.mu.Lock()
 	c.activeTurn = turnID
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -538,13 +570,47 @@ func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
 	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
 }
 
+// providerTitle drops AO's standing instructions from a title the agent sent.
+// An agent that titles a chat from its first prompt (Hermes takes the first
+// line) sees the instructions block before the user's text, so its title is
+// the opening tag. What follows the block is the user's text; a title that is
+// only the block, or cut off inside it, is no title and the rename is skipped.
+func providerTitle(title string) (string, bool) {
+	trimmed := strings.TrimSpace(title)
+	if strings.HasPrefix(trimmed, "<ao-") && strings.HasPrefix(standingOpen, trimmed) {
+		return "", false // the opening tag itself, cut short
+	}
+	if !strings.HasPrefix(trimmed, standingOpen) {
+		return title, true
+	}
+	_, rest, ok := strings.Cut(trimmed, standingClose)
+	rest = strings.TrimSpace(rest)
+	return rest, ok && rest != ""
+}
+
+const (
+	plainStandingOpen  = "Standing instructions from Agent Orchestrator. Follow them for this whole session:\n<ao_standing_instructions>"
+	plainStandingClose = "</ao_standing_instructions>"
+)
+
+// PlainStandingInstructionsBlock carries AO's standing instructions behind a
+// lead sentence, for agents that follow them only when introduced that way
+// (Antigravity, DeepSeek Harness). History drops it from a replayed first
+// message just like StandingInstructionsBlock.
+func PlainStandingInstructionsBlock(text string) acpsdk.ContentBlock {
+	return acpsdk.TextBlock(plainStandingOpen + "\n" + strings.ReplaceAll(text, plainStandingClose, "") + "\n" + plainStandingClose)
+}
+
 func historicalUserContent(content acpsdk.ContentBlock) string {
 	switch {
 	case content.Text != nil:
-		if _, rest, ok := strings.Cut(content.Text.Text, standingClose); ok && strings.HasPrefix(content.Text.Text, standingOpen) {
-			return strings.TrimLeft(rest, "\n")
+		text := content.Text.Text
+		for _, block := range [][2]string{{standingOpen, standingClose}, {plainStandingOpen, plainStandingClose}} {
+			if _, rest, ok := strings.Cut(text, block[1]); ok && strings.HasPrefix(text, block[0]) {
+				return strings.TrimLeft(rest, "\n")
+			}
 		}
-		return content.Text.Text
+		return text
 	case content.Image != nil:
 		return "[Image]"
 	case content.Audio != nil:

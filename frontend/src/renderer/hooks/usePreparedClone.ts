@@ -5,6 +5,9 @@ import { apiClient } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
 type PreparedClone = components["schemas"]["ClonePreparationResult"];
+export type CloneProgress = components["schemas"]["CloneProgress"];
+type ClonePrepareStreamEvent = components["schemas"]["ClonePrepareStreamEvent"];
+type DaemonClient = ReturnType<typeof clientForSessionHost>;
 
 export function usePreparedClone(hostId?: string) {
 	const currentRef = useRef<PreparedClone | null>(null);
@@ -41,16 +44,14 @@ export function usePreparedClone(hostId?: string) {
 		return data;
 	}, [hostId]);
 
-	const prepare = useCallback(async (remoteUrl: string, destinationParent: string) => {
+	const prepare = useCallback(async (remoteUrl: string, destinationParent: string, onProgress?: (progress: CloneProgress) => void) => {
 		const controller = new AbortController();
 		activeRequest.current = controller;
 		try {
-			const { data, error } = await (hostId ? clientForSessionHost(hostId) : apiClient).POST("/api/v1/projects/clone/prepare", {
-				body: { remoteUrl, destinationParent },
-				signal: controller.signal,
-			});
-			if (error) throw error;
-			if (!data) throw new Error("Could not clone repository");
+			const client = hostId ? clientForSessionHost(hostId) : apiClient;
+			const body = { remoteUrl, destinationParent };
+			const data = (onProgress ? await prepareCloneStream(client, body, controller.signal, onProgress) : null)
+				?? await prepareCloneOnce(client, body, controller.signal);
 			if (controller.signal.aborted) throw new DOMException("Cancelled", "AbortError");
 			currentRef.current = data;
 			inputRef.current = { remoteUrl, destinationParent };
@@ -96,4 +97,57 @@ export function usePreparedClone(hostId?: string) {
 	const current = useCallback(() => currentRef.current, []);
 
 	return { cancel, checkDestination, cleanup, complete, current, isCleaning, matches, prepare };
+}
+
+async function prepareCloneOnce(client: DaemonClient, body: { remoteUrl: string; destinationParent: string }, signal: AbortSignal): Promise<PreparedClone> {
+	const { data, error } = await client.POST("/api/v1/projects/clone/prepare", { body, signal });
+	if (error) throw error;
+	if (!data) throw new Error("Could not clone repository");
+	return data;
+}
+
+/**
+ * Clones through the streaming route, reporting each git step as it starts.
+ * Resolves null when the daemon predates the route, so the caller can clone
+ * through the JSON route instead.
+ */
+async function prepareCloneStream(
+	client: DaemonClient,
+	body: { remoteUrl: string; destinationParent: string },
+	signal: AbortSignal,
+	onProgress: (progress: CloneProgress) => void,
+): Promise<PreparedClone | null> {
+	const { data: stream, error, response } = await client.POST("/api/v1/projects/clone/prepare/stream", { body, signal, parseAs: "stream" });
+	if (!response || response.status === 404 || response.status === 405) return null;
+	if (error) throw error;
+	if (!(stream instanceof ReadableStream)) return null;
+	const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+	let buffered = "";
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffered += value;
+			let boundary = buffered.indexOf("\n\n");
+			while (boundary >= 0) {
+				const frame = buffered.slice(0, boundary);
+				buffered = buffered.slice(boundary + 2);
+				boundary = buffered.indexOf("\n\n");
+				const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+				if (!data) continue;
+				const event = JSON.parse(data) as ClonePrepareStreamEvent;
+				if (event.error) throw event.error;
+				if (event.result) return event.result;
+				if (event.progress) onProgress(event.progress);
+			}
+		}
+	} catch (err) {
+		if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+		throw err;
+	} finally {
+		// The daemon closes after its last event; this only drops a stream we stop reading early.
+		void reader.cancel().catch(() => undefined);
+	}
+	if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+	throw new Error("Could not clone repository");
 }

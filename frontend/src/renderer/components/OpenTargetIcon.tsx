@@ -1,5 +1,6 @@
-import { Code2, FolderOpen, SquareTerminal } from "lucide-react";
+import { Code2, FolderOpen, SquareTerminal } from "@/components/app-icons";
 import { useState } from "react";
+import { cn } from "../lib/utils";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import {
 	AndroidStudioIcon,
@@ -45,7 +46,9 @@ const editorColors: Record<string, string> = {
 	"android-studio": "#3DDC84",
 };
 
-export function OpenTargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
+export function OpenTargetIcon({ target, className: extraClassName }: { target?: OpenTarget; className?: string }) {
+	// Marks an app's logo, which menus keep even where they drop action icons.
+	const className = cn("open-target-icon", extraClassName);
 	const [failedIcon, setFailedIcon] = useState<string>();
 	const iconDataUrl = target?.iconDataUrl;
 	const nativeIcon = iconDataUrl && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(iconDataUrl) && iconDataUrl !== failedIcon

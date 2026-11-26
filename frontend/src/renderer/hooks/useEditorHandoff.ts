@@ -71,6 +71,51 @@ export function workspaceCheckFailed(state: EditorHandoffState | undefined): boo
 		(state.unavailableCode === "INTERNAL_ERROR" || state.unavailableCode === "SERVICE_UNAVAILABLE");
 }
 
+/**
+ * One read of a session's open targets. A missing workspace is returned as
+ * successful state rather than an exception, so TanStack's retry option cannot
+ * recover it: while a new session can still be crossing the daemon/UI
+ * readiness boundary, the read waits and asks again, a bounded number of times.
+ */
+async function readEditorHandoffState(sessionId: string, awaitWorkspace: boolean, signal: AbortSignal): Promise<EditorHandoffState> {
+	for (let retries = 0; ; retries += 1) {
+		const state = await aoBridge.editorHandoff.getState(sessionId);
+		if (state.workspaceAvailable || !awaitWorkspace || retries >= WORKSPACE_READINESS_MAX_RETRIES) return state;
+		await waitForWorkspaceRetry(signal);
+	}
+}
+
+/**
+ * Reads a session's open targets before its menu opens, so the menu's first
+ * frame already holds its final rows ("Open in" and its apps) instead of a
+ * placeholder that swaps once the lookup returns. It is the menu's own read,
+ * new-session wait included, so a menu that opens mid-read gets the same
+ * answer; cached alike, so repeated hovers inside the stale window cost nothing.
+ */
+export function prefetchEditorHandoffState(
+	queryClient: QueryClient,
+	session: { id: string; createdAt?: string; isTerminated?: boolean },
+) {
+	if (!session.id) return;
+	const awaitWorkspace = shouldAwaitWorkspace({ sessionCreatedAt: session.createdAt, sessionTerminated: session.isTerminated });
+	const queryKey = editorHandoffQueryKey(session.id);
+	void queryClient
+		.prefetchQuery({
+			queryKey,
+			staleTime: 10_000,
+			retry: false,
+			queryFn: ({ signal }) => readEditorHandoffState(session.id, awaitWorkspace, signal),
+		})
+		.then(() => {
+			// A hover can come well before the menu opens. A missing workspace may
+			// appear in between, so leave that answer stale: a menu opening later
+			// reads again. A found workspace stays fresh.
+			if (queryClient.getQueryData<EditorHandoffState>(queryKey)?.workspaceAvailable === false) {
+				void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
+			}
+		});
+}
+
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
 	const failedChecks = useRef(0);
@@ -82,23 +127,14 @@ export function useEditorHandoffState(sessionId: string, readiness: EditorHandof
 		retry: false,
 		refetchInterval: (query) => (workspaceCheckFailed(query.state.data) ? WORKSPACE_CHECK_RETRY_MS : false),
 		queryFn: async ({ signal }) => {
-			// A missing workspace is returned as successful state rather than an
-			// exception, so TanStack's retry option cannot recover it. Poll only
-			// during the bounded window in which a newly created session can still
-			// be crossing the daemon/UI readiness boundary.
-			for (let retries = 0; ; retries += 1) {
-				const state = await aoBridge.editorHandoff.getState(sessionId);
-				if (state.workspaceAvailable || !awaitWorkspace || retries >= WORKSPACE_READINESS_MAX_RETRIES) {
-					if (!workspaceCheckFailed(state)) {
-						failedChecks.current = 0;
-						return state;
-					}
-					// After a few failed checks stop treating it as transient: polling ends and the reason shows.
-					failedChecks.current += 1;
-					return failedChecks.current < WORKSPACE_CHECK_MAX_FAILURES ? state : { ...state, unavailableCode: undefined };
-				}
-				await waitForWorkspaceRetry(signal);
+			const state = await readEditorHandoffState(sessionId, awaitWorkspace, signal);
+			if (!workspaceCheckFailed(state)) {
+				failedChecks.current = 0;
+				return state;
 			}
+			// After a few failed checks stop treating it as transient: polling ends and the reason shows.
+			failedChecks.current += 1;
+			return failedChecks.current < WORKSPACE_CHECK_MAX_FAILURES ? state : { ...state, unavailableCode: undefined };
 		},
 	});
 	return {
@@ -166,7 +202,7 @@ export function useOpenSessionTarget() {
 		},
 		onSuccess: (result, input) => {
 			if (result.kind === "editor" && isEditorId(result.id)) cachePreferredEditor(queryClient, result.id);
-			void captureRendererEvent("ao.renderer.open_in_editor_succeeded", {
+			void captureRendererEvent("ao.editor.opened", {
 				project_id: input.projectId,
 				target_kind: result.kind,
 				...(result.kind === "editor" ? { editor_id: result.id } : {}),

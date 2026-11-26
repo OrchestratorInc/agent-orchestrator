@@ -1,28 +1,36 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
-import { useFabExpanded } from "../../../lib/useFabExpanded";
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import { boardTitle } from "../../../lib/board-tabs";
-import { AddFab, addFabClearance } from "../../../lib/AddFab";
-import { StaleBanner } from "../../../lib/StaleBanner";
+import { FreshnessLine } from "../../../lib/FreshnessLine";
+import { useMachineFreshness } from "../../../lib/useMachineFreshness";
 import { useApp } from "../../../lib/store";
+import { useCloud } from "../../../lib/cloud/CloudProvider";
+import { CLOUD_HOST_ID } from "../../../lib/cloud/mapping";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
-import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { useHeaderOverlap } from "../../../lib/useHeaderOverlap";
 import { setNewTaskHandler } from "../../../lib/newTaskAction";
+import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
+import { useMenuRowWidths } from "../../../lib/useMenuRowWidth";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
+import { isArchived } from "../../../lib/agentsView";
+import { latestEventAt } from "../../../lib/archive/archiveOrder";
+import { useLatestArchivedAt } from "../../../lib/archive/useLatestArchivedAt";
+import { idleFleet } from "../../../lib/workers-idle-copy";
+import { WorkersIdleState } from "../../../lib/workers-idle-state";
 import { hostedProjectKey } from "../../../lib/hostedRows";
 import { workerFilterMenu } from "../../../lib/worker-filter-menu";
 import { classifyLink, EMPTY_LINK_TRACKER } from "../../../lib/linkHealth";
 import { WorkerMachineState } from "../../../lib/worker-machine-state";
+import { useRefreshActions } from "../../../lib/useRefreshActions";
 import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
 import {
 	ALL_WORKER_ENVIRONMENTS,
@@ -44,31 +52,42 @@ export default function FleetScreen() {
 	const styles = useThemedStyles(makeStyles);
 
 	const router = useRouter();
-	const tabBarInset = useTabBarInset();
-	const fab = useFabExpanded();
-	const largeTitle = useLargeTitle(boardTitle("(workers)"), fab.onScroll);
 	const tabBar = useTabBarFrost();
 	const headerOverlap = useHeaderOverlap();
-	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread, phoneNetwork } = useApp();
+	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, cloud, notificationsUnread, phoneNetwork } = useApp();
+	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, sessionsLoaded: cloudSessionsLoaded, sessionsError: cloudSessionsError, refreshSessions: refreshCloudSessions } = useCloud();
+	// Cloud's own list answering is enough to draw the board: offline machines
+	// re-racing in the background must not hold it on a spinner.
+	const cloudReady = Boolean(cloud) && cloudSessionsLoaded;
+	// Signed in, with Orchestrator Cloud still answering: not unpaired yet.
+	const cloudPending = !cloud && (cloudStatus === "loading" || cloudStatus === "connecting");
+	// Signed in to Cloud with its first list not in yet: still loading, not
+	// idle. A first read that failed says so; the poll also tries again.
+	const cloudLoading = Boolean(cloud) && !cloudSessionsLoaded && !cloudSessionsError;
+	const cloudFailed = Boolean(cloud) && !cloudSessionsLoaded && Boolean(cloudSessionsError);
+	// Cloud workers on this board refresh at the live rate while it is in front.
+	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
 		: Boolean(error);
-	const unreadCount = hostStates.length > 1
+	const unreadCount = (hostStates.length > 1
 		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
-		: notificationsUnread;
-	const [refreshing, setRefreshing] = useState(false);
+		: notificationsUnread) + (cloud ? cloudUnread : 0);
 	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
 	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
 	// the memoised header menu only needs who the machines are. Rebuilding this on
 	// every tick would register the header again mid-tap, the bug the stable
 	// handlers below avoid.
-	const environmentsKey = JSON.stringify(hostStates.map((host) => [host.hostId, host.name, host.appearance.symbol]));
+	// Orchestrator Cloud is one more environment while signed in: its workers are on this board.
+	const environmentsKey = JSON.stringify([...hostStates, ...(cloud ? [cloud] : [])].map((host) => [host.hostId, host.name, host.appearance.symbol]));
+	// Each machine's dot on its chip. Changes only when some machine's state does.
+	const freshness = useMachineFreshness();
 	const environments = useMemo(
-		() => sortWorkerEnvironments(hostStates.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance }))),
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey covers every field read here
-		[environmentsKey],
+		() => sortWorkerEnvironments([...hostStates, ...(cloud ? [cloud] : [])].map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance, freshness: freshness.get(host.hostId) }))),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey and freshness cover every field read here
+		[environmentsKey, freshness],
 	);
 	const projectOptions = useMemo(
 		() => workerProjectOptions(allProjects, workerEnvironmentId),
@@ -77,17 +96,22 @@ export default function FleetScreen() {
 	// The machine the app reaches first, as a value: hostStates itself is new on
 	// every poll, and the spawn action is a header item.
 	const openHostId = hostStates.find((host) => host.connection === "open")?.hostId;
+	const signedInToCloud = Boolean(cloud);
 	const spawnWorker = useCallback(() => {
 		Keyboard.dismiss();
 		const project = spawnProjectParam(workerProjectId, allProjects);
-		const connectedHostId = connection === "open" ? config?.hostId : openHostId;
+		// With no machine connected, Orchestrator Cloud (signed in) is where a task
+		// can run, rather than the default machine that is offline; New task names
+		// the machine it runs on, so the choice is visible before it starts.
+		const connectedHostId = (connection === "open" ? config?.hostId : openHostId) ?? (signedInToCloud ? CLOUD_HOST_ID : undefined);
 		const selectedHostId = workerEnvironmentId === ALL_WORKER_ENVIRONMENTS ? undefined : workerEnvironmentId;
 		router.push({ pathname: "/spawn", params: { hostId: project?.hostId ?? selectedHostId ?? connectedHostId ?? config?.hostId, ...project } });
-	}, [allProjects, config?.hostId, connection, openHostId, router, workerEnvironmentId, workerProjectId]);
+	}, [allProjects, config?.hostId, connection, openHostId, router, signedInToCloud, workerEnvironmentId, workerProjectId]);
 	// The tab bar's New task button starts a task on the board's own machine
 	// and project filters while the board is the page in front.
 	useFocusEffect(useCallback(() => setNewTaskHandler(spawnWorker), [spawnWorker]));
 	const listRef = useRef<FlatList<BoardRow>>(null);
+	useScrollToTopOnReselect("(workers)", listRef);
 
 	const projectSessions = useMemo(
 		() => filterWorkersByEnvironmentAndProject(allSessions, workerEnvironmentId, workerProjectId, allProjects),
@@ -109,13 +133,29 @@ export default function FleetScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- archiveSourcesKey covers every field read here
 	}, [archiveSourcesKey]);
 	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;
+	const rowWidths = useMenuRowWidths();
 	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
 	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
 	const selectedHost = hostStates.find((host) => host.hostId === workerEnvironmentId);
 	// The one machine every row is on: the one the board is filtered to, or the
 	// only one paired. The rows leave its name off, since it would say the same
 	// on every row; the filter names a chosen machine.
-	const boardMachine = selectedHost ?? (hostStates.length === 1 ? hostStates[0] : undefined);
+	const cloudSelected = workerEnvironmentId === CLOUD_HOST_ID;
+	const onlyEnvironment = environments.length === 1 ? environments[0] : undefined;
+	const boardMachine = selectedHost ?? (cloudSelected ? cloud ?? undefined : onlyEnvironment);
+	// The idle state's facts: which machines in scope are quiet, and when anything
+	// in this scope last happened. Older machines send their archive inline with
+	// the poll; newer ones page it, so their newest finish is read only while the
+	// idle board is on screen.
+	// Orchestrator Cloud counts as one more machine while signed in, so an idle
+	// Cloud is named rather than the board saying the offline machines alone.
+	const fleet = idleFleet(selectedHost ? [selectedHost] : [...hostStates, ...(cloud ? [cloud] : [])], connection);
+	const boardIdle = projectSessions.every(isArchived);
+	const inlineFinishedAt = useMemo(() => latestEventAt(projectSessions), [projectSessions]);
+	const pagedFinishedAt = useLatestArchivedAt(archiveSources, boardIdle);
+	const lastFinishedAt = pagedFinishedAt && (!inlineFinishedAt || Date.parse(pagedFinishedAt) > Date.parse(inlineFinishedAt))
+		? pagedFinishedAt
+		: inlineFinishedAt;
 	const selectEnvironment = useCallback((environmentId: string) => {
 		// Resolve both selectors in one React event. Letting the project reset in the
 		// effect below creates an intermediate empty board and a second remount.
@@ -155,29 +195,59 @@ export default function FleetScreen() {
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry actions that also call this buzz once.
-	const onRefresh = useCallback(async () => {
-		setRefreshing(true);
-		try {
-			if (selectedHost) await refreshHost(selectedHost.hostId);
-			else await refreshAll();
-		}
-		finally { setRefreshing(false); }
-	}, [refreshAll, refreshHost, selectedHost?.hostId]);
+	// it gives everywhere, and the Retry actions that run it too buzz once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retrying, retry } = useRefreshActions(async () => {
+		if (selectedHost) await refreshHost(selectedHost.hostId);
+		else if (cloudSelected) await refreshHost(CLOUD_HOST_ID);
+		else await refreshAll();
+	});
 
 	// Unpaired only once the stored config has been read: until then an empty
 	// store means "still finding the machine", and the board shows its spinner.
-	const unpaired = configResolved && !configured && hostStates.length === 0;
-	const resolving = !configResolved && !configured && hostStates.length === 0;
+	const unpaired = configResolved && !configured && hostStates.length === 0 && !cloud && !cloudPending;
+	const resolving = !configured && hostStates.length === 0 && !cloud && (!configResolved || cloudPending);
+	// Which empty state the board shows when it has no rows; only the idle one
+	// offers its own way to start a task (New agent).
+	// Cloud's state counts where its rows can be on the board in view (all
+	// machines or Cloud alone, and no machine's project as the filter), judged
+	// by that board's rows: machine workers elsewhere don't make Cloud loaded.
+	const filteredProject = workerProjectId === ALL_WORKER_PROJECTS ? undefined : allProjects.find((item) => hostedProjectKey(item) === workerProjectId);
+	const cloudInView = !selectedHost && (!filteredProject || filteredProject.hostId === CLOUD_HOST_ID) && projectSessions.length === 0;
+	const emptyView = unpaired ? "unpaired"
+		: resolving || (!selectedHost && fleetLoading && allSessions.length === 0 && !cloudReady) || (cloudInView && cloudLoading) ? "loading"
+			: cloudInView && cloudFailed ? "cloud"
+			: selectedHost && selectedHost.connection !== "open" ? "machine"
+				: fleetError && !cloud ? "error"
+					: workerProjectId !== ALL_WORKER_PROJECTS ? "project"
+						: workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? "environment"
+							: "idle";
+	const [boardEmpty, setBoardEmpty] = useState(false);
+	// The one machine every row is on, when it is a paired machine: the line under
+	// the title speaks for it, since a dot on every row would say the same thing.
+	// With several machines on the board their chips and rows carry the dots.
+	// A project filter puts every row on its machine even with All machines chosen;
+	// a Cloud project matches no paired machine and leaves the line to the phone.
+	const projectHostId = hostStates.some((host) => host.hostId === filteredProject?.hostId) ? filteredProject?.hostId : undefined;
+	const lineHostId = selectedHost?.hostId ?? projectHostId ?? (!cloudSelected && !cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined);
 
-	// Inside the list rather than above it: the header is translucent and the page
-	// is laid out under it, so the list has to be the page's first view. Above the
-	// rows rather than inside ListEmptyComponent, because the case the banner
-	// exists for is a populated board whose poll has died.
+	// Above the rows rather than inside ListEmptyComponent (on iOS in the list's
+	// header, under the large title), because the case the line exists
+	// for is a populated board whose machine has stopped answering. An empty board's
+	// own state says why it is empty, so there the line keeps to the phone being
+	// offline (no host), which a project or idle empty state would not mention; the
+	// machine's own empty state already says that too, so it takes no line at all.
+	const freshnessLine = boardEmpty && emptyView === "machine"
+		? null
+		: <FreshnessLine hostId={boardEmpty ? undefined : lineHostId} onRetry={retry} />;
+	// The title's accessory: under the large title on iOS, pinned under the bar
+	// on Android. The Android bar is solid rather than frosted: the frost's tail
+	// lay over the machine chips and dimmed them at rest.
+	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine, backdrop: "solid", resetKey: boardIdentityKey });
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
+			{largeTitle.accessory}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}
@@ -197,43 +267,56 @@ export default function FleetScreen() {
 			<WorkerBoardList
 				onScroll={largeTitle.onScroll}
 				key={boardIdentityKey}
+				// Held here, above the key, so the board rebuilt for a new filter
+				// starts its rows at the width the last board's rows measured.
+				rowWidths={rowWidths}
 				sessions={projectSessions}
 				archiveSources={archiveSources}
+				archiveFooter
 				identityKey={boardIdentityKey}
 				showMachine={!boardMachine}
 				listRef={listRef}
 				// iOS insets the list by the tab bar already. Android pads it clear
 				// of the floating New button, and of the clear tab bar it runs
 				// on under.
-				contentBottomInset={addFabClearance + space.xxl + tabBar.inset}
+				contentBottomInset={space.xxl + tabBar.inset}
 				contentInsetAdjustmentBehavior="automatic"
 				overlayTopInset={headerOverlap + largeTitle.topInset}
 				refreshing={refreshing}
 				onRefresh={onRefresh}
 				ListHeaderComponent={listHeader}
+				onEmptyChange={setBoardEmpty}
 				ListEmptyComponent={
-					unpaired ? (
+					emptyView === "unpaired" ? (
 						<UnpairedState />
-					) : resolving || (!selectedHost && fleetLoading && allSessions.length === 0) ? (
+					) : emptyView === "loading" ? (
 						<View style={styles.center}>
 							<ActivityIndicator color={t.accent} />
 						</View>
-					) : selectedHost && selectedHost.connection !== "open" ? (
+					) : emptyView === "cloud" ? (
+						<EmptyState
+							icon="cloud"
+							title="Couldn't load cloud workers"
+							message={cloudSessionsError ?? undefined}
+							action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={() => void refreshCloudSessions()} />}
+						/>
+					) : emptyView === "machine" && selectedHost ? (
 						<WorkerMachineState
 							host={selectedHost}
 							linkHealth={classifyLink(selectedHost.linkTracker ?? EMPTY_LINK_TRACKER, phoneNetwork, Date.now())}
 							environments={environments}
 							onSelectEnvironment={selectEnvironment}
-							onRetry={onRefresh}
+							onRetry={retry}
+							retrying={retrying}
 						/>
-					) : fleetError ? (
+					) : emptyView === "error" ? (
 						<EmptyState
 							icon={hostStates.length > 1 ? "unplug" : failure.icon}
 							title={hostStates.length > 1 ? "No machines connected" : failure.title}
 							message={hostStates.length > 1 ? undefined : failure.hint}
 							action={
 								<View style={styles.errorActions}>
-									<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />
+									<Button title="Retry" icon="refresh-cw" variant="secondary" loading={retrying} onPress={retry} />
 									{/* Re-scanning is the only fix for a rotated password, and the
 									    fastest one for a moved/renamed host — so it belongs beside
 									    Retry rather than three taps away in Settings. */}
@@ -241,24 +324,24 @@ export default function FleetScreen() {
 								</View>
 							}
 						/>
-					) : workerProjectId !== ALL_WORKER_PROJECTS ? (
+					) : emptyView === "project" ? (
 						<EmptyState
 							icon="folder"
 							title={`No workers in ${selectedProjectLabel}`}
 							message="Choose another project from the filter menu."
 						/>
-					) : workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? (
+					) : emptyView === "environment" ? (
 						<EmptyState
 							icon="monitor"
 							title={`No workers on ${selectedEnvironmentLabel ?? "this machine"}`}
 							message="Choose another machine from the filter menu."
 						/>
 					) : (
-						<EmptyState
-							icon="moon"
-							title="No active workers"
-							message="Spawn a worker to get started."
-							action={<Button title="New agent" icon="plus" onPress={spawnWorker} />}
+						<WorkersIdleState
+							machines={fleet.machines}
+							connection={fleet.connection}
+							lastFinishedAt={lastFinishedAt}
+							onNewAgent={spawnWorker}
 						/>
 					)
 				}
@@ -272,13 +355,10 @@ export default function FleetScreen() {
 				// or spawn.
 				<BoardHeaderItems unread={0} notifications={false} />
 			) : (
-				<>
-					<AddFab expanded={fab.expanded} label="New task" onPress={spawnWorker} bottomInset={tabBarInset + tabBar.inset} testID="spawn-worker" />
-					{/* New task is the tab bar's own round button on iOS and the
-					    floating New button on Android; the header keeps settings and
-					    alerts. */}
-					<BoardHeaderItems unread={unreadCount} filter={filterMenu} />
-				</>
+				// New task is the round button beside the tab bar (see
+				// app/(tabs)/_layout), which starts it on this page's filters through
+				// `setNewTaskHandler`; the header keeps settings and alerts.
+				<BoardHeaderItems unread={unreadCount} filter={filterMenu} />
 			)}
 		</View>
 	);

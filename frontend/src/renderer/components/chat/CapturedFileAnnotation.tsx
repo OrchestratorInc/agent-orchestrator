@@ -5,7 +5,7 @@ import { fileReferencePreview } from "../../../shared/chat-file-reference";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 
-export function CapturedFileAnnotation({ reference, children, onOpen, opening = false }: { reference: ChatFileReference; children?: ReactNode; onOpen?: () => void; opening?: boolean }) {
+export function CapturedFileAnnotation({ reference, index, children, onOpen, opening = false }: { reference: ChatFileReference; index?: number; children?: ReactNode; onOpen?: () => void; opening?: boolean }) {
 	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const [wrappedOverflow, setWrappedOverflow] = useState(false);
@@ -31,7 +31,7 @@ export function CapturedFileAnnotation({ reference, children, onOpen, opening = 
 	const side = reference.endSide && reference.endSide !== reference.side ? `${reference.side} → ${reference.endSide}` : reference.side;
 	const location = `L${reference.line}${reference.endLine === reference.line ? "" : `–${reference.endLine}`} · ${side}`;
 	const header = <>
-		<span className="min-w-0 flex-1 truncate font-semibold">{filename}</span>
+		<span className="min-w-0 flex-1 truncate font-semibold">{index !== undefined ? `${index}. ` : ""}{filename}</span>
 		<span className="shrink-0 rounded bg-background/60 px-1.5 py-0.5 font-mono text-[10px]">{location}</span>
 	</>;
 	const headerClass = "mb-1 flex min-w-0 items-center gap-2 border-b border-border/60 pb-1.5";

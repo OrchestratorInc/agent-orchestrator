@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useUiStore } from "../stores/ui-store";
@@ -30,7 +31,8 @@ function useCloudLinkSource(_hostId: string): SessionLinkSource {
 	}, [org?.id, projects.data, sessions.data]);
 	return {
 		ready: orgReady && Boolean(org?.id) && projects.isSuccess && sessions.isSuccess,
-		isLoading: !orgReady || projects.isLoading || sessions.isLoading,
+		// Signed out means the source is absent, not that it is on its way.
+		isLoading: orgReady && (projects.isLoading || sessions.isLoading),
 		isError: projects.isError || sessions.isError,
 		workspaces,
 	};
@@ -45,7 +47,8 @@ function useRemoteLinkSource(hostId: string): SessionLinkSource {
 	);
 	return {
 		ready: state?.status === "success",
-		isLoading: state === undefined || state.status === "pending",
+		// A host with no running query never settles on its own, so only a live fetch counts as loading.
+		isLoading: state?.status === "pending" && state.fetchStatus !== "idle",
 		isError: state?.status === "error",
 		workspaces: state?.data ?? [],
 	};
@@ -63,11 +66,13 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
+	const restoreSession = useRestoreSession();
+	const queryClient = useQueryClient();
 	return useCallback((url: string) => {
 		const artifact = parseArtifactLink(url);
 		const target = parseSessionLink(url) ?? artifact;
 		if (!target) {
-			showGlobalToast("This AO session link is malformed or unsupported.", undefined, {
+			showGlobalToast("This Orchestrator-managed session link is malformed or unsupported.", undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,
@@ -76,7 +81,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			return false;
 		}
 		if (!source.ready) {
-			showGlobalToast(`AO could not verify that session. Check the ${remoteHostId ? "host" : sourceKind === "cloud" ? "Cloud" : "daemon"} connection and try again.`, undefined, {
+			showGlobalToast(`Orchestrator could not verify that session. Check the ${remoteHostId ? "host" : sourceKind === "cloud" ? "Cloud" : "daemon"} connection and try again.`, undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,
@@ -86,7 +91,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		}
 		const resolved = resolveSessionLink(url, source.workspaces);
 		if (!resolved) {
-			showGlobalToast("That session is missing or is not accessible in this AO workspace.", undefined, {
+			showGlobalToast("That session is missing or is not accessible in this Orchestrator workspace.", undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,
@@ -94,19 +99,26 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			});
 			return false;
 		}
-		// A terminated session's artifacts are still served, so its artifact links still open.
-		if (resolved.isTerminated && !artifact) {
-			showGlobalToast(`Session ${resolved.sessionId} is terminated`, undefined, {
-				placement: "top-center",
-				dismissible: true,
-				durationMs: 5_000,
-				dedupeKey: `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`,
+		const mutationKey = ["resume-agent", remoteHostId ?? "local", resolved.sessionId];
+		if (resolved.isTerminated && !artifact && queryClient.isMutating({ mutationKey }) === 0) {
+			void queryClient.getMutationCache().build(queryClient, {
+				mutationKey,
+				mutationFn: async () => {
+					const result = await restoreSession(resolved.sessionId, remoteHostId);
+					if (result.status !== "success") throw new Error(result.message);
+				},
+			}).execute(undefined).catch((error: unknown) => {
+				showGlobalToast(error instanceof Error ? error.message : "Unable to restore session", undefined, {
+					tone: "error",
+					placement: "top-center",
+					dismissible: true,
+					dedupeKey: `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`,
+				});
 			});
-			return false;
 		}
 		if (artifact) requestWorkspaceFileOpen(resolved.sessionId, artifact.path, remoteHostId, "artifact");
 		if (remoteHostId) navigateToSession(resolved.projectId, resolved.sessionId, remoteHostId);
 		else navigateToSession(resolved.projectId, resolved.sessionId);
 		return true;
-	}, [navigateToSession, remoteHostId, requestWorkspaceFileOpen, showGlobalToast, source, sourceKind]);
+	}, [navigateToSession, queryClient, remoteHostId, requestWorkspaceFileOpen, restoreSession, showGlobalToast, source, sourceKind]);
 }

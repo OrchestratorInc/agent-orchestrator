@@ -11,10 +11,13 @@ import (
 )
 
 const (
-	conPTYHostProtocolVersion         = 3
+	// Version 5 adds MsgControlReq; older hosts ignore it and replay as before.
+	conPTYHostProtocolVersion         = 5
 	conPTYStyledOutputProtocolVersion = 2
 	// Older hosts ignore MsgWatchForegroundReq and would stream raw output.
 	conPTYForegroundProtocolVersion = 3
+	// Older hosts ignore MsgWatchTitleReq and never report a title.
+	conPTYTitleProtocolVersion = 4
 )
 
 // Message type constants. Values must match pty-host.ts MSG_* constants exactly.
@@ -31,6 +34,9 @@ const (
 	MsgGetStyledOutputRes byte = 0x0a // host -> client: rendered UTF-8 text with ANSI styles
 	MsgWatchForegroundReq byte = 0x0b // client -> host: empty; turns the connection into a foreground watcher
 	MsgForegroundState    byte = 0x0c // host -> watcher: JSON ForegroundPayload, sent on change
+	MsgWatchTitleReq      byte = 0x0d // client -> host: empty; turns the connection into a title watcher
+	MsgTitleState         byte = 0x0e // host -> watcher: JSON TitlePayload, sent on change
+	MsgControlReq         byte = 0x0f // client -> host: empty; sent first, the connection gets no replay and no terminal output
 )
 
 // JSON payload structs shared with later tasks (kept minimal).
@@ -55,6 +61,15 @@ type ForegroundPayload struct {
 	PGID int      `json:"pgid"`
 	Argv []string `json:"argv,omitempty"`
 	Busy bool     `json:"busy"`
+	// EchoOnly marks a settled-screen update whose only new output was the
+	// echo of typed input. Hosts from before this field never set it.
+	EchoOnly bool `json:"echoOnly,omitempty"`
+}
+
+// TitlePayload is the MsgTitleState body: the normalized title the program last
+// set. Empty means it has set none, or reset the one it had.
+type TitlePayload struct {
+	Title string `json:"title"`
 }
 
 // GetOutputReq is the JSON body for MsgGetOutputReq.
@@ -85,6 +100,8 @@ func EncodeMessage(msgType byte, payload []byte) ([]byte, error) {
 type MessageParser struct {
 	buf       []byte
 	onMessage func(msgType byte, payload []byte)
+	want      func(msgType byte) bool // nil accepts every type
+	skip      int                     // payload bytes of an unwanted frame still to discard
 }
 
 // NewMessageParser returns a parser that calls onMessage for each complete frame.
@@ -93,14 +110,34 @@ func NewMessageParser(onMessage func(msgType byte, payload []byte)) *MessagePars
 	return &MessageParser{onMessage: onMessage}
 }
 
+// newFilteredParser returns a parser that calls onMessage only for the types
+// want accepts; other payloads are dropped as they arrive, never buffered.
+func newFilteredParser(want func(msgType byte) bool, onMessage func(msgType byte, payload []byte)) *MessageParser {
+	return &MessageParser{onMessage: onMessage, want: want}
+}
+
 // Feed appends chunk to the internal buffer and dispatches all complete frames.
 // It matches the semantics of MessageParser.feed in pty-host.ts exactly:
 // arbitrary chunk boundaries and multiple frames per chunk are both handled.
 func (p *MessageParser) Feed(chunk []byte) {
+	if p.skip > 0 {
+		n := min(p.skip, len(chunk))
+		p.skip -= n
+		chunk = chunk[n:]
+	}
 	p.buf = append(p.buf, chunk...)
 
 	for len(p.buf) >= 5 {
 		payloadLen := binary.BigEndian.Uint32(p.buf[1:5])
+		if p.want != nil && !p.want(p.buf[0]) {
+			if buffered := len(p.buf) - 5; buffered < int(payloadLen) {
+				p.skip = int(payloadLen) - buffered
+				p.buf = p.buf[:0]
+				return
+			}
+			p.buf = p.buf[5+int(payloadLen):]
+			continue
+		}
 		frameLen := 5 + int(payloadLen)
 		if len(p.buf) < frameLen {
 			break

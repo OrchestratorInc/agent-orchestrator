@@ -1,10 +1,10 @@
 import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
+import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "@/components/app-icons";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import type { ArtifactMenuAction, ArtifactMenuActions } from "../lib/artifact-menu";
 import { EditProvider } from "@pierre/diffs/react";
@@ -85,7 +85,7 @@ function canRenderMermaid(path: string, detail: WorkspaceFileDetail): boolean {
 export function FileContentPane({
 	onOpenInCenter,
 	active = true,
-	annotation,
+	annotation: annotationProp,
 	initialEditing = false,
 	initialLine,
 	annotationRange,
@@ -155,6 +155,16 @@ export function FileContentPane({
 	toolbar?: "tabs" | "compact";
 }) {
 	const { t } = useTranslation();
+	// An archived session's artifact takes no feedback: nothing starts or sends
+	// a comment, none shows, and the buttons that would are not offered.
+	const feedbackOff = source.kind === "artifact" && source.noFeedback === true;
+	const annotation = useMemo<FileAnnotationModel>(() => feedbackOff
+		? { ...annotationProp, targets: [], begin: () => {}, submit: async () => {} }
+		: annotationProp, [annotationProp, feedbackOff]);
+	// A comment already open on the file when its session is archived is closed.
+	useEffect(() => {
+		if (feedbackOff && path) cancelFileAnnotations(annotationProp, (target) => target.path === path);
+	}, [annotationProp, feedbackOff, path]);
 	// The menu actions this render offers; published once it commits, and
 	// withdrawn while loading, on an error, or when the pane goes away.
 	const menuPublish = useRef<ArtifactMenuAction[]>([]);
@@ -409,7 +419,7 @@ export function FileContentPane({
 					{t("files.previousVersionAt", { revision: detail.compareBaseSha?.slice(0, 12) ?? "base" })}
 				</p>
 			) : null}
-			<CompleteFileView annotationRange={annotationRange} annotationReady={annotationReady}
+			<CompleteFileView active={active} annotationRange={annotationRange} annotationReady={annotationReady}
 				annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
 				detail={displayDetail}
 				editing={editing && effectiveMode === "file"}
@@ -513,7 +523,7 @@ export function FileContentPane({
 					) : source.kind === "snapshot" ? (
       <Tooltip><TooltipTrigger asChild><span tabIndex={0}><Button aria-label={t("files.editFile")} disabled size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{t("files.readOnlySnapshot")}</TooltipContent></Tooltip>
      ) : null}
-     <Tooltip>
+     {feedbackOff ? null : <Tooltip>
 						<TooltipTrigger asChild>
 							<Button
 								aria-label={t("files.addFeedback")}
@@ -527,7 +537,7 @@ export function FileContentPane({
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
-					</Tooltip>
+					</Tooltip>}
 				</div>
 			)}
 		</div>
@@ -542,7 +552,7 @@ export function FileContentPane({
 				id: `mode:${id}`, label, icon, disabled: editing, mode: { checked: effectiveMode === id }, onSelect: () => selectMode(id),
 			})) : []),
 			...(!editing && editable ? [{ id: "edit", label: t("files.editFile"), icon: <Pencil aria-hidden="true" />, onSelect: beginEditing }] : []),
-			...(!editing ? [{
+			...(!editing && !feedbackOff ? [{
 				id: "feedback",
 				label: t("files.addFeedback"),
 				icon: <MessageSquarePlus aria-hidden="true" />,
@@ -669,14 +679,14 @@ function artifactOriginOf(source: FilesSource): string | undefined {
 	}
 }
 
-function CompleteFileView({ annotationReady = true, annotationRange, annotation, commitSha, detail, editing, markdownEditing = false, mediaKind, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source, version }: { annotationReady?: boolean; annotationRange?: FileAnnotationRange; annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; mediaKind?: FileMediaKind; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource; version: number | string }) {
+function CompleteFileView({ active = true, annotationReady = true, annotationRange, annotation, commitSha, detail, editing, markdownEditing = false, mediaKind, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source, version }: { active?: boolean; annotationReady?: boolean; annotationRange?: FileAnnotationRange; annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; mediaKind?: FileMediaKind; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource; version: number | string }) {
 	const { t } = useTranslation();
 	const needsRevision = !mediaKind && source.kind !== "artifact" && source.kind !== "snapshot" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType;
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
 		enabled: needsRevision,
 	});
-	if (mediaKind && !editing) return <FileMediaPreview hostId={hostId} kind={mediaKind} path={detail.path} sessionId={sessionId} source={source} side={detail.deleted ? "before" : "after"} version={version} />;
+	if (mediaKind && !editing) return <FileMediaPreview active={active} hostId={hostId} kind={mediaKind} path={detail.path} sessionId={sessionId} source={source} side={detail.deleted ? "before" : "after"} version={version} />;
 	if (needsRevision && revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	const retryRevision = <span data-file-annotation-retry={annotationRange?.requestKey}><RetryButton onClick={() => void revision.refetch({ cancelRefetch: false })} /></span>;
 	if (needsRevision && revision.error) return <PanelMessage action={retryRevision}>{revision.error.message}</PanelMessage>;

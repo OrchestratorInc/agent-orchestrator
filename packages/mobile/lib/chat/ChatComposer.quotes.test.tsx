@@ -1,7 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
-import { TextInput } from "react-native";
+import { Keyboard, TextInput } from "react-native";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true, requestAnimationFrame: (cb: () => void) => { cb(); return 1; } });
 const { request, storage, paste } = vi.hoisted(() => ({ paste: { handler: null as null | ((assets: unknown[]) => void) }, request: vi.fn(), storage: { getItem: vi.fn(async (_key: string) => null as string | null), setItem: vi.fn(async (_key: string, _value: string) => {}), removeItem: vi.fn(async (_key: string) => {}) } }));
@@ -15,12 +15,12 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-native-reanimated", () => {
 	const spring = (): object => new Proxy({}, { get: () => () => spring() });
-	return { default: { View: "AnimatedView" }, FadeIn: { duration: () => undefined }, FadeOut: { duration: () => undefined }, ZoomIn: spring(), interpolate: () => 0, useAnimatedStyle: () => ({}), useSharedValue: (value: unknown) => ({ value }), withSpring: (value: unknown) => value, withTiming: (value: unknown) => value };
+	return { default: { View: "AnimatedView" }, FadeIn: { duration: () => undefined }, FadeOut: { duration: () => undefined }, ZoomIn: spring(), interpolate: () => 0, measure: () => null, useAnimatedReaction: () => undefined, useAnimatedRef: () => ({ current: null }), useAnimatedStyle: () => ({}), useFrameCallback: () => ({ setActive: () => {} }), useSharedValue: (value: unknown) => ({ value }), withSpring: (value: unknown) => value, withTiming: (value: unknown) => value };
 });
 vi.mock("../useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Defs: "Defs", LinearGradient: "LinearGradient", Rect: "Rect", Stop: "Stop" }));
 vi.mock("../ui", () => ({ Button: "Button" }));
-vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }) }));
+vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }), useReanimatedFocusedInput: () => ({ input: { value: null } }), useKeyboardHandler: () => {} }));
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("expo-secure-store", () => ({}));
 vi.mock("expo-document-picker", () => ({}));
@@ -29,6 +29,8 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("../api", () => ({ apiRequest: request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
 vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
+// Saving the transcript for after a restart is not under test here.
+vi.mock("./savedConversations", () => ({ conversationSaver: { schedule: () => {}, flush: async () => {} }, loadSavedConversation: async () => null }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), success: vi.fn(), error: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: (factory: (theme: object) => unknown) => factory({}) }));
@@ -36,6 +38,7 @@ vi.mock("../voice/MicKey", () => ({ MicKey: "MicKey" }));
 vi.mock("../voice/useVoiceInput", () => ({ useVoiceInput: () => ({}) }));
 vi.mock("./chatSheetRegistry", () => ({ chatSheetRoute: vi.fn() }));
 vi.mock("./ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
+vi.mock("../ImageViewer", () => ({ ImageViewer: "ImageViewer" }));
 vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handler) => { paste.handler = handler; return () => {}; } }));
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurnSettingsControl" }));
@@ -48,6 +51,7 @@ import { ComposerGlass } from "./composer-glass";
 import { decodeResponseDraft, encodeResponseDraft } from "./responseQuotes";
 import { useMobileConversation } from "./useConversation";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { HardwareReturn } from "./HardwareReturn";
 import { launchImageLibraryAsync } from "expo-image-picker";
 
 const source = { conversationId: "conversation", messageId: "response", revision: 1 };
@@ -68,7 +72,8 @@ it("adds and removes selected text while preserving the existing editable reply,
 	act(() => renderer.update(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "Title\n• Bullet", source, composerKey: "session" }} />));
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Explain this");
 	const quote = renderer.root.findByProps({ accessibilityLabel: "Quoted response: Title\n• Bullet" });
-	const panel = renderer.root.findByType(TextInput).parent?.parent;
+	// The field's slot in the row is the hardware-Return wrapper around it.
+	const panel = renderer.root.findByType(HardwareReturn).parent?.parent;
 	expect(quote.parent?.parent?.parent).toBe(panel);
 	expect(panel?.findAllByType(ComposerGlass)).toHaveLength(1);
 	expect(p.onSend).not.toHaveBeenCalled();
@@ -208,4 +213,89 @@ it("attaches an image pasted into the field and sends it with the reply", async 
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove Pasted image" })).toHaveLength(1);
 	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
 	expect(p.onSend).toHaveBeenCalledWith("", [{ mimeType: "image/png", data: "aGVsbG8=" }], undefined, undefined);
+});
+
+const noModifiers = { command: false, control: false, option: false };
+
+it("sends on hardware Return and keeps the field focused for the next message", async () => {
+	let delivered!: (id: string) => void;
+	const p = { ...props(), onSend: vi.fn(() => new Promise<string>((resolve) => { delivered = resolve; })) };
+	const focus = vi.fn();
+	// The renderer has no native field behind the ref; give it one that can take focus.
+	await act(async () => { renderer = create(<ChatComposer {...p} />, { createNodeMock: (element) => element.type === "TextInput" ? { focus } : null }); });
+	act(() => renderer.root.findByType(TextInput).props.onChangeText("Run the tests"));
+	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(noModifiers));
+	expect(p.onSend).toHaveBeenCalledWith("Run the tests", undefined, undefined, undefined);
+	// In flight: the field is read-only, so focus waits for the send to land.
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
+	expect(focus).not.toHaveBeenCalled();
+	await act(async () => delivered("send-id"));
+	expect(p.onSteer).not.toHaveBeenCalled();
+	// The keyboard stays and the field takes focus back once it is editable again,
+	// so the next message can be typed straight away.
+	expect(Keyboard.dismiss).not.toHaveBeenCalled();
+	expect(focus).toHaveBeenCalledOnce();
+	expect(renderer.root.findByType(TextInput).props.value).toBe("");
+
+	// The send button still puts the keyboard away, and does not pull focus back.
+	act(() => renderer.root.findByType(TextInput).props.onChangeText("Then this"));
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
+	await act(async () => delivered("send-id-2"));
+	expect(Keyboard.dismiss).toHaveBeenCalledOnce();
+	expect(focus).toHaveBeenCalledOnce();
+});
+
+it("turns hardware Return off while the agent is stopped", async () => {
+	const p = props();
+	await act(async () => { renderer = create(<ChatComposer {...p} snapshot={{ ...p.snapshot, controller: { state: "stopped" } } as typeof p.snapshot} />); });
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
+});
+
+it("stays open across a hardware-Return send while the read-only field is away", async () => {
+	let delivered!: (id: string) => void;
+	const opened: boolean[] = [];
+	const p = { ...props(), onSend: vi.fn(() => new Promise<string>((resolve) => { delivered = resolve; })), onExpandedChange: (expanded: boolean) => { opened.push(expanded); } };
+	const focus = vi.fn();
+	await act(async () => { renderer = create(<ChatComposer {...p} />, { createNodeMock: (element) => element.type === "TextInput" ? { focus } : null }); });
+	const field = () => renderer.root.findByType(TextInput);
+	act(() => field().props.onFocus());
+	act(() => field().props.onChangeText("Run the tests"));
+	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(noModifiers));
+	// Going read-only for the send takes the field's focus.
+	act(() => field().props.onBlur());
+	// The send lands: the draft clears before the field has its focus back.
+	await act(async () => delivered("send-id"));
+	expect(focus).toHaveBeenCalledOnce();
+	act(() => field().props.onFocus());
+	expect(opened.at(-1)).toBe(true);
+	expect(opened.slice(opened.indexOf(true))).not.toContain(false);
+	// Once the field has its focus back, leaving it empty closes the composer as usual.
+	act(() => field().props.onBlur());
+	expect(opened.at(-1)).toBe(false);
+});
+
+it("gives Return back to the field while the composer cannot send", async () => {
+	const p = props();
+	await act(async () => { renderer = create(<ChatComposer {...p} pending />); });
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
+	await act(async () => renderer.update(<ChatComposer {...p} disabled />));
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
+	await act(async () => renderer.update(<ChatComposer {...p} />));
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(true);
+});
+
+it("steers on Cmd+Return only when the draft can steer, and sends otherwise", async () => {
+	const p = props();
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	act(() => renderer.root.findByType(TextInput).props.onChangeText("Idle, so this sends"));
+	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn({ ...noModifiers, command: true }));
+	expect(p.onSend).toHaveBeenCalledWith("Idle, so this sends", undefined, undefined, undefined);
+	expect(p.onSteer).not.toHaveBeenCalled();
+
+	const running = { ...p.snapshot, capabilities: ["steer"], turns: [{ id: "turn", state: "running" }] } as unknown as typeof p.snapshot;
+	const steering = { ...p, snapshot: running, onSteer: vi.fn(async () => "steer-id") };
+	await act(async () => renderer.update(<ChatComposer {...steering} />));
+	act(() => renderer.root.findByType(TextInput).props.onChangeText("Use the other branch"));
+	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn({ ...noModifiers, control: true }));
+	expect(steering.onSteer).toHaveBeenCalledWith("Use the other branch");
 });

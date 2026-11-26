@@ -11,11 +11,11 @@ export const FileAnnotationContext = createContext<
 	{ sessionId: string; hostId?: string; onOpen?: OpenFileAnnotation; generation?: { current: number } } | undefined
 >(undefined);
 
-export function FileAnnotationPreview({ reference, onNavigate }: { reference: ChatFileReference; onNavigate?: () => void }) {
+export function FileAnnotationPreview({ reference, index, onNavigate }: { reference: ChatFileReference; index?: number; onNavigate?: () => void }) {
 	const context = useContext(FileAnnotationContext);
 	const queryClient = useContext(QueryClientContext);
-	if (context && queryClient) return <ResolvedPreview reference={reference} context={context} onNavigate={onNavigate} />;
-	return <CapturedPreview reference={reference} />;
+	if (context && queryClient) return <ResolvedPreview reference={reference} index={index} context={context} onNavigate={onNavigate} />;
+	return <CapturedPreview reference={reference} index={index} />;
 }
 type FileAnnotationStatus =
  | "chat.fileAnnotationInvalid"
@@ -26,10 +26,10 @@ type FileAnnotationStatus =
  | "chat.fileAnnotationAmbiguous"
  | "chat.fileAnnotationTruncated";
 
-function CapturedPreview({ reference, status, onOpen, opening }: { reference: ChatFileReference; status?: FileAnnotationStatus; onOpen?: () => void; opening?: boolean }) {
+function CapturedPreview({ reference, index, status, onOpen, opening }: { reference: ChatFileReference; index?: number; status?: FileAnnotationStatus; onOpen?: () => void; opening?: boolean }) {
 	const { t } = useTranslation();
 	return (
-		<CapturedFileAnnotation reference={reference} onOpen={onOpen} opening={opening}>
+		<CapturedFileAnnotation reference={reference} index={index} onOpen={onOpen} opening={opening}>
 			{status ? (
 				<span className="block text-muted-foreground" role="status">
 					{t(status)} {t("chat.fileAnnotationCapturedPreview")}
@@ -40,10 +40,12 @@ function CapturedPreview({ reference, status, onOpen, opening }: { reference: Ch
 }
 function ResolvedPreview({
 	reference,
+	index,
 	context,
 	onNavigate,
 }: {
 	reference: ChatFileReference;
+	index?: number;
 	context: NonNullable<React.ContextType<typeof FileAnnotationContext>>;
 	onNavigate?: () => void;
 }) {
@@ -81,6 +83,7 @@ function ResolvedPreview({
 	return (
 		<>
 			<CapturedPreview
+				index={index}
 				reference={reference}
 				opening={opening}
 				onOpen={context.onOpen && !reference.truncated && (state === "unchanged" || state === "moved" || state === "changed") ? async () => {

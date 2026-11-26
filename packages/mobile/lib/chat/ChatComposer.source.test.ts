@@ -19,6 +19,17 @@ function styleRule(name: string): string {
 }
 
 describe("chat composer pill", () => {
+	// Picked photos and files ride inside the pill over the field, as part of
+	// the message, rather than as a strip of chips stacked on top of it.
+	it("draws attachments inside the pill, over the field", () => {
+		const pill = composer.slice(composer.indexOf("{requestCard ?? <View style={[styles.composer"));
+		const tray = pill.indexOf("<ComposerAttachmentTray items={trayItems}");
+		expect(tray).toBeGreaterThan(0);
+		expect(tray).toBeLessThan(pill.indexOf("<TextInput"));
+		expect(composer.indexOf("<ComposerAttachmentTray")).toBe(composer.indexOf("<ComposerAttachmentTray items={trayItems}"));
+		expect(composer).toContain("useMemo(() => composerTrayItems(attachments), [attachments])");
+	});
+
 	// The row is one capsule: attach, field, dictation and the one filled control
 	// that commits. A border plus a fill made it read as a box with buttons in it.
 	it("draws a single borderless capsule", () => {
@@ -66,7 +77,7 @@ describe("chat composer pill", () => {
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
-		expect(composer).toContain("onChangeText={(value) => { latestText.current = value; setText(value); }}");
+		expect(composer).toContain("onChangeText={(value) => { watchFieldBriefly(); latestText.current = value; setText(value); }}");
 		expect(composer).toContain('latestText.current = "";\n\t\t\tsetText("");');
 	});
 
@@ -86,7 +97,7 @@ describe("chat composer pill", () => {
 	});
 
 	it("gives every small control in and around the pill a full touch target", () => {
-		for (const rule of ["removeQuote", "queueSteer", "queueDelete", "steerAction", "attachmentRemove", "roundTarget"]) {
+		for (const rule of ["removeQuote", "queueSteer", "queueDelete", "steerAction", "roundTarget"]) {
 			expect(styleRule(rule), rule).toContain("width: touchTarget, height: touchTarget");
 		}
 		expect(composer).toContain("hitSlop={{ top: CHIP_SLOP, bottom: CHIP_SLOP }}");
@@ -117,7 +128,14 @@ describe("chat composer pill", () => {
 	// inset too low and then jumped into place at the end.
 	it("rides the keyboard's own progress instead of switching inset on a flag", () => {
 		expect(composer).toContain("useReanimatedKeyboardAnimation()");
-		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");
+		expect(composer).toContain("const inset = restingInset - KEYBOARD_DOCK_GAP;");
+		expect(composer).toContain("if (dockRiseOverride !== undefined) return { transform: [{ translateY: inset * dockRiseOverride }] };");
+		expect(composer).toContain("return { transform: [{ translateY: inset * keyboard.progress.value }] };");
+	});
+	// On Android the keyboard's last stretch passes behind the navigation bar;
+	// riding it there left the dock drifting down after the keys had gone.
+	it("rests on Android as soon as the keyboard passes behind the navigation bar", () => {
+		expect(composer).toContain('if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };');
 		expect(composer).toContain("{ paddingBottom: restingInset }");
 		expect(composer).not.toContain("dockInset(");
 	});
@@ -143,7 +161,9 @@ describe("collapsed and expanded composer", () => {
 	// takes it back to the slim pill.
 	it("opens on focus and stays open while anything waits to be sent, until the mic opens", () => {
 		expect(composer).toContain("const dictating = listening || transcribing;");
-		expect(composer).toContain("const expanded = !dictating && (focused || hasDraft || attachments.length > 0);");
+		// `keyboardSend.holding` covers a hardware-Return send, whose read-only field
+		// is away for a moment after the draft clears (see useKeyboardSendRefocus).
+		expect(composer).toContain("const expanded = !dictating && (focused || keyboardSend.holding || hasDraft || attachments.length > 0);");
 		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"}');
 	});
 
@@ -168,12 +188,28 @@ describe("collapsed and expanded composer", () => {
 });
 
 describe("composer chips", () => {
-	// The session's PR, what it changed and the context meter sit over the
-	// composer, open or not.
+	// The session's PR, what it changed, its device, the context meter and the account's
+	// quota sit over the composer, open or not.
 	it("shows the session's state as chips that say where they lead", () => {
-		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter ?");
+		expect(composer).toContain("const chips = activeReviewPR || changes || device || contextMeter || quotaChip ?");
 		expect(composer).toContain('accessibilityHint="Opens the pull request review" onPress={onOpenReview}');
 		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
+		expect(composer).toContain('accessibilityHint="Opens the device screen" onPress={device.onOpen}');
+		expect(composer).toContain('accessibilityHint="Opens context and usage" onPress={onOpenUsage}');
+	});
+
+	// The row scrolls sideways with no indicator, and the quota chip is the only
+	// quota warning: last, behind a PR and a changes chip, it starts off screen.
+	it("puts the quota chip first, ahead of the PR, changes and context chips", () => {
+		const at = (marker: string) => {
+			const index = composer.indexOf(marker);
+			expect(index, marker).toBeGreaterThan(-1);
+			return index;
+		};
+		const quota = at("{quotaChip ? <ComposerChip");
+		expect(quota).toBeLessThan(at("{activeReviewPR ? <ComposerChip"));
+		expect(quota).toBeLessThan(at("{changes ? <ComposerChip"));
+		expect(quota).toBeLessThan(at("{contextMeter ? <View"));
 	});
 
 	// Steering stays reachable from the open card. While a turn runs the field's

@@ -23,7 +23,7 @@ func TestSideNativeCurrentUsesCapabilitiesAndIndependentHost(t *testing.T) {
 			caps[ports.ChatCapabilityForkCurrent] = true
 			h.conv.setCapabilities(caps)
 			h.source(t)
-			side := h.side(t, "native", true)
+			side := h.startedSide(t, "native")
 			if side.ContextMode != "native" || side.NativeAnchorID != "" || side.SeedHistory == "" {
 				t.Fatalf("context mode: %+v", side)
 			}
@@ -62,6 +62,9 @@ func TestSideNativeCurrentKeepsParentQuiescentAndReleasesFailedFork(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
+				t.Fatal(err)
+			}
 			select {
 			case <-started:
 			case <-time.After(2 * time.Second):
@@ -96,13 +99,13 @@ func TestSideCurrentForkReconstructsWhenParentHasLaterWork(t *testing.T) {
 	if _, err := h.svc.Send(t.Context(), testSession, ports.ChatUserMessage{Text: "in flight", ClientMessageID: "running"}); err != nil {
 		t.Fatal(err)
 	}
-	side := h.side(t, "busy", true)
+	side := h.startedSide(t, "busy")
 	if side.ContextMode != "reconstructed" || side.SeedHistory == "" || len(h.driver.anchors) != 0 {
 		t.Fatalf("unsafe current-context fork: %+v", side)
 	}
 }
 
-func TestSideCreateWakesHibernatedParentBeforeNativeFork(t *testing.T) {
+func TestSideFirstSendWakesHibernatedParentBeforeNativeFork(t *testing.T) {
 	h, old := settledHibernationHarness(t, domain.TurnStateCompleted)
 	if hibernated, err := h.svc.HibernateChat(t.Context(), testSession); err != nil || !hibernated {
 		t.Fatalf("hibernate: %v %v", hibernated, err)
@@ -141,6 +144,12 @@ func TestSideCreateWakesHibernatedParentBeforeNativeFork(t *testing.T) {
 	}
 	side, err := svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "wake"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if side.State != "draft" || svc.HasLiveChatController(testSession) {
+		t.Fatal("draft woke hibernated parent")
+	}
+	if _, err := svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -183,6 +192,9 @@ func TestSideCreateRetryDuringCurrentForkReturnsSameSide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
+		t.Fatal(err)
+	}
 	defer close(release)
 	select {
 	case <-started:
@@ -208,6 +220,9 @@ func TestSideCurrentForkRetryAfterParentMovesUsesFrozenHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
+		t.Fatal(err)
+	}
 	h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "failed" })
 	if _, err := h.svc.Send(t.Context(), testSession, ports.ChatUserMessage{Text: "later parent request", ClientMessageID: "later"}); err != nil {
 		t.Fatal(err)
@@ -230,6 +245,9 @@ func TestSideUnknownForkCannotBeBlindlyRetried(t *testing.T) {
 	h.driver.onFork = func(context.Context) error { return ports.ErrChatRecoveryInconclusive }
 	side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "unknown"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	failed := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "failed" })
@@ -266,6 +284,9 @@ func TestSideCurrentForkDoesNotBlockParentDuringChildSetup(t *testing.T) {
 			}
 			side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: stage})
 			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -309,8 +330,11 @@ func TestSideCurrentForkWaitsParentSendUntilCopyCompletes(t *testing.T) {
 			return ctx.Err()
 		}
 	}
-	_, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "wait"})
+	side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "wait"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -357,6 +381,9 @@ func TestSideCurrentForkCanBeStoppedOrKilled(t *testing.T) {
 			}
 			side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: action})
 			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "first question", ClientMessageID: "first"}); err != nil {
 				t.Fatal(err)
 			}
 			select {

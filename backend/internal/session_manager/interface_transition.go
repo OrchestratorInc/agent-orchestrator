@@ -27,8 +27,8 @@ const (
 )
 
 var (
-	errDrainQuiescenceUnverified = errors.New("AO could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
-	errDrainDecisionPending      = errors.New("AO found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
+	errDrainQuiescenceUnverified = errors.New("the Orchestrator daemon could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
+	errDrainDecisionPending      = errors.New("the Orchestrator daemon found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
 )
 
 // interfaceTransitionStore is optional so the existing narrow Manager Store
@@ -107,6 +107,9 @@ func (m *Manager) InterfaceTransitionStatus(
 	} else if interfaceWorkspaceUnavailable(rec) {
 		status.ReasonCode = "WORKSPACE_UNAVAILABLE"
 		status.Reason = "This session's workspace was never set up. Retry start before switching interfaces."
+	} else if rec.NeedsImportResume() {
+		status.ReasonCode = "WORKSPACE_UNAVAILABLE"
+		status.Reason = "Open this imported chat once before switching interfaces."
 	} else if target == domain.SessionModeChat && (m.chat == nil || !m.chat.SupportsChat(rec.Harness)) {
 		status.ReasonCode = "CHAT_UNSUPPORTED"
 		status.Reason = fmt.Sprintf("%s does not support Chat UI.", rec.Harness)
@@ -204,6 +207,11 @@ func (m *Manager) StartInterfaceTransition(
 	}
 	if interfaceWorkspaceUnavailable(rec) {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
+	}
+	// An import is copied into AO and checked for an outside owner on its first
+	// open. A switch would launch without either step.
+	if rec.NeedsImportResume() {
+		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: imported session %s has not been opened yet", ErrInterfaceWorkspaceUnavailable, id)
 	}
 	nativeID, err := m.handoffNativeConversationID(ctx, rec)
 	// A hermes Chat session whose adapter never declared the compatible
@@ -578,7 +586,7 @@ func (m *Manager) runInterfaceTransition(
 	// be proven stopped, do not launch either controller: recovery is safer than
 	// two writers racing on one native conversation.
 	if err := m.stopSourceControllerConclusive(rec); err != nil {
-		detail := "AO could not prove that the old controller stopped. Restart AO to reconcile this session before sending more work: " + err.Error()
+		detail := "Orchestrator could not prove that the old controller stopped. Restart Orchestrator to reconcile this session before sending more work: " + err.Error()
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"SOURCE_STOP_UNCERTAIN", detail)
 		return
@@ -595,8 +603,9 @@ func (m *Manager) runInterfaceTransition(
 				fail("HANDOFF_STORAGE_BRIDGE_FAILED", projectErr)
 				return
 			}
-			env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+			env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 			m.augmentAgentRuntimeEnv(bridge, env)
+			m.applyImportedConfigEnv(ctx, rec, env)
 			if bridgeErr := storageBridge.PrepareInterfaceHandoffStorage(ctx, ports.SessionRef{
 				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: transition.NativeConversationID},
@@ -618,7 +627,13 @@ func (m *Manager) runInterfaceTransition(
 			fail("LIFECYCLE_UNAVAILABLE", fmt.Errorf("lifecycle manager is unavailable"))
 			return
 		}
-		changed, err := m.lcm.CommitControllerEpoch(ctx, rec.ID, transition.SourceMode,
+		// A degraded identity-reset handoff may leave the source Chat archived
+		// with its messages; the strict path must still prove the root untouched.
+		commitEpoch := m.lcm.CommitControllerEpoch
+		if transition.DegradedKind != "" {
+			commitEpoch = m.lcm.CommitControllerEpochArchivedChat
+		}
+		changed, err := commitEpoch(ctx, rec.ID, transition.SourceMode,
 			transition.TargetMode, transition.NativeConversationID, transition.NativeConversationID == "")
 		if err != nil || !changed {
 			if err == nil {
@@ -713,6 +728,7 @@ func (m *Manager) runInterfaceTransition(
 		captureBackgroundFault(context.WithoutCancel(ctx), err, "interface_transition", "durable_completion")
 		return
 	}
+	m.deliverQueuedAfterAccountMove(transition)
 }
 
 // hermesNativeConversationID reads the native state.db session id the
@@ -1023,7 +1039,8 @@ func (m *Manager) persistedNativeConversationID(
 	if err != nil {
 		return "", err
 	}
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	m.applyImportedConfigEnv(ctx, rec, env)
 	exists, err := probe.NativeConversationExists(ctx, ports.SessionRef{
 		ID:            string(rec.ID),
 		WorkspacePath: rec.Metadata.WorkspacePath,
@@ -1070,13 +1087,14 @@ func (m *Manager) preflightInterfaceTarget(
 		return err
 	}
 	config := restoredAgentConfig(rec, project.Config)
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
+	m.applyImportedConfigEnv(ctx, rec, env)
 	if err := m.preflightLaunchAuth(ctx, agent, rec, env); err != nil {
 		return err
 	}
-	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID)
+	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID, env)
 }
 
 // preflightLaunchAuth refuses a target whose login the provider reports as
@@ -1106,6 +1124,7 @@ func (m *Manager) preflightTerminalLaunch(
 	rec domain.SessionRecord,
 	project domain.ProjectRecord,
 	nativeConversationID string,
+	env map[string]string,
 ) error {
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
@@ -1113,16 +1132,27 @@ func (m *Manager) preflightTerminalLaunch(
 	}
 	config := restoredAgentConfig(rec, project.Config)
 	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	_, launchPath, err := m.importLaunch(ctx, "preflight terminal", rec, rec.Metadata.WorkspacePath, env, false)
+	if err != nil {
+		return err
+	}
 	var cmd []string
 	if nativeConversationID == "" {
-		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "")
+		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath,
+			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", env)
 	} else {
 		var resumable bool
+		restoreRec := rec
+		restoreRec.Metadata.AgentSessionID = nativeConversationID
+		metadata := nativeRestoreMetadata(restoreRec)
+		// Preflight runs before storage bridging. Let adapters validate the
+		// current interface's binding; actual launches get fresh restore metadata.
+		metadata[ports.MetadataKeySessionMode] = string(rec.Mode)
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
+			Env: env,
 			Session: ports.SessionRef{
-				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
-				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeConversationID},
+				ID: string(rec.ID), WorkspacePath: launchPath,
+				Metadata: metadata,
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
 			Config: config, Permissions: config.Permissions,
@@ -1161,17 +1191,13 @@ func (m *Manager) prepareSourceHandoff(
 		if rec.Activity.State == domain.ActivityExited {
 			return nil
 		}
-		interrupter, ok := m.runtime.(runtimeInterrupter)
-		if !ok {
-			return fmt.Errorf("runtime cannot interrupt a live terminal controller")
-		}
 		// Explicit Stop now is authoritative even when the durable activity row
 		// says idle: approval screens can be user-blocked while that row is idle.
 		// Sending the interrupt is what makes “Cancel request and switch” true.
-		if err := interrupter.Interrupt(ctx, handle); err != nil {
+		if err := m.interruptTerminal(ctx, rec); err != nil {
 			return err
 		}
-		// Let the provider observe Ctrl-C and begin flushing its native history
+		// Let the provider observe cancellation and begin flushing its native history
 		// before an already-idle activity row can end the loop immediately.
 		initialSettle := time.NewTimer(m.interfaceTransition.pollInterval)
 		select {
@@ -1181,7 +1207,7 @@ func (m *Manager) prepareSourceHandoff(
 		case <-initialSettle.C:
 		}
 		// Give the provider a short, bounded window to flush its native transcript
-		// after Ctrl-C. The subsequent Destroy is still authoritative, so a stale
+		// after cancellation. The subsequent Destroy is still authoritative, so a stale
 		// activity hook cannot turn "stop now" into an unbounded drain.
 		deadline := time.NewTimer(interfaceInterruptSettle)
 		defer deadline.Stop()
@@ -1297,7 +1323,7 @@ func (m *Manager) prepareSourceHandoff(
 		if !surfaceProofAvailable && unverifiedIdle && detector != nil && inputQuiet {
 			// Compatibility path for terminal activity adapters that have not yet
 			// adopted the richer surface observation capability.
-			if output, outputErr := m.runtime.GetOutput(probeCtx, handle, interfaceTransitionOutputLines); outputErr == nil {
+			if output, outputErr := m.terminalActivityOutput(probeCtx, detector, handle, interfaceTransitionOutputLines); outputErr == nil {
 				now = time.Now()
 				state, authoritative := detector.DetectTerminalActivity(output)
 				idleProven = authoritative && state == domain.ActivityIdle
@@ -1350,6 +1376,22 @@ func (m *Manager) prepareSourceHandoff(
 		case <-ticker.C:
 		}
 	}
+}
+
+// terminalActivityOutput reads the screen a terminal activity detector expects.
+// A detector that requires rendered activity tells a dim native placeholder
+// from a typed draft by its styling, which plain output drops, so it reads the
+// rendered screen whenever the runtime can provide it.
+func (m *Manager) terminalActivityOutput(ctx context.Context, detector ports.TerminalActivityDetector, handle ports.RuntimeHandle, lines int) (string, error) {
+	if rendered, ok := detector.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() {
+		if styled, ok := m.runtime.(ports.StyledTerminalOutputReader); ok {
+			output, err := styled.GetStyledOutput(ctx, handle, lines)
+			if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+				return output, err
+			}
+		}
+	}
+	return m.runtime.GetOutput(ctx, handle, lines)
 }
 
 // tuiIdleAfterInput proves that the idle fact was written after every terminal
@@ -1438,11 +1480,37 @@ func (m *Manager) startTransitionTarget(
 	// A genuinely fresh target has nothing to replay. Every resumed TUI -> Chat
 	// handoff must import native history before activation; rollback and ordinary
 	// daemon restore deliberately use the normal context-resume policy.
-	_, err = m.relaunchSessionWithPolicy(
+	var promptOverride *string
+	if fresh && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && m.chatAcceptedWork(ctx, id) {
+		// The Chat already ran the session's prompt, so replaying it into a fresh
+		// terminal would start the task again. The prompt stays on the session.
+		noPrompt := ""
+		promptOverride = &noPrompt
+	}
+	_, err = m.relaunchSessionWithPolicyAndGeneration(
 		ctx, "switch interface", rec, project, ws, nil,
-		fresh, requireNativeHistory && !fresh, historyPolicy,
+		fresh, requireNativeHistory && !fresh, "", historyPolicy, promptOverride,
 	)
 	return err
+}
+
+// chatAcceptedWork reports whether the session's Chat conversation ever accepted
+// a message or activity. The sequence is monotonic, so rolled-back or hidden
+// turns still count. A failed read also counts: a terminal that opens without
+// the prompt is recoverable, and repeating a finished task is not.
+// (Guard reused from OrchestratorInc/agent-orchestrator#7725 by Meraj-08.)
+func (m *Manager) chatAcceptedWork(ctx context.Context, id domain.SessionID) bool {
+	store, ok := m.store.(interface {
+		ConversationForSession(context.Context, domain.SessionID) (domain.ConversationRecord, error)
+	})
+	if !ok {
+		return false
+	}
+	conversation, err := store.ConversationForSession(ctx, id)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return false
+	}
+	return err != nil || conversation.LatestSequence != 0
 }
 
 func (m *Manager) rollbackInterfaceTransition(
@@ -1520,6 +1588,7 @@ func (m *Manager) rollbackInterfaceTransition(
 		return
 	}
 	_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionFailed, code, cause.Error())
+	m.deliverQueuedAfterAccountMove(transition)
 }
 
 // chatHoldsProviderConversation reports whether the session durably holds a
@@ -1553,7 +1622,7 @@ func (m *Manager) retainUnconfirmedTransitionTarget(transition domain.SessionInt
 	// Keep the durable input fence and startup-recovery record. Terminalizing the
 	// saga would let ordinary restore adopt a target that never passed admission.
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionTargetStarting,
-		"TARGET_STOP_UNCONFIRMED", "AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. "+cause.Error()); err != nil {
+		"TARGET_STOP_UNCONFIRMED", "Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. "+cause.Error()); err != nil {
 		m.logger.Error("interface transition: retain unconfirmed target shutdown", "transition", transition.ID, "error", err)
 		captureBackgroundFault(context.Background(), err, "interface_transition", "state_record")
 		return fmt.Errorf("persist unconfirmed target for transition %s: %w", transition.ID, err)
@@ -1922,7 +1991,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 				return nil, ctx.Err()
 			}
 		}
-		detail := "The daemon restarted during the interface switch; AO recovered the session from its last committed mode."
+		detail := "The daemon restarted during the interface switch; Orchestrator recovered the session from its last committed mode."
 		if transition.AccountMove() {
 			detail = "The daemon restarted during the account switch; the session stays on its committed account."
 			switch transition.Phase {
@@ -1957,7 +2026,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 						captureBackgroundFault(ctx, stopErr, "session_quarantine", "")
 						continue
 					}
-					detail = "The daemon restarted during the account switch; AO stopped the agent and kept the session on its committed account. Resume it to continue."
+					detail = "The daemon restarted during the account switch; Orchestrator stopped the agent and kept the session on its committed account. Resume it to continue."
 				}
 			}
 		} else if (transition.SourceMode == domain.SessionModeTUI && transition.TargetMode == domain.SessionModeChat) ||
@@ -1993,9 +2062,9 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 					return nil, fmt.Errorf("recover transition %s source mode: session changed", transition.ID)
 				}
 				if transition.SourceMode == domain.SessionModeTUI {
-					detail = "The daemon restarted during the interface switch; AO restored Terminal so native history can be replayed safely on retry."
+					detail = "The daemon restarted during the interface switch; Orchestrator restored Terminal so native history can be replayed safely on retry."
 				} else {
-					detail = "The daemon restarted during the interface switch; AO confirmed the failed Terminal controller stopped and restored Chat ownership."
+					detail = "The daemon restarted during the interface switch; Orchestrator confirmed the failed Terminal controller stopped and restored Chat ownership."
 				}
 			}
 		}
@@ -2077,7 +2146,7 @@ func transitionDetail(transition domain.SessionInterfaceTransition, code, detail
 	}
 	switch code {
 	case "DRAIN_QUIESCENCE_UNVERIFIED":
-		return "AO could not confirm that the terminal was idle, so the agent stays on its current account. Try again when it is idle."
+		return "Orchestrator could not confirm that the terminal was idle, so the agent stays on its current account. Try again when it is idle."
 	case "DRAIN_DECISION_PENDING":
 		return "The agent is waiting for an answer in the terminal, so it stays on its current account. Answer it, then try again."
 	case "TRANSITION_CANCELLED":

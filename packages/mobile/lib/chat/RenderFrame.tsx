@@ -38,6 +38,10 @@ import { RenderSkeleton } from "./RenderSkeleton";
 import { startRenderHeightStore } from "./renderHeightStore";
 import { FRAME_PAGE_LIMITS } from "../artifactPageInliner";
 import { useInlinedArtifactPage } from "../useInlinedArtifactPage";
+import { daemonArtifactsBackend } from "../artifactsBackend";
+import { holdArtifactsBackend, useHeldBackend } from "../heldBackend";
+import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
+import { ARTIFACT_MEDIA_PLAYBACK } from "../artifactMediaPlayback";
 
 startRenderHeightStore();
 
@@ -81,7 +85,11 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 	onFailed: () => void;
 }) {
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
+	const { config: verified, machine } = useApp();
+	// A page on screen keeps what it loaded with through an app switch, so it
+	// does not reload; one mounted while the connection is away waits for it to
+	// be verified (see useLastVerifiedConfig).
+	const config = useLastVerifiedConfig(verified, machine);
 	const web = useRef<WebView>(null);
 	const lastTouch = useRef(0);
 	const loaded = useRef(false);
@@ -94,7 +102,10 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 	const fullscreen = displayMode === "fullscreen";
 	// A stable source: a new object each render would make the WebView re-check it.
 	// A page from memory has no fragment, so the theme is written into it for first paint.
-	const source = useMemo(() => html ? { html: withRenderTheme(html, themeRef.current) } : uri && config ? { uri, headers: authHeaders(config) } : undefined, [html, uri, config]);
+	// Keyed on the headers' content: the connection verified again after an app
+	// switch is a new object for the same credential, and must not reload the page.
+	const headers = config ? JSON.stringify(authHeaders(config)) : null;
+	const source = useMemo(() => html ? { html: withRenderTheme(html, themeRef.current) } : uri && headers ? { uri, headers: JSON.parse(headers) as Record<string, string> } : undefined, [html, uri, headers]);
 
 	useEffect(() => {
 		if (loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
@@ -103,6 +114,9 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 	if (!source || (!html && !uri)) return null;
 	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
 		<WebView
+			// Inline, a frame stays live off screen and a tap opens the viewer
+			// rather than reaching the page, so only the viewer plays media unprompted.
+			{...(fullscreen ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
 			ref={web}
 			source={source}
 			injectedJavaScriptBeforeContentLoaded={fullscreen ? VIEWER_STYLE_SCRIPT : undefined}
@@ -186,7 +200,10 @@ export const RenderFrame = memo(function RenderFrame({ render, artifact }: {
 	// The whole frame is the button: Android ripples across it, over the page;
 	// iOS highlights the chip that marks it.
 	const expandFeedback = usePressFeedback("row", { foreground: true });
-	const { config, currentHostId, sessions } = useApp();
+	const { config: verified, machine, currentHostId, sessions } = useApp();
+	// Held through an app switch: the frame stays as it is instead of folding to
+	// its title and loading its page again on return.
+	const config = useLastVerifiedConfig(verified, machine);
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
@@ -197,7 +214,9 @@ export const RenderFrame = memo(function RenderFrame({ render, artifact }: {
 	// An artifact page is read with the files it links inlined, and only
 	// while its frame is in range; the file's version re-reads a rewrite.
 	const version = artifact ? sessions?.find((session) => session.id === artifact.sessionId)?.artifacts?.find((file) => file.path === artifact.path)?.updatedAt : undefined;
-	const inlined = useInlinedArtifactPage({ enabled: Boolean(artifact) && live, config, sessionId: artifact?.sessionId ?? "", path: artifact?.path ?? "", version, limits: FRAME_PAGE_LIMITS });
+	const liveArtifacts = useMemo(() => verified ? daemonArtifactsBackend(verified) : null, [verified]);
+	const artifactsBackend = useHeldBackend(liveArtifacts, machine, holdArtifactsBackend);
+	const inlined = useInlinedArtifactPage({ enabled: Boolean(artifact) && live, backend: artifactsBackend, sessionId: artifact?.sessionId ?? "", path: artifact?.path ?? "", version, limits: FRAME_PAGE_LIMITS });
 	// The skeleton covers the frame until the inlined page is ready; if inlining
 	// fails the page loads from its URL instead.
 	const awaitingInline = Boolean(artifact) && !inlined.html && !inlined.failed;

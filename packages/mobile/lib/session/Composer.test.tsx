@@ -146,6 +146,18 @@ describe("the terminal composer", () => {
 		expect(voice.toggleLatched).toHaveBeenCalledOnce();
 	});
 
+	// With access off it keeps the mic, crossed out, rather than an empty Send:
+	// the tap is how the user gets to Settings to turn it back on.
+	it("keeps a crossed-out mic that goes to Settings while access is off", async () => {
+		await render({ voice: { ...voice, state: "denied" } });
+		expect(renderer!.root.findAllByProps({ accessibilityLabel: "Send" })).toHaveLength(0);
+		const mic = renderer!.root.findByProps({ accessibilityLabel: "Turn on microphone access in Settings" });
+		expect(mic.props.disabled).toBe(false);
+		expect(mic.findByProps({ name: "micOff" })).toBeTruthy();
+		act(() => mic.props.onPress());
+		expect(voice.toggleLatched).toHaveBeenCalledOnce();
+	});
+
 	it("stops the mic from the same button", async () => {
 		await render({ value: "draft", voice: { ...voice, state: "recording" } });
 		act(() => renderer!.root.findByProps({ accessibilityLabel: "Stop dictating" }).props.onPress());

@@ -811,6 +811,59 @@ func TestClosedThreadDoesNotStopTheController(t *testing.T) {
 	}
 }
 
+/* ---- provider state ---------------------------------------------------- */
+
+func awaitActivityEvent(t *testing.T, activity *recordingActivity, event string, state domain.ActivityState) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, signal := range activity.snapshot() {
+			if signal.Event == event && signal.State == state {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no %s %q signal: %+v", state, event, activity.snapshot())
+}
+
+// Claude Code runs cycles on its own after a turn, for example to answer a
+// finished background task. AO has no turn for them, so the provider's own
+// running and idle reports are what keep the session from reading idle while
+// the agent works.
+func TestProviderStateReportsWorkOutsideAOTurns(t *testing.T) {
+	h := newHarness(t)
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState,
+		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
+	awaitActivityEvent(t, h.activity, "chat.provider.running", domain.ActivityActive)
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState,
+		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}})
+	awaitActivityEvent(t, h.activity, "chat.provider.idle", domain.ActivityIdle)
+}
+
+// While AO's own turn runs, its turn events own the activity. A provider idle
+// can lag behind the next turn's start, so it must not end that turn early.
+func TestProviderStateLeavesAOTurnsToTurnEvents(t *testing.T) {
+	h := newHarness(t)
+
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "turn-1"},
+		ports.ChatEvent{Kind: ports.ChatEventProviderState,
+			ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}},
+		ports.ChatEvent{Kind: ports.ChatEventProviderState,
+			ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "turn-1", TurnState: domain.TurnStateCompleted},
+	)
+	awaitActivityEvent(t, h.activity, "chat.turn.completed", domain.ActivityIdle)
+	for _, signal := range h.activity.snapshot() {
+		if signal.Event == "chat.provider.running" || signal.Event == "chat.provider.idle" {
+			t.Fatalf("provider state overrode a running AO turn: %+v", h.activity.snapshot())
+		}
+	}
+}
+
 /* ---- MCP servers ------------------------------------------------------- */
 
 // Servers are announced one at a time and re-announced every turn, so reports
@@ -1137,4 +1190,49 @@ func TestATurnAfterARefusedLoginReadsTheAccountAgain(t *testing.T) {
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "second"})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 2 })
 	countsAfter(1, 1)
+}
+
+// An agent's own cycle after a turn (Antigravity or Claude Code answering a
+// background command that finished) is turn-less. The ACP driver gives each
+// cycle its own items and settles them when it ends, so the rows stop
+// streaming and a later cycle is a message of its own, not more text on an
+// earlier one.
+func TestProviderCycleItemsSettleAsTheirOwnRows(t *testing.T) {
+	h := newHarness(t)
+	cycle := func(id, text string) {
+		h.conv.emit(
+			ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}},
+			ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderItemID: "thought-" + id,
+				ActivityKind: domain.ActivityKindReasoning, ActivityStatus: domain.ActivityStatusRunning, Summary: "Reasoning"},
+			ports.ChatEvent{Kind: ports.ChatEventReasoningDelta, ProviderItemID: "thought-" + id, Delta: "thinking"},
+			ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "assistant-" + id, Delta: text},
+			ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderItemID: "assistant-" + id, Text: text},
+			ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderItemID: "thought-" + id,
+				ActivityKind: domain.ActivityKindReasoning, ActivityStatus: domain.ActivityStatusCompleted,
+				Summary: "Reasoning", Text: "thinking"},
+			ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}},
+		)
+	}
+	cycle("cycle-1", "All checks passed.")
+	awaitActivityEvent(t, h.activity, "chat.provider.idle", domain.ActivityIdle)
+	cycle("cycle-2", "Second note.")
+
+	// Each event commits on its own, and the reasoning completes after the
+	// message, so wait for both.
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 2 && !s.Messages[1].Streaming &&
+			activityByItem(s, "thought-cycle-1").Status == domain.ActivityStatusCompleted &&
+			activityByItem(s, "thought-cycle-2").Status == domain.ActivityStatusCompleted
+	})
+	for i, want := range []string{"All checks passed.", "Second note."} {
+		message := snapshot.Messages[i]
+		if message.Text != want || message.Streaming || message.TurnID != "" {
+			t.Fatalf("cycle message %d = %+v, want settled turn-less %q", i, message, want)
+		}
+	}
+	for _, id := range []string{"thought-cycle-1", "thought-cycle-2"} {
+		if activity := activityByItem(snapshot, id); activity.Status != domain.ActivityStatusCompleted || activity.TurnID != "" {
+			t.Fatalf("cycle reasoning %s = %+v, want completed and turn-less", id, activity)
+		}
+	}
 }

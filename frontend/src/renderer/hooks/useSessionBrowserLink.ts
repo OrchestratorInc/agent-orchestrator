@@ -28,12 +28,16 @@ export function useSessionBrowserLink(
 	const setInspectorOpen = useUiStore((state) => state.setInspectorOpen);
 	const active = session ? sessionIsActive(session) : false;
 	const hostId = session?.hostId;
+	const cloud = Boolean(session?.cloud);
 
 	return useCallback(
 		(uri: string) => {
 			if (!session?.id || !active) return;
 			const sessionId = session.id;
 			const webLink = isWebLink(uri);
+			// A cloud session's files live in its sandbox, which the local daemon
+			// does not serve: only a web link opens, in this computer's Browser tab.
+			if (cloud && !(webLink && openInBrowser)) return;
 			// `target` is what the daemon preview resolves; `workspacePath` is set
 			// only when the target is known to be that workspace-relative file.
 			const openPreview = (target: string, workspacePath: string | undefined) => {
@@ -91,6 +95,6 @@ export function useSessionBrowserLink(
 			if (!webLink && !workspacePath && !isPotentialWorkspaceFileLink(uri)) return;
 			openPreview(uri, workspacePath);
 		},
-		[active, hostId, onUnownedFile, openInBrowser, queryClient, session?.id, session?.kind, setInspectorOpen, setInspectorView, workspacePaths],
+		[active, cloud, hostId, onUnownedFile, openInBrowser, queryClient, session?.id, session?.kind, setInspectorOpen, setInspectorView, workspacePaths],
 	);
 }

@@ -5,15 +5,15 @@ import { StyleSheet, View } from "react-native";
 import { ItemActionsPullDown } from "./item-actions-menu.ios";
 import type { ReviewActionsSheetProps, ReviewFeedbackItem, ReviewPolicyRow } from "./review-actions-sheet.types";
 import { ReviewerPicker } from "./reviewer-picker.ios";
+import { reviewerSectionFooter } from "./reviewer-picker.types";
 import { symbols } from "./symbols";
 import { appFont } from "./swiftUIFont";
+import { secondaryForeground as secondary } from "./swiftUIStyles";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
 import { sheetInset, space } from "./tokens";
 import { SheetHeader } from "./ui";
 import { useAnnounceAlerts } from "./useAnnounceAlerts";
-
-const secondary = foregroundStyle({ type: "hierarchical", style: "secondary" });
 
 /**
  * The review actions sheet as a SwiftUI Form: switches, menu pickers and
@@ -40,7 +40,7 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 					<Section title="Automation" footer={<Text>The same settings as this session's inspector on desktop.</Text>}>
 						{policies.map((policy) => <PolicyToggle key={policy.key} policy={policy} locked={locked} onChange={onPolicyChange} />)}
 					</Section>
-					<Section title="Orchestrator reviewer" footer={<Text>Choose who runs the next Orchestrator review and which model it uses.</Text>}>
+					<Section title="Orchestrator reviewer" footer={<Text>{reviewerSectionFooter(reviewer)}</Text>}>
 						{reviewer
 							? <ReviewerPicker {...reviewer} />
 							: <Text modifiers={[appFont("subheadline"), secondary, row]}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}

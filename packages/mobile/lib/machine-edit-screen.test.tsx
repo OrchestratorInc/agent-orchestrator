@@ -7,7 +7,7 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	findHost: vi.fn<(id: string) => Promise<Host | null>>(async () => null),
 	activeHost: vi.fn<() => Promise<Host | null>>(async () => null),
-	save: vi.fn(async () => ({ routeChanged: false })),
+	save: vi.fn(async (): Promise<{ routeChanged: boolean; appearanceError?: Error }> => ({ routeChanged: false })),
 	reloadConfig: vi.fn(async () => {}),
 	reloadHostMetadata: vi.fn(async () => {}),
 	alert: vi.fn(),
@@ -97,6 +97,8 @@ beforeEach(() => {
 	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
 	fixtures.findHost.mockResolvedValue(a);
 	fixtures.activeHost.mockResolvedValue(a);
+	// Counted per test: a save that fails in one must not count in the next.
+	for (const fn of Object.values(fixtures.haptics)) fn.mockClear();
 	fixtures.save.mockResolvedValue({ routeChanged: false });
 	fixtures.reloadHostMetadata.mockResolvedValue(undefined);
 	fixtures.reloadConfig.mockResolvedValue(undefined);
@@ -139,7 +141,8 @@ describe("editing a machine", () => {
 		expect(field("environment-port-a").props.text.value).toBe("3011");
 		expect(field("environment-password-a").type).toBe("SecureField");
 		expect(field("environment-password-a").props.text.value).toBe("secret");
-		expect(field("environment-tls-a").props).toMatchObject({ label: "Use TLS", isOn: true });
+		// The address decides TLS when the route is saved; there is nothing to switch.
+		expect(renderer!.root.findAll((node) => node.props.testID === "environment-tls-a" || node.props.label === "Use TLS")).toEqual([]);
 		expect(renderer!.root.findByType("Picker" as never).props.selection).toBe("laptop");
 		for (const [testID, label] of [["environment-name-a", "Name"], ["environment-host-a", "Host"], ["environment-port-a", "API port"], ["environment-password-a", "Password"]]) {
 			expect(modifiersOf(field(testID))).toContainEqual({ $type: "accessibilityLabel", args: [label] });
@@ -163,7 +166,14 @@ describe("editing a machine", () => {
 		expect(fixtures.reloadHostMetadata).toHaveBeenCalledOnce();
 		expect(fixtures.haptics.success).toHaveBeenCalledOnce();
 		expect(fixtures.back).toHaveBeenCalledOnce();
-		expect(fixtures.preventRemove.prevent).toBe(false);
+		// It leaves through the hold rather than letting go in the commit that
+		// pops it: on Android that changes the header of a page already out of
+		// its stack, and react-native-screens throws (the app went black).
+		expect(fixtures.preventRemove.prevent).toBe(true);
+		const action = { type: "GO_BACK" };
+		act(() => fixtures.preventRemove.callback?.({ data: { action } }));
+		expect(fixtures.dispatch).toHaveBeenCalledWith(action);
+		expect(fixtures.alert).not.toHaveBeenCalled();
 	});
 
 	it("reconnects the default machine over a changed route", async () => {
@@ -174,18 +184,33 @@ describe("editing a machine", () => {
 		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
 	});
 
+	// A local storage failure on the icon is not the machine being offline, and
+	// the route that did save still reconnects the default machine.
+	it("reconnects over a saved route and stays open when only the icon failed to save", async () => {
+		const message = "The connection was saved, but the icon couldn't be. Try Save again.";
+		fixtures.save.mockResolvedValue({ routeChanged: true, appearanceError: new MachineSaveError(message, "host") });
+		await open();
+		await type("environment-port-a", "3012");
+		await act(async () => save().props.onPress());
+		expect(fixtures.reloadHostMetadata).toHaveBeenCalledOnce();
+		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
+		expect(fixtures.back).not.toHaveBeenCalled();
+		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: message });
+	});
+
 	it("keeps the editor and says what failed under the connection fields", async () => {
-		fixtures.save.mockRejectedValue(new MachineSaveError("That password was rejected. Check it and try again.", "password"));
+		fixtures.save.mockRejectedValue(new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password"));
 		await open();
 		await type("environment-password-a", "wrong");
 		await act(async () => save().props.onPress());
 		expect(fixtures.back).not.toHaveBeenCalled();
 		expect(fixtures.haptics.warning).toHaveBeenCalledOnce();
-		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
+		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: "That code or password was rejected. Get a new code and try again." });
 		// A footer isn't read out as it appears, so the screen reader is told.
-		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith("That code or password was rejected. Get a new code and try again.", { queue: true });
 		await type("environment-password-a", "right");
-		expect(connectionSection().props.footer).toBeUndefined();
+		// Cleared but still mounted, so the field being typed in keeps focus.
+		expect(connectionSection().props.footer.props).toMatchObject({ error: false, children: undefined });
 	});
 
 	it("explains an out-of-range port and keeps Save off", async () => {

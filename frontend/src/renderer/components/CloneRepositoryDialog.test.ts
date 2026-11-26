@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import CloneRepositoryDialog, { joinCloneDestination, repositoryNameFromGitUrl, sameProjectPath } from "./CloneRepositoryDialog";
+import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
+import { sessionImportPreviewQuery } from "../lib/session-import";
 
 // The first run prompt reads the GitHub CLI state from the daemon; drive it directly.
 const gitHub = vi.hoisted(() => ({
@@ -66,7 +68,7 @@ describe("clone repository input", () => {
 			onOpenLocalFolder,
 			onStartStandaloneAgent,
 		});
-		expect(screen.getByRole("dialog", { name: "Welcome to Agent Orchestrator" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Welcome to Orchestrator" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
 
 		expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
@@ -83,6 +85,54 @@ describe("clone repository input", () => {
 		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
 		fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 		expect(props.onContinue).toHaveBeenCalledWith(expect.objectContaining({ destinationParent: "/code", targetPath: "/code/web-app" }));
+	});
+
+	it.each([
+		["offers the import step", "installed", [{ id: "a", harness: "codex", title: "Fix login", lastActivity: "2026-11-10T00:00:00Z", messageCount: 4, folder: "/code/app" }], true],
+		["skips the import step without an installed agent", "not_installed", [{ id: "a", harness: "codex", title: "Fix login", lastActivity: "2026-11-10T00:00:00Z", messageCount: 4, folder: "/code/app" }], false],
+		["skips the import step when nothing was found", "installed", [], false],
+	] as const)("%s in the first run prompt", (_, installation, candidates, offered) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentReadinessQueryKey, { agents: [{ id: "codex", installation: { state: installation }, authentication: { state: "authorized" } }] });
+		client.setQueryData(sessionImportPreviewQuery.queryKey, { candidates: [...candidates] });
+		render(React.createElement(QueryClientProvider, { client }, React.createElement(CloneRepositoryDialog, cloneDialogProps({
+			firstRun: true,
+			value: { remoteUrl: "", destinationParent: "/code" },
+			onChatsImported: vi.fn(),
+		}))));
+		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
+		if (!offered) {
+			expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
+			return;
+		}
+		// The step opens as a summary; the folder list only expands on request.
+		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
+		expect(screen.queryByText("app")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Choose folders" }));
+		expect(screen.getByText("app")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
+		expect(screen.queryByText("app")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+		expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
+		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
+	});
+
+	it("moves past the import step by itself when a scan still running finds nothing", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentReadinessQueryKey, { agents: [{ id: "codex", installation: { state: "installed" }, authentication: { state: "authorized" } }] });
+		render(React.createElement(QueryClientProvider, { client }, React.createElement(CloneRepositoryDialog, cloneDialogProps({
+			firstRun: true,
+			value: { remoteUrl: "", destinationParent: "/code" },
+			onChatsImported: vi.fn(),
+		}))));
+		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
+		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
+		act(() => client.setQueryData(sessionImportPreviewQuery.queryKey, { candidates: [] }));
+		expect(await screen.findByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
+		// The step it skipped is not on the way back.
+		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
+		expect(screen.getByRole("dialog", { name: "Welcome to Orchestrator" })).toBeInTheDocument();
 	});
 
 	it("cannot dismiss the first run welcome step, but the close button works afterwards", () => {
@@ -355,6 +405,28 @@ describe("clone repository input", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel clone" }));
 		expect(props.onCancel).toHaveBeenCalledOnce();
 		expect(screen.getByRole("button", { name: "Close clone repository dialog" })).toBeDisabled();
+	});
+
+	it("says the long-clone hint once and replaces the status with each streamed git step", () => {
+		const { props, view } = renderCloneDialog({ disabled: true, cloning: true, activity: "cloning" });
+		expect(screen.getAllByText(/Large repositories can take/)).toHaveLength(1);
+
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "counting_objects", attempt: 1 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("remote: Counting objects · 0s");
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 0s");
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 45 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 45% · 0s");
+		// The percent ticks in place: no second line slides in for it.
+		const lines = screen.getByRole("status").querySelectorAll(".chat-working-shimmer").length;
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 46 } }));
+		expect(screen.getByRole("status").querySelectorAll(".chat-working-shimmer")).toHaveLength(lines);
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 46% · 0s");
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "retrying", attempt: 2 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Connection dropped, retrying · 0s");
+
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, cloning: false, activity: "validating", progress: { phase: "resolving_deltas", attempt: 1 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Checking checkout · 0s");
 	});
 
 	it("discards a destination picker result after the dialog closes", async () => {

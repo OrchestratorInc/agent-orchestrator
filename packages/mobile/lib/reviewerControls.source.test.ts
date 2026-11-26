@@ -9,12 +9,15 @@ const sheetIOS = readFileSync(new URL("./review-actions-sheet.ios.tsx", import.m
 const sheetAndroid = readFileSync(new URL("./review-actions-sheet.tsx", import.meta.url), "utf8");
 const terminal = readFileSync(new URL("./session/TerminalSessionScreen.tsx", import.meta.url), "utf8");
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+// Where the page and the sheet reach a daemon or Orchestrator Cloud.
+const backend = source("./reviewBackend.ts");
 
 describe("reviewer control integration", () => {
 	it("keeps the project-default override separate from the effective reviewer", () => {
 		expect(actions).toContain('const [reviewerOverride, setReviewerOverride] = useState("")');
 		expect(actions).toContain("const effectiveReviewer = reviewerOverride || projectDefaultReviewer;");
-		expect(actions).toContain("defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined)");
+		expect(backend).toContain("defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined)");
+		expect(actions).toContain("setProjectDefaultReviewer(settings.defaultReviewer);");
 		// The daemon's reviewerHarness names the last reviewer that ran, so it
 		// must never pick the model catalog after a switch.
 		expect(actions).not.toContain("result.reviewerHarness");
@@ -28,8 +31,9 @@ describe("reviewer control integration", () => {
 		expect(actions).toContain("request === modelRequest.current");
 	});
 
-	it("confirms model and mode changes while a review is running", () => {
-		expect(actions).toContain("confirmReviewerChange(reviewerOverride, { ...reviewerConfig, [key]: value })");
+	it("confirms model, mode and effort changes while a review is running", () => {
+		expect(actions).toContain("confirmReviewerChange(reviewerOverride, reviewerModelPick(modelState, value))");
+		expect(actions).toContain("confirmReviewerChange(reviewerOverride, reviewerEffortPick(modelState, level))");
 	});
 
 	it("does not warn or save when the selected reviewer settings are unchanged", () => {
@@ -37,9 +41,9 @@ describe("reviewer control integration", () => {
 	});
 
 	it("renders every reviewer through the shared harness logo registry", () => {
-		expect(pickerIOS).toContain('import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios"');
-		expect(pickerIOS).toContain("<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />");
-		expect(picker).toContain("const source = logoFor(harness);");
+		expect(pickerIOS).toContain('import { HarnessImage } from "./spawn-composer-controls.ios"');
+		expect(pickerIOS).toContain("<HarnessImage harness={agent.id} />");
+		expect(picker).toContain("const source = logoFor(harness, scheme);");
 	});
 
 	it("keeps Android review actions scrolling inside the sheet", () => {
@@ -47,9 +51,11 @@ describe("reviewer control integration", () => {
 		expect(sheetAndroid).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
 	});
 
-	it("picks the reviewer and model from native iOS menu pickers", () => {
+	it("picks the reviewer, model and effort from native iOS menu pickers", () => {
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-reviewer")');
-		expect(pickerIOS).toContain('accessibilityIdentifier("review-model")');
+		expect(pickerIOS).toContain('tag="review-model"');
+		expect(pickerIOS).toContain('tag="review-effort"');
+		expect(pickerIOS).toContain("accessibilityIdentifier(identifier)");
 	});
 
 	it("only offers reviewers that can run, like the spawn sheet", () => {
@@ -70,7 +76,7 @@ describe("reviewer control integration", () => {
 	});
 
 	it("checks fresh review state before changing reviewer, model, or mode", () => {
-		expect(actions).toContain("const latest = await getSessionReviews(config, sessionId)");
+		expect(actions).toContain("const latest = await backend.reviews(sessionId)");
 		expect(actions).toContain("latest.reviews.some((item) => item.status === \"running\")");
 		expect(actions).toContain("confirmReviewerChange(reviewerOverride");
 		expect(actions).not.toContain('reviewerSwitchWarning(running === "true")');
@@ -98,7 +104,9 @@ describe("reviewer control integration", () => {
 	});
 
 	it("chooses Open, Restore, or Stop from what is actually available", () => {
-		expect(detail).toContain("const controls = reviewerControls(data, review, sessionId);");
+		expect(detail).toContain("const daemonControls = reviewerControls(data, review, sessionId);");
+		// Cloud reviewers run as conversations, with no session to restore or stop.
+		expect(detail).toContain('const controls = backend?.cloud ? { open: daemonControls.open === "chat" ? "chat" as const : undefined, restore: false, stop: false } : daemonControls;');
 		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <ReviewActionButton label=\"Open\"");
 		expect(detail).toContain(": controls.restore ? <ReviewActionButton label=\"Restore\"");
 		expect(detail).toContain("Push a new commit to run another review.");
@@ -146,7 +154,9 @@ describe("reviewer control integration", () => {
 
 	it("merges like desktop: only when ready, fenced to the head commit, after confirmation", () => {
 		expect(detail).toContain("const merge = pr ? mergeReadiness(pr) : undefined;");
-		expect(detail).toContain("await mergeSessionPR(config, pr)");
+		expect(detail).toContain("await backend.merge(sessionId, pr)");
+		expect(backend).toContain("merge: (_sessionId, pr) => mergeSessionPR(config, pr),");
+		expect(backend).toContain("await client.mergePullRequest(orgId, sessionId, pr.number, pr.url, pr.headSha);");
 		expect(detail).toContain("This will squash-merge PR #${pr.number} in the remote repository.");
 	});
 

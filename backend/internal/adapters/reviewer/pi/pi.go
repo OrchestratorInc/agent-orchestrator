@@ -192,4 +192,4 @@ func (*Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 
 const piPolicy = `Pi reviewer security policy
 
-You are running in Pi's interactive TUI with no built-in tools and no project or user resources. Use only the AO review tools supplied by the loaded AO extension. Use github_post_review instead of the task file's gh command, and use ao_review_submit instead of its ao CLI command. Those structured tools enforce the current review queue and do not provide arbitrary shell execution. Never ask for or attempt to enable other tools or resources.`
+You are running in Pi's interactive TUI with no built-in tools and no project or user resources. Use only the Orchestrator review tools supplied by the loaded Orchestrator extension. Use github_post_review instead of the task file's gh command, and use ao_review_submit instead of its ao CLI command. Those structured tools enforce the current review queue and do not provide arbitrary shell execution. Never ask for or attempt to enable other tools or resources.`

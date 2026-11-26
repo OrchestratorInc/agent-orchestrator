@@ -1,4 +1,4 @@
-import { Button, Divider, HStack, LabeledContent, SecureField, Text, TextField, Toggle, useNativeState } from "@expo/ui/swift-ui";
+import { Button, Divider, HStack, LabeledContent, SecureField, Section, Text, TextField, Toggle, useNativeState } from "@expo/ui/swift-ui";
 import {
 	accessibilityLabel,
 	autocorrectionDisabled,
@@ -20,12 +20,14 @@ import {
 	tint,
 	type ModifierConfig,
 } from "@expo/ui/swift-ui/modifiers";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 import type { Theme } from "./theme";
+import { secondaryForeground } from "./swiftUIStyles";
 import { useTheme } from "./ThemeProvider";
 import { space } from "./tokens";
 import { useNativeTextInput } from "./useNativeTextInput";
+import { useTrackedField } from "./formFocus";
 
 export type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 
@@ -45,10 +47,35 @@ export function sectionModifiers(t: Theme): ModifierConfig[] {
 	return [listRowBackground(t.bgElevated)];
 }
 
-/** A section footer: the system's footnote styling, or the error colour for a problem with the section's fields. */
-export function FormFooter({ children, error = false }: { children: string; error?: boolean }) {
+/**
+ * A section footer: the system's footnote styling (secondary), or the error
+ * colour for a problem with the section's fields. A hint and an error draw with
+ * the same modifier, so switching between them changes only its style. With
+ * nothing to say it draws nothing: no empty row, and nothing for VoiceOver.
+ */
+export function FormFooter({ children, error = false }: { children?: string; error?: boolean }) {
 	const t = useTheme();
-	return <Text modifiers={error ? [foregroundStyle(t.red)] : undefined}>{children}</Text>;
+	if (!children) return null;
+	return <Text modifiers={[error ? foregroundStyle(t.red) : secondaryForeground]}>{children}</Text>;
+}
+
+/**
+ * A form section whose footer is always mounted. @expo/ui builds a different
+ * SwiftUI Section with and without a footer, so adding or removing one rebuilds
+ * the section's fields, and the field being typed in loses focus and the
+ * keyboard. Here the footer slot is always there and only what it holds changes;
+ * @expo/ui keeps the same Section for an empty slot, which draws nothing. Use it
+ * for any footer that can come and go (formSection.source.test.ts enforces it).
+ *
+ * The footer shows `error` in red when there is one, otherwise `hint`: one pair
+ * of props, so the text and its colour can't drift apart.
+ */
+export function FormSection({ title, error, hint, modifiers, children }: { title?: string; error?: string; hint?: string; modifiers?: ModifierConfig[]; children: ReactNode }) {
+	return (
+		<Section title={title} footer={<FormFooter error={Boolean(error)}>{error || hint}</FormFooter>} modifiers={modifiers}>
+			{children}
+		</Section>
+	);
 }
 
 function inputModifiers(t: Theme, props: FormTextFieldProps, contentType?: Parameters<typeof textContentType>[0]): ModifierConfig[] {
@@ -75,10 +102,13 @@ type TextContentType = Parameters<typeof textContentType>[0];
 
 /** The bare input, without its row: a fixed `width` frames it to that size. */
 function InlineTextField(props: FormTextFieldProps & { textContentType?: TextContentType }) {
+	// Joins the form's focus tracking when it has one (see useFormFocus).
+	const tracked = useTrackedField(props.testID ?? props.label);
 	const t = useTheme();
 	const text = useNativeState(props.value);
 	const change = useNativeTextInput(props.value, text, props.onChangeText);
-	const modifiers = inputModifiers(t, props, props.textContentType);
+	// Locked while the form submits, so it can't be focused again before the form closes.
+	const modifiers = inputModifiers(t, tracked?.locked ? { ...props, editable: false } : props, props.textContentType);
 	if (typeof props.width === "number") modifiers.push(frame({ width: props.width }));
 	return (
 		<TextField
@@ -88,6 +118,8 @@ function InlineTextField(props: FormTextFieldProps & { textContentType?: TextCon
 			maxLength={props.maxLength}
 			testID={props.testID}
 			onTextChange={(next) => change(next)}
+			ref={tracked?.ref}
+			onFocusChange={tracked?.onFocusChange}
 			modifiers={modifiers}
 		/>
 	);

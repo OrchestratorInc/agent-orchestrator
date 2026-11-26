@@ -200,16 +200,22 @@ func MergedOutsideAO(provider string) string {
 }
 
 // stampUsageGrouping adds the same project and session grouping IDs the usage
-// summaries carry. Standalone sessions have no project grouping.
+// summaries carry. A standalone session has no project grouping, so its
+// session ID is salted by the install ID instead (like project_id_hash): every
+// ended session carries an opaque session_telemetry_id.
 func (r *Recorder) stampUsageGrouping(ctx context.Context, rec domain.SessionRecord, payload map[string]any) {
 	r.installMu.RLock()
 	installIDFn := r.installID
 	r.installMu.RUnlock()
-	if installIDFn == nil || rec.ProjectID == "" {
+	if installIDFn == nil {
 		return
 	}
 	installID := installIDFn()
 	if installID == "" {
+		return
+	}
+	if rec.ProjectID == "" {
+		payload["session_telemetry_id"] = SessionTelemetryID("install:"+installID, string(rec.ID))
 		return
 	}
 	projectTelemetryID, err := r.store.UsageProjectID(ctx, string(rec.ProjectID), installID)

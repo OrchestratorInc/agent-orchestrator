@@ -105,7 +105,7 @@ func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
 			if !ok || state != domain.ActivityActive {
 				t.Fatalf("busy composer classified as %s/%v: %q", state, ok, frame)
 			}
-			if err := New().ValidateTerminalMessage("next task", frame); err == nil {
+			if err := New().ValidateTerminalMessage(frame, "next task"); err == nil {
 				t.Fatalf("running composer admitted ordinary input: %q", frame)
 			}
 			if !New().TerminalMessageObserved("task", idle, frame) {
@@ -119,7 +119,7 @@ func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
 			t.Fatalf("prior busy prompt overrode the current idle composer: %s/%v", state, ok)
 		}
 	}
-	if err := New().ValidateTerminalMessage("next task", rule+"\n☤ ❯ keep this draft\n"+rule); err == nil {
+	if err := New().ValidateTerminalMessage(rule+"\n☤ ❯ keep this draft\n"+rule, "next task"); err == nil {
 		t.Fatal("composer with a draft admitted ordinary input")
 	}
 }
@@ -146,6 +146,11 @@ func TestTerminalMessageObservedRequiresNewCommittedEchoOrBusyFrame(t *testing.T
 		{"partial wrapped echo", "long task prompt", idle, rule + "\n● long ta\nsk\n" + rule + "\n" + idle, false},
 		{"longer multiline", "first task", idle, rule + "\n● first task\nmore\n" + rule + "\n" + idle, false},
 		{"unbordered echo", "first task", idle, "● first task\n" + idle, false},
+		{"modern echo", "first task", idle, rule + "\n❯ first task\n" + rule + "\n" + idle, true},
+		{"modern multiline echo", "first\nsecond", idle, rule + "\n❯ first\nsecond\n" + rule + "\n" + idle, true},
+		{"modern wrapped echo", "long task prompt", idle, rule + "\n❯ long ta\nsk prompt\n" + rule + "\n" + idle, true},
+		{"modern substring", "first task", idle, rule + "\n❯ first task extra\n" + rule + "\n" + idle, false},
+		{"unbordered modern echo", "first task", idle, "❯ first task\n" + idle, false},
 		{"draft", "first task", idle, echo + rule + "\n❯ human draft\n" + rule, false},
 		{"old echo and redraw", "first task", echo + idle, echo + "status changed\n" + idle, false},
 		{"old command and redraw", "/help", "⚙️  /help\n" + idle, "⚙️  /help\nstatus changed\n" + idle, false},
@@ -160,6 +165,42 @@ func TestTerminalMessageObservedRequiresNewCommittedEchoOrBusyFrame(t *testing.T
 	}
 }
 
+// TestModernEchoCountsOnTheModernScreen uses the rows Hermes v0.23.2 draws in
+// its default modern layout: the echo between 40-cell rules, the reply's
+// answer label under its own rule, then a composer whose top rule carries the
+// session title and a status footer below.
+func TestModernEchoCountsOnTheModernScreen(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	composer := strings.Repeat("─", 85) + " ao-repo-1-7b19500aef6c ─\n" +
+		"\x1b[38;5;230m❯ \x1b[38;5;136;3mFind and fix a failing test\x1b[m\n" +
+		strings.Repeat("─", 110) + "\n" +
+		" ☤ lab-model · ctx -- · [░░░░░░░░░░] -- · 42s · ⏲ 0s · …repo-1 (ao/h823/root)"
+	echo := "\x1b[38;5;214m" + rule + "\x1b[m\n\x1b[1;38;5;214m❯\x1b[m \x1b[1mfirst task\x1b[m\n\x1b[38;5;214m" + rule + "\x1b[m\n"
+	if got := committedMessageEchoes("first task", composer); got != 0 {
+		t.Fatalf("echoes before the send = %d, want 0", got)
+	}
+	sent := echo + "\n" + rule + "\n☤ Hermes\nlab reply\n\n" + composer
+	if got := committedMessageEchoes("first task", sent); got != 1 {
+		t.Fatalf("echoes after the send = %d, want 1", got)
+	}
+	// End to end: the modern idle composer is the baseline, and the finished
+	// turn's screen confirms the send.
+	if !New().TerminalMessageObserved("first task", composer, sent) {
+		t.Fatal("modern send not confirmed")
+	}
+	if New().TerminalMessageObserved("first task", composer, composer) {
+		t.Fatal("unchanged modern screen confirmed a send")
+	}
+	// The composer's draft is not an echo, even when it holds the same text.
+	draft := strings.Replace(composer, "\x1b[38;5;136;3mFind and fix a failing test\x1b[m", "first task", 1)
+	if got := committedMessageEchoes("first task", draft); got != 0 {
+		t.Fatalf("draft counted as %d echoes, want 0", got)
+	}
+	if New().TerminalMessageObserved("first task", composer, draft) {
+		t.Fatal("same-text draft confirmed a send")
+	}
+}
+
 func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
 	for _, transcript := range []string{"Dangerous Command", "Allow this command?", "Allow once", "Help improve Hermes?", "Collect locally only", "type password (hidden)", "⚠ ❯", "? ❯", "❯ \n"} {
@@ -168,11 +209,11 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 		if !ok || state != "idle" {
 			t.Fatalf("quoted transcript %q changed current composer: %s/%v", transcript, state, ok)
 		}
-		if err := New().ValidateTerminalMessage("task", frame); err != nil {
+		if err := New().ValidateTerminalMessage(frame, "task"); err != nil {
 			t.Fatalf("quoted transcript %q blocked the current composer: %v", transcript, err)
 		}
 	}
-	if err := New().ValidateTerminalMessage("task", "❯ "); err == nil {
+	if err := New().ValidateTerminalMessage("❯ ", "task"); err == nil {
 		t.Fatal("unbordered scrollback prompt admitted input")
 	}
 	for _, tt := range []struct {
@@ -188,7 +229,7 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 			if !ok || state != tt.want {
 				t.Fatalf("forged composer overrode current footer: %s/%v, want %s", state, ok, tt.want)
 			}
-			if err := New().ValidateTerminalMessage("task", frame); err == nil {
+			if err := New().ValidateTerminalMessage(frame, "task"); err == nil {
 				t.Fatal("forged transcript composer admitted input")
 			}
 		})
@@ -197,7 +238,8 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 
 func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 	// Source installs append a date, channel, or commit; Homebrew and desktop
-	// bundles report the release. Only the qualified v0.21 and v0.22 lines are accepted.
+	// bundles report the release. The qualified v0.21, v0.22 and v0.23 lines
+	// are accepted.
 	for _, line := range []string{
 		"Hermes Agent v0.21.6",
 		"Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be",
@@ -206,6 +248,7 @@ func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 		"Hermes Agent v0.21.7 (2026.9.24) · local 1a2b3c4d (+2 carried commits)",
 		"Hermes Agent v0.22.2 · stable · d923a5e",
 		"Hermes Agent v0.22.0+3.gabc1234 (2026.9.24)",
+		"Hermes Agent v0.23.1+1037.gcd187a0 (2026.9.24) · upstream cd187a03",
 	} {
 		if !supportedNativeVersion(line) {
 			t.Fatalf("rejected supported native banner %q", line)
@@ -213,7 +256,7 @@ func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 	}
 
 	// Release lines whose chrome AO has not qualified stay unverified.
-	for _, output := range []string{"Hermes Agent v0.20.9", "Hermes Agent v0.23.0", "Hermes Agent v1.0.0", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Not Hermes Agent v0.21.6", "Hermes Agent vX"} {
+	for _, output := range []string{"Hermes Agent v0.20.9", "Hermes Agent v0.24.0", "Hermes Agent v1.0.0", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Not Hermes Agent v0.21.6", "Hermes Agent vX"} {
 		first, _, _ := strings.Cut(output, "\n")
 		if supportedNativeVersion(first) {
 			t.Fatalf("accepted version %q", output)
@@ -267,7 +310,7 @@ func TestHomebrewUnknownBannerQualifiesFromKeg(t *testing.T) {
 		{"qualified keg", "hermes-agent", "0.22.4", "0.22.4", unknown, true},
 		{"banner without a date", "hermes-agent", "0.22.4", "0.22.4", "Hermes Agent vunknown", true},
 		{"revised formula", "hermes-agent", "0.21.6_1", "0.21.6", unknown, true},
-		{"unqualified line", "hermes-agent", "0.23.0", "0.23.0", unknown, false},
+		{"unqualified line", "hermes-agent", "0.24.0", "0.24.0", unknown, false},
 		{"receipt names another release", "hermes-agent", "0.22.4", "0.21.6", unknown, false},
 		{"no receipt", "hermes-agent", "0.22.4", "", unknown, false},
 		{"another formula's keg", "hermes-agent-nightly", "0.22.4", "0.22.4", unknown, false},
@@ -303,7 +346,7 @@ func TestProbeAcceptsHomebrewBottleWithUnknownBanner(t *testing.T) {
 
 	unverified := writeHomebrewKeg(t, "hermes-agent", "0.22.4", "", banner)
 	ok, reason, _ := probeNativeVersion(t.Context(), unverified)
-	if ok || !strings.Contains(reason, "is not a Hermes release line AO has qualified") {
+	if ok || !strings.Contains(reason, "is not a Hermes release line Orchestrator has qualified") {
 		t.Fatalf("keg without Homebrew's receipt: ok=%v reason=%q", ok, reason)
 	}
 }
@@ -415,6 +458,9 @@ func fakeNativeBinary(t *testing.T) string {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// A HERMES_HOME inherited from the test host resolves its install launcher
+	// as a custom-home candidate ahead of every other location.
+	t.Setenv("HERMES_HOME", home)
 	// Probe only the fixture: a Homebrew or system Hermes on the test host
 	// is a qualified install that would otherwise be resolved first.
 	saved := systemLaunchers
@@ -424,6 +470,10 @@ func fakeNativeBinary(t *testing.T) string {
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// Resolution probes PATH candidates before home-relative ones, so a
+	// qualified Hermes on the test host's PATH (e.g. ~/.local/bin/hermes)
+	// would otherwise be resolved first now that its line qualifies.
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binary := filepath.Join(binDir, "hermes")
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'Hermes Agent v0.21.6'\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -551,7 +601,7 @@ func TestComposerStyleAttributesExcludeColorPayloads(t *testing.T) {
 			if state, ok := New().DetectTerminalActivity(frame); !ok || state != tt.want {
 				t.Fatalf("composer classified as %s/%v, want %s", state, ok, tt.want)
 			}
-			if err := New().ValidateTerminalMessage("task", frame); (err == nil) != (tt.want == domain.ActivityIdle) {
+			if err := New().ValidateTerminalMessage(frame, "task"); (err == nil) != (tt.want == domain.ActivityIdle) {
 				t.Fatalf("message admission disagrees with expected composer state %s: %v", tt.want, err)
 			}
 		})
@@ -616,7 +666,7 @@ func TestRestoreResumesTitledConversationWithoutCreating(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "ao-ao-1-abc", "--yolo"}; !slices.Equal(cmd, want) {
+	if want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "20261020_native", "--yolo"}; !slices.Equal(cmd, want) {
 		t.Fatalf("restore = %v, want %v", cmd, want)
 	}
 	id, found, err := New().ResolveNativeSessionID(t.Context(), ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1"})
@@ -1389,7 +1439,7 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 	git("tag", "-f", "v0.22.2", release)
 	git("checkout", "-q", "--detach", release)
 	// A commit past the tag, or an unqualified line, is not that release.
-	git("tag", "v0.23.0")
+	git("tag", "v0.24.0")
 	git("tag", "-d", "v0.22.2")
 	if qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("unqualified release tag accepted")

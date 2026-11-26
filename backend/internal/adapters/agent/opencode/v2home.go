@@ -354,3 +354,11 @@ func snapshotSQLiteDatabase(ctx context.Context, source, destination string) err
 		}
 	}
 }
+
+// ReadOnlyDSN is the SQLite URI that opens path read-only. The path is escaped,
+// so a "?", "#" or "%" in a data directory cannot end it early and drop
+// mode=ro, which would open the user's store writable.
+func ReadOnlyDSN(path string, busyTimeoutMillis int) string {
+	u := url.URL{Path: filepath.ToSlash(path)}
+	return fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)", u.EscapedPath(), busyTimeoutMillis)
+}

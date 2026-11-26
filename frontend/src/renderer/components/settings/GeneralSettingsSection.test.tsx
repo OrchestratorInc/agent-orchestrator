@@ -5,9 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
 import { useUiStore } from "../../stores/ui-store";
 
-const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
+const { settingsMock, updateRetentionMock, updateCommitAttributionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
 	updateRetentionMock: vi.fn(),
+	updateCommitAttributionMock: vi.fn(),
 }));
 
 const idle = { update: vi.fn(), saving: false, error: undefined };
@@ -16,6 +17,7 @@ vi.mock("../../hooks/useSettings", () => ({
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
+	useUpdateCommitAttribution: () => ({ update: updateCommitAttributionMock, saving: false, error: undefined }),
 }));
 
 vi.mock("../../hooks/useEditorHandoff", () => ({
@@ -25,6 +27,7 @@ vi.mock("../../hooks/useEditorHandoff", () => ({
 
 // The real rows read the cloud gate and the CLI link; this file covers retention.
 vi.mock("./DefaultCloudSandboxRow", () => ({ DefaultCloudSandboxSection: () => null }));
+vi.mock("./DataRetentionSection", () => ({ DataRetentionSection: () => null }));
 vi.mock("./CliLinkSettingsRow", () => ({ CliLinkSettings: () => null }));
 
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
@@ -87,23 +90,22 @@ describe("archived session retention", () => {
 	});
 });
 
-describe("simplified top bar switch", () => {
-	beforeEach(() => settingsMock.mockReturnValue(settings({})));
-
+describe("Orchestrator attribution beta switch", () => {
 	it("only appears in Developer Mode", () => {
+		settingsMock.mockReturnValue(settings({}));
 		useUiStore.setState({ developerMode: false });
 		renderSection();
-		expect(screen.queryByRole("switch", { name: "Simplified top bar" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("switch", { name: "Orchestrator attribution (beta)" })).not.toBeInTheDocument();
 	});
 
-	it("turns the preview off and on", async () => {
-		useUiStore.setState({ developerMode: true, simplifiedTopbar: true });
+	it("reflects the daemon setting and saves a change to it", async () => {
+		updateCommitAttributionMock.mockReset();
+		settingsMock.mockReturnValue(settings({ commitAttribution: false }));
+		useUiStore.setState({ developerMode: true });
 		renderSection();
-		const toggle = screen.getByRole("switch", { name: "Simplified top bar" });
-		expect(toggle).toBeChecked();
+		const toggle = screen.getByRole("switch", { name: "Orchestrator attribution (beta)" });
+		expect(toggle).not.toBeChecked();
 		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(false);
-		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(true);
+		expect(updateCommitAttributionMock).toHaveBeenCalledWith(true);
 	});
 });

@@ -35,7 +35,20 @@ func toContractKanbanSessionFacts(rec domain.SessionRecord, interrupted, signalC
 		AutoReview:        rec.AutoReviewEnabled,
 		AutoInjectReview:  rec.AutoInjectReview,
 		AutoInjectCI:      rec.AutoInjectCI,
+		// Only a person's prompt resumes a done session. LatestInteractionAt
+		// also counts messages from other sessions, such as an orchestrator's
+		// note after the merge, which must leave the session done.
+		HumanPromptAt: rec.Metadata.LatestUserPromptAt,
 	}
+}
+
+// prSettledAt is when a merged or closed PR reached that state; zero while it
+// is open.
+func prSettledAt(pr domain.PRFacts) time.Time {
+	if !pr.Merged && !pr.Closed {
+		return time.Time{}
+	}
+	return pr.StateChangedAt
 }
 
 func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) []contract.KanbanPRFacts {
@@ -43,11 +56,13 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 	for _, run := range runs {
 		facts := byPR[run.PRURL]
 		facts.Present = true
-		facts.Running = facts.Running || run.Status == domain.ReviewRunRunning
+		facts.Running = facts.Running || run.Status.IsActive()
 		facts.ChangesRequested = facts.ChangesRequested || run.Verdict == domain.VerdictChangesRequested
 		facts.Outcome = facts.Outcome || run.Verdict.Valid()
 		facts.Failed = facts.Failed || run.Status == domain.ReviewRunFailed
 		facts.Cancelled = facts.Cancelled || run.Status == domain.ReviewRunCancelled
+		facts.RetryExhausted = facts.RetryExhausted ||
+			(run.Status == domain.ReviewRunFailed && (run.AutoRetryBlocked || run.FailedAutoRuns >= domain.AutoReviewFailedRetryLimit))
 		byPR[run.PRURL] = facts
 	}
 
@@ -55,6 +70,9 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 	for i, pr := range prs {
 		out[i] = contract.KanbanPRFacts{
 			URL:          pr.URL,
+			Host:         pr.Host,
+			Repo:         pr.Repo,
+			Number:       pr.Number,
 			Draft:        pr.Draft,
 			Merged:       pr.Merged,
 			Closed:       pr.Closed,
@@ -62,12 +80,14 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 			Review:       pr.Review,
 			Mergeability: pr.Mergeability,
 			UpdatedAt:    pr.UpdatedAt,
+			SettledAt:    prSettledAt(pr),
 			ReviewRun:    byPR[pr.URL],
 			ExternalReview: contract.KanbanExternalReviewFacts{
 				Approved:         pr.ExternalApproved,
 				ChangesRequested: pr.ExternalChangesRequested,
 				Comments:         pr.ExternalComments,
 			},
+			StackParent: pr.StackParent,
 		}
 	}
 	return out

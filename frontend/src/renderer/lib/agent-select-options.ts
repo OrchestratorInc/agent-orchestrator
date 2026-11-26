@@ -1,4 +1,4 @@
-import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { defaultReviewerHarness } from "./reviewer-harnesses";
 
 export type AgentInfo = {
 	authentication: {
@@ -15,12 +15,6 @@ export type AgentInfo = {
 	lastUsedAt?: string | null;
 	usageCount: number;
 };
-
-export type RoleSession = Pick<WorkspaceSession, "id" | "provider" | "kind" | "createdAt">;
-
-// Only recent habits drive onboarding defaults: a harness used heavily
-// months ago must not outvote what the user reaches for now.
-export const ROLE_HISTORY_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 export const DEFAULT_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "opencode-v2", "aider"] as const;
 export const DEFAULT_AGENT_PRIORITY_RANK = new Map<string, number>(
@@ -67,40 +61,80 @@ export function agentUsageCompare(a: AgentInfo, b: AgentInfo): number {
 	return 0;
 }
 
-export function defaultAuthorizedAgentForRole(
-	authorizedAgents: AgentInfo[],
-	sessions: RoleSession[],
-	role: "worker" | "orchestrator",
-): string {
-	const eligible = new Set(authorizedAgents.map((agent) => agent.id));
-	const usage = new Map<string, { count: number; latest: number }>();
-	const cutoff = Date.now() - ROLE_HISTORY_WINDOW_MS;
-	for (const session of sessions) {
-		if (!isRoleSession(session, role) || !eligible.has(session.provider)) continue;
-		const at = session.createdAt ? Date.parse(session.createdAt) : Number.NaN;
-		if (Number.isNaN(at) || at < cutoff) continue;
-		const prev = usage.get(session.provider) ?? { count: 0, latest: Number.NEGATIVE_INFINITY };
-		usage.set(session.provider, { count: prev.count + 1, latest: Math.max(prev.latest, at) });
-	}
-	const empty = { count: 0, latest: Number.NEGATIVE_INFINITY };
-	return [...authorizedAgents]
-		.sort((a, b) => {
-			const aUsage = usage.get(a.id) ?? empty;
-			const bUsage = usage.get(b.id) ?? empty;
-			return (
-				bUsage.count - aUsage.count ||
-				bUsage.latest - aUsage.latest ||
-				(DEFAULT_AGENT_PRIORITY_RANK.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
-					(DEFAULT_AGENT_PRIORITY_RANK.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
-				agentLabelCompare(a, b)
-			);
-		})[0]?.id ?? "";
+export type ProjectAgentDefaults = {
+	workerAgent: string;
+	orchestratorAgent: string;
+	reviewerAgent: string;
+};
+
+// The daemon's own default agent, used when no agent could be checked at all.
+const FALLBACK_PROJECT_AGENT = DEFAULT_AGENT_PRIORITY[0];
+
+function isConfirmedAgent(agent: AgentInfo): boolean {
+	return agent.installation.state === "installed" &&
+		["authorized", "not_applicable", "configured"].includes(agent.authentication.state);
 }
 
-// Role matching reuses the board's definition: orchestrators are explicit,
-// everything else counts as worker history.
-function isRoleSession(session: RoleSession, role: "worker" | "orchestrator"): boolean {
-	return role === "orchestrator" ? isOrchestratorSession(session) : !isOrchestratorSession(session);
+// How much AO knows about an agent: confirmed installed and signed in, found
+// installed with sign-in not checked yet, or not checked at all.
+function readinessTier(agent: AgentInfo): number {
+	if (isConfirmedAgent(agent)) return 2;
+	return agent.installation.state === "installed" ? 1 : 0;
+}
+
+/**
+ * The agents a new project can start on, most preferred first. Agents AO found
+ * installed and signed in come first, then agents it found installed but whose
+ * sign-in it has not checked, then agents it has not checked at all, so an
+ * agent that may not be installed never beats one that is. Within each group,
+ * AO's integration priority decides. Missing or signed-out agents
+ * are left out. "configured" counts as signed in: AO cannot verify most
+ * credentials, and that is not a reason to pass over an agent.
+ */
+export function preferredAgentList(agents: readonly AgentInfo[]): string[] {
+	const priority = (agent: AgentInfo) => DEFAULT_AGENT_PRIORITY_RANK.get(agent.id) ?? Number.MAX_SAFE_INTEGER;
+	return agents
+		.filter(isLaunchableAgent)
+		.sort(
+			(a, b) =>
+				readinessTier(b) - readinessTier(a) ||
+				priority(a) - priority(b) ||
+				agentLabelCompare(a, b),
+		)
+		.map((agent) => agent.id);
+}
+
+/**
+ * Whether checks AO has not finished could still change the pick: the agent AO
+ * prefers most among the usable ones is not confirmed yet. A snapshot taken
+ * before the daemon's first checks reads "not checked" for every agent, and
+ * ranking it would start the project on Claude Code even when only Codex is
+ * installed.
+ */
+export function preferredAgentNeedsChecks(agents: readonly AgentInfo[]): boolean {
+	const priority = (agent: AgentInfo) => DEFAULT_AGENT_PRIORITY_RANK.get(agent.id) ?? Number.MAX_SAFE_INTEGER;
+	const first = agents
+		.filter(isLaunchableAgent)
+		.sort((a, b) => priority(a) - priority(b) || agentLabelCompare(a, b))[0];
+	return first !== undefined && !isConfirmedAgent(first);
+}
+
+/**
+ * A new project starts the worker and orchestrator on the most preferred agent;
+ * project settings can change each one. Only the unattended-safe reviewers can
+ * review by default (other reviewers need an explicit choice, and an older
+ * remote host may not know them), so the reviewer is the most preferred of
+ * those this machine has, and Claude Code, the daemon's own fallback, when it
+ * has none.
+ */
+export function defaultProjectAgents(agents: readonly AgentInfo[]): ProjectAgentDefaults {
+	const ranked = preferredAgentList(agents);
+	const top = ranked[0] ?? FALLBACK_PROJECT_AGENT;
+	return {
+		workerAgent: top,
+		orchestratorAgent: top,
+		reviewerAgent: ranked.find((id) => defaultReviewerHarness(id) === id) ?? defaultReviewerHarness(top),
+	};
 }
 
 function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone"> {
@@ -136,6 +170,15 @@ export function isReadyAgent(agent: AgentInfo): boolean {
 /** Unknown readiness is not a rejection; only definite failures block launch. */
 export function isLaunchableAgent(agent: AgentInfo): boolean {
 	return agent.installation.state !== "not_installed" && agent.authentication.state !== "unauthorized";
+}
+
+/**
+ * Whether AO has found a launchable agent installed. A pick saved to an
+ * existing project needs one: with every agent unchecked the ranking always
+ * starts with Claude Code, installed or not.
+ */
+export function hasInstalledAgent(agents: readonly AgentInfo[]): boolean {
+	return agents.some((agent) => isLaunchableAgent(agent) && agent.installation.state === "installed");
 }
 
 export function buildRankedAgentOptions({
