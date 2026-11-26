@@ -21,7 +21,7 @@ import { useReducedMotion } from "../useReducedMotion";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { DictationField } from "../voice/DictationField";
 import { useVoiceInput } from "../voice/useVoiceInput";
-import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
+import { activeTurn, sendWaitsInQueue, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
 	findComposerSuggestion,
 	rankComposerCatalog,
@@ -96,6 +96,19 @@ const dictateGlyph = { ios: "mic.fill", android: "mic" } as const;
 const OPEN_FIELD_INSET = space.xs;
 // The waveform's inset from the pill's leading edge while the mic is open.
 const DICTATION_INSET = space.md;
+
+/**
+ * Plain sends in flight, by draft key: the text each emptied from its field.
+ * A composer opened on the same conversation while one is in flight (the
+ * person left and came back) must not load that text as a draft, nor save
+ * its own empty field over the stored copy; if the send fails, the text goes
+ * back into whichever composer is open.
+ */
+const sendsInFlight = new Map<string, string>();
+const failedSendListeners = new Map<string, Set<(text: string) => void>>();
+function sendFailed(draftKey: string, text: string) {
+	for (const listener of [...(failedSendListeners.get(draftKey) ?? [])]) listener(text);
+}
 
 /** The chat's composer, sharing the screen's keyboard handler when there is one (see KeyboardMotionScope). */
 export function ChatComposer(props: ComponentProps<typeof Composer>) {
@@ -286,6 +299,8 @@ function Composer({
 	const [cancellingQueuedTurnId, setCancellingQueuedTurnId] = useState<string>();
 	const [hiddenQueuedTurnIds, setHiddenQueuedTurnIds] = useState<Set<string>>(() => new Set());
 	const active = Boolean(activeTurn(snapshot));
+	// A send now would wait in the queue: nothing shows it until the daemon has it.
+	const sendWaits = sendWaitsInQueue(snapshot);
 	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const visibleQueuedMessages = useMemo(() => queuedMessages.filter((entry) => !hiddenQueuedTurnIds.has(entry.turnId)), [hiddenQueuedTurnIds, queuedMessages]);
 	// Absent below 70%: a permanent token gauge is chrome nobody reads.
@@ -389,17 +404,43 @@ function Composer({
 			.then((value) => {
 				if (!mounted) return;
 				const draft = decodeResponseDraft(value);
+				// The stored copy of a send still in flight is not a draft (see `sendsInFlight`).
+				const text = draft.text === sendsInFlight.get(draftKey) ? "" : draft.text;
 				// Text typed before the read finished wins, and so does its caret.
 				if (!latestText.current) setCursor(undefined);
-				setText((current) => current || draft.text);
+				setText((current) => current || text);
 				setQuotes((current) => [...draft.quotes.filter((quote) => !current.some((item) => item.id === quote.id)), ...current]);
 			})
 			.catch(() => {})
 			.finally(() => { if (mounted) setDraftLoaded(true); });
 		return () => { mounted = false; };
 	}, [draftKey]);
+	// A send this conversation's composer made, in this one or one since closed, failed: its text comes back.
 	useEffect(() => {
+		if (!draftKey) return;
+		const restore = (sent: string) => {
+			if (latestText.current) return;
+			latestText.current = sent;
+			setText(sent);
+		};
+		const listeners = failedSendListeners.get(draftKey) ?? new Set();
+		failedSendListeners.set(draftKey, listeners);
+		listeners.add(restore);
+		return () => {
+			listeners.delete(restore);
+			if (!listeners.size) failedSendListeners.delete(draftKey);
+		};
+	}, [draftKey]);
+	// Whether the field has held anything since a send emptied it (or since it opened).
+	const heldSinceSend = useRef(false);
+	useEffect(() => {
+		if (text || quotes.length) heldSinceSend.current = true;
 		if (!draftKey || !draftLoaded) return;
+		// The field emptied by a send in flight is not a draft: saving it would
+		// drop the stored message, and a send that then fails with the
+		// conversation closed would leave nothing to restore. The send removes it
+		// once it lands. A draft typed since and cleared again is saved as cleared.
+		if (sendsInFlight.has(draftKey) && !text && quotes.length === 0 && !heldSinceSend.current) return;
 		draftTimer.current = setTimeout(() => {
 			const value = encodeResponseDraft(text, quotes);
 			void afterDraftWrites(draftKey, () => value ? AsyncStorage.setItem(draftKey, value) : AsyncStorage.removeItem(draftKey)).catch(() => {});
@@ -450,6 +491,19 @@ function Composer({
 		dismissAttachmentNotice();
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
+		const route = composerDeliveryRoute(intent, steerEligible);
+		// A plain message leaves the field the moment it is sent, as the
+		// conversation shows it at once (ChatTimeline's optimistic message); a send
+		// that fails puts it back. One with files or quotes stays until it lands,
+		// and so does one that waits in the queue, which nothing shows until then.
+		const clearedAtSend = attachments.length === 0 && quotes.length === 0 && (route === "steer" || !sendWaits);
+		if (clearedAtSend) {
+			if (draftKey) sendsInFlight.set(draftKey, text);
+			heldSinceSend.current = false;
+			latestText.current = "";
+			setText("");
+			setCursor(undefined);
+		}
 		try {
 			// Submission cancels the debounce; persist before a preflight can reject.
 			if (draftKey) {
@@ -458,18 +512,22 @@ function Composer({
 			const excerpts = responseExcerpts(quotes);
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
-			const route = composerDeliveryRoute(intent, steerEligible);
 			const id = route === "steer"
 				? await onSteer(trimmed)
 				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
 			if (draftKey) {
 				const current = latestText.current;
 				const currentQuotes = latestQuotes.current;
-				const unchanged = current === text && currentQuotes === quotes;
-				await afterDraftWrites(draftKey, () => unchanged ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes)));
+				const unchanged = (clearedAtSend ? current === "" : current === text) && currentQuotes === quotes;
+				const sentDraft = encodeResponseDraft(text, quotes);
+				await afterDraftWrites(draftKey, async () => {
+					if (!unchanged) return AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes));
+					// Only the sent copy: a composer opened since may have saved a new draft.
+					if (!clearedAtSend || await AsyncStorage.getItem(draftKey) === sentDraft) await AsyncStorage.removeItem(draftKey);
+				});
 			}
 			await onAcknowledgeSend(id);
-			if (latestText.current === text && latestQuotes.current === quotes) {
+			if (!clearedAtSend && latestText.current === text && latestQuotes.current === quotes) {
 				latestText.current = "";
 				setText("");
 				latestQuotes.current = [];
@@ -478,10 +536,22 @@ function Composer({
 			forgetComposerAttachments(sentKey, sent);
 			haptics.success();
 		} catch (cause) {
+			// Unless something new was typed meanwhile; a composer opened since gets it instead.
+			if (clearedAtSend && draftKey) {
+				// Only this send's entry: a composer opened since may have one in flight.
+				if (sendsInFlight.get(draftKey) === text) sendsInFlight.delete(draftKey);
+				sendFailed(draftKey, text);
+			} else if (clearedAtSend && latestText.current === "") {
+				latestText.current = text;
+				setText(text);
+			}
 			setLocalError(userFacingError(cause));
 			haptics.error();
-		} finally { setSubmitting(false); }
-	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
+		} finally {
+			if (clearedAtSend && draftKey && sendsInFlight.get(draftKey) === text) sendsInFlight.delete(draftKey);
+			setSubmitting(false);
+		}
+	}, [text, quotes, attachments, steerEligible, sendWaits, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
 
 	// Pasting is a way to attach too, so it follows the same gate as the menu.
 	const pasteLayout = useImagePaste(stopped || submitting || attachmentsUnavailable ? null : (assets, overflow) => {

@@ -53,11 +53,12 @@ import { controllerStoppedBanner, errorBanner, mcpNoticeKey, reauthBanner, rolle
 import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
-import { brokenMcpServers, can, type ChatExcerpt, type ChatImage, type ChatResource, type ConversationSnapshot } from "./types";
+import { activeTurn, brokenMcpServers, can, sendWaitsInQueue, type ChatExcerpt, type ChatImage, type ChatResource, type ConversationSnapshot } from "./types";
 import { clientMessageId, useMobileConversation } from "./useConversation";
 import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
+import { newestSequence, type SendAnchor } from "./timelineScroll";
 import { sessionStartupView, startupVisible } from "../session/sessionStartup";
 import { startSerialPoll } from "../session/serialPoll";
 import { STARTUP_POLL_MS } from "../session/startupPoll";
@@ -92,6 +93,9 @@ const HANDOFF_STALLED_COPY = "This screen hasn't switched over yet. Retry, or go
 
 /** How long the composer's height holds still before the timeline takes it: past its spring. */
 const COMPOSER_SETTLE_MS = 120;
+
+/** How long a returned send's early copy is drawn while the conversation does not show it under its key. */
+const OPTIMISTIC_SETTLED_MS = 10_000;
 
 async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<void> {
 	Keyboard.dismiss();
@@ -235,21 +239,83 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useEffect(() => {
 		if (config && pendingHarness) void prewarmChatAgent(config, pendingHarness).catch(() => {});
 	}, [config, pendingHarness]);
-	const agentBusy = conversation.snapshot?.controller.state === "busy" ||
-		Boolean(conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
+	const agentBusy = sendWaitsInQueue(conversation.snapshot);
 	const otherAgents = useMemo(
 		() => (agentSwitchMenu ? { ...agentSwitchMenu, pending: pendingSwitch, disabled: agentBusy, onPick: setChosenSwitch } : undefined),
 		[agentBusy, agentSwitchMenu, pendingSwitch],
 	);
 	const agentSwitchSending = conversation.pendingSends.some((item) => item.state === "sending" && Boolean(item.providerSwitch));
 	const sendConversation = conversation.send;
+	// The send under way, for the timeline to show its message and bring it up
+	// (ChatTimeline's `sendAnchor`). A plain message or steer shows the moment it
+	// is sent, before the daemon has it; one with files or quotes, and a send
+	// that will wait in the queue, appear once the conversation has them. A send
+	// that fails clears it.
+	const [sendAnchor, setSendAnchor] = useState<SendAnchor | undefined>(undefined);
+	useEffect(() => { setSendAnchor(undefined); }, [session.id]);
+	// The send's own key goes with it, so the timeline knows its message from
+	// one another device or agent sends meanwhile.
+	// A failed send waiting to be resolved decides the key: the same text resends
+	// it under its own (reservePendingSend), and other text is refused, so no
+	// early copy is drawn for it.
+	const pendingSendsRef = useRef(conversation.pendingSends);
+	pendingSendsRef.current = conversation.pendingSends;
+	const anchorSend = (kind: "send" | "steer", text?: string): SendAnchor | undefined => {
+		const current = latestSnapshot.current;
+		if (!current) return undefined;
+		const turnId = kind === "steer" ? activeTurn(current)?.id : undefined;
+		const waiting = pendingSendsRef.current.find((item) => item.state === "failed");
+		const resends = waiting && (waiting.kind ?? "send") === kind && waiting.draftText === text && !waiting.hasAttachments;
+		const shown = waiting && !resends ? undefined : text;
+		const anchor = { conversationId: current.conversationId, after: newestSequence(current.items), at: Date.now(), kind, text: shown, turnId, clientMessageId: resends && waiting ? waiting.id : clientMessageId() };
+		setSendAnchor(anchor);
+		return anchor;
+	};
+	// The send returned with the key it was delivered under (a resend of an
+	// earlier send keeps that one's). Its message shows until the conversation
+	// has it; should the conversation keep it under another key, the early copy
+	// stops being drawn a little later rather than staying beside it.
+	const settleAnchor = (anchor: SendAnchor | undefined, id: string) => {
+		if (!anchor) return;
+		setSendAnchor((shown) => shown?.at === anchor.at ? { ...shown, clientMessageId: id } : shown);
+		setTimeout(() => setSendAnchor((shown) => shown?.at === anchor.at && shown.text ? { ...shown, text: undefined } : shown), OPTIMISTIC_SETTLED_MS);
+	};
+	const dropAnchor = (anchor: SendAnchor | undefined) => {
+		if (anchor) setSendAnchor((shown) => shown?.at === anchor.at ? undefined : shown);
+	};
 	const send = useCallback(
-		(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => sendConversation(
-			text, attachments, resources, excerpts,
-			pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
-		),
-		[pendingSwitch, sendConversation],
+		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => {
+			const plain = !attachments?.length && !resources?.length && !excerpts?.length;
+			const anchor = anchorSend("send", plain && !agentBusy ? text : undefined);
+			try {
+				const id = await sendConversation(
+					text, attachments, resources, excerpts,
+					pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
+					anchor?.clientMessageId,
+				);
+				settleAnchor(anchor, id);
+				return id;
+			} catch (cause) {
+				dropAnchor(anchor);
+				throw cause;
+			}
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[agentBusy, pendingSwitch, sendConversation],
 	);
+	const steerConversation = conversation.steer;
+	const steer = useCallback(async (text: string) => {
+		const anchor = anchorSend("steer", text);
+		try {
+			const id = await steerConversation(text, anchor?.clientMessageId);
+			settleAnchor(anchor, id);
+			return id;
+		} catch (cause) {
+			dropAnchor(anchor);
+			throw cause;
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [steerConversation]);
 	// A new agent brings its own models and options: reload them uncached, so
 	// the outgoing agent's never stay in the menu (desktop's
 	// useAgentSwitchProviderCatalogs).
@@ -996,6 +1062,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					keyboardOffset={chatKeyboard.listKeyboardOffset}
 					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
+					sendAnchor={sendAnchor}
 				/> : null}
 				</TurnRecoveryContext.Provider>
 				</TurnArtifactsContext.Provider>
@@ -1087,7 +1154,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onSend={send}
 					onAcknowledgeSend={conversation.acknowledgeSend}
 					completedRetry={conversation.completedRetry}
-					onSteer={conversation.steer}
+					onSteer={steer}
 					onPromoteQueuedTurn={conversation.promoteQueuedTurn}
 					onCancelQueuedTurn={conversation.cancelQueuedTurn}
 					onInterrupt={() => void conversation.interrupt().catch(() => {})}

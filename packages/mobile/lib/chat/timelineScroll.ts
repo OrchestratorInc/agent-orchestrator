@@ -1,4 +1,5 @@
 import type { NativeScrollEvent } from "react-native";
+import type { ConversationItem } from "./types";
 
 type ScrollMetrics = Pick<NativeScrollEvent, "contentOffset" | "contentSize" | "layoutMeasurement">;
 
@@ -44,4 +45,115 @@ export function followsAfterRest(release: Release | undefined, offset: number, a
  */
 export function openingRow(count: number, window: number): number {
 	return Math.max(0, count - window);
+}
+
+/** How quickly a follow glide closes on the end: the gap left decays with this time constant. */
+export const GLIDE_TAU_MS = 140;
+/** The fastest a glide moves, in points per millisecond, so a long one starts gently. */
+export const GLIDE_MAX_SPEED = 3;
+/** The slowest, so its last few points do not crawl. */
+const GLIDE_MIN_SPEED = 0.2;
+
+/**
+ * One frame of a follow glide from `from` toward `to` (see useFollowGlide).
+ * Further than `reach` away, it first jumps to within `reach` of `to`: no
+ * glide covers more than a screen. Returns `to` once there.
+ */
+export function glideStep(from: number, to: number, elapsedMs: number, reach = 0): number {
+	"worklet";
+	let start = from;
+	if (reach > 0 && Math.abs(to - start) > reach) start = to - Math.sign(to - start) * reach;
+	const gap = to - start;
+	if (Math.abs(gap) < 0.5) return to;
+	const elapsed = Math.min(Math.max(elapsedMs, 1), 48);
+	const eased = Math.abs(gap) * (1 - Math.exp(-elapsed / GLIDE_TAU_MS));
+	const distance = Math.min(Math.max(eased, GLIDE_MIN_SPEED * elapsed), GLIDE_MAX_SPEED * elapsed, Math.abs(gap));
+	return start + Math.sign(gap) * distance;
+}
+
+/** Where a send's new message will be found: after the newest item the conversation had. */
+export function newestSequence(items: readonly { sequence: number }[]): number {
+	let newest = 0;
+	for (const item of items) if (item.sequence > newest) newest = item.sequence;
+	return newest;
+}
+
+/**
+ * The room a just-sent message's turn holds open below it, so that at the end
+ * of the list the message sits at the top of what can be seen (under the
+ * header and the banners) while the reply grows into the space beneath it.
+ * `keyboard` is the room the keyboard took when the message appeared: the
+ * keyboard usually stays up through a send, and the turn is laid out for the
+ * part of the screen above it.
+ */
+export function sentTurnRoom({ listHeight, keyboard, topClear, endPad, share = 1 }: { listHeight: number; keyboard: number; topClear: number; endPad: number; share?: number }): number {
+	return Math.max(0, Math.round((listHeight - keyboard - topClear - endPad) * share));
+}
+
+/**
+ * How much of the visible height a sent message's room takes: the message
+ * rises three quarters of the way, resting a little below the top with the
+ * conversation before it still in view, rather than all the way up.
+ */
+export const SENT_ROOM_SHARE = 0.75;
+
+/**
+ * A send under way: its message is the first human message, or the person's
+ * steer, after `after` in conversation `conversationId`. With `text`, the list
+ * shows the message the moment it is sent (`optimisticSentItem`) until the
+ * conversation has it; a steer joins the running turn `turnId`.
+ */
+export type SendAnchor = {
+	conversationId: string;
+	after: number;
+	/** When it was sent; also the send's identity, kept when the screen updates the anchor. */
+	at: number;
+	kind?: "send" | "steer";
+	text?: string;
+	turnId?: string;
+	/**
+	 * The send's idempotency key, which the conversation keeps on the message or
+	 * steer; once the send returns, the key it was delivered under (a resend of
+	 * an earlier send keeps that one's).
+	 */
+	clientMessageId?: string;
+};
+
+/** Whether `item` is what a send after `after` put in the conversation: the person's message, or their steer. */
+export function isSentItem(item: ConversationItem, after: number): boolean {
+	if (item.sequence <= after) return false;
+	if (item.kind === "message") return item.role === "user" && item.origin === "human";
+	return item.activityKind === "system" && item.detail?.event === "steer" && !item.detail.senderSessionId;
+}
+
+/** The idempotency key the conversation kept on a message or steer, when it has one. */
+export function sentItemId(item: ConversationItem): string | undefined {
+	if (item.kind === "message") return item.clientMessageId;
+	return typeof item.detail?.clientMessageId === "string" ? item.detail.clientMessageId : undefined;
+}
+
+/**
+ * Whether `item` can be the send's own message or steer. One carrying another
+ * key is someone else's (another device, another agent's steer) and is passed
+ * over; one without a key (an older daemon) is taken by its place after the
+ * send began.
+ */
+export function matchesSend(item: ConversationItem, anchor: SendAnchor): boolean {
+	if (!isSentItem(item, anchor.after)) return false;
+	const id = sentItemId(item);
+	return !anchor.clientMessageId || id === undefined || id === anchor.clientMessageId;
+}
+
+/**
+ * The sent message as the list draws it before the conversation has it: a
+ * human message in a turn of its own, or a steer in the running turn, after
+ * everything loaded. It draws as the real one will, so the swap moves nothing.
+ */
+export function optimisticSentItem(anchor: SendAnchor, newest: number): ConversationItem | undefined {
+	if (!anchor.text) return undefined;
+	const base = { id: `optimistic:${anchor.at}`, sequence: Math.max(newest, anchor.after) + 0.5, revision: 0, createdAt: new Date(anchor.at).toISOString() };
+	if (anchor.kind === "steer") {
+		return { ...base, kind: "activity", turnId: anchor.turnId, activityKind: "system", status: "completed", summary: anchor.text, detail: { event: "steer", text: anchor.text, clientMessageId: anchor.clientMessageId } };
+	}
+	return { ...base, kind: "message", role: "user", origin: "human", text: anchor.text, streaming: false, clientMessageId: anchor.clientMessageId };
 }

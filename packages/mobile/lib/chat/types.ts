@@ -112,6 +112,8 @@ export type ConversationMessage = {
 	senderDisplayName?: string;
 	/** The daemon can branch before this human prompt and resend it edited. */
 	editAvailable?: boolean;
+	/** The idempotency key the sender gave a human message. */
+	clientMessageId?: string;
 	createdAt: string;
 };
 
@@ -345,6 +347,15 @@ export type ChatResource = { uri: string; name: string; mimeType?: string; text?
 
 export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | undefined {
 	return snapshot.turns.find((turn) => turn.state === "running") ?? snapshot.turns.find((turn) => turn.state === "queued");
+}
+
+/**
+ * Whether a message sent now waits in the queue behind work under way: the
+ * agent is busy, or a turn is running or queued. Such a send has nothing to
+ * show until the daemon has queued it (ChatComposer, ChatSessionScreen).
+ */
+export function sendWaitsInQueue(snapshot: ConversationSnapshot | undefined): boolean {
+	return snapshot?.controller.state === "busy" || Boolean(snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
 }
 
 export function can(snapshot: ConversationSnapshot | undefined, capability: string): boolean {

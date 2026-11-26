@@ -71,9 +71,31 @@ describe("chat composer pill", () => {
 	});
 
 	it("does not clear a newer draft when an earlier send completes", () => {
-		expect(composer).toContain('const unchanged = current === text && currentQuotes === quotes;');
-		expect(composer).toContain('unchanged ? AsyncStorage.removeItem(draftKey)');
-		expect(composer).toContain('if (latestText.current === text && latestQuotes.current === quotes) {');
+		expect(composer).toContain('const unchanged = (clearedAtSend ? current === "" : current === text) && currentQuotes === quotes;');
+		expect(composer).toContain('if (!unchanged) return AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes));');
+		expect(composer).toContain('if (!clearedAtSend && latestText.current === text && latestQuotes.current === quotes) {');
+	});
+
+	// The conversation shows a plain message the moment it is sent, so the field
+	// empties then too; a failed send puts the text back unless more was typed.
+	it("empties the field at send for a plain message and restores it if the send fails", () => {
+		expect(composer).toContain("const clearedAtSend = attachments.length === 0 && quotes.length === 0 && (route === \"steer\" || !sendWaits);");
+		// A send that waits in the queue has no early copy, so its text stays until it lands.
+		expect(composer).toContain("const sendWaits = sendWaitsInQueue(snapshot);");
+		// The emptied field is not saved as the draft while the send is in flight.
+		expect(composer).toContain("if (sendsInFlight.has(draftKey) && !text && quotes.length === 0 && !heldSinceSend.current) return;");
+		// A draft typed after the send and then cleared is saved as cleared.
+		expect(composer).toContain("heldSinceSend.current = false;");
+	});
+
+	// A composer opened while a send is in flight (the person left and came back)
+	// must not load its text as a draft, and a send that fails restores into it;
+	// success removes only the sent copy, not a draft saved since.
+	it("keeps a send in flight out of composers opened meanwhile", () => {
+		expect(composer).toContain('const text = draft.text === sendsInFlight.get(draftKey) ? "" : draft.text;');
+		expect(composer).toContain("if (!clearedAtSend || await AsyncStorage.getItem(draftKey) === sentDraft) await AsyncStorage.removeItem(draftKey);");
+		expect(composer).toContain("listeners.add(restore);");
+		expect(composer).toContain("if (sendsInFlight.get(draftKey) === text) sendsInFlight.delete(draftKey);\n\t\t\t\tsendFailed(draftKey, text);");
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
