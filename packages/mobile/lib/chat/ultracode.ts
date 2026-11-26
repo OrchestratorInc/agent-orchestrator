@@ -8,10 +8,12 @@ import type { ChatExcerpt } from "./types";
  */
 export const ULTRACODE = "ultracode";
 export const ULTRACODE_LEVEL = "xhigh";
+/** The one agent with Ultracode. */
+export const ULTRACODE_HARNESS = "claude-code";
 
 /** Whether a chat's agent and model offer Ultracode: Claude Code, on a model that takes Extra High. */
 export function offersUltracode(harness: string | undefined, levels: readonly string[]): boolean {
-	return harness === "claude-code" && levels.includes(ULTRACODE_LEVEL);
+	return harness === ULTRACODE_HARNESS && levels.includes(ULTRACODE_LEVEL);
 }
 
 /** The message as sent with Ultracode on: named once, at its start. */

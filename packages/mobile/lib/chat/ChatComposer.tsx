@@ -40,7 +40,7 @@ import { EffortSliderHost } from "../effort-slider-host";
 import { ModelWheelHost } from "../model-wheel";
 import { PermissionPickerHost } from "../permission-picker";
 import { useChatEffort } from "./useChatEffort";
-import { isSentDraft, withUltracode } from "./ultracode";
+import { isSentDraft, ULTRACODE_HARNESS, withUltracode } from "./ultracode";
 import { useChatModelWheel } from "./useChatModelWheel";
 import { useChatPermissions } from "./useChatPermissions";
 import { compactCount } from "../files/model";
@@ -429,6 +429,9 @@ function Composer({
 	const canSubmit = !submitting && !pending && !disabled && !(draftKey && !draftLoaded);
 	// Claude Code's Ultracode, picked on the effort slider: each message asks for it.
 	const ultracodeOn = useRef<() => boolean>(() => false);
+	// The agent a message goes to: the one running, or a switch picked to run with it.
+	const receiving = useRef({ harness: snapshot.harness, switchTo: otherAgents?.pending?.harness });
+	receiving.current = { harness: snapshot.harness, switchTo: otherAgents?.pending?.harness };
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send", from: "button" | "keyboard" = "button") => {
 		if (!canSubmit) return;
 		const trimmed = responseReplyText(text, quotes);
@@ -459,7 +462,11 @@ function Composer({
 			const route = composerDeliveryRoute(intent, steerEligible);
 			// With Ultracode's prefix added, the draft as typed goes too: a retry's
 			// completion matches the composer against it, exactly.
-			const sentText = ultracodeOn.current() ? withUltracode(trimmed) : trimmed;
+			// Ultracode is Claude Code's: a send that switches the chat to another
+			// agent goes to that agent, which must not get a prefix nobody typed.
+			// A steer stays with the agent running now.
+			const receiver = route === "steer" ? receiving.current.harness : receiving.current.switchTo ?? receiving.current.harness;
+			const sentText = ultracodeOn.current() && receiver === ULTRACODE_HARNESS ? withUltracode(trimmed) : trimmed;
 			const typed: [] | [string] = sentText === trimmed ? [] : [trimmed];
 			const id = route === "steer"
 				? await onSteer(sentText, ...typed)

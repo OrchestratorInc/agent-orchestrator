@@ -299,3 +299,27 @@ it("steers on Cmd+Return only when the draft can steer, and sends otherwise", as
 	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn({ ...noModifiers, control: true }));
 	expect(steering.onSteer).toHaveBeenCalledWith("Use the other branch");
 });
+
+// Ultracode is Claude Code's: a send that switches the chat to another agent
+// goes to that agent, which must not get a prefix nobody typed.
+it("asks for Ultracode only when the message goes to Claude Code", async () => {
+	const ultracodeKey = "ao.chat.ultracode.host.m.session";
+	storage.getItem.mockImplementation(async (key: string) => (key === ultracodeKey ? "1" : null));
+	const sendWith = async (pending?: { harness: string; modelLabel: string }) => {
+		const p = {
+			...props(),
+			machine: "host.m",
+			snapshot: { harness: "claude-code", turns: [], items: [], controller: { state: "idle" }, capabilities: [], settings: { model: "opus", reasoningEffort: "xhigh" } },
+			models: [{ id: "opus", displayName: "Opus", efforts: ["high", "xhigh"], defaultEffort: "high" }],
+			otherAgents: { agents: [], models: {}, pending, onPick: vi.fn() },
+		} as unknown as ComponentProps<typeof ChatComposer>;
+		await act(async () => { renderer = create(<ChatComposer {...p} />); });
+		act(() => renderer.root.findByType(TextInput).props.onChangeText("fix it"));
+		await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(noModifiers));
+		act(() => renderer.unmount());
+		return vi.mocked(p.onSend).mock.calls[0]?.[0];
+	};
+	expect(await sendWith()).toBe("Ultracode:\nfix it");
+	expect(await sendWith({ harness: "claude-code", modelLabel: "Opus" })).toBe("Ultracode:\nfix it");
+	expect(await sendWith({ harness: "codex", modelLabel: "GPT" })).toBe("fix it");
+});
