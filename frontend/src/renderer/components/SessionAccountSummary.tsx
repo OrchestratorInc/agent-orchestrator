@@ -1,7 +1,8 @@
 import { LoaderCircle } from "@/components/app-icons";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderFor, agentAccountUsable, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
+import { AccountBadge } from "./AccountBadge";
+import { agentAccountChoiceOption, agentAccountProviderFor, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { cloudAgentAccountName, CLOUD_ACCOUNT_SWITCH_HARNESSES, useCloudAgentAccountActions, useCloudAgentAccounts, useCloudSessionAgentAccount } from "../hooks/useCloudAgentAccounts";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -84,7 +85,7 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	const choice = useMemo<AccountChoice | undefined>(() => {
 		if (!shown || !provider) return undefined;
 		return {
-			options: options.map((option) => ({ id: option.id, label: agentAccountLabel(option, options, t), disabled: !agentAccountUsable(option) })),
+			options: options.map((option) => agentAccountChoiceOption(option, options, t)),
 			value: currentId,
 			onPick: (id) => void moveRef.current(id),
 			disabled: moving || options.length < 2,
@@ -126,7 +127,12 @@ function LocalSessionAccountSummary({ session, hostId }: { session: WorkspaceSes
 					: <Select value={choice.value ?? ""} disabled={choice.disabled} onValueChange={choice.onPick}>
 						<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 						<SelectContent align="end">
-							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>{option.label}</SelectItem>)}
+							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} textValue={option.label} disabled={option.disabled}>
+								<span className="flex min-w-0 items-center gap-2">
+									<AccountBadge provider={session.provider} accountProvider={agentAccountProviderFor(session.provider) ?? undefined} name={option.name} email={option.email} color={option.color} />
+									<span className="truncate">{option.label}</span>
+								</span>
+							</SelectItem>)}
 						</SelectContent>
 					</Select>}
 			</div>

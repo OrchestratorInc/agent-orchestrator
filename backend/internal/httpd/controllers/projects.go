@@ -25,7 +25,7 @@ type ProjectsController struct {
 }
 
 // Register mounts the project routes on the supplied router.
-func (c *ProjectsController) Register(r chi.Router) {
+func (c *ProjectsController) Register(r chi.Router) { //nolint:dupl // route tables share one shape by design; each line is a distinct route
 	r.Get("/projects", c.list)
 	r.Post("/projects", c.add)
 	r.Post("/projects/clone", c.clone)

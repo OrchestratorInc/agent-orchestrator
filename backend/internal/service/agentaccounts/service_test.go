@@ -44,6 +44,15 @@ func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string)
 	}
 	return ports.ErrAgentAccountUnknown
 }
+func (m *memStore) UpdateAgentAccountIdentity(_ context.Context, id, name, color string) error {
+	for i := range m.accounts {
+		if m.accounts[i].ID == id {
+			m.accounts[i].Name, m.accounts[i].Color = name, color
+			return nil
+		}
+	}
+	return ports.ErrAgentAccountUnknown
+}
 func (m *memStore) DeleteAgentAccount(context.Context, string) error { return nil }
 func (m *memStore) GetAgentAccountDefault(_ context.Context, p domain.AgentAccountProvider) (string, bool, error) {
 	id, ok := m.defaults[p]

@@ -2,12 +2,15 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // TestAgentAccountUsageFollowsBindingHistory pins the per-account statistics:
@@ -116,5 +119,47 @@ func TestAgentAccountKindsRoundTrip(t *testing.T) {
 	}
 	if key := got["acct-key"]; !key.APIKey() || key.Name != "Work key" || key.KeyHint != "c3d4" {
 		t.Fatalf("API key account = %+v", key)
+	}
+}
+
+// An account's name and color round-trip, and an empty color clears to NULL.
+func TestAgentAccountIdentityRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	raw, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(dir, "ao.db")))
+	mustNoError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+	ctx := context.Background()
+	t0 := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
+	mustNoError(t, s.CreateAgentAccount(ctx, domain.AgentAccount{
+		ID: "acct-a", Provider: domain.AgentAccountProviderClaude, Home: "/tmp/acct-a", Email: "a@example.com", Color: "teal", CreatedAt: t0,
+	}))
+	read := func() domain.AgentAccount {
+		t.Helper()
+		accounts, err := s.ListAgentAccounts(ctx)
+		mustNoError(t, err)
+		if len(accounts) != 1 {
+			t.Fatalf("accounts = %+v", accounts)
+		}
+		return accounts[0]
+	}
+	if got := read(); got.Color != "teal" || got.Name != "" {
+		t.Fatalf("created = %+v", got)
+	}
+	mustNoError(t, s.UpdateAgentAccountIdentity(ctx, "acct-a", "Work", "violet"))
+	if got := read(); got.Name != "Work" || got.Color != "violet" {
+		t.Fatalf("updated = %+v", got)
+	}
+	mustNoError(t, s.UpdateAgentAccountIdentity(ctx, "acct-a", "Work", ""))
+	if got := read(); got.Color != "" {
+		t.Fatalf("cleared color = %q", got.Color)
+	}
+	var stored sql.NullString
+	mustNoError(t, raw.QueryRowContext(ctx, `SELECT color FROM agent_accounts WHERE id = 'acct-a'`).Scan(&stored))
+	if stored.Valid {
+		t.Fatalf("cleared color stored %q, want NULL", stored.String)
+	}
+	if err := s.UpdateAgentAccountIdentity(ctx, "missing", "x", ""); !errors.Is(err, ports.ErrAgentAccountUnknown) {
+		t.Fatalf("unknown id: err = %v", err)
 	}
 }

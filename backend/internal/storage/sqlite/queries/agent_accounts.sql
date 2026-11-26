@@ -4,8 +4,11 @@
 SELECT * FROM agent_accounts ORDER BY provider, created_at, id;
 
 -- name: CreateAgentAccount :exec
-INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, color, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: UpdateAgentAccountIdentity :execrows
+UPDATE agent_accounts SET name = ?, color = ? WHERE id = ?;
 
 -- name: UpdateAgentAccountKeyHint :execrows
 UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind IN ('api_key', 'setup_token');

@@ -4814,6 +4814,8 @@ type AgentAccountResponse struct {
 	// characters. The key itself is never sent.
 	Name    string `json:"name,omitempty"`
 	KeyHint string `json:"keyHint,omitempty"`
+	// Color is the palette id the app tints the account with; absent means none.
+	Color   string `json:"color,omitempty" enum:"red,orange,amber,green,teal,blue,violet,pink"`
 	Email   string `json:"email,omitempty"`
 	Plan    string `json:"plan,omitempty"`
 	Default bool   `json:"default"`
@@ -4866,6 +4868,16 @@ type AddAgentAccountAPIKeyRequest struct {
 	// Name labels the account; empty shows a default label.
 	Name   string `json:"name,omitempty"`
 	APIKey string `json:"apiKey"`
+	// Color is an optional palette id; empty means none.
+	Color string `json:"color,omitempty" enum:",red,orange,amber,green,teal,blue,violet,pink"`
+}
+
+// UpdateAgentAccountRequest changes an account's name and color. A missing
+// field is left as it is; an empty name falls back to the email, and an empty
+// color clears the color.
+type UpdateAgentAccountRequest struct {
+	Name  *string `json:"name,omitempty"`
+	Color *string `json:"color,omitempty" enum:",red,orange,amber,green,teal,blue,violet,pink"`
 }
 
 // ReplaceAgentAccountAPIKeyRequest saves a new key for an API key account.

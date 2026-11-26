@@ -55,15 +55,47 @@ const (
 // device account, whose folder is the CLI's own default. Name and KeyHint (the
 // key's last four characters) are set only on an API key account.
 type AgentAccount struct {
-	ID        string
-	Provider  AgentAccountProvider
-	Home      string
-	Email     string
-	Plan      string
-	Kind      AgentAccountKind
-	Name      string
-	KeyHint   string
+	ID       string
+	Provider AgentAccountProvider
+	Home     string
+	Email    string
+	Plan     string
+	Kind     AgentAccountKind
+	Name     string
+	KeyHint  string
+	// Color is the palette id the app tints the account with; empty means none.
+	Color     string
 	CreatedAt time.Time
+}
+
+// Account colors: the closed set of palette ids an account can carry. The app
+// maps each id to its own swatch, so the backend never stores a raw color value.
+const (
+	AgentAccountColorRed    = "red"
+	AgentAccountColorOrange = "orange"
+	AgentAccountColorAmber  = "amber"
+	AgentAccountColorGreen  = "green"
+	AgentAccountColorTeal   = "teal"
+	AgentAccountColorBlue   = "blue"
+	AgentAccountColorViolet = "violet"
+	AgentAccountColorPink   = "pink"
+)
+
+// AgentAccountColors lists every palette id in display order.
+var AgentAccountColors = []string{
+	AgentAccountColorRed, AgentAccountColorOrange, AgentAccountColorAmber, AgentAccountColorGreen,
+	AgentAccountColorTeal, AgentAccountColorBlue, AgentAccountColorViolet, AgentAccountColorPink,
+}
+
+// ValidAgentAccountColor reports whether color is a palette id. The empty
+// string is not one: it is how a caller says "no color", handled separately.
+func ValidAgentAccountColor(color string) bool {
+	for _, c := range AgentAccountColors {
+		if c == color {
+			return true
+		}
+	}
+	return false
 }
 
 // Device reports the "This computer" account.

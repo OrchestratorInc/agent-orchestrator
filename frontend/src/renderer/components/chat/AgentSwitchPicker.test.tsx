@@ -567,4 +567,30 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.getByRole("menuitem", { name: /^Account.*me@work/ })).toBeInTheDocument();
 	});
+	it("marks the chip with the account's badge only with two or more accounts", async () => {
+		const one = { options: [{ id: "a", label: "me@work", name: "Work", color: "blue" as const }], value: "a", onPick: vi.fn() };
+		open(undefined, false, "claude-code", {}, false, false, undefined, one);
+		expect(screen.queryByRole("img", { name: "Work" })).not.toBeInTheDocument();
+	});
+
+	it("shows the badge of the account in use on the chip and one beside each account row", async () => {
+		const user = userEvent.setup();
+		const two = {
+			options: [
+				{ id: "a", label: "Work · me@work", name: "Work", email: "me@work", color: "blue" as const },
+				{ id: "b", label: "me@home", email: "me@home" },
+			],
+			value: "a",
+			onPick: vi.fn(),
+		};
+		open(undefined, false, "claude-code", {}, false, false, undefined, two);
+		const chip = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(within(chip).getByRole("img", { name: "Work" })).toHaveTextContent("WO");
+		await user.click(chip);
+		const accountRow = screen.getByRole("menuitem", { name: /^Account/ });
+		expect(within(accountRow).getByRole("img", { name: "Work" })).toHaveTextContent("WO");
+		await user.click(accountRow);
+		expect(await screen.findByRole("img", { name: "me@home" })).toHaveTextContent("ME");
+		expect(screen.getAllByRole("img", { name: "Work" })).toHaveLength(3);
+	});
 });

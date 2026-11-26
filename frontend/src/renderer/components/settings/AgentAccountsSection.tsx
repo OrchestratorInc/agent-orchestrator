@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { getAgentUILogin, type AgentLoginSnapshot } from "../../hooks/useAgentAuth";
+import type { AgentAccountColor } from "../../hooks/useAgentAccounts";
 import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { apiErrorCode, apiErrorDetails } from "../../lib/api-client";
@@ -15,7 +16,9 @@ import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
+import { AccountBadge } from "../AccountBadge";
 import { Badge } from "../ui/badge";
+import { AccountEditDialog } from "./AccountEditDialog";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -77,6 +80,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	// is off; the alert says where to turn it on. Other link failures stay errors.
 	const [needsDeveloperMode, setNeedsDeveloperMode] = useState(false);
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
+	const [editing, setEditing] = useState<AgentAccount | null>(null);
 	// The in-app sign-in: adding an account, or signing one in again. The
 	// account's own sign-in it started is kept to save or cancel it.
 	const [signIn, setSignIn] = useState<{ account?: AgentAccount } | null>(null);
@@ -199,7 +203,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	// daemon, a setup token saved at once; any other method signs the account's
 	// own folder in in the background, which the panel follows like the
 	// harness's own sign-in.
-	const startAccountSignIn = async (method: string, secret: string, name: string): Promise<AgentLoginSnapshot> => {
+	const startAccountSignIn = async (method: string, secret: string, name: string, color?: AgentAccountColor): Promise<AgentLoginSnapshot> => {
 		const target = signIn?.account;
 		// A start that resolves after the user opened or closed another sign-in
 		// belongs to a panel that is gone: it never writes the newer one's refs.
@@ -210,7 +214,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 		try {
 			if (method === API_KEY_METHOD) {
 				if (target) await actions.replaceApiKey(target.id, secret);
-				else if (provider === "claude") await actions.addApiKey(provider, name, secret);
+				else if (provider === "claude") await actions.addApiKey(provider, name, secret, color);
 				if (current()) finishedAccount.current = target?.id;
 				return finishedAtOnce(method);
 			}
@@ -336,7 +340,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				agentId={harness}
 				methods={methodsFor(signInTarget)}
 				hostId={hostId}
-				account={{ start: startAccountSignIn, named: !signInTarget }}
+				account={{ start: startAccountSignIn, named: !signInTarget, colorMethod: API_KEY_METHOD }}
 				onVerify={verifyAccountSignIn}
 				onClose={closeSignIn}
 				onTerminal={panelOnly(signInTarget) ? undefined : async () => {
@@ -364,9 +368,17 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				onSignInAgain={signInReady(account) ? () => openSignIn(account) : undefined}
 				onReplaceKey={signInReady(account) ? () => openSignIn(account) : undefined}
 				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
+				onEdit={account.device ? undefined : () => setEditing(account)}
+				badged={rows.length > 1}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
+		{editing ? <AccountEditDialog
+			account={editing}
+			label={agentAccountLabel(editing, rows, t)}
+			onSave={(change) => actions.update(editing.id, change)}
+			onClose={() => setEditing(null)}
+		/> : null}
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
 			description={t(removing.kind === "api_key" ? "settings.agentAccounts.removeApiKeyDescription" : "settings.agentAccounts.removeDescription", { email: agentAccountLabel(removing, rows, t) })}
@@ -379,7 +391,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	</>;
 }
 
-function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onReplaceKey, onRemove }: {
+function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onReplaceKey, onRemove, onEdit, badged }: {
 	account: AgentAccount;
 	name: string;
 	aoTokens: number | undefined;
@@ -392,6 +404,10 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	onSignInAgain?: () => void;
 	onReplaceKey?: () => void;
 	onRemove: () => void;
+	/** Missing for this computer's own login, which AO does not store. */
+	onEdit?: () => void;
+	/** The provider has 2 or more accounts, so each shows its badge. */
+	badged?: boolean;
 }) {
 	const { t, i18n } = useTranslation();
 	const kind = account.kind;
@@ -421,6 +437,7 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
 				<p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+					{badged ? <AccountBadge provider={providerHarness[account.provider]} accountProvider={account.provider} name={account.name} email={account.email} color={account.color} /> : null}
 					<span className="truncate">{name}</span>
 					{badge ? <Badge>{badge}</Badge> : null}
 				</p>
@@ -435,6 +452,7 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 				{account.default
 					? <span className="text-xs text-muted-foreground">{t("settings.agentAccounts.default")}</span>
 					: agentAccountUsable(account) ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
+				{onEdit ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onEdit}>{t("settings.agentAccounts.edit")}</Button> : null}
 				{replaces ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || !onReplaceKey} onClick={onReplaceKey}>{t(kind === "api_key" ? "settings.agentAccounts.replaceKey" : "settings.agentAccounts.replaceToken")}</Button> : null}
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
 				{account.device
