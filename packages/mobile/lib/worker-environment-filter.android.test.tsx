@@ -99,6 +99,19 @@ describe("WorkerEnvironmentFilter on Android", () => {
 		expect(chips().map((chip) => chip.props.selected)).toEqual([false, true, false]);
 	});
 
+	// The chips stay mounted across board changes, so a tap from long ago must
+	// not come back when the board returns to where that tap started.
+	it("forgets a tap once the board has moved, even when it moves back", async () => {
+		const onSelect = vi.fn();
+		await render("all", onSelect);
+		act(() => chips()[2].props.onClick());
+		const board = (selected: string) => <WorkerEnvironmentFilter environments={environments} selectedEnvironmentId={selected} onSelectEnvironment={onSelect} />;
+		act(() => renderer!.update(board("dev")));
+		// Dev went away, and the board fell back to every machine.
+		act(() => renderer!.update(board("all")));
+		expect(chips().map((chip) => chip.props.selected)).toEqual([true, false, false]);
+	});
+
 	it("does nothing when every environment is chosen again", async () => {
 		const onSelect = await render("all");
 		act(() => chips()[0].props.onClick());

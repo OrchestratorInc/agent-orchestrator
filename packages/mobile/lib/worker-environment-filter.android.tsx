@@ -27,14 +27,21 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 	const { scheme } = useThemeState();
 	// The tapped chip is checked at once, ahead of the board it asks for: the
 	// board below is rebuilt for the new machine, which on a phone took seconds,
-	// and the check waited for all of it. Kept only while the board is still
-	// where the tap found it; once it moves, the board says what is chosen.
-	const [tapped, setTapped] = useState<{ id: string; from: string }>();
-	const chosenId = tapped?.from === selectedEnvironmentId ? tapped.id : selectedEnvironmentId;
+	// and the check waited for all of it. Kept only until the board first moves;
+	// from then on the board says what is chosen, even if it moves back to
+	// where the tap started (the tapped machine went away, say).
+	const [tapped, setTapped] = useState<string>();
+	const [boardSeen, setBoardSeen] = useState(selectedEnvironmentId);
+	const boardMoved = boardSeen !== selectedEnvironmentId;
+	if (boardMoved) {
+		setBoardSeen(selectedEnvironmentId);
+		setTapped(undefined);
+	}
+	const chosenId = !boardMoved && tapped !== undefined ? tapped : selectedEnvironmentId;
 	const select = (environmentId: string) => {
 		if (environmentId === chosenId) return;
 		haptics.select();
-		setTapped({ id: environmentId, from: selectedEnvironmentId });
+		setTapped(environmentId);
 		startTransition(() => onSelectEnvironment(environmentId));
 	};
 	return (
