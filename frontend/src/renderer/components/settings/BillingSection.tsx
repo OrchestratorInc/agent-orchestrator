@@ -8,12 +8,13 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { aoBridge } from "../../lib/bridge";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import type { CloudCpBillingSummary, CloudCpPlanLimits, CloudCpPlanOffer } from "../../lib/cloud-cp/types";
+import type { CloudCpBillingInterval, CloudCpBillingSummary, CloudCpPlanLimits, CloudCpPlanOffer } from "../../lib/cloud-cp/types";
 import { useCloudSession } from "../../lib/cloud-session";
 import { reportUpgradeViewed } from "../../lib/cloud-telemetry";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { BayerVortex } from "./BayerVortex";
 import { SettingsRow } from "./SettingsRow";
@@ -58,6 +59,9 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	}, [pending]);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
+	// The billing period the plan cards show; null until the viewer picks one, so the
+	// cards follow the org's own subscription (or monthly) while it loads and changes.
+	const [chosenInterval, setChosenInterval] = useState<CloudCpBillingInterval | null>(null);
 	// The Upgrade page is the paywall's landing: count each visit once mounted.
 	useEffect(() => {
 		if (status === "authenticated") reportUpgradeViewed("settings");
@@ -120,7 +124,9 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			await aoBridge.app.openExternal(url);
 			setPollUntil(Date.now() + POLL_WINDOW_MS);
 		});
-	const openCheckout = (plan: string) => openExternal(`checkout:${plan}`, () => client.createBillingCheckout(orgId, plan));
+	// Monthly Checkout sends the plan alone, which every control plane accepts.
+	const openCheckout = (plan: string, interval: CloudCpBillingInterval) => openExternal(`checkout:${plan}`, () =>
+		interval === "year" ? client.createBillingCheckout(orgId, plan, { interval }) : client.createBillingCheckout(orgId, plan));
 	const openPortal = () => openExternal("portal", () => client.createBillingPortal(orgId));
 	const openCancel = () => openExternal("portal:cancel", () => client.createBillingPortal(orgId, "cancel"));
 	const reset = () =>
@@ -146,6 +152,16 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	// its cloud sessions are paused and new ones answer PLAN_REQUIRED.
 	const planEnded = !subscribed && summary.subscriptionStatus === "canceled";
 	const offers = summary.plans ?? [];
+	// Yearly billing shows only when the control plane sells a plan yearly; older ones send no
+	// yearly prices, and the page stays monthly as before.
+	const yearlyOffered = offers.some((offer) => offer.yearly);
+	const subscribedInterval: CloudCpBillingInterval = summary.billingInterval === "year" ? "year" : "month";
+	const interval: CloudCpBillingInterval = yearlyOffered ? (chosenInterval ?? (subscribed ? subscribedInterval : "month")) : "month";
+	const savings = yearlySavingsPercent(offers);
+	// Renewal is stated where the control plane reports the interval, for a plan that renews.
+	const renewsAt = subscribed && !endsAt && !onTrial && !lapsed && summary.billingInterval && summary.currentPeriodEnd
+		? formatDay(summary.currentPeriodEnd)
+		: "";
 	const limits = summary.limits;
 	const usage = summary.usage;
 	const resetsLeft = usage ? Math.max(0, usage.manualResetsAllowed - usage.manualResetsUsed) : 0;
@@ -186,6 +202,11 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						) : null}
 					</div>
 				) : null}
+				{renewsAt ? (
+					<p className="settings-row-bar text-pretty text-xs text-settings-muted">
+						{t(summary.billingInterval === "year" ? "settings.billing.renewsYearly" : "settings.billing.renewsMonthly", { plan: planName(currentPlan), date: renewsAt })}
+					</p>
+				) : null}
 				{lapsed && manage ? (
 					<div role="alert" className="settings-row-bar">
 						<p className="min-w-0 text-pretty text-xs text-error">{t("settings.billing.paymentFailed")}</p>
@@ -195,12 +216,23 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						</Button>
 					</div>
 				) : null}
+				{yearlyOffered ? (
+					<Tabs value={interval} onValueChange={(value) => setChosenInterval(value === "year" ? "year" : "month")}>
+						<TabsList aria-label={t("settings.billing.billingPeriod")}>
+							<TabsTrigger value="month">{t("settings.billing.monthly")}</TabsTrigger>
+							<TabsTrigger value="year">
+								{t("settings.billing.yearly")}
+								{savings > 0 ? <span className="text-xs font-normal text-settings-muted">{t("settings.billing.yearlySavings", { percent: savings })}</span> : null}
+							</TabsTrigger>
+						</TabsList>
+					</Tabs>
+				) : null}
 				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
 					<PlanCard
 						plan="free"
 						name={t("settings.billing.planFree")}
 						amount="$0"
-						interval={t("settings.billing.intervalMonth")}
+						interval={t(interval === "year" ? "settings.billing.intervalYear" : "settings.billing.intervalMonth")}
 						features={[
 							t("settings.billing.freeLocal"),
 							t("settings.billing.freeAgents"),
@@ -221,7 +253,11 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						t={t}
 					/>
 					{offers.map((offer) => {
-						const isCurrent = currentPlan === offer.name;
+						// A plan not sold yearly keeps its monthly price, and says so, in the yearly view.
+						const shown = interval === "year" && offer.yearly ? offer.yearly : offer;
+						const shownInterval: CloudCpBillingInterval = shown === offer ? "month" : "year";
+						const onPlan = currentPlan === offer.name;
+						const isCurrent = onPlan && shownInterval === subscribedInterval;
 						const recommended = !subscribed && offer.name === RECOMMENDED_PLAN;
 						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && portalFor === offer.name);
 						const openPlanPortal = () => {
@@ -229,11 +265,15 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							void openPortal();
 						};
 						// The control plane sets trialDays only when this org can still start a free trial.
-						const trialDays = offer.trialDays ?? 0;
+						const trialDays = shown.trialDays ?? 0;
 						let label = trialDays > 0 ? t("settings.billing.startTrial", { count: trialDays }) : t("settings.billing.upgrade");
-						let onClick: () => void = () => void openCheckout(offer.name);
+						let onClick: () => void = () => void openCheckout(offer.name, shownInterval);
 						if (isCurrent) {
 							label = t("settings.billing.manage");
+							onClick = openPlanPortal;
+						} else if (onPlan) {
+							// The same plan at the other billing period: a subscription changes in the Portal.
+							label = t(shownInterval === "year" ? "settings.billing.switchToYearly" : "settings.billing.switchToMonthly");
 							onClick = openPlanPortal;
 						} else if (subscribed) {
 							label = t("settings.billing.switchPlan");
@@ -244,7 +284,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 								key={offer.name}
 								plan={offer.name}
 								name={planName(offer.name)}
-								{...offerPrice(offer, t)}
+								{...offerPrice(shown, t)}
 								{...(offer.limits ? planFeatures(offer.name, offer.limits, t) : { features: [] })}
 								current={isCurrent}
 								trial={isCurrent && onTrial}
@@ -626,7 +666,21 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { 
 	};
 }
 
-function offerPrice(offer: CloudCpPlanOffer, t: TFunction): { amount: string; interval: string } {
+/**
+ * How much less a year costs on the yearly prices than twelve months, as a whole
+ * percent: the best saving among plans priced both ways in one currency, 0 for none.
+ */
+function yearlySavingsPercent(offers: CloudCpPlanOffer[]): number {
+	let best = 0;
+	for (const offer of offers) {
+		const yearly = offer.yearly;
+		if (!yearly?.unitAmount || !offer.unitAmount || yearly.currency !== offer.currency) continue;
+		best = Math.max(best, Math.round((1 - yearly.unitAmount / (offer.unitAmount * 12)) * 100));
+	}
+	return best;
+}
+
+function offerPrice(offer: Pick<CloudCpPlanOffer, "unitAmount" | "currency" | "interval">, t: TFunction): { amount: string; interval: string } {
 	if (offer.unitAmount === undefined || !offer.currency) return { amount: "—", interval: "" };
 	return {
 		amount: formatMoney(offer.unitAmount, offer.currency),

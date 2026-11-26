@@ -2812,7 +2812,9 @@ export interface paths {
          *     within the grace period) is on Free, which runs no billed sessions:
          *     creating or waking one answers 402 PLAN_REQUIRED. Usage counts every
          *     running billed session per minute. Plans lists what the organization
-         *     can buy, cheapest first, for self-serve organizations only.
+         *     can buy, cheapest first, for self-serve organizations only; a plan
+         *     also sold yearly carries that price as yearly, and billingInterval
+         *     says which one the organization pays.
          *      */
         get: operations["getOrgBilling"];
         put?: never;
@@ -3059,6 +3061,11 @@ export interface components {
             /** Format: date-time */
             currentPeriodEnd?: string;
             /**
+             * @description How often the organization's subscription renews. Absent without a subscription, and from control planes that do not report it; read absent as month.
+             * @enum {string}
+             */
+            billingInterval?: "month" | "year";
+            /**
              * Format: date-time
              * @description When a subscription set to cancel ends and the organization moves to Free.
              */
@@ -3120,6 +3127,27 @@ export interface components {
             interval: string;
             limits?: components["schemas"]["PlanLimits"];
             /** @description Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial. */
+            trialDays?: number;
+            yearly?: components["schemas"]["PlanOfferPrice"];
+        };
+        /** @description Another price the same plan is sold at, with the same limits: the
+         *     plan's yearly price. Present only when the deployment sells the plan
+         *     yearly. A Checkout with interval year subscribes at it; without this
+         *     price, a control plane refuses interval year. The price fields are
+         *     zero or empty when Stripe could not be read.
+         *      */
+        PlanOfferPrice: {
+            /** @description The Stripe price. */
+            id: string;
+            /**
+             * Format: int64
+             * @description In the currency's smallest unit, for the whole interval.
+             */
+            unitAmount: number;
+            currency: string;
+            /** @description year. */
+            interval: string;
+            /** @description Days of free trial that a Checkout at this price starts. Present only while the organization can still start a free trial of it. */
             trialDays?: number;
         };
         PutPushDeviceInput: {

@@ -431,6 +431,120 @@ describe("BillingSection", () => {
 	});
 });
 
+describe("BillingSection yearly billing", () => {
+	const yearlyPlans = [
+		{ ...plans[0], yearly: { id: "price_1y", unitAmount: 20000, currency: "usd", interval: "year" } },
+		{ ...plans[1], yearly: { id: "price_2y", unitAmount: 40000, currency: "usd", interval: "year" } },
+	];
+
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		vi.clearAllMocks();
+		mocks.orgRole = "owner";
+		mocks.client.me.mockResolvedValue({ user: { id: "user-1" }, organizations: [{ id: "org-1", role: "owner" }] });
+	});
+
+	function chooseInterval(name: "Monthly" | RegExp) {
+		// Radix tabs activate on mouse down, as a press does.
+		fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0 });
+	}
+
+	it("shows no billing period choice when the control plane sells no yearly prices", async () => {
+		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans });
+		renderSection();
+		await findCard("starter");
+		expect(screen.queryByRole("tablist", { name: "Billing period" })).not.toBeInTheDocument();
+	});
+
+	it("switches the cards to yearly prices and opens a yearly Checkout", async () => {
+		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans: yearlyPlans });
+		mocks.client.createBillingCheckout.mockResolvedValue({ url: "https://checkout.stripe.test/cs_year" });
+		renderSection();
+		await findCard("starter");
+		expect(screen.getByRole("tab", { name: "Monthly" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("tab", { name: /Yearly/ })).toHaveTextContent("Save 17%");
+		expect(within(card("starter")).getByText("$20")).toBeInTheDocument();
+
+		chooseInterval(/Yearly/);
+		expect(screen.getByRole("tab", { name: /Yearly/ })).toHaveAttribute("aria-selected", "true");
+		expect(within(card("starter")).getByText("$200")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("/ year")).toBeInTheDocument();
+		expect(within(card("pro")).getByText("$400")).toBeInTheDocument();
+		expect(within(card("free")).getByText("/ year")).toBeInTheDocument();
+		fireEvent.click(within(card("pro")).getByRole("button", { name: "Upgrade" }));
+		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://checkout.stripe.test/cs_year"));
+		expect(mocks.client.createBillingCheckout).toHaveBeenCalledWith("org-1", "pro", { interval: "year" });
+
+		// Back to monthly, Checkout sends the plan alone, as before.
+		chooseInterval("Monthly");
+		expect(within(card("starter")).getByText("$20")).toBeInTheDocument();
+		fireEvent.click(within(card("starter")).getByRole("button", { name: "Upgrade" }));
+		await waitFor(() => expect(mocks.client.createBillingCheckout).toHaveBeenLastCalledWith("org-1", "starter"));
+	});
+
+	it("keeps a plan not sold yearly at its monthly price in the yearly view", async () => {
+		mocks.client.getBilling.mockResolvedValue({
+			enabled: true, exempt: false, plan: "free", entitled: false, plans: [yearlyPlans[0], plans[1]],
+		});
+		mocks.client.createBillingCheckout.mockResolvedValue({ url: "https://checkout.stripe.test/cs_pro" });
+		renderSection();
+		await findCard("pro");
+		chooseInterval(/Yearly/);
+		expect(within(card("pro")).getByText("$40")).toBeInTheDocument();
+		expect(within(card("pro")).getByText("/ month")).toBeInTheDocument();
+		fireEvent.click(within(card("pro")).getByRole("button", { name: "Upgrade" }));
+		await waitFor(() => expect(mocks.client.createBillingCheckout).toHaveBeenCalledWith("org-1", "pro"));
+	});
+
+	it("offers the trial of the price shown", async () => {
+		mocks.client.getBilling.mockResolvedValue({
+			enabled: true, exempt: false, plan: "free", entitled: false,
+			plans: [{ ...yearlyPlans[0], trialDays: 7 }, yearlyPlans[1]],
+		});
+		renderSection();
+		await findCard("starter");
+		expect(within(card("starter")).getByRole("button", { name: "Start 7-day trial" })).toBeInTheDocument();
+		chooseInterval(/Yearly/);
+		expect(within(card("starter")).getByRole("button", { name: "Upgrade" })).toBeInTheDocument();
+	});
+
+	it("opens on a yearly subscriber's own plan, with its renewal, and switches period in the Portal", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed({ plans: yearlyPlans, billingInterval: "year" }));
+		mocks.client.createBillingPortal.mockResolvedValue({ url: "https://billing.stripe.test/p_1" });
+		renderSection();
+		await findCard("starter");
+		expect(screen.getByRole("tab", { name: /Yearly/ })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByText(/Your Starter plan renews yearly on/)).toBeInTheDocument();
+		expect(within(card("starter")).getByText("Current")).toBeInTheDocument();
+		expect(within(card("starter")).getByRole("button", { name: "Manage" })).toBeInTheDocument();
+		expect(within(card("pro")).getByRole("button", { name: "Switch" })).toBeInTheDocument();
+
+		chooseInterval("Monthly");
+		expect(within(card("starter")).queryByText("Current")).not.toBeInTheDocument();
+		fireEvent.click(within(card("starter")).getByRole("button", { name: "Switch to monthly" }));
+		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://billing.stripe.test/p_1"));
+		expect(mocks.client.createBillingPortal).toHaveBeenCalledWith("org-1");
+		expect(mocks.client.createBillingCheckout).not.toHaveBeenCalled();
+	});
+
+	it("offers a monthly subscriber the switch to yearly", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed({ plans: yearlyPlans, billingInterval: "month" }));
+		renderSection();
+		await findCard("starter");
+		expect(screen.getByText(/Your Starter plan renews monthly on/)).toBeInTheDocument();
+		expect(within(card("starter")).getByText("Current")).toBeInTheDocument();
+		chooseInterval(/Yearly/);
+		expect(within(card("starter")).getByRole("button", { name: "Switch to yearly" })).toBeInTheDocument();
+	});
+
+	it("states no renewal when the control plane does not report the interval", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed());
+		renderSection();
+		await findCard("starter");
+		expect(screen.queryByText(/renews/)).not.toBeInTheDocument();
+	});
+});
+
 describe("billing formatting", () => {
 	it("formats session-minutes as hours", () => {
 		expect(formatHours(252)).toBe("4.2");

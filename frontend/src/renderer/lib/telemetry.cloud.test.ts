@@ -57,6 +57,8 @@ describe("cloud funnel event allowlist", () => {
 		expect(offering).toEqual({ org_kind: "unknown", billing_mode: "unknown", default_provider: "freestyle", provider_count: 2 });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "Pro Plan $$" })).toEqual({ plan: "other" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "starter", trial: true })).toEqual({ plan: "starter", trial: true });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "pro", interval: "year", trial: false })).toEqual({ plan: "pro", interval: "year", trial: false });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "pro", interval: "weekly" })).toEqual({ plan: "pro" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_completed", { plan: "starter", trial: false, duration_ms: 5 })).toEqual({
 			plan: "starter",
 			trial: false,
