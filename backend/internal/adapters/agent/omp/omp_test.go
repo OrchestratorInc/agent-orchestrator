@@ -373,3 +373,43 @@ func fakeOMPVersionBinary(t *testing.T, version string) string {
 	}
 	return path
 }
+
+func TestNativeConversationIDUsesSharedOMPSessionID(t *testing.T) {
+	const id = "01a12fa3-6b72-7061-be3f-02314ae3994c"
+	p := &Plugin{}
+	cases := []struct {
+		name         string
+		mode         domain.SessionMode
+		metadata     map[string]string
+		providerConv string
+		wantID       string
+		wantOK       bool
+	}{
+		{name: "tui uncaptured", mode: domain.SessionModeTUI, metadata: map[string]string{}},
+		{name: "tui whitespace", mode: domain.SessionModeTUI, metadata: map[string]string{ports.MetadataKeyAgentSessionID: "  "}},
+		{name: "tui captured", mode: domain.SessionModeTUI, metadata: map[string]string{ports.MetadataKeyAgentSessionID: " " + id + " "}, wantID: id, wantOK: true},
+		{name: "tui ignores provider id", mode: domain.SessionModeTUI, providerConv: id},
+		{name: "chat empty", mode: domain.SessionModeChat},
+		{name: "chat whitespace", mode: domain.SessionModeChat, providerConv: "  "},
+		{name: "chat captured", mode: domain.SessionModeChat, providerConv: " " + id + " ", wantID: id, wantOK: true},
+		{name: "chat ignores agent session id", mode: domain.SessionModeChat, metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
+				ID: "ao-session-1", Metadata: tc.metadata,
+			}, tc.mode, tc.providerConv)
+			if err != nil || ok != tc.wantOK || got != tc.wantID {
+				t.Fatalf("NativeConversationID = (%q, %v, %v), want (%q, %v, nil)", got, ok, err, tc.wantID, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestNativeConversationIDHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := (&Plugin{}).NativeConversationID(ctx, ports.SessionRef{}, domain.SessionModeChat, "id"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
