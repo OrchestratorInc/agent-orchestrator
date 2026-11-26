@@ -244,6 +244,17 @@ describe("send keys", () => {
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.fileReferences).toEqual([expect.objectContaining({ id: ref.id })]));
 		expect(onSend.mock.calls[0][5]).toBeUndefined();
 	});
+	it("holds a pasted picture's place with a square and any other file's with a card", async () => {
+		const staging = deferred<string[]>();
+		const { field } = renderComposer({ draftSessionId: "pending-tile-shape", onStageAttachments: vi.fn(() => staging.promise) });
+		fireEvent.paste(field, { clipboardData: clipboardData([png("shot.png"), textFile("notes.txt")]) });
+		// The placeholder is already the size its tile will be, so nothing shifts when the file lands.
+		expect(await screen.findByRole("status", { name: "Attaching shot.png" })).toHaveClass("size-14");
+		expect(screen.getByRole("status", { name: "Attaching notes.txt" })).toHaveClass("w-50");
+		staging.resolve([".ao/attachments/shot.png", ".ao/attachments/notes.txt"]);
+		expect((await screen.findByRole("button", { name: "Remove shot.png" })).closest("li")).toHaveClass("size-14");
+		expect(screen.getByRole("button", { name: "Remove notes.txt" }).closest("li")).toHaveClass("w-50");
+	});
 	it("cancels a Cloud upload from its chip, never holds the page for it, and lets the message go", async () => {
 		const sessionId = "composer-cloud-cancel";
 		const signals: AbortSignal[] = [];
