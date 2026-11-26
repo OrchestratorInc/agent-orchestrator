@@ -63,6 +63,7 @@ function AndroidMessageMenu({ children, canEdit, onAction, style }: MessageConte
 	const { scheme } = useThemeState();
 	const items = menuItems(canEdit);
 	const menu = useRef<MenuComponentRef>(null);
+	const wrapper = useRef<View>(null);
 	const touch = useRef({ x: 0, y: 0 });
 	const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
 	const teardown = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -73,7 +74,7 @@ function AndroidMessageMenu({ children, canEdit, onAction, style }: MessageConte
 	}, [anchor]);
 	useEffect(() => () => clearTimeout(teardown.current), []);
 	return (
-		<View style={style}>
+		<View ref={wrapper} style={style}>
 			{/* The menu's trigger is no accessibility node, so the bubble itself offers Edit and Copy to TalkBack. */}
 			<Pressable
 				accessible
@@ -81,7 +82,14 @@ function AndroidMessageMenu({ children, canEdit, onAction, style }: MessageConte
 				accessibilityActions={items.map((item) => ({ name: item.id, label: item.title }))}
 				onAccessibilityAction={(event) => onAction(event.nativeEvent.actionName as MessageMenuAction)}
 				onPressIn={(event: GestureResponderEvent) => {
-					touch.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
+					// The anchor sits in this wrapper's space. Android gives locationX/Y
+					// in the space of the view under the finger, which can be the bubble's
+					// text, so the touch's page position is rebased onto the wrapper.
+					const { pageX, pageY, locationX, locationY } = event.nativeEvent;
+					touch.current = { x: locationX, y: locationY };
+					wrapper.current?.measure((_x, _y, _width, _height, left, top) => {
+						touch.current = { x: pageX - left, y: pageY - top };
+					});
 				}}
 				onLongPress={() => {
 					// The bump the system gives a long press that opens a menu.

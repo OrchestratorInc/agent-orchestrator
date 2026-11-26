@@ -64,7 +64,7 @@ it("mounts no Compose menu on Android until a long press opens one under the fin
 	render(true);
 	expect(menus()).toHaveLength(0);
 	act(() => {
-		trigger().props.onPressIn({ nativeEvent: { locationX: 40, locationY: 12 } });
+		trigger().props.onPressIn({ nativeEvent: { locationX: 40, locationY: 12, pageX: 40, pageY: 12 } });
 		trigger().props.onLongPress();
 	});
 	expect(fixtures.press).toHaveBeenCalledOnce();
@@ -74,6 +74,22 @@ it("mounts no Compose menu on Android until a long press opens one under the fin
 	expect(fixtures.show).toHaveBeenCalledOnce();
 	// The bubble is drawn once, under the trigger; nothing is cloned into the menu.
 	expect(renderer!.root.findAll((node) => node.props.children === "bubble")).toHaveLength(1);
+});
+
+it("anchors the menu in the bubble's space when the press lands on an offset child", () => {
+	// The wrapper sits at (100, 300) on the page; the text under the finger at (16, 80) inside it.
+	const measure = (callback: (x: number, y: number, width: number, height: number, pageX: number, pageY: number) => void) => callback(0, 0, 320, 200, 100, 300);
+	act(() => {
+		renderer = create(<MessageContextMenu canEdit onAction={vi.fn()}><Text>bubble</Text></MessageContextMenu>, {
+			createNodeMock: (element) => element.type === "View" ? { measure } : null,
+		});
+	});
+	act(() => {
+		// Child-local (40, 12) is (56, 92) in the wrapper.
+		trigger().props.onPressIn({ nativeEvent: { locationX: 40, locationY: 12, pageX: 156, pageY: 392 } });
+		trigger().props.onLongPress();
+	});
+	expect(menu().props.style).toContainEqual({ left: 56, top: 92 });
 });
 
 it("reports the chosen action, and takes the menu away once it has closed", () => {
