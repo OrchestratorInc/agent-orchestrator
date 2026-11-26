@@ -103,10 +103,18 @@ $AO_DATA_DIR/bots/<bot-id>/
   - Memory content is always owner-visible. Every write shows up as a diff in the Memory tab.
   - `ao bot memory purge` removes a value from `MEMORY.md`, every `.history/` snapshot, and the `journal/` files, for when a secret slips through.
   - The bot skill and system prompt tell the bot not to store secrets, and to refer to credentials by name only. This is a model instruction, not enforcement.
-  - Memory never leaves the home in Phase 0. It is not synced, uploaded, or sent in telemetry.
+  - AO never syncs memory, uploads it to AO services, or puts it in telemetry. **It does leave the home through the model provider:**
+    - Every bot session sends its system prompt, including `SOUL.md` and `MEMORY.md`, to the bot's model provider when the model is remote (see Injection).
+    - A tidy turn also sends the journal days it reads.
+    - A secret that slips into memory is sent to the provider at every session start until it is purged. Purging does not recall copies a provider already received; their retention follows that provider's terms.
+  - Some harnesses take the system prompt as an inline command-line argument (for example `cline -s`). Memory can then appear in the local process list for the lifetime of the session.
   - Moving or exporting a bot in a later phase must re-run the check and show the owner the memory before it leaves the machine.
 - **SOUL.md is owner-only.** It is edited in the UI, the API, or a text editor. The bot can propose a SOUL change only as a bot ask.
 - **Injection.** At every bot-session start (first start, wake, recycle), the system prompt gets SOUL.md, MEMORY.md, the bot's open asks, and a crew summary. It goes through the existing `writeSystemPromptFile` path in `session_manager/manager.go`.
+- **Provider policy (Phase 0).** The bot's memory goes to the model provider the owner chose for the bot. This is inherent: a bot can only use memory its model can read. It is the same trust boundary as the repository content any AO session already sends. Phase 0 adds no separate control over it:
+  - The owner's control is the choice of harness and model at create time. A locally hosted model keeps memory on the machine.
+  - The create dialog and the Memory tab state in one line that memory is sent to the bot's model provider.
+  - A per-bot "do not send memory" switch, or redacting memory before injection, is not planned. Open question 6 tracks whether one is needed.
 - **Portability rule.** Memory must not contain absolute paths or daemon-local session IDs as load-bearing references. The tidy prompt says so, and the folder must be able to move to another home unchanged.
 
 ### 4. Bot sessions hibernate between turns and are recycled
@@ -336,3 +344,4 @@ Ten PRs of about two weeks' total work, each with tests for the boundary it chan
 3. **Project scope.** Phase 0 gives each bot one project, and workspace projects cover multi-repo. Is a cross-project bot (for example "triage everything") needed before Phase 1?
 4. **Recycle thresholds.** Is 60% context use or 7 days right? Tune from dogfood telemetry.
 5. **Relationship to the project orchestrator.** Should the orchestrator be able to message bots in its project (Capy lets Captains message each other), or stay separate in Phase 0? The default is separate.
+6. **Provider exposure of memory.** Is the owner's harness and model choice enough, or do bots need a per-bot switch or pre-injection redaction? A related question: should AO prefer file-based system-prompt injection over inline command-line arguments for bot sessions, so memory never appears in the process list?
