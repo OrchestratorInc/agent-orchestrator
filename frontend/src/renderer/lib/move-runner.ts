@@ -18,7 +18,6 @@ export type MoveState = {
 	/** The session's title, for the toast shown while its view is closed. */
 	title?: string;
 	step?: MoveStep;
-	progress?: { sent: number; total: number };
 	error?: MoveError;
 	result?: MoveResult;
 };
@@ -107,13 +106,12 @@ export async function runMove(key: string, input: MoveInput, options: RunMoveOpt
 			}
 			if (cancelled.delete(key)) return;
 		}
-		update(key, { phase: "moving", step: "prepare", progress: undefined, error: undefined });
+		update(key, { phase: "moving", step: "prepare", error: undefined });
 		try {
 			const result = await moveSession({
 				...input,
 				stopTurn: options.stopTurn,
 				onStep: (step) => update(key, { step }),
-				onProgress: (sent, total) => update(key, { progress: { sent, total } }),
 			});
 			update(key, { phase: "done", result });
 			options.onDone?.(result);

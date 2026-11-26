@@ -1,6 +1,7 @@
 package gitworktree
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 var _ ports.WorkspaceTransfer = (*Workspace)(nil)
@@ -130,7 +132,7 @@ func gitSaid(out []byte) string {
 	return text
 }
 
-// CheckTransfer refuses a worktree whose work a push cannot carry.
+// CheckTransfer refuses a worktree whose work a move cannot carry.
 func (w *Workspace) CheckTransfer(ctx context.Context, info ports.WorkspaceInfo) error {
 	path, err := w.validateManagedPath(info.Path)
 	if err != nil {
@@ -146,51 +148,116 @@ func (w *Workspace) CheckTransfer(ctx context.Context, info ports.WorkspaceInfo)
 	return nil
 }
 
-// PushTransfer pushes the worktree's branch to origin without forcing, with
-// uncommitted work at remotePreservedRef: preservedRef, and what is staged.
-// A refused branch pushes neither. It returns the branch head and whether
-// there was uncommitted work.
-func (w *Workspace) PushTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef string) (head string, uncommitted bool, err error) {
+// BundleTransfer writes to bundlePath what origin may not have of the
+// worktree's work: the branch's unpushed commits and, at remotePreservedRef,
+// the uncommitted work (preservedRef) with what is staged beside it. Nothing is
+// written when origin has it all. It returns the branch head, and whether there
+// was uncommitted work and a bundle.
+func (w *Workspace) BundleTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef, bundlePath string) (head string, uncommitted, bundled bool, err error) {
 	path, err := w.validateManagedPath(info.Path)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	if !strings.HasPrefix(remotePreservedRef, "refs/ao/preserved/") {
-		return "", false, fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
+		return "", false, false, fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
 	}
 	if err := w.CheckTransfer(ctx, info); err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	if head, err = w.revParse(ctx, path, "HEAD"); err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	staged, err := w.stagedCommit(ctx, path, head)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	if preservedRef == "" && staged != "" {
 		// A staged edit undone on disk: the files match HEAD, only the index differs.
 		if preservedRef, err = w.commitTree(ctx, path, head+"^{tree}", head, "ao preserved"); err != nil {
-			return "", false, err
+			return "", false, false, err
 		}
 	}
-	args := []string{"-C", path, "push", "--porcelain"}
-	refspecs := []string{"HEAD:refs/heads/" + info.Branch}
-	if preservedRef != "" {
-		args = append(args, "--atomic")
-		refspecs = append(refspecs, preservedRef+":"+remotePreservedRef)
+	tips := []string{"refs/heads/" + info.Branch}
+	defer func() {
+		for _, ref := range tips[1:] {
+			_, _ = w.run(ctx, w.binary, "-C", path, "update-ref", "-d", ref)
+		}
+	}()
+	for ref, target := range map[string]string{remotePreservedRef: preservedRef, remotePreservedRef + indexSuffix: staged} {
+		if target == "" {
+			continue
+		}
+		if _, err := w.run(ctx, w.binary, "-C", path, "update-ref", ref, target); err != nil {
+			return "", false, false, err
+		}
+		tips = append(tips, ref)
 	}
-	if staged != "" {
-		refspecs = append(refspecs, staged+":"+remotePreservedRef+indexSuffix)
+	uncommitted = preservedRef != ""
+	unpushed, err := w.run(ctx, w.binary, append(append([]string{"-C", path, "rev-list", "--count"}, tips...), "--not", "--remotes")...)
+	if err != nil {
+		return "", false, false, err
 	}
-	if out, err := w.run(ctx, w.binary, append(append(args, "origin"), refspecs...)...); err != nil {
-		return "", false, fmt.Errorf("%w: %s", ports.ErrTransferPush, gitSaid(out))
+	if strings.TrimSpace(string(unpushed)) == "0" {
+		return head, uncommitted, false, nil
 	}
-	return head, preservedRef != "", nil
+	if err := w.refuseLFSFiles(ctx, path, tips); err != nil {
+		return "", false, false, err
+	}
+	if out, err := w.run(ctx, w.binary, append(append([]string{"-C", path, "bundle", "create", "--quiet", bundlePath}, tips...), "--not", "--remotes")...); err != nil {
+		return "", false, false, fmt.Errorf("gitworktree: bundle: %w: %s", err, gitSaid(out))
+	}
+	return head, uncommitted, true, nil
 }
 
-// FetchTransfer fetches a moved branch and, when set, its preserved ref from origin.
-func (w *Workspace) FetchTransfer(ctx context.Context, repoPath, branch, remotePreservedRef string) error {
+// lfsPointer starts every Git LFS pointer file. A bundle carries the pointer
+// and not the file, which the destination could not check out.
+var lfsPointer = []byte("version https://git-lfs.github.com/spec/v1")
+
+// refuseLFSFiles refuses work whose new files include Git LFS pointers.
+func (w *Workspace) refuseLFSFiles(ctx context.Context, path string, tips []string) error {
+	// Pointers are small; larger blobs are left out of the listing.
+	objects, err := w.run(ctx, w.binary, append(append([]string{"-C", path, "rev-list", "--objects", "--no-object-names", "--filter=blob:limit=1024"}, tips...), "--not", "--remotes")...)
+	if err != nil || len(objects) == 0 {
+		return err
+	}
+	types, err := w.runInput(ctx, objects, "-C", path, "cat-file", "--batch-check=%(objecttype) %(objectname)")
+	if err != nil {
+		return err
+	}
+	var blobs bytes.Buffer
+	for _, line := range strings.Split(string(types), "\n") {
+		if name, ok := strings.CutPrefix(line, "blob "); ok {
+			blobs.WriteString(name + "\n")
+		}
+	}
+	if blobs.Len() == 0 {
+		return nil
+	}
+	contents, err := w.runInput(ctx, blobs.Bytes(), "-C", path, "cat-file", "--batch")
+	if err != nil {
+		return err
+	}
+	if bytes.Contains(contents, lfsPointer) {
+		return ports.ErrTransferLFS
+	}
+	return nil
+}
+
+func (w *Workspace) runInput(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
+	cmd.Stdin = bytes.NewReader(input)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gitworktree: git %s: %w", args[2], err)
+	}
+	return out, nil
+}
+
+// FetchTransfer brings a moved branch's head, and at remotePreservedRef its
+// uncommitted work, into the repository: from bundlePath when set, and from
+// origin for commits the bundle builds on, or for the head when there is no
+// bundle.
+func (w *Workspace) FetchTransfer(ctx context.Context, repoPath, branch, head, bundlePath, remotePreservedRef string) error {
 	repo, err := physicalAbs(repoPath)
 	if err != nil {
 		return fmt.Errorf("gitworktree: repo path: %w", err)
@@ -198,16 +265,42 @@ func (w *Workspace) FetchTransfer(ctx context.Context, repoPath, branch, remoteP
 	if err := w.validateBranch(ctx, repo, branch); err != nil {
 		return err
 	}
-	refspecs := []string{"+refs/heads/" + branch + ":refs/remotes/origin/" + branch}
-	if remotePreservedRef != "" {
-		if !strings.HasPrefix(remotePreservedRef, "refs/ao/preserved/") {
-			return fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
+	if remotePreservedRef != "" && !strings.HasPrefix(remotePreservedRef, "refs/ao/preserved/") {
+		return fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
+	}
+	fetchOrigin := func(what string) error {
+		if out, err := w.run(ctx, w.binary, "-C", repo, "fetch", "--quiet", "origin"); err != nil {
+			return fmt.Errorf("%w: %s, and fetching origin failed: %s", ports.ErrTransferFetch, what, gitSaid(out))
 		}
+		return nil
+	}
+	if bundlePath == "" {
+		if _, err := w.run(ctx, w.binary, "-C", repo, "cat-file", "-e", head+"^{commit}"); err == nil {
+			return nil
+		}
+		if err := fetchOrigin("this computer does not have " + head); err != nil {
+			return err
+		}
+		if _, err := w.run(ctx, w.binary, "-C", repo, "cat-file", "-e", head+"^{commit}"); err != nil {
+			return fmt.Errorf("%w: origin does not have %s", ports.ErrTransferFetch, head)
+		}
+		return nil
+	}
+	if _, err := w.run(ctx, w.binary, "-C", repo, "bundle", "verify", "--quiet", bundlePath); err != nil {
+		if err := fetchOrigin("the moved work builds on commits this computer does not have"); err != nil {
+			return err
+		}
+		if out, err := w.run(ctx, w.binary, "-C", repo, "bundle", "verify", "--quiet", bundlePath); err != nil {
+			return fmt.Errorf("%w: neither this computer nor origin has the commits the moved work builds on: %s", ports.ErrTransferFetch, gitSaid(out))
+		}
+	}
+	// The head lands in FETCH_HEAD; AlignTransferBranch then points the branch at it.
+	refspecs := []string{"refs/heads/" + branch}
+	if remotePreservedRef != "" {
 		// The trailing * also takes the staged state's ref, which is not always there.
 		refspecs = append(refspecs, "+"+remotePreservedRef+"*:"+remotePreservedRef+"*")
 	}
-	args := append([]string{"-C", repo, "fetch", "origin"}, refspecs...)
-	if out, err := w.run(ctx, w.binary, args...); err != nil {
+	if out, err := w.run(ctx, w.binary, append([]string{"-C", repo, "fetch", "--quiet", bundlePath}, refspecs...)...); err != nil {
 		return fmt.Errorf("%w: %s", ports.ErrTransferFetch, gitSaid(out))
 	}
 	return nil
@@ -295,35 +388,5 @@ func (w *Workspace) RestoreTransferIndex(ctx context.Context, info ports.Workspa
 	}
 	// Refresh the cached file stats; files that differ from the index report as such.
 	_, _ = w.run(ctx, w.binary, "-C", path, "update-index", "-q", "--refresh")
-	return nil
-}
-
-// DeleteTransferRef deletes a preserved ref, and the staged state beside it,
-// from origin. A ref that is already gone is not an error.
-func (w *Workspace) DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error {
-	if !strings.HasPrefix(remotePreservedRef, "refs/ao/preserved/") {
-		return fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
-	}
-	repo, err := physicalAbs(repoPath)
-	if err != nil {
-		return fmt.Errorf("gitworktree: repo path: %w", err)
-	}
-	out, err := w.run(ctx, w.binary, "-C", repo, "ls-remote", "origin", remotePreservedRef, remotePreservedRef+indexSuffix)
-	if err != nil {
-		return fmt.Errorf("gitworktree: ls-remote: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	var refspecs []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if _, ref, ok := strings.Cut(line, "\t"); ok {
-			refspecs = append(refspecs, ":"+ref)
-		}
-	}
-	if len(refspecs) == 0 {
-		return nil
-	}
-	args := append([]string{"-C", repo, "push", "--porcelain", "origin"}, refspecs...)
-	if out, err := w.run(ctx, w.binary, args...); err != nil {
-		return fmt.Errorf("gitworktree: delete %s: %w: %s", remotePreservedRef, err, strings.TrimSpace(string(out)))
-	}
 	return nil
 }

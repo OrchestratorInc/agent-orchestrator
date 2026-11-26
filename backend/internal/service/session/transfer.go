@@ -20,7 +20,7 @@ type transferCommander interface {
 	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination, stopTurn bool) (domain.SessionTransfer, error)
 	CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error
 	TransferArchivePath(id domain.SessionID, transferID string) (string, error)
-	StoreTransferArchivePart(transferID string, part int, r io.Reader) error
+	StoreTransferArchive(transferID string, r io.Reader) error
 	ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer, prompt string) (domain.SessionRecord, error)
 	CommitTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionMovedTo, error)
 	SessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error)
@@ -112,7 +112,7 @@ func (s *Service) CancelTransfer(ctx context.Context, id domain.SessionID, trans
 	return transferError(tc.CancelTransfer(ctx, id, transferID))
 }
 
-// TransferArchivePath is the exported conversation of session id's prepared transfer.
+// TransferArchivePath is the file session id's prepared transfer carries.
 func (s *Service) TransferArchivePath(id domain.SessionID, transferID string) (string, error) {
 	tc, err := s.transfers()
 	if err != nil {
@@ -122,13 +122,13 @@ func (s *Service) TransferArchivePath(id domain.SessionID, transferID string) (s
 	return path, transferError(err)
 }
 
-// StoreTransferArchivePart keeps one uploaded part of a transfer's archive.
-func (s *Service) StoreTransferArchivePart(transferID string, part int, r io.Reader) error {
+// StoreTransferArchive keeps the file uploaded for a transfer.
+func (s *Service) StoreTransferArchive(transferID string, r io.Reader) error {
 	tc, err := s.transfers()
 	if err != nil {
 		return err
 	}
-	return transferError(tc.StoreTransferArchivePart(transferID, part, r))
+	return transferError(tc.StoreTransferArchive(transferID, r))
 }
 
 // ReceiveTransfer starts a session in projectID that continues t, then claims
@@ -233,14 +233,12 @@ func transferError(err error) error {
 		return apierr.Conflict("TRANSFER_NESTED_REPO", fmt.Sprintf("The folder %s is its own git repository, which a move cannot carry. Move it out, or add it to .gitignore, then move the session.", transferDetail(err, ports.ErrTransferNestedRepo)), nil)
 	case errors.Is(err, ports.ErrTransferSubmodule):
 		return apierr.Conflict("TRANSFER_SUBMODULE", fmt.Sprintf("The submodule %s has work that is not pushed, which a move cannot carry. Commit and push it, then move the session.", transferDetail(err, ports.ErrTransferSubmodule)), nil)
-	case errors.Is(err, ports.ErrTransferPush):
-		said := transferDetail(err, ports.ErrTransferPush)
-		if strings.Contains(said, "fetch first") || strings.Contains(said, "non-fast-forward") {
-			return apierr.Conflict("TRANSFER_PUSH_REJECTED", "Origin has commits on this branch that are not here, or the branch was rewritten. Push or rebase it, then move the session.", nil)
-		}
-		return apierr.Conflict("TRANSFER_PUSH_FAILED", "Could not push to origin: "+said, nil)
+	case errors.Is(err, ports.ErrTransferLFS):
+		return apierr.Conflict("TRANSFER_LFS", "This work has Git LFS files that are not pushed, which a move cannot carry. Commit and push them, then move the session.", nil)
+	case errors.Is(err, sessionmanager.ErrTransferTooLarge):
+		return apierr.Conflict("TRANSFER_TOO_LARGE", fmt.Sprintf("The unpushed work is %s, over the %d MB a move carries. Push the branch, then move the session.", transferDetail(err, sessionmanager.ErrTransferTooLarge), sessionmanager.MaxTransferArchiveBytes>>20), nil)
 	case errors.Is(err, ports.ErrTransferFetch):
-		return apierr.Conflict("TRANSFER_FETCH_FAILED", "Could not fetch from origin: "+transferDetail(err, ports.ErrTransferFetch), nil)
+		return apierr.Conflict("TRANSFER_FETCH_FAILED", "Could not bring in the moved work: "+transferDetail(err, ports.ErrTransferFetch), nil)
 	case errors.Is(err, ports.ErrDetachedHead):
 		return apierr.Conflict("TRANSFER_DETACHED_HEAD", fmt.Sprintf("The session's folder is not on its branch %s. Switch back to it, then move the session.", transferDetail(err, ports.ErrDetachedHead)), nil)
 	case errors.Is(err, sessionmanager.ErrSessionMoved):

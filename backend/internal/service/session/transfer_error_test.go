@@ -25,14 +25,14 @@ func TestTransferErrorNamesWhatBlocksTheMove(t *testing.T) {
 		err        error
 		code, text string
 	}{
-		{fmt.Errorf("transfer s1: push: %w: a merge", ports.ErrTransferGitBusy), "TRANSFER_GIT_BUSY", "in the middle of a merge"},
-		{fmt.Errorf("transfer s1: push: %w: unresolved conflicts", ports.ErrTransferGitBusy), "TRANSFER_GIT_BUSY", "unresolved conflicts here"},
-		{fmt.Errorf("transfer s1: push: %w: vendor/inner", ports.ErrTransferNestedRepo), "TRANSFER_NESTED_REPO", "vendor/inner"},
+		{fmt.Errorf("transfer s1: bundle: %w: a merge", ports.ErrTransferGitBusy), "TRANSFER_GIT_BUSY", "in the middle of a merge"},
+		{fmt.Errorf("transfer s1: bundle: %w: unresolved conflicts", ports.ErrTransferGitBusy), "TRANSFER_GIT_BUSY", "unresolved conflicts here"},
+		{fmt.Errorf("transfer s1: bundle: %w: vendor/inner", ports.ErrTransferNestedRepo), "TRANSFER_NESTED_REPO", "vendor/inner"},
 		{fmt.Errorf("transfer s1: %w: libs/core", ports.ErrTransferSubmodule), "TRANSFER_SUBMODULE", "The submodule libs/core has work"},
-		{fmt.Errorf("transfer s1: push: %w: ! [rejected] (fetch first)", ports.ErrTransferPush), "TRANSFER_PUSH_REJECTED", "rewritten"},
-		{fmt.Errorf("transfer s1: push: %w: pre-push hook declined", ports.ErrTransferPush), "TRANSFER_PUSH_FAILED", "pre-push hook declined"},
+		{fmt.Errorf("transfer s1: bundle: %w", ports.ErrTransferLFS), "TRANSFER_LFS", "Git LFS"},
+		{fmt.Errorf("transfer s1: %w: 120 MB", sessionmanager.ErrTransferTooLarge), "TRANSFER_TOO_LARGE", "is 120 MB, over the 90 MB"},
 		{fmt.Errorf("receive: %w: Permission denied (publickey)", ports.ErrTransferFetch), "TRANSFER_FETCH_FAILED", "Permission denied"},
-		{fmt.Errorf("transfer s1: push: %w: feat/x", ports.ErrDetachedHead), "TRANSFER_DETACHED_HEAD", "feat/x"},
+		{fmt.Errorf("transfer s1: bundle: %w: feat/x", ports.ErrDetachedHead), "TRANSFER_DETACHED_HEAD", "feat/x"},
 		{fmt.Errorf("%w: feat/x", ports.ErrTransferBranchDiverged), "TRANSFER_BRANCH_DIVERGED", "feat/x on that computer"},
 		{fmt.Errorf("spawn s1: %w: \"feat/x\" is checked out at \"/tmp/w\"", ports.ErrWorkspaceBranchCheckedOutElsewhere), "TRANSFER_BRANCH_IN_USE", "/tmp/w"},
 		{fmt.Errorf("%w: %w: kill failed", sessionmanager.ErrTransferUnconfirmed, ports.ErrRuntimePrerequisite), "TRANSFER_UNCONFIRMED", "may have started"},

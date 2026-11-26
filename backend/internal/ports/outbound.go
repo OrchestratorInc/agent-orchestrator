@@ -435,17 +435,19 @@ type Workspace interface {
 	AddExclude(ctx context.Context, info WorkspaceInfo, patterns ...string) error
 }
 
-// WorkspaceTransfer moves a session's git state between machines through origin.
+// WorkspaceTransfer moves a session's git state between machines in a git bundle.
 type WorkspaceTransfer interface {
-	// CheckTransfer refuses a worktree whose work PushTransfer cannot carry.
+	// CheckTransfer refuses a worktree whose work BundleTransfer cannot carry.
 	CheckTransfer(ctx context.Context, info WorkspaceInfo) error
-	// PushTransfer pushes the worktree's branch, never forcing, and its
-	// uncommitted work to remotePreservedRef: preservedRef when set, with what
-	// is staged beside it. A refused branch leaves neither on origin. It returns
-	// the branch head and whether there was uncommitted work.
-	PushTransfer(ctx context.Context, info WorkspaceInfo, preservedRef, remotePreservedRef string) (head string, uncommitted bool, err error)
-	// FetchTransfer fetches a moved branch and, when set, a preserved ref from origin.
-	FetchTransfer(ctx context.Context, repoPath, branch, remotePreservedRef string) error
+	// BundleTransfer writes to bundlePath what origin may not have of the
+	// worktree's work: unpushed commits and, at remotePreservedRef, the
+	// uncommitted work with what is staged beside it. It returns the branch
+	// head, and whether there was uncommitted work and a bundle.
+	BundleTransfer(ctx context.Context, info WorkspaceInfo, preservedRef, remotePreservedRef, bundlePath string) (head string, uncommitted, bundled bool, err error)
+	// FetchTransfer brings a moved head, and at remotePreservedRef its
+	// uncommitted work, into the repository from bundlePath, fetching origin
+	// for commits the bundle builds on or the head when there is no bundle.
+	FetchTransfer(ctx context.Context, repoPath, branch, head, bundlePath, remotePreservedRef string) error
 	// AlignTransferBranch points the local branch at head when it is missing or
 	// behind, and returns ErrTransferBranchDiverged when it does not lead there.
 	AlignTransferBranch(ctx context.Context, repoPath, branch, head string) error
@@ -457,9 +459,6 @@ type WorkspaceTransfer interface {
 	// RestoreTransferIndex puts the index back as it was on the source after
 	// ApplyPreserved, which leaves everything staged.
 	RestoreTransferIndex(ctx context.Context, info WorkspaceInfo, remotePreservedRef string) error
-	// DeleteTransferRef removes a preserved ref from origin once it is no
-	// longer needed.
-	DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error
 }
 
 // WorkspaceDefaultBranchRefresher is an optional capability for Git-backed
@@ -615,10 +614,11 @@ var (
 	// ErrTransferSubmodule is returned when a submodule holds work its own
 	// remote does not have.
 	ErrTransferSubmodule = errors.New("workspace: submodule has work that is not pushed")
-	// ErrTransferPush is returned when origin does not take the moved work.
-	ErrTransferPush = errors.New("workspace: could not push to origin")
+	// ErrTransferLFS is returned when the work to move includes Git LFS files
+	// that are not pushed, which a bundle cannot carry.
+	ErrTransferLFS = errors.New("workspace: Git LFS files are not pushed")
 	// ErrTransferFetch is returned when the moved work cannot be read from origin.
-	ErrTransferFetch = errors.New("workspace: could not fetch from origin")
+	ErrTransferFetch = errors.New("workspace: could not bring in the moved work")
 	// ErrDetachedHead is returned when a moved session's worktree is not on its branch.
 	ErrDetachedHead = errors.New("workspace: worktree is not on its branch")
 	// ErrRuntimePrerequisite reports a missing host prerequisite for the selected

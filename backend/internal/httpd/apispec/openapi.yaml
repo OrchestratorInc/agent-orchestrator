@@ -14473,7 +14473,7 @@ paths:
       summary: Report where a session moved, if it did
       tags:
       - sessions
-  /api/v1/sessions/{sessionId}/transfer/{transferId}/native:
+  /api/v1/sessions/{sessionId}/transfer/{transferId}/archive:
     get:
       operationId: getSessionTransferArchive
       parameters:
@@ -14494,7 +14494,7 @@ paths:
       responses:
         "200":
           content:
-            application/gzip:
+            application/x-tar:
               schema:
                 type: string
           description: OK
@@ -14510,7 +14510,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Download a prepared transfer's conversation archive
+      summary: 'Download the file a prepared transfer carries: its git bundle and
+        conversation'
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/transfer/cancel:
@@ -15849,9 +15850,9 @@ paths:
       summary: Clean up terminated session workspaces
       tags:
       - sessions
-  /api/v1/sessions/transfer/{transferId}/native/{part}:
+  /api/v1/sessions/transfer/{transferId}/archive:
     put:
-      operationId: putSessionTransferArchivePart
+      operationId: putSessionTransferArchive
       parameters:
       - description: Transfer identifier chosen by the client.
         in: path
@@ -15860,13 +15861,6 @@ paths:
         schema:
           description: Transfer identifier chosen by the client.
           type: string
-      - description: Part number, from 0.
-        in: path
-        name: part
-        required: true
-        schema:
-          description: Part number, from 0.
-          type: integer
       responses:
         "204":
           content:
@@ -15892,8 +15886,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Upload one part of a transfer's conversation archive; the body is the
-        part's bytes
+      summary: Upload the file a transfer carries, at most 90 MiB; the body is its
+        bytes
       tags:
       - sessions
   /api/v1/sessions/transfer/receive:
@@ -22600,6 +22594,17 @@ components:
       - reviewId
       - harness
       type: object
+    DomainSessionTransferArchive:
+      properties:
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+      required:
+      - size
+      - sha256
+      type: object
     DomainSideReference:
       properties:
         comment:
@@ -26862,8 +26867,12 @@ components:
       type: object
     SessionTransfer:
       properties:
+        archive:
+          $ref: '#/components/schemas/DomainSessionTransferArchive'
         branch:
           type: string
+        bundle:
+          type: boolean
         displayName:
           type: string
         effort:
@@ -26875,6 +26884,8 @@ components:
         headSha:
           type: string
         issueId:
+          type: string
+        mode:
           type: string
         model:
           type: string
@@ -26927,18 +26938,11 @@ components:
           type: string
         nativeId:
           type: string
-        sha256:
-          type: string
-        size:
-          format: int64
-          type: integer
         sourceCwd:
           type: string
       required:
       - nativeId
       - sourceCwd
-      - size
-      - sha256
       type: object
     SessionTransferResponse:
       properties:

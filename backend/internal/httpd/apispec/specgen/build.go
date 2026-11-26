@@ -4404,20 +4404,20 @@ func sessionOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/transfer/{transferId}/native", id: "getSessionTransferArchive", tag: "sessions",
-			summary:    "Download a prepared transfer's conversation archive",
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/transfer/{transferId}/archive", id: "getSessionTransferArchive", tag: "sessions",
+			summary:    "Download the file a prepared transfer carries: its git bundle and conversation",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.TransferIDParam{}},
 			resps: []respUnit{
 				{http.StatusOK, ""},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
-			contentTypes: map[int]string{http.StatusOK: "application/gzip"},
+			contentTypes: map[int]string{http.StatusOK: "application/x-tar"},
 		},
 		{
-			method: http.MethodPut, path: "/api/v1/sessions/transfer/{transferId}/native/{part}", id: "putSessionTransferArchivePart", tag: "sessions",
-			summary:    "Upload one part of a transfer's conversation archive; the body is the part's bytes",
-			pathParams: []any{controllers.TransferIDParam{}, controllers.TransferPartParam{}},
+			method: http.MethodPut, path: "/api/v1/sessions/transfer/{transferId}/archive", id: "putSessionTransferArchive", tag: "sessions",
+			summary:    "Upload the file a transfer carries, at most 90 MiB; the body is its bytes",
+			pathParams: []any{controllers.TransferIDParam{}},
 			resps: []respUnit{
 				{http.StatusNoContent, ""},
 				{http.StatusBadRequest, envelope.APIError{}},

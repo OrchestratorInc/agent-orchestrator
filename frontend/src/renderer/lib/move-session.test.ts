@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { aoBridge } from "./bridge";
-import { MOVE_PART_BYTES, MoveError, moveSession } from "./move-session";
+import { MoveError, moveSession } from "./move-session";
 import { hostsWithRepo } from "./repo-hosts";
 import type { WorkspaceSummary } from "../types/workspace";
 
@@ -10,8 +10,7 @@ function fakeClient(handlers: Record<string, Handler>) {
 	const calls: string[] = [];
 	const bodies: Record<string, unknown> = {};
 	const call = (method: string) => async (path: string, options: Parameters<Handler>[0] = {}) => {
-		const part = options.params?.path?.part;
-		calls.push(`${method} ${path}${part === undefined ? "" : ` #${part}`}`);
+		calls.push(`${method} ${path}`);
 		bodies[`${method} ${path}`] = options.body;
 		const handler = handlers[`${method} ${path}`];
 		return handler ? handler(options) : { data: {} };
@@ -19,14 +18,14 @@ function fakeClient(handlers: Record<string, Handler>) {
 	return { calls, bodies, client: { GET: call("GET"), POST: call("POST"), PUT: call("PUT") } as never };
 }
 
-const transfer = { transferId: "tr1", branch: "feat/x", headSha: "abc", native: { size: 3, sha256: "s", nativeId: "n", sourceCwd: "/a" } };
+const transfer = { transferId: "tr1", branch: "feat/x", headSha: "abc", archive: { size: 3, sha256: "s" }, bundle: true, native: { nativeId: "n", sourceCwd: "/a" } };
 
 const received = { data: { session: { id: "web-9" }, warnings: [], resumed: true } };
 
-function hosts(archive = new ArrayBuffer(MOVE_PART_BYTES + 10), receive: Handler = () => received, identity?: { hostId: string; apiVersion: number }) {
+function hosts(archive = new Blob(["abc"]), receive: Handler = () => received, identity?: { hostId: string; apiVersion: number }) {
 	const source = fakeClient({
 		"POST /api/v1/sessions/{sessionId}/transfer/prepare": () => ({ data: { transfer } }),
-		"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/native": () => ({ data: archive }),
+		"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/archive": () => ({ data: archive }),
 		"POST /api/v1/sessions/{sessionId}/resume-agent": () => ({ error: { code: "AGENT_NOT_EXITED", message: "agent is running" } }),
 	});
 	// An empty body is the preflight, which a current daemon refuses as incomplete.
@@ -44,7 +43,7 @@ function hosts(archive = new ArrayBuffer(MOVE_PART_BYTES + 10), receive: Handler
 }
 
 describe("moveSession", () => {
-	it("prepares, copies the archive in parts, receives, then marks the source moved", async () => {
+	it("prepares, copies the archive in one request, receives, then marks the source moved", async () => {
 		const { source, target, input } = hosts();
 		const steps: string[] = [];
 		const result = await moveSession({ ...input, onStep: (step) => steps.push(step) });
@@ -53,13 +52,12 @@ describe("moveSession", () => {
 		expect(steps).toEqual(["prepare", "copy", "receive", "commit"]);
 		expect(source.calls).toEqual([
 			"POST /api/v1/sessions/{sessionId}/transfer/prepare",
-			"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/native",
+			"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/archive",
 			"POST /api/v1/sessions/{sessionId}/transfer/commit",
 		]);
 		expect(target.calls).toEqual([
 			"POST /api/v1/sessions/transfer/receive",
-			"PUT /api/v1/sessions/transfer/{transferId}/native/{part} #0",
-			"PUT /api/v1/sessions/transfer/{transferId}/native/{part} #1",
+			"PUT /api/v1/sessions/transfer/{transferId}/archive",
 			"POST /api/v1/sessions/transfer/receive",
 		]);
 	});
@@ -145,11 +143,11 @@ describe("moveSession", () => {
 		expect(source.calls).not.toContain(cancelled);
 	});
 
-	it("copies the conversation again when an earlier try left no session", async () => {
+	it("copies the work again when an earlier try left no session", async () => {
 		let attempts = 0;
 		const { input, copies } = earlierMove(() => (attempts++ ? received : { error: { code: "TRANSFER_ARCHIVE_INVALID", message: "not uploaded" } }));
 		expect((await moveSession(input)).sessionId).toBe("web-9");
-		expect([attempts, copies()]).toEqual([2, 2]);
+		expect([attempts, copies()]).toEqual([2, 1]);
 	});
 
 	it.each([
@@ -164,13 +162,10 @@ describe("moveSession", () => {
 		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
-	it("asks the source to stop a running turn and reports bytes copied", async () => {
+	it("asks the source to stop a running turn", async () => {
 		const { source, input } = hosts();
-		const progress: number[] = [];
-		await moveSession({ ...input, stopTurn: true, onProgress: (sent) => progress.push(sent) });
-
+		await moveSession({ ...input, stopTurn: true });
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ stopTurn: true });
-		expect(progress).toEqual([MOVE_PART_BYTES, MOVE_PART_BYTES + 10]);
 	});
 
 	it("reports a move that started from a summary", async () => {

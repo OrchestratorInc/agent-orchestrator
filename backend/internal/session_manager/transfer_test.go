@@ -24,9 +24,9 @@ func TestReceiveTransferRefusesMalformedPreservedRef(t *testing.T) {
 	}
 }
 
-func TestAssembleTransferArchiveWithoutUpload(t *testing.T) {
+func TestOpenTransferArchiveWithoutUpload(t *testing.T) {
 	m := &Manager{dataDir: t.TempDir()}
-	_, err := m.assembleTransferArchive("trtest00001", domain.SessionTransferNative{Size: 10, SHA256: strings.Repeat("0", 64)})
+	err := m.openTransferArchive("trtest00001", domain.SessionTransferArchive{Size: 10, SHA256: strings.Repeat("0", 64)})
 	if !errors.Is(err, ErrTransferArchive) {
 		t.Fatalf("err = %v, want ErrTransferArchive", err)
 	}
@@ -38,7 +38,7 @@ func TestSweepTransfersDropsStaleUploadsSooner(t *testing.T) {
 	root := filepath.Join(m.dataDir, "transfers")
 	upload := filepath.Join(root, "trupload0001")
 	prepared := filepath.Join(root, "trsource0001")
-	for _, dir := range []string{filepath.Join(upload, "incoming"), prepared} {
+	for _, dir := range []string{upload, prepared} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -52,7 +52,7 @@ func TestSweepTransfersDropsStaleUploadsSooner(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	m.sweepTransfers(context.Background())
+	m.sweepTransfers()
 	if _, err := os.Stat(upload); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("upload kept after two hours: %v", err)
 	}

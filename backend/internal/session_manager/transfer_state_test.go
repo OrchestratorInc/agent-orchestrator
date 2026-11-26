@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -54,15 +55,16 @@ func (s *moveStore) SessionMovedTo(_ context.Context, id domain.SessionID) (doma
 
 type moveWorkspace struct {
 	*fakeWorkspace
-	push    func() error
-	deleted []string
+	bundle func(path string) error
 }
 
 func (w *moveWorkspace) CheckTransfer(context.Context, ports.WorkspaceInfo) error { return nil }
-func (w *moveWorkspace) PushTransfer(context.Context, ports.WorkspaceInfo, string, string) (string, bool, error) {
-	return strings.Repeat("a", 40), true, w.push()
+func (w *moveWorkspace) BundleTransfer(_ context.Context, _ ports.WorkspaceInfo, _, _, bundlePath string) (string, bool, bool, error) {
+	return strings.Repeat("a", 40), true, true, w.bundle(bundlePath)
 }
-func (w *moveWorkspace) FetchTransfer(context.Context, string, string, string) error { return nil }
+func (w *moveWorkspace) FetchTransfer(context.Context, string, string, string, string, string) error {
+	return nil
+}
 func (w *moveWorkspace) AlignTransferBranch(context.Context, string, string, string) error {
 	return nil
 }
@@ -71,16 +73,12 @@ func (w *moveWorkspace) ReleaseTransferBranch(context.Context, ports.WorkspaceIn
 func (w *moveWorkspace) RestoreTransferIndex(context.Context, ports.WorkspaceInfo, string) error {
 	return nil
 }
-func (w *moveWorkspace) DeleteTransferRef(_ context.Context, _, ref string) error {
-	w.deleted = append(w.deleted, ref)
-	return nil
-}
 
 func newMoveManager(t *testing.T) (*Manager, *moveStore, *moveWorkspace, *fakeRuntime) {
 	t.Helper()
 	m, st, rt, ws := newManager()
 	store := &moveStore{fakeStore: st, moves: map[domain.SessionID]domain.SessionMovedTo{}}
-	workspace := &moveWorkspace{fakeWorkspace: ws, push: func() error { return nil }}
+	workspace := &moveWorkspace{fakeWorkspace: ws, bundle: writeBundle}
 	m.store, m.workspace, m.dataDir = store, workspace, t.TempDir()
 	m.agents = singleAgent{agent: transcriptAgent{dir: t.TempDir()}}
 	st.sessions["mer-1"] = pastStartupGate(domain.SessionRecord{
@@ -92,19 +90,32 @@ func newMoveManager(t *testing.T) (*Manager, *moveStore, *moveWorkspace, *fakeRu
 	return m, store, workspace, rt
 }
 
+func writeBundle(path string) error { return os.WriteFile(path, []byte("bundle"), 0o600) }
+
+// transferLeft reports whether a move left its folder behind.
+func transferLeft(t *testing.T, m *Manager, transferID string) bool {
+	t.Helper()
+	dir, err := m.transferDir(transferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = os.Stat(dir)
+	return err == nil
+}
+
 var toB = domain.SessionTransferDestination{HostID: "h_b", Label: "MacBook B", ProjectID: "web"}
 
 func TestPrepareTransferReservesTheSessionBeforeItStops(t *testing.T) {
 	m, store, ws, _ := newMoveManager(t)
 	resumed, switched := errors.New("not tried"), errors.New("not tried")
-	ws.push = func() error {
+	ws.bundle = func(path string) error {
 		_, resumed = m.ResumeAgentWithMode(ctx, "mer-1")
 		rec := store.sessions["mer-1"]
 		_, switched = m.relaunchSession(ctx, "switch", rec, domain.ProjectRecord{ID: "mer"}, workspaceInfo(rec), nil)
-		return nil
+		return writeBundle(path)
 	}
 	transfer, err := m.PrepareTransfer(ctx, "mer-1", "trfirst00", toB, false)
-	if err != nil || transfer.PreservedRef != "refs/ao/preserved/trfirst00" {
+	if err != nil || transfer.PreservedRef != "refs/ao/preserved/trfirst00" || !transfer.Bundle || transfer.Archive == nil {
 		t.Fatalf("prepare = %+v, %v", transfer, err)
 	}
 	if !errors.Is(resumed, ErrTransferPending) || !errors.Is(switched, ErrTransferPending) {
@@ -132,35 +143,39 @@ func TestPrepareTransferReservesTheSessionBeforeItStops(t *testing.T) {
 
 func TestPrepareTransferFailureReleasesTheSession(t *testing.T) {
 	m, store, ws, _ := newMoveManager(t)
-	ws.push = func() error { return ports.ErrTransferPush }
-	if _, err := m.PrepareTransfer(ctx, "mer-1", "trfirst00", toB, false); !errors.Is(err, ports.ErrTransferPush) {
+	ws.bundle = func(path string) error {
+		if err := writeBundle(path); err != nil {
+			return err
+		}
+		return ports.ErrTransferLFS
+	}
+	if _, err := m.PrepareTransfer(ctx, "mer-1", "trfirst00", toB, false); !errors.Is(err, ports.ErrTransferLFS) {
 		t.Fatalf("prepare = %v", err)
 	}
-	if len(store.moves) != 0 || len(ws.deleted) != 0 {
-		t.Fatalf("after a refused push: pending %v, deleted %v; want neither", store.moves, ws.deleted)
+	if len(store.moves) != 0 || transferLeft(t, m, "trfirst00") {
+		t.Fatalf("after a refused bundle: pending %v; want none and no files", store.moves)
 	}
+}
 
-	// A failure after the push also takes the pushed work off origin.
-	ws.push = func() error { return nil }
+func TestPrepareTransferWithoutAConversationCarriesTheWork(t *testing.T) {
+	m, _, _, _ := newMoveManager(t)
 	m.agents = fakeAgents{}
-	if _, err := m.PrepareTransfer(ctx, "mer-1", "trsecond0", toB, false); !errors.Is(err, ErrTransferUnsupported) {
-		t.Fatalf("prepare = %v", err)
-	}
-	if len(store.moves) != 0 || !slices.Equal(ws.deleted, []string{"refs/ao/preserved/trsecond0"}) {
-		t.Fatalf("after a failed export: pending %v, deleted %v", store.moves, ws.deleted)
+	transfer, err := m.PrepareTransfer(ctx, "mer-1", "trfirst00", toB, false)
+	if err != nil || transfer.Native != nil || !transfer.Bundle || transfer.Archive == nil {
+		t.Fatalf("prepare = %+v, %v; want the bundle alone", transfer, err)
 	}
 }
 
 func TestCommitAfterKeepItHereLeavesTheSessionRunning(t *testing.T) {
-	m, store, ws, rt := newMoveManager(t)
+	m, store, _, rt := newMoveManager(t)
 	if _, err := m.PrepareTransfer(ctx, "mer-1", "trfirst00", toB, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.CancelTransfer(ctx, "mer-1", "trfirst00"); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(ws.deleted, []string{"refs/ao/preserved/trfirst00"}) {
-		t.Fatalf("cancel deleted %v", ws.deleted)
+	if transferLeft(t, m, "trfirst00") {
+		t.Fatal("cancel left the transfer's files")
 	}
 	stopped := rt.destroyed
 	done := toB
@@ -255,5 +270,23 @@ func TestLockTransferWaitsItsTurn(t *testing.T) {
 	unlock()
 	if err := <-got; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReceiveTransferWithoutAConversationStartsFromTheNote(t *testing.T) {
+	m, store, _, _ := newMoveManager(t)
+	agent := &recordingAgent{}
+	m.agents = singleAgent{agent: agent}
+	origin := "https://github.com/o/r"
+	store.projects["web"] = domain.ProjectRecord{ID: "web", Path: "/repo/web", RepoOriginURL: origin}
+	rec, err := m.ReceiveTransfer(ctx, "web", domain.SessionTransfer{
+		TransferID: "trrecv001", RepoKey: domain.RepositoryKey(origin), Branch: "feat/x", HeadSHA: strings.Repeat("a", 40),
+		Harness: domain.HarnessCodex, HandoffNote: "NOTE",
+	}, "resume where you stopped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Harness != domain.HarnessCodex || agent.lastLaunch.Prompt != "NOTE" {
+		t.Fatalf("received %s with prompt %q; want codex with the handoff note", rec.Harness, agent.lastLaunch.Prompt)
 	}
 }

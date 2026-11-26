@@ -4829,14 +4829,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/sessions/{sessionId}/transfer/{transferId}/native": {
+    "/api/v1/sessions/{sessionId}/transfer/{transferId}/archive": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Download a prepared transfer's conversation archive */
+        /** Download the file a prepared transfer carries: its git bundle and conversation */
         get: operations["getSessionTransferArchive"];
         put?: never;
         post?: never;
@@ -5187,7 +5187,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/sessions/transfer/{transferId}/native/{part}": {
+    "/api/v1/sessions/transfer/{transferId}/archive": {
         parameters: {
             query?: never;
             header?: never;
@@ -5195,8 +5195,8 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Upload one part of a transfer's conversation archive; the body is the part's bytes */
-        put: operations["putSessionTransferArchivePart"];
+        /** Upload the file a transfer carries, at most 90 MiB; the body is its bytes */
+        put: operations["putSessionTransferArchive"];
         post?: never;
         delete?: never;
         options?: never;
@@ -7821,6 +7821,11 @@ export interface components {
             mode: string;
             reviewId: string;
         };
+        DomainSessionTransferArchive: {
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+        };
         DomainSideReference: {
             comment?: string;
             conversationId: string;
@@ -9468,13 +9473,16 @@ export interface components {
             tool: string;
         };
         SessionTransfer: {
+            archive?: components["schemas"]["DomainSessionTransferArchive"];
             branch: string;
+            bundle?: boolean;
             displayName?: string;
             effort?: string;
             handoffNote: string;
             harness: string;
             headSha: string;
             issueId?: string;
+            mode?: string;
             model?: string;
             native?: components["schemas"]["SessionTransferNative"];
             permissions?: string;
@@ -9494,9 +9502,6 @@ export interface components {
         SessionTransferNative: {
             cliVersion?: string;
             nativeId: string;
-            sha256: string;
-            /** Format: int64 */
-            size: number;
             sourceCwd: string;
         };
         SessionTransferResponse: {
@@ -28633,7 +28638,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/gzip": string;
+                    "application/x-tar": string;
                 };
             };
             /** @description Unprocessable Entity */
@@ -29986,15 +29991,13 @@ export interface operations {
             };
         };
     };
-    putSessionTransferArchivePart: {
+    putSessionTransferArchive: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Transfer identifier chosen by the client. */
                 transferId: string;
-                /** @description Part number, from 0. */
-                part: number;
             };
             cookie?: never;
         };

@@ -4,7 +4,7 @@ import { Check, LoaderCircle } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cancelWaitingMove, useMoveStore, type MoveState } from "../lib/move-runner";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
-import { moveFraction, useMoveStepText } from "./MoveBanner";
+import { useMoveStepText } from "./MoveBanner";
 import { CloseButton } from "./ui/close-button";
 import { Button } from "./ui/button";
 
@@ -48,11 +48,10 @@ function GlobalToastStack({ placement, toasts, leading = [] }: { placement: NonN
 	);
 }
 
-/** A move running while its session is not on screen: which session, where to, and how far. */
+/** A move running while its session is not on screen: which session, where to, and the step it is on. */
 function MoveToast({ moveKey: key, move }: { moveKey: string; move: MoveState }) {
 	const { t } = useTranslation();
 	const step = useMoveStepText(move);
-	const fraction = moveFraction(move);
 	const moving = t("moveSession.moving", { host: move.targetLabel });
 	return (
 		<section
@@ -65,11 +64,6 @@ function MoveToast({ moveKey: key, move }: { moveKey: string; move: MoveState })
 			<div className="min-w-0 flex-1">
 				<p className="truncate font-medium text-(--color-text-import-title)">{move.title ?? moving}</p>
 				<p className="mt-0.5 truncate text-[var(--color-text-import-muted)]">{move.title ? `${moving} · ${step}` : step}</p>
-				{fraction === undefined ? null : (
-					<div className="mt-2 h-0.5 overflow-hidden rounded-full bg-muted">
-						<div className="h-full bg-[var(--color-status-working)] transition-[width] duration-150" style={{ width: `${fraction * 100}%` }} />
-					</div>
-				)}
 			</div>
 			{move.phase === "waiting" ? (
 				<Button type="button" variant="ghost" size="xs" className="-my-1 font-medium" onClick={() => cancelWaitingMove(key)}>

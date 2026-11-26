@@ -4,31 +4,18 @@ import { ArrowRightLeft, LoaderCircle, TriangleAlert } from "@/components/app-ic
 import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import { useMoveSession } from "../hooks/useMoveSession";
 import { cancelWaitingMove, moveKey, showMove, useMoveStore, type MoveState } from "../lib/move-runner";
-import { MOVE_PART_BYTES } from "../lib/move-session";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 
-const MB = 1024 * 1024;
-
 /** Refusals that the same move cannot get past by retrying. */
 const FINAL_REFUSALS = new Set(["TRANSFER_DEFAULT_BRANCH", "TRANSFER_UNSUPPORTED", "SESSION_MOVED"]);
 
-/** What the move is doing now, such as "Copying the conversation · 12 of 32 MB". */
+/** What the move is doing now, such as "Copying the work". */
 export function useMoveStepText(move: MoveState | undefined): string {
 	const { t } = useTranslation();
 	if (!move || move.phase !== "moving") return move?.phase === "waiting" ? t("moveSession.waitingTitle") : "";
-	const step = t(`moveSession.step.${move.step ?? "prepare"}`, { host: move.targetLabel });
-	const progress = move.step === "copy" && move.progress && move.progress.total > MOVE_PART_BYTES ? move.progress : undefined;
-	return progress
-		? `${step} · ${t("moveSession.progress", { sent: Math.round(progress.sent / MB), total: Math.max(1, Math.round(progress.total / MB)) })}`
-		: step;
-}
-
-/** The copy's real progress, from 0 to 1, while there is one. */
-export function moveFraction(move: MoveState | undefined): number | undefined {
-	const progress = move?.phase === "moving" && move.step === "copy" ? move.progress : undefined;
-	return progress && progress.total > 0 ? Math.min(1, progress.sent / progress.total) : undefined;
+	return t(`moveSession.step.${move.step ?? "prepare"}`, { host: move.targetLabel });
 }
 
 /** A session's move, on the session: the mid-turn choice, progress, and a failure with its way out. */
@@ -59,18 +46,10 @@ export function MoveBanner({ session }: { session: WorkspaceSession }) {
 		);
 	}
 	if (move.phase === "waiting" || move.phase === "moving") {
-		const fraction = moveFraction(move);
 		return (
-			<div className="shrink-0">
-				<Row icon={<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-[var(--color-status-working)]" />} title={t("moveSession.moving", { host })} detail={stepText}>
-					{move.phase === "waiting" ? <Button size="sm" variant="ghost" onClick={() => cancelWaitingMove(key)}>{t("moveSession.cancelMove")}</Button> : null}
-				</Row>
-				{fraction === undefined ? null : (
-					<div className="h-0.5 bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction * 100)}>
-						<div className="h-full bg-[var(--color-status-working)] transition-[width] duration-150" style={{ width: `${fraction * 100}%` }} />
-					</div>
-				)}
-			</div>
+			<Row icon={<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-[var(--color-status-working)]" />} title={t("moveSession.moving", { host })} detail={stepText}>
+				{move.phase === "waiting" ? <Button size="sm" variant="ghost" onClick={() => cancelWaitingMove(key)}>{t("moveSession.cancelMove")}</Button> : null}
+			</Row>
 		);
 	}
 	const alert = <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-destructive" />;

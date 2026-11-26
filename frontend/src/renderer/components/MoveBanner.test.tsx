@@ -15,7 +15,6 @@ const actions = vi.hoisted(() => ({
 }));
 vi.mock("../hooks/useMoveSession", () => ({ useMoveSession: () => actions }));
 
-const MB = 1024 * 1024;
 const session = { id: "web-3", title: "Osprey notes", workspaceId: "web" } as never;
 const base = { targetHostId: "host-b", targetProjectId: "web", targetLabel: "MacBook B", title: "Osprey notes" };
 const setMove = (move: Partial<MoveState>) => useMoveStore.setState({ moves: { "local:web-3": { ...base, phase: "moving", ...move } as MoveState }, shown: {} });
@@ -29,19 +28,18 @@ describe("MoveBanner", () => {
 	it("asks when to move a session that is mid-turn", () => {
 		setMove({ phase: "asking" });
 		render(<MoveBanner session={session} />);
-		expect(screen.getByText("Claude is working on a turn")).toBeInTheDocument();
+		expect(screen.getByText("The agent is working on a turn")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Move after this turn" }));
 		expect(actions.retry).toHaveBeenCalledWith({ afterTurn: true });
 		fireEvent.click(screen.getByRole("button", { name: "Stop turn and move" }));
 		expect(actions.retry).toHaveBeenCalledWith({ stopTurn: true });
 	});
 
-	it("shows the copy's real progress and counts itself as shown", () => {
-		setMove({ step: "copy", progress: { sent: 12 * MB, total: 32 * MB } });
+	it("shows the step and counts itself as shown", () => {
+		setMove({ step: "copy" });
 		const view = render(<MoveBanner session={session} />);
 		expect(screen.getByText("Moving to MacBook B")).toBeInTheDocument();
-		expect(screen.getByText(/Copying the conversation · 12 of 32 MB/)).toBeInTheDocument();
-		expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "38");
+		expect(screen.getByText(/Copying the work/)).toBeInTheDocument();
 		expect(useMoveStore.getState().shown["local:web-3"]).toBe(1);
 		view.unmount();
 		expect(useMoveStore.getState().shown["local:web-3"]).toBe(0);

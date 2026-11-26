@@ -3,8 +3,8 @@ package domain
 import "strings"
 
 // SessionTransfer is what one machine hands another to continue a session
-// there: where the code is on origin, the agent's conversation, and the
-// session's settings.
+// there: its branch head, a file with the work and conversation origin may not
+// have, and the session's settings.
 type SessionTransfer struct {
 	TransferID string                `json:"transferId"`
 	Source     SessionTransferSource `json:"source"`
@@ -12,10 +12,18 @@ type SessionTransfer struct {
 	RepoKey string `json:"repoKey"`
 	Branch  string `json:"branch"`
 	HeadSHA string `json:"headSha"`
-	// PreservedRef is the origin ref holding uncommitted work; empty when there was none.
+	// PreservedRef names the uncommitted work in the bundle; empty when there was none.
 	PreservedRef string `json:"preservedRef,omitempty"`
-	// Native describes the exported agent conversation; nil when there was none.
+	// Archive is the one file the move carries; nil when origin has all the
+	// work and no conversation moves.
+	Archive *SessionTransferArchive `json:"archive,omitempty"`
+	// Bundle is true when Archive holds a git bundle.
+	Bundle bool `json:"bundle,omitempty"`
+	// Native describes the agent conversation in Archive; nil when none moves.
 	Native *SessionTransferNative `json:"native,omitempty"`
+	// Mode is the session's mode on the source. A session that resumes its own
+	// conversation runs in its CLI's terminal instead.
+	Mode SessionMode `json:"mode,omitempty"`
 	// HandoffNote starts the agent on a new conversation when the moved one
 	// cannot be resumed.
 	HandoffNote     string          `json:"handoffNote"`
@@ -35,13 +43,17 @@ type SessionTransferSource struct {
 	SessionID SessionID `json:"sessionId"`
 }
 
-// SessionTransferNative describes an exported native conversation archive.
+// SessionTransferArchive describes the one file a move carries.
+type SessionTransferArchive struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+// SessionTransferNative describes the agent's own conversation in a move.
 type SessionTransferNative struct {
 	NativeID   string `json:"nativeId"`
 	SourceCwd  string `json:"sourceCwd"`
 	CLIVersion string `json:"cliVersion,omitempty"`
-	Size       int64  `json:"size"`
-	SHA256     string `json:"sha256"`
 }
 
 // SessionTransferDestination records where a moved session continues.

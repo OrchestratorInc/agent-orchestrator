@@ -12,63 +12,40 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestTransferPushFetchAlign(t *testing.T) {
-	git := requireGit(t)
-	tmp := t.TempDir()
-	repoA := setupOriginClone(t, git, tmp)
-	repoB := filepath.Join(tmp, "repo-b")
-	run(t, git, "clone", filepath.Join(tmp, "origin.git"), repoB)
-	runGit(t, git, repoB, "config", "user.email", "ao@example.com")
-	runGit(t, git, repoB, "config", "user.name", "Ao Agents")
-
+func TestTransferBundleFetchAlign(t *testing.T) {
 	ctx := context.Background()
-	wsA, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed-a"), RepoResolver: StaticRepoResolver{"proj": repoA}})
-	if err != nil {
-		t.Fatalf("new a: %v", err)
-	}
-	wsB, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed-b"), RepoResolver: StaticRepoResolver{"proj": repoB}})
-	if err != nil {
-		t.Fatalf("new b: %v", err)
-	}
-	const branch = "feature/move"
-	const remotePreserved = "refs/ao/preserved/tr12345678"
-	info, err := wsA.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: branch})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	const branch, remotePreserved = "feature/move", "refs/ao/preserved/tr12345678"
+	git, tmp, repoA, repoB, wsA, wsB, info := transferPair(t, branch)
+	bundle := filepath.Join(tmp, "move.bundle")
 	commit := func(name string) {
-		if err := os.WriteFile(filepath.Join(info.Path, name), []byte(name+"\n"), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
+		writeFile(t, info.Path, name, name+"\n")
 		runGit(t, git, info.Path, "add", name)
 		runGit(t, git, info.Path, "commit", "-m", name)
 	}
 	commit("one.txt")
-	tree := gitOutput(t, git, info.Path, "rev-parse", "HEAD^{tree}")
-	preserved := gitOutput(t, git, info.Path, "commit-tree", tree, "-p", "HEAD", "-m", "preserved")
-	runGit(t, git, info.Path, "update-ref", "refs/ao/local-preserved", preserved)
-
-	head, uncommitted, err := wsA.PushTransfer(ctx, info, "refs/ao/local-preserved", remotePreserved)
-	if err != nil || !uncommitted {
-		t.Fatalf("push = %v, %v", uncommitted, err)
+	writeFile(t, info.Path, "draft.txt", "draft\n")
+	ref, err := wsA.StashUncommitted(ctx, info)
+	if err != nil || ref == "" {
+		t.Fatalf("stash = %q, %v", ref, err)
+	}
+	head, uncommitted, bundled, err := wsA.BundleTransfer(ctx, info, ref, remotePreserved, bundle)
+	if err != nil || !uncommitted || !bundled {
+		t.Fatalf("bundle = %v %v, %v", uncommitted, bundled, err)
 	}
 	if want := gitOutput(t, git, info.Path, "rev-parse", "HEAD"); head != want {
-		t.Fatalf("push head = %s, want %s", head, want)
+		t.Fatalf("bundle head = %s, want %s", head, want)
 	}
-
-	if err := wsB.FetchTransfer(ctx, repoB, branch, remotePreserved); err != nil {
+	if out := gitOutput(t, git, filepath.Join(tmp, "origin.git"), "for-each-ref"); strings.Contains(out, "refs/ao/") || strings.Contains(out, branch) {
+		t.Fatalf("origin got the work:\n%s", out)
+	}
+	if out := gitOutput(t, git, info.Path, "for-each-ref", remotePreserved+"*"); out != "" {
+		t.Fatalf("source kept %s", out)
+	}
+	if err := wsB.FetchTransfer(ctx, repoB, branch, head, bundle, remotePreserved); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if got, _ := wsB.RevParse(ctx, repoB, remotePreserved); got != preserved {
-		t.Fatalf("fetched preserved = %q, want %s", got, preserved)
-	}
-	for range 2 {
-		if err := wsA.DeleteTransferRef(ctx, repoA, remotePreserved); err != nil {
-			t.Fatalf("delete preserved ref: %v", err)
-		}
-	}
-	if out := gitOutput(t, git, filepath.Join(tmp, "origin.git"), "for-each-ref", "refs/ao/"); out != "" {
-		t.Fatalf("origin still has %s", out)
+	if got := gitOutput(t, git, repoB, "rev-parse", remotePreserved+"^"); got != head {
+		t.Fatalf("preserved parent = %s, want %s", got, head)
 	}
 	if err := wsB.AlignTransferBranch(ctx, repoB, branch, head); err != nil {
 		t.Fatalf("align new branch: %v", err)
@@ -77,40 +54,110 @@ func TestTransferPushFetchAlign(t *testing.T) {
 		t.Fatalf("b branch = %s, want %s", got, head)
 	}
 
+	// Pushed and clean: nothing to bundle, and the head comes from origin.
+	runGit(t, git, info.Path, "checkout", "--", ".")
+	runGit(t, git, info.Path, "clean", "-fdq")
 	commit("two.txt")
-	head2, uncommitted, err := wsA.PushTransfer(ctx, info, "", remotePreserved)
-	if err != nil || uncommitted {
-		t.Fatalf("second push = %v, %v; want nothing uncommitted", uncommitted, err)
+	runGit(t, git, info.Path, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	_ = os.Remove(bundle)
+	head2, uncommitted, bundled, err := wsA.BundleTransfer(ctx, info, "", remotePreserved, bundle)
+	if err != nil || uncommitted || bundled {
+		t.Fatalf("clean pushed bundle = %v %v, %v; want none", uncommitted, bundled, err)
 	}
-	if err := wsB.FetchTransfer(ctx, repoB, branch, ""); err != nil {
-		t.Fatalf("second fetch: %v", err)
+	if _, err := os.Stat(bundle); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a bundle was written: %v", err)
+	}
+	if err := wsB.FetchTransfer(ctx, repoB, branch, head2, "", ""); err != nil {
+		t.Fatalf("fetch from origin: %v", err)
 	}
 	if err := wsB.AlignTransferBranch(ctx, repoB, branch, head2); err != nil {
 		t.Fatalf("fast-forward: %v", err)
 	}
-	if got := gitOutput(t, git, repoB, "rev-parse", "refs/heads/"+branch); got != head2 {
-		t.Fatalf("b branch after fast-forward = %s, want %s", got, head2)
+
+	// The bundle builds on a commit B lacks: B fetches it from origin.
+	commit("three.txt")
+	runGit(t, git, info.Path, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	commit("four.txt")
+	head4, _, bundled, err := wsA.BundleTransfer(ctx, info, "", remotePreserved, bundle)
+	if err != nil || !bundled {
+		t.Fatalf("bundle = %v, %v", bundled, err)
+	}
+	if err := wsB.FetchTransfer(ctx, repoB, branch, head4, bundle, ""); err != nil {
+		t.Fatalf("fetch with a missing base: %v", err)
+	}
+	if err := wsB.AlignTransferBranch(ctx, repoB, branch, head4); err != nil {
+		t.Fatalf("align after base fetch: %v", err)
+	}
+	if got := gitOutput(t, git, repoB, "rev-parse", "refs/heads/"+branch); got != head4 {
+		t.Fatalf("b branch = %s, want %s", got, head4)
 	}
 
-	local := gitOutput(t, git, repoB, "commit-tree", tree, "-p", head2, "-m", "only on b")
+	tree := gitOutput(t, git, repoB, "rev-parse", head4+"^{tree}")
+	local := gitOutput(t, git, repoB, "commit-tree", tree, "-p", head4, "-m", "only on b")
 	runGit(t, git, repoB, "update-ref", "refs/heads/"+branch, local)
-	if err := wsB.AlignTransferBranch(ctx, repoB, branch, head2); !errors.Is(err, ports.ErrTransferBranchDiverged) {
+	if err := wsB.AlignTransferBranch(ctx, repoB, branch, head4); !errors.Is(err, ports.ErrTransferBranchDiverged) {
 		t.Fatalf("align with local-only commit err = %v, want ErrTransferBranchDiverged", err)
-	}
-	if got := gitOutput(t, git, repoB, "rev-parse", "refs/heads/"+branch); got != local {
-		t.Fatalf("b branch = %s, want local commit %s kept", got, local)
 	}
 
 	if err := wsA.ReleaseTransferBranch(ctx, info); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if got := gitOutput(t, git, info.Path, "rev-parse", "HEAD"); got != head2 {
-		t.Fatalf("released HEAD = %s, want %s", got, head2)
+	if got := gitOutput(t, git, info.Path, "rev-parse", "HEAD"); got != head4 {
+		t.Fatalf("released HEAD = %s, want %s", got, head4)
 	}
 	runGit(t, git, repoA, "worktree", "add", filepath.Join(tmp, "again"), branch)
-	if _, _, err := wsA.PushTransfer(ctx, info, "", remotePreserved); !errors.Is(err, ports.ErrDetachedHead) {
-		t.Fatalf("detached push err = %v, want ErrDetachedHead", err)
+	if _, _, _, err := wsA.BundleTransfer(ctx, info, "", remotePreserved, bundle); !errors.Is(err, ports.ErrDetachedHead) {
+		t.Fatalf("detached bundle err = %v, want ErrDetachedHead", err)
 	}
+}
+
+func TestFetchTransferNamesMissingWork(t *testing.T) {
+	ctx := context.Background()
+	git, tmp, _, repoB, wsA, wsB, info := transferPair(t, "feature/missing")
+	writeFile(t, info.Path, "one.txt", "one\n")
+	runGit(t, git, info.Path, "add", "-A")
+	runGit(t, git, info.Path, "commit", "-qm", "one")
+	head := gitOutput(t, git, info.Path, "rev-parse", "HEAD")
+	if err := wsB.FetchTransfer(ctx, repoB, "feature/missing", head, "", ""); !errors.Is(err, ports.ErrTransferFetch) {
+		t.Fatalf("unpushed head without a bundle: %v, want ErrTransferFetch", err)
+	}
+	// A bundle whose base neither B nor origin has.
+	writeFile(t, info.Path, "two.txt", "two\n")
+	runGit(t, git, info.Path, "add", "-A")
+	runGit(t, git, info.Path, "commit", "-qm", "two")
+	bundle := filepath.Join(tmp, "partial.bundle")
+	runGit(t, git, info.Path, "bundle", "create", bundle, "refs/heads/feature/missing", "^"+head)
+	if err := wsB.FetchTransfer(ctx, repoB, "feature/missing", gitOutput(t, git, info.Path, "rev-parse", "HEAD"), bundle, ""); !errors.Is(err, ports.ErrTransferFetch) {
+		t.Fatalf("bundle with an unknown base: %v, want ErrTransferFetch", err)
+	}
+	_ = wsA
+}
+
+func TestBundleTransferRefusesUnpushedLFSFiles(t *testing.T) {
+	ctx := context.Background()
+	git, tmp, _, _, wsA, _, info := transferPair(t, "feature/lfs")
+	writeFile(t, info.Path, "big.psd", "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n")
+	if _, _, _, err := wsA.BundleTransfer(ctx, info, mustStash(t, wsA, info), "refs/ao/preserved/tr12345678", filepath.Join(tmp, "lfs.bundle")); !errors.Is(err, ports.ErrTransferLFS) {
+		t.Fatalf("uncommitted LFS file: %v, want ErrTransferLFS", err)
+	}
+	runGit(t, git, info.Path, "add", "-A")
+	runGit(t, git, info.Path, "commit", "-qm", "lfs")
+	if _, _, _, err := wsA.BundleTransfer(ctx, info, "", "refs/ao/preserved/tr12345678", filepath.Join(tmp, "lfs.bundle")); !errors.Is(err, ports.ErrTransferLFS) {
+		t.Fatalf("unpushed LFS commit: %v, want ErrTransferLFS", err)
+	}
+	runGit(t, git, info.Path, "push", "-q", "origin", "HEAD:refs/heads/feature/lfs")
+	if _, _, bundled, err := wsA.BundleTransfer(ctx, info, "", "refs/ao/preserved/tr12345678", filepath.Join(tmp, "lfs.bundle")); err != nil || bundled {
+		t.Fatalf("pushed LFS commit = %v, %v; want no bundle, no error", bundled, err)
+	}
+}
+
+func mustStash(t *testing.T, ws *Workspace, info ports.WorkspaceInfo) string {
+	t.Helper()
+	ref, err := ws.StashUncommitted(context.Background(), info)
+	if err != nil || ref == "" {
+		t.Fatalf("stash = %q, %v", ref, err)
+	}
+	return ref
 }
 
 func TestRestoreTransferIndexUnstagesWhenNothingWasStaged(t *testing.T) {
@@ -188,11 +235,12 @@ func moveToB(t *testing.T, wsA, wsB *Workspace, repoB string, info ports.Workspa
 	if err != nil {
 		t.Fatalf("stash: %v", err)
 	}
-	head, uncommitted, err := wsA.PushTransfer(ctx, info, ref, remoteRef)
-	if err != nil || !uncommitted {
-		t.Fatalf("push = %v, %v", uncommitted, err)
+	bundle := filepath.Join(t.TempDir(), "move.bundle")
+	head, uncommitted, bundled, err := wsA.BundleTransfer(ctx, info, ref, remoteRef, bundle)
+	if err != nil || !uncommitted || !bundled {
+		t.Fatalf("bundle = %v %v, %v", uncommitted, bundled, err)
 	}
-	if err := wsB.FetchTransfer(ctx, repoB, info.Branch, remoteRef); err != nil {
+	if err := wsB.FetchTransfer(ctx, repoB, info.Branch, head, bundle, remoteRef); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if err := wsB.AlignTransferBranch(ctx, repoB, info.Branch, head); err != nil {
@@ -296,7 +344,6 @@ func TestCheckTransferRefusesSubmoduleWork(t *testing.T) {
 }
 
 func TestTransferCarriesStagedState(t *testing.T) {
-	ctx := context.Background()
 	const branch, remoteRef = "feature/staged", "refs/ao/preserved/tr12345678"
 	git, _, repoA, repoB, wsA, wsB, info := transferPair(t, branch)
 	for _, name := range []string{"keep.txt", "gone.txt", "old.txt"} {
@@ -330,15 +377,12 @@ func TestTransferCarriesStagedState(t *testing.T) {
 	if out := gitOutput(t, git, repoB, "for-each-ref", "refs/ao/"); out != "" {
 		t.Fatalf("destination kept %s", out)
 	}
-	if err := wsA.DeleteTransferRef(ctx, repoA, remoteRef); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if out := gitOutput(t, git, repoA, "ls-remote", "origin", "refs/ao/*"); out != "" {
-		t.Fatalf("origin kept %s", out)
+	if out := gitOutput(t, git, repoA, "ls-remote", "origin"); strings.Contains(out, "refs/ao/") {
+		t.Fatalf("origin got %s", out)
 	}
 }
 
-func TestPushTransferRefusesUnfinishedGit(t *testing.T) {
+func TestCheckTransferRefusesUnfinishedGit(t *testing.T) {
 	ctx := context.Background()
 	git, _, _, _, wsA, _, info := transferPair(t, "feature/merge")
 	writeFile(t, info.Path, "m.txt", "base\n")
@@ -352,7 +396,7 @@ func TestPushTransferRefusesUnfinishedGit(t *testing.T) {
 	runGit(t, git, info.Path, "commit", "-am", "theirs")
 	runGit(t, git, info.Path, "switch", "-q", "feature/merge")
 	_ = exec.Command(git, "-C", info.Path, "merge", "other").Run()
-	if _, _, err := wsA.PushTransfer(ctx, info, "", "refs/ao/preserved/tr12345678"); !errors.Is(err, ports.ErrTransferGitBusy) || !strings.Contains(err.Error(), "merge") {
+	if err := wsA.CheckTransfer(ctx, info); !errors.Is(err, ports.ErrTransferGitBusy) || !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("merge in progress: %v, want ErrTransferGitBusy", err)
 	}
 	// Conflicts without a merge, as after a stash pop, refuse as well.
@@ -365,12 +409,12 @@ func TestPushTransferRefusesUnfinishedGit(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("index-info: %v: %s", err, out)
 	}
-	if _, _, err := wsA.PushTransfer(ctx, info, "", "refs/ao/preserved/tr12345678"); !errors.Is(err, ports.ErrTransferGitBusy) || !strings.Contains(err.Error(), "conflicts") {
+	if err := wsA.CheckTransfer(ctx, info); !errors.Is(err, ports.ErrTransferGitBusy) || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("unresolved conflicts: %v, want ErrTransferGitBusy", err)
 	}
 }
 
-func TestPushTransferRefusesNestedRepo(t *testing.T) {
+func TestCheckTransferRefusesNestedRepo(t *testing.T) {
 	git, _, _, _, wsA, _, info := transferPair(t, "feature/nested")
 	inner := filepath.Join(info.Path, "deep", "inner")
 	if err := os.MkdirAll(inner, 0o755); err != nil {
@@ -378,33 +422,8 @@ func TestPushTransferRefusesNestedRepo(t *testing.T) {
 	}
 	runGit(t, git, inner, "init", "-q")
 	writeFile(t, inner, "n.txt", "n\n")
-	if _, _, err := wsA.PushTransfer(context.Background(), info, "", "refs/ao/preserved/tr12345678"); !errors.Is(err, ports.ErrTransferNestedRepo) || !strings.Contains(err.Error(), "deep/inner") {
+	if err := wsA.CheckTransfer(context.Background(), info); !errors.Is(err, ports.ErrTransferNestedRepo) || !strings.Contains(err.Error(), "deep/inner") {
 		t.Fatalf("nested repository: %v, want ErrTransferNestedRepo naming deep/inner", err)
-	}
-}
-
-func TestPushTransferReportsARefusedPush(t *testing.T) {
-	git, _, repoA, _, wsA, _, info := transferPair(t, "feature/rewritten")
-	ctx := context.Background()
-	writeFile(t, info.Path, "one.txt", "one\n")
-	runGit(t, git, info.Path, "add", "-A")
-	runGit(t, git, info.Path, "commit", "-m", "one")
-	if _, _, err := wsA.PushTransfer(ctx, info, "", "refs/ao/preserved/tr12345678"); err != nil {
-		t.Fatalf("push: %v", err)
-	}
-	runGit(t, git, info.Path, "commit", "--amend", "-m", "rewritten")
-	writeFile(t, info.Path, "one.txt", "staged secret\n")
-	runGit(t, git, info.Path, "add", "one.txt")
-	ref, err := wsA.StashUncommitted(ctx, info)
-	if err != nil || ref == "" {
-		t.Fatalf("stash = %q, %v", ref, err)
-	}
-	_, _, err = wsA.PushTransfer(ctx, info, ref, "refs/ao/preserved/tr12345678")
-	if !errors.Is(err, ports.ErrTransferPush) || !strings.Contains(err.Error(), "non-fast-forward") && !strings.Contains(err.Error(), "fetch first") {
-		t.Fatalf("rewritten history: %v, want ErrTransferPush with git's reason", err)
-	}
-	if out := gitOutput(t, git, repoA, "ls-remote", "origin", "refs/ao/*"); out != "" {
-		t.Fatalf("a refused push left %s on origin", out)
 	}
 }
 

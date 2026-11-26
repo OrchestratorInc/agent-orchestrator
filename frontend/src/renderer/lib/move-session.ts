@@ -9,9 +9,6 @@ type Client = ReturnType<typeof clientForSessionHost>;
 type Transfer = components["schemas"]["SessionTransfer"];
 type Destination = { hostId: string; label: string; projectId: string };
 
-/** Archive parts stay well under a tunnel's request size limit. */
-export const MOVE_PART_BYTES = 8 * 1024 * 1024;
-
 export type MoveStep = "prepare" | "copy" | "receive" | "commit";
 
 export type MoveInput = {
@@ -21,8 +18,6 @@ export type MoveInput = {
 	/** End a turn in progress instead of refusing to move. */
 	stopTurn?: boolean;
 	onStep?: (step: MoveStep) => void;
-	/** Bytes of the conversation archive copied so far. */
-	onProgress?: (sent: number, total: number) => void;
 };
 
 export type MoveResult = {
@@ -52,7 +47,7 @@ export function newTransferId(): string {
 
 /**
  * Moves a session from one AO daemon to another: prepare on the source, copy
- * the conversation archive, receive on the destination, then mark the source
+ * its one file of work and conversation, receive on the destination, then mark the source
  * moved. Until the destination accepts the session, a failure cancels the move
  * and resumes the source agent, so nothing is lost. After that, only marking
  * the source is left, which commitMove can retry. Running it again after an
@@ -88,10 +83,10 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		step = "receive";
 		let received = earlier ? await receiveUnlessNotCopied(target.client, target.projectId, transfer, target.label) : undefined;
 		if (!received) {
-			if (transfer.native) {
+			if (transfer.archive) {
 				step = "copy";
 				input.onStep?.("copy");
-				await copyArchive(source, target, transferId, input.onProgress);
+				await copyArchive(source, target, transferId);
 			}
 			step = "receive";
 			input.onStep?.("receive");
@@ -160,24 +155,20 @@ async function reach<T extends { error?: unknown }>(label: string, call: Promise
 	return res;
 }
 
-async function copyArchive(source: MoveInput["source"], target: MoveInput["target"], transferId: string, onProgress?: MoveInput["onProgress"]): Promise<void> {
-	const archive = await reach(source.label, source.client.GET("/api/v1/sessions/{sessionId}/transfer/{transferId}/native", {
+async function copyArchive(source: MoveInput["source"], target: MoveInput["target"], transferId: string): Promise<void> {
+	const archive = await reach(source.label, source.client.GET("/api/v1/sessions/{sessionId}/transfer/{transferId}/archive", {
 		params: { path: { sessionId: source.sessionId, transferId } },
-		parseAs: "arrayBuffer",
+		parseAs: "blob",
 	}));
-	if (archive.error || !archive.data) throw apiErrorException(archive.error, "Could not read the conversation");
-	const bytes = new Uint8Array(archive.data as ArrayBuffer);
-	for (let offset = 0, part = 0; offset < bytes.length; offset += MOVE_PART_BYTES, part++) {
-		const res = await reach(target.label, target.client.PUT("/api/v1/sessions/transfer/{transferId}/native/{part}", {
-			params: { path: { transferId, part } },
-			// A Blob reaches Electron's request hooks by reference; a byte array is copied into the main process.
-			body: new Blob([bytes.subarray(offset, offset + MOVE_PART_BYTES)]) as never,
-			bodySerializer: (body: unknown) => body as BodyInit,
-			headers: { "Content-Type": "application/octet-stream" },
-		}));
-		if (res.error) throw apiErrorException(res.error, "Could not copy the conversation");
-		onProgress?.(Math.min(offset + MOVE_PART_BYTES, bytes.length), bytes.length);
-	}
+	if (archive.error || !archive.data) throw apiErrorException(archive.error, "Could not read the work to move");
+	const res = await reach(target.label, target.client.PUT("/api/v1/sessions/transfer/{transferId}/archive", {
+		params: { path: { transferId } },
+		// A Blob reaches Electron's request hooks by reference; a byte array is copied into the main process.
+		body: archive.data as never,
+		bodySerializer: (body: unknown) => body as BodyInit,
+		headers: { "Content-Type": "application/octet-stream" },
+	}));
+	if (res.error) throw apiErrorException(res.error, "Could not copy the work to the other computer");
 }
 
 /** Receive is idempotent per transfer, so a dropped response is retried once
@@ -196,7 +187,7 @@ async function receive(target: Client, projectId: string, transfer: Transfer, la
 	}
 }
 
-/** Undefined when the destination has neither the session nor its whole conversation. */
+/** Undefined when the destination has neither the session nor the copied file. */
 async function receiveUnlessNotCopied(...args: Parameters<typeof receive>) {
 	try {
 		return await receive(...args);

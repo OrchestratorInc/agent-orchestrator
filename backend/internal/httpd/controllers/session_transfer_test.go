@@ -20,7 +20,7 @@ import (
 type fakeTransferSessionService struct {
 	*fakeSessionService
 	archivePath     string
-	parts           map[int]string
+	uploaded        string
 	receivedProject domain.ProjectID
 	received        domain.SessionTransfer
 	preparedDest    domain.SessionTransferDestination
@@ -45,9 +45,9 @@ func (f *fakeTransferSessionService) TransferArchivePath(id domain.SessionID, _ 
 	return f.archivePath, nil
 }
 
-func (f *fakeTransferSessionService) StoreTransferArchivePart(_ string, part int, r io.Reader) error {
+func (f *fakeTransferSessionService) StoreTransferArchive(_ string, r io.Reader) error {
 	b, err := io.ReadAll(r)
-	f.parts[part] = string(b)
+	f.uploaded = string(b)
 	return err
 }
 
@@ -71,11 +71,11 @@ func (f *fakeTransferSessionService) CommitTransfer(_ context.Context, id domain
 }
 
 func TestSessionsAPI_Transfer(t *testing.T) {
-	archive := filepath.Join(t.TempDir(), "native.tgz")
+	archive := filepath.Join(t.TempDir(), "transfer.tar")
 	if err := os.WriteFile(archive, []byte("archive-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	svc := &fakeTransferSessionService{fakeSessionService: newFakeSessionService(), archivePath: archive, parts: map[int]string{}}
+	svc := &fakeTransferSessionService{fakeSessionService: newFakeSessionService(), archivePath: archive}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
@@ -85,21 +85,16 @@ func TestSessionsAPI_Transfer(t *testing.T) {
 		t.Fatalf("prepare = %d %s, destination %+v", status, body, svc.preparedDest)
 	}
 
-	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/transfer/tr12345678/native", "")
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/transfer/tr12345678/archive", "")
 	if status != http.StatusOK || string(body) != "archive-bytes" {
 		t.Fatalf("archive = %d %q", status, body)
 	}
-	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-2/transfer/tr12345678/native", "")
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-2/transfer/tr12345678/archive", "")
 	assertErrorCode(t, body, status, http.StatusNotFound, "TRANSFER_ARCHIVE_INVALID")
 
-	if _, status, _ = doRequest(t, srv, http.MethodPut, "/api/v1/sessions/transfer/tr12345678/native/1", "part-one"); status != http.StatusNoContent {
-		t.Fatalf("put part = %d", status)
+	if _, status, _ = doRequest(t, srv, http.MethodPut, "/api/v1/sessions/transfer/tr12345678/archive", "uploaded"); status != http.StatusNoContent || svc.uploaded != "uploaded" {
+		t.Fatalf("put archive = %d, stored %q", status, svc.uploaded)
 	}
-	if svc.parts[1] != "part-one" {
-		t.Fatalf("stored parts = %v", svc.parts)
-	}
-	body, status, _ = doRequest(t, srv, http.MethodPut, "/api/v1/sessions/transfer/tr12345678/native/-1", "x")
-	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_PART")
 
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/transfer/receive", `{"projectId":"web","transfer":{"transferId":"tr12345678"}}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "TRANSFER_INCOMPLETE")

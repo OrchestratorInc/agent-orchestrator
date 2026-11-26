@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import { Archive, ArrowRightLeft, Code2, Copy, ExternalLink, GitBranch, GitFork, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
@@ -80,8 +80,8 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// plane for a Cloud session. A session shared from another organization is
 	// the sharer's to name and lists outside this sidebar's pins.
 	const canRenameAndPin = !session.cloud?.shared;
-	// Moving resumes the agent's own conversation, which AO can do for Claude Code workers in a project.
-	const canMove = session.provider === "claude-code" && !isOrchestratorSession(session) && !session.isTerminated && !session.cloud &&
+	// Workers in a project can move; the daemon refuses the rest with a reason.
+	const canMove = !isOrchestratorSession(session) && !session.isTerminated && !session.cloud &&
 		Boolean(session.workspaceId) && session.workspaceId !== STANDALONE_WORKSPACE_ID;
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
@@ -157,22 +157,14 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 			},
 			items: moveTargets.length === 0
 				? [moveTargetsSettled && moveOpen ? note("session-move-none", t("moveSession.none")) : { kind: "item", id: "session-move-loading", label: t("common.loading"), disabled: true }]
-				: [
-					...moveTargets.map((target): MenuEntry => ({
-						kind: "item",
-						id: `session-move-${target.hostId}-${target.projectId}`,
-						label: target.label,
-						description: target.projectName,
-						disabled: running,
-						onSelect: () => move.choose(target),
-					})),
-					...(branch
-						? [
-							{ kind: "separator", id: "session-move-sep" } as const,
-							note("session-move-note", <Trans t={t} i18nKey="moveSession.pushNote" values={{ branch }} components={{ branch: <span className="font-mono text-foreground/80" /> }} />),
-						]
-						: []),
-				],
+				: moveTargets.map((target): MenuEntry => ({
+					kind: "item",
+					id: `session-move-${target.hostId}-${target.projectId}`,
+					label: target.label,
+					description: target.projectName,
+					disabled: running,
+					onSelect: () => move.choose(target),
+				})),
 		});
 	}
 	entries.push({ kind: "separator", id: "session-links-sep" });

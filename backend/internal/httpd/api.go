@@ -544,8 +544,8 @@ func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
 func transferRoute(req *http.Request) bool {
 	switch chi.RouteContext(req.Context()).RoutePattern() {
 	case "/api/v1/sessions/{sessionId}/transfer/prepare",
-		"/api/v1/sessions/{sessionId}/transfer/{transferId}/native",
-		"/api/v1/sessions/transfer/{transferId}/native/{part}",
+		"/api/v1/sessions/{sessionId}/transfer/{transferId}/archive",
+		"/api/v1/sessions/transfer/{transferId}/archive",
 		"/api/v1/sessions/transfer/receive",
 		"/api/v1/sessions/{sessionId}/transfer/commit":
 		return true

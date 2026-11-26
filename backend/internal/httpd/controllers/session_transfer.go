@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -13,11 +12,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
-
-// maxTransferPartBytes caps one uploaded part of a conversation archive. The
-// desktop app sends 8 MiB parts, under a tunnel's request size limit.
-const maxTransferPartBytes = 64 << 20
 
 // sessionTransferService moves sessions between machines. It is optional so
 // focused SessionService fakes need not implement it.
@@ -25,7 +21,7 @@ type sessionTransferService interface {
 	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string, dest domain.SessionTransferDestination, stopTurn bool) (domain.SessionTransfer, error)
 	CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error
 	TransferArchivePath(id domain.SessionID, transferID string) (string, error)
-	StoreTransferArchivePart(transferID string, part int, r io.Reader) error
+	StoreTransferArchive(transferID string, r io.Reader) error
 	ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer) (domain.Session, bool, []string, error)
 	CommitTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionMovedTo, error)
 	SessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error)
@@ -34,11 +30,6 @@ type sessionTransferService interface {
 // TransferIDParam names a transfer in a route.
 type TransferIDParam struct {
 	TransferID string `path:"transferId" description:"Transfer identifier chosen by the client."`
-}
-
-// TransferPartParam numbers one uploaded part of a conversation archive, from 0.
-type TransferPartParam struct {
-	Part int `path:"part" description:"Part number, from 0."`
 }
 
 // PrepareTransferRequest is the body of POST /sessions/{sessionId}/transfer/prepare.
@@ -123,7 +114,7 @@ func (c *SessionsController) prepareTransfer(w http.ResponseWriter, r *http.Requ
 }
 
 func (c *SessionsController) transferArchive(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.transferService(w, r, "GET", "/api/v1/sessions/{sessionId}/transfer/{transferId}/native")
+	svc, ok := c.transferService(w, r, "GET", "/api/v1/sessions/{sessionId}/transfer/{transferId}/archive")
 	if !ok {
 		return
 	}
@@ -143,22 +134,17 @@ func (c *SessionsController) transferArchive(w http.ResponseWriter, r *http.Requ
 		envelope.WriteError(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/gzip")
-	http.ServeContent(w, r, "native.tgz", info.ModTime(), f)
+	w.Header().Set("Content-Type", "application/x-tar")
+	http.ServeContent(w, r, "transfer.tar", info.ModTime(), f)
 }
 
-func (c *SessionsController) putTransferArchivePart(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.transferService(w, r, "PUT", "/api/v1/sessions/transfer/{transferId}/native/{part}")
+func (c *SessionsController) putTransferArchive(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.transferService(w, r, "PUT", "/api/v1/sessions/transfer/{transferId}/archive")
 	if !ok {
 		return
 	}
-	part, err := strconv.Atoi(chi.URLParam(r, "part"))
-	if err != nil || part < 0 {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PART", "part must be a non-negative integer", nil)
-		return
-	}
-	body := http.MaxBytesReader(w, r.Body, maxTransferPartBytes)
-	if err := svc.StoreTransferArchivePart(chi.URLParam(r, "transferId"), part, body); err != nil {
+	body := http.MaxBytesReader(w, r.Body, sessionmanager.MaxTransferArchiveBytes)
+	if err := svc.StoreTransferArchive(chi.URLParam(r, "transferId"), body); err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}

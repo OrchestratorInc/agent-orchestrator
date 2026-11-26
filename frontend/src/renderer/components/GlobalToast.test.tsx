@@ -5,15 +5,14 @@ import { showMove, useMoveStore } from "../lib/move-runner";
 import { useUiStore } from "../stores/ui-store";
 
 describe("GlobalToast", () => {
-	it("shows a move's progress only while no session view shows it", () => {
-		const MB = 1024 * 1024;
+	it("shows a move's step only while no session view shows it", () => {
 		useMoveStore.setState({
-			moves: { "local:web-3": { phase: "moving", targetHostId: "host-b", targetProjectId: "web", targetLabel: "MacBook B", title: "Osprey notes", step: "copy", progress: { sent: 12 * MB, total: 32 * MB } } },
+			moves: { "local:web-3": { phase: "moving", targetHostId: "host-b", targetProjectId: "web", targetLabel: "MacBook B", title: "Osprey notes", step: "copy" } },
 			shown: {},
 		});
 		render(<GlobalToast />);
 		expect(screen.getByText("Osprey notes")).toBeInTheDocument();
-		expect(screen.getByText("Moving to MacBook B · Copying the conversation · 12 of 32 MB")).toBeInTheDocument();
+		expect(screen.getByText("Moving to MacBook B · Copying the work")).toBeInTheDocument();
 		let hide = () => {};
 		act(() => {
 			hide = showMove("local:web-3");

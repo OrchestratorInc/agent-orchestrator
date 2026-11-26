@@ -1137,7 +1137,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	defer func() {
 		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
 	}()
-	if cfg.Transfer != nil {
+	if cfg.Transfer != nil && cfg.Transfer.NativeArchive != "" {
 		// A moved conversation resumes in its CLI's terminal.
 		cfg.RequestedMode = domain.SessionModeTUI
 	}

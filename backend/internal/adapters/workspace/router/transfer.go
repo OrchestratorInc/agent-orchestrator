@@ -28,22 +28,22 @@ func (w *Workspace) CheckTransfer(ctx context.Context, info ports.WorkspaceInfo)
 	return t.CheckTransfer(ctx, info)
 }
 
-// PushTransfer delegates to the Git adapter.
-func (w *Workspace) PushTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef string) (string, bool, error) {
+// BundleTransfer delegates to the Git adapter.
+func (w *Workspace) BundleTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef, bundlePath string) (string, bool, bool, error) {
 	t, err := w.gitTransfer()
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
-	return t.PushTransfer(ctx, info, preservedRef, remotePreservedRef)
+	return t.BundleTransfer(ctx, info, preservedRef, remotePreservedRef, bundlePath)
 }
 
 // FetchTransfer delegates to the Git adapter.
-func (w *Workspace) FetchTransfer(ctx context.Context, repoPath, branch, remotePreservedRef string) error {
+func (w *Workspace) FetchTransfer(ctx context.Context, repoPath, branch, head, bundlePath, remotePreservedRef string) error {
 	t, err := w.gitTransfer()
 	if err != nil {
 		return err
 	}
-	return t.FetchTransfer(ctx, repoPath, branch, remotePreservedRef)
+	return t.FetchTransfer(ctx, repoPath, branch, head, bundlePath, remotePreservedRef)
 }
 
 // AlignTransferBranch delegates to the Git adapter.
@@ -80,13 +80,4 @@ func (w *Workspace) RestoreTransferIndex(ctx context.Context, info ports.Workspa
 		return err
 	}
 	return t.RestoreTransferIndex(ctx, info, remotePreservedRef)
-}
-
-// DeleteTransferRef delegates to the Git adapter.
-func (w *Workspace) DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error {
-	t, err := w.gitTransfer()
-	if err != nil {
-		return err
-	}
-	return t.DeleteTransferRef(ctx, repoPath, remotePreservedRef)
 }
