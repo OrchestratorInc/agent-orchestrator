@@ -2,6 +2,7 @@ import { CircleAlert } from "@/components/app-icons";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApprovalDecision, PendingApproval } from "../../lib/approvals";
+import { offersSiteRule } from "../../lib/approval-site-rule";
 import { AgentAvatar, type AgentAvatarProps } from "../AgentAvatar";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -137,7 +138,7 @@ export function ApprovalNoticeCard({
 				</div>
 			) : null}
 
-			{request.site && !waitingFor ? (
+			{offersSiteRule(request) && !waitingFor ? (
 				<label className="mt-2 flex items-center gap-2 text-caption text-muted-foreground">
 					<Checkbox checked={always} disabled={busy} onCheckedChange={(value) => setAlways(value === true)} />
 					{t("approvals.allowSite", { site: host })}

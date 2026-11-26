@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApprovalDecision, PendingApproval } from "../../lib/approvals";
+import { offersSiteRule } from "../../lib/approval-site-rule";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
@@ -155,9 +156,7 @@ export function ApprovalPrompt({
 								Esc
 							</kbd>
 						</Button>
-						{/* "script" is the catch-all (eval, unknown commands, unreadable
-						    targets): the daemon refuses a site rule for it. */}
-						{request.site && request.category !== "script" ? (
+						{offersSiteRule(request) ? (
 							<Button type="button" variant="ghost" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-site")}>
 								{t("approvals.allowSite", { site: request.site })}
 							</Button>

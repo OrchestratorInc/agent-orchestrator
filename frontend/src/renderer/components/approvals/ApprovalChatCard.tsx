@@ -2,6 +2,7 @@ import { ChevronDown, KeyRound } from "@/components/app-icons";
 import { useEffect, useId, useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApprovalDecision, PendingApproval } from "../../lib/approvals";
+import { offersSiteRule } from "../../lib/approval-site-rule";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { approvalTimeLeft, useNow } from "./ApprovalPrompt";
@@ -136,14 +137,14 @@ export function ApprovalChatCard({
 						type="button"
 						variant="primary"
 						size="sm"
-						className={request.site ? "rounded-none" : "rounded-full"}
+						className={offersSiteRule(request) ? "rounded-none" : "rounded-full"}
 						disabled={busy}
 						data-approval-allow=""
 						onClick={() => onDecide("allow-once")}
 					>
 						{t("approvals.allowOnce")}
 					</Button>
-					{request.site ? (
+					{offersSiteRule(request) ? (
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
 								<Button

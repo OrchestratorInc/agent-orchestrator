@@ -48,6 +48,17 @@ describe("ApprovalPrompt", () => {
 		expect(screen.getByText(/Approval needed · Unrecognized command · example\.com/)).toBeInTheDocument();
 	});
 
+	it("offers no site rule for a catch-all category, local or cloud", () => {
+		for (const category of ["script", "unknown"]) {
+			const { unmount } = render(<ApprovalPrompt request={{ ...request, category }} onDecide={vi.fn()} />);
+			expect(screen.queryByRole("button", { name: /Always allow/ })).toBeNull();
+			expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+			unmount();
+		}
+		render(<ApprovalPrompt request={request} onDecide={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "Always allow on shop.example" })).toBeInTheDocument();
+	});
+
 	it("only says who it waits for when someone else decides it", () => {
 		const onDecide = vi.fn();
 		render(<ApprovalPrompt request={{ ...request, waitingFor: { name: "Priya Shah" } }} onDecide={onDecide} />);
