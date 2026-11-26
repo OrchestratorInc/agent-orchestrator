@@ -271,6 +271,25 @@ describe("chat effort", () => {
 			expect(effort.sendsUltracode()).toBe(true);
 		});
 
+		// Two picks over each other, both failing: Ultracode goes back to how it
+		// was before the first, not to the second's unconfirmed off.
+		it("goes back to Ultracode when two picks made over it both fail", async () => {
+			const saves: Array<{ resolve: () => void; reject: (cause: Error) => void }> = [];
+			const { update } = render({ models: claude, snapshot: claudeChat("high"), onSettings: () => new Promise<void>((resolve, reject) => { saves.push({ resolve, reject }); }) });
+			act(() => slider.toggle());
+			act(() => { effort.choose("ultracode"); effort.commit(); });
+			await act(async () => saves[0].resolve());
+			update(claudeChat("xhigh"));
+			expect(effort.sendsUltracode()).toBe(true);
+			act(() => { effort.choose("high"); effort.commit(); });
+			act(() => { effort.choose("low"); effort.commit(); });
+			expect(effort.sendsUltracode()).toBe(false);
+			await act(async () => saves[1].reject(new Error("no")));
+			await act(async () => saves[2].reject(new Error("no")));
+			expect(effort.sendsUltracode()).toBe(true);
+			expect(effort.ultracode).toBe(true);
+		});
+
 		it("saves Extra High, and is on once the conversation reports it", () => {
 			const onSettings = vi.fn(() => Promise.resolve());
 			const { update } = render({ models: claude, snapshot: claudeChat(), onSettings });

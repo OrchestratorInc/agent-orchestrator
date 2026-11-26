@@ -91,6 +91,8 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 		if (confirmTimer.current !== undefined) clearTimeout(confirmTimer.current);
 		confirmTimer.current = undefined;
 	};
+	// Ultracode or not as last confirmed, with no save on its way.
+	const confirmedUltracode = useRef(false);
 	const latest = useRef<() => void>(() => {});
 	// Published once the render commits: a render React drops (a model
 	// change mid-drag, say) must not swap in a handler for a row never shown.
@@ -100,8 +102,10 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 			picked.current = undefined;
 			if (pickedValue === undefined) return;
 			const value = pickedValue === ULTRACODE ? ULTRACODE_LEVEL : pickedValue;
-			// Ultracode or not, as it was before this pick: what a failed save returns to.
-			const wasUltracode = ultracodeWanted;
+			// Ultracode or not, as it was with no save on its way: what a failed
+			// save returns to. Taken only then, so a pick made over another still
+			// on its way does not take that one's unconfirmed flag for it.
+			if (held.current === undefined) confirmedUltracode.current = ultracodeWanted;
 			// Ultracode is Extra High saved, and on for the messages that follow.
 			setUltracode(pickedValue === ULTRACODE);
 			// The level already on its way: its save and hold stand.
@@ -127,7 +131,7 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 				if (picked.current !== undefined) return;
 				stopConfirmTimer();
 				slider.setPick(undefined);
-				setUltracode(wasUltracode);
+				setUltracode(confirmedUltracode.current);
 			};
 			// Held until the conversation shows it (the effect below), or dropped
 			// if it never does.
