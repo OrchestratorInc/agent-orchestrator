@@ -7,7 +7,19 @@
 // latest as fit are kept and the middle ones are counted instead.
 
 import { compactText, limitMessage, MAX_FILE_ANNOTATION_MESSAGE_LENGTH } from "../files/file-annotations";
-import { artifactCommentAuthorLabel, type ArtifactComment, type ArtifactCommentThread } from "./types";
+import {
+	artifactCommentAnchorKind,
+	artifactCommentRegionPlace,
+	formatArtifactCommentTime,
+	isPointRegion,
+} from "./anchors";
+import {
+	artifactCommentAuthorLabel,
+	type ArtifactComment,
+	type ArtifactCommentAnchor,
+	type ArtifactCommentRegion,
+	type ArtifactCommentThread,
+} from "./types";
 
 export const MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH = MAX_FILE_ANNOTATION_MESSAGE_LENGTH;
 /** The Send to agent dialog's note limit; a note this long reaches the agent whole. */
@@ -81,15 +93,51 @@ function threadLines(comments: readonly ArtifactComment[], budget: number): stri
 	return skipped > 0 ? [head, omitted(skipped), ...tail] : [head, ...tail];
 }
 
+const percent = (value: number) => `${Math.round(value * 100)}%`;
+
+/** "point near top-left of the image (x 12%, y 30%)", "region near center of the frame (x 10–40%, y 20–35%)". */
+function regionWhere(region: ArtifactCommentRegion, of: string): string {
+	const place = artifactCommentRegionPlace(region);
+	if (isPointRegion(region)) return `point near ${place} of the ${of} (x ${percent(region.x)}, y ${percent(region.y)})`;
+	return `region near ${place} of the ${of} (x ${percent(region.x)}–${percent(region.x + region.w)}, y ${percent(region.y)}–${percent(region.y + region.h)})`;
+}
+
+/**
+ * The "Where:" line in plain words. An element keeps its original form, tag,
+ * excerpt and selector; lines, images and videos say where in words: "lines
+ * 12-14", "at 01:23", "region near top-left".
+ */
+export function artifactCommentWhere(anchor: ArtifactCommentAnchor): string {
+	const excerpt = compactText(anchor.excerpt, MAX_EXCERPT_LENGTH);
+	const quoted = excerpt ? ` "${excerpt}"` : "";
+	switch (artifactCommentAnchorKind(anchor)) {
+		case "lines":
+			if (anchor.lines) {
+				const { start, end } = anchor.lines;
+				const noun = anchor.tag === "tr" ? "row" : "line";
+				const which = start === end ? `${noun} ${start}` : `${noun}s ${start}-${end}`;
+				return `Where: ${which}${quoted}`;
+			}
+			break;
+		case "image":
+			if (anchor.region) return `Where: ${regionWhere(anchor.region, "image")}`;
+			return "Where: the image";
+		case "video": {
+			const at = `at ${formatArtifactCommentTime(anchor.time ?? 0)} in the video`;
+			return anchor.region ? `Where: ${at}, ${regionWhere(anchor.region, "frame")}` : `Where: ${at}`;
+		}
+	}
+	const selector = compactText(anchor.path, MAX_PATH_LENGTH);
+	return `Where: <${anchor.tag}>${quoted}  [selector: ${selector}]`;
+}
+
 export function formatArtifactCommentMessage(
 	thread: ArtifactCommentThread,
 	artifact: ArtifactCommentMessageArtifact,
 	note?: string,
 ): string {
-	const excerpt = compactText(thread.anchor.excerpt, MAX_EXCERPT_LENGTH);
 	const path = compactText(artifact.path, MAX_PATH_LENGTH);
-	const selector = compactText(thread.anchor.path, MAX_PATH_LENGTH);
-	const where = `Where: <${thread.anchor.tag}>${excerpt ? ` "${excerpt}"` : ""}  [selector: ${selector}]`;
+	const where = artifactCommentWhere(thread.anchor);
 	const ownerNote = note === undefined ? "" : compactText(note, MAX_ARTIFACT_COMMENT_NOTE_LENGTH);
 
 	const before = [

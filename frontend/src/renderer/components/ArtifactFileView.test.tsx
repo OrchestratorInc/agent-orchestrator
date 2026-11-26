@@ -115,8 +115,13 @@ describe("ArtifactFileView", () => {
 		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(contentUrl);
 		expect(cancel).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		if (tag === "video") {
+			// The comment workspace's player, so opening comments keeps it: its own controls, not the native ones.
+			expect(media).not.toHaveAttribute("controls");
+			expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Full screen" })).toBeInTheDocument();
+		} else if (tag === "audio") expect(media).toHaveAttribute("controls");
 		if (tag !== "img") {
-			expect(media).toHaveAttribute("controls");
 			expect(media).toHaveAttribute("preload", "metadata");
 			expect(media).not.toHaveAttribute("autoplay");
 		}

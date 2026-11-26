@@ -5405,7 +5405,7 @@ export interface components {
                 grantCount: number;
             };
         };
-        /** @description The element a thread is on, as the comment bridge on the share host reports it. A version's bytes never change, so a path recorded on a version always points at the same element of that version. */
+        /** @description The element a thread is on, as the comment bridge on the share host reports it, or for the kinds added later a line range, an image point or region, or a video moment. A version's bytes never change, so a path recorded on a version always points at the same element of that version. */
         ArtifactShareCommentAnchor: {
             /** @description A structural path from <body>: each step is the element's tag and its 1-based position among element siblings with the same tag, for example body>main:1>h1:1. */
             path: string;
@@ -5415,6 +5415,28 @@ export interface components {
             textHash: string;
             /** @description Up to 120 characters of the element's text, kept for the agent message and diagnostics. Never shown in the comments UI. */
             excerpt: string;
+            /**
+             * @description What the thread is on. Absent means element: an element of an HTML or rendered Markdown page, picked by the comment bridge. lines: a line or range of lines of a text page (rows of a table page); path, tag, textHash and excerpt describe the first line and lines holds the range. image: a point or rectangle of an image (region). video: a moment of a video (time), optionally a point or rectangle of that frame (region). For image and video the path is body>img:1 or body>video:1, the tag img or video, the textHash that of empty text (e3b0c44298fc1c14) and the excerpt empty. Clients skip threads whose kind they don't know. lines only with kind lines; region only with image (required) or video (optional); time only with video (required).
+             * @enum {string}
+             */
+            kind?: "element" | "lines" | "image" | "video";
+            lines?: components["schemas"]["ArtifactShareCommentLineRange"];
+            /** @description Seconds from the start of the video, for kind video. */
+            time?: number;
+            region?: components["schemas"]["ArtifactShareCommentRegion"];
+        };
+        /** @description 1-based line numbers of a text page, first and last included (for a table page, data rows in file order, the header not counted). */
+        ArtifactShareCommentLineRange: {
+            start: number;
+            /** @description At least start. */
+            end: number;
+        };
+        /** @description A point or rectangle as fractions of the picture's width and height (0 to 1), from its top-left corner, so it holds at any display size. w and h of 0 make a point. x + w and y + h are at most 1. */
+        ArtifactShareCommentRegion: {
+            x: number;
+            y: number;
+            w: number;
+            h: number;
         };
         /** @description A commenter, by display name only; never their email. */
         ArtifactShareCommentAuthor: {

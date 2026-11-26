@@ -1264,7 +1264,7 @@ describe("SessionArtifactsView comments", () => {
 
 	it.each([
 		{ why: "an unpublished file", files: artifacts, path: "notes.md", cloud: undefined },
-		{ why: "a published file that is neither Markdown nor HTML", files: published([{ kind: "file", name: "data.csv", path: "data.csv", size: 1, updatedAt: "2026-09-22T00:00:00Z" }]), path: "data.csv", cloud: undefined },
+		{ why: "a published file that takes no comments (PDF)", files: published([{ kind: "file", name: "report.pdf", path: "report.pdf", size: 1, updatedAt: "2026-09-22T00:00:00Z" }]), path: "report.pdf", cloud: undefined },
 		{ why: "another member's cloud session", files: published(), path: "notes.md", cloud: { orgId: "org-1", createdByUserId: "someone-else" } },
 		{ why: "a shared project's session", files: published(), path: "notes.md", cloud: { orgId: "org-1", shared: true } },
 	])("shows no Comments for $why", async ({ files, path, cloud }) => {

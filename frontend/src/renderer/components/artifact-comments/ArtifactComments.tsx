@@ -3,17 +3,22 @@ import { useTranslation } from "react-i18next";
 import { MessageSquare } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { SharedArtifactFrame } from "../SharedArtifactFrame";
+import { mediaPlayback } from "../../lib/media-playback";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PanelMessage } from "../WorkspaceDiffView";
+import { ArtifactCommentsMedia } from "./ArtifactCommentsMedia";
 import { ArtifactCommentsPanel, ArtifactCommentsReadOnlyList } from "./ArtifactCommentsPanel";
 import {
+	artifactCommentAnchorKey,
 	artifactCommentMarkers,
 	groupArtifactCommentThreads,
 	placeCommentsPopover,
 	type CommentsSelectionRect,
 	type ArtifactCommentAnchor,
+	type ArtifactCommentGroup,
 	type ArtifactCommentsPickKind,
+	videoCommentAnchor,
 } from "../../../shared/artifact-comments";
 import type { ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { useArtifactComments } from "./useArtifactComments";
@@ -21,11 +26,29 @@ import { useCommentBridge } from "./useCommentBridge";
 
 const POPOVER_CLASS = "absolute top-2 right-2 z-overlay max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-lg border border-(--color-border-overlay) bg-overlay text-popover-foreground shadow-(--shadow-popover) transition-[top] duration-150 ease-out motion-reduce:transition-none animate-popover-in";
 
-/** Files whose published page takes comments: Markdown and HTML. */
-export function artifactCommentsKind(path: string): ArtifactCommentsPickKind | null {
+/**
+ * How a published file takes comments: on elements of a Markdown or HTML
+ * page and on lines of a text or table page (the bridge in the frame picks),
+ * or on a point, rectangle or moment of an image or video (the app picks).
+ */
+export type ArtifactCommentsKind = ArtifactCommentsPickKind | "image" | "video";
+
+// The share host's rendering (control plane shareRenderOf): images and
+// videos are served as uploaded; audio, PDF and Mermaid take no comments;
+// any other file is a text or table page.
+/** How long comment mode waits for the viewer's own image or video before showing the published copy. */
+const LOCAL_MEDIA_WAIT = 2500;
+const IMAGE_FILE = /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp|svg)$/i;
+const VIDEO_FILE = /\.(m4v|mov|mp4|ogv|webm|avi|mkv)$/i;
+const NO_COMMENTS_FILE = /\.(aac|flac|m4a|mp3|oga|ogg|opus|wav|pdf|mmd|mermaid)$/i;
+
+export function artifactCommentsKind(path: string): ArtifactCommentsKind | null {
 	if (/\.(md|markdown)$/i.test(path)) return "markdown";
 	if (/\.html?$/i.test(path)) return "html";
-	return null;
+	if (IMAGE_FILE.test(path)) return "image";
+	if (VIDEO_FILE.test(path)) return "video";
+	if (NO_COMMENTS_FILE.test(path)) return null;
+	return "text";
 }
 
 /**
@@ -76,8 +99,8 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
  * belong to the published version, so the local file is not shown meanwhile;
  * a notice says so when the local file has changed since publishing.
  */
-export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, sendTarget, slug, title }: {
-	kind: ArtifactCommentsPickKind;
+export function ArtifactCommentsWorkspace({ kind, mediaKey, onClose, onShown, outdated, sendTarget, slug, title }: {
+	kind: ArtifactCommentsKind;
 	/** Leaves comment mode. */
 	onClose: () => void;
 	/** Called once there is something to see: the published page loaded, or a message in its place. */
@@ -87,15 +110,35 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 	sendTarget?: ArtifactCommentsSendTarget;
 	slug: string;
 	title: string;
+	/** The viewer's image or video for this file (see media-playback): shown here too while it is the published version. */
+	mediaKey?: string;
 }) {
 	const { t } = useTranslation();
+	// The file the viewer already has, at once and where it was; the published copy if it fails to load.
+	const [localMedia] = useState(() => (mediaKey ? mediaPlayback(mediaKey) : undefined));
+	const [localFailed, setLocalFailed] = useState(false);
+	// The local file can wait on the browser's few connections to the app's
+	// server (long-lived streams and other players hold them): if it hasn't
+	// shown soon, the published copy, from its own host.
+	const usingLocal = Boolean(localMedia && !outdated && !localFailed && (kind === "image" || kind === "video"));
+	const localShown = useRef(false);
+	useEffect(() => {
+		if (!usingLocal) return;
+		const timer = window.setTimeout(() => {
+			if (!localShown.current) setLocalFailed(true);
+		}, LOCAL_MEDIA_WAIT);
+		return () => window.clearTimeout(timer);
+	}, [usingLocal]);
 	const comments = useArtifactComments(slug, { panelOpen: true });
 	const [frame, setFrame] = useState<HTMLIFrameElement | null>(null);
-	// The element whose comments are open: a picked one brings its anchor for a new comment.
-	const [element, setElement] = useState<{ path: string; anchor: ArtifactCommentAnchor | null } | null>(null);
+	// The element whose comments are open: a picked one brings its anchor for a
+	// new comment; a video's seek-bar badge brings every group at it (keys).
+	const [element, setElement] = useState<{ path: string; anchor: ArtifactCommentAnchor | null; keys?: string[] } | null>(null);
 	// Where the selected element is in the frame, from the bridge: the popover sits beside it.
 	const [selection, setSelection] = useState<({ path: string } & CommentsSelectionRect) | null>(null);
 	const closePopover = useCallback(() => setElement(null), []);
+	// The thread open in the popover, by anchor key: a video outlines only its box on the frame.
+	const [openThreadKey, setOpenThreadKey] = useState<string | null>(null);
 	// From a new comment to the element's threads, once it is posted.
 	const showThreads = useCallback(() => setElement((current) => current && { path: current.path, anchor: null }), []);
 	const elementRef = useRef(element);
@@ -111,10 +154,32 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 		},
 	});
 	const { setAnchors, setMode, select, unsupported } = bridge;
-	useEffect(() => setMode({ type: "mode", on: true, kind }), [kind, setMode]);
+	const media = kind === "image" || kind === "video" ? kind : null;
+	// A new comment on a place that already has comments (an image's pin, a video's moment).
+	const writeOn = useCallback((anchor: ArtifactCommentAnchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor }), []);
+	useEffect(() => {
+		if (!media) setMode({ type: "mode", on: true, kind: kind as ArtifactCommentsPickKind });
+	}, [kind, media, setMode]);
 
 	const threads = comments.snapshot?.threads;
 	const groups = useMemo(() => groupArtifactCommentThreads(threads ?? []), [threads]);
+	// A video badge with several moments at it: the popover shows them all, as one group.
+	const pointKeys = element && !element.anchor && element.keys && element.keys.length > 1 ? element.keys : null;
+	const popoverGroups = useMemo(() => {
+		if (!pointKeys || !element) return groups;
+		const merge = (list: ArtifactCommentGroup[]) => {
+			const at = list.filter((group) => pointKeys.includes(group.path));
+			if (at.length === 0) return list;
+			const merged: ArtifactCommentGroup = {
+				...at[0]!,
+				path: element.path,
+				threads: at.flatMap((group) => group.threads),
+				openCount: at.reduce((n, group) => n + group.openCount, 0),
+			};
+			return [merged, ...list.filter((group) => !pointKeys.includes(group.path))];
+		};
+		return { ...groups, open: merge(groups.open), resolved: merge(groups.resolved) };
+	}, [element, groups, pointKeys]);
 	// Counts on the elements; a picked element without comments is sent too, so the bridge can find it.
 	const pickedAnchor = element?.anchor ?? null;
 	const anchorsKey = useMemo(() => {
@@ -161,6 +226,20 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 		);
 	}
 	const version = comments.snapshot?.currentVersion;
+	const mediaProps = (src: string, mediaShown: () => void) => ({
+		kind: media!,
+		focused: element && !element.anchor ? openThreadKey : null,
+		onPick: (anchor: ArtifactCommentAnchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor }),
+		onSelect: (key: string, keys?: string[]) => setElement({ path: key, anchor: null, keys }),
+		onSelection: (rect: CommentsSelectionRect | null) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null),
+		onShown: mediaShown,
+		picked: element?.anchor ?? null,
+		selected: selectedPath,
+		selectedKeys: element?.keys ?? null,
+		src,
+		threads: threads ?? [],
+		title,
+	});
 	return (
 		<div className="flex h-full min-h-0 flex-col" data-testid="artifact-comments-workspace">
 			{outdated && version !== undefined ? (
@@ -168,9 +247,19 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 					{t("artifactComments.publishedVersion", { version })}
 				</p>
 			) : null}
-			<div className="relative min-h-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
-				<SharedArtifactFrame frameRef={setFrame} linkId={slug} onShown={shown} title={title} />
-				{unsupported ? (
+			<div className="relative min-h-0 min-w-0 flex-1" data-testid="artifact-comments-stage" ref={stageRef}>
+				{media && localMedia && !outdated && !localFailed ? (
+					<ArtifactCommentsMedia {...mediaProps(localMedia.src, () => { localShown.current = true; shown(); })} crossOrigin={localMedia.crossOrigin} onError={() => setLocalFailed(true)} positionKey={mediaKey} />
+				) : <SharedArtifactFrame
+					frameRef={setFrame}
+					linkId={slug}
+					onShown={shown}
+					renderMedia={media ? (contentUrl, mediaShown, source) => (
+						<ArtifactCommentsMedia {...mediaProps(contentUrl, mediaShown)} source={source} />
+					) : undefined}
+					title={title}
+				/>}
+				{unsupported && !media ? (
 					<ArtifactCommentsReadOnlyList
 						className={POPOVER_CLASS}
 						comments={comments}
@@ -184,7 +273,14 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						className={POPOVER_CLASS}
 						comments={comments}
 						element={element}
-						groups={groups}
+						groups={popoverGroups}
+						onAddComment={() => {
+							const group = [...groups.open, ...groups.unanchored, ...groups.resolved].find((item) => item.path === element.path);
+							if (!group) return;
+							// A video's footer is about the frame: a new comment on the whole frame; drag a box for a place on it.
+							writeOn(media === "video" ? videoCommentAnchor(group.anchor.time ?? 0) : group.anchor);
+						}}
+						onOpenThread={setOpenThreadKey}
 						onClose={closePopover}
 						onNaturalHeight={setPopoverHeight}
 						onPosted={showThreads}
