@@ -3290,16 +3290,16 @@ describe("ChatWorkspace timeline", () => {
 	it("never shows the stopped banner and the live turn spinner together", () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter(
-			(item) =>
-				!(
-					item.kind === "activity" &&
-					item.activityKind === "approval" &&
-					item.status === "pending"
-				),
+			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
 		);
-		snapshot.controller = { state: "stopped" };
-		render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />);
+		const view = render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />);
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 
+		// The controller dies mid-turn; no turn-end event follows it.
+		view.rerender(
+			<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />,
+		);
 		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
 		expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
