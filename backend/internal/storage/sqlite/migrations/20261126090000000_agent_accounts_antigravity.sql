@@ -35,9 +35,26 @@ SELECT CASE WHEN (
 -- +goose StatementBegin
 DROP TABLE antigravity_account_schema_guard;
 -- +goose StatementEnd
+-- Every session that exists already ran on the computer's own agy login, as
+-- 0210 records for Claude and Codex: a default account picked later leaves it
+-- there, and its usage counts for the login it used.
+-- +goose StatementBegin
+INSERT INTO session_agent_accounts (session_id, provider, account_id, bound_at)
+SELECT sessions.id, 'antigravity', 'device-antigravity', sessions.created_at
+FROM sessions
+WHERE NOT EXISTS (
+    SELECT 1 FROM session_agent_accounts a
+    WHERE a.session_id = sessions.id AND a.provider = 'antigravity'
+);
+-- +goose StatementEnd
 
 -- +goose Down
--- Refuse a rollback while any Antigravity row would violate the restored CHECK.
+-- The computer's own bindings this migration recorded go first; any other
+-- Antigravity row refuses the rollback below.
+-- +goose StatementBegin
+DELETE FROM session_agent_accounts WHERE provider = 'antigravity' AND account_id = 'device-antigravity';
+-- +goose StatementEnd
+-- Refuse a rollback while any other Antigravity row would violate the restored CHECK.
 -- +goose StatementBegin
 CREATE TEMP TABLE IF NOT EXISTS antigravity_account_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
 -- +goose StatementEnd

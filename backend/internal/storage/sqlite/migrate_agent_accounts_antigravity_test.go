@@ -40,3 +40,34 @@ func TestAntigravityAccountsMigrationAcceptsTheProvider(t *testing.T) {
 		t.Fatalf("integrity %s: %v", integrity, err)
 	}
 }
+
+// TestAntigravityAccountsMigrationKeepsExistingSessionsOnTheComputersLogin:
+// a session from before Antigravity accounts ran on the computer's own agy
+// login, so the upgrade records that, as 0210 did for Claude and Codex, and a
+// default picked later does not move it. The rollback removes those records.
+func TestAntigravityAccountsMigrationKeepsExistingSessionsOnTheComputersLogin(t *testing.T) {
+	const before, version = 20261124180938781, 20261126090000000
+	db := openMigratedDatabaseCopy(t, before)
+	created := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	mustExec(t, db, `INSERT INTO projects(id,path,registered_at) VALUES ('p1','/tmp/p1',?)`, created)
+	mustExec(t, db, `INSERT INTO sessions(id,project_id,num,harness,created_at,updated_at,activity_last_at) VALUES ('old-agy','p1',1,'agy',?,?,?)`, created, created, created)
+
+	upTo(t, db, version)
+	var account string
+	var boundAt time.Time
+	if err := db.QueryRow(`SELECT account_id, bound_at FROM session_agent_accounts WHERE session_id = 'old-agy' AND provider = 'antigravity'`).Scan(&account, &boundAt); err != nil {
+		t.Fatalf("read binding: %v", err)
+	}
+	if account != "device-antigravity" || !boundAt.Equal(created) {
+		t.Fatalf("binding = %s at %v, want device-antigravity at the session's creation %v", account, boundAt, created)
+	}
+
+	downTo(t, db, before)
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM session_agent_accounts WHERE provider = 'antigravity'`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("antigravity bindings after rollback = %d, %v", rows, err)
+	}
+	if _, err := db.Exec(`INSERT INTO agent_account_defaults (provider, account_id) VALUES ('antigravity', 'a1')`); err == nil {
+		t.Fatal("the rollback kept the antigravity provider in the CHECK")
+	}
+}
