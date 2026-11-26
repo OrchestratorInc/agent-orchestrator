@@ -48,7 +48,7 @@ type AgentAccountsController struct {
 }
 
 // Register adds the account routes.
-func (c *AgentAccountsController) Register(r chi.Router) {
+func (c *AgentAccountsController) Register(r chi.Router) { //nolint:dupl // route tables share one shape by design; each line is a distinct route
 	r.Get("/agents/accounts", c.list)
 	r.Get("/agents/accounts/usage", c.usage)
 	r.Post("/agents/accounts/login", c.startLogin)
