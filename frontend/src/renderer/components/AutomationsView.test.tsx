@@ -36,6 +36,9 @@ const mocks = vi.hoisted(() => ({
 	providerConnections: undefined as Array<{ provider: string; validationState: string }> | undefined,
 	createCloudError: null as Error | null,
 	createCloudVariables: undefined as Record<string, unknown> | undefined,
+	updateCloudError: null as Error | null,
+	removeCloud: vi.fn(),
+	cloudProjectsLoaded: false,
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -53,7 +56,7 @@ const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [mocks.fallbackAmp ? { ...codexSnapshot, effectiveReadiness: "not_ready" } : codexSnapshot, cursorSnapshot, ampSnapshot] } }) }));
 vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectWorkerDefaults: () => ({ loaded: mocks.defaultsLoaded, harness: mocks.defaultWorker, agentConfig: mocks.baseTuning, worker: { agent: mocks.defaultWorker, agentConfig: mocks.workerTuning } }) }));
-vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: mocks.workspaces }) }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: mocks.workspaces }), useCloudProjectsQuery: () => ({ data: mocks.cloudProjectsLoaded ? [] : undefined }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
@@ -84,8 +87,8 @@ vi.mock("../hooks/useCloudAutomations", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useCloudAutomations")>(),
 	useCloudAutomations: () => ({ data: mocks.cloudAvailable ? mocks.cloudAutomations : undefined, available: mocks.cloudAvailable, orgId: "org-1", userId: mocks.cloudUserId, isLoading: false, error: null }),
 	useCreateCloudAutomation: () => ({ mutateAsync: mocks.createCloud, reset: vi.fn(), isPending: false, error: mocks.createCloudError, variables: mocks.createCloudVariables }),
-	useUpdateCloudAutomation: () => ({ mutateAsync: mocks.updateCloud, reset: vi.fn(), isPending: false, error: null }),
-	useDeleteCloudAutomation: () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null }),
+	useUpdateCloudAutomation: () => ({ mutateAsync: mocks.updateCloud, reset: vi.fn(), isPending: false, error: mocks.updateCloudError }),
+	useDeleteCloudAutomation: () => ({ mutate: mocks.removeCloud, reset: vi.fn(), isPending: false, error: null }),
 	useRunCloudAutomationNow: () => ({ mutateAsync: mocks.runNow, isPending: false }),
 	useSubscribeCloudAutomation: () => ({ mutateAsync: mocks.subscribe, isPending: false }),
 	useCloudAutomationRuns: () => ({ data: mocks.cloudRuns, isLoading: false, error: null }),
@@ -112,7 +115,7 @@ async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = []; mocks.createCloudError = null; mocks.createCloudVariables = undefined; mocks.updateCloud.mockReset(); mocks.createCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset(); mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = []; mocks.createCloudError = null; mocks.createCloudVariables = undefined; mocks.updateCloudError = null; mocks.removeCloud.mockReset(); mocks.cloudProjectsLoaded = false; mocks.updateCloud.mockReset(); mocks.createCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset(); mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -941,7 +944,7 @@ describe("automation starters", () => {
 		beforeEach(() => {
 			mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "cloud-1", name: "Cloud app", kind: "cloud", cloudOrgId: "org-1" }];
 			// "automation starters" does not reset the cloud mocks, so each test starts from none.
-			mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = []; mocks.createCloudError = null; mocks.createCloudVariables = undefined;
+			mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = []; mocks.createCloudError = null; mocks.createCloudVariables = undefined; mocks.updateCloudError = null; mocks.removeCloud.mockReset(); mocks.cloudProjectsLoaded = false;
 			mocks.createCloud.mockReset(); mocks.updateCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset();
 		});
 
@@ -988,6 +991,79 @@ describe("automation starters", () => {
 				// Off by default: the session stays, paused, for the next run.
 				deleteSessionOnComplete: false,
 			});
+		});
+
+		it("runs a standalone project (no repository) in AO Cloud, but not a standalone agent", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.createCloud.mockResolvedValue({});
+			// A standalone project has no repositories; a standalone agent's project is the Scratchpad's.
+			mocks.workspaces = [
+				{ id: "demo", name: "Demo" },
+				{ id: "cloud-blank", name: "Blank project", kind: "cloud", cloudOrgId: "org-1", workspaceRepos: [] },
+				{ id: "cloud-agent", name: "My agent", kind: "cloud", cloudOrgId: "org-1", standaloneAgent: true },
+			];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			await user.click(dialog.getByRole("combobox", { name: "Project" }));
+			expect(screen.queryByRole("option", { name: "My agent" })).not.toBeInTheDocument();
+			await user.click(await screen.findByRole("option", { name: "Blank project" }));
+			await user.type(dialog.getByRole("textbox", { name: "Name" }), "Scratch notes");
+			await user.type(dialog.getByRole("textbox", { name: "Prompt" }), "Summarize yesterday.");
+			await pickTime(user, screen.getByRole("dialog"), "07", "00");
+			await user.click(dialog.getByRole("button", { name: "Create automation" }));
+			await waitFor(() => expect(mocks.createCloud).toHaveBeenCalled());
+			expect(mocks.createCloud.mock.calls[0][0]).toMatchObject({ projectId: "cloud-blank" });
+			// Nothing about a repository or a GitHub token: it has none.
+			expect(screen.queryByText(/GitHub/)).toBeNull();
+		});
+
+		it("shows an automation whose project was deleted as turned off and deletable, and says why a change or Run now is refused", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudProjectsLoaded = true;
+			const deletedReason = "Turned off: its project was deleted. Delete the automation, or move its prompt to another project.";
+			const refusal = () => new CloudCpError("This automation's project was deleted.", { status: 409, code: "AUTOMATION_PROJECT_DELETED" });
+			mocks.cloudAutomations = [{
+				...cloudAutomation, projectId: "cloud-gone", enabled: false, nextRunAt: undefined, disabledReason: deletedReason,
+				canEdit: true, runAs: { userId: "u1", displayName: "Me" },
+				latestRun: { ...cloudAutomation.latestRun, status: "completed", errorCode: undefined, errorMessage: undefined },
+			}];
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			// The project is gone from the list: it reads as not found, not as an id.
+			expect(within(row).getByText("Project not found")).toBeInTheDocument();
+			expect(within(row).queryByText("cloud-gone")).toBeNull();
+			expect(within(row).getByText(deletedReason)).toBeInTheDocument();
+			expect(within(row).getByRole("switch", { name: "Enable Nightly debt" })).not.toBeChecked();
+
+			// Run now and turning it on are refused, with what to do.
+			const message = "This automation's project was deleted, so it can't run or change. Delete the automation.";
+			mocks.runNow.mockRejectedValue(refusal());
+			await user.click(within(row).getByRole("button", { name: "Run Nightly debt now" }));
+			expect(await screen.findByText(message)).toHaveAttribute("role", "alert");
+			mocks.updateCloud.mockRejectedValue(refusal());
+			await user.click(within(row).getByRole("switch", { name: "Enable Nightly debt" }));
+			await waitFor(() => expect(mocks.updateCloud).toHaveBeenCalledWith({ id: "c1", body: { enabled: true } }));
+			expect(await screen.findByText(message)).toHaveAttribute("role", "alert");
+
+			// An edit's save shows it on the form.
+			mocks.updateCloudError = refusal();
+			cleanup();
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			const dialog = within(screen.getByRole("dialog", { name: "Edit automation" }));
+			expect(dialog.getByRole("combobox", { name: "Project" })).toHaveTextContent("Project not found");
+			expect(dialog.getByRole("alert")).toHaveTextContent(message);
+			await user.click(dialog.getByRole("button", { name: "Cancel" }));
+
+			// Delete still works.
+			await user.click(screen.getByRole("button", { name: "Delete Nightly debt" }));
+			await user.click(await screen.findByRole("button", { name: "Delete automation" }));
+			expect(mocks.removeCloud).toHaveBeenCalledWith("c1", expect.anything());
 		});
 
 		it("offers deleting the session after each run, explained, and saves only that change", async () => {

@@ -52,7 +52,7 @@ beforeEach(() => {
 describe("cloudAutomationErrorMessage", () => {
 	const t = ((key: string) => key) as unknown as Parameters<typeof cloudAutomationErrorMessage>[1];
 	const refusal = (code: string) => new CloudCpError(`server says ${code}`, { status: 422, code });
-	it.each(["repository_not_accessible", "repository_unreachable", "SANDBOX_QUOTA_EXCEEDED", "PLAN_REQUIRED"])("names %s", (code) => {
+	it.each(["repository_not_accessible", "repository_unreachable", "SANDBOX_QUOTA_EXCEEDED", "PLAN_REQUIRED", "AUTOMATION_PROJECT_DELETED"])("names %s", (code) => {
 		expect(cloudAutomationErrorMessage(refusal(code), t)).toBe(`automations.cloud.error.${code}`);
 	});
 	it("reads every plan limit as one message, and keeps an unknown code's words", () => {

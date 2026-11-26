@@ -238,6 +238,8 @@ const ERROR_CODES = [
 	"AUTOMATION_RUN_ACTIVE",
 	"AUTOMATION_EDIT_FORBIDDEN",
 	"AUTOMATION_PROJECT_UNSUPPORTED",
+	// A change or Run now on an automation whose project was deleted.
+	"AUTOMATION_PROJECT_DELETED",
 	// Saving checks what a run needs (the control plane's preflight).
 	"repository_not_accessible",
 	"repository_unreachable",

@@ -35,7 +35,7 @@ import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
-import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { useCloudProjectsQuery, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { CLOUD_PROJECT_KIND } from "../types/workspace";
 import {
 	buildRankedAgentOptions,
@@ -221,7 +221,13 @@ export function AutomationsView() {
 	const [actionError, setActionError] = useState<string | null>(null);
 	const cloudItems = cloud.available ? cloud.data : undefined;
 	const automations = useMemo(() => [...(query.data ?? []).map(listLocal), ...(cloudItems ?? []).map(listCloud)], [query.data, cloudItems]);
-	const projectName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name ?? id;
+	// A cloud automation's project that the loaded project list lacks (deleted:
+	// its automation stays, turned off, until someone deletes it) reads as not
+	// found rather than as its id.
+	const cloudProjectsLoaded = useCloudProjectsQuery({ enabled: cloud.available }).data !== undefined;
+	const cloudProjectIds = useMemo(() => new Set((cloudItems ?? []).map((item) => item.projectId)), [cloudItems]);
+	const projectName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name
+		?? (cloudProjectsLoaded && cloudProjectIds.has(id) ? t("automations.cloud.projectNotFound") : id);
 	// Projects that own at least one automation, so the filter never offers an empty choice.
 	const projectOptions = [...new Set(automations.map((item) => item.projectId))].map((id) => ({ id, name: projectName(id) }));
 	const needle = search.trim().toLocaleLowerCase();
@@ -805,7 +811,7 @@ function AutomationFormDialog({
 			: item.kind !== CLOUD_PROJECT_KIND))
 		.map((item) => ({ value: item.id, label: item.name }));
 	if (edited && !projectOptions.some((option) => option.value === edited.projectId)) {
-		projectOptions.unshift({ value: edited.projectId, label: edited.projectId });
+		projectOptions.unshift({ value: edited.projectId, label: cloudAutomation ? t("automations.cloud.projectNotFound") : edited.projectId });
 	}
 	const cloudHarnessOptions = CLOUD_AUTOMATION_HARNESSES
 		.filter((id) => !cloudHarnesses?.length || cloudHarnesses.includes(id))
