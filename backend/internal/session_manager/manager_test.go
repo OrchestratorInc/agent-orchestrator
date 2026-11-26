@@ -1973,6 +1973,47 @@ func TestSpawn_OrchestratorPermissionCeilingUsesParentSessionWithoutChat(t *test
 	}
 }
 
+func TestSpawn_WorkerParentCannotExceedProjectPermission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		project   domain.PermissionMode
+		requested domain.PermissionMode
+		want      domain.PermissionMode
+		refused   bool
+	}{
+		{"default blocks bypass", domain.PermissionModeDefault, domain.PermissionModeBypassPermissions, "", true},
+		{"auto blocks bypass", domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, "", true},
+		{"auto allows stricter", domain.PermissionModeAuto, domain.PermissionModeDefault, domain.PermissionModeDefault, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.Worker.AgentConfig.Permissions = tc.project
+			st.projects["mer"] = project
+			st.sessions["mer-0"] = domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Kind: domain.KindWorker}
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "mer-0",
+				AgentConfig: ports.AgentConfig{Permissions: tc.requested},
+			})
+			if tc.refused {
+				if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+					t.Fatalf("spawn error = %v, want project permission ceiling refusal", err)
+				}
+				if rt.created != 0 {
+					t.Fatal("runtime was created for an over-permissive worker")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastCfg.Env[EnvPermissionMode]; got != string(tc.want) {
+				t.Fatalf("worker permission environment = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 type rejectingHarnessUseGate struct {
 	harness domain.AgentHarness
 }

@@ -1439,6 +1439,54 @@ func TestUnrealSpawnDefaultsToChatWithBypassPermissions(t *testing.T) {
 	}
 }
 
+func TestUnrealSpawnRejectsImplicitBypassAboveProjectCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		permission       domain.PermissionMode
+		parentKind       domain.SessionKind
+		parentPermission domain.PermissionMode
+		projectHarness   bool
+	}{
+		{"orchestrator parent with default project mode", domain.PermissionModeDefault, domain.KindOrchestrator, domain.PermissionModeBypassPermissions, false},
+		{"orchestrator parent with auto project mode", domain.PermissionModeAuto, domain.KindOrchestrator, domain.PermissionModeBypassPermissions, false},
+		{"orchestrator parent with default parent mode", "", domain.KindOrchestrator, domain.PermissionModeDefault, false},
+		{"worker parent with default project mode", domain.PermissionModeDefault, domain.KindWorker, domain.PermissionModeBypassPermissions, false},
+		{"direct spawn with default project mode", domain.PermissionModeDefault, "", "", false},
+		{"project-selected Unreal with default project mode", domain.PermissionModeDefault, domain.KindOrchestrator, domain.PermissionModeBypassPermissions, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			mgr, st, runtime := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.Worker.AgentConfig.Permissions = tc.permission
+			harness := domain.HarnessUnreal
+			if tc.projectHarness {
+				project.Config.Worker.Harness = domain.HarnessUnreal
+				harness = ""
+			}
+			st.projects[string(chatTestProject)] = project
+			var parentID domain.SessionID
+			if tc.parentKind != "" {
+				parentID = "mer-0"
+				st.sessions[parentID] = domain.SessionRecord{ID: parentID, ProjectID: chatTestProject, Kind: tc.parentKind}
+				st.conversations[parentID] = domain.ConversationRecord{
+					SessionID: parentID, Settings: domain.ConversationSettings{ApprovalMode: tc.parentPermission},
+				}
+			}
+			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: harness,
+				ParentSessionID: parentID,
+			})
+			if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+				t.Fatalf("spawn error = %v, want project permission ceiling refusal", err)
+			}
+			if runtime.created != 0 || len(launcher.preflighted) != 0 || len(launcher.started) != 0 {
+				t.Fatal("a refused Unreal spawn created a runtime or chat controller")
+			}
+		})
+	}
+}
+
 // A TUI spawn must never reach the chat launcher, even when one is wired.
 func TestTUISpawnNeverTouchesTheChatLauncher(t *testing.T) {
 	launcher := &recordingLauncher{}

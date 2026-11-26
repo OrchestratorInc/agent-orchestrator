@@ -133,11 +133,13 @@ branch, issue, or PR-claim options.
 
 A spawned session's permission mode is `--permission` when given, otherwise
 the project's setting for the role (`<role>.agentConfig.permissions`, then
-`agentConfig.permissions`). An orchestrator may request an equal or stricter
-mode for its worker, but cannot exceed the project setting. When the project
-sets none, the orchestrator's own approval mode is the ceiling and the default.
+`agentConfig.permissions`). A spawn from another session in the same project
+may request an equal or stricter mode, but cannot exceed the project setting.
+When the project sets none, an orchestrator's own approval mode is its worker's
+ceiling and default.
 Other spawns without a permission setting default to `auto`. An Unreal Agent
-spawn with no permission set at any level defaults to `bypass-permissions`.
+spawn with no permission set at any level defaults to `bypass-permissions`;
+an implicit Unreal spawn is refused if the project or parent ceiling is stricter.
 A Chat spawn whose harness offers only the `default` mode defaults to `default`
 when neither the spawn nor project sets a permission.
 
