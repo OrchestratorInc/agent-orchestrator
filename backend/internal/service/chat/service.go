@@ -77,6 +77,7 @@ type Service struct {
 	reports          *reportsvc.Coordinator
 	renders          RenderFiles
 	dataDir          string
+	skillSharing     func(context.Context) bool
 	reconcileOutput  func(context.Context, domain.SessionID) error
 	renderCheck      RenderCheck
 	renderMeasure    RenderMeasure
@@ -211,6 +212,11 @@ type Options struct {
 	// DataDir locates a session's artifact directory when its record names
 	// none, for a render kept as an artifact.
 	DataDir string
+	// SkillSharingEnabled reports the "Share skills between agents" setting.
+	// While it is off, chats offer no shared skills in their / menu and add no
+	// shared skill's instructions to a message, even in sessions launched while
+	// it was on. Nil is off.
+	SkillSharingEnabled func(context.Context) bool
 	// PRChanged is told when a finished agent command probably changed the
 	// session's pull request (`gh pr merge`, `git push`), so the SCM observer
 	// can re-read it early. Nil leaves it to the regular poll.
@@ -254,6 +260,7 @@ func New(opts Options) *Service {
 		stopProviderHost:       opts.StopProviderHost,
 		renders:                opts.Renders,
 		dataDir:                opts.DataDir,
+		skillSharing:           opts.SkillSharingEnabled,
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		versionRefresh:         opts.VersionRefresh,
@@ -1130,6 +1137,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if owner.Kind != domain.ConversationOwnerReview {
 		controller.artifactDir = s.sessionArtifactDir(ctx, cfg.SessionID)
 		controller.dataDir = s.dataDir
+		controller.skillSharing = s.skillSharing
 	}
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {

@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,6 +271,42 @@ func TestSharedSkillNamesWithSpaces(t *testing.T) {
 			}
 			if !strings.HasPrefix(sent, want+"\n\n<user_skill name=\""+tc.skill+"\"") || strings.Count(sent, "<user_skill ") != 1 {
 				t.Fatalf("sent %q, want it to start %q with one skill", sent, want)
+			}
+		})
+	}
+}
+
+// Switching skill sharing takes effect in a running chat at once. Off, its /
+// menu loses the shared skills and a message naming one goes as written; on,
+// both come back without a resume.
+func TestSharedSkillsFollowTheSettingInARunningChat(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		t.Run(fmt.Sprintf("switched on=%v", on), func(t *testing.T) {
+			conv := &skillfulConversation{fakeConversation: newFakeConversation()}
+			h := newHarnessWithConversation(t, conv)
+			shareSkills(t, h, shareSkill(t, "deploy", "Ship it with ./ship.sh"))
+			// The chat is running; now the user flips the setting.
+			h.skillSharingOff.Store(!on)
+			ctx := context.Background()
+			skills, err := h.svc.Skills(ctx, testSession)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offered := false
+			for _, skill := range skills {
+				offered = offered || (skill.Name == "deploy" && skill.Source == "orchestrator")
+			}
+			if offered != on {
+				t.Fatalf("deploy offered = %v", offered)
+			}
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "/deploy now", ClientMessageID: "m-1", Origin: domain.MessageOriginHuman}); err != nil {
+				t.Fatal(err)
+			}
+			conv.mu.Lock()
+			sent := conv.sent[len(conv.sent)-1].Text
+			conv.mu.Unlock()
+			if expanded := strings.HasPrefix(sent, `Use the "deploy" skill.`); expanded != on {
+				t.Fatalf("sent %q", sent)
 			}
 		})
 	}

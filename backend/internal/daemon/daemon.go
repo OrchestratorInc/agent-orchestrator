@@ -490,6 +490,7 @@ func Run(buildVersion string) (retErr error) {
 		Sessions:            store,
 		Renders:             attachmentstore.New(cfg.DataDir),
 		DataDir:             cfg.DataDir,
+		SkillSharingEnabled: settingsSvc.SkillSharingEnabled,
 		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
 		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
 		VersionRefresh: func() (time.Duration, bool) {

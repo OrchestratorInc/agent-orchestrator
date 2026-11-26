@@ -83,17 +83,27 @@ func leadingSkill(text string, names []string) (name string, end int, ok bool) {
 // user's skill, nor must an issue quoted inside an opening prompt. A skill
 // named twice is added once.
 func (c *Controller) withSharedSkillInstructions(ctx context.Context, msg ports.ChatUserMessage) ports.ChatUserMessage {
-	return withSharedSkillInstructions(ctx, c.dataDir, c.sessionID, c.conv, msg)
+	return withSharedSkillInstructions(ctx, c.skillSharing, c.dataDir, c.sessionID, c.conv, msg)
+}
+
+// sharedSkillIndex is the session's shared skills, or none while the setting
+// is off: switching it off takes effect in running chats at once.
+func sharedSkillIndex(ctx context.Context, enabled func(context.Context) bool, dataDir string, id domain.SessionID) []skillbridge.Skill {
+	if dataDir == "" || enabled == nil || !enabled(ctx) {
+		return nil
+	}
+	return skillbridge.ReadIndex(dataDir, string(id))
 }
 
 func withSharedSkillInstructions(
 	ctx context.Context,
+	enabled func(context.Context) bool,
 	dataDir string,
 	id domain.SessionID,
 	conv ports.ChatConversation,
 	msg ports.ChatUserMessage,
 ) ports.ChatUserMessage {
-	if dataDir == "" || !sharedSkillToken.MatchString(msg.Text) {
+	if !sharedSkillToken.MatchString(msg.Text) {
 		return msg
 	}
 	if msg.Origin != "" && msg.Origin != domain.MessageOriginHuman && !msg.AuthoredByUser {
@@ -101,7 +111,7 @@ func withSharedSkillInstructions(
 	}
 	shared := map[string]skillbridge.Skill{}
 	var sharedNames []string
-	for _, skill := range skillbridge.ReadIndex(dataDir, string(id)) {
+	for _, skill := range sharedSkillIndex(ctx, enabled, dataDir, id) {
 		if key := strings.ToLower(skill.Name); invocable(skill.Name) && shared[key].Name == "" {
 			shared[key] = skill
 			sharedNames = append(sharedNames, skill.Name)

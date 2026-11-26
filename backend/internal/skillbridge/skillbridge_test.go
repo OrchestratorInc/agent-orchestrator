@@ -511,3 +511,38 @@ func TestDeclaredRoots(t *testing.T) {
 }
 
 func quote(path string) string { return `"` + strings.ReplaceAll(path, `\`, `\\`) + `"` }
+
+// A dotfiles repository in home must not make the user's own skill folders a
+// project's: every user skill would then count as native and none be shared.
+// A repository inside home still reaches its own root.
+func TestProjectRootsNeverCountHome(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".git"), "gitdir: dotfiles")
+	loose := filepath.Join(home, "work", "notes")
+	repo := filepath.Join(home, "code", "app")
+	nested := filepath.Join(repo, "web")
+	writeFile(t, filepath.Join(repo, ".git"), "gitdir: elsewhere")
+	for _, dir := range []string{loose, nested} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	folders := func(dir string) []string {
+		var out []string
+		for _, root := range projectRoots(dir, home) {
+			if filepath.Base(filepath.Dir(root)) == ".agents" {
+				out = append(out, filepath.Dir(filepath.Dir(root)))
+			}
+		}
+		return out
+	}
+	if got, want := folders(loose), []string{loose}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outside a repository under a dotfiles home: %v, want %v", got, want)
+	}
+	if got := folders(home); len(got) != 0 {
+		t.Fatalf("a session in home itself: %v, want no project folders", got)
+	}
+	if got, want := folders(nested), []string{nested, repo}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("a repository inside home: %v, want %v", got, want)
+	}
+}

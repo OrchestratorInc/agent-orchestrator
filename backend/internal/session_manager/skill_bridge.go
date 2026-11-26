@@ -94,14 +94,16 @@ func (m *Manager) syncSkills(ctx context.Context, agent ports.Agent, id domain.S
 	})
 	sources := skillbridge.UserRoots(home)
 	native := append(slices.Clone(support.Native), project...)
-	m.writeSkillIndex(syncCtx, id, sources, native)
+	// One listing serves the index and the copies.
+	catalog := skillbridge.Scan(syncCtx, sources, native)
+	m.writeSkillIndex(id, catalog)
 	if support.Layout != "" {
-		m.copySkills(syncCtx, rec, support.Layout, sources, native)
+		m.copySkills(syncCtx, rec, support.Layout, sources, native, catalog)
 	}
 }
 
-func (m *Manager) writeSkillIndex(ctx context.Context, id domain.SessionID, sources, native []string) {
-	missing, err := skillbridge.Missing(ctx, sources, native)
+func (m *Manager) writeSkillIndex(id domain.SessionID, catalog *skillbridge.Catalog) {
+	missing, err := catalog.Missing()
 	if err == nil {
 		err = skillbridge.WriteIndex(m.dataDir, string(id), missing)
 	}
@@ -110,13 +112,13 @@ func (m *Manager) writeSkillIndex(ctx context.Context, id domain.SessionID, sour
 	}
 }
 
-func (m *Manager) copySkills(ctx context.Context, rec domain.SessionRecord, layout string, sources, native []string) {
+func (m *Manager) copySkills(ctx context.Context, rec domain.SessionRecord, layout string, sources, native []string, catalog *skillbridge.Catalog) {
 	dir := skillbridge.SessionDir(m.dataDir, string(rec.Harness), string(rec.ID))
 	if dir == "" {
 		return
 	}
 	result, err := skillbridge.Sync(ctx, skillbridge.Config{
-		Dir: dir, Layout: layout, Sources: sources, Native: native,
+		Dir: dir, Layout: layout, Sources: sources, Native: native, Catalog: catalog,
 	})
 	if err != nil {
 		m.logger.Warn("skills: some are missing", "session", rec.ID, "err", err)
@@ -155,7 +157,9 @@ func (m *Manager) projectSkillRoots(ctx context.Context, rec domain.SessionRecor
 
 // skillIndexPrompt points an agent that cannot take a folder of skills at the
 // list of those it misses. It is a pointer, not the list: some users have
-// hundreds.
+// hundreds. It lists nothing itself: the instructions are built before the
+// launch writes the list, and the pointer says that a missing file means no
+// more skills.
 func (m *Manager) skillIndexPrompt(ctx context.Context, id domain.SessionID, chat bool) string {
 	if !m.skillSharingEnabled(ctx) {
 		return ""
@@ -174,17 +178,25 @@ func (m *Manager) skillIndexPrompt(ctx context.Context, id domain.SessionID, cha
 		return ""
 	}
 	support := skillSupport(ctx, agent, rec.Harness, home, ports.AgentSkillRequest{Chat: chat})
-	if support.Layout != "" {
-		return ""
-	}
-	missing, err := skillbridge.Missing(ctx, skillbridge.UserRoots(home), support.Native)
-	if err != nil || len(missing) == 0 {
+	if support.Layout != "" || readsEveryUserFolder(support.Native, home) {
 		return ""
 	}
 	return "## User skills\n\n" +
 		"The user keeps skills: instructions for particular kinds of task. `" + filepath.ToSlash(document) + "` lists those your own skill list does not have, with what each is for. " +
 		"When the user names one, for example as `/name`, or a task clearly matches one, read that list, then the skill's SKILL.md, and follow it. " +
 		"A skill of the same name in the project comes first. If the file does not exist, there are no more skills."
+}
+
+// readsEveryUserFolder reports whether an agent loads all of the user's skill
+// folders itself, so it can miss none (Cursor). It compares folders and lists
+// no skills.
+func readsEveryUserFolder(native []string, home string) bool {
+	for _, folder := range skillbridge.UserRoots(home) {
+		if !slices.Contains(native, folder) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) removeSkills(id domain.SessionID) {

@@ -3,8 +3,10 @@ package skillbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,19 +26,42 @@ type Skill struct {
 	Path string `json:"path"`
 }
 
+// Catalog is one listing of a session's skills: the names it already has and
+// the source skills. The index and the copies both read it, so a launch lists
+// the user's skills once.
+type Catalog struct {
+	taken      nameSet
+	nativeErr  error
+	candidates []skill
+	sourcesErr error
+}
+
+// Scan lists the native names and the source skills. When the native names
+// cannot be listed, the sources are not listed either: nothing may be offered
+// whose name the session could already have.
+func Scan(ctx context.Context, sources, native []string) *Catalog {
+	catalog := &Catalog{}
+	catalog.taken, catalog.nativeErr = nativeNames(ctx, native)
+	if catalog.nativeErr == nil {
+		catalog.candidates, catalog.sourcesErr = listSkills(ctx, sources)
+	}
+	return catalog
+}
+
 // Missing lists the source skills the session does not already have.
 func Missing(ctx context.Context, sources, native []string) ([]Skill, error) {
-	taken, err := nativeNames(ctx, native)
-	if err != nil {
+	return Scan(ctx, sources, native).Missing()
+}
+
+// Missing lists the catalog's source skills the session does not already have.
+func (c *Catalog) Missing() ([]Skill, error) {
+	if err := errors.Join(c.nativeErr, c.sourcesErr); err != nil {
 		return nil, err
 	}
-	candidates, err := listSkills(ctx, sources)
-	if err != nil {
-		return nil, err
-	}
+	taken := maps.Clone(c.taken)
 	var skills []Skill
 	seen := map[string]struct{}{}
-	for _, candidate := range candidates {
+	for _, candidate := range c.candidates {
 		if _, duplicate := seen[candidate.real]; duplicate || candidate.err != nil || taken.has(candidate) {
 			continue
 		}

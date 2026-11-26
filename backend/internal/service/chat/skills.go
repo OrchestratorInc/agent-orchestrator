@@ -8,7 +8,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/skillbridge"
 )
 
 // ErrSkillsUnsupported reports a driver whose provider cannot enumerate skills.
@@ -39,7 +38,7 @@ func (s *Service) Skills(ctx context.Context, id domain.SessionID) ([]ports.Chat
 	if err != nil {
 		return nil, err
 	}
-	shared := skillbridge.ReadIndex(s.dataDir, string(id))
+	shared := sharedSkillIndex(ctx, s.skillSharing, s.dataDir, id)
 	lister, ok := controller.conv.(ports.ChatSkillLister)
 	if !ok && len(shared) == 0 {
 		return nil, ErrSkillsUnsupported

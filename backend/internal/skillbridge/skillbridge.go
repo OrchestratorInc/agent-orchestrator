@@ -57,8 +57,10 @@ const (
 )
 
 // DefaultLimits leave out a skill that carries a build or a dataset (one real
-// skill was 385 MB) while keeping ordinary ones whole.
-var DefaultLimits = Limits{SkillBytes: 32 << 20, SkillFiles: 4000, TotalBytes: 256 << 20}
+// skill was 385 MB) while keeping ordinary ones whole. The total is lower where
+// copies may take real disk (see defaultTotalBytes): a user with about 230
+// skills had 36 MB, and each live session holds its own copies.
+var DefaultLimits = Limits{SkillBytes: 32 << 20, SkillFiles: 4000, TotalBytes: defaultTotalBytes}
 
 // Config describes one session's folder.
 type Config struct {
@@ -74,6 +76,9 @@ type Config struct {
 	Native []string
 	// Limits defaults to DefaultLimits.
 	Limits Limits
+	// Catalog, when set, is the listing of Sources and Native that Scan made,
+	// so they are not listed again.
+	Catalog *Catalog
 }
 
 // Skipped is a skill left out, and why.
@@ -159,11 +164,26 @@ func UserRoots(home string) []string {
 // project skill wins over a user skill of the same name, whichever agent it
 // was written for.
 func ProjectRoots(dir string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	return projectRoots(dir, home)
+}
+
+// projectRoots never counts home as a project: its skill folders are the
+// user's own, which a dotfiles repository in home would otherwise turn into
+// project skills that every user skill then loses to.
+func projectRoots(dir, home string) []string {
 	if strings.TrimSpace(dir) == "" {
 		return nil
 	}
+	home = cleanReal(home)
 	var roots []string
-	for _, folder := range repositoryFolders(filepath.Clean(dir)) {
+	for _, folder := range repositoryFolders(filepath.Clean(dir), home) {
+		if home != "" && cleanReal(folder) == home {
+			continue
+		}
 		roots = append(roots,
 			filepath.Join(folder, ".agents", "skills"),
 			filepath.Join(folder, ".agent", "skills"),
@@ -175,20 +195,33 @@ func ProjectRoots(dir string) []string {
 }
 
 // repositoryFolders is dir and its parents up to the repository root, or dir
-// alone outside a repository: the user's own folders are not a project's.
-func repositoryFolders(dir string) []string {
+// alone outside a repository: the user's own folders are not a project's. The
+// walk stops below home, so a repository rooted at home is not one.
+func repositoryFolders(dir, home string) []string {
 	folders := []string{dir}
 	for current := dir; ; {
 		if _, err := os.Lstat(filepath.Join(current, ".git")); err == nil {
 			return folders
 		}
 		parent := filepath.Dir(current)
-		if parent == current {
+		if parent == current || (home != "" && cleanReal(parent) == home) {
 			return []string{dir}
 		}
 		current = parent
 		folders = append(folders, current)
 	}
+}
+
+// cleanReal is path with its links resolved where possible, so /tmp and
+// /private/tmp compare equal.
+func cleanReal(path string) string {
+	if path == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+	return filepath.Clean(path)
 }
 
 // Sync makes cfg.Dir hold the source skills the session does not already have,
@@ -218,7 +251,11 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 	next := manifest{Owner: "orchestrator", Skills: map[string]string{}}
 	var result Result
 	var total int64
-	taken, err := nativeNames(ctx, cfg.Native)
+	catalog := cfg.Catalog
+	if catalog == nil {
+		catalog = Scan(ctx, cfg.Sources, cfg.Native)
+	}
+	taken, err := maps.Clone(catalog.taken), catalog.nativeErr
 	if err != nil {
 		// Which names the session already has is unknown, and a copy of one of
 		// them would override it. Leave the session without copies this time.
@@ -228,10 +265,10 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 	stop := func(cause error) (Result, error) {
 		return result, errors.Join(cause, keepEarlier(root, skillsPath, taken, previous, next, cfg.Limits.TotalBytes-total))
 	}
-	candidates, err := listSkills(ctx, cfg.Sources)
-	if err != nil {
-		return stop(err)
+	if catalog.sourcesErr != nil {
+		return stop(catalog.sourcesErr)
 	}
+	candidates := catalog.candidates
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {

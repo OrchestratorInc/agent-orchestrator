@@ -248,8 +248,8 @@ func (s *Service) SkillSharingEnabled(ctx context.Context) bool {
 	return err == nil && snapshot.SkillSharing
 }
 
-// SetSkillSharing switches skill sharing. A running session follows at its next
-// resume.
+// SetSkillSharing switches skill sharing. A running chat's / menu and messages
+// follow at once; the folders an agent loaded follow at its next resume.
 func (s *Service) SetSkillSharing(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetSkillSharing(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err

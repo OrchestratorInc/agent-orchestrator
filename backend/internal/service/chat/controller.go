@@ -225,7 +225,9 @@ type Controller struct {
 	workspacePath string
 	// dataDir holds the session's shared skills; a review's controller has none.
 	dataDir string
-	started time.Time
+	// skillSharing reports the skill sharing setting; nil is off.
+	skillSharing func(context.Context) bool
+	started      time.Time
 
 	conv                   ports.ChatConversation
 	backgroundMu           sync.Mutex
