@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { rememberSentAttachments, resetSentAttachmentPreviewsForTest } from "../../lib/sent-attachment-previews";
 import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 import { attachmentURL } from "./messageAttachments";
@@ -113,5 +113,33 @@ describe("AttachmentStrip", () => {
 		strip.scrollLeft = 120;
 		rerender(<AttachmentStrip itemCount={2} data-testid="strip">{tiles(2)}</AttachmentStrip>);
 		expect(strip.scrollLeft).toBe(120);
+	});
+});
+
+describe("StagedAttachmentItems opening a text file", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("shows a sent text file's whole saved copy with Copy", async () => {
+		vi.stubGlobal("IntersectionObserver", class {
+			constructor(private readonly callback: IntersectionObserverCallback) {}
+			observe() {
+				this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+			}
+			disconnect() {}
+		});
+		const whole = `first line\n${"middle\n".repeat(500)}last line`;
+		const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+			new Response((init?.headers as Record<string, string> | undefined)?.Range ? "first line" : whole, { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
+		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`, expect.not.objectContaining({ headers: expect.anything() }));
 	});
 });

@@ -4,6 +4,7 @@ import { cn } from "../../lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
 import { AttachmentLightbox } from "./AttachmentLightbox";
+import { CopyButton } from "./CopyButton";
 import { useChatImageSrc } from "./chat-image-source";
 import {
 	ATTACHMENT_TILE_OVERLAY_PILL_CLASS,
@@ -52,6 +53,41 @@ export async function readTextPrefix(response: Response): Promise<string> {
 }
 const PREVIEW_CLASS = "pointer-events-none absolute inset-0 flex flex-col overflow-hidden";
 
+function rawTextUrl(src: string): string {
+	return src.startsWith("blob:") ? src : `${src}${src.includes("?") ? "&" : "?"}raw=true`;
+}
+
+function TextViewer({ src, name, start, onOpenChange }: {
+	src: string;
+	name: string;
+	start?: string;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const [full, setFull] = useState<string>();
+	useEffect(() => {
+		const controller = new AbortController();
+		void fetch(rawTextUrl(src), { signal: controller.signal })
+			.then((response) => {
+				if (!response.ok) throw new Error(`Read failed: ${response.status}`);
+				return response.text();
+			})
+			.then(setFull)
+			.catch(() => undefined);
+		return () => controller.abort();
+	}, [src]);
+	return (
+		<Dialog open onOpenChange={onOpenChange}>
+			<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
+				<div className="flex min-w-0 items-center gap-2 pr-8">
+					<DialogTitle className="min-w-0 flex-1 truncate text-sm">{name}</DialogTitle>
+					{full === undefined ? null : <CopyButton text={full} label="Copy text" />}
+				</div>
+				<pre className="m-0 min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words font-mono text-sm text-foreground">{full ?? start}</pre>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
 /**
  * A preview laid over a file tile: a video's first frame, a PDF's first page, or
  * the start of a text file, with its type as a chip. It loads only near the
@@ -96,7 +132,7 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 		const controller = new AbortController();
 		// A file just sent is read from its in-memory copy, which takes no query or range.
 		const local = src.startsWith("blob:");
-		void fetch(local ? src : `${src}${src.includes("?") ? "&" : "?"}raw=true`, {
+		void fetch(rawTextUrl(src), {
 			signal: controller.signal,
 			headers: local ? undefined : { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
 		})
@@ -130,24 +166,22 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 			<span ref={sentinel} aria-hidden="true" className="pointer-events-none absolute inset-0" />
 			{preview ? (
 				<>
-					{kind === "text" ? (
-						<span inert className={PREVIEW_CLASS}>{preview}</span>
-					) : (
-						<Pressable
-							onClick={() => setOpen(true)}
-							aria-label={name}
-							className="absolute inset-0 cursor-zoom-in focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-						>
-							<span inert className={PREVIEW_CLASS}>
-								<Suspense fallback={null}>{preview}</Suspense>
-							</span>
-						</Pressable>
-					)}
+					<Pressable
+						onClick={() => setOpen(true)}
+						aria-label={name}
+						className="absolute inset-0 cursor-zoom-in focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+					>
+						<span inert className={PREVIEW_CLASS}>
+							<Suspense fallback={null}>{preview}</Suspense>
+						</span>
+					</Pressable>
 					{type ? <span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{type}</span> : null}
 				</>
 			) : null}
 			{open && src && kind === "video" ? (
 				<AttachmentLightbox open onOpenChange={setOpen} kind="video" src={src} name={name} details={type} onError={onError} />
+			) : open && src && kind === "text" ? (
+				<TextViewer src={src} name={name} start={text} onOpenChange={setOpen} />
 			) : open && src ? (
 				<Dialog open onOpenChange={setOpen}>
 					<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
