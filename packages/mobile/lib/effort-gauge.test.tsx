@@ -85,6 +85,31 @@ describe("effort gauge", () => {
 		}
 	});
 
+	// A finger let go outside gets no onPress, and the next finger can land
+	// and lift before the first touch's deferred clear has run.
+	it("toggles once for a touch that lands right after one released outside", async () => {
+		vi.useFakeTimers();
+		try {
+			const onPress = vi.fn();
+			await act(async () => { renderer = create(<EffortGaugeButton choices={levels("high")} open={false} onPress={onPress} disabled={false} testID="gauge" />); });
+			const button = () => hosts(renderer!.root, "Pressable")[0];
+			// Touch A, released outside the gauge.
+			await act(async () => { button().props.onPressIn(); button().props.onTouchEnd(); });
+			expect(onPress).toHaveBeenCalledOnce();
+			// Touch B lands and lifts inside before A's clear runs.
+			await act(async () => button().props.onPressIn());
+			expect(onPress).toHaveBeenCalledTimes(2);
+			await act(async () => { button().props.onPress(); button().props.onTouchEnd(); });
+			expect(onPress).toHaveBeenCalledTimes(2);
+			await act(async () => { vi.runAllTimers(); });
+			// A screen reader's activation afterwards still toggles.
+			await act(async () => button().props.onPress());
+			expect(onPress).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// The clear a touch's end schedules must not wipe a touch that lands
 	// before it runs, or that touch's lift would toggle a second time.
 	it("keeps a late clear from an earlier touch off the next one", async () => {

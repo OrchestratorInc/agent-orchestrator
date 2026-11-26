@@ -63,8 +63,17 @@ export function approvalCopy(harness: string | undefined): Record<ApprovalMode, 
  * it. Where the same mode has a name of its own (Codex's Full access,
  * Antigravity's Ask for approval) it is a real choice and keeps desktop's
  * place, first.
+ *
+ * A mode the chat already runs in stays listed even where the agent is not
+ * offered it (an Antigravity chat saved with bypass-permissions), last, so it
+ * shows as the one in force, with its own look, rather than no mode at all.
  */
-export function approvalOrder(harness: string | undefined): ApprovalMode[] {
+export function approvalOrder(harness: string | undefined, current?: ApprovalMode): ApprovalMode[] {
+	const order = offeredApprovals(harness);
+	return current && !order.includes(current) ? [...order, current] : order;
+}
+
+function offeredApprovals(harness: string | undefined): ApprovalMode[] {
 	if (harness === "codex") return APPROVAL_ORDER;
 	if (harness === "agy") return APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions");
 	return [...APPROVAL_ORDER.filter((mode) => mode !== "default"), "default"];

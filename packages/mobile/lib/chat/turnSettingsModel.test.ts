@@ -451,6 +451,20 @@ describe("default labels", () => {
 		expect(approvals("hermes")?.at(-1)?.[2]).toBe("Asks before file edits only");
 	});
 
+	// Antigravity is not offered bypass-permissions, but a chat saved with it
+	// still runs in it: the picker must show it as the mode in force.
+	it("keeps a saved mode the agent is not offered, selected, rather than showing none", () => {
+		const approvals = turnSettingsRows(snapshot({ harness: "agy", capabilities: [], settings: { approvalMode: "bypass-permissions" } }), [], []).find((row) => row.id === "approvals");
+		expect(approvals?.value).toBe("Auto-approve");
+		expect(approvals?.choices.map((choice) => [choice.value, choice.selected])).toEqual([
+			["default", false], ["accept-edits", false], ["auto", false], ["bypass-permissions", true],
+		]);
+		expect(approvals?.choices.at(-1)).toMatchObject({ label: "Auto-approve", description: "Approves everything", permissionMode: "bypass-permissions" });
+		// A mode the agent offers adds nothing.
+		const offered = turnSettingsRows(snapshot({ harness: "agy", capabilities: [], settings: { approvalMode: "auto" } }), [], []).find((row) => row.id === "approvals");
+		expect(offered?.choices.map((choice) => choice.value)).toEqual(["default", "accept-edits", "auto"]);
+	});
+
 	// A chat that never set a mode runs in the agent's default; the picker
 	// must show that as the mode in force and offer the way back to it.
 	it("shows the agent's own permissions as in force for a chat that never set a mode", () => {
