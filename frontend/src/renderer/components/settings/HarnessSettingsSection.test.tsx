@@ -3083,6 +3083,28 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(row).toHaveTextContent("Verifying…"));
 	});
 
+	it("does not show Done when readiness cannot be refreshed after a job succeeds", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "interrupted", method: "npm", error: "AO restarted", startedAt: "2026-09-19T00:00:00Z" }] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/verify") return { data: { target: "codex", status: "succeeded", method: "npm", startedAt: "2026-09-19T00:00:00Z" } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") return { error: { message: "probe failed" }, response: { status: 500 } } as never;
+			return { data: undefined } as never;
+		});
+		const user = userEvent.setup();
+		renderSection();
+		const row = await findAgentRow("codex");
+		await user.click(await within(row).findByRole("button", { name: "Verify again" }));
+
+		// The earlier snapshot already reads installed; that is not a confirmation.
+		await waitFor(() => expect(row).toHaveTextContent("Could not complete the check. Try again or copy diagnostics."));
+		expect(within(row).queryByRole("progressbar", { name: "Done" })).not.toBeInTheDocument();
+	});
+
 	it("shows Autohand component repair after verified CLI success", async () => {
 		const warning = "Computer control needs a separate repair: autohand computer install";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {

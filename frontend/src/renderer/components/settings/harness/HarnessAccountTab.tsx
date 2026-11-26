@@ -71,8 +71,8 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	// Subscription accounts are for local Claude Code and Codex.
 	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// The running job's steps stay in the Installation card until it finishes on
-	// Done. Done needs the harness to read as installed, not just the job.
-	const justFinished = useInstallJustFinished(job) && isInstalled;
+	// Done. Done needs readiness to confirm the harness is installed, not just the job.
+	const justFinished = useInstallJustFinished(job) && isInstalled && !failed;
 	const stage = justFinished ? "done" : installStage(job);
 	// Progress reads as a solid state, not a greyed-out action.
 	const progress = (label: string) => <span role="status"><Button type="button" size="default" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{label}</Button></span>;

@@ -283,8 +283,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const refreshInstalledAgent = useCallback((agentId: AgentId, { confirmsJob = false }: { confirmsJob?: boolean } = {}) => {
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		if (confirmsJob) setConfirmingInstalls((current) => current.includes(agentId) ? current : [...current, agentId]);
-		void checkAuthRef.current(agentId).finally(async () => {
-			if (confirmsJob) setConfirmingInstalls((current) => current.filter((id) => id !== agentId));
+		void checkAuthRef.current(agentId).then((confirmed) => {
+			if (!confirmsJob) return;
+			setConfirmingInstalls((current) => current.filter((id) => id !== agentId));
+			// A failed readiness refresh confirms nothing: no Done, and the row
+			// reports the check so it can be run again.
+			if (confirmed === undefined) setActionErrors((current) => ({ ...current, [agentId]: t("settings.harness.health.checkFailed") }));
+		}).finally(async () => {
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId, hostId) }),
 				queryClient.invalidateQueries({ queryKey: installerKey }),
@@ -292,7 +297,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				invalidateAgentModelCatalogs(queryClient, agentId, hostId),
 			]);
 		});
-	}, [authPlansKey, hostId, installerKey, queryClient]);
+	}, [authPlansKey, hostId, installerKey, queryClient, t]);
 
 	useEffect(() => {
 		let active = true;
