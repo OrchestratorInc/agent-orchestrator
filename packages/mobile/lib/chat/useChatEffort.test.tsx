@@ -2,6 +2,14 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
 
+const stored = vi.hoisted(() => new Map<string, string>());
+vi.mock("@react-native-async-storage/async-storage", () => ({
+	default: {
+		getItem: async (key: string) => stored.get(key) ?? null,
+		setItem: async (key: string, value: string) => { stored.set(key, value); },
+		removeItem: async (key: string) => { stored.delete(key); },
+	},
+}));
 vi.mock("react-native", () => ({ BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Keyboard: { addListener: () => ({ remove: () => {} }) } }));
 
 import { useEffortSliderOpen, withPick } from "../useEffortSlider";
@@ -31,10 +39,10 @@ let renderer: ReactTestRenderer | undefined;
 let effort: ReturnType<typeof useChatEffort>;
 let slider: ReturnType<typeof useEffortSliderOpen>;
 let composerRenders = 0;
-beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
+beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); stored.clear(); });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
 
-function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; models?: ChatModel[]; onSettings?: () => Promise<void> } = {}) {
+function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; models?: ChatModel[]; onSettings?: () => Promise<void>; ultracodeKey?: string } = {}) {
 	const onSettings = vi.fn(over.onSettings ?? (() => Promise.resolve()));
 	const onOption = vi.fn(() => Promise.resolve([] as ChatConfigOption[]));
 	// The slider's side as EffortSliderHost has it: subscribed to the
@@ -45,7 +53,7 @@ function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; mod
 	}
 	function Harness({ current }: { current: ConversationSnapshot }) {
 		composerRenders += 1;
-		effort = useChatEffort({ snapshot: current, models: over.models ?? models, options: [], disabled: over.disabled, onSettings, onOption });
+		effort = useChatEffort({ snapshot: current, models: over.models ?? models, options: [], disabled: over.disabled, onSettings, onOption, ultracodeKey: over.ultracodeKey });
 		return <SliderHost chat={effort} />;
 	}
 	composerRenders = 0;
@@ -229,8 +237,8 @@ describe("chat effort", () => {
 		});
 	});
 
-	// Claude Code's Ultracode, desktop's level above Extra High: Extra High
-	// saved, and asked for in each message while it is on.
+	// Claude Code's Ultracode, here the level above Extra High (a toggle on
+	// desktop): Extra High saved, and asked for in each message while it is on.
 	describe("ultracode", () => {
 		const claude = [{ id: "opus", displayName: "Opus", efforts: ["low", "high", "xhigh", "max"], defaultEffort: "high" }] as ChatModel[];
 		const claudeChat = (reasoningEffort?: string) => snapshot({ harness: "claude-code", settings: { model: "opus", approvalMode: "auto", reasoningEffort } });
@@ -254,6 +262,33 @@ describe("chat effort", () => {
 			// Another level turns it off.
 			act(() => { effort.choose("max"); effort.commit(); });
 			expect(effort.ultracode).toBe(false);
+		});
+
+		// Leaving the chat and coming back kept Extra High saved but dropped
+		// the Ultracode prefix, with nothing to say so.
+		it("lasts past the screen, kept for the conversation", async () => {
+			const key = "ao.chat.ultracode.m.s";
+			render({ models: claude, snapshot: claudeChat(), ultracodeKey: key });
+			act(() => slider.toggle());
+			act(() => { effort.choose("ultracode"); effort.commit(); });
+			await act(async () => {});
+			expect(stored.get(key)).toBe("1");
+			act(() => renderer!.unmount());
+			renderer = undefined;
+			render({ models: claude, snapshot: claudeChat("xhigh"), ultracodeKey: key });
+			await act(async () => {});
+			expect(effort.ultracode).toBe(true);
+			// Another conversation has its own.
+			render({ models: claude, snapshot: claudeChat("xhigh"), ultracodeKey: "ao.chat.ultracode.m.other" });
+			await act(async () => {});
+			expect(effort.ultracode).toBe(false);
+			// Turned off, it is forgotten.
+			render({ models: claude, snapshot: claudeChat("xhigh"), ultracodeKey: key });
+			await act(async () => {});
+			act(() => slider.toggle());
+			act(() => { effort.choose("max"); effort.commit(); });
+			await act(async () => {});
+			expect(stored.has(key)).toBe(false);
 		});
 	});
 
@@ -284,5 +319,43 @@ describe("chat effort", () => {
 		act(() => { vi.advanceTimersByTime(EFFORT_CONFIRM_MS); });
 		expect(effort.fast?.on).toBe(true);
 		vi.useRealTimers();
+	});
+
+	// An effort save replaces the whole set: a Fast flip the conversation has
+	// not reported yet must ride along, or the save clears it.
+	it("carries a Fast flip not yet reported into an effort save", () => {
+		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], supportsFast: true }] as ChatModel[];
+		const { onSettings } = render({ models: fastModels });
+		act(() => effort.fast!.toggle());
+		act(() => slider.toggle());
+		act(() => { effort.choose("high"); effort.commit(); });
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", fastMode: true, reasoningEffort: "high" });
+	});
+
+	it("keeps the newest Fast flip through the report of an older one", () => {
+		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], supportsFast: true }] as ChatModel[];
+		const { update } = render({ models: fastModels });
+		act(() => effort.fast!.toggle());
+		act(() => effort.fast!.toggle());
+		expect(effort.fast?.on).toBe(false);
+		// The first flip (on) is reported while the second (off) is on its way.
+		update(snapshot({ settings: { model: "opus", approvalMode: "auto", fastMode: true } }));
+		expect(effort.fast?.on).toBe(false);
+		update(snapshot({ settings: { model: "opus", approvalMode: "auto" } }));
+		expect(effort.fast?.on).toBe(false);
+	});
+
+	it("lets only the newest Fast flip's failure drop it", async () => {
+		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], supportsFast: true }] as ChatModel[];
+		const saves: { reject: (cause: Error) => void }[] = [];
+		render({ models: fastModels, onSettings: () => new Promise<void>((_resolve, reject) => { saves.push({ reject }); }) });
+		act(() => effort.fast!.toggle());
+		act(() => effort.fast!.toggle());
+		act(() => effort.fast!.toggle());
+		expect(effort.fast?.on).toBe(true);
+		await act(async () => saves[0].reject(new Error("offline")));
+		expect(effort.fast?.on).toBe(true);
+		await act(async () => saves[2].reject(new Error("offline")));
+		expect(effort.fast?.on).toBe(false);
 	});
 });

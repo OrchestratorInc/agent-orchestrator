@@ -612,7 +612,8 @@ function Composer({
 		setCursor(caret);
 	}, []);
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
-	const effort = useChatEffort(settingsProps);
+	// Ultracode has no field on the daemon: it is kept per conversation here.
+	const effort = useChatEffort({ ...settingsProps, ultracodeKey: machine ? `ao.chat.ultracode.${machine}.${sessionId}` : null });
 	ultracodeOn.current = effort.ultracode;
 	const permissions = useChatPermissions(settingsProps);
 	// Fast mode is the effort slider's bolt where the slider shows, so the wheels leave it out.
