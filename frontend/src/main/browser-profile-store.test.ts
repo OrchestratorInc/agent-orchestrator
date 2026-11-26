@@ -205,6 +205,56 @@ describe("BrowserProfileStore", () => {
 		expect(store.getDefaultProfileId()).toBe(imported.id);
 	});
 
+	it("replaces an import that became the default when the user re-imports (#8190)", async () => {
+		const stateDir = await makeStateDir();
+		const store = new BrowserProfileStore({ stateDir });
+		const firstImport = await store.createProfile("Chrome", { claimDefault: false });
+		await store.claimDefaultForImport(firstImport.id);
+		const reimport = await store.createProfile("Chrome 2", { claimDefault: false });
+		await store.claimDefaultForImport(reimport.id);
+		expect(store.getDefaultProfileId()).toBe(reimport.id);
+	});
+
+	it("keeps a default the user chose when a later import completes", async () => {
+		const stateDir = await makeStateDir();
+		const store = new BrowserProfileStore({ stateDir });
+		await store.createProfile("Personal");
+		const work = await store.createProfile("Work");
+		await store.setDefaultProfileId(work.id);
+		const imported = await store.createProfile("Firefox", { claimDefault: false });
+
+		await store.claimDefaultForImport(imported.id);
+		expect(store.getDefaultProfileId()).toBe(work.id);
+		// The choice survives a restart.
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		const again = await reloaded.createProfile("Firefox 2", { claimDefault: false });
+		await reloaded.claimDefaultForImport(again.id);
+		expect(reloaded.getDefaultProfileId()).toBe(work.id);
+	});
+
+	it("keeps a default the user turned off (Temporary) when a later import completes", async () => {
+		const store = new BrowserProfileStore({ stateDir: await makeStateDir() });
+		await store.createProfile("Personal");
+		await store.setDefaultProfileId(null);
+		const imported = await store.createProfile("Firefox", { claimDefault: false });
+
+		await store.claimDefaultForImport(imported.id);
+		expect(store.getDefaultProfileId()).toBeNull();
+	});
+
+	it("lets an import take the default again after the user's chosen default is deleted", async () => {
+		const store = new BrowserProfileStore({ stateDir: await makeStateDir() });
+		await store.createProfile("Personal");
+		const work = await store.createProfile("Work");
+		await store.setDefaultProfileId(work.id);
+		await store.deleteProfile(work.id);
+		const imported = await store.createProfile("Firefox", { claimDefault: false });
+
+		await store.claimDefaultForImport(imported.id);
+		expect(store.getDefaultProfileId()).toBe(imported.id);
+	});
+
 	it("creates one persistent default profile on first run so sessions start signed in", async () => {
 		const stateDir = await makeStateDir();
 		const store = new BrowserProfileStore({ stateDir });

@@ -46,6 +46,11 @@ export type BrowserProfileRegistry = {
 	 * deliberate choice of Temporary and must not bring it back.
 	 */
 	defaultProfileCreated?: true;
+	/**
+	 * Set when the user picked the default (or turned it off) in Settings. A
+	 * completed import then leaves the default alone; otherwise it takes it.
+	 */
+	defaultProfileChosen?: true;
 };
 
 export type BrowserProfileStoreError = {
