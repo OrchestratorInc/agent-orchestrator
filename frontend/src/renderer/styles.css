@@ -7828,10 +7828,11 @@ html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"]):
 }
 
 /* The composer sits tighter: 8px around its text and controls (12px
- * before), so the send button's corners stay close to concentric with the
- * composer's. */
+ * before). Its controls take the composer's radius less that inset, so their
+ * corners run concentric with the composer's. */
 html[data-new-desktop-ui] .cursor-chat-composer {
-	padding: 8px;
+	--composer-inset: 8px;
+	padding: var(--composer-inset);
 }
 
 /* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
@@ -7905,9 +7906,14 @@ html[data-new-desktop-ui] {
 	--radius-topbar-control: var(--radius-center-panel);
 }
 
-html[data-new-desktop-ui] .cursor-chat-composer button:is(.rounded-full, .rounded-lg),
 html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::before {
 	border-radius: var(--radius-control);
+}
+
+/* The composer's add, picker, dictate and send controls sit one inset inside
+ * its corners, so they take its radius less that inset (20 - 8 = 12px). */
+html[data-new-desktop-ui] .cursor-chat-composer button:is(.rounded-full, .rounded-lg) {
+	border-radius: calc(var(--radius-chat-composer) - var(--composer-inset));
 }
 
 /* Sidebar row actions (project and session rows, section "+") keep their
