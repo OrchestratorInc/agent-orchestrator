@@ -15,6 +15,7 @@ import (
 
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -613,7 +614,39 @@ func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID,
 	if len(request.Env) == 0 {
 		request.Env = s.runtimeCredentialEnv(ctx, agentID)
 	}
+	endpointEnv, err := s.customEndpointEnv(agentID)
+	if err != nil {
+		return ports.AgentModelDiscoveryRequest{}, err
+	}
+	if len(endpointEnv) > 0 {
+		// Sessions of a harness on a custom endpoint send its base URL and key,
+		// not the account's sign-in, so its catalog must come from that endpoint.
+		// The endpoint goes on last, as it does at launch: its blank entries hide
+		// a competing login the adapter would otherwise list models for.
+		env := make(map[string]string, len(request.Env)+len(endpointEnv))
+		for key, value := range request.Env {
+			env[key] = value
+		}
+		for key, value := range endpointEnv {
+			env[key] = value
+		}
+		request.Env = env
+	}
 	return s.globalModelDiscoveryRequest(request)
+}
+
+// customEndpointEnv is the saved custom endpoint env sessions of agentID get.
+// An endpoint that cannot be used fails discovery, which keeps the cached
+// catalog, instead of listing the models of a login no session will use.
+func (s *Service) customEndpointEnv(agentID string) (map[string]string, error) {
+	if s.dataDir == "" {
+		return nil, nil
+	}
+	env, err := harnessendpoint.ForDataDir(s.dataDir).Env(agentID)
+	if err != nil {
+		return nil, fmt.Errorf("load custom endpoint for %s: %w", agentID, err)
+	}
+	return env, nil
 }
 
 // runtimeCredentialEnv is the credential AO adds to agentID's local sessions
