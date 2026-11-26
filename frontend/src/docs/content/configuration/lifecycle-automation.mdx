@@ -70,6 +70,34 @@ Automations run in the local daemon, so the computer must be awake and Orchestra
 
 To try an automation, create one in **Automations** with a short prompt and a schedule a few minutes ahead. Then open its run history and linked session. If it does not run, check the time zone, confirm the automation is enabled, and make sure Orchestrator stayed open and the computer stayed awake. Pause the automation before changing a schedule you are testing.
 
+### Run when called
+
+Choose **When called** as the schedule to start a run each time another service, such as GitHub, Sentry, or Linear, sends a POST request to the automation's address: `https://<this machine's Remote access address>/hooks/<key>`. Turn on **Remote access** in **Settings → Mobile** first. The form shows the address with a copy button after you create the automation.
+
+```bash
+ao automation create --project my-app --name "Issue triage" \
+  --prompt "Triage {{body.issue.title}}: {{body.issue.html_url}}" \
+  --when-called --hook-secret "$SECRET" --hook-signature-header X-Hub-Signature-256 \
+  --filter body.action=opened --dedupe-key "{{headers.X-GitHub-Delivery}}"
+```
+
+- **Prompt**: `{{body.path}}`, `{{headers.Name}}`, and `{{query.name}}` fill in values from the call. Each filled value is wrapped in tags, and the prompt tells the agent to treat it as data, not instructions.
+- **Secret** and **Signature header**: Orchestrator checks the HMAC-SHA256 signature of the raw body in that header, in hex or base64, with or without `sha256=`, and rejects a call that does not match. Without a secret, anyone who has the address can start a run.
+- **Filters**, one per line: `path=a,b` runs only when the value is one of those, `path!=a,b` skips them, and a bare `path` needs the field to exist.
+- **Dedupe key**: a call whose key matches one from the last seven days is ignored, so a service's retries start one run.
+
+| Response | When |
+| --- | --- |
+| 202 with `runId` | The run is queued |
+| 200 | A filter did not match, or the dedupe key repeated |
+| 403 | The signature does not match |
+| 404 | Unknown address, or the project is archived |
+| 409 | The automation is paused |
+| 413 | The body is larger than 1 MiB |
+| 429 | 20 runs are already waiting for this automation |
+
+Called runs start one at a time, like scheduled runs. The computer must be awake with Orchestrator running; a call sent while it sleeps is lost unless the sending service retries.
+
 Project **Cues** save reusable instructions or exact shell commands for manual use. They do not run on a schedule. An agent Cue sends a prompt to an eligible session or starts a worker. A command Cue opens a fresh local terminal. Manage Cues in the project dialog and choose **Run a cue** from a session.
 
 For example, create an agent Cue named **Check tests** with the prompt `Run the focused tests and report failures`, then choose **Run a cue** in a project session. If the session cannot accept a prompt, start a worker from the offered option or wait until the session can accept one.

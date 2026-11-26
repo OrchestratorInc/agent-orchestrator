@@ -9,6 +9,7 @@ const displayAttributes = new Set(["alt", "aria-label", "placeholder", "title"])
 // These are content/data, product names, technical units, or keyboard chords—not
 // English UI copy. Keeping this allowlist exact makes newly introduced chrome fail.
 const approvedLiterals: Record<string, readonly string[]> = {
+	"components/AutomationsView.tsx": ["X-Hub-Signature-256", "body.action=opened", "{{headers.X-GitHub-Delivery}}"],
 	"components/BrowserPanel.tsx": [
 		"Orchestrator Preview",
 		"Demo app preview",

@@ -191,6 +191,30 @@ func TestAutomationCreatePostsDaemonContract(t *testing.T) {
 	}
 }
 
+func TestAutomationCreateWhenCalledPostsHookSettings(t *testing.T) {
+	cfg := setConfigEnv(t)
+	server, capture := automationServer(t, http.StatusCreated, `{"automation":{"id":"automation-1","displayName":"Triage","trigger":"call","hookKey":"k1"}}`)
+	writeRunFileFor(t, cfg, server)
+	out, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, Now: func() time.Time { return time.Now() }}, "automation", "create", "--project", "demo", "--name", "Triage", "--prompt", "Triage {{body.issue.title}}", "--when-called", "--hook-secret", "s", "--hook-signature-header", "X-Hub-Signature-256", "--filter", "body.action=opened", "--filter", "headers.X-GitHub-Event=issues", "--dedupe-key", "{{headers.X-GitHub-Delivery}}")
+	if err != nil {
+		t.Fatalf("create: %v stderr=%s", err, stderr)
+	}
+	if !strings.Contains(out, "POST /hooks/k1") {
+		t.Fatalf("output=%s", out)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(capture.body, &body); err != nil {
+		t.Fatal(err)
+	}
+	filters, _ := body["hookFilters"].([]any)
+	if body["trigger"] != "call" || body["timezone"] != nil || body["hookSignatureHeader"] != "X-Hub-Signature-256" || len(filters) != 2 || body["hookDedupeKey"] != "{{headers.X-GitHub-Delivery}}" {
+		t.Fatalf("body=%s", capture.body)
+	}
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "automation", "create", "--project", "demo", "--name", "x", "--prompt", "y", "--when-called", "--cron", "0 9 * * *"); err == nil {
+		t.Fatal("--when-called with --cron was accepted")
+	}
+}
+
 func TestAutomationDeleteRequiresMatchingConfirmation(t *testing.T) {
 	setConfigEnv(t)
 	out, _, err := executeCLI(t, Deps{In: strings.NewReader("wrong\n")}, "automation", "delete", "automation-1")

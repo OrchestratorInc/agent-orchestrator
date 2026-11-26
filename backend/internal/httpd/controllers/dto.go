@@ -2748,11 +2748,17 @@ type CreateAutomationRequest struct {
 	Harness     string `json:"harness,omitempty"`
 	RRule       string `json:"rrule,omitempty"`
 	Cron        string `json:"cron,omitempty"`
-	Timezone    string `json:"timezone"`
+	Timezone    string `json:"timezone,omitempty"`
 	Enabled     *bool  `json:"enabled,omitempty"`
 	Model       string `json:"model,omitempty"`
 	Mode        string `json:"mode,omitempty"`
 	Effort      string `json:"effort,omitempty"`
+
+	Trigger             string   `json:"trigger,omitempty" enum:"schedule,call"`
+	HookSecret          string   `json:"hookSecret,omitempty"`
+	HookSignatureHeader string   `json:"hookSignatureHeader,omitempty"`
+	HookFilters         []string `json:"hookFilters,omitempty"`
+	HookDedupeKey       string   `json:"hookDedupeKey,omitempty"`
 }
 
 // UpdateAutomationRequest is the partial body accepted when updating an automation.
@@ -2769,6 +2775,11 @@ type UpdateAutomationRequest struct {
 	Model       *string `json:"model,omitempty"`
 	Mode        *string `json:"mode,omitempty"`
 	Effort      *string `json:"effort,omitempty"`
+
+	HookSecret          *string   `json:"hookSecret,omitempty"`
+	HookSignatureHeader *string   `json:"hookSignatureHeader,omitempty"`
+	HookFilters         *[]string `json:"hookFilters,omitempty"`
+	HookDedupeKey       *string   `json:"hookDedupeKey,omitempty"`
 }
 
 // AutomationRunSummaryResponse is the latest-run projection attached to a definition.
@@ -2803,6 +2814,19 @@ type AutomationResponse struct {
 	Model       string                        `json:"model,omitempty"`
 	Mode        string                        `json:"mode,omitempty"`
 	Effort      string                        `json:"effort,omitempty"`
+
+	Trigger             string   `json:"trigger" enum:"schedule,call"`
+	HookKey             string   `json:"hookKey,omitempty"`
+	HookSecretSet       bool     `json:"hookSecretSet,omitempty"`
+	HookSignatureHeader string   `json:"hookSignatureHeader,omitempty"`
+	HookFilters         []string `json:"hookFilters,omitempty"`
+	HookDedupeKey       string   `json:"hookDedupeKey,omitempty"`
+}
+
+// HookCallResponse reports what happened to one call to /hooks/{hookKey}.
+type HookCallResponse struct {
+	Status string `json:"status" enum:"accepted,ignored,duplicate"`
+	RunID  string `json:"runId,omitempty"`
 }
 
 // AutomationEnvelope wraps one automation response.

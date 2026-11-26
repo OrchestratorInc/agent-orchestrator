@@ -3,7 +3,9 @@ package controllers
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -23,7 +25,10 @@ type AutomationService interface {
 	Update(context.Context, domain.AutomationID, automationsvc.UpdateInput) (domain.Automation, error)
 	Delete(context.Context, domain.AutomationID) error
 	Runs(context.Context, domain.AutomationRunFilter) (domain.AutomationRunPage, error)
+	Call(context.Context, string, automationsvc.CallInput) (automationsvc.CallResult, error)
 }
+
+const maxHookBodyBytes = 1 << 20
 
 // AutomationsController serves the automation API routes.
 type AutomationsController struct{ Svc AutomationService }
@@ -36,6 +41,38 @@ func (c *AutomationsController) Register(r chi.Router) {
 	r.Patch("/automations/{automationId}", c.update)
 	r.Delete("/automations/{automationId}", c.delete)
 	r.Get("/automations/{automationId}/runs", c.runs)
+}
+
+// RegisterHook mounts the route outside services call to start an automation.
+func (c *AutomationsController) RegisterHook(r chi.Router) {
+	r.Post("/hooks/{hookKey}", c.call)
+}
+
+func (c *AutomationsController) call(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/hooks/{hookKey}")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBodyBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			envelope.WriteAPIError(w, r, http.StatusRequestEntityTooLarge, "bad_request", "HOOK_BODY_TOO_LARGE", "Request body is larger than 1 MiB", nil)
+			return
+		}
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_BODY", "Could not read the request body", nil)
+		return
+	}
+	res, err := c.Svc.Call(r.Context(), chi.URLParam(r, "hookKey"), automationsvc.CallInput{Body: body, Headers: r.Header, Query: r.URL.Query()})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	if res.Status == domain.AutomationCallAccepted {
+		status = http.StatusAccepted
+	}
+	envelope.WriteJSON(w, status, HookCallResponse{Status: string(res.Status), RunID: string(res.RunID)})
 }
 
 func (c *AutomationsController) create(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +90,8 @@ func (c *AutomationsController) create(w http.ResponseWriter, r *http.Request) {
 		Kind: domain.SessionKind(req.Kind), Harness: domain.AgentHarness(req.Harness), RRule: req.RRule,
 		Cron: req.Cron, Timezone: req.Timezone, Enabled: req.Enabled,
 		Model: req.Model, Mode: req.Mode, Effort: req.Effort,
+		Trigger: req.Trigger, HookSecret: req.HookSecret, HookSignatureHeader: req.HookSignatureHeader,
+		HookFilters: req.HookFilters, HookDedupeKey: req.HookDedupeKey,
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -124,7 +163,8 @@ func (c *AutomationsController) update(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	input := automationsvc.UpdateInput{UseCase: req.UseCase, Model: req.Model, Mode: req.Mode, Effort: req.Effort, DisplayName: req.DisplayName, Prompt: req.Prompt, RRule: req.RRule, Cron: req.Cron, Timezone: req.Timezone, Enabled: req.Enabled}
+	input := automationsvc.UpdateInput{UseCase: req.UseCase, Model: req.Model, Mode: req.Mode, Effort: req.Effort, DisplayName: req.DisplayName, Prompt: req.Prompt, RRule: req.RRule, Cron: req.Cron, Timezone: req.Timezone, Enabled: req.Enabled,
+		HookSecret: req.HookSecret, HookSignatureHeader: req.HookSignatureHeader, HookFilters: req.HookFilters, HookDedupeKey: req.HookDedupeKey}
 	if req.Kind != nil {
 		value := domain.SessionKind(*req.Kind)
 		input.Kind = &value
@@ -185,7 +225,8 @@ func automationResponse(rec domain.Automation) AutomationResponse {
 		response := automationRunSummaryResponse(*rec.LatestRun)
 		latest = &response
 	}
-	return AutomationResponse{ID: string(rec.ID), ProjectID: string(rec.ProjectID), DisplayName: rec.DisplayName, Prompt: rec.Prompt, TemplateID: rec.TemplateID, UseCase: rec.UseCase, Kind: string(rec.Kind), Harness: string(rec.Harness), Model: rec.Model, Mode: rec.Mode, Effort: rec.Effort, RRule: rec.RRuleText, Timezone: rec.Timezone, Enabled: rec.Enabled, NextRunAt: rec.NextRunAt, LastRunAt: rec.LastRunAt, CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt, LatestRun: latest}
+	return AutomationResponse{ID: string(rec.ID), ProjectID: string(rec.ProjectID), DisplayName: rec.DisplayName, Prompt: rec.Prompt, TemplateID: rec.TemplateID, UseCase: rec.UseCase, Kind: string(rec.Kind), Harness: string(rec.Harness), Model: rec.Model, Mode: rec.Mode, Effort: rec.Effort, RRule: rec.RRuleText, Timezone: rec.Timezone, Enabled: rec.Enabled, NextRunAt: rec.NextRunAt, LastRunAt: rec.LastRunAt, CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt, LatestRun: latest,
+		Trigger: rec.Trigger, HookKey: rec.HookKey, HookSecretSet: rec.HookSecret != "", HookSignatureHeader: rec.HookSignatureHeader, HookFilters: rec.HookFilters, HookDedupeKey: rec.HookDedupeKey}
 }
 func automationRunSummaryResponse(run domain.AutomationRun) AutomationRunSummaryResponse {
 	response := AutomationRunSummaryResponse{ID: string(run.ID), Status: string(run.Status), ScheduledFor: run.ScheduledFor, ErrorMessage: run.ErrorMessage, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt}

@@ -5519,5 +5519,18 @@
 	"backgroundTasks.stale": "stale",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Background task",
-	"backgroundTasks.state.failed": "Failed"
+	"backgroundTasks.state.failed": "Failed",
+	"automations.whenCalled": "When called",
+	"automations.hook.address": "Address",
+	"automations.hook.promptHint": "Put {{example}} in the prompt to use a value from the call.",
+	"automations.hook.secret": "Secret",
+	"automations.hook.secretKept": "Saved secret kept",
+	"automations.hook.signatureHeader": "Signature header",
+	"automations.hook.filters": "Filters",
+	"automations.hook.dedupeKey": "Dedupe key",
+	"automations.hook.needsRemote": "Needs Remote access for a public address.",
+	"automations.hook.turnOnRemote": "Set up",
+	"automations.hook.addressAfterCreate": "Shown after you create it.",
+	"automations.hook.copyAddress": "Copy address",
+	"automations.hook.copied": "Copied"
 }

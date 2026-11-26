@@ -6093,6 +6093,11 @@ export interface components {
             effort?: string;
             enabled: boolean;
             harness?: string;
+            hookDedupeKey?: string;
+            hookFilters?: string[];
+            hookKey?: string;
+            hookSecretSet?: boolean;
+            hookSignatureHeader?: string;
             id: string;
             /** @enum {string} */
             kind: "worker" | "orchestrator";
@@ -6109,6 +6114,8 @@ export interface components {
             /** @enum {string} */
             templateId: "custom" | "daily_pr_review_v1" | "daily_issue_triage_v1" | "weekly_release_notes_v1";
             timezone: string;
+            /** @enum {string} */
+            trigger: "schedule" | "call";
             /** Format: date-time */
             updatedAt: string;
             /** @enum {string} */
@@ -7506,6 +7513,10 @@ export interface components {
             effort?: string;
             enabled?: null | boolean;
             harness?: string;
+            hookDedupeKey?: string;
+            hookFilters?: string[];
+            hookSecret?: string;
+            hookSignatureHeader?: string;
             /** @enum {string} */
             kind: "worker" | "orchestrator";
             mode?: string;
@@ -7515,7 +7526,9 @@ export interface components {
             rrule?: string;
             /** @enum {string} */
             templateId?: "custom" | "daily_pr_review_v1" | "daily_issue_triage_v1" | "weekly_release_notes_v1";
-            timezone: string;
+            timezone?: string;
+            /** @enum {string} */
+            trigger?: "schedule" | "call";
             /** @enum {string} */
             useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown";
         };
@@ -10030,6 +10043,10 @@ export interface components {
             effort?: null | string;
             enabled?: null | boolean;
             harness?: null | string;
+            hookDedupeKey?: null | string;
+            hookFilters?: null | string[];
+            hookSecret?: null | string;
+            hookSignatureHeader?: null | string;
             /** @enum {null|string} */
             kind?: "worker" | "orchestrator" | null;
             mode?: null | string;

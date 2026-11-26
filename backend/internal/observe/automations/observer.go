@@ -20,22 +20,24 @@ type Poller interface {
 
 // Config controls the automation observer's cadence, clock, and logging.
 type Config struct {
-	Tick   time.Duration
-	Clock  func() time.Time
-	Logger *slog.Logger
+	Tick    time.Duration
+	Clock   func() time.Time
+	Logger  *slog.Logger
+	Trigger <-chan struct{}
 }
 
 // Observer periodically asks the automation scheduler to process due work.
 type Observer struct {
-	poller Poller
-	tick   time.Duration
-	clock  func() time.Time
-	logger *slog.Logger
+	poller  Poller
+	tick    time.Duration
+	clock   func() time.Time
+	logger  *slog.Logger
+	trigger <-chan struct{}
 }
 
 // New constructs an automation observer with defaults for omitted configuration.
 func New(poller Poller, cfg Config) *Observer {
-	o := &Observer{poller: poller, tick: cfg.Tick, clock: cfg.Clock, logger: cfg.Logger}
+	o := &Observer{poller: poller, tick: cfg.Tick, clock: cfg.Clock, logger: cfg.Logger, trigger: cfg.Trigger}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -50,7 +52,7 @@ func New(poller Poller, cfg Config) *Observer {
 
 // Start runs the polling loop until ctx is canceled and returns its completion channel.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "automations")
+	return observe.StartTriggeredPollLoop(ctx, o.tick, o.trigger, o.Poll, o.logger, "automations")
 }
 
 // Poll processes automation work due at the observer's current time.

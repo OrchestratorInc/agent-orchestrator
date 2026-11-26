@@ -20,6 +20,8 @@ type fakeAutomationService struct {
 	updated automationsvc.UpdateInput
 	items   []domain.Automation
 	deleted domain.AutomationID
+	called  automationsvc.CallInput
+	result  automationsvc.CallResult
 }
 
 func (f *fakeAutomationService) Create(_ context.Context, input automationsvc.CreateInput) (domain.Automation, error) {
@@ -44,10 +46,48 @@ func (f *fakeAutomationService) Runs(_ context.Context, filter domain.Automation
 	return domain.AutomationRunPage{}, nil
 }
 
+func (f *fakeAutomationService) Call(_ context.Context, key string, in automationsvc.CallInput) (automationsvc.CallResult, error) {
+	f.called = in
+	return f.result, nil
+}
+
 func automationTestRouter(service AutomationService) http.Handler {
 	r := chi.NewRouter()
-	(&AutomationsController{Svc: service}).Register(r)
+	c := &AutomationsController{Svc: service}
+	c.Register(r)
+	c.RegisterHook(r)
 	return r
+}
+
+func TestHookCallStatusAndBodyLimit(t *testing.T) {
+	service := &fakeAutomationService{}
+	router := automationTestRouter(service)
+	for _, tc := range []struct {
+		result automationsvc.CallResult
+		body   string
+		status int
+	}{
+		{automationsvc.CallResult{Status: domain.AutomationCallAccepted, RunID: "automation-run-1"}, `{"a":1}`, http.StatusAccepted},
+		{automationsvc.CallResult{Status: domain.AutomationCallIgnored}, `{"a":1}`, http.StatusOK},
+		{automationsvc.CallResult{}, strings.Repeat("x", maxHookBodyBytes+1), http.StatusRequestEntityTooLarge},
+	} {
+		service.result = tc.result
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/hooks/key?x=1", strings.NewReader(tc.body)))
+		if rec.Code != tc.status {
+			t.Fatalf("status=%d want %d body=%s", rec.Code, tc.status, rec.Body.String())
+		}
+	}
+	if string(service.called.Body) != `{"a":1}` || service.called.Query.Get("x") != "1" {
+		t.Fatalf("call input=%+v", service.called)
+	}
+}
+
+func TestAutomationResponseHidesHookSecret(t *testing.T) {
+	raw, _ := json.Marshal(automationResponse(domain.Automation{Trigger: domain.AutomationTriggerCall, HookKey: "k", HookSecret: "s3cret", HookSignatureHeader: "X-Sig"}))
+	if strings.Contains(string(raw), "s3cret") || !strings.Contains(string(raw), `"hookSecretSet":true`) {
+		t.Fatalf("response=%s", raw)
+	}
 }
 
 // Request decoding must preserve the schedule choice and route through the

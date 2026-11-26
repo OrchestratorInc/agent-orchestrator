@@ -33,6 +33,7 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 		RRuleText:   "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
 		Timezone:    "Asia/Calcutta",
 		Enabled:     true,
+		Trigger:     domain.AutomationTriggerSchedule,
 		NextRunAt:   now.Add(24 * time.Hour),
 		LastRunAt:   &lastRun,
 		CreatedAt:   now,
@@ -258,6 +259,7 @@ func TestAutomationUpdatePersistsAllMutableFields(t *testing.T) {
 		t.Fatalf("CreateAutomation: %v", err)
 	}
 	lastRun := now.Add(time.Hour)
+	rec.Trigger = domain.AutomationTriggerSchedule
 	rec.DisplayName = "Weekly triage"
 	rec.Prompt = "Review the weekly queue"
 	rec.UseCase = "repo_digest"

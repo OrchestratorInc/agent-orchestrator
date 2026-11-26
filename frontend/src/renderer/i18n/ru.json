@@ -5886,5 +5886,18 @@
 	"device.options": "Параметры устройства",
 	"device.screenAlt": "Экран {{name}}",
 	"device.connecting": "Подключение…",
-	"device.reconnecting": "Повторное подключение…"
+	"device.reconnecting": "Повторное подключение…",
+	"automations.whenCalled": "При вызове",
+	"automations.hook.address": "Адрес",
+	"automations.hook.promptHint": "Вставьте {{example}} в промпт, чтобы использовать значение из вызова.",
+	"automations.hook.secret": "Секрет",
+	"automations.hook.secretKept": "Сохранённый секрет останется",
+	"automations.hook.signatureHeader": "Заголовок подписи",
+	"automations.hook.filters": "Фильтры",
+	"automations.hook.dedupeKey": "Ключ дедупликации",
+	"automations.hook.needsRemote": "Для публичного адреса нужен удалённый доступ.",
+	"automations.hook.turnOnRemote": "Настроить",
+	"automations.hook.addressAfterCreate": "Появится после создания.",
+	"automations.hook.copyAddress": "Скопировать адрес",
+	"automations.hook.copied": "Скопировано"
 }

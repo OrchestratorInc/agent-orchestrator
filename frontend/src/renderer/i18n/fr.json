@@ -5718,5 +5718,18 @@
 	"backgroundTasks.state.failed": "Échec",
 	"backgroundTasks.shells_many": "{{count}} shells sont toujours en cours",
 	"backgroundTasks.agents_many": "{{count}} agents en arrière-plan en cours",
-	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours"
+	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours",
+	"automations.whenCalled": "À l'appel",
+	"automations.hook.address": "Adresse",
+	"automations.hook.promptHint": "Mettez {{example}} dans le prompt pour utiliser une valeur de l'appel.",
+	"automations.hook.secret": "Secret",
+	"automations.hook.secretKept": "Secret enregistré conservé",
+	"automations.hook.signatureHeader": "En-tête de signature",
+	"automations.hook.filters": "Filtres",
+	"automations.hook.dedupeKey": "Clé de dédoublonnage",
+	"automations.hook.needsRemote": "Nécessite l'accès à distance pour obtenir une adresse publique.",
+	"automations.hook.turnOnRemote": "Configurer",
+	"automations.hook.addressAfterCreate": "Affichée après la création.",
+	"automations.hook.copyAddress": "Copier l'adresse",
+	"automations.hook.copied": "Copié"
 }

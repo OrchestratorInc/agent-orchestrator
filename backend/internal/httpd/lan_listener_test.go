@@ -139,6 +139,37 @@ func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	}
 }
 
+func TestLANManagerLetsOnlyHookCallsSkipAuth(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	})
+	st := &authState{}
+	st.setHash(mobilebridge.HashPassword("secret12"))
+	m := NewLANManager(inner, st, 0, slog.Default(), nil)
+	port, err := m.Start(0)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.Stop(context.Background())
+	for path, want := range map[string]int{
+		"/hooks/Abc_12-x":                 http.StatusOK,
+		"/hooks/":                         http.StatusUnauthorized,
+		"/hooks/abc/extra":                http.StatusUnauthorized,
+		"/hooks/..%2Fapi%2Fv1%2Fsessions": http.StatusUnauthorized,
+		"/hooks/abc%2F..%2F..%2Fapi%2Fv1": http.StatusUnauthorized,
+		"/api/v1/hooks/abc":               http.StatusUnauthorized,
+	} {
+		resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d%s", port, path), "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Fatalf("%s: got %d want %d", path, resp.StatusCode, want)
+		}
+	}
+}
+
 func TestLANManagerServesHTTP2WithoutTLS(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, r.Proto)

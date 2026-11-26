@@ -5539,5 +5539,18 @@
 	"backgroundTasks.stale": "veraltet",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Hintergrundaufgabe",
-	"backgroundTasks.state.failed": "Fehlgeschlagen"
+	"backgroundTasks.state.failed": "Fehlgeschlagen",
+	"automations.whenCalled": "Bei Aufruf",
+	"automations.hook.address": "Adresse",
+	"automations.hook.promptHint": "Mit {{example}} im Prompt nutzt du einen Wert aus dem Aufruf.",
+	"automations.hook.secret": "Secret",
+	"automations.hook.secretKept": "Gespeichertes Secret bleibt",
+	"automations.hook.signatureHeader": "Signatur-Header",
+	"automations.hook.filters": "Filter",
+	"automations.hook.dedupeKey": "Dedupe-Schlüssel",
+	"automations.hook.needsRemote": "Braucht Remote-Zugriff für eine öffentliche Adresse.",
+	"automations.hook.turnOnRemote": "Einrichten",
+	"automations.hook.addressAfterCreate": "Wird nach dem Erstellen angezeigt.",
+	"automations.hook.copyAddress": "Adresse kopieren",
+	"automations.hook.copied": "Kopiert"
 }

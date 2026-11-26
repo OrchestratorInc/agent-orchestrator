@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
 	tunnel      http.Handler // lanTunnelPath, behind the same auth
+	hooks       http.Handler // lanHookPath, checked by the automation's own key and signature
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
@@ -53,8 +55,11 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 		lock:        lock,
 	}
 	m.tunnel = auth(http.HandlerFunc(m.serveTunnel))
+	m.hooks = lanControlBlock(handler)
 	return m
 }
+
+var lanHookPath = regexp.MustCompile(`^/hooks/[A-Za-z0-9_-]+$`)
 
 // lanControlBlockedPrefixes are the loopback-only daemon-control route
 // prefixes that must never be reachable through the LAN listener: /shutdown,
@@ -365,6 +370,10 @@ func (m *LANManager) dispatch() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == lanTunnelPath {
 			m.tunnel.ServeHTTP(w, r)
+			return
+		}
+		if lanHookPath.MatchString(r.URL.Path) {
+			m.hooks.ServeHTTP(w, r)
 			return
 		}
 		m.handler.ServeHTTP(w, r)
