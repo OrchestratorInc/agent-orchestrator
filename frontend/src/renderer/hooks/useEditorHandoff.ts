@@ -71,6 +71,27 @@ export function workspaceCheckFailed(state: EditorHandoffState | undefined): boo
 		(state.unavailableCode === "INTERNAL_ERROR" || state.unavailableCode === "SERVICE_UNAVAILABLE");
 }
 
+/**
+ * Reads a session's open targets before its menu opens, so the menu's first
+ * frame already holds its final rows ("Open in" and its apps) instead of a
+ * placeholder that swaps once the lookup returns. Cached like the menu's own
+ * read, so repeated hovers inside the stale window cost nothing.
+ */
+export function prefetchEditorHandoffState(queryClient: QueryClient, sessionId: string) {
+	if (!sessionId) return;
+	const queryKey = editorHandoffQueryKey(sessionId);
+	void queryClient
+		.prefetchQuery({ queryKey, staleTime: 10_000, retry: false, queryFn: () => aoBridge.editorHandoff.getState(sessionId) })
+		.then(() => {
+			// The menu's own read waits out a new session's workspace and retries a
+			// failed check; a single read here cannot. Leave a missing workspace stale
+			// so the menu reads it again itself instead of trusting this answer.
+			if (queryClient.getQueryData<EditorHandoffState>(queryKey)?.workspaceAvailable === false) {
+				void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
+			}
+		});
+}
+
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
 	const failedChecks = useRef(0);
