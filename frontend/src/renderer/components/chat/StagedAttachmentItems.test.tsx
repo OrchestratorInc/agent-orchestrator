@@ -152,6 +152,18 @@ describe("StagedAttachmentItems opening a text file", () => {
 		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`, expect.objectContaining({ headers: { Range: `bytes=0-${VIEWER_BYTES}` } }));
 	});
 
+	it("opens a text file whose thumbnail couldn't be read", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+			tileRead(init) ? new Response("", { status: 502 }) : new Response("first line\nlast line", { status: 200 })));
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
+		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+	});
+
 	it("says when the whole file can't be read, and loads it on Retry", async () => {
 		let reachable = false;
 		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

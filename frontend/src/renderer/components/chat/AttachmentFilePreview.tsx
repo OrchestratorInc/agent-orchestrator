@@ -240,18 +240,20 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 	return (
 		<>
 			<span ref={sentinel} aria-hidden="true" className="pointer-events-none absolute inset-0" />
-			{preview ? (
+			{src && (preview || kind === "text") ? (
 				<>
 					<Pressable
 						onClick={() => setOpen(true)}
 						aria-label={name}
 						className="absolute inset-0 cursor-zoom-in focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
 					>
-						<span inert className={PREVIEW_CLASS}>
-							<Suspense fallback={null}>{preview}</Suspense>
-						</span>
+						{preview ? (
+							<span inert className={PREVIEW_CLASS}>
+								<Suspense fallback={null}>{preview}</Suspense>
+							</span>
+						) : null}
 					</Pressable>
-					{type ? <span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{type}</span> : null}
+					{preview && type ? <span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{type}</span> : null}
 				</>
 			) : null}
 			{open && src && kind === "video" ? (
