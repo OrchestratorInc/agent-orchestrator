@@ -181,6 +181,7 @@ function bootPage(fragment = "") {
 	const documentEvents = vi.spyOn(page, "addEventListener");
 	const windowEvents = new Map<string, (event: unknown) => void>();
 	const frames: Array<() => void> = [];
+	const timeouts: Array<() => void> = [];
 	const postMessage = vi.fn();
 	const host = { postMessage };
 	const observed: Element[] = [];
@@ -194,6 +195,8 @@ function bootPage(fragment = "") {
 		scrollTo: vi.fn(),
 		addEventListener: (name: string, callback: (event: unknown) => void) => windowEvents.set(name, callback),
 		requestAnimationFrame: (callback: () => void) => frames.push(callback),
+		setTimeout: (callback: () => void) => timeouts.push(callback),
+		clearTimeout: vi.fn(),
 		ResizeObserver: class {
 			constructor(callback: () => void) { onResize = callback; }
 			observe(element: Element) { observed.push(element); }
@@ -218,7 +221,7 @@ function bootPage(fragment = "") {
 		emitDocument("click", event);
 		return event;
 	};
-	return { page, view, history, observed, frames, postMessage, theme, context, click, emitDocument, windowEvents, resize: () => onResize() };
+	return { page, view, history, observed, frames, timeouts, postMessage, theme, context, click, emitDocument, windowEvents, resize: () => onResize() };
 }
 
 describe("render page bootstrap", () => {
@@ -351,6 +354,20 @@ describe("render page bootstrap", () => {
 		scrollable(400);
 		page.context({ scrollTo: { x: 0, y: 1200 } });
 		page.windowEvents.get("pointerdown")?.({});
+		page.view.scrollTo.mockClear();
+		page.resize();
+		for (const frame of page.frames.splice(0)) frame();
+		expect(page.view.scrollTo).not.toHaveBeenCalled();
+
+		// A page that never grows tall enough, or resizes, gives up on its own
+		// deadline: it reports again, and a later resize does not scroll it.
+		page.timeouts.length = 0;
+		page.context({ scrollTo: { x: 0, y: 1500 } });
+		expect(page.timeouts).toHaveLength(1);
+		page.postMessage.mockClear();
+		page.timeouts.shift()!();
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 400 } }, "*");
 		page.view.scrollTo.mockClear();
 		page.resize();
 		for (const frame of page.frames.splice(0)) frame();

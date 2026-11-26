@@ -95,17 +95,19 @@
   }
   // A page shown again goes back to where it was scrolled. It may still be
   // laying out, so this is tried again as its size changes, until it is
-  // reached, the reader takes over, or a few seconds pass.
-  var scrollReport = false, restoreTarget = null, restoreUntil = 0;
+  // reached, the reader takes over, or a few seconds pass. The deadline has
+  // its own timer, since a page that never resizes would never check it.
+  var scrollReport = false, restoreTarget = null, restoreUntil = 0, restoreTimer = 0;
   function restoreScroll() {
     if (!restoreTarget) return;
+    if (Date.now() > restoreUntil) return stopRestore();
     window.scrollTo(restoreTarget.x, restoreTarget.y);
-    if ((Math.abs(window.scrollX - restoreTarget.x) <= 1 && Math.abs(window.scrollY - restoreTarget.y) <= 1) ||
-        Date.now() > restoreUntil) stopRestore();
+    if (Math.abs(window.scrollX - restoreTarget.x) <= 1 && Math.abs(window.scrollY - restoreTarget.y) <= 1) stopRestore();
   }
   function stopRestore() {
     if (!restoreTarget) return;
     restoreTarget = null;
+    window.clearTimeout(restoreTimer);
     scheduleScrollReport();
   }
   window.addEventListener("message", function (e) {
@@ -123,8 +125,10 @@
     if (p.scrollReport !== undefined) scrollReport = p.scrollReport === true;
     var to = p.scrollTo;
     if (to && typeof to.x === "number" && typeof to.y === "number" && isFinite(to.x) && isFinite(to.y)) {
+      window.clearTimeout(restoreTimer);
       restoreTarget = { x: to.x, y: to.y };
       restoreUntil = Date.now() + 3000;
+      restoreTimer = window.setTimeout(stopRestore, 3000);
       restoreScroll();
     }
   });
