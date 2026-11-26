@@ -8028,3 +8028,61 @@ html[data-new-desktop-ui] :is(.session-inspector__resize-handle, .pane-split-jun
 html[data-new-desktop-ui] [class*="before:bg-interactive-hover"]::before {
 	inset: 0;
 }
+
+/* Menus: compact rows that read at full strength and sit on whole pixels: a
+ * 20px line in 4px of padding makes every row 28px, so no label lands on a
+ * half pixel. Icons and chevrons take the label's colour, red rows stay red,
+ * and key hints sit at the right edge in the label's size, muted. Dividers
+ * stop at the row text's inset and sit a step quieter. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]) {
+	padding-block: 4px;
+	line-height: 20px;
+}
+
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):not(.text-destructive) {
+	color: var(--foreground);
+}
+
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]) > svg {
+	color: currentColor;
+}
+
+/* Action menus are words only: a row's leading icon is dropped, so labels
+ * start on one edge and the letter keys carry the scanning. A submenu's
+ * chevron (pushed right with ml-auto) stays, and so does an app's logo
+ * ("Open in" and its apps), which names the row faster than its word. A
+ * menu that lists apps keeps every row's icon, so "Copy path" lines up. */
+html[data-new-desktop-ui] [role="menu"]:not(:has(> [role="menuitem"]:not([aria-haspopup]) > .open-target-icon)) .action-menu-item > svg:not(.ml-auto, .open-target-icon) {
+	display: none;
+}
+
+/* The menu's edge: a slight hairline so the panel holds its shape over any
+ * surface; the overlay border token is too faint to read on its own. */
+html[data-new-desktop-ui] [role="menu"] {
+	border-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+/* The row under the pointer or keyboard, and an open submenu's row, take a
+ * clear fill: the theme's hover tint was too faint on the menu surface. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled]) {
+	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+/* A destructive row under the pointer takes a soft red fill instead, so the
+ * row reads as a warning before it runs. */
+html[data-new-desktop-ui] [role="menu"] .text-destructive:is(:focus, [data-highlighted]):not([data-disabled]) {
+	background-color: color-mix(in oklab, var(--destructive) 22%, transparent);
+	color: color-mix(in oklab, var(--destructive) 75%, var(--foreground));
+}
+
+html[data-new-desktop-ui] [role="menu"] [data-slot="menu-shortcut"] {
+	padding-left: 16px;
+	font-size: inherit;
+	letter-spacing: normal;
+	color: var(--muted-foreground);
+}
+
+html[data-new-desktop-ui] [role="menu"] > [role="separator"] {
+	margin: 4px 8px;
+	background-color: color-mix(in oklab, var(--border), transparent 35%);
+}
