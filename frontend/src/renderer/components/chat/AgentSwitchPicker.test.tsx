@@ -90,6 +90,35 @@ describe("AgentModelPicker", () => {
 		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
 	});
 
+	// A routed catalog offers one model through several providers. The New task
+	// composer's menu lists the running agent's models, browsed and searched.
+	it("names the provider of the running agent's models that share a name", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "crush", {
+			models: [
+				{ id: "deepseek/deepseek-v4-pro", label: "deepseek-v4-pro" },
+				{ id: "fireworks/accounts/fireworks/models/deepseek-v4-pro", label: "deepseek-v4-pro" },
+				{ id: "venice/only-here", label: "only-here" },
+			],
+			modelId: "deepseek/deepseek-v4-pro",
+			modelLabel: "deepseek-v4-pro",
+		});
+		const button = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(button).toHaveTextContent("deepseek-v4-pro (deepseek)");
+		await user.click(button);
+		const names = () => screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+		expect(names()).toEqual([
+			expect.stringContaining("deepseek-v4-pro (deepseek)"),
+			expect.stringContaining("deepseek-v4-pro (fireworks)"),
+			expect.stringMatching(/^only-here(?! \()/),
+		]);
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "deepseek-v4-pro");
+		expect(names()).toEqual([
+			expect.stringContaining("deepseek-v4-pro (deepseek)"),
+			expect.stringContaining("deepseek-v4-pro (fireworks)"),
+		]);
+	});
+
 	it("lists Claude's newest models first and keeps the older releases below them", async () => {
 		const user = userEvent.setup();
 		open(undefined, false, "claude-code", {

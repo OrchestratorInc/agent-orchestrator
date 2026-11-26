@@ -1108,21 +1108,30 @@ func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 
 // accountModelPathPattern matches the resource name Fireworks uses as a model
 // ID, accounts/<account>/models/<model>.
-var accountModelPathPattern = regexp.MustCompile(`^accounts/[^/]+/models/([^/]+)$`)
+var accountModelPathPattern = regexp.MustCompile(`^accounts/([^/]+)/models/([^/]+)$`)
+
+// sharedModelAccount is the account Fireworks publishes its public models under.
+const sharedModelAccount = "fireworks"
 
 // splitProviderID labels a provider/model selector with its provider and the
 // name after the first slash, reporting whether the ID had both parts. A
-// resource path is labelled with its model's name; any other nested name
-// (a router's vendor/model) is kept whole, as the vendor is part of it. So is
-// a path to a model literally named "default", because normalize reads that
-// label as the default-model marker.
+// resource path is labelled with its model's name, and another account's
+// deployment as account/model so it does not read as the public one. Any other
+// nested name (a router's vendor/model) is kept whole, as the vendor is part of
+// it. So is a public path to a model literally named "default", because
+// normalize reads that label as the default-model marker.
 func splitProviderID(item *ports.AgentModelInfo) bool {
 	provider, name, ok := strings.Cut(item.ID, "/")
 	if !ok || provider == "" || name == "" {
 		return false
 	}
-	if match := accountModelPathPattern.FindStringSubmatch(name); len(match) == 2 && !strings.EqualFold(match[1], "default") {
-		name = match[1]
+	if match := accountModelPathPattern.FindStringSubmatch(name); len(match) == 3 {
+		switch account, model := match[1], match[2]; {
+		case account != sharedModelAccount:
+			name = account + "/" + model
+		case !strings.EqualFold(model, "default"):
+			name = model
+		}
 	}
 	item.Provider, item.Label = provider, name
 	return true

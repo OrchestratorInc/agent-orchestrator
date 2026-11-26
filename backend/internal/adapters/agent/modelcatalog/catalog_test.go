@@ -1612,13 +1612,16 @@ func TestModelDiscoveryErrorNamesACrashedCLIsError(t *testing.T) {
 	}
 }
 
-// Fireworks model IDs are resource names. The label is the model's own name;
-// the ID, which selects the model, is unchanged. Other nested names carry a
-// vendor that is part of the name, so they stay as they are.
+// Fireworks model IDs are resource names. A model of the shared "fireworks"
+// account is labelled with its own name; another account's deployment keeps the
+// account, so it does not read as the shared one. The ID, which selects the
+// model, is unchanged. Other nested names carry a vendor that is part of the
+// name, so they stay as they are.
 func TestParseProviderIDLinesLabelsAccountModelResourcePaths(t *testing.T) {
 	t.Parallel()
 	models, err := parseProviderIDLines([]byte(strings.Join([]string{
 		"fireworks/accounts/fireworks/models/deepseek-v4-pro",
+		"fireworks/accounts/myteam/models/deepseek-v4-pro",
 		"openrouter/anthropic/claude-sonnet",
 		"openai/gpt-5",
 	}, "\n")))
@@ -1631,6 +1634,7 @@ func TestParseProviderIDLinesLabelsAccountModelResourcePaths(t *testing.T) {
 	}
 	want := map[string]string{
 		"fireworks/accounts/fireworks/models/deepseek-v4-pro": "fireworks | deepseek-v4-pro",
+		"fireworks/accounts/myteam/models/deepseek-v4-pro":    "fireworks | myteam/deepseek-v4-pro",
 		"openrouter/anthropic/claude-sonnet":                  "openrouter | anthropic/claude-sonnet",
 		"openai/gpt-5":                                        "openai | gpt-5",
 	}
@@ -1655,14 +1659,14 @@ func TestResourcePathLabelsInvalidateCachedCatalogs(t *testing.T) {
 // its path as the label and is not marked as the default.
 func TestResourcePathModelNamedDefaultIsNotTheDefaultMarker(t *testing.T) {
 	t.Parallel()
-	models, err := parseMiMoModels([]byte("fireworks/accounts/team/models/default — Custom deployment"))
+	models, err := parseMiMoModels([]byte("fireworks/accounts/fireworks/models/default — Custom deployment"))
 	if err != nil {
 		t.Fatalf("parseMiMoModels() error = %v", err)
 	}
 	if len(models) != 1 {
 		t.Fatalf("models = %+v, want one", models)
 	}
-	if got := models[0]; got.Label != "accounts/team/models/default" || got.IsDefault {
+	if got := models[0]; got.Label != "accounts/fireworks/models/default" || got.IsDefault {
 		t.Fatalf("model = %+v, want the path as its label and not the default", got)
 	}
 }

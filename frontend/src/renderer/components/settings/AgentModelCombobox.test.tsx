@@ -97,6 +97,19 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByText("only-here")).toHaveAttribute("title", "venice/only-here");
 	});
 
+	it("names the provider on the closed picker when the picked model's name is shared", () => {
+		const models = [
+			{ id: "deepseek/deepseek-v4-pro", label: "deepseek-v4-pro", provider: "deepseek" },
+			{ id: "venice/deepseek-v4-pro", label: "deepseek-v4-pro", provider: "venice" },
+			{ id: "venice/only-here", label: "only-here", provider: "venice" },
+		];
+		const { unmount } = renderCombobox(models, { compact: true, value: "venice/deepseek-v4-pro" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("deepseek-v4-pro (venice)");
+		unmount();
+		renderCombobox(models, { compact: true, value: "venice/only-here" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent(/^only-here$/);
+	});
+
 	// Long names often differ only at the end ("…-large-flash", "…-large-v2"),
 	// which a narrow menu cuts off, so a compact row wraps instead.
 	it("wraps a long model name in a compact menu instead of cutting it off", async () => {
