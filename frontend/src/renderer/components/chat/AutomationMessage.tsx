@@ -5,8 +5,9 @@
  * - What the user did through AO (file feedback, a diff selection, a git button,
  *   browser annotations) is the user's own message: their words under a chip
  *   naming what they pointed at.
- * - What GitHub reported on the session's PR (failing CI, a review comment, a
- *   changes-requested review, merge conflicts) is a row in the PR's glyph,
+ * - Review comments and failing CI on the session's PR are one right-aligned line
+ *   per PR, however many messages they came in, that opens onto the detail.
+ * - A changes-requested review or merge conflicts is a row in the PR's glyph,
  *   tinted by what it means, with the detail beneath.
  * - AO's own notices are one quiet line.
  *
@@ -32,16 +33,18 @@ import {
 	CornerDownRight,
 	type AppIcon,
 } from "@/components/app-icons";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
 import { GITHUB_HTML_REHYPE_NO_IMAGES } from "../../lib/github-html";
+import { openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { cn } from "../../lib/utils";
 import type { SessionGitActionKind } from "../../stores/session-git-action-store";
+import { PRAvatar } from "../PRComments";
 import { Pressable } from "../ui/pressable";
 import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
-import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
+import { ChatMarkdown, FileReference, SessionLabelLink, useChatBrowserOpen, useWorkspaceFile } from "./ChatMarkdown";
 import { formatMessageTimestamp, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
 
@@ -286,19 +289,36 @@ export const automationOf = cachedBy((item) =>
 	item.kind === "message" && !item.senderSessionId && !/^\s*\[from /.test(item.text) ? readAutomation(item.text) : null,
 );
 
+type PullRequestFeedback = Extract<Automation, { kind: "reviewComments" | "ciFailing" }>;
+
 /**
- * Review comments AO delivered back to back for one PR, keyed by message id.
- * The daemon sends each comment as its own message, so a review round arrives
- * as a burst; its first message maps to the whole burst and draws it as one
- * event, and every later one maps to null and draws nothing. A lone comment is
- * not in the map.
+ * Review comments and failing CI: what a PR asks the agent to fix. Only AO's own
+ * nudges count, so a human message that reads like one stays a bubble and the
+ * feedback after it cannot hide behind it.
  */
-export function reviewBursts(items: readonly (ConversationItem | undefined)[]): ReadonlyMap<string, readonly ConversationMessage[] | null> {
+function feedbackOf(item: ConversationItem | undefined): PullRequestFeedback | null {
+	if (item?.kind !== "message" || item.origin !== "automation") return null;
+	const automation = automationOf(item);
+	return automation?.kind === "reviewComments" || automation?.kind === "ciFailing" ? automation : null;
+}
+
+/** The PR a message carries review comments or failing CI for, when it is AO's nudge. */
+export function pullRequestFeedbackNumber(item: ConversationItem): number | undefined {
+	return feedbackOf(item)?.pr.number;
+}
+
+/**
+ * A PR's review comments and failing CI that came back to back, keyed by message
+ * id. The daemon sends each comment as its own message, so a review round arrives
+ * as a burst; its first message maps to the whole burst and draws it as one line,
+ * and every later one maps to null and draws nothing. A lone message maps to itself.
+ */
+export function pullRequestBursts(items: readonly (ConversationItem | undefined)[]): ReadonlyMap<string, readonly ConversationMessage[] | null> {
 	const bursts = new Map<string, readonly ConversationMessage[] | null>();
 	let run: ConversationMessage[] = [];
 	let pr: number | undefined;
 	const close = () => {
-		if (run.length > 1) {
+		if (run.length > 0) {
 			bursts.set(run[0]!.id, run);
 			for (const message of run.slice(1)) bursts.set(message.id, null);
 		}
@@ -306,13 +326,11 @@ export function reviewBursts(items: readonly (ConversationItem | undefined)[]): 
 		pr = undefined;
 	};
 	for (const item of items) {
-		// Only AO's own nudges join: a human message that reads like one draws as
-		// a bubble, and the comments after it must not hide behind it.
-		const automation = item?.kind === "message" && item.origin === "automation" ? automationOf(item) : null;
-		if (item?.kind === "message" && automation?.kind === "reviewComments") {
-			if (pr !== automation.pr.number) close();
+		const feedback = feedbackOf(item);
+		if (item?.kind === "message" && feedback) {
+			if (pr !== feedback.pr.number) close();
 			run.push(item);
-			pr = automation.pr.number;
+			pr = feedback.pr.number;
 			continue;
 		}
 		close();
@@ -321,36 +339,25 @@ export function reviewBursts(items: readonly (ConversationItem | undefined)[]): 
 	return bursts;
 }
 
-/** A burst's comments as one event: every comment, the newest PR title, and the newest forge time. */
-function mergedReviewComments(burst: readonly ConversationMessage[]): Extract<Automation, { kind: "reviewComments" }> | null {
-	const each = burst
-		.map((message) => automationOf(message))
-		.filter((automation): automation is Extract<Automation, { kind: "reviewComments" }> => automation?.kind === "reviewComments");
-	const last = each.at(-1);
-	if (!last) return null;
-	const times = each.flatMap((automation) => (automation.at ? [automation.at] : [])).sort();
-	return { kind: "reviewComments", pr: last.pr, comments: each.flatMap((automation) => automation.comments), at: times.at(-1) };
-}
-
 /* -------------------------------------------------------------------------- */
 /* drawing                                                                     */
 /* -------------------------------------------------------------------------- */
 
 type UserAction = Extract<Automation, { kind: "fileFeedback" | "diffSelection" | "gitAction" | "browserFeedback" }>;
-type PullRequestAutomation = Extract<Automation, { pr: PullRequestRef }>;
 
 /**
  * An automation message drawn as what it is, or `fallback` when AO cannot tell.
- * `burst` is this message's entry from `reviewBursts`: the messages it draws
- * for, or null when an earlier message already drew it.
+ * `burst` is this message's entry from `pullRequestBursts`: the messages it draws
+ * for, or null when an earlier message already drew it. `queued` means the agent
+ * has not been sent it yet.
  */
 export function AutomationMessage({ message, queued, fallback, burst }: { message: ConversationMessage; queued?: boolean; fallback: ReactNode; burst?: readonly ConversationMessage[] | null }) {
 	if (burst === null) return null;
-	const merged = burst ? mergedReviewComments(burst) : null;
-	const automation = merged ?? automationOf(message);
+	const automation = automationOf(message);
 	if (!automation) return <>{fallback}</>;
 	if (automation.kind === "notice") return <NoticeLine notice={automation.notice} />;
-	if ("pr" in automation) return <PullRequestEvent automation={automation} createdAt={(merged && burst?.at(-1)?.createdAt) || message.createdAt} />;
+	if (automation.kind === "reviewComments" || automation.kind === "ciFailing") return <PullRequestFeedbackLine messages={burst ?? [message]} queued={queued} />;
+	if (automation.kind === "changesRequested" || automation.kind === "mergeConflict") return <PullRequestEvent automation={automation} createdAt={message.createdAt} />;
 	return (
 		<YourAction queued={queued} createdAt={message.createdAt}>
 			<UserActionBody action={automation} />
@@ -595,143 +602,269 @@ function byFile(comments: readonly ReviewComment[]): ReviewComment[] {
 	});
 }
 
+const isBot = (login: string) => login.endsWith("[bot]");
+const loginName = (login: string) => login.replace(/\[bot\]$/, "");
+
+/** Who commented, people before bots: a person's comment is usually the one to read. */
+function reviewersOf(comments: readonly ReviewComment[]): string[] {
+	return [...new Set(comments.map((comment) => comment.author))].sort((a, b) => Number(isBot(a)) - Number(isBot(b)));
+}
+
+const SHOWN_AVATARS = 3;
+
 /**
- * What GitHub reported on the session's PR, in the PR glyph tinted by what it
- * means. Failing CI and review comments are one line with their counts that
- * opens onto the list, so a long report does not bury the conversation.
+ * The reviewers inside a feedback line: up to three avatars, then one or two
+ * names, or a count for more. Takes no children, so a translation can place it
+ * as an empty tag.
  */
-function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {
+function Reviewers({ authors }: { authors: readonly string[] }) {
 	const { t, i18n } = useTranslation();
-	const { pr } = automation;
+	const more = authors.length - SHOWN_AVATARS;
+	const names = authors.length > 2
+		? <span className="font-medium text-foreground">{t("chat.automation.reviewers", { count: authors.length })}</span>
+		: new Intl.ListFormat(i18n.language, { type: "conjunction" }).formatToParts(authors.map(loginName)).map((part, index) =>
+			part.type === "element" ? <span key={index} className="font-medium text-foreground">{part.value}</span> : part.value);
+	return (
+		<>
+			<span className="mr-1 inline-flex items-center gap-0.5 align-[-3px]">
+				{authors.slice(0, SHOWN_AVATARS).map((author) => <PRAvatar key={author} name={author} bot={isBot(author)} size="sm" />)}
+				{more > 0 ? (
+					<span aria-hidden="true" className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium tabular-nums text-muted-foreground">
+						+{more}
+					</span>
+				) : null}
+			</span>
+			{names}
+		</>
+	);
+}
+
+/**
+ * One comment under the feedback line. The whole row opens where it points: the
+ * file at its line when this chat can open it, else the PR's changed files on the
+ * forge. The file label is the same control, as a plain button, so keyboard and
+ * screen readers reach it; links, buttons and a text selection inside the
+ * comment keep their own behaviour.
+ */
+function FeedbackComment({ comment, prUrl }: { comment: ReviewComment; prUrl?: string }) {
+	const file = useWorkspaceFile(comment.path);
+	const browserOpen = useChatBrowserOpen();
+	const pr = forgeURL(prUrl);
+	const changes = comment.path && pr ? `${pr.replace(/\/+$/, "")}/${new URL(pr).hostname === "gitlab.com" ? "diffs" : "files"}` : undefined;
+	const where = comment.path ? `${comment.path.slice(comment.path.lastIndexOf("/") + 1)}${comment.line ? `:${comment.line}` : ""}` : undefined;
+	const open = file
+		? () => file.open(comment.line)
+		: changes
+			? () => (browserOpen ? browserOpen(changes) : void openLinkInSystemBrowser(changes))
+			: undefined;
+	const openFromRow = (event: MouseEvent<HTMLDivElement>) => {
+		if ((event.target as HTMLElement).closest("a, button, [role='button'], summary, input, textarea") || window.getSelection()?.toString()) return;
+		open?.();
+	};
+	return (
+		<div onClick={open ? openFromRow : undefined} className={cn("min-w-0 p-2", open && "cursor-pointer hover:bg-interactive-hover")}>
+			<div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+				<PRAvatar name={comment.author} bot={isBot(comment.author)} size="sm" />
+				<span className="shrink-0 font-medium text-foreground">{loginName(comment.author)}</span>
+				{where ? (
+					<>
+						<span aria-hidden="true" className="shrink-0 text-muted-foreground/50">·</span>
+						{open ? (
+							<Pressable onClick={open} title={comment.path} className="min-w-0 truncate rounded hover:text-foreground">{where}</Pressable>
+						) : (
+							<span className="min-w-0 truncate" title={comment.path}>{where}</span>
+						)}
+					</>
+				) : null}
+			</div>
+			<div className="mt-0.5 min-w-0 pl-[22px]">
+				<Folded watch={comment.body}>
+					<ChatMarkdown text={comment.body} className="text-control leading-snug" safeOrigin rehypePlugins={GITHUB_HTML} />
+				</Folded>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * Keeps a revealing block in view while it grows: each frame of its 150ms
+ * reveal, scroll the chat just enough to show its bottom, but never so far
+ * that its top (the line the user clicked) leaves the view. Reduced motion has
+ * no transition, so the first frame already sees the full height.
+ */
+function followReveal(root: HTMLElement, scroller: HTMLElement): () => void {
+	// The reveal, plus a few frames for the comments' Markdown to settle.
+	const until = performance.now() + 220;
+	// The chat's end fade (--edge-fade-end-size, --space-3).
+	const inset = 12;
+	let frame = 0;
+	// The reader scrolling takes over: the follow never pulls the view back.
+	const readerInput = ["wheel", "touchstart", "keydown"] as const;
+	const stop = () => {
+		cancelAnimationFrame(frame);
+		for (const type of readerInput) scroller.removeEventListener(type, stop);
+	};
+	for (const type of readerInput) scroller.addEventListener(type, stop, { passive: true });
+	const step = () => {
+		const view = scroller.getBoundingClientRect();
+		const box = root.getBoundingClientRect();
+		const by = Math.min(box.bottom + inset - view.bottom, box.top - inset - view.top);
+		if (by > 0.5) scroller.scrollTop += by;
+		if (performance.now() < until) frame = requestAnimationFrame(step);
+		else stop();
+	};
+	frame = requestAnimationFrame(step);
+	return stop;
+}
+
+/**
+ * A PR's review comments and failing CI as one right-aligned line: "3 comments from
+ * coderabbitai on #9120". While the agent is busy, AO holds them until its turn
+ * ends, and the line says so; once sent, the same line stays where it was with
+ * the time the feedback came in, so nothing moves when the agent picks it up. The
+ * line opens onto every comment, file by file, and every failing check.
+ */
+function PullRequestFeedbackLine({ messages, queued }: { messages: readonly ConversationMessage[]; queued?: boolean }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	// The list mounts on first open and stays, so closing can animate.
 	const [opened, setOpened] = useState(false);
 	const bodyId = useId();
 	const headingId = useId();
-	// When it happened on the forge, not when AO delivered it: AO holds PR
-	// nudges while the session waits on the user, so delivery can lag by a lot.
-	const at = ("at" in automation && automation.at) || createdAt;
-	const components = {
-		strong: <span className="font-medium text-foreground" />,
-		// Above the row's toggle, so the PR number still opens the PR.
-		pr: <ForgeLink url={pr.url} className="relative z-[1] font-medium text-foreground" />,
-	};
-	// A narrow key keeps Trans's typing tractable; the full MessageKey union is too complex for it (TS2590).
-	const lead = (key: `chat.automation.${"ciFailing" | "reviewComment" | "changesRequested" | "mergeConflict"}`, author?: string) => (
-		<Trans t={t} i18nKey={key} values={{ number: pr.number, author }} components={components} />
-	);
-	let tone = "text-status-in-review";
-	let heading: ReactNode;
-	let counts: string | undefined;
-	let detail: ReactNode = null;
-	// Failing CI and review comments open from their line; the rest show their detail as before.
-	let collapsible = false;
-	switch (automation.kind) {
-		case "ciFailing": {
-			const checks = uniqueChecks(automation.checks);
-			tone = "text-status-exited";
-			heading = lead("chat.automation.ciFailing");
-			counts = t("chat.automation.failedChecks", { count: checks.length });
-			collapsible = true;
-			detail = (
-				<ul className="flex flex-col gap-1">
-					{checks.map((check, index) => <FailedCheckLine key={index} check={check} />)}
-				</ul>
-			);
-			break;
-		}
-		case "reviewComments": {
-			const { comments } = automation;
-			const authors = [...new Set(comments.map((comment) => `@${comment.author}`))];
-			const files = new Set(comments.flatMap((comment) => (comment.path ? [comment.path] : [])));
-			heading = comments.length === 1
-				? lead("chat.automation.reviewComment", new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(authors))
-				: <Trans t={t} i18nKey="chat.automation.reviewComments" values={{ number: pr.number, count: comments.length }} components={components} />;
-			// The plural heading names no one, so a lone reviewer's name leads the counts.
-			counts = [
-				...(authors.length > 1 ? [t("chat.automation.reviewers", { count: authors.length })] : comments.length > 1 ? authors : []),
-				...(files.size > 0 ? [t("chat.automation.commentFiles", { count: files.size })] : []),
-			].join(", ") || undefined;
-			collapsible = true;
-			detail = byFile(comments).map((comment, index) => (
-				<div key={index} className="min-w-0">
-					{comment.path || authors.length > 1 ? (
-						<div className="mb-1 flex min-w-0 items-center gap-2">
-							{/* Several reviewers: each comment says whose it is. */}
-							{authors.length > 1 ? <span className="shrink-0 text-xs font-medium text-foreground">{`@${comment.author}`}</span> : null}
-							{comment.path ? <FileChip path={comment.path} line={comment.line} /> : null}
-						</div>
-					) : null}
-					<Folded watch={comment.body}>
-						<ChatMarkdown text={comment.body} safeOrigin rehypePlugins={GITHUB_HTML} />
-					</Folded>
-				</div>
-			));
-			break;
-		}
-		case "changesRequested":
-			heading = lead("chat.automation.changesRequested", automation.author ? `@${automation.author}` : t("chat.automation.aoReviewer"));
-			detail = automation.body ? (
-				<Folded watch={automation.body}>
-					<ChatMarkdown text={automation.body} safeOrigin rehypePlugins={GITHUB_HTML} />
-				</Folded>
-			) : null;
-			break;
-		case "mergeConflict":
-			// The PR cannot merge until the agent rebases: a failure, like failing CI.
-			tone = "text-status-exited";
-			heading = lead("chat.automation.mergeConflict");
-			break;
-	}
+	const stateId = useId();
+	const rootRef = useRef<HTMLDivElement>(null);
+	// Opening grows the line downward; scroll the chat along with it so the comments come into view.
+	useEffect(() => {
+		const root = rootRef.current;
+		const scroller = root?.closest<HTMLElement>(".chat-scroll-viewport");
+		if (!open || !root || !scroller) return;
+		return followReveal(root, scroller);
+	}, [open]);
+	const each = messages.flatMap((message) => {
+		const automation = automationOf(message);
+		const feedback = automation?.kind === "reviewComments" || automation?.kind === "ciFailing" ? automation : null;
+		// When it happened on the forge, not when AO delivered it: AO holds PR
+		// nudges while the agent works, so delivery can lag by a lot.
+		return feedback ? [{ feedback, at: (feedback.kind === "reviewComments" && feedback.at) || message.createdAt }] : [];
+	});
+	const last = each.at(-1);
+	if (!last) return null;
+	// The newest message carries the PR's current title and link.
+	const { pr } = last.feedback;
+	const at = each.map((entry) => entry.at).sort().at(-1)!;
+	const comments = each.flatMap(({ feedback }) => (feedback.kind === "reviewComments" ? feedback.comments : []));
+	const checks = uniqueChecks(each.flatMap(({ feedback }) => (feedback.kind === "ciFailing" ? feedback.checks : [])));
+	const authors = reviewersOf(comments);
+	const key = comments.length > 0 && checks.length > 0 ? "feedbackBoth" : comments.length > 0 ? "feedbackComments" : "feedbackChecks";
 	const toggle = () => {
 		setOpened(true);
 		setOpen((current) => !current);
 	};
-	// Hover lightens the line's text, never a fill behind the row.
-	const hoverText = collapsible ? "transition-colors duration-150 group-hover/pr-event:text-foreground motion-reduce:transition-none" : undefined;
+	// Hover lightens the line's text, never a fill behind it.
+	const hoverText = "group-hover/pr-feedback:text-foreground";
+	return (
+		<div ref={rootRef} className="min-w-0" data-testid="pull-request-feedback">
+			<div className="group/pr-feedback relative flex min-h-7 w-full min-w-0 items-center justify-end gap-1.5 text-xs text-muted-foreground">
+				{/* The whole row toggles, not just its text. The PR link sits above this, so it still opens the PR. */}
+				<Pressable
+					aria-expanded={open}
+					aria-controls={bodyId}
+					aria-labelledby={`${headingId} ${stateId}`}
+					onClick={toggle}
+					className="absolute inset-0 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+				/>
+				<span id={headingId} className={cn("min-w-0 truncate", hoverText)}>
+					<Trans
+						t={t}
+						i18nKey={`chat.automation.${key}`}
+						values={{
+							number: pr.number,
+							comments: t("chat.automation.commentCount", { count: comments.length }),
+							checks: t("chat.automation.failingCheckCount", { count: checks.length }),
+						}}
+						components={{
+							strong: <span className="font-medium text-foreground" />,
+							pr: <ForgeLink url={pr.url} className="relative z-[1] font-medium text-foreground" />,
+							who: <Reviewers authors={authors} />,
+							fail: <CircleX aria-hidden="true" className="mr-1 inline size-3.5 align-[-2px] text-status-exited" />,
+						}}
+					/>
+				</span>
+				<span aria-hidden="true" className="shrink-0 text-muted-foreground/50">·</span>
+				{queued ? (
+					<span id={stateId} className={cn("shrink-0", hoverText)}>{t("chat.automation.afterThisTurn")}</span>
+				) : (
+					<time id={stateId} className={cn("shrink-0 tabular-nums", hoverText)} dateTime={at}>{formatMessageTimestamp(at)}</time>
+				)}
+				<ChevronRight
+					aria-hidden="true"
+					className={cn("size-3 shrink-0 transition-transform duration-150 group-hover/pr-feedback:text-foreground motion-reduce:transition-none", open && "rotate-90")}
+				/>
+			</div>
+			{/* Grid rows 0fr to 1fr: the line never moves and nothing is measured. */}
+			<div
+				id={bodyId}
+				inert={!open}
+				className={cn(
+					"grid min-w-0 transition-[grid-template-rows,opacity] duration-150 ease-out motion-reduce:transition-none",
+					open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+				)}
+			>
+				<div className="min-h-0 min-w-0 overflow-hidden">
+					{opened ? (
+						// One shared surface under the line, right-aligned with it: a comment per row, the failing checks last.
+						<div className="mb-1 ml-auto mt-0.5 w-full max-w-lg divide-y divide-border overflow-hidden rounded-lg bg-card">
+							{byFile(comments).map((comment, index) => <FeedbackComment key={index} comment={comment} prUrl={pr.url} />)}
+							{checks.length > 0 ? (
+								<ul className="flex flex-col gap-0.5 p-2">
+									{checks.map((check, index) => <FailedCheckLine key={index} check={check} />)}
+								</ul>
+							) : null}
+						</div>
+					) : null}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * A changes-requested review or merge conflicts on the session's PR, in the PR
+ * glyph tinted by what it means, with the review's body beneath.
+ */
+function PullRequestEvent({ automation, createdAt }: { automation: Extract<Automation, { kind: "changesRequested" | "mergeConflict" }>; createdAt: string }) {
+	const { t } = useTranslation();
+	const { pr } = automation;
+	// When it happened on the forge, not when AO delivered it.
+	const at = ("at" in automation && automation.at) || createdAt;
+	const components = {
+		strong: <span className="font-medium text-foreground" />,
+		pr: <ForgeLink url={pr.url} className="font-medium text-foreground" />,
+	};
+	// A narrow key keeps Trans's typing tractable; the full MessageKey union is too complex for it (TS2590).
+	const lead = (key: `chat.automation.${"changesRequested" | "mergeConflict"}`, author?: string) => (
+		<Trans t={t} i18nKey={key} values={{ number: pr.number, author }} components={components} />
+	);
+	const changes = automation.kind === "changesRequested";
 	return (
 		<div className="relative min-w-0 pl-6" data-testid="pull-request-event">
-			<GitPullRequest aria-hidden="true" className={cn("absolute left-0 top-[6px] size-4", tone)} />
-			<div className={cn("relative flex min-h-7 min-w-0 items-center gap-2 text-xs text-muted-foreground", collapsible && "group/pr-event")}>
-				{collapsible ? (
-					// The whole line toggles. The PR link sits above this, so it still opens the PR.
-					<Pressable
-						aria-expanded={open}
-						aria-controls={bodyId}
-						aria-labelledby={headingId}
-						onClick={toggle}
-						className="absolute inset-0 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
-					/>
-				) : null}
-				<span id={headingId} className={cn("min-w-0 truncate", hoverText)}>
-					{heading}
+			{/* Changes requested wait on the agent; merge conflicts keep the PR from merging, a failure. */}
+			<GitPullRequest aria-hidden="true" className={cn("absolute left-0 top-[6px] size-4", changes ? "text-status-in-review" : "text-status-exited")} />
+			<div className="flex min-h-7 min-w-0 items-center gap-2 text-xs text-muted-foreground">
+				<span className="min-w-0 truncate">
+					{changes
+						? lead("chat.automation.changesRequested", automation.author ? `@${automation.author}` : t("chat.automation.aoReviewer"))
+						: lead("chat.automation.mergeConflict")}
 					{pr.title ? <span className="ml-1.5">{pr.title}</span> : null}
 				</span>
-				{counts ? <span className={cn("shrink-0 tabular-nums", hoverText)}>{counts}</span> : null}
-				{collapsible ? (
-					<ChevronRight
-						aria-hidden="true"
-						className={cn("size-3 shrink-0 transition-[color,transform] duration-150 group-hover/pr-event:text-foreground motion-reduce:transition-none", open && "rotate-90")}
-					/>
-				) : null}
 				<time className="ml-auto shrink-0 tabular-nums" dateTime={at}>{formatMessageTimestamp(at)}</time>
 			</div>
-			{collapsible ? (
-				// Grid rows 0fr to 1fr: the line never moves and nothing is measured.
-				<div
-					id={bodyId}
-					inert={!open}
-					className={cn(
-						"grid min-w-0 transition-[grid-template-rows,opacity] duration-150 ease-out motion-reduce:transition-none",
-						open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-					)}
-				>
-					<div className="min-h-0 min-w-0 overflow-hidden">
-						{opened ? <div className="flex min-w-0 flex-col gap-3 pb-1 pt-1">{detail}</div> : null}
-					</div>
+			{changes && automation.body ? (
+				<div className="flex min-w-0 flex-col gap-3 pb-1">
+					<Folded watch={automation.body}>
+						<ChatMarkdown text={automation.body} safeOrigin rehypePlugins={GITHUB_HTML} />
+					</Folded>
 				</div>
-			) : detail ? (
-				<div className="flex min-w-0 flex-col gap-3 pb-1">{detail}</div>
 			) : null}
 		</div>
 	);

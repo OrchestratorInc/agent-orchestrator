@@ -199,7 +199,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, pullRequestBursts, pullRequestFeedbackNumber, ReplacedNotice, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -4566,8 +4566,11 @@ export function Timeline({
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const pendingTurns = new Set(snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id));
-		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
-			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+		// The user's own queued prompts sit in the dock, so feedback queued around one still merges.
+		const groups = mergeQueuedPullRequestFeedback(
+			groupByTurn({ ...snapshot, items }, { controllerStopped }).filter((group) => !group.turnId || !hiddenTurns.has(group.turnId)),
+			queuedTurnIds(snapshot),
+		)
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group)
@@ -6340,8 +6343,8 @@ const TurnGroup = memo(function TurnGroup({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
 		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
-	// A review round arrives as one message per comment; it draws as one event.
-	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
+	// A review round arrives as one message per comment; a PR's comments and failing CI draw as one line.
+	const bursts = useMemo(() => pullRequestBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6464,7 +6467,7 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
-			reviewBurst={bursts.get(run.items[0]!.id)}
+			pullRequestBurst={bursts.get(run.items[0]!.id)}
 			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
@@ -6751,7 +6754,7 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
-	reviewBurst,
+	pullRequestBurst,
 }: {
 	item: ConversationItem;
 	harness?: string;
@@ -6794,8 +6797,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
-	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
-	reviewBurst?: readonly ConversationMessage[] | null;
+	/** This message's PR feedback burst (see `pullRequestBursts`): the messages it draws for, or null when another draws it. */
+	pullRequestBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6851,11 +6854,11 @@ function TimelineItem({
 				/>
 			);
 		}
-		// An earlier message of its review burst draws this one.
-		if (reviewBurst === null) return null;
+		// An earlier message of its PR feedback burst draws this one.
+		if (pullRequestBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={pullRequestBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
@@ -7842,6 +7845,36 @@ function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
  */
 function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: boolean): boolean {
 	return firstTurnSettled(snapshot) || (controllerStopped && snapshot.turns[0]?.state === "running");
+}
+
+/**
+ * Queued turns that hold only one PR's review comments or failing CI, back to
+ * back, as one group. The daemon queues each comment that arrives while the
+ * agent works as its own turn, so a review round stacked one row per comment
+ * under the working row; as one group its messages draw as one line, and the
+ * count grows in place as more arrive. The group keeps the first turn's key and
+ * id, so the line stays where it is.
+ */
+function mergeQueuedPullRequestFeedback(groups: TimelineGroup[], queued: ReadonlySet<string>): TimelineGroup[] {
+	const pullRequestOf = (group: TimelineGroup) => {
+		if (!group.turnId || !queued.has(group.turnId) || group.items.length === 0) return undefined;
+		const numbers = new Set(group.items.map((item) => pullRequestFeedbackNumber(item)));
+		const [number] = numbers;
+		return numbers.size === 1 ? number : undefined;
+	};
+	const merged: TimelineGroup[] = [];
+	let runPullRequest: number | undefined;
+	for (const group of groups) {
+		const pullRequest = pullRequestOf(group);
+		const previous = merged.at(-1);
+		if (pullRequest !== undefined && pullRequest === runPullRequest && previous) {
+			merged[merged.length - 1] = { ...previous, items: [...previous.items, ...group.items] };
+			continue;
+		}
+		merged.push(group);
+		runPullRequest = pullRequest;
+	}
+	return merged.length === groups.length ? groups : merged;
 }
 
 /**
