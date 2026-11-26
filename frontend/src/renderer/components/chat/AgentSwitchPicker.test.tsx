@@ -107,6 +107,26 @@ describe("AgentModelPicker", () => {
 		expect(labels).toEqual([expect.stringContaining("Opus 5.5"), expect.stringContaining("Sonnet 4.5"), expect.stringContaining("Opus 4.5")]);
 	});
 
+	it("shows the exact OMP model IDs when browsing and searching identically named choices", async () => {
+		const user = userEvent.setup();
+		const first = "test-router/ag/example-argon-low";
+		const second = "test-router/ag/example-argon-high";
+		const { current } = open(undefined, false, "omp", {
+			modelId: first,
+			modelLabel: "Example Argon",
+			models: [{ id: first, label: "Example Argon" }, { id: second, label: "Example Argon" }],
+		});
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const row = (id: string) => screen.getByText(id, { selector: "code" }).closest('[role="menuitemradio"]')!;
+		expect(row(first)).toHaveAttribute("aria-description", first);
+		expect(row(second)).toHaveAttribute("aria-description", second);
+		await user.type(screen.getByRole("searchbox"), "argon");
+		const high = row(second);
+		expect(high).toHaveAttribute("aria-description", second);
+		await user.click(high);
+		expect(current.onPickModel).toHaveBeenCalledWith(second);
+	});
+
 	it.each(["Opus", "Sonnet"])("keeps the menu open, effort under it, after picking model %s", async (model) => {
 		const user = userEvent.setup();
 		const { current } = open();

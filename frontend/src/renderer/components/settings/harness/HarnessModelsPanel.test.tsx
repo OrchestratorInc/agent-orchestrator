@@ -19,10 +19,14 @@ vi.mock("../../../hooks/useSettings", () => ({
 	useUpdateHarnessDefault: () => ({ update, error: undefined }),
 }));
 vi.mock("../../../hooks/useAgentModelsQuery", () => ({
-	agentModelsQueryOptions: () => ({
-		queryKey: ["agent-models", "cursor"],
+	agentModelsQueryOptions: (agentId: string) => ({
+		queryKey: ["agent-models", agentId],
 		queryFn: async () => h.catalog ?? ({
-			models: [
+			models: agentId === "omp" ? [
+				{ id: "test-router/cx/example-terra", label: "Example Terra", provider: "test-router" },
+				{ id: "test-router/cx/example-terra-xhigh", label: "Example Terra", provider: "test-router" },
+				{ id: "test-router/cx/other", label: "test-router/cx/other", provider: "test-router" },
+			] : [
 				{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High", isDefault: true },
 				{ id: "claude-opus-4-8-thinking-high", label: "Claude Opus 4.8 High Thinking" },
 				{ id: "gpt-5.5-high", label: "GPT-5.5 High" },
@@ -66,5 +70,22 @@ describe("HarnessModelsPanel", () => {
 		expect(screen.getAllByRole("switch")).toHaveLength(2);
 		await userEvent.click(opus);
 		expect(update).toHaveBeenCalledWith({ agentId: "cursor", disabledModels: ["claude-opus-4-8-high", "claude-opus-4-8-thinking-high"] });
+	});
+
+	it("shows distinct IDs and switches only the chosen same-name model", async () => {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<HarnessModelsPanel agentId="omp" installed needsLogin={false} onOpenAccount={() => {}} />
+			</QueryClientProvider>,
+		);
+		const base = "test-router/cx/example-terra";
+		const variant = "test-router/cx/example-terra-xhigh";
+		expect(await screen.findAllByText("Example Terra")).toHaveLength(2);
+		expect(screen.getByText(base)).toBeVisible();
+		expect(screen.getByText(variant)).toBeVisible();
+		expect(screen.getAllByText("test-router/cx/other")).toHaveLength(1);
+		expect(screen.getByRole("switch", { name: /test-router\/cx\/example-terra\)/ })).toBeEnabled();
+		await userEvent.click(screen.getByRole("switch", { name: new RegExp(variant) }));
+		expect(update).toHaveBeenCalledWith({ agentId: "omp", disabledModels: [variant] });
 	});
 });

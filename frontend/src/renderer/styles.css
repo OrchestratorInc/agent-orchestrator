@@ -1479,6 +1479,39 @@ button.settings-row-bar {
 	}
 }
 
+/* The model combobox can contain tall ID rows. Expose a native, draggable
+   thumb on its results only; other compact chat menus keep their hidden bar. */
+@utility model-picker-scrollbar {
+	scrollbar-width: auto;
+	scrollbar-color: auto;
+	scrollbar-gutter: stable;
+
+	&::-webkit-scrollbar {
+		width: 10px;
+	}
+
+	&::-webkit-scrollbar-button {
+		display: none;
+	}
+
+	&::-webkit-scrollbar-track {
+		background-color: color-mix(in srgb, var(--color-scrollbar) 16%, transparent);
+		border-radius: 999px;
+	}
+
+	&::-webkit-scrollbar-thumb {
+		min-height: 28px;
+		border: 2px solid transparent;
+		border-radius: 999px;
+		background-color: var(--color-scrollbar);
+		background-clip: padding-box;
+	}
+
+	&::-webkit-scrollbar-thumb:hover {
+		background-color: color-mix(in srgb, var(--color-scrollbar) 80%, var(--color-foreground));
+	}
+}
+
 /* Search field inside a dropdown menu. settings-inline-input cannot be reused
    here: it is a settings-ROW control, so it caps at 42% width and right-aligns
    its text, which reads as a stray half-width box once it sits in a menu. */

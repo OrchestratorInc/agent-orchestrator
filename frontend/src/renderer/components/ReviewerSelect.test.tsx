@@ -90,7 +90,10 @@ describe("ReviewerSelect", () => {
 		/></QueryClientProvider>);
 		await userEvent.click(screen.getByRole("button", { name: "Reviewer" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: /Codex/ }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "GPT Test" }));
+		const inheritedModel = screen.getByRole("menuitem", { name: "GPT Test" });
+		expect(inheritedModel).toHaveTextContent("gpt-test");
+		expect(inheritedModel).toHaveAttribute("aria-description", "gpt-test");
+		await userEvent.click(inheritedModel);
 		expect(onConfigChange).toHaveBeenCalledWith("codex", {});
 	});
 
