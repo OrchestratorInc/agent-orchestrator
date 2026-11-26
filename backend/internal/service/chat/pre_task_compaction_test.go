@@ -262,3 +262,134 @@ func TestPreTaskCompactionPolicyAppliesToOrchestratorTasksForWorkers(t *testing.
 		t.Fatal("a service without a project reader built a policy")
 	}
 }
+
+// awaitSentCount waits until the provider has received n messages.
+func awaitSentCount(t *testing.T, conv *fakeConversation, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := conv.sentTexts(); len(got) == n {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("provider messages = %v, want %d", conv.sentTexts(), n)
+	return nil
+}
+
+// A compaction the provider accepts but never starts, a hung /compact or a lost
+// event, must not hold the task forever: nobody is watching an automatic one.
+// After the deadline the task runs on the uncompacted context, and a late
+// settlement does not deliver it twice.
+func TestPreTaskCompactionDeadlineDeliversTheTask(t *testing.T) {
+	h, conv := newPreTaskHarness(t, 300_000)
+	h.ctrl.SetPreTaskCompactionDeadline(50 * time.Millisecond)
+	ctx := context.Background()
+	reportContext(t, h, conv.fakeConversation, 463_550)
+
+	if _, err := h.svc.Send(ctx, testSession, orchestratorTask("next task")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if conv.compactCalls() != 1 {
+		t.Fatalf("compactions = %d, want 1", conv.compactCalls())
+	}
+	awaitProviderTexts(t, conv.fakeConversation, "next task")
+
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventCompacted, ProviderTurnID: "compact-turn", Summary: "late"})
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+	time.Sleep(100 * time.Millisecond)
+	if got := conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("late settlement re-delivered the task: %v", got)
+	}
+
+	// The worker is not left busy: the task's turn ends and the next send goes out.
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send after: %v", err)
+	}
+	awaitProviderTexts(t, conv.fakeConversation, "next task", "after")
+}
+
+// A compaction whose turn started is a visible, stoppable turn. The deadline
+// leaves it alone, so its settlement still releases the task even when the
+// compaction fails.
+func TestPreTaskCompactionDeadlineLeavesAStartedCompaction(t *testing.T) {
+	h, conv := newPreTaskHarness(t, 300_000)
+	h.ctrl.SetPreTaskCompactionDeadline(50 * time.Millisecond)
+	ctx := context.Background()
+	reportContext(t, h, conv.fakeConversation, 463_550)
+
+	if _, err := h.svc.Send(ctx, testSession, orchestratorTask("next task")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "compact-turn"})
+	time.Sleep(200 * time.Millisecond)
+	if got := conv.sentTexts(); len(got) != 0 {
+		t.Fatalf("task dispatched into a running compaction: %v", got)
+	}
+
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn",
+		TurnState: domain.TurnStateFailed, Err: errors.New("compaction failed"),
+	})
+	awaitProviderTexts(t, conv.fakeConversation, "next task")
+}
+
+// A deadline armed for a compaction that settled in time does nothing when it
+// fires, even with another task queued behind the first.
+func TestPreTaskCompactionDeadlineAfterSettlementIsInert(t *testing.T) {
+	h, conv := newPreTaskHarness(t, 300_000)
+	h.ctrl.SetPreTaskCompactionDeadline(100 * time.Millisecond)
+	ctx := context.Background()
+	reportContext(t, h, conv.fakeConversation, 463_550)
+
+	if _, err := h.svc.Send(ctx, testSession, orchestratorTask("next task")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+	awaitProviderTexts(t, conv.fakeConversation, "next task")
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "queued", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send queued: %v", err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	if got := conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("stale deadline dispatched into a running turn: %v", got)
+	}
+}
+
+// The drain sends consecutive non-human turns as one. A CI or review notice
+// queued ahead of an orchestrator's task must not hide the task from the rule.
+func TestPreTaskCompactionChecksTheWholeBatch(t *testing.T) {
+	h, conv := newPreTaskHarness(t, 300_000)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "current work", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	awaitProviderTexts(t, conv.fakeConversation, "current work")
+	reportContext(t, h, conv.fakeConversation, 463_550)
+
+	notice := ports.ChatUserMessage{Text: "CI failed on your PR", Origin: domain.MessageOriginAutomation}
+	for _, msg := range []ports.ChatUserMessage{notice, orchestratorTask("next task")} {
+		if turn, err := h.svc.Send(ctx, testSession, msg); err != nil || turn.State != domain.TurnStateQueued {
+			t.Fatalf("Send %q while busy = %+v, %v", msg.Text, turn, err)
+		}
+	}
+
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	deadline := time.Now().Add(5 * time.Second)
+	for conv.compactCalls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if conv.compactCalls() != 1 {
+		t.Fatalf("compactions = %d, want 1 for a batch holding an orchestrator task", conv.compactCalls())
+	}
+	if got := conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("batch dispatched before its compaction settled: %v", got)
+	}
+
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+	awaitSentCount(t, conv.fakeConversation, 2)
+	if conv.compactCalls() != 1 {
+		t.Fatalf("compactions = %d, want exactly 1", conv.compactCalls())
+	}
+}

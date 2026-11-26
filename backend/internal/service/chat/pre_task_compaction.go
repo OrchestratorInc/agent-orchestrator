@@ -2,9 +2,15 @@ package chat
 
 import (
 	"context"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+// defaultPreTaskCompactionDeadline bounds how long a queued task waits for a
+// compaction whose provider turn never starts. Real compactions start within
+// seconds; this only catches a hung /compact or a lost event.
+const defaultPreTaskCompactionDeadline = 5 * time.Minute
 
 // PreTaskCompactionPolicy decides whether a turn sent by sender compacts the
 // conversation first. It returns the context size, in tokens, above which the
@@ -26,6 +32,12 @@ type preTaskCompaction struct {
 	// running is set from the moment the provider accepts the compaction until
 	// its turn settles. While set, the queued task waits.
 	running bool
+	// seq identifies the running compaction, so a deadline armed for an earlier
+	// one does nothing.
+	seq uint64
+	// deadline fires if the compaction's turn has not started in time. Nil when
+	// no compaction is running.
+	deadline *time.Timer
 }
 
 // SetPreTaskCompactionPolicy installs the compact-before-task rule. Nil turns
@@ -74,21 +86,42 @@ func (c *Controller) startPreTaskCompaction(ctx context.Context, turnID string) 
 	}
 	c.mu.Lock()
 	c.preTask.running = true
+	c.preTask.seq++
+	seq := c.preTask.seq
+	wait := c.preTaskDeadline
+	if wait <= 0 {
+		wait = defaultPreTaskCompactionDeadline
+	}
+	c.preTask.deadline = time.AfterFunc(wait, func() { c.expirePreTaskCompaction(seq) })
 	c.mu.Unlock()
 	c.log.Info("compacting before an orchestrator task",
 		"session", c.sessionID, "turn", turnID, "contextUsed", used)
 	return true
 }
 
-// compactBeforeQueuedTurn starts a compaction ahead of the next queued turn when
-// it is an orchestrator's task over the threshold. It reports true when the
-// drain must stop: the compaction's settlement drains the task. Callers hold
-// sendMu.
-func (c *Controller) compactBeforeQueuedTurn(ctx context.Context, next domain.QueuedTurn) bool {
-	if !c.wantsPreTaskCompaction(ctx, next.TurnID, next.SenderSessionID) {
+// compactBeforeQueuedBatch starts a compaction ahead of the next queued batch
+// when any turn in it is an orchestrator's task over the threshold. The drain
+// sends consecutive non-human turns as one, so a CI or review notice ahead of
+// the task must not hide it. The attempt is keyed on the batch's head turn. It
+// reports true when the drain must stop: the compaction's settlement drains the
+// batch. Callers hold sendMu.
+func (c *Controller) compactBeforeQueuedBatch(ctx context.Context, batch []domain.QueuedTurn) bool {
+	if len(batch) == 0 {
 		return false
 	}
-	return c.startPreTaskCompaction(ctx, next.TurnID)
+	head := batch[0].TurnID
+	checked := make(map[string]bool, len(batch))
+	for _, turn := range batch {
+		sender := turn.SenderSessionID
+		if sender == "" || checked[sender] {
+			continue
+		}
+		checked[sender] = true
+		if c.wantsPreTaskCompaction(ctx, head, sender) {
+			return c.startPreTaskCompaction(ctx, head)
+		}
+	}
+	return false
 }
 
 // finishPreTaskCompaction clears the running compaction and reports whether
@@ -101,7 +134,40 @@ func (c *Controller) finishPreTaskCompaction() bool {
 	defer c.mu.Unlock()
 	running := c.preTask.running
 	c.preTask.running = false
+	if c.preTask.deadline != nil {
+		c.preTask.deadline.Stop()
+		c.preTask.deadline = nil
+	}
 	return running
+}
+
+// expirePreTaskCompaction releases a task whose compaction the provider
+// accepted but never started: a hung /compact or a lost event would otherwise
+// hold it, and every later send behind it, with nobody watching. The task then
+// runs on the uncompacted context, as after a refused compaction. A compaction
+// whose turn did start is left to the turn path, which shows Stop and releases
+// the task when the turn settles, including when it fails.
+func (c *Controller) expirePreTaskCompaction(seq uint64) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	select {
+	case <-c.stopped:
+		return
+	default:
+	}
+	c.mu.Lock()
+	if !c.preTask.running || c.preTask.seq != seq || c.pendingTurnID != "" {
+		c.mu.Unlock()
+		return
+	}
+	c.preTask.running = false
+	c.preTask.deadline = nil
+	c.compactionPending = false
+	turnID := c.preTask.attemptedFor
+	c.mu.Unlock()
+	c.log.Warn("compact before task never started; delivering the task as is",
+		"session", c.sessionID, "turn", turnID)
+	_ = c.drainLocked(context.Background(), true) // drain logs failures.
 }
 
 // preTaskCompactionPolicy builds the compact-before-task rule for the Chat

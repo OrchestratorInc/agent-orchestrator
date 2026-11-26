@@ -48,3 +48,11 @@ func SetForcedHandoffInterruptLimit(limit time.Duration) (restore func()) {
 func (s *Service) PreTaskCompactionPolicyFor(target domain.SessionID) PreTaskCompactionPolicy {
 	return s.preTaskCompactionPolicy(target)
 }
+
+// SetPreTaskCompactionDeadline shortens how long a queued task waits for a
+// compaction whose turn never starts.
+func (c *Controller) SetPreTaskCompactionDeadline(d time.Duration) {
+	c.mu.Lock()
+	c.preTaskDeadline = d
+	c.mu.Unlock()
+}

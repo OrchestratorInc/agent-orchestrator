@@ -290,6 +290,8 @@ type Controller struct {
 	// (pre_task_compaction.go).
 	preTaskPolicy PreTaskCompactionPolicy
 	preTask       preTaskCompaction
+	// preTaskDeadline overrides defaultPreTaskCompactionDeadline in tests.
+	preTaskDeadline time.Duration
 	// Provider calls keep automatic hibernation out without blocking explicit Kill.
 	operations int
 	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
@@ -2444,7 +2446,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 			}
 			return err
 		}
-		if len(preview) > 0 && c.compactBeforeQueuedTurn(ctx, preview[0]) {
+		if c.compactBeforeQueuedBatch(ctx, preview) {
 			// The compaction's settlement drains this batch.
 			return nil
 		}
