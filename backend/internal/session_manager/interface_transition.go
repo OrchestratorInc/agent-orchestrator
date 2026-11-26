@@ -605,6 +605,7 @@ func (m *Manager) runInterfaceTransition(
 			}
 			env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 			m.augmentAgentRuntimeEnv(bridge, env)
+			m.applyImportedConfigEnv(ctx, rec, env)
 			if bridgeErr := storageBridge.PrepareInterfaceHandoffStorage(ctx, ports.SessionRef{
 				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: transition.NativeConversationID},
@@ -1039,6 +1040,7 @@ func (m *Manager) persistedNativeConversationID(
 		return "", err
 	}
 	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	m.applyImportedConfigEnv(ctx, rec, env)
 	exists, err := probe.NativeConversationExists(ctx, ports.SessionRef{
 		ID:            string(rec.ID),
 		WorkspacePath: rec.Metadata.WorkspacePath,
@@ -1088,6 +1090,7 @@ func (m *Manager) preflightInterfaceTarget(
 	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
+	m.applyImportedConfigEnv(ctx, rec, env)
 	if err := m.preflightLaunchAuth(ctx, agent, rec, env); err != nil {
 		return err
 	}
@@ -1129,17 +1132,27 @@ func (m *Manager) preflightTerminalLaunch(
 	}
 	config := restoredAgentConfig(rec, project.Config)
 	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	_, launchPath, err := m.importLaunch(ctx, "preflight terminal", rec, rec.Metadata.WorkspacePath, env, false)
+	if err != nil {
+		return err
+	}
 	var cmd []string
 	if nativeConversationID == "" {
-		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
+		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath,
 			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", env)
 	} else {
 		var resumable bool
+		restoreRec := rec
+		restoreRec.Metadata.AgentSessionID = nativeConversationID
+		metadata := nativeRestoreMetadata(restoreRec)
+		// Preflight runs before storage bridging. Let adapters validate the
+		// current interface's binding; actual launches get fresh restore metadata.
+		metadata[ports.MetadataKeySessionMode] = string(rec.Mode)
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 			Env: env,
 			Session: ports.SessionRef{
-				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
-				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeConversationID},
+				ID: string(rec.ID), WorkspacePath: launchPath,
+				Metadata: metadata,
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
 			Config: config, Permissions: config.Permissions,
@@ -1310,7 +1323,7 @@ func (m *Manager) prepareSourceHandoff(
 		if !surfaceProofAvailable && unverifiedIdle && detector != nil && inputQuiet {
 			// Compatibility path for terminal activity adapters that have not yet
 			// adopted the richer surface observation capability.
-			if output, outputErr := m.runtime.GetOutput(probeCtx, handle, interfaceTransitionOutputLines); outputErr == nil {
+			if output, outputErr := m.terminalActivityOutput(probeCtx, detector, handle, interfaceTransitionOutputLines); outputErr == nil {
 				now = time.Now()
 				state, authoritative := detector.DetectTerminalActivity(output)
 				idleProven = authoritative && state == domain.ActivityIdle
@@ -1363,6 +1376,22 @@ func (m *Manager) prepareSourceHandoff(
 		case <-ticker.C:
 		}
 	}
+}
+
+// terminalActivityOutput reads the screen a terminal activity detector expects.
+// A detector that requires rendered activity tells a dim native placeholder
+// from a typed draft by its styling, which plain output drops, so it reads the
+// rendered screen whenever the runtime can provide it.
+func (m *Manager) terminalActivityOutput(ctx context.Context, detector ports.TerminalActivityDetector, handle ports.RuntimeHandle, lines int) (string, error) {
+	if rendered, ok := detector.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() {
+		if styled, ok := m.runtime.(ports.StyledTerminalOutputReader); ok {
+			output, err := styled.GetStyledOutput(ctx, handle, lines)
+			if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+				return output, err
+			}
+		}
+	}
+	return m.runtime.GetOutput(ctx, handle, lines)
 }
 
 // tuiIdleAfterInput proves that the idle fact was written after every terminal

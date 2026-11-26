@@ -3,6 +3,7 @@ import * as SecureStore from "expo-secure-store";
 import type { Endpoint } from "./endpoints";
 import type { MachineAppearance } from "./machineAppearance";
 import { clearConfig, loadConfig, saveConfig, type ServerConfig } from "./config";
+import { pairSavedChatMachines, savedConversationMachines } from "./chat/savedChatMachines";
 
 /**
  * A paired machine.
@@ -133,6 +134,8 @@ export async function saveHost(host: Host): Promise<void> {
 	);
 	await writeSecret(tokenKey(host.id), token);
 	await writeSecret(fallbackTokenKey(host.id), fallbackToken);
+	// Paired (again): its chats may be saved on the phone, even if it was forgotten before.
+	pairSavedChatMachines(savedConversationMachines(host));
 }
 
 export async function updateHostToken(id: string, token: string, fallbackToken?: string): Promise<void> {

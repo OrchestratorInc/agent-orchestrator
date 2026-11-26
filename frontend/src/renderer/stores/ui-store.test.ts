@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FINISHED_TASK_TABS_KEPT, failedTaskKey, rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
 import { previewDocumentThemeStyle } from "../lib/theme";
+import { aoBridge } from "../lib/bridge";
 
 describe("sidebar visibility", () => {
 	beforeEach(() => {
@@ -46,6 +47,154 @@ describe("subagents tab availability", () => {
 		const before = useUiStore.getState().inspectorSessions;
 		useUiStore.getState().setSubagentsAvailable(sessionUiKey("session-3"), false);
 		expect(useUiStore.getState().inspectorSessions).toBe(before);
+	});
+});
+
+describe("theme preference", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ themePreference: "dark", resolvedTheme: "dark" });
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("resolves System from the OS appearance main reports, not the forced media query", async () => {
+		// The test media query reports dark, as a forced Dark themeSource would.
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+		useUiStore.getState().setThemePreference("system");
+
+		await vi.waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("light"));
+		expect(useUiStore.getState().themePreference).toBe("system");
+		expect(document.documentElement.dataset.theme).toBe("light");
+		expect(window.localStorage.getItem("ao.theme")).toBe("system");
+	});
+
+	it("re-reads the OS appearance once main stops forcing a mode", async () => {
+		// The OS turns dark between the first lookup and the reveal.
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValueOnce("light").mockResolvedValue("dark");
+		useUiStore.getState().setThemePreference("system");
+
+		await vi.waitFor(() => expect(aoBridge.theme.systemAppearance).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("dark"));
+		expect(useUiStore.getState().themePreference).toBe("system");
+	});
+
+	it("keeps the OS correction until a deferred update commits System", async () => {
+		const updates: (() => void)[] = [];
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: (update: () => void) => {
+				updates.push(update);
+				return { ready: Promise.resolve(), finished: Promise.resolve() };
+			},
+		});
+		try {
+			// The OS turns dark between the first lookup and the reveal.
+			const lookup = vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValueOnce("light").mockResolvedValue("dark");
+			useUiStore.getState().setThemePreference("system");
+			await vi.waitFor(() => expect(updates).toHaveLength(1));
+			// Main has answered theme:set, but the update has not run yet.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(lookup).toHaveBeenCalledTimes(1);
+
+			updates[0]?.();
+			expect(useUiStore.getState().resolvedTheme).toBe("light");
+			await vi.waitFor(() => expect(updates).toHaveLength(2));
+			updates[1]?.();
+
+			expect(useUiStore.getState().themePreference).toBe("system");
+			expect(useUiStore.getState().resolvedTheme).toBe("dark");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+		}
+	});
+
+	it("skips the second OS lookup when a newer choice lands while System reaches main", async () => {
+		const lookup = vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+		let releaseSet: () => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "set").mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					releaseSet = resolve;
+				}),
+		);
+		useUiStore.getState().setThemePreference("system");
+		await vi.waitFor(() => expect(useUiStore.getState().themePreference).toBe("system"));
+		useUiStore.getState().setThemePreference("dark");
+		releaseSet();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(lookup).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().themePreference).toBe("dark");
+	});
+
+	it("drops a System lookup that a newer choice overtook", async () => {
+		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(
+			new Promise((resolve) => {
+				reportAppearance = resolve;
+			}),
+		);
+		useUiStore.getState().setThemePreference("system");
+		useUiStore.getState().setThemePreference("light");
+		reportAppearance("dark");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(useUiStore.getState().themePreference).toBe("light");
+		expect(useUiStore.getState().resolvedTheme).toBe("light");
+	});
+
+	it("drops a System transition whose choice was overtaken before it ran", async () => {
+		let runUpdate: (() => void) | undefined;
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: (update: () => void) => {
+				runUpdate = update;
+				return { ready: Promise.resolve(), finished: Promise.resolve() };
+			},
+		});
+		try {
+			vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+			useUiStore.getState().setThemePreference("system");
+			await vi.waitFor(() => expect(runUpdate).toBeDefined());
+			useUiStore.getState().setThemePreference("dark");
+			runUpdate?.();
+
+			expect(useUiStore.getState().themePreference).toBe("dark");
+			expect(useUiStore.getState().resolvedTheme).toBe("dark");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+		}
+	});
+
+	it("lets a newer choice cancel a pending toggle", async () => {
+		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(
+			new Promise((resolve) => {
+				reportAppearance = resolve;
+			}),
+		);
+		useUiStore.getState().toggleThemePreference();
+		useUiStore.getState().setThemePreference("dark");
+		reportAppearance("light");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(useUiStore.getState().themePreference).toBe("dark");
+		expect(useUiStore.getState().resolvedTheme).toBe("dark");
+	});
+
+	it("re-sends the current mode to main when it overtakes a System lookup", () => {
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(new Promise(() => undefined));
+		const set = vi.spyOn(aoBridge.theme, "set");
+		useUiStore.getState().setThemePreference("system");
+		useUiStore.getState().setThemePreference("dark");
+
+		expect(set).toHaveBeenCalledWith("dark");
+		expect(useUiStore.getState().themePreference).toBe("dark");
 	});
 });
 
@@ -245,6 +394,23 @@ describe("remoteHosts flag", () => {
 	it("honors an explicit opt-out", async () => {
 		window.localStorage.setItem("ao.remoteHosts", "false");
 		expect((await bootStore()).getState().remoteHosts).toBe(false);
+	});
+});
+
+describe("retired side chats switch", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+	});
+
+	it("leaves no switch behind and clears a stored opt-out at startup", async () => {
+		window.localStorage.setItem("ao.sideChats", "false");
+
+		const state = (await bootStore()).getState();
+
+		expect(state).not.toHaveProperty("sideChats");
+		expect(state).not.toHaveProperty("setSideChats");
+		expect(window.localStorage.getItem("ao.sideChats")).toBeNull();
 	});
 });
 
@@ -453,5 +619,113 @@ describe("retired new sidebar design switch", () => {
 		expect(state).not.toHaveProperty("setNewSidebarDesign");
 		expect(window.localStorage.getItem("ao.newSidebarDesign")).toBeNull();
 		expect(document.documentElement.hasAttribute("data-legacy-status-colors")).toBe(false);
+	});
+});
+
+describe("background tasks side panel", () => {
+	const id = "task-tabs-session";
+	const task = (taskId: string, extra: Record<string, unknown> = {}) => ({ id: taskId, kind: "shell" as const, state: "running" as const, description: `Task ${taskId}`, ...extra });
+	const panel = () => useUiStore.getState().inspectorSessions[id];
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: { [id]: { isOpen: false, view: "browser" } } });
+	});
+
+	it("opens a task in the Background tasks tab, back to the list, and into another listed task", () => {
+		const store = useUiStore.getState();
+		store.openTaskTab(id, task("a"));
+		expect(panel()).toMatchObject({ isOpen: true, view: "task", activeTaskTab: "a" });
+		store.openTaskTab(id, task("b"));
+		store.openTaskTab(id, task("a", { description: "renamed" }));
+		expect(panel().taskTabs?.map((tab) => tab.task.id)).toEqual(["a", "b"]);
+		expect(panel().taskTabs?.[0].task.description).toBe("renamed");
+		store.showTaskList(id);
+		expect(panel()).toMatchObject({ view: "task", activeTaskTab: undefined });
+		store.selectTaskTab(id, "b");
+		expect(panel().activeTaskTab).toBe("b");
+		store.selectTaskTab(id, "missing");
+		expect(panel().activeTaskTab).toBe("b");
+	});
+
+	it("lists every task a reading names but agents, and marks a live task that left it as ended", () => {
+		const store = useUiStore.getState();
+		store.syncTaskTabs(id, [task("dev"), task("helper", { kind: "agent" })]);
+		expect(panel().taskTabs?.map((tab) => tab.task.id)).toEqual(["dev"]);
+		store.syncTaskTabs(id, [task("dev"), task("build", { state: "failed", endedAt: "2026-11-14T10:00:00Z" })]);
+		expect(panel().taskTabs?.map((tab) => [tab.task.id, tab.task.state, Boolean(tab.ended)])).toEqual([["dev", "running", false], ["build", "failed", false]]);
+		const before = panel();
+		store.syncTaskTabs(id, [task("dev"), task("build", { state: "failed", endedAt: "2026-11-14T10:00:00Z" })]);
+		expect(panel()).toBe(before);
+		store.syncTaskTabs(id, []);
+		expect(panel().taskTabs?.map((tab) => [tab.task.id, Boolean(tab.ended)])).toEqual([["dev", true], ["build", false]]);
+		// Listed again, it is live again.
+		store.syncTaskTabs(id, [task("dev")]);
+		expect(panel().taskTabs?.[0].ended).toBeUndefined();
+	});
+
+	it("keeps running tasks, the open one and the newest finished ones, and forgets failures seen on the rest", () => {
+		const store = useUiStore.getState();
+		const done = (n: number) => task(`done-${n}`, { state: "failed", runId: "r", endedAt: "2026-11-14T10:00:00Z" });
+		store.syncTaskTabs(id, [task("dev"), done(0), done(1)]);
+		store.acknowledgeFailedTask(id, done(0));
+		store.acknowledgeFailedTask(id, done(1));
+		store.selectTaskTab(id, "done-1");
+		store.syncTaskTabs(id, [task("dev"), ...Array.from({ length: FINISHED_TASK_TABS_KEPT + 1 }, (_, n) => done(n + 2))]);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toContain("dev");
+		// The oldest finished row goes; the open one, and the rows the reading still lists, stay past the cap.
+		expect(ids).not.toContain("done-0");
+		expect(ids).toContain("done-1");
+		expect(ids.filter((taskId) => taskId !== "dev")).toHaveLength(FINISHED_TASK_TABS_KEPT + 2);
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(done(1))]);
+	});
+
+	it("prunes finished rows once a reading stops listing them, even when none of them changed", () => {
+		const store = useUiStore.getState();
+		const finished = Array.from({ length: FINISHED_TASK_TABS_KEPT + 1 }, (_, n) => task(`done-${n}`, { state: "succeeded", endedAt: `2026-11-14T10:${String(n).padStart(2, "0")}:00Z` }));
+		store.syncTaskTabs(id, finished);
+		expect(panel().taskTabs).toHaveLength(FINISHED_TASK_TABS_KEPT + 1);
+		store.syncTaskTabs(id, []);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toHaveLength(FINISHED_TASK_TABS_KEPT);
+		expect(ids).not.toContain("done-0");
+		const before = panel();
+		store.syncTaskTabs(id, []);
+		expect(panel()).toBe(before);
+	});
+
+	it("drops the finished rows that ended longest ago, not the first seen", () => {
+		const store = useUiStore.getState();
+		const at = (minute: number) => `2026-11-14T10:${String(minute).padStart(2, "0")}:00Z`;
+		// A dev server seen first, which only just failed.
+		store.syncTaskTabs(id, [task("dev")]);
+		const finished = Array.from({ length: FINISHED_TASK_TABS_KEPT }, (_, n) => task(`done-${n}`, { state: "succeeded", endedAt: at(n) }));
+		store.syncTaskTabs(id, [task("dev"), ...finished]);
+		const failed = task("dev", { state: "failed", runId: "r", endedAt: at(59) });
+		store.syncTaskTabs(id, [failed]);
+		store.acknowledgeFailedTask(id, failed);
+		// The reading no longer lists the others, and one more task finishes.
+		store.syncTaskTabs(id, [failed, task("late", { state: "succeeded", endedAt: at(58) })]);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toContain("dev");
+		expect(ids).not.toContain("done-0");
+		expect(ids).toHaveLength(FINISHED_TASK_TABS_KEPT);
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(failed)]);
+	});
+
+	it("leaves a session with no tasks untouched", () => {
+		const before = useUiStore.getState().inspectorSessions;
+		useUiStore.getState().syncTaskTabs("never-ran-a-task", []);
+		expect(useUiStore.getState().inspectorSessions).toBe(before);
+	});
+
+	it("remembers each failed run that its tab has shown, once", () => {
+		const store = useUiStore.getState();
+		const failed = task("build", { state: "failed", runId: "r1" });
+		store.acknowledgeFailedTask(id, failed);
+		const before = panel();
+		store.acknowledgeFailedTask(id, failed);
+		expect(panel()).toBe(before);
+		store.acknowledgeFailedTask(id, task("build", { state: "failed", runId: "r2" }));
+		expect(panel().seenFailedTasks).toEqual([failedTaskKey(failed), failedTaskKey(task("build", { runId: "r2" }))]);
 	});
 });

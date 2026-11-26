@@ -1,0 +1,52 @@
+
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │                                                                                                                                                            │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                                                                                                                            │
+ │  ▐█████▌  Send /help for help information.                                                                                                                 │
+ │                                                                                                                                                            │
+ │  Directory: /home/dev/project                                                                                                                              │
+ │  Session:   session_00000000-0000-0000-0000-000000000000                                                                                                   │
+ │  Model:     lab-model                                                                                                                                      │
+ │  Version:   2.4.1                                                                                                                                          │
+ │                                                                                                                                                            │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ✦ Kimi K3.1 Pro is ready - use the model in a fresh session for the best results
+   Standard: Plus/Moderato and above; Highspeed: Pro/Allegretto and above
+
+   No session yet — one will be created on your first message.
+
+ ❯ explain the repo
+
+ ● Working through the request step by step. Working through the request step by step. Working through the request step by step. Working through the request
+   step by step. Working through the request step by step. Working through the request step by step. Working through the request step by step. Working through
+   the request step by step. Working through the request step by step. Working through the request step by step. Working through the request step by step.
+   Working through the request step by step. Working through the request step by step. Working through
+   Interrupted by user
+
+ ❯ fix the importer
+   Error: [provider.auth_error] 401 The API Key appears to be invalid or may have expired.
+   If this persists, run `/export-debug-zip` and share the file with us for diagnosis. Please don't share it publicly.
+
+ ❯ hi
+
+ ● Done.
+
+ ❯ make a probe file
+
+ ● Running a command · $ touch lab-permission-probe.txt
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   ▶ Run this command?
+
+   cwd: /home/dev/project                                                                                                                             
+   $ touch lab-permission-probe.txt
+
+   ▶ 1. Approve once
+     2. Approve for this session
+     3. Reject
+     4. Reject with feedback
+
+   ↑/↓ select · 1/2/3/4 choose · ↵ confirm
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ lab-model  ~/project                                                                                                 ctrl+o expand | /init: generate AGENTS.md
+                                                                                                                                         context: 1% (280/128k)

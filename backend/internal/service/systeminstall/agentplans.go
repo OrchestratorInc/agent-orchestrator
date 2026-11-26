@@ -54,6 +54,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:        "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:       "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode:     "https://commandcode.ai/docs/quickstart",
+	TargetMastraCode:      "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode",
 	TargetDockerAgent:     "https://docs.docker.com/ai/docker-agent/getting-started/installation/",
 	TargetHermes:          "https://github.com/NousResearch/hermes-agent",
 	TargetStakpak:         "https://github.com/stakpak/agent#installation",
@@ -285,6 +286,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetMastraCode:
+		plans = []Plan{manualPlan(target, "Install mastracode 0.45.0 with @mastra/code-sdk pinned to 1.11.0 and Node >=22.19; AO qualifies the native TUI only. A plain `npm install -g mastracode@0.45.0` resolves @mastra/code-sdk 1.19.1, which needs a newer @mastra/core than mastracode pins and is unsupported. In an empty folder, create package.json with {\"dependencies\":{\"mastracode\":\"0.45.0\"},\"overrides\":{\"@mastra/code-sdk\":\"1.11.0\"}}, run `ONNXRUNTIME_NODE_INSTALL=skip npm install` there (the variable omits optional CUDA downloads for API-backed use), and add its node_modules/.bin to PATH.", agentDocumentationURLs[target])}
 	case TargetTau:
 		plans = []Plan{s.planUV(target, "tau-ai")}
 	case TargetOpenInterpreter:
@@ -499,7 +502,10 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			pkg := packageWithoutLatest(plan.Package)
 			plan.Command = []string{"npm", "install", "-g", "--prefix", plan.PackagePrefix, pkg + "@latest"}
 		case "winget":
-			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
+			// This method maintains community-source installs: planWinget installs
+			// there, and the ownership/version probes also select that source.
+			// Keep upgrades there to avoid msstore's first-run agreement prompt.
+			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 		case "uv":
 			plan.Command = []string{"uv", "tool", "upgrade", plan.Package}
 		case "pipx":

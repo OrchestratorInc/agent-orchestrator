@@ -677,8 +677,11 @@ type claudePreToolUseDenyOutput struct {
 
 const artifactToolName = "Artifact"
 
+// The nudge blocks only the first use, so the reason must say a retry works:
+// otherwise an agent told to make a Claude artifact reads it as a ban.
 const artifactNudgeReason = "Orchestrator does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
-	"in a chat session, use html_render."
+	"in a chat session, use html_render. This is a one-time reminder: if the user asked for a Claude artifact, " +
+	"call Artifact again and it will be allowed."
 
 // claimArtifactNudge reports whether this is the session's first Artifact tool
 // use, by atomically creating a marker file under AO_DATA_DIR. Any failure
@@ -976,6 +979,16 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if domain.AgentHarness(agent) == domain.HarnessCopilot && event == "stop" && conversation.FinalAssistantMessage == "" {
 		// Copilot's stop hook names its event log instead of carrying the answer.
 		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
+	}
+	if domain.AgentHarness(agent) == domain.HarnessMastraCode && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Mastra's TUI Stop hook omits the answer. The daemon reads it from
+		// native history; the hook only forwards a reply the payload carries.
+		var reply struct {
+			AssistantMessage string `json:"assistant_message"`
+		}
+		if json.Unmarshal(payload, &reply) == nil {
+			conversation.FinalAssistantMessage = capHookText(strings.TrimSpace(reply.AssistantMessage), maxHookInteractionLen)
+		}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{

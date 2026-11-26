@@ -498,6 +498,18 @@ describe("durable workspace cleanup feedback", () => {
 		expect(toasts()[0].action).toBeUndefined();
 	});
 
+	it("says nothing when a standalone agent's folder is kept, its only copy of the work", async () => {
+		const queryClient = newQueryClient();
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+		setCleanup(queryClient, "pending");
+
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+
+		expect(toasts()).toEqual([]);
+	});
+
 	it("raises nothing for a cleanup a sweep recorded", async () => {
 		const queryClient = new QueryClient();
 		const sweep = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) => queryClient.setQueryData(workspaceQueryKey, [{

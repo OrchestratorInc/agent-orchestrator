@@ -318,6 +318,8 @@ export function PeopleField({
 							// with focus here would cover what it shows. A click, typing
 							// or an arrow key does.
 							onClick={() => setOpen(true)}
+							// Back in the field before the blur's close fires: keep the list.
+							onFocus={() => window.clearTimeout(blurCloseTimer.current)}
 							onBlur={() => {
 								window.clearTimeout(blurCloseTimer.current);
 								blurCloseTimer.current = window.setTimeout(() => setOpen(false), 120);

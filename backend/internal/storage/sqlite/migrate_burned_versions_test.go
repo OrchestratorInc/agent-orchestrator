@@ -260,6 +260,7 @@ var shippedMigrations = map[int64]string{
 	20261107181854835: "20261107181854835_session_delete_child_indexes.sql",
 	20261109072438921: "20261109072438921_terminal_titles.sql",
 	20261109120000000: "20261109120000000_conversation_turn_batch_delivery.sql",
+	20261110081433531: "20261110081433531_commit_attribution.sql",
 	20261110172911382: "20261110172911382_conversation_turn_artifacts.sql",
 	20261111020206870: "20261111020206870_shell_terminal_ended.sql",
 	20261116231134450: "20261116231134450_shell_terminal_agent_conversation.sql",
@@ -282,9 +283,16 @@ var shippedMigrations = map[int64]string{
 	20261116101450009: "20261116101450009_report_delivery_terminal_state.sql",
 	20261116113334512: "20261116113334512_pr_head_stack_facts.sql",
 	20261116125847855: "20261116125847855_allow_open_interpreter_harness.sql",
+	20261116173035000: "20261116173035000_agent_account_api_keys.sql",
 	20261116173733857: "20261116173733857_timestamp_repair_progress.sql",
 	20261117090000000: "20261117090000000_allow_tau_harness.sql",
 	20261118180603285: "20261118180603285_report_unacknowledged_attempts.sql",
+	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
+	20261119200201916: "20261119200201916_session_pr_footer_choice.sql",
+	20261121120000000: "20261121120000000_pr_merge_queue.sql",
+	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
+	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
+	20261124180938781: "20261124180938781_review_chat_active_index.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -305,7 +313,10 @@ func burnedVersion(v int64) bool {
 	// builds before the migration moved above main's latest version. 216 and
 	// 20261114174124485 were Open Interpreter draft numbers for the same reason.
 	return v == 22 || v == 203 || v == 20261021083138547 || v == 20261114173247220 ||
-		v == 216 || v == 20261114174124485
+		v == 216 || v == 20261114174124485 ||
+		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
+		// numbers before its migration moved above main's latest version.
+		v == 207 || v == 20261023182047274 || v == 20261114174310512
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

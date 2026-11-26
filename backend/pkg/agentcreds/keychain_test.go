@@ -2,6 +2,7 @@ package agentcreds
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -185,5 +186,46 @@ func TestKeychainItemMissingRecognizesARealExitStatus(t *testing.T) {
 	}
 	if keychainItemMissing(nil) {
 		t.Error("no error reported as a missing item")
+	}
+}
+
+// `security -w` prints a value as hex when it is not plain printable text, and
+// a value that is not a credential must never be sent anywhere.
+func TestKeychainValueFormats(t *testing.T) {
+	const pretty = "{\n  \"claudeAiOauth\": {\n    \"accessToken\": \"sk-ant-oat01-access\",\n    \"refreshToken\": \"sk-ant-ort01-refresh\"\n  }\n}"
+	for _, tc := range []struct {
+		name, service, value, wantSecret string
+		wantKind                         Kind
+	}{
+		{"compact JSON", "Claude Code-credentials", `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-access"}}`, "sk-ant-oat01-access", KindOAuthToken},
+		{"pretty JSON printed as hex", "Claude Code-credentials", hex.EncodeToString([]byte(pretty)) + "\n", "sk-ant-oat01-access", KindOAuthToken},
+		{"bare token", "Claude Code-credentials", "sk-ant-oat01-bare\n", "sk-ant-oat01-bare", KindOAuthToken},
+		{"bare token printed as hex", "Claude Code-credentials", hex.EncodeToString([]byte("sk-ant-oat01-bare\n")), "sk-ant-oat01-bare", KindOAuthToken},
+		{"managed key", "Claude Code", "sk-ant-api03-managed", "sk-ant-api03-managed", KindAPIKey},
+		{"API key in credentials item", "Claude Code-credentials", "sk-ant-api03-managed", "sk-ant-api03-managed", KindAPIKey},
+		{"unrecognised value", "Claude Code-credentials", "not-a-credential", "", ""},
+		{"unrecognised managed value", "Claude Code", "not-a-credential", "", ""},
+		{"multi-line token printed as hex", "Claude Code-credentials", hex.EncodeToString([]byte("sk-ant-oat01-x\nrefresh: sk-ant-ort01-y")), "", ""},
+		{"token with trailing text", "Claude Code-credentials", "sk-ant-oat01-x extra junk with spaces", "", ""},
+		{"managed key with trailing text", "Claude Code", "sk-ant-api03-x\tnote", "", ""},
+		{"JSON without a token", "Claude Code-credentials", hex.EncodeToString([]byte("{\n}")), "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cred, found := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
+				// HOME is pinned so a miss cannot fall through to this machine's credentials file.
+				Env:  envFrom(map[string]string{"USER": "someone", "HOME": t.TempDir()}),
+				GOOS: "darwin", AllowKeychain: true,
+				Runner: fakeKeychain([3]string{tc.service, "someone", tc.value}),
+			})
+			if tc.wantSecret == "" {
+				if found {
+					t.Fatalf("resolved %q from an unrecognised value", cred.Secret)
+				}
+				return
+			}
+			if !found || cred.Secret != tc.wantSecret || cred.Kind != tc.wantKind {
+				t.Fatalf("resolved = %v, secret = %q, kind = %q", found, cred.Secret, cred.Kind)
+			}
+		})
 	}
 }

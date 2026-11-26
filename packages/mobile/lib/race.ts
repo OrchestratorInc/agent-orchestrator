@@ -6,6 +6,7 @@ export type ProbeAnswer = { hostId: string };
 export type ProbeFn = (endpoint: Endpoint, signal: AbortSignal) => Promise<ProbeAnswer>;
 
 export class IncompatibleHostVersionError extends Error {
+	readonly code: string = "INCOMPATIBLE_HOST_VERSION_ERROR";
 	constructor(readonly hostId: string) {
 		super("Orchestrator versions are incompatible. Update Orchestrator on this phone and the machine.");
 		this.name = "IncompatibleHostVersionError";

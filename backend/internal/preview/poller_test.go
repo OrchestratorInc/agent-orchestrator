@@ -15,6 +15,23 @@ import (
 type fakePreviewSessions struct {
 	sessions []domain.SessionRecord
 	sets     []previewSet
+	// listCancellable records, per listing, whether its context could be cancelled.
+	listCancellable []bool
+}
+
+// A cancellable context makes the SQLite driver and database/sql start two
+// watcher goroutines per query; the 250 ms poll must not pay that.
+func TestPollerListsWithoutCancellableContext(t *testing.T) {
+	src := &fakePreviewSessions{}
+	p := NewPoller(src, src, "http://127.0.0.1:3001", PollerConfig{Logger: discardLogger()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := p.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(src.listCancellable) != 1 || src.listCancellable[0] {
+		t.Fatalf("poll listed with a cancellable context: %v", src.listCancellable)
+	}
 }
 
 type previewSet struct {
@@ -22,7 +39,8 @@ type previewSet struct {
 	url string
 }
 
-func (f *fakePreviewSessions) ListPreviewSessions(_ context.Context) ([]domain.SessionRecord, error) {
+func (f *fakePreviewSessions) ListPreviewSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	f.listCancellable = append(f.listCancellable, ctx.Done() != nil)
 	return append([]domain.SessionRecord(nil), f.sessions...), nil
 }
 

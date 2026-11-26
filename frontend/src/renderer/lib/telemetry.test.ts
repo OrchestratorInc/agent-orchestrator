@@ -38,17 +38,10 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
-	it("allows only the first run experiment variants and prompt actions", async () => {
-		for (const variant of ["prompt", "control"]) {
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
-		}
-		for (const action of ["clone", "local_folder", "standalone", "import", "dismissed"]) {
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
-		}
-		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: value })).toEqual({});
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: value })).toEqual({});
-		}
+	it("keeps no properties on the retired first-run prompt events", async () => {
+		// No longer sent since #7767; any properties they carried are dropped.
+		expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: "prompt", path: "/private/repo" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: "clone", url: "https://private/repo" })).toEqual({});
 	});
 	it("keeps the v2 aliases for api errors and the session summary", () => {
 		expect(postHogEventName("ao.requests.failed")).toBe("ao.requests.failed");
@@ -122,8 +115,10 @@ describe("telemetry sanitizers", () => {
 
 	it("allows only the closed onboarding step vocabulary", async () => {
 		for (const event of ["ao.onboarding.step_viewed", "ao.onboarding.step_completed", "ao.onboarding.step_abandoned"]) {
-			expect(await sanitizeRendererProperties(event, { step: "github_auth", email: "a@b.co", path: "/Users/x" })).toEqual({
+			// step_index is derived from the step (onboarding-telemetry-schema.ts), never passed through.
+			expect(await sanitizeRendererProperties(event, { step: "github_auth", step_index: 99, email: "a@b.co", path: "/Users/x" })).toEqual({
 				step: "github_auth",
+				step_index: 4,
 			});
 			expect(await sanitizeRendererProperties(event, { step: "/Users/x/secret" })).toEqual({});
 		}
@@ -837,6 +832,8 @@ describe("telemetry sanitizers", () => {
 			message: "spawn /Users/alice/ao failed",
 		});
 		expect(props).toEqual({ daemon_state: "error", code: "spawn_failed", exit_code: 1, signal: "SIGKILL" });
+		expect(await sanitizeRendererProperties("ao.daemon.failed", { code: "exited", exit_reason: "store_open_failed" })).toEqual({ code: "exited", exit_reason: "store_open_failed" });
+		expect(await sanitizeRendererProperties("ao.daemon.failed", { code: "exited", exit_reason: "open store: /Users/alice/.ao/ao.db" })).toEqual({ code: "exited" });
 	});
 
 	it("whitelists normalized api_error fields", async () => {

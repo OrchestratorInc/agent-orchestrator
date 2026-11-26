@@ -409,6 +409,7 @@ function ArtifactViewerFrame({
  * an edit in progress survives a look at an earlier version.
  */
 function ArtifactViewerBody({
+	active,
 	artifact,
 	artifactRoot,
 	cloud = false,
@@ -431,6 +432,8 @@ function ArtifactViewerBody({
 	menuActions,
 	zoomController,
 }: {
+	/** False while the view is hidden: a video pauses then. */
+	active: boolean;
 	artifact: SessionArtifact;
 	/** A cloud file's access prefix, which relative links resolve against. */
 	artifactRoot?: string;
@@ -486,6 +489,7 @@ function ArtifactViewerBody({
 				{previewing && media ? null : <div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactZoomContext.Provider value={previewing || showingPage ? null : zoomController}>
 					<ArtifactFileView
+						active={active}
 						artifactName={artifact.name}
 						initialEditing={initialEditing}
 						artifactRoot={artifactRoot}
@@ -537,6 +541,7 @@ function ArtifactViewerBody({
 				) : null}
 				{previewing ? (
 					<ArtifactVersionPreview
+						active={active}
 						artifactOrigin={artifactOrigin}
 						cloud={cloudVersions}
 						hostId={hostId}
@@ -664,11 +669,14 @@ function CloudHtmlArtifactView({
  * with isolated inline HTML previews and an optional full-screen view.
  */
 export function SessionArtifactsView({
+	active = true,
 	hostId,
 	onRequestConsumed,
 	request,
 	session,
 }: {
+	/** False while the inspector is closed or on another tab: a video pauses then. */
+	active?: boolean;
 	hostId?: string;
 	onRequestConsumed?: (key: number) => void;
 	request?: ArtifactOpenRequest | null;
@@ -829,8 +837,10 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
-	// A file the agent rewrites while it is open shows the new content.
-	useArtifactFileChanges(session, Boolean(selected) && !hostId);
+	// Follow a requested file before it appears in the list too: the stream's
+	// ready event rereads files written before the view opened, and later file
+	// changes refresh the list so the pending path can resolve.
+	useArtifactFileChanges(session, Boolean(selected || (awaitedPath !== null && selectedPath === awaitedPath)) && !hostId);
 	// Versions are read back as text or, from a daemon that can, by the media
 	// viewers, so a cloud media file and any other binary file, such as an
 	// archive, get no History. This shares the viewer's cached read of the file, which for a
@@ -902,7 +912,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+					<ArtifactActionsMenu artifact={selected} viewingHistoricalVersion={previewVersion !== null} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
 						<ArtifactViewMenuItems
 							fileActions={fileMenuActions}
 							history={(fileMediaKind(selected.path) ? session.cloud || (hostId && !hostServesMediaVersions) : selectedFile.data?.binary) ? null : (
@@ -981,6 +991,7 @@ export function SessionArtifactsView({
 						</ArtifactZoomContext.Provider>
 					) : (
 						<ArtifactViewerBody
+							active={active}
 							artifact={selected}
 							htmlSource={showingHtmlSource}
 							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated}

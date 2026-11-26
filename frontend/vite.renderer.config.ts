@@ -144,8 +144,10 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// show as plain images (main/artifact-snapshots.ts). 'self' is only the app:// origin, so
 		// without it every cached card is refused in a packaged build and falls back to live.
 		`img-src 'self' data: blob: http://127.0.0.1:* http://*.localhost:* https: ${ARTIFACT_SNAPSHOT_SCHEME}:`,
-		// A cloud session's audio and video artifacts stream from its control plane.
-		["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
+		// A cloud session's audio and video artifacts stream from its control plane;
+		// a shared video plays from its link's file host, which redirects to the
+		// video host (both under the share content origins).
+		["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS, ...SHARE_CONTENT_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",
