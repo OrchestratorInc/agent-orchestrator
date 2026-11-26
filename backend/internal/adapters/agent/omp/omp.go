@@ -121,6 +121,9 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
+// NativeConversationID bridges OMP's terminal and ACP session ids: the ACP
+// session/new id and the id `omp --resume` accepts are the same session UUID
+// that names ~/.omp/agent/sessions/<cwd slug>/<timestamp>_<id>.jsonl.
 func (p *Plugin) NativeConversationID(
 	ctx context.Context,
 	session ports.SessionRef,
