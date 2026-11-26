@@ -2,9 +2,11 @@ diff --git a/node_modules/react-native-keyboard-controller/android/src/main/java
 index 6ba79e2..9bc84a9 100644
 --- a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
 +++ b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
-@@ -3,9 +3,18 @@ package com.reactnativekeyboardcontroller.views.overlay
+@@ -2,10 +2,20 @@
+ 
  import android.annotation.SuppressLint
  import android.content.Context
++import android.content.res.Configuration
  import android.graphics.PixelFormat
 +import android.graphics.Rect
 +import android.graphics.Region
@@ -21,7 +23,7 @@ index 6ba79e2..9bc84a9 100644
  import android.view.accessibility.AccessibilityEvent
  import com.facebook.react.bridge.UiThreadUtil
  import com.facebook.react.bridge.WritableMap
-@@ -31,6 +40,11 @@ class OverKeyboardHostView(
+@@ -31,6 +41,11 @@
    private var windowManager: WindowManager = reactContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
    private var hostView: OverKeyboardRootViewGroup = OverKeyboardRootViewGroup(reactContext)
  
@@ -33,7 +35,7 @@ index 6ba79e2..9bc84a9 100644
    var stateWrapper: StateWrapper?
      get() = hostView.stateWrapper
      set(stateWrapper) {
-@@ -102,17 +116,21 @@ class OverKeyboardHostView(
+@@ -102,17 +117,21 @@
          WindowManager.LayoutParams.MATCH_PARENT,
          // This type ensures it floats over other application windows but under system windows
          WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
@@ -60,7 +62,7 @@ index 6ba79e2..9bc84a9 100644
      }
    }
  }
-@@ -247,3 +265,111 @@ class OverKeyboardRootViewGroup(
+@@ -247,3 +266,139 @@
      stateWrapper?.updateState(newStateData)
    }
  }
@@ -86,6 +88,10 @@ index 6ba79e2..9bc84a9 100644
 +) : FrameLayout(reactContext) {
 +  private var region: Rect? = null
 +  private var drawnBottom: Int? = null
++  // A gesture whose ACTION_DOWN landed on the fade: its MOVE/UP/CANCEL are
++  // swallowed too, so React (which never saw its DOWN) and gesture handler
++  // never get the gesture mid-stream.
++  private var swallowing = false
 +  private val preDraw =
 +    ViewTreeObserver.OnPreDrawListener {
 +      syncRegion()
@@ -99,6 +105,20 @@ index 6ba79e2..9bc84a9 100644
 +    addView(hostView, LayoutParams(display.x, display.y))
 +  }
 +
++  // The host view is the display's size, not the window's: the window itself
++  // is cut short at the touch region, and React must still lay out the whole
++  // screen. A rotation, a foldable unfolding or a split-screen resize changes
++  // the display, so the host view follows it.
++  override fun onConfigurationChanged(newConfig: Configuration?) {
++    super.onConfigurationChanged(newConfig)
++    val display = reactContext.getDisplaySize()
++    val params = hostView.layoutParams ?: return
++    if (params.width == display.x && params.height == display.y) return
++    params.width = display.x
++    params.height = display.y
++    hostView.layoutParams = params
++  }
++
 +  override fun onAttachedToWindow() {
 +    super.onAttachedToWindow()
 +    viewTreeObserver.addOnPreDrawListener(preDraw)
@@ -108,6 +128,7 @@ index 6ba79e2..9bc84a9 100644
 +    viewTreeObserver.removeOnPreDrawListener(preDraw)
 +    region = null
 +    drawnBottom = null
++    swallowing = false
 +    super.onDetachedFromWindow()
 +  }
 +
@@ -154,14 +175,23 @@ index 6ba79e2..9bc84a9 100644
 +  }
 +
 +  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-+    // A tap on the fade over the keys is outside the overlay too.
-+    val below = region?.bottom
-+    if (event.actionMasked == MotionEvent.ACTION_DOWN && below != null && event.y > below) {
++    if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) {
 +      reactContext.emitEvent("KeyboardController::overKeyboardTouchOutside", Arguments.createMap())
 +      return true
 +    }
-+    if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) {
-+      reactContext.emitEvent("KeyboardController::overKeyboardTouchOutside", Arguments.createMap())
++    // A tap on the fade over the keys is outside the overlay too. The whole
++    // gesture is kept from React, not only its DOWN.
++    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
++      val below = region?.bottom
++      swallowing = below != null && event.y > below
++      if (swallowing) {
++        reactContext.emitEvent("KeyboardController::overKeyboardTouchOutside", Arguments.createMap())
++        return true
++      }
++    } else if (swallowing) {
++      if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
++        swallowing = false
++      }
 +      return true
 +    }
 +    return super.dispatchTouchEvent(event)
