@@ -34,8 +34,9 @@ type agentAccountsResponse struct {
 }
 
 type sessionAgentAccounts struct {
-	Claude string `json:"claude,omitempty"`
-	Codex  string `json:"codex,omitempty"`
+	Claude      string `json:"claude,omitempty"`
+	Codex       string `json:"codex,omitempty"`
+	Antigravity string `json:"antigravity,omitempty"`
 }
 
 type switchSessionAccountRequest struct {
@@ -80,8 +81,10 @@ func accountProvider(agent string) (string, error) {
 		return "claude", nil
 	case "codex":
 		return "codex", nil
+	case "agy", "antigravity":
+		return "antigravity", nil
 	}
-	return "", usageError{fmt.Errorf("--agent must be claude-code or codex, got %q", agent)}
+	return "", usageError{fmt.Errorf("--agent must be claude-code, codex or agy, got %q", agent)}
 }
 
 func newAccountListCommand(ctx *commandContext) *cobra.Command {
@@ -117,7 +120,7 @@ func newAccountListCommand(ctx *commandContext) *cobra.Command {
 			return writeAccountList(cmd, accounts)
 		},
 	}
-	cmd.Flags().StringVar(&agent, "agent", "", "Only this agent's accounts: claude-code or codex")
+	cmd.Flags().StringVar(&agent, "agent", "", "Only this agent's accounts: claude-code, codex or agy")
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Read each account's sign-in and limits again instead of using cached values")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output JSON")
 	return cmd
@@ -163,8 +166,11 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 }
 
 func accountAgentLabel(provider string) string {
-	if provider == "claude" {
+	switch provider {
+	case "claude":
 		return "claude-code"
+	case "antigravity":
+		return "agy"
 	}
 	return provider
 }
@@ -260,7 +266,7 @@ func newAccountShowCommand(ctx *commandContext) *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), res)
 			}
 			out := cmd.OutOrStdout()
-			_, err = fmt.Fprintf(out, "claude-code: %s\ncodex: %s\n", dash(res.Claude), dash(res.Codex))
+			_, err = fmt.Fprintf(out, "claude-code: %s\ncodex: %s\nagy: %s\n", dash(res.Claude), dash(res.Codex), dash(res.Antigravity))
 			return err
 		},
 	}

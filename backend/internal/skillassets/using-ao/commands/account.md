@@ -1,6 +1,6 @@
 # ao account
 
-List this machine's Claude Code and Codex subscription accounts, set the
+List this machine's Claude Code, Codex and Antigravity (agy) subscription accounts, set the
 default account for new sessions, and move a session to another account.
 
 The commands act on the daemon of the machine they run on. On a remote host,
@@ -12,7 +12,7 @@ Adding, signing in, signing out, and removing accounts stay in the desktop app
 ## Syntax
 
 ```
-ao account ls [--agent claude-code|codex] [--refresh] [--json]
+ao account ls [--agent claude-code|codex|agy] [--refresh] [--json]
 ao account default <account-id>
 ao account show [session-id] [--json]
 ao account switch <session-id> <account-id> [--stop-turn] [--wait] [--timeout 3m]
@@ -24,7 +24,7 @@ ao account switch <session-id> <account-id> [--stop-turn] [--wait] [--timeout 3m
 
 | Command | Flag | Meaning | Default |
 |---|---|---|---|
-| `ls` | `--agent` | Only `claude-code` or `codex` accounts | All |
+| `ls` | `--agent` | Only `claude-code`, `codex` or `agy` accounts | All |
 | `ls` | `--refresh` | Read sign-in state and limits again instead of cached values | Off |
 | `switch` | `--stop-turn` | Stop a turn in progress now instead of waiting for it to finish | Off |
 | `switch` | `--wait` | Return only when the move completes or fails | Off |
@@ -42,6 +42,14 @@ limit.
 
 To move your own session, run `switch` without `--wait`: the move starts after
 your turn ends, so waiting for it in that turn never finishes.
+
+## Antigravity (agy) accounts
+
+Each agy account is its own agy folder and keeps its own Google sign-in, so
+sessions on different accounts run side by side. Conversations, skills,
+settings and MCP config follow every account, so a moved session resumes the
+same conversation. agy accounts show no usage limits, and a session never
+moves between them at a limit on its own; move it with `switch`.
 
 ## Starting on an account
 

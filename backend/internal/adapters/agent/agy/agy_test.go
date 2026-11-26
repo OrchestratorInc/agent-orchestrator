@@ -91,6 +91,36 @@ func TestGetLaunchCommandNoModel(t *testing.T) {
 	}
 }
 
+// TestLaunchAndRestorePassTheSessionFolder: agy reads its folder from
+// --gemini-dir only, so a session's GEMINI_HOME (an Antigravity account's
+// folder) is passed as the flag on launch and on resume.
+func TestLaunchAndRestorePassTheSessionFolder(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "agy"}
+	env := map[string]string{"GEMINI_HOME": "/accounts/a1"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: "/tmp/ws", Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"agy", "--gemini-dir", "/accounts/a1", "--add-dir", "/tmp/ws"}; !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("launch = %#v, want %#v", cmd, want)
+	}
+
+	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Env: env,
+		Session: ports.SessionRef{
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "native-id-123"},
+			WorkspacePath: "/tmp/ws",
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore ok=%v err=%v", ok, err)
+	}
+	if want := []string{"agy", "--gemini-dir", "/accounts/a1", "--add-dir", "/tmp/ws", "--conversation", "native-id-123"}; !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("restore = %#v, want %#v", cmd, want)
+	}
+}
+
 func TestGetPromptDeliveryStrategy(t *testing.T) {
 	plugin := &Plugin{}
 	got, err := plugin.GetPromptDeliveryStrategy(context.Background(), ports.LaunchConfig{})

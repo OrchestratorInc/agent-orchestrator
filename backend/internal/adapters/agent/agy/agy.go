@@ -113,6 +113,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 
 	cmd = []string{binary}
+	appendGeminiDirFlag(&cmd, cfg.Env)
 
 	if cfg.WorkspacePath != "" {
 		cmd = append(cmd, "--add-dir", cfg.WorkspacePath)
@@ -181,6 +182,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 			return nil, false, err
 		}
 		cmd = append(cmd, "--gemini-dir", root)
+	} else {
+		appendGeminiDirFlag(&cmd, cfg.Env)
 	}
 
 	if cfg.Session.WorkspacePath != "" {
@@ -356,6 +359,15 @@ func (p *Plugin) agyBinary(ctx context.Context) (string, error) {
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
+	}
+}
+
+// appendGeminiDirFlag passes the launch's GEMINI_HOME as --gemini-dir: agy
+// reads its folder from the flag only. A session on a saved Antigravity
+// account has the account's folder here.
+func appendGeminiDirFlag(cmd *[]string, env map[string]string) {
+	if home := strings.TrimSpace(env["GEMINI_HOME"]); home != "" {
+		*cmd = append(*cmd, "--gemini-dir", home)
 	}
 }
 

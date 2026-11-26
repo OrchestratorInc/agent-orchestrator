@@ -68,7 +68,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	// Sessions that must end first turn Update into a way to find them.
 	const blockedBy = advisoryInUse(details.advisory);
 	const updateBlocked = Boolean(blockedBy);
-	// Subscription accounts are for local Claude Code and Codex.
+	// Subscription accounts are for local Claude Code, Codex and agy.
 	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// The running job's steps stay in the Installation card until it finishes on
 	// Done. Done needs readiness to confirm the harness is installed, not just the job.

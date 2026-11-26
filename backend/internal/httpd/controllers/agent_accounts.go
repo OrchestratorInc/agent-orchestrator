@@ -299,7 +299,9 @@ func (c *AgentAccountsController) sessionAccounts(w http.ResponseWriter, r *http
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionAgentAccountsResponse{
-		Claude: accounts[domain.AgentAccountProviderClaude], Codex: accounts[domain.AgentAccountProviderCodex],
+		Claude:      accounts[domain.AgentAccountProviderClaude],
+		Codex:       accounts[domain.AgentAccountProviderCodex],
+		Antigravity: accounts[domain.AgentAccountProviderAntigravity],
 	})
 }
 
@@ -338,7 +340,7 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ports.ErrAgentAccountLoginUnknown):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "AGENT_ACCOUNT_LOGIN_NOT_FOUND", "Unknown or finished sign-in", nil)
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code and Codex only", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code, Codex and Antigravity only", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyRejected):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_KEY_REJECTED", "The provider did not accept this key or token. Check it and try again.", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyUnchecked):

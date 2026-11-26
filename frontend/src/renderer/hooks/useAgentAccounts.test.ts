@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { agentAccountLabel, agentAccountName, oneRowPerLogin, withoutSameLogins } from "./useAgentAccounts";
+import { agentAccountLabel, agentAccountName, agentAccountProviderFor, oneRowPerLogin, withoutSameLogins } from "./useAgentAccounts";
+
+describe("agentAccountProviderFor", () => {
+	it("names the account provider of each harness with accounts", () => {
+		expect(agentAccountProviderFor("claude-code")).toBe("claude");
+		expect(agentAccountProviderFor("codex")).toBe("codex");
+		expect(agentAccountProviderFor("agy")).toBe("antigravity");
+		expect(agentAccountProviderFor("gemini")).toBeNull();
+	});
+});
 
 const cli = { id: "device-claude", sameLoginAs: "acct-a" };
 const a = { id: "acct-a" };

@@ -32,6 +32,7 @@ const client = (hostId?: HostId) => clientForSessionHost(remoteHost(hostId));
 export function agentAccountProviderFor(harness: string | undefined): AgentAccountProvider | null {
 	if (harness === "claude-code") return "claude";
 	if (harness === "codex") return "codex";
+	if (harness === "agy") return "antigravity";
 	return null;
 }
 
@@ -55,7 +56,7 @@ export function useAgentAccounts(enabled = true, hostId?: HostId) {
 	return useQuery({ queryKey: agentAccountsQueryKeyFor(hostId), queryFn: () => fetchAgentAccounts(false, hostId), refetchInterval: 60_000, enabled });
 }
 
-export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };
+export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex", antigravity: "Antigravity" };
 
 type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentAccounts.oauthToken" | "settings.agentAccounts.apiKeyDefaultName", options?: { provider: string }) => string;
 

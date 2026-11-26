@@ -28,7 +28,7 @@ type LoginMethod = components["schemas"]["AgentLoginMethod"];
 type AccountKind = AgentAccount["kind"];
 
 /** The harness whose CLI signs in an account of each provider. */
-const providerHarness: Record<AgentAccountProvider, "claude-code" | "codex"> = { claude: "claude-code", codex: "codex" };
+const providerHarness: Record<AgentAccountProvider, "claude-code" | "codex" | "agy"> = { claude: "claude-code", codex: "codex", antigravity: "agy" };
 
 /** Claude Code's API key method, which AO saves as an account's own key. */
 const API_KEY_METHOD = "env_ANTHROPIC_API_KEY";
@@ -44,6 +44,8 @@ const accountMethods: Record<AgentAccountProvider, { add: string[] } & Partial<R
 		add: ["browser", "device_code", "api_key", "access_token"],
 		subscription: ["browser", "device_code", "access_token"], metered: ["api_key"],
 	},
+	// agy signs in only in its own screen, so its accounts sign in in a terminal.
+	antigravity: { add: [] },
 };
 
 // One sign-in per host and provider, kept outside the page so leaving Settings
