@@ -1,0 +1,150 @@
+diff --git a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
+index 6ba79e2..fdd6dac 100644
+--- a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
++++ b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
+@@ -3,9 +3,18 @@ package com.reactnativekeyboardcontroller.views.overlay
+ import android.annotation.SuppressLint
+ import android.content.Context
+ import android.graphics.PixelFormat
++import android.graphics.Rect
++import android.graphics.Region
++import android.os.Build
++import android.view.Gravity
+ import android.view.MotionEvent
+ import android.view.View
++import android.view.ViewTreeObserver
+ import android.view.WindowManager
++import android.widget.FrameLayout
++import com.facebook.react.bridge.Arguments
++import com.facebook.react.uimanager.util.ReactFindViewUtil
++import com.reactnativekeyboardcontroller.extensions.emitEvent
+ import android.view.accessibility.AccessibilityEvent
+ import com.facebook.react.bridge.UiThreadUtil
+ import com.facebook.react.bridge.WritableMap
+@@ -31,6 +40,11 @@ class OverKeyboardHostView(
+   private var windowManager: WindowManager = reactContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+   private var hostView: OverKeyboardRootViewGroup = OverKeyboardRootViewGroup(reactContext)
+ 
++  // The window's own root: holds hostView at the display's full size and lets
++  // the window end where JS's touch region does, so touches below it (the
++  // keyboard) reach the windows under it.
++  private val windowRoot: OverKeyboardWindowRoot = OverKeyboardWindowRoot(reactContext, hostView, windowManager)
++
+   var stateWrapper: StateWrapper?
+     get() = hostView.stateWrapper
+     set(stateWrapper) {
+@@ -102,17 +116,21 @@ class OverKeyboardHostView(
+         WindowManager.LayoutParams.MATCH_PARENT,
+         // This type ensures it floats over other application windows but under system windows
+         WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+-        // Ensures touches outside the view pass through to other windows
+-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
++        // Ensures touches outside the view pass through to other windows, and
++        // reports them (ACTION_OUTSIDE) so JS can hear a key tapped below.
++        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
++          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
++          WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+         PixelFormat.TRANSLUCENT,
+       )
++    layoutParams.gravity = Gravity.TOP or Gravity.START
+ 
+-    windowManager.addView(hostView, layoutParams)
++    windowManager.addView(windowRoot, layoutParams)
+   }
+ 
+   fun hide() {
+-    if (hostView.isAttached) {
+-      windowManager.removeView(hostView)
++    if (windowRoot.isAttachedToWindow) {
++      windowManager.removeView(windowRoot)
+     }
+   }
+ }
+@@ -247,3 +265,87 @@ class OverKeyboardRootViewGroup(
+     stateWrapper?.updateState(newStateData)
+   }
+ }
++
++/**
++ * The overlay window's root. JS marks the part of the screen the overlay
++ * claims with a view whose nativeID is [TOUCH_REGION_ID]; the window then ends
++ * at that view's bottom, so the keyboard below it is outside the window and
++ * gets its own touches (since Android 12 a window from another app over a
++ * point blocks touches there, so the frame itself must end, not only its
++ * touchable area). On API 33+ the part above the region is made not
++ * touchable too, so the app's header gets its touches. A touch outside the
++ * window or its touchable region is reported to JS as
++ * `KeyboardController::overKeyboardTouchOutside`. With no region view, the
++ * window covers the screen as before.
++ */
++@SuppressLint("ViewConstructor")
++class OverKeyboardWindowRoot(
++  private val reactContext: ThemedReactContext,
++  private val hostView: View,
++  private val windowManager: WindowManager,
++) : FrameLayout(reactContext) {
++  private var region: Rect? = null
++  private val preDraw =
++    ViewTreeObserver.OnPreDrawListener {
++      syncRegion()
++      true
++    }
++
++  init {
++    clipChildren = true
++    val display = reactContext.getDisplaySize()
++    addView(hostView, LayoutParams(display.x, display.y))
++  }
++
++  override fun onAttachedToWindow() {
++    super.onAttachedToWindow()
++    viewTreeObserver.addOnPreDrawListener(preDraw)
++  }
++
++  override fun onDetachedFromWindow() {
++    viewTreeObserver.removeOnPreDrawListener(preDraw)
++    region = null
++    super.onDetachedFromWindow()
++  }
++
++  private fun syncRegion() {
++    val marker = ReactFindViewUtil.findView(hostView, TOUCH_REGION_ID)
++    val next =
++      if (marker != null && marker.width > 0 && marker.height > 0 && hostView is android.view.ViewGroup) {
++        val rect = Rect(0, 0, marker.width, marker.height)
++        hostView.offsetDescendantRectToMyCoords(marker, rect)
++        rect
++      } else {
++        null
++      }
++    if (next == region) return
++    region = next
++    val params = layoutParams as? WindowManager.LayoutParams ?: return
++    val height = next?.bottom ?: WindowManager.LayoutParams.MATCH_PARENT
++    if (params.height != height) {
++      params.height = height
++      try {
++        windowManager.updateViewLayout(this, params)
++      } catch (
++        @Suppress("detekt:TooGenericExceptionCaught") e: RuntimeException,
++      ) {
++        Logger.w(TAG, "Can not resize the overlay window", e)
++      }
++    }
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++      rootSurfaceControl?.setTouchableRegion(next?.let { Region(it) })
++    }
++  }
++
++  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
++    if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) {
++      reactContext.emitEvent("KeyboardController::overKeyboardTouchOutside", Arguments.createMap())
++      return true
++    }
++    return super.dispatchTouchEvent(event)
++  }
++
++  companion object {
++    const val TOUCH_REGION_ID = "RNKC_OverKeyboardTouchRegion"
++  }
++}

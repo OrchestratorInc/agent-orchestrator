@@ -5,6 +5,7 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
 	detent: vi.fn(),
 	reduceMotion: false,
+	events: new Map<string, () => void>(),
 	// When set, a glide leaves the blob where it was for the JS thread, as a
 	// glide still under way on the UI thread does.
 	midGlide: false,
@@ -37,7 +38,7 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ t
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Platform: { get OS() { return fixtures.os; } }, StyleSheet: { create: (styles: object) => styles, absoluteFill: {} }, Pressable: host("Pressable"), Text: host("Text"), View: host("View"), useWindowDimensions: () => ({ width: 400, height: 800 }) };
+	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, DeviceEventEmitter: { addListener: (name: string, handler: () => void) => { fixtures.events.set(name, handler); return { remove: () => fixtures.events.delete(name) }; } }, Platform: { get OS() { return fixtures.os; }, Version: 34 }, StyleSheet: { create: (styles: object) => styles, absoluteFill: {} }, Pressable: host("Pressable"), Text: host("Text"), View: host("View"), useWindowDimensions: () => ({ width: 400, height: 800 }) };
 });
 // The pan's builder keeps its callbacks, so a test can play a drag through them.
 vi.mock("react-native-gesture-handler", async () => {
@@ -194,6 +195,22 @@ describe("effort slider", () => {
 		expect(label()).toBe("Xhigh");
 		// The same style array: the blob's element was not rebuilt.
 		expect(blob().props.style).toBe(before);
+	});
+
+	// Android: the patched keyboard-controller window ends at the touch region
+	// view, so the keys below are the keyboard's; a touch outside it (a key, the
+	// header) is reported and puts the overlay away.
+	it("marks the window's touch region on Android, and goes on a touch outside it", async () => {
+		fixtures.os = "android";
+		const onDismiss = vi.fn();
+		await act(async () => { renderer = create(<EffortSliderOverlay overKeyboard onDismiss={onDismiss} choices={levels("low")} onChoose={() => {}} />); });
+		const region = renderer!.root.findAll((node) => hostType(node) === "View" && node.props.nativeID === "RNKC_OverKeyboardTouchRegion");
+		expect(region).toHaveLength(1);
+		expect(region[0].props.collapsable).toBe(false);
+		act(() => fixtures.events.get("KeyboardController::overKeyboardTouchOutside")!());
+		expect(onDismiss).toHaveBeenCalledOnce();
+		await act(async () => renderer!.update(<EffortSliderOverlay overKeyboard visible={false} onDismiss={onDismiss} choices={levels("low")} onChoose={() => {}} />));
+		expect(fixtures.events.has("KeyboardController::overKeyboardTouchOutside")).toBe(false);
 	});
 
 	// Claude Code's Ultracode is drawn in desktop's gradient, the other levels plainly.

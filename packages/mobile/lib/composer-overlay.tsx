@@ -1,6 +1,6 @@
 import { useNavigation } from "expo-router";
-import { useEffect, useLayoutEffect, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, Text, View, type DimensionValue, type ViewStyle } from "react-native";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { DeviceEventEmitter, Platform, Pressable, StyleSheet, Text, View, type DimensionValue, type ViewStyle } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { OverKeyboardView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
@@ -32,6 +32,12 @@ const KEYS_OVERLAP = 32;
 const KEYS_FALL = 56;
 // With no keyboard up: the gap between the content and the screen's foot.
 const FOOT_GAP = space.sm;
+// The patched keyboard-controller window (patches/react-native-keyboard-controller+1.21.9.patch):
+// the view it ends at, the event it sends for a touch outside it, and the
+// Android version from which it can leave the header's touches to the app.
+const TOUCH_REGION_ID = "RNKC_OverKeyboardTouchRegion";
+const TOUCH_OUTSIDE_EVENT = "KeyboardController::overKeyboardTouchOutside";
+const ANDROID_TOUCHABLE_REGION = 33;
 // The header's room below the status bar: taps there go through to it on iOS.
 const HEADER_ROOM = 64;
 // Over the keyboard: the veil's reach above the content.
@@ -132,9 +138,11 @@ export function ComposerOverlay({ bottom, overKeyboard = false, onDismiss, lift 
  * under it pressed or scrolled. One on the header or the keys puts it away
  * and goes on to them, so the key types and the header's button works. On
  * iOS that is the window's own: a point no view of it claims falls through
- * to the window below. Android's window takes every touch on the screen, so
- * there any touch outside the content only puts the overlay away; typing
- * still puts it away (see the composer's field). The window carries its own
+ * to the window below. On Android the window is keyboard-controller's,
+ * patched to end at the touch region view below it, so the keys under it
+ * get their own touches, and to report a touch outside it, which puts the
+ * overlay away; on Android 13+ it leaves the header's touches to the app
+ * too. Older Android's header taps only put it away. The window carries its own
  * gesture handler root, so gestures (the slider's drag) run there on the UI
  * thread as anywhere else.
  */
@@ -156,20 +164,40 @@ function OverKeyboardOverlay({ visible, onDismiss, fill, reveal, children }: {
 		const keys = -keyboard.height.value;
 		return { bottom: keys > insets.bottom ? keys - KEYS_OVERLAP : insets.bottom + FOOT_GAP };
 	}, [insets.bottom]);
-	const passThrough = Platform.OS === "ios";
+	// The header's taps reach the app where the window can leave them out: on
+	// iOS, and on Android 13+, whose window is untouchable above the band (see
+	// the keyboard-controller patch). Older Android only closes the overlay.
+	const passThrough = Platform.OS === "ios" || (Platform.OS === "android" && Platform.Version >= ANDROID_TOUCHABLE_REGION);
+	// A key tapped below the window, or the header above it, is reported by the
+	// patched window as a touch outside it: the key still types, and the
+	// overlay goes, even for a key that types nothing (shift, ?123).
+	const dismiss = useRef(onDismiss);
+	dismiss.current = onDismiss;
+	useEffect(() => {
+		if (Platform.OS !== "android" || !visible) return;
+		const outside = DeviceEventEmitter.addListener(TOUCH_OUTSIDE_EVENT, () => dismiss.current?.());
+		return () => outside.remove();
+	}, [visible]);
 	return (
 		<OverKeyboardView visible={visible}>
 			<View style={styles.window} pointerEvents="box-none">
 				{passThrough ? null : <Pressable style={StyleSheet.absoluteFill} onPressIn={onDismiss} accessible={false} />}
 				<Animated.View pointerEvents="box-none" style={[styles.band, { top: passThrough ? insets.top + HEADER_ROOM : 0 }, band]}>
 					{passThrough ? <Pressable style={StyleSheet.absoluteFill} onPressIn={onDismiss} accessible={false} /> : null}
+					{/* Android: the part of the screen the overlay's window keeps. The
+					    patched window ends at this view's foot, so the keys below it
+					    are the keyboard's own, and on Android 13+ it is untouchable
+					    above it. Never flattened away, so the window can find it. */}
+					{Platform.OS === "android" ? <View nativeID={TOUCH_REGION_ID} collapsable={false} pointerEvents="none" style={styles.touchRegion} /> : null}
 					<Animated.View
 						pointerEvents="box-none"
 						accessibilityElementsHidden={!visible}
 						importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
 						style={[styles.aboveKeys, reveal]}
 					>
-						<EffortSliderVeil rise={KEYS_RISE} fall={KEYS_FALL} />
+						{/* No fade over the keys on Android: the window ends above them,
+						    so they stay the keyboard's to tap. */}
+						<EffortSliderVeil rise={KEYS_RISE} fall={Platform.OS === "android" ? 0 : KEYS_FALL} />
 						{/* Its touches are its own. The window is native, but a touch in it
 						    still bubbles through React's tree to the app root, which would
 						    otherwise take it for a tap outside and close it as the finger
@@ -241,6 +269,8 @@ const makeStyles = (t: Theme) =>
 		window: { flex: 1 },
 		// Over the keyboard: the chat from under the header to the content's foot.
 		band: { position: "absolute", left: 0, right: 0 },
+		// The band, and the veil's solid foot just below it.
+		touchRegion: { position: "absolute", left: 0, right: 0, top: 0, bottom: -space.sm },
 		// The content at the band's foot, a composer's inset in from the screen's sides.
 		aboveKeys: { position: "absolute", left: space.sm, right: space.sm, bottom: 0, alignItems: "center" },
 		// No wider than the composer, so a card inside can be capped to it.
