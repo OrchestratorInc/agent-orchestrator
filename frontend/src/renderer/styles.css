@@ -8154,6 +8154,13 @@ html[data-new-desktop-ui] .menu-search-input {
 	border-radius: var(--radius-overlay-row);
 }
 
+/* Option-menu rows draw their highlight on ::before, so the row box itself
+ * stays square: a row that opens a group draws the divider as its top edge,
+ * which a rounded box would curl at both ends. */
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]) {
+	border-radius: 0;
+}
+
 /* A segmented switch inside an overlay (the model picker's Auto/200k/1M):
  * its 8px track has 2px of padding, so each segment takes 6px. */
 html[data-new-desktop-ui] .settings-menu-surface [role="radiogroup"].rounded-md > [role="radio"] {
