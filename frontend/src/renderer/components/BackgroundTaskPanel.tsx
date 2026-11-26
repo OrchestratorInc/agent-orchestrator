@@ -240,14 +240,19 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 	const command = task.command && task.command !== name ? task.command : null;
 	const text = shown?.output ?? "";
 	const summary = useMemo(() => (text ? outputSummary(text) : null), [text]);
+	// Lines to follow, rather than a one-line note in their place.
+	const tailing = text !== "";
 
 	return (
 		// The side panel's frame is the card: a header block (the task and Stop,
 		// then its command and counts) over the output, with Jump to latest
 		// docked at its bottom.
+		// The command shows in full while the panel has room for it. A longer one
+		// scrolls in its own box: beside output it keeps at most half the panel,
+		// and beside a note it leaves just the note's line.
 		<section aria-label={name} className="flex min-h-0 flex-1 flex-col">
-			<header className="flex shrink-0 flex-col gap-0.5 border-b border-border pt-1.5 pr-2 pb-2.5 pl-3">
-				<div className="flex h-control-md min-w-0 items-center gap-1.5 text-xs">
+			<header className="flex min-h-0 flex-col gap-0.5 border-b border-border pt-1.5 pr-2 pb-2.5 pl-3">
+				<div className="flex h-control-md min-w-0 shrink-0 items-center gap-1.5 text-xs">
 					<Tooltip open={backTip} onOpenChange={(open) => setBackTip(open && !quietFocus.current)}>
 						<TooltipTrigger asChild>
 							<Button
@@ -296,9 +301,9 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 					</span>
 				</div>
 				{command || summary ? (
-					<div className="flex min-w-0 items-baseline gap-3 pr-1">
+					<div className="flex min-h-0 min-w-0 items-baseline gap-3 pr-1">
 						{command ? (
-							<code className="board-scrollbar max-h-20 min-w-0 flex-1 overflow-y-auto font-mono text-xs leading-[18px] break-all whitespace-pre-wrap text-muted-foreground select-text">
+							<code className="board-scrollbar max-h-full min-w-0 flex-1 overflow-y-auto font-mono text-xs leading-[18px] break-all whitespace-pre-wrap text-muted-foreground select-text">
 								{command}
 							</code>
 						) : null}
@@ -316,7 +321,7 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 					</div>
 				) : null}
 			</header>
-			<div className="flex min-h-0 flex-1 flex-col">
+			<div className={cn("flex flex-col", tailing ? "min-h-0 flex-[1_0_50%]" : "flex-[1_0_auto]")}>
 				{/* A failed refresh keeps what was read; only a first read that fails says so in place of output. */}
 				{output.isError && !shown ? (
 					<p className="px-3 py-2.5 text-xs text-muted-foreground">{t("backgroundTasks.output.error")}</p>

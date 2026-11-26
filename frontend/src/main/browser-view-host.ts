@@ -43,6 +43,7 @@ import {
   type BrowserProfileUsage,
 } from "../shared/browser-profiles";
 import { attachAppShortcuts } from "./app-shortcuts";
+import { APP_SHORTCUT_PRESSED_CHANNEL } from "../shared/shortcuts";
 import type {
   AppShortcutId,
   KeybindingOverrides,
@@ -1530,6 +1531,10 @@ export function createBrowserViewHost(
           devtoolsAction(session, "toggle"),
         ).catch(() => undefined);
       },
+      undefined,
+      undefined,
+      undefined,
+      (id) => shellWebContents.send(APP_SHORTCUT_PRESSED_CHANNEL, id),
     );
     view.webContents.on("focus", () => {
       if (!isCurrentEntry()) return;
@@ -5167,6 +5172,7 @@ export function createBrowserViewHost(
             const describeDocument = describeEntry.documentGeneration;
             const described = await describePanelApprovalTarget({
               action: typeof args.action === "string" ? args.action : "",
+              image: args.image === true,
               ref: typeof args.ref === "string" ? args.ref : undefined,
               instruction:
                 typeof args.instruction === "string" ? args.instruction : undefined,

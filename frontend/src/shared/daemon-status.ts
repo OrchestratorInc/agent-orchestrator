@@ -1,3 +1,5 @@
+import type { DaemonExitReason } from "./daemon-exit-reason";
+
 // DaemonStatus is the supervisor → renderer handshake payload, shared by the
 // Electron main process (which derives it) and the preload bridge (which types
 // the IPC surface). The renderer picks it up through the preload's AoBridge type.
@@ -28,6 +30,8 @@ export type DaemonStatus = {
 	code?: DaemonFailureCode;
 	exitCode?: number | null;
 	signal?: string | null;
+	// Why an `exited` daemon stopped, read from its last output line. Safe to report.
+	exitReason?: DaemonExitReason;
 	// The daemon also serves [::1] at its port (its probes' ipv6Loopback), so a
 	// *.localhost name, which Chromium resolves to ::1 first, reaches it.
 	ipv6Loopback?: boolean;

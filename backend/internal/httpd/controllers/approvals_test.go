@@ -221,3 +221,60 @@ func toJSON(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
 }
+
+func TestApprovalListAndStreamRefuseAgentCallers(t *testing.T) {
+	// The agent must never see request ids: with one it could answer its own
+	// request from a header-less call.
+	srv, gate := approvalServer(t)
+	out := pendingRequest(gate, "s1")
+	id := onlyPending(t, srv)["id"].(string)
+	for _, headers := range []map[string]string{
+		{"X-AO-Caller-Session": "s1"},
+		{"X-AO-Browser-Capability": "token"},
+	} {
+		for _, path := range []string{"/api/v1/approvals", "/api/v1/approvals/stream"} {
+			req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			// An open stream would never end: a refusal answers at once.
+			client := &http.Client{Timeout: 2 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("%s with %v: %v", path, headers, err)
+			}
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || strings.Contains(string(raw), id) {
+				t.Fatalf("%s with %v: status %d body %s", path, headers, resp.StatusCode, raw)
+			}
+		}
+	}
+	_ = gate.Decide(id, approval.DecisionDeny)
+	<-out
+}
+
+func TestApprovalRefusesAllowSiteForScript(t *testing.T) {
+	srv, gate := approvalServer(t)
+	out := make(chan approval.Outcome, 1)
+	go func() {
+		outcome, _ := gate.Request(context.Background(), approval.Request{
+			Kind: approval.KindBrowserAction, SessionID: "s1", Site: "shop.example",
+			Action: `Run "eval 1"`, Category: approval.CategoryScript, Reason: "runs JavaScript", Timeout: 5 * time.Second,
+		})
+		out <- outcome
+	}()
+	id := onlyPending(t, srv)["id"].(string)
+	resp := post(t, srv.URL+"/api/v1/approvals/"+id+"/decision", `{"decision":"allow-site"}`, nil)
+	var body map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(toJSON(body), "APPROVAL_SITE_RULE_NOT_ALLOWED") {
+		t.Fatalf("status %d body %v", resp.StatusCode, body)
+	}
+	if len(gate.SiteRules()) != 0 {
+		t.Fatalf("saved %+v", gate.SiteRules())
+	}
+	_ = gate.Decide(id, approval.DecisionDeny)
+	<-out
+}

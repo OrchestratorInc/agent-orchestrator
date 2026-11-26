@@ -10,7 +10,8 @@ import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type Rea
 import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { shellPanelTransition } from "@/lib/motion-spring";
+import { MainViewVisibleContext } from "../lib/main-view-visibility";
 import { CommandPalette } from "../components/CommandPalette";
 import { useLatestCallback } from "../hooks/useStable";
 import { isRemoveTarget, useRemoveProject } from "../hooks/useRemoveProject";
@@ -72,10 +73,12 @@ import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
+import { applyNewDesktopUi, newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { applyWindowTranslucency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
+import { composerDropTargetFor, type ComposerDropTarget } from "../lib/composer-drop-targets";
 import { cn } from "../lib/utils";
 import {
 	isLinuxPlatform,
@@ -199,7 +202,10 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 	return (
 		<>
 			<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
-				<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				{/* Settings and a starting chat hide the page but keep it mounted; videos in it pause. */}
+				<MainViewVisibleContext.Provider value={!settingsOpen && !startingChat}>
+					<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				</MainViewVisibleContext.Provider>
 				{startingChat}
 			</div>
 			<SettingsPane />
@@ -369,7 +375,15 @@ function ShellLayout() {
 	const settingsPage = useSettingsPage();
 	// One string, so a session switch (same kind of route) does not re-render the shell
 	// while the router loads; useMatchRoute would on every location and status change.
-	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
+	const newDesktopUi = useUiStore(newDesktopUiEnabled);
+	// Interface v2 reads the rendered matches, the ones the Outlet and useParams
+	// show, so the shell's frame changes in the same commit as the page inside it.
+	// The resolved location lands a commit later, which painted a session's tabs
+	// for a frame in the bare, no-top-bar frame of the page it came from.
+	const routeKind = useRouterState({
+		select: (state) =>
+			shellRouteKind(newDesktopUi ? (state.matches.at(-1)?.pathname ?? state.location.pathname) : (state.resolvedLocation ?? state.location).pathname),
+	});
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
@@ -526,7 +540,8 @@ function ShellLayout() {
 		return () => document.removeEventListener("click", handleModifierLinkClick);
 	}, []);
 	// Drop a folder anywhere in the app window to add it as a project, mirroring
-	// VS Code's "drop a folder to open it". A depth counter (not a relatedTarget
+	// VS Code's "drop a folder to open it". Drop files anywhere to attach them
+	// to the nearest chat composer. A depth counter (not a relatedTarget
 	// check) tracks dragenter/dragleave so the overlay doesn't flicker as the
 	// pointer crosses child-element boundaries. XtermTerminal's own drop handler
 	// only swallows (preventDefault/stopPropagation) a drop that is NOT a
@@ -540,6 +555,16 @@ function ShellLayout() {
 			const item = event.dataTransfer?.items?.[0];
 			return item?.webkitGetAsEntry?.()?.isDirectory ?? false;
 		};
+		// Files (not folders) dropped anywhere go to the nearest chat composer,
+		// unless something under the pointer (a terminal, a PR comment box, the
+		// composer itself) already claimed the drag with preventDefault.
+		let highlighted: ComposerDropTarget | undefined;
+		const highlight = (target: ComposerDropTarget | undefined) => {
+			if (highlighted === target) return;
+			highlighted?.setDragging(false);
+			highlighted = target;
+			target?.setDragging(true);
+		};
 		const handleDragEnter = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			event.preventDefault();
@@ -548,21 +573,38 @@ function ShellLayout() {
 		};
 		const handleDragOver = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			if (event.defaultPrevented) {
+				// Claimed below; a composer under the pointer highlights itself.
+				if (highlighted && !highlighted.element()?.contains(event.target as Node)) highlight(undefined);
+				else highlighted = undefined;
+			} else if (!firstEntryIsDirectory(event)) {
+				const target = composerDropTargetFor(event.target);
+				highlight(target?.accepts() ? target : undefined);
+			}
 			event.preventDefault();
 			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		};
 		const handleDragLeave = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-			if (dragDepthRef.current === 0) setIsDragActive(false);
+			if (dragDepthRef.current === 0) {
+				setIsDragActive(false);
+				highlight(undefined);
+			}
 		};
 		const handleDrop = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			const claimed = event.defaultPrevented;
 			event.preventDefault();
 			dragDepthRef.current = 0;
 			setIsDragActive(false);
+			highlight(undefined);
+			if (claimed) return;
 			const item = event.dataTransfer?.items?.[0];
-			if (!item?.webkitGetAsEntry?.()?.isDirectory) return;
+			if (!item?.webkitGetAsEntry?.()?.isDirectory) {
+				composerDropTargetFor(event.target)?.attach(Array.from(event.dataTransfer?.files ?? []));
+				return;
+			}
 			const file = item.getAsFile();
 			if (!file) return;
 			// Must be synchronous, on the File taken directly from dataTransfer, in
@@ -1340,6 +1382,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
 	}, [windowTranslucent]);
+	useEffect(() => {
+		applyNewDesktopUi(newDesktopUi);
+	}, [newDesktopUi]);
 
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.
@@ -1801,7 +1846,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								// so a var fallback wider than the sidebar would cover the panel.
 								style={sidebarWidthPx ? { width: sidebarWidthPx } : undefined}
 								initial={false}
-								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
+								transition={prefersReducedMotion ? { duration: 0 } : shellPanelTransition(newDesktopUi)}
 							/>
 						</div>
 					) : null}

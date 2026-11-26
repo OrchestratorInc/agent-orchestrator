@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
@@ -71,6 +72,11 @@ type remoteGate struct {
 	name     string
 	// typed: the command types a line break, which presses Enter.
 	typed bool
+	// source is what a drag picks up; selector is where it drops.
+	source string
+	// nth picks one of the elements selector matches ("0", "2", "-1" for the
+	// last); empty means the first.
+	nth string
 }
 
 // Commands that read, navigate by URL, or change a field's value without
@@ -80,8 +86,8 @@ var remoteBenign = map[string]struct{}{
 	"screenshot": {}, "pdf": {}, "get": {}, "is": {}, "wait": {}, "scroll": {}, "scrollintoview": {},
 	"hover": {}, "focus": {}, "fill": {}, "type": {}, "select": {}, "check": {}, "uncheck": {},
 	"highlight": {}, "tab": {}, "tabs": {}, "window": {}, "frame": {}, "dialog": {}, "console": {},
-	"errors": {}, "network": {}, "set": {}, "diff": {}, "upload": {}, "download": {}, "close": {},
-	"help": {}, "version": {}, "drag": {}, "record": {}, "trace": {}, "cookies": {}, "storage": {},
+	"errors": {}, "network": {}, "set": {}, "diff": {}, "upload": {}, "close": {},
+	"help": {}, "version": {}, "record": {}, "trace": {}, "cookies": {}, "storage": {},
 }
 
 // classifyRemoteArgs reads an agent-browser command line the way the service
@@ -134,6 +140,42 @@ func classifyRemoteArgs(args []string) remoteGate {
 		return remoteGate{}
 	case "find":
 		return classifyFind(rest)
+	case "wait":
+		// wait --fn evaluates its expression in the page: it is an eval.
+		if scriptFlag(rest) != "" {
+			return remoteGate{kind: remoteAsk, action: "wait"}
+		}
+		return remoteGate{}
+	case "open", "goto", "navigate":
+		// A javascript: address runs script in the page.
+		for _, word := range rest {
+			if !strings.HasPrefix(word, "-") {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(word)), "javascript:") {
+					return remoteGate{kind: remoteAsk, action: command}
+				}
+				break
+			}
+		}
+		return remoteGate{}
+	case "download":
+		// agent-browser downloads by clicking the element: it is a click.
+		if len(rest) == 0 {
+			return remoteGate{}
+		}
+		return remoteGate{kind: remoteDescribe, action: "click", selector: rest[0]}
+	case "drag":
+		// A drag presses on one element and releases on another: what it
+		// does is decided where it drops ("Delete", "Trash").
+		var ends []string
+		for _, word := range rest {
+			if !strings.HasPrefix(word, "-") {
+				ends = append(ends, word)
+			}
+		}
+		if len(ends) < 2 {
+			return remoteGate{kind: remoteAsk, action: "drag"}
+		}
+		return remoteGate{kind: remoteDescribe, action: "drag", selector: ends[1], source: ends[0]}
 	case "dialog":
 		// Accepting a confirm or prompt lets the page carry on with what it
 		// asked about; reading or dismissing it does not.
@@ -150,7 +192,9 @@ func classifyRemoteArgs(args []string) remoteGate {
 	return remoteGate{kind: remoteAsk, action: command}
 }
 
-// classifyFind handles `find <locator> <value> <action> [--name N]`.
+// classifyFind handles `find <locator> <value> [action] [text]` (and
+// `find nth <index> <selector> [action]`). The action defaults to click, as
+// agent-browser's does; a shape it does not recognise asks.
 func classifyFind(rest []string) remoteGate {
 	var positional []string
 	name := ""
@@ -165,25 +209,67 @@ func classifyFind(rest []string) remoteGate {
 		}
 		positional = append(positional, rest[i])
 	}
-	if len(positional) < 3 {
-		return remoteGate{}
+	unknown := remoteGate{kind: remoteAsk, action: "find"}
+	if len(positional) < 2 {
+		return unknown
 	}
-	action := strings.ToLower(positional[2])
+	locator := strings.ToLower(positional[0])
+	values := 1
+	if locator == "nth" {
+		values = 2
+	}
+	if len(positional) < 1+values {
+		return unknown
+	}
+	action := "click"
+	if len(positional) > 1+values {
+		action = strings.ToLower(positional[1+values])
+	}
 	gate := remoteGate{kind: remoteDescribe, action: "click"}
 	switch {
 	case action == "click" || action == "dblclick":
-	case action == "type" && slices.ContainsFunc(positional[3:], approval.HasLineBreak):
+	case action == "type" && slices.ContainsFunc(positional[2+values:], approval.HasLineBreak):
 		gate.action, gate.key, gate.typed = "type", "Enter", true
-	default:
+	case action == "fill" || action == "check" || action == "uncheck" || action == "hover" || action == "text" || action == "type":
+		// A value change, a hover, or a read: nothing is submitted.
 		return remoteGate{}
+	default:
+		return unknown
 	}
-	if strings.EqualFold(positional[0], "role") {
-		gate.role = strings.ToLower(positional[1])
-		gate.name = name
-	} else {
-		gate.name = positional[1]
+	value := positional[1]
+	switch locator {
+	case "role":
+		gate.role, gate.name = strings.ToLower(value), name
+	case "text", "label", "placeholder", "alt", "title":
+		gate.name = value
+	case "testid":
+		gate.selector = fmt.Sprintf("[data-testid=%q]", value)
+	case "first":
+		gate.selector, gate.nth = value, "0"
+	case "last":
+		gate.selector, gate.nth = value, "-1"
+	case "nth":
+		if _, err := strconv.Atoi(value); err != nil {
+			return unknown
+		}
+		gate.selector, gate.nth = positional[2], value
+	default:
+		return unknown
 	}
 	return gate
+}
+
+// scriptFlag returns the expression wait --fn evaluates, or "".
+func scriptFlag(rest []string) string {
+	for i, word := range rest {
+		if word == "--fn" && i+1 < len(rest) {
+			return rest[i+1]
+		}
+		if expression, ok := strings.CutPrefix(word, "--fn="); ok {
+			return expression
+		}
+	}
+	return ""
 }
 
 func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionID, args []string) error {
@@ -230,7 +316,15 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		approved, approvedIdentified, approvedDocument = target, identified, document
 		target.PageURL, target.PageTitle = pageURL, pageTitle
 		if identified {
-			verdict = approval.Classify(target, mode)
+			judged := target
+			if gate.action == "drag" {
+				// The drop lands on the target as a click would.
+				judged.Action = "click"
+			}
+			verdict = approval.Classify(judged, mode)
+			if gate.action == "drag" && verdict.NeedsApproval {
+				verdict.Summary = onSite(fmt.Sprintf("Drag %s onto %q", remoteSelectorLabel(gate.source), target.Name), pageURL)
+			}
 		}
 		if identified && partial && !verdict.NeedsApproval {
 			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
@@ -246,7 +340,7 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		switch {
 		case gate.action == "dialog":
 			reason = "Accepting the page's dialog lets the page carry on with what it asked to confirm."
-		case gate.action != "eval" && gate.action != "js":
+		case !runsScript(gate.action):
 			reason = "Orchestrator cannot tell in advance what this command does on the page, so it asks first."
 		}
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
@@ -299,6 +393,15 @@ func sameRemoteTarget(a, b approval.Target) bool {
 		a.FormHasPassword == b.FormHasPassword && a.FormHasNewPassword == b.FormHasNewPassword && a.SubmitName == b.SubmitName
 }
 
+// runsScript reports the remote commands that evaluate script in the page.
+func runsScript(action string) bool {
+	switch action {
+	case "eval", "js", "wait", "open", "goto", "navigate":
+		return true
+	}
+	return false
+}
+
 func remoteTargetChanged() error {
 	return apierr.Conflict("BROWSER_TARGET_CHANGED",
 		"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.", nil)
@@ -313,12 +416,19 @@ func remoteSummary(gate remoteGate, args []string) string {
 		return "Accept the page's dialog"
 	}
 	if gate.kind == remoteAsk {
-		if gate.action == "eval" || gate.action == "js" {
+		if runsScript(gate.action) {
+			// The script is the action being approved: show it, and say plainly
+			// when it is too long to show whole, since Allow runs all of it.
 			script := strings.Join(remoteCommandArgs(args, gate.action), " ")
-			if len(script) > 160 {
-				script = script[:160] + "…"
+			if gate.action == "wait" {
+				script = "--fn " + scriptFlag(args)
 			}
-			return fmt.Sprintf("Run %q", strings.TrimSpace(gate.action+" "+script))
+			shown, cut := approval.Truncate(strings.TrimSpace(script), 160)
+			text := fmt.Sprintf("Run %q", strings.TrimSpace(gate.action+" "+shown))
+			if cut > 0 {
+				text += fmt.Sprintf(" (script cut: %d more characters not shown; Allow runs all of it)", cut)
+			}
+			return text
 		}
 		return fmt.Sprintf("Run %q", gate.action)
 	}
@@ -327,12 +437,11 @@ func remoteSummary(gate remoteGate, args []string) string {
 	case gate.name != "":
 		target = fmt.Sprintf("%q", gate.name)
 	case gate.selector != "":
-		target = gate.selector
-		if len(target) > 80 {
-			target = target[:80] + "…"
-		}
+		target, _ = approval.Truncate(gate.selector, 80)
 	}
 	switch {
+	case gate.action == "drag":
+		return fmt.Sprintf("Drag %s onto %s", remoteSelectorLabel(gate.source), target)
 	case gate.typed:
 		return "Type a line break into " + target
 	case gate.action == "press":
@@ -341,6 +450,12 @@ func remoteSummary(gate remoteGate, args []string) string {
 		return "Double-click " + target
 	}
 	return "Click " + target
+}
+
+// remoteSelectorLabel shortens a selector or ref for a prompt.
+func remoteSelectorLabel(selector string) string {
+	label, _ := approval.Truncate(selector, 80)
+	return label
 }
 
 // remoteCommandArgs returns what follows the command verb in args.
@@ -415,6 +530,9 @@ func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target app
 		request = map[string]string{"mode": "named", "role": target.Role, "name": target.Name}
 	default:
 		request = map[string]string{"mode": "selector", "selector": gate.selector}
+		if gate.nth != "" {
+			request["nth"] = gate.nth
+		}
 	}
 	named := request["mode"] == "named"
 	if named && target.Role == "" && gate.action != "type" {
@@ -503,9 +621,24 @@ func (s *Service) remoteData(ctx context.Context, args ...string) (map[string]in
 const remoteDescribeScript = `(() => {
 const req = %s;
 const clean = (v) => (v || "").replace(/\s+/g, " ").trim().slice(0, 120);
+// Implicit roles as the panel's describer and the snapshot assign them, so a
+// snapshot ref's role matches the element it names.
 const roleOf = (el) => {
-  const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
-  return el.getAttribute("role") || (tag === "a" ? "link" : tag === "button" || ["submit", "button", "image"].includes(type) ? "button" : tag === "textarea" || tag === "input" ? "textbox" : "");
+  const explicit = el.getAttribute("role");
+  if (explicit) return explicit.split(/\s+/)[0].toLowerCase();
+  const tag = el.tagName.toLowerCase(), type = (el.type || "text").toLowerCase();
+  if (tag === "a") return "link";
+  if (tag === "button" || tag === "summary") return "button";
+  if (tag === "textarea") return "textbox";
+  if (tag === "select") return "combobox";
+  if (tag === "input") {
+    if (["submit", "button", "reset", "image"].includes(type)) return "button";
+    if (type === "checkbox" || type === "radio") return type;
+    if (type === "search") return "searchbox";
+    if (type === "number") return "spinbutton";
+    return "textbox";
+  }
+  return el.isContentEditable ? "textbox" : "";
 };
 const nameOf = (el) => {
   const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
@@ -514,9 +647,13 @@ const nameOf = (el) => {
   // An editable field's content is what the agent typed: name it only by its
   // label or hint, never by its text, so typed values stay out of the prompt.
   const editable = tag === "textarea" || el.isContentEditable || (tag === "input" && !["submit", "button", "image", "reset", "checkbox", "radio"].includes(type));
-  if (editable) {
-    const wrap = name ? null : el.closest("label");
+  // A wrapping label names its field; its own text nodes only, so a field's
+  // content (what the agent typed) never becomes the name.
+  if (!name && (editable || tag === "input" || tag === "select")) {
+    const wrap = el.closest("label");
     if (wrap) name = clean([...wrap.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" "));
+  }
+  if (editable) {
     return name || clean(el.placeholder || el.getAttribute("aria-placeholder") || el.getAttribute("data-placeholder") || el.title);
   }
   return name || clean(el.innerText || el.textContent || el.placeholder);
@@ -531,7 +668,9 @@ if (req.mode === "named") {
   if (hits.length !== 1) return { partial: true, documentOrigin: performance.timeOrigin };
   el = hits[0];
 } else {
-  el = req.mode === "focused" ? document.activeElement : document.querySelector(req.selector);
+  if (req.mode === "focused") el = document.activeElement;
+  else if (req.nth === undefined) el = document.querySelector(req.selector);
+  else { const all = document.querySelectorAll(req.selector); const i = Number(req.nth); el = all[i < 0 ? all.length + i : i]; }
 }
 if (!el || el === document.body) return null;
 const tag = el.tagName.toLowerCase();

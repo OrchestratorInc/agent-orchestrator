@@ -67,6 +67,10 @@ func (d Decision) Allowed() bool {
 // ErrNotPending reports a decision for a request that is no longer waiting.
 var ErrNotPending = errors.New("approval request is not pending")
 
+// ErrSiteRuleNotAllowed is returned for an "Always allow" on the catch-all
+// script category, which covers eval and anything that could not be read.
+var ErrSiteRuleNotAllowed = errors.New("this kind of action cannot be always allowed for a site")
+
 // ErrInvalidDecision reports a decision the user cannot make.
 var ErrInvalidDecision = errors.New("decision must be allow-once, allow-site, or deny")
 
@@ -275,6 +279,9 @@ func (g *Gate) Decide(id string, decision Decision) error {
 		return ErrNotPending
 	}
 	if decision == DecisionAllowSite {
+		if w.pending.Category == CategoryScript {
+			return ErrSiteRuleNotAllowed
+		}
 		if err := g.addSiteRuleLocked(w.pending.Site, w.pending.Category); err != nil {
 			return err
 		}
@@ -405,7 +412,8 @@ func (g *Gate) RemoveSiteRule(site, category string) error {
 }
 
 func (g *Gate) siteAllowedLocked(site, category string) bool {
-	if site == "" {
+	// A script rule saved by an earlier build is never honoured.
+	if site == "" || category == CategoryScript {
 		return false
 	}
 	for _, rule := range g.policy.Sites {

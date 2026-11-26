@@ -72,4 +72,25 @@ describe("remote describe script", () => {
 			expect(JSON.stringify(facts)).not.toMatch(/secret|4111/);
 		}
 	});
+
+	it("resolves snapshot refs by the implicit roles the snapshot uses", () => {
+		document.body.innerHTML = `<form id="f" method="post">
+			<label><input type="checkbox" id="agree"> Agree</label>
+			<label><input type="radio" id="ship"> Ship</label>
+			<label for="q">Find</label><input type="search" id="q">
+			<label for="qty">Quantity</label><input type="number" id="qty">
+			<label for="country">Country</label><select id="country"><option>India</option></select>
+			<button>Save</button></form>`;
+		for (const [role, name] of [["checkbox", "Agree"], ["radio", "Ship"], ["searchbox", "Find"], ["spinbutton", "Quantity"], ["combobox", "Country"]]) {
+			const facts = run({ mode: "named", role, name });
+			expect(facts, role).not.toHaveProperty("partial");
+			expect(facts, role).toMatchObject({ role, name });
+		}
+	});
+
+	it("picks the nth match of a selector", () => {
+		const facts = describeIn(`<form method="post"><button class="b">One</button><button class="b">Two</button><button class="b">Three</button></form>`, { mode: "selector", selector: ".b", nth: "-1" });
+		expect(facts).toMatchObject({ name: "Three" });
+		expect(run({ mode: "selector", selector: ".b", nth: "1" })).toMatchObject({ name: "Two" });
+	});
 });

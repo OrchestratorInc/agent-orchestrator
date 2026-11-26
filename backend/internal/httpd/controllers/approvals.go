@@ -73,6 +73,12 @@ func (c *ApprovalsController) list(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/approvals")
 		return
 	}
+	// Agents never see request ids: with one, a header-less call could
+	// answer the agent's own request.
+	if fromAgent(r) {
+		writeFromAgent(w, r)
+		return
+	}
 	pending := c.Svc.Pending()
 	out := ApprovalListResponse{Pending: make([]ApprovalPendingResponse, 0, len(pending))}
 	for _, p := range pending {
@@ -100,6 +106,9 @@ func (c *ApprovalsController) decide(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, approval.ErrInvalidDecision):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_DECISION", err.Error(), nil)
+		return
+	case errors.Is(err, approval.ErrSiteRuleNotAllowed):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "APPROVAL_SITE_RULE_NOT_ALLOWED", "This kind of action can only be allowed once or denied", nil)
 		return
 	case errors.Is(err, approval.ErrNotPending):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "APPROVAL_NOT_PENDING", "This request already ended: it was answered, timed out, or the agent stopped waiting", nil)
@@ -223,6 +232,12 @@ func (c *ApprovalsController) policyResponse(sessionID string) ApprovalPolicyRes
 func (c *ApprovalsController) stream(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/approvals/stream")
+		return
+	}
+	// Agents never see request ids: with one, a header-less call could
+	// answer the agent's own request.
+	if fromAgent(r) {
+		writeFromAgent(w, r)
 		return
 	}
 	flusher, ok := w.(http.Flusher)

@@ -238,7 +238,7 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 	if target.IsSubmit && target.FormHasPayment {
 		return paymentFormVerdict()
 	}
-	if name != "" && name != "cancel" && !containsAny(name, benignPhrases) && !opensComposer(name) {
+	if name != "" && name != "cancel" && !leadsWith(name, benignPhrases) && !opensComposer(name) {
 		linkish := role == "link"
 		for _, set := range phraseSets {
 			// A link labelled with one word is navigation ("Checkout",
@@ -270,7 +270,7 @@ func classifySubmit(submitName string, target Target) Verdict {
 	if post && target.FormHasNewPassword {
 		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: "It submits a form that sets a new password."}
 	}
-	if containsAny(submitName, []string{"search", "filter", "sign in", "log in", "login"}) {
+	if leadsWith(submitName, []string{"search", "filter", "sign in", "log in", "login"}) {
 		return Verdict{}
 	}
 	if submitName != "" && !containsAny(submitName, benignPhrases) {
@@ -332,7 +332,10 @@ func matchPhrase(name string, phrases []string, whole bool) string {
 				return phrase
 			}
 		case len(words) > 5:
-			if strings.HasPrefix(name+" ", phrase+" ") {
+			// A long label matches at its start, so headlines and sentences
+			// that merely mention a word stay out; a confirm button's leading
+			// "Yes," or "I understand," does not count as its start.
+			if strings.HasPrefix(stripFiller(name)+" ", phrase+" ") {
 				return phrase
 			}
 		default:
@@ -342,6 +345,31 @@ func matchPhrase(name string, phrases []string, whole bool) string {
 		}
 	}
 	return ""
+}
+
+// leadsWith reports a label that is one of phrases or starts with one: a
+// benign phrase ("search", "sign in") excuses "Search orders" but not
+// "Delete search history".
+func leadsWith(name string, phrases []string) bool {
+	for _, phrase := range phrases {
+		if name == phrase || strings.HasPrefix(name+" ", phrase+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// confirmFillers lead a confirm dialog's button without being its action.
+var confirmFillers = []string{"yes", "ok", "okay", "sure", "confirm and", "confirm", "i understand", "i agree"}
+
+// stripFiller drops a leading confirm filler from a normalized label.
+func stripFiller(name string) string {
+	for _, filler := range confirmFillers {
+		if rest, ok := strings.CutPrefix(name, filler+" "); ok {
+			return rest
+		}
+	}
+	return name
 }
 
 func opensComposer(name string) bool {
@@ -449,12 +477,20 @@ func ClassifyDialog(kind, message string, mode Mode) Verdict {
 		verdict.Summary = fmt.Sprintf("Accept the page's %s dialog", strings.ToLower(kind))
 	}
 	if text := strings.TrimSpace(message); text != "" {
-		if len(text) > 120 {
-			text = text[:120] + "…"
-		}
+		text, _ = Truncate(text, 120)
 		verdict.Summary += fmt.Sprintf(" %q", text)
 	}
 	return verdict
+}
+
+// Truncate cuts s to at most limit characters (not bytes, so a multi-byte
+// character is never split) and reports how many characters it left out.
+func Truncate(s string, limit int) (string, int) {
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s, 0
+	}
+	return string(runes[:limit]) + "…", len(runes) - limit
 }
 
 // HasLineBreak reports whether typed text contains a line break. Runtimes

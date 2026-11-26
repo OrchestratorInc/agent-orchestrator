@@ -32,7 +32,7 @@ type providerSwitchActivityDetail struct {
 	SourceModel  string `json:"sourceModel,omitempty"`
 	TargetModel  string `json:"targetModel,omitempty"`
 	TargetEffort string `json:"targetEffort,omitempty"`
-	// TargetAutoCompactWindow is the Claude Code compaction window the target started with.
+	// TargetAutoCompactWindow is the auto-compaction the target started with: Claude Code's window, or OpenCode's "off".
 	TargetAutoCompactWindow string `json:"targetAutoCompactWindow,omitempty"`
 	BranchID                string `json:"branchId"`
 	// PermissionMode is the mode the target started in. ChatPermissionMode is the
@@ -394,7 +394,7 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 		ConversationID: conversation.ID, SourceBranchID: activeBranch.ID,
 		SourceSequence: conversation.LatestSequence, Bootstrap: handoffNote,
 	}
-	if request.TargetHarness == domain.HarnessClaudeCode {
+	if request.TargetHarness == domain.HarnessClaudeCode || domain.CanTurnOffAutoCompact(request.TargetHarness) {
 		targetCfg.ProviderSwitch.AutoCompactWindow = request.AutoCompactWindow
 	}
 	targetCfg.Model, targetCfg.Effort = request.Model, request.Effort
@@ -528,7 +528,8 @@ func (s *Service) sourcePermissions(source *Controller) ports.PermissionMode {
 
 // adoptTargetsLiveModel saves the model the target runs when its chat does not
 // offer the picked one (Claude Code's lists the newest of each family by alias),
-// or the chat would show one model and save another.
+// or the chat would show one model and save another. A pick the chat runs as a
+// base model plus a reasoning level is offered, so it stays as picked.
 func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID, target *Controller, picked string) {
 	configurer, ok := target.conv.(ports.ChatConfigOptionController)
 	if picked == "" || !ok {
@@ -545,6 +546,14 @@ func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID
 		live := option.Current.Select
 		if live == "" || live == picked || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool { return choice.Value == picked }) {
 			return
+		}
+		// A pick that folds its reasoning level into the model id (Antigravity's
+		// gemini-3.8-flash-low) runs as the base model plus that level. The
+		// picked id is kept, or a restart would apply the base at its default level.
+		if resolver, ok := target.conv.(ports.ChatModelVariantResolver); ok {
+			if base, split := resolver.ModelVariantBase(picked); split && base == live {
+				return
+			}
 		}
 		settings := target.Settings()
 		settings.Model = live
