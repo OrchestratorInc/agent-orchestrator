@@ -60,6 +60,7 @@ export const REFRESH_INTERVAL_MS = 250;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
+const NO_SKILLS: ChatSkill[] = [];
 
 export type PendingSend = {
 	id: string;
@@ -184,7 +185,8 @@ export function useMobileConversation(
 	const [initialCatalog] = useState(() => rememberedTurnOptions(cacheKey, initialState.pages.length ? mergeConversationPages(initialState.pages)?.harness : undefined));
 	const [models, setModels] = useState<ChatModel[]>(() => initialCatalog?.models ?? []);
 	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => initialCatalog?.configOptions ?? []);
-	const [skills, setSkills] = useState<ChatSkill[]>([]);
+	// With the agent that reported them: see `skills` below.
+	const [reportedSkills, setReportedSkills] = useState<{ harness?: string; skills: ChatSkill[] }>({ skills: NO_SKILLS });
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
 	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
 	const [pendingActions, setPendingActions] = useState<ConversationAction[]>([]);
@@ -213,6 +215,10 @@ export function useMobileConversation(
 	// clearConversationProviderCatalogs).
 	const harnessShown = useRef<{ cacheKey: string; harness: string } | undefined>(undefined);
 	const snapshotHarness = snapshot?.harness;
+	// Only the chat's current agent's: in the render that first names a new agent
+	// the outgoing agent's list would otherwise still be here, and the screen
+	// would remember it for the new agent (rememberedSkills).
+	const skills = reportedSkills.harness === snapshotHarness ? reportedSkills.skills : NO_SKILLS;
 	useEffect(() => {
 		if (!snapshotHarness) return;
 		const previous = harnessShown.current;
@@ -234,7 +240,7 @@ export function useMobileConversation(
 		setConfigOptions([]);
 		// Its "/" list too, which the New task page reuses (rememberedSkills).
 		skillsCache.delete(cacheKey);
-		setSkills([]);
+		setReportedSkills({ skills: NO_SKILLS });
 	}, [cacheKey, snapshotHarness]);
 
 	const refresh = useCallback(async () => {
@@ -401,7 +407,7 @@ export function useMobileConversation(
 				skillsCache.delete(cacheKey);
 				return [];
 			}
-			if (mounted.current) setSkills(next);
+			if (mounted.current) setReportedSkills({ harness, skills: next });
 			return next;
 		} catch {
 			return skills;
@@ -637,7 +643,7 @@ export function useMobileConversation(
 		async () => {
 			await runAction("mcp", () => requireConfig(cfg, offline, (c) => reloadMcpServers(c, sessionId)));
 			skillsCache.delete(cacheKey);
-			setSkills([]);
+			setReportedSkills({ skills: NO_SKILLS });
 		},
 		[cacheKey, cfg, offline, runAction, sessionId],
 	);

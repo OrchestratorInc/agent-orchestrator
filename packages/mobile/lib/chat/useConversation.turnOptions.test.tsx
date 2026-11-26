@@ -231,6 +231,26 @@ it("clears the outgoing agent's skills at a switch", async () => {
 	expect(conversation.skills.map((skill) => skill.name)).toEqual(["review"]);
 });
 
+// The screen's effects read the render that first names the new agent: its
+// skills must already be empty, not the outgoing agent's until the next render.
+it("never pairs the new agent with the outgoing agent's skills, even for one render", async () => {
+	const seen: { harness?: string; skills: string[] }[] = [];
+	function Recording({ id }: { id: string }) {
+		conversation = useMobileConversation(config, "qa-host", id);
+		seen.push({ harness: conversation.snapshot?.harness, skills: conversation.skills.map((skill) => skill.name) });
+		return null;
+	}
+	fixture.skills = [{ name: "compact", displayName: "compact" }];
+	await act(async () => { renderer = create(<Recording id="switch-skills-render" />); });
+	await act(async () => { await conversation.loadSkills(); });
+	expect(conversation.skills.map((skill) => skill.name)).toEqual(["compact"]);
+
+	fixture.harness = "codex";
+	await act(async () => { await conversation.refresh(); });
+	expect(seen.some((render) => render.harness === "codex")).toBe(true);
+	expect(seen.filter((render) => render.harness === "codex" && render.skills.length)).toEqual([]);
+});
+
 it("drops a skills load that was started for the outgoing agent", async () => {
 	await open("switch-during-skills");
 	let answer!: (skills: unknown[]) => void;
