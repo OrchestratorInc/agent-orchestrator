@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -158,5 +159,62 @@ func TestDestroyRefusesNonGlobAgentProfileAsBefore(t *testing.T) {
 	err = ws.Destroy(ctx, info)
 	if !errors.Is(err, ports.ErrWorkspaceDirty) {
 		t.Fatalf("destroy error = %v, want ports.ErrWorkspaceDirty", err)
+	}
+}
+
+// Git reports slash-separated paths on every OS; the filter must match them
+// with package path so a Windows filepath separator never hides a profile.
+func TestIsExcludedAgentProfilePath(t *testing.T) {
+	cases := map[string]bool{
+		".github/agents/ao-reviewer.agent.md": true,
+		".github/agents/ao-.agent.md":         true,
+		".github/agents/my-reviewer.agent.md": false,
+		".github/agents/ao-reviewer.md":       false,
+		".github/agents/nested/ao-x.agent.md": false,
+		"sub/.github/agents/ao-x.agent.md":    false,
+		".github/agents/":                     false,
+		"":                                    false,
+	}
+	for entry, want := range cases {
+		if got := isExcludedAgentProfilePath(entry); got != want {
+			t.Errorf("isExcludedAgentProfilePath(%q) = %v, want %v", entry, got, want)
+		}
+	}
+}
+
+// A candidate the probe lists but cannot read may be user work git cannot
+// see: Destroy must refuse rather than defer to git and delete it.
+func TestDestroyRefusesUnreadableAgentProfile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX permission bits")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files regardless of permission bits")
+	}
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/one"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	poisonCopilotExclude(t, repo)
+	profile := writeAgentProfile(t, info.Path, "ao-reviewer.agent.md", "# my hand-written reviewer agent\n")
+	if err := os.Chmod(profile, 0); err != nil {
+		t.Fatalf("chmod profile: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(profile, 0o600) })
+
+	err = ws.Destroy(ctx, info)
+	if !errors.Is(err, ports.ErrWorkspaceDirty) {
+		t.Fatalf("destroy error = %v, want ports.ErrWorkspaceDirty", err)
+	}
+	if _, statErr := os.Stat(profile); statErr != nil {
+		t.Fatalf("unreadable agent profile was not preserved: %v", statErr)
 	}
 }

@@ -894,9 +894,17 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	// User-authored agent profiles hidden by AO's own .git/info/exclude glob
 	// are invisible to git's dirtiness checks; without this probe teardown
 	// would silently delete them (#9007). Refuse so the Session Manager
-	// preserves the workspace; git stays the authority when the probe itself
-	// fails, so a probe error never blocks a teardown git would allow.
-	if profiles, profileErr := w.unmanagedExcludedAgentProfiles(ctx, path); profileErr == nil && len(profiles) > 0 {
+	// preserves the workspace. A candidate that was listed but could not be
+	// read refuses too: git cannot see it, so deferring to git would delete
+	// it. Only when git itself cannot list the directory does git stay the
+	// authority, since `git worktree remove` would then fail on its own.
+	// The fast path re-checks after its move through isDirty; this check
+	// covers the git-driven path below, which never sees these files.
+	profiles, profileErr := w.unmanagedExcludedAgentProfiles(ctx, path)
+	switch {
+	case errors.Is(profileErr, errAgentProfileUnreadable):
+		return reclaim, fmt.Errorf("gitworktree: preserve unreadable agent profile under %q: %w (cause: %w)", path, ports.ErrWorkspaceDirty, profileErr)
+	case profileErr == nil && len(profiles) > 0:
 		return reclaim, fmt.Errorf("gitworktree: preserve %d unmanaged agent profile(s) under %q: %w", len(profiles), path, ports.ErrWorkspaceDirty)
 	}
 	// Move the directory aside rather than waiting out `git worktree remove`'s
