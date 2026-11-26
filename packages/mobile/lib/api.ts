@@ -10,6 +10,7 @@ import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 import type { ApprovalMode } from "./spawnApproval";
+import type { ChatSkill } from "./chat/types";
 
 // ---- Types (subset of AO's DashboardSession we use on the phone) ------------
 
@@ -1107,6 +1108,24 @@ export async function getAgentModels(cfg: ServerConfig, agent: string, projectId
 		if (!discovering || signal?.aborted) return catalog;
 		await pollDelay(signal);
 		if (signal?.aborted) return catalog;
+	}
+}
+
+/**
+ * The skills an agent offers in a project before any session of it runs, read
+ * by the machine from the agent's own skill folders: the new task page's "/"
+ * list. Without a project only the user's own skills come back. A machine on a
+ * version without this route answers 404, which lists none.
+ */
+export async function getAgentSkills(cfg: ServerConfig, agent: string, projectId?: string): Promise<ChatSkill[]> {
+	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+	try {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/skills${query}`);
+		const body = await res.json() as { skills?: ChatSkill[] };
+		return body.skills ?? [];
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.status === 404) return [];
+		throw cause;
 	}
 }
 
