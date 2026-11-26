@@ -20,6 +20,10 @@ vi.mock("./haptics", () => ({ haptics: { detent: fixtures.detent, select: () => 
 vi.mock("lucide-react-native/icons/zap", () => ({ default: "Zap" }));
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./effort-slider-veil", () => ({ EffortSliderVeil: "EffortSliderVeil" }));
+vi.mock("./gradient-text", async () => {
+	const React = await import("react");
+	return { GradientText: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("GradientText", props, children) };
+});
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => fixtures.reduceMotion }));
 // Over the keyboard, the overlay is a window of its own; here it is drawn in place.
 vi.mock("react-native-keyboard-controller", async () => {
@@ -190,6 +194,17 @@ describe("effort slider", () => {
 		expect(label()).toBe("Xhigh");
 		// The same style array: the blob's element was not rebuilt.
 		expect(blob().props.style).toBe(before);
+	});
+
+	// Claude Code's Ultracode is drawn in desktop's gradient, the other levels plainly.
+	it("draws Ultracode in desktop's gradient, and other levels plainly", async () => {
+		const withUltra = (selected: string) => [...levels(selected === "ultracode" ? undefined : selected), { value: "ultracode", label: "Ultracode", selected: selected === "ultracode" }];
+		await act(async () => { renderer = create(<EffortSlider choices={withUltra("ultracode")} onChoose={() => {}} />); });
+		const gradient = () => renderer!.root.findAll((node) => hostType(node) === "GradientText");
+		expect(gradient()).toHaveLength(1);
+		expect(gradient()[0].props.children).toBe("Ultracode");
+		await act(async () => renderer!.update(<EffortSlider choices={withUltra("high")} onChoose={() => {}} />));
+		expect(gradient()).toHaveLength(0);
 	});
 
 	// Closed mid-drag (the keyboard, back), the level the finger was on is

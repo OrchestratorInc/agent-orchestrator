@@ -5,6 +5,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { ComposerOverlay, OverlayHeading, overlayCardStyle } from "./composer-overlay";
+import { ULTRACODE } from "./chat/ultracode";
 import { haptics } from "./haptics";
 import { magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
@@ -186,7 +187,8 @@ export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSlide
 			    "Effort", adjustable, valued the level, for screen readers. */}
 			{/* The heading centred over the card, the bolt at the card's right. */}
 			<View style={[styles.header, fast && styles.headerWithBolt, { width: trackWidth + CARD_PAD * 2 }]}>
-				<OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" />
+				{/* Claude Code's Ultracode in desktop's gradient, as its effort menu draws it. */}
+				<OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" ultra={choices[index]?.value === ULTRACODE} />
 				{fast ? <FastBolt {...fast} /> : null}
 			</View>
 			{/* The card is "Effort" for screen readers, adjustable, valued the level:

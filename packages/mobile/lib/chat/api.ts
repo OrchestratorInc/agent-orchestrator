@@ -591,6 +591,9 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			model: wire.settings?.model || undefined,
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
+			// Fast mode, where the model has one: dropped here, it always read Off,
+			// and the bolt fell back to Off once its save went unconfirmed.
+			fastMode: wire.settings?.fastMode === true || undefined,
 		},
 		turns: (wire.turns ?? []).map(toTurn),
 		items: [...messages, ...activities].sort((a, b) => a.sequence - b.sequence),

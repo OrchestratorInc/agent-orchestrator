@@ -7,6 +7,7 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
 import { EffortSliderVeil } from "./effort-slider-veil";
+import { GradientText } from "./gradient-text";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { duration, iconSize, space, type } from "./tokens";
@@ -191,14 +192,20 @@ function OverKeyboardOverlay({ visible, onDismiss, fill, reveal, children }: {
  * above the card rather than inside it. Hidden from screen readers: the card's
  * own control names both.
  */
-export function OverlayHeading({ title, value, valueTestID }: { title: string; value: string; valueTestID?: string }) {
+export function OverlayHeading({ title, value, valueTestID, ultra = false }: {
+	title: string;
+	value: string;
+	valueTestID?: string;
+	/** The value in desktop's Ultracode gradient, as desktop marks that level. */
+	ultra?: boolean;
+}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return (
 		<View style={styles.heading} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
 			<Text style={styles.title} numberOfLines={1}>{title}</Text>
 			<AppSymbol name="chevronForward" size={iconSize.xs} color={t.textTertiary} weight="semibold" />
-			<Text style={styles.value} numberOfLines={1} testID={valueTestID}>{value}</Text>
+			{ultra ? <GradientText style={styles.value} testID={valueTestID}>{value}</GradientText> : <Text style={styles.value} numberOfLines={1} testID={valueTestID}>{value}</Text>}
 		</View>
 	);
 }
