@@ -123,7 +123,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	accountHome := env[key]
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 	if rec.Harness == domain.HarnessAgy && !sameDirectory(accountHome, value) {
-		m.pinImportToComputerLogin(ctx, rec, env)
+		m.dropImportedAccountSignIn(ctx, rec, env)
 	}
 }
 
