@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
@@ -569,7 +570,7 @@ func TestCancelWorkspaceProjectPreparationRemovesEachBranch(t *testing.T) {
 	if err := os.MkdirAll(assetPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(assetPath, "note.txt"), []byte("copied by AO\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(assetPath, "note.txt"), []byte("local only\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("api/\nlocal-assets/\n"), 0o644); err != nil {
@@ -593,8 +594,8 @@ func TestCancelWorkspaceProjectPreparationRemovesEachBranch(t *testing.T) {
 		t.Fatalf("prepare workspace project: %v", prep.err)
 	}
 	branch := st.sessions["mer-1"].Metadata.Branch
-	if _, err := os.Stat(filepath.Join(st.sessions["mer-1"].Metadata.WorkspacePath, "local-assets", "note.txt")); err != nil {
-		t.Fatalf("prepared workspace missing copied asset: %v", err)
+	if _, err := os.Stat(filepath.Join(st.sessions["mer-1"].Metadata.WorkspacePath, "local-assets")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected legacy plain directory to be absent: %v", err)
 	}
 	if err := m.CancelTaskPreparation(context.Background(), token); err != nil {
 		t.Fatal(err)
@@ -819,6 +820,49 @@ func TestTaskPreparationExpires(t *testing.T) {
 	t.Fatal("preparation did not expire")
 }
 
+func TestTaskPreparationRenewalDelaysExpiry(t *testing.T) {
+	// Fake time: expiry fires only when the bubble's clock passes the TTL.
+	synctest.Test(t, func(t *testing.T) {
+		m, st, _, _ := newManager()
+		m.runBackground = func(work func()) { work() }
+		m.taskPreparationTTL = time.Minute
+
+		token, err := m.PrepareTaskWorkspace(context.Background(), st.projects["mer"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		active := func() bool {
+			m.taskPreparationsMu.Lock()
+			defer m.taskPreparationsMu.Unlock()
+			_, ok := m.taskPreparations[token]
+			return ok
+		}
+		// Renewed just before each expiry, it outlives several TTLs.
+		for range 5 {
+			time.Sleep(m.taskPreparationTTL - time.Second)
+			m.RenewTaskPreparation(token)
+			synctest.Wait()
+			if !active() {
+				t.Fatal("a renewed preparation expired")
+			}
+		}
+		// Left alone, it expires one TTL after the last renewal.
+		time.Sleep(m.taskPreparationTTL - time.Second)
+		synctest.Wait()
+		if !active() {
+			t.Fatal("preparation expired before a full TTL since the last renewal")
+		}
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if active() {
+			t.Fatal("preparation did not expire after renewals stopped")
+		}
+		// Renewing a token that is gone does nothing.
+		m.RenewTaskPreparation(token)
+		m.RenewTaskPreparation("unknown")
+	})
+}
+
 func TestTaskPreparationExpiryDeletesUnmodifiedBranch(t *testing.T) {
 	m, st, _, repo := newGitTaskPreparationManager(t)
 	token, err := m.PrepareTaskWorkspace(context.Background(), st.projects["mer"])
@@ -971,5 +1015,36 @@ func TestStartupSafetyDefersInterruptedPreparationGitCleanup(t *testing.T) {
 	}
 	if got := st.sessions["mer-3"].ProvisionState; got != domain.SessionProvisionProvisioning {
 		t.Fatalf("background retry marked a new async spawn %q, want provisioning", got)
+	}
+}
+
+// A preparation that failed on its own is not the spawn's failure: the spawn
+// creates a fresh worktree, and the step that then ends it is reported.
+func TestFailedPreparationFallbackReportsTheStepThatEndedTheSpawn(t *testing.T) {
+	m, st, _, ws := newManager()
+	m.runBackground = func(work func()) { work() }
+	project := st.projects["mer"]
+	ws.createErr = errors.New("speculative worktree failed")
+	token, err := m.PrepareTaskWorkspace(context.Background(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws.createErr = nil
+	ws.path = t.TempDir()
+	project.Config.PostCreate = []string{"exit 3"}
+	st.projects["mer"] = project
+	ctx, trace := WithSpawnTrace(context.Background())
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, TaskPreparation: token}); err == nil {
+		t.Fatal("Spawn succeeded, want the Setup step to fail it")
+	}
+	if ws.createCount != 2 {
+		t.Fatalf("workspace creates = %d, want the failed preparation then a fresh worktree", ws.createCount)
+	}
+	facts := trace.Facts()
+	if facts.FailedStep != SpawnStepSetup {
+		t.Fatalf("failed_step = %q, want %q: the preparation's own failure was recovered", facts.FailedStep, SpawnStepSetup)
+	}
+	if _, ok := facts.StepMs["worktree_ms"]; !ok {
+		t.Fatalf("steps = %v, want the worktree step timed", facts.StepMs)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -582,8 +583,8 @@ func TestReadinessCoordinatorClassifiesTimeouts(t *testing.T) {
 	}
 }
 
-func TestReadinessCoordinatorAllowsOpenCodeVersionProbeBudget(t *testing.T) {
-	for _, id := range []string{"opencode", "opencode-v2"} {
+func TestReadinessCoordinatorAllowsSlowVersionProbeBudget(t *testing.T) {
+	for _, id := range []string{"opencode", "opencode-v2", "gemini"} {
 		t.Run(id, func(t *testing.T) {
 			agent := &readinessTestAgent{resolve: func(ctx context.Context) (string, error) {
 				deadline, ok := ctx.Deadline()
@@ -615,12 +616,19 @@ func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *
 		label               string
 		expected, found     int
 		version, binaryPath string
+		wantReasonHas       string
 	}{
-		{"opencode", "OpenCode", 1, 2, "2.0.0", "/usr/local/bin/opencode"},
-		{"opencode-v2", "OpenCode 2", 2, 1, "1.18.33", "/opt/homebrew/bin/opencode"},
+		// OpenCode 2 at OpenCode 1's default location replaced it; say so and how to repair it.
+		{"opencode", "OpenCode", 1, 2, "2.0.0", "/usr/local/bin/opencode", "/usr/local/bin/opencode is OpenCode 2 (2.0.0), which replaced OpenCode 1"},
+		// OpenCode 2 only where AO keeps it apart: OpenCode 1 simply is not installed.
+		{"opencode", "OpenCode", 1, 2, "2.0.0", "/opt/homebrew/opt/opencode-v2/bin/opencode", ""},
+		{"opencode-v2", "OpenCode 2", 2, 1, "1.18.33", "/opt/homebrew/bin/opencode", ""},
 	} {
-		t.Run(tc.id, func(t *testing.T) {
+		t.Run(tc.id+tc.binaryPath, func(t *testing.T) {
 			t.Parallel()
+			if runtime.GOOS == "windows" && strings.Contains(tc.binaryPath, "/opt/homebrew/opt/") {
+				t.Skip("Homebrew opt links do not exist on Windows")
+			}
 			testAgent := &readinessTestAgent{
 				resolve: func(context.Context) (string, error) {
 					return "", &opencode.IncompatibleVersionError{
@@ -646,8 +654,11 @@ func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *
 			if observation.ReasonCode != domain.AgentReadinessReasonNotInstalled {
 				t.Fatalf("installation reason code = %q, want not_installed", observation.ReasonCode)
 			}
-			wantReason := tc.label + " is not installed."
-			if observation.Reason != wantReason {
+			if tc.wantReasonHas != "" {
+				if !strings.Contains(observation.Reason, tc.wantReasonHas) || !strings.Contains(observation.Reason, "first reinstall OpenCode 2 from Orchestrator") {
+					t.Fatalf("installation reason = %q, want replacement explanation %q with repair steps", observation.Reason, tc.wantReasonHas)
+				}
+			} else if wantReason := tc.label + " is not installed."; observation.Reason != wantReason {
 				t.Fatalf("installation reason = %q, want %q", observation.Reason, wantReason)
 			}
 			if items[0].EffectiveReadiness != domain.AgentReadinessNotReady {
@@ -1105,9 +1116,9 @@ func TestReadinessCoordinatorFindInstalledIsBoundedAndDoesNotWaitForAuth(t *test
 		Workers: 2,
 	})
 
-	found, ok := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch)
-	if !ok || found.ID != "codex" {
-		t.Fatalf("FindInstalled() = (%#v, %v), want Codex", found, ok)
+	found, search := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch)
+	if search != PresenceFound || found.ID != "codex" {
+		t.Fatalf("FindInstalled() = (%#v, %v), want Codex", found, search)
 	}
 	if got := installed.authCalls.Load(); got != 0 {
 		t.Fatalf("authentication checks = %d, want none in startup presence path", got)
@@ -1151,9 +1162,122 @@ func TestReadinessCoordinatorFindInstalledDoesNotStarveLaterHarnesses(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	found, ok := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
-	if !ok || found.ID != "z" {
-		t.Fatalf("FindInstalled() = (%#v, %v), want Z", found, ok)
+	found, search := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
+	if search != PresenceFound || found.ID != "z" {
+		t.Fatalf("FindInstalled() = (%#v, %v), want Z", found, search)
+	}
+}
+
+// The startup gate may only report "no agent" when every installation check
+// finished and said so. A check that is still running, timed out, or failed is
+// not evidence of absence.
+func TestReadinessCoordinatorFindInstalledOnlyReportsMissingWhenEveryCheckSaysSo(t *testing.T) {
+	t.Parallel()
+	notInstalled := func(context.Context) (string, error) { return "", ports.ErrAgentBinaryNotFound }
+	noAuth := func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusUnknown, nil }
+	for _, tc := range []struct {
+		name    string
+		resolve func(context.Context) (string, error)
+		want    Presence
+	}{
+		{name: "every check says not installed", resolve: notInstalled, want: PresenceMissing},
+		{name: "a check is still running", resolve: func(ctx context.Context) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}, want: PresenceUnconfirmed},
+		{name: "a check timed out", resolve: func(context.Context) (string, error) {
+			return "", context.DeadlineExceeded
+		}, want: PresenceUnconfirmed},
+		{name: "a check failed", resolve: func(context.Context) (string, error) {
+			return "", errors.New("stat: access is denied")
+		}, want: PresenceUnconfirmed},
+		// Present but unverified is not absent: it must not be found, and it must
+		// not block startup either.
+		{name: "an executable's identity is not confirmed yet", resolve: func(context.Context) (string, error) {
+			return "", ports.ErrAgentBinaryIdentityUnknown
+		}, want: PresenceUnconfirmed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+			defer cancelDaemon()
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+				Agents: []agentregistry.HarnessAgent{
+					readinessHarness("missing", "Missing", &readinessTestAgent{resolve: notInstalled, auth: noAuth}),
+					readinessHarness("other", "Other", &readinessTestAgent{resolve: tc.resolve, auth: noAuth}),
+				},
+				Context:        daemonCtx,
+				InstallTimeout: time.Second,
+				Workers:        2,
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			if _, got := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch); got != tc.want {
+				t.Fatalf("FindInstalled() search = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Only a fresh, completed observation is a definite answer. A re-check in
+// flight, a stale result, or a failure can all show an earlier "not installed"
+// that proves nothing now.
+func TestInstallationSettledOnlyTrustsFreshCompletedAnswers(t *testing.T) {
+	t.Parallel()
+	notInstalled := func(freshness domain.AgentReadinessFreshness, code string) domain.AgentInstallationObservation {
+		return domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled, Freshness: freshness, ReasonCode: code}
+	}
+	unknown := func(code string) domain.AgentInstallationObservation {
+		return domain.AgentInstallationObservation{State: domain.AgentInstallationUnknown, Freshness: domain.AgentReadinessFresh, ReasonCode: code}
+	}
+	for _, tc := range []struct {
+		name        string
+		observation domain.AgentInstallationObservation
+		want        bool
+	}{
+		{"fresh not installed", notInstalled(domain.AgentReadinessFresh, domain.AgentReadinessReasonNotInstalled), true},
+		{"no installation check", unknown(domain.AgentReadinessReasonInstallCheckUnsupported), true},
+		{"earlier absence while a re-check runs", notInstalled(domain.AgentReadinessChecking, domain.AgentReadinessReasonChecking), false},
+		{"earlier absence gone stale", notInstalled(domain.AgentReadinessStale, domain.AgentReadinessReasonNotInstalled), false},
+		{"earlier absence kept by a timed-out check", notInstalled(domain.AgentReadinessStale, domain.AgentReadinessReasonInstallCheckTimeout), false},
+		{"identity not confirmed yet", unknown(domain.AgentReadinessReasonInstallIdentityPending), false},
+	} {
+		if got := installationSettled(tc.observation); got != tc.want {
+			t.Errorf("installationSettled(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A failed re-check keeps the state an earlier check recorded, with the
+// failure as its reason. An earlier "not installed" must not turn that failure
+// into proof of absence.
+func TestReadinessCoordinatorFindInstalledDoesNotTrustAnEarlierAbsenceAfterAFailedCheck(t *testing.T) {
+	t.Parallel()
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	defer cancelDaemon()
+	var fail atomic.Bool
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) {
+			if fail.Load() {
+				return "", context.DeadlineExceeded
+			}
+			return "", ports.ErrAgentBinaryNotFound
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusUnknown, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:  []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+		Context: daemonCtx,
+	})
+
+	if _, got := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch); got != PresenceMissing {
+		t.Fatalf("first FindInstalled() search = %v, want missing after a completed not-found check", got)
+	}
+	fail.Store(true)
+	coordinator.Invalidate("codex", readinessInvalidateInstallation)
+	if _, got := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch); got != PresenceUnconfirmed {
+		t.Fatalf("FindInstalled() after a timed-out re-check = %v, want unconfirmed", got)
 	}
 }
 
@@ -1186,9 +1310,9 @@ func TestReadinessCoordinatorWarmFinishesPresenceBeforeAuthentication(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	found, ok := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
-	if !ok || found.ID != "codex" {
-		t.Fatalf("FindInstalled() while auth is running = (%#v, %v), want cached Codex presence", found, ok)
+	found, search := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
+	if search != PresenceFound || found.ID != "codex" {
+		t.Fatalf("FindInstalled() while auth is running = (%#v, %v), want cached Codex presence", found, search)
 	}
 	close(authRelease)
 }

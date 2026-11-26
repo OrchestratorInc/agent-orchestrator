@@ -5,9 +5,10 @@ import { ApiError } from "./api";
 import { chatErrorCopy, isChatPreflightError } from "./chatError";
 import { classifyConnectionFailure, describeConnectionFailure } from "./connectionError";
 import { haptics } from "./haptics";
-import type { OrchestratorProjectRow } from "./orchestratorView";
+import { orchestratorLaunchRefusal, type OrchestratorProjectRow } from "./orchestratorView";
 import { hostedRowKey } from "./hostedRows";
 import { useApp } from "./store";
+import { isCloudHost } from "./cloud/mapping";
 
 function rowHostId(row: OrchestratorProjectRow, fallback?: string): string {
 	return "hostId" in row.project && typeof row.project.hostId === "string" ? row.project.hostId : fallback ?? "";
@@ -59,6 +60,18 @@ export function useOrchestratorLauncher() {
 					{ text: "Cancel", style: "cancel" },
 					{ text: "Start Terminal UI", onPress: () => void runLaunch(row, "tui") },
 				]);
+				return;
+			}
+			// The machine answered and said why (no orchestrator agent set, say):
+			// that, not advice about the connection.
+			const refusal = orchestratorLaunchRefusal(cause);
+			if (refusal) {
+				Alert.alert(refusal.title, refusal.message);
+				return;
+			}
+			// Orchestrator Cloud's failures already arrive in words; there is no machine address to name.
+			if (isCloudHost(hostId)) {
+				Alert.alert("Couldn't start the orchestrator", cause instanceof Error && cause.message ? cause.message : "Try again.");
 				return;
 			}
 			const httpStatus = cause instanceof ApiError ? cause.status : undefined;

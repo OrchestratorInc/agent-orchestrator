@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -74,5 +75,157 @@ func TestReconcileNativeHistoryUsesLegacyAliasForAttachmentOnlyUserTurn(t *testi
 			t.Fatalf("reconciled event turn = %q, want legacy-history-turn; events=%#v",
 				event.ProviderTurnID, got)
 		}
+	}
+}
+
+func TestReconcileNativeHistoryDropsReplayedReasoningUnderNewItemID(t *testing.T) {
+	// Hermes tags live thought chunks with a message id but replays them id-less,
+	// so the replay mints a new item id and settles the thought as recovered.
+	// Live, the same thought completed.
+	replay := func(texts ...string) []ports.ChatEvent {
+		events := []ports.ChatEvent{
+			{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "acp-history-turn:s:user-2"},
+			{
+				Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "acp-history-turn:s:user-2",
+				ProviderItemID: "user-2", Text: "Reply with ready.",
+			},
+		}
+		for i, text := range texts {
+			events = append(events, ports.ChatEvent{
+				Kind: ports.ChatEventActivityCompleted, ProviderTurnID: "acp-history-turn:s:user-2",
+				ProviderItemID: "thought-acp-history-turn:s:user-2-" + string(rune('a'+i)),
+				ActivityKind:   domain.ActivityKindReasoning, ActivityStatus: domain.ActivityStatusRecovered,
+				Summary: "Reasoning", Text: text,
+			})
+		}
+		return append(events, ports.ChatEvent{
+			Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "acp-history-turn:s:user-2",
+			TurnState: domain.TurnStateCompleted,
+		})
+	}
+	existingTurns := []domain.ConversationTurn{{
+		ID: "turn-1", ProviderTurnID: "live-turn", State: domain.TurnStateCompleted,
+	}}
+	existingMessages := []domain.ConversationMessage{{
+		TurnID: "turn-1", Role: domain.MessageRoleUser, Text: "Reply with ready.",
+	}}
+	existingActivities := []domain.ConversationActivity{{
+		TurnID: "turn-1", Kind: domain.ActivityKindReasoning, Status: domain.ActivityStatusCompleted,
+		ProviderItemID: "live-thought-uuid", Summary: "Reasoning",
+		StreamedText: "**Defining the Core Task**\n\nReady.\n\n\n",
+	}}
+	reasoning := func(events []ports.ChatEvent) []string {
+		var texts []string
+		for _, event := range events {
+			if event.ActivityKind == domain.ActivityKindReasoning {
+				texts = append(texts, event.Text)
+			}
+		}
+		return texts
+	}
+
+	for _, tc := range []struct {
+		name   string
+		replay []string
+		want   []string
+	}{
+		{name: "the stored thought is dropped", replay: []string{"**Defining the Core Task**\n\nReady."}},
+		{
+			name:   "a different thought is still imported",
+			replay: []string{"**Defining the Core Task**\n\nReady.", "A second thought."},
+			want:   []string{"A second thought."},
+		},
+		{
+			name:   "a repeated thought keeps its count",
+			replay: []string{"**Defining the Core Task**\n\nReady.", "**Defining the Core Task**\n\nReady."},
+			want:   []string{"**Defining the Core Task**\n\nReady."},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reconcileNativeHistory(replay(tc.replay...), existingTurns, existingMessages, existingActivities)
+			if texts := reasoning(got); !slices.Equal(texts, tc.want) {
+				t.Fatalf("reconciled reasoning = %q, want %q", texts, tc.want)
+			}
+		})
+	}
+}
+
+// Hermes' session/load replay carries id-less chunks, stripped reply text, and
+// the failed-turn boundary row on interrupted turns, under turn ids the live
+// projection never used. The stored completed turn must absorb the stripped
+// reply (boundary whitespace differs) without a duplicate, and the interrupted
+// turn must not gain a replayed reply on top.
+func TestReconcileNativeHistoryAbsorbsHermesReplayShape(t *testing.T) {
+	const completedReply = "Answer one.\n"
+	const interruptedPrompt = "Do turn two."
+	events := []ports.ChatEvent{
+		{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "acp-history-turn:replay-1"},
+		{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "acp-history-turn:replay-1",
+			ClientMessageID: "user-1", Text: "What is X?"},
+		{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "acp-history-turn:replay-1",
+			ProviderItemID: "assistant-1", Text: "Answer one."},
+		{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "acp-history-turn:replay-1",
+			TurnState: domain.TurnStateRecovered},
+		{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "acp-history-turn:replay-2"},
+		{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "acp-history-turn:replay-2",
+			ClientMessageID: "user-2", Text: interruptedPrompt},
+		{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "acp-history-turn:replay-2",
+			TurnState: domain.TurnStateRecovered},
+	}
+	existingTurns := []domain.ConversationTurn{
+		{ID: "ao-turn-1", ProviderTurnID: "live-turn-1", State: domain.TurnStateCompleted},
+		{ID: "ao-turn-2", ProviderTurnID: "live-turn-2", State: domain.TurnStateInterrupted},
+	}
+	existingMessages := []domain.ConversationMessage{
+		{TurnID: "ao-turn-1", Role: domain.MessageRoleUser, ClientMessageID: "live-client-1", Text: "What is X?"},
+		{TurnID: "ao-turn-1", Role: domain.MessageRoleAssistant, ProviderItemID: "live-assistant-1", Text: completedReply},
+		{TurnID: "ao-turn-2", Role: domain.MessageRoleUser, ClientMessageID: "live-client-2", Text: interruptedPrompt},
+	}
+
+	got := reconcileNativeHistoryForHarness(domain.HarnessHermes, events, existingTurns, existingMessages, nil)
+	byTurn := map[string][]ports.ChatEvent{}
+	for _, event := range got {
+		byTurn[event.ProviderTurnID] = append(byTurn[event.ProviderTurnID], event)
+	}
+	if len(byTurn["live-turn-1"]) != 2 {
+		t.Fatalf("completed turn kept %d events, want only the boundaries: %#v",
+			len(byTurn["live-turn-1"]), byTurn["live-turn-1"])
+	}
+	for _, event := range byTurn["live-turn-1"] {
+		if event.Kind == ports.ChatEventTurnCompleted && event.TurnState != domain.TurnStateCompleted {
+			t.Fatalf("recovered completion not upgraded to AO's known state: %#v", event)
+		}
+	}
+	// The interrupted turn keeps its user prompt, its recovered completion is
+	// corrected, and no replayed reply is added on top.
+	if len(byTurn["live-turn-2"]) != 2 {
+		t.Fatalf("interrupted turn kept %d events, want only the boundaries: %#v",
+			len(byTurn["live-turn-2"]), byTurn["live-turn-2"])
+	}
+	for _, event := range byTurn["live-turn-2"] {
+		if event.Kind == ports.ChatEventTurnCompleted && event.TurnState != domain.TurnStateInterrupted {
+			t.Fatalf("interrupted completion rewritten to %q", event.TurnState)
+		}
+	}
+	if _, extra := byTurn["acp-history-turn:replay-2"]; extra {
+		t.Fatal("replay turn imported as a duplicate of the interrupted turn")
+	}
+}
+
+func TestReplayWhitespaceMatchingStaysHermesOnly(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessHermes, domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessKimi} {
+		t.Run(string(harness), func(t *testing.T) {
+			turns := []domain.ConversationTurn{{ID: "ao", ProviderTurnID: "turn", State: domain.TurnStateCompleted}}
+			messages := []domain.ConversationMessage{{TurnID: "ao", Role: domain.MessageRoleAssistant, Text: " answer "}}
+			events := []ports.ChatEvent{{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "turn", Text: "answer"}}
+			got := reconcileNativeHistoryForHarness(harness, events, turns, messages, nil)
+			want := 1
+			if harness == domain.HarnessHermes {
+				want = 0
+			}
+			if len(got) != want {
+				t.Fatalf("%s replay retained %d events, want %d", harness, len(got), want)
+			}
+		})
 	}
 }

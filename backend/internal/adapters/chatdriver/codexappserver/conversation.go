@@ -14,6 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -25,9 +27,9 @@ import (
 const eventBuffer = 4096
 
 // approvalWait bounds how long the provider is left blocked on an unanswered
-// request. Codex holds its turn until the client replies, so an approval nobody
+// approval. Codex holds its turn until the client replies, so an approval nobody
 // resolves would hang the session indefinitely. On expiry AO refuses rather than
-// deciding on the user's behalf.
+// deciding on the user's behalf. Questions have no such bound (see inputDeadline).
 const approvalWait = 30 * time.Minute
 
 // errConversationClosed reports a decision arriving after the controller ended.
@@ -40,20 +42,26 @@ var approvalMethods = map[string]domain.ActivityKind{
 	codexproto.MethodItemCommandExecutionRequestApproval: domain.ActivityKindCommand,
 	codexproto.MethodItemFileChangeRequestApproval:       domain.ActivityKindFileChange,
 	codexproto.MethodItemPermissionsRequestApproval:      domain.ActivityKindApproval,
-	codexproto.MethodItemToolRequestUserInput:            domain.ActivityKindApproval,
 }
 
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
-	conn *conn
-	proc *process
-	log  *slog.Logger
+	backgroundObserved backgroundtasks.Tracker
+	// backgroundOutput keeps recent command output by exec item, since the
+	// app-server streams it but has no way to read it back.
+	backgroundOutput backgroundtasks.OutputBuffer
+	conn             *conn
+	proc             *process
+	log              *slog.Logger
 
 	threadID        string
 	historyParentID string
 	providerScopeID string
-	readOnly        bool
-	disableNetwork  bool
+	// codexHome is the CODEX_HOME the app-server runs under, naming the Codex
+	// account its refusals belong to. Empty is the computer's own.
+	codexHome      string
+	readOnly       bool
+	disableNetwork bool
 	// launchMode is the permission mode the thread started or resumed with;
 	// a turn without its own approval setting runs under it.
 	launchMode ports.PermissionMode
@@ -67,9 +75,27 @@ type conversation struct {
 	tierUnknown, planUnknown bool
 	fastTiers                map[string]string
 
-	mu      sync.Mutex
-	pending map[string]*parkedRequest
-	closed  bool
+	mu            sync.Mutex
+	pending       map[string]*parkedRequest
+	pendingInputs map[string]*parkedInput
+	closed        bool
+	// backgroundStopping holds the terminals AO asked the app-server to
+	// terminate, so their completion reads as stopped, not failed.
+	backgroundStopping map[string]bool
+	// Command starts are observational; only the native inventory confirms background work.
+	backgroundCommands map[string]backgroundCommand
+	// A surviving host reconnect needs launch evidence without transcript replay.
+	backgroundHistoryPending bool
+	// backgroundRuns maps a terminal's process ID to the exec item its output
+	// streams on, oldest first in backgroundRunOrder.
+	backgroundRuns     map[string]string
+	backgroundRunOrder []string
+	// backgroundStarted holds the exec items whose start this controller saw,
+	// oldest first in backgroundStartOrder, so a terminal started before it
+	// attached (a daemon restart) can read as missing its earlier output. The
+	// value says whether it printed, so output evicted since reads as missing.
+	backgroundStarted    map[string]backgroundStart
+	backgroundStartOrder []string
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.
@@ -131,6 +157,7 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 		pumpDone:        make(chan struct{}),
 		providerScopeID: providerScopeID,
 	}
+	c.backgroundOutput.MaxDeltas = codexMaxOutputDeltas
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
 	return c
 }
@@ -181,6 +208,7 @@ func (c *conversation) pump() {
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		c.observeBackgroundNotification(n)
 		now := time.Now()
 		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
@@ -194,7 +222,14 @@ func (c *conversation) pump() {
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
+		refusedAt, refusal := turnCompletedAt(n)
 		for _, ev := range normalizeNotification(n, now) {
+			if refusal && ev.Err != nil {
+				// A model this account cannot use: refuse the next session on it
+				// before it starts (#4518), dated by the provider so a turn
+				// replayed on reattach cannot revive a refusal since cleared.
+				codexagent.RecordUnavailableModelFrom(c.codexHome, ev.Err.Error(), refusedAt)
+			}
 			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
@@ -203,6 +238,8 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
+			var threadStatus *ports.ChatEvent
+			ev, threadStatus = usageLimits.threadStatus(ev, threadID)
 			var visible bool
 			ev, visible = citations.formatEvent(threadID, ev)
 			if !visible {
@@ -264,8 +301,22 @@ func (c *conversation) pump() {
 				// The provider resolved it (possibly via another client), so any
 				// card AO is still showing is stale.
 				c.discardPending(ev.RequestID)
+				c.mu.Lock()
+				if input := c.pendingInputs[ev.RequestID]; input != nil {
+					delete(c.pendingInputs, ev.RequestID)
+					if input.resolved {
+						c.mu.Unlock()
+						continue
+					}
+					input.result <- inputResult{err: ports.ErrChatRequestNotPending}
+					ev.Kind = ports.ChatEventInputResolved
+				}
+				c.mu.Unlock()
 			}
 			c.emit(ev)
+			if threadStatus != nil {
+				c.emit(*threadStatus)
+			}
 		}
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go
@@ -276,6 +327,25 @@ func (c *conversation) pump() {
 	}
 	c.emit(state)
 	c.failPendingApprovals()
+}
+
+// turnCompletedAt is when Codex says a failed turn ended, for a turn/completed
+// notification that carries it. A model refusal is recorded only from these:
+// the provider's own time stays the same when a detached host replays the
+// notification, where the time AO received it would not.
+//
+// Codex reports whole seconds, so the refusal is dated to the last instant of
+// that second: a catalog observed within the same second cannot be shown to
+// come after the refusal, and must not clear it.
+func turnCompletedAt(n notification) (time.Time, bool) {
+	if n.Method != codexproto.MethodTurnCompleted {
+		return time.Time{}, false
+	}
+	var p codexproto.TurnCompletedNotification
+	if json.Unmarshal(n.Params, &p) != nil || p.Turn.Error == nil || p.Turn.CompletedAt == nil || *p.Turn.CompletedAt <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(*p.Turn.CompletedAt+1, 0).Add(-time.Nanosecond).UTC(), true
 }
 
 // emit delivers an event, preferring to drop a delta over blocking the reader. A
@@ -724,7 +794,7 @@ func isNoActiveTurn(err error) bool {
 	return strings.Contains(strings.ToLower(rpcErr.Message), "no active turn")
 }
 
-// ResolveRequest answers a parked approval or user-input request.
+// ResolveRequest answers a parked approval request.
 //
 // The decision is checked against the set the provider offered for THIS request,
 // and the request stays parked unless a valid answer is actually going through.
@@ -732,6 +802,9 @@ func isNoActiveTurn(err error) bool {
 // consuming the request on a bad one would leave the user's real answer with
 // nothing left to answer while the provider waits out its timeout.
 func (c *conversation) ResolveRequest(ctx context.Context, requestID string, decision ports.ChatDecision) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	requestID = c.nativeID(requestID)
 	c.mu.Lock()
 	parked, ok := c.pending[requestID]
@@ -741,7 +814,11 @@ func (c *conversation) ResolveRequest(ctx context.Context, requestID string, dec
 		return errConversationClosed
 	}
 	if !ok {
+		input := c.pendingInputs[requestID] != nil
 		c.mu.Unlock()
+		if input {
+			return ports.ErrChatDecisionNotOffered
+		}
 		// Already resolved, superseded, or from a previous controller. Refusing is
 		// required: a stale card must never resolve a newer request.
 		return fmt.Errorf("%w: %q", ports.ErrChatRequestNotPending, requestID)
@@ -771,17 +848,11 @@ func (c *conversation) ResolveRequest(ctx context.Context, requestID string, dec
 // reconstruct them. AO echoes what the provider sent rather than rebuilding it.
 type parkedRequest struct {
 	ch      chan ports.ChatDecision
-	method  string
 	offered map[string]json.RawMessage
 }
 
 // reply resolves a client decision into the payload to send back.
 func (p *parkedRequest) reply(decision ports.ChatDecision) (ports.ChatDecision, error) {
-	if p.method == "item/tool/requestUserInput" {
-		// Not a decision but an answer: the provider offers questions, not options,
-		// so there is no set to check it against.
-		return decision, nil
-	}
 	raw, ok := p.offered[decision.ID]
 	if !ok {
 		return ports.ChatDecision{}, fmt.Errorf("%w: %q (offered: %s)",
@@ -813,6 +884,8 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 		return nil, c.reportAuthRefreshRequest(req.Params)
 	case codexproto.MethodItemToolCall:
 		return nil, c.refuseDynamicToolCall(req.Params)
+	case codexproto.MethodItemToolRequestUserInput:
+		return c.requestUserInput(ctx, req)
 	}
 
 	kind, known := approvalMethods[req.Method]
@@ -842,7 +915,11 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 		c.mu.Unlock()
 		return nil, errConversationClosed
 	}
-	c.pending[requestID] = &parkedRequest{ch: ch, method: req.Method, offered: offered}
+	if c.pending[requestID] != nil || c.pendingInputs[requestID] != nil {
+		c.mu.Unlock()
+		return nil, errors.New("server request id is already pending")
+	}
+	c.pending[requestID] = &parkedRequest{ch: ch, offered: offered}
 	c.mu.Unlock()
 
 	c.emit(ports.ChatEvent{
@@ -859,7 +936,7 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 
 	select {
 	case decision := <-ch:
-		return approvalReply(req.Method, decision), nil
+		return approvalReply(decision), nil
 
 	case <-time.After(approvalWait):
 		c.discardPending(requestID)
@@ -1001,6 +1078,12 @@ func (c *conversation) failPendingApprovals() {
 	pending := c.pending
 	c.pending = map[string]*parkedRequest{}
 	c.closed = true
+	for id, input := range c.pendingInputs {
+		delete(c.pendingInputs, id)
+		if !input.resolved {
+			input.result <- inputResult{err: errConversationClosed}
+		}
+	}
 	c.mu.Unlock()
 	for _, parked := range pending {
 		close(parked.ch)
@@ -1072,13 +1155,6 @@ type approvalPayload struct {
 	// per request and does not always offer a plain decline, so a client must
 	// render from this rather than a fixed set of buttons.
 	AvailableDecisions []json.RawMessage `json:"availableDecisions"`
-	Questions          []struct {
-		ID      string `json:"id"`
-		Prompt  string `json:"prompt"`
-		Options []struct {
-			Label string `json:"label"`
-		} `json:"options"`
-	} `json:"questions"`
 }
 
 // parseApproval extracts the decisions, label, and neutral detail for a request.
@@ -1101,8 +1177,6 @@ func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionO
 		summary = "Run " + commandSummary(p.Command)
 	case method == "item/fileChange/requestApproval":
 		summary = "Apply file changes"
-	case method == "item/tool/requestUserInput" && len(p.Questions) > 0:
-		summary = p.Questions[0].Prompt
 	case p.Reason != "":
 		summary = p.Reason
 	}
@@ -1120,9 +1194,6 @@ func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionO
 	}
 	if p.Reason != "" {
 		detail["reason"] = p.Reason
-	}
-	if len(p.Questions) > 0 {
-		detail["questions"] = p.Questions
 	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {
@@ -1197,15 +1268,7 @@ func decisionLabel(id string) string {
 
 // approvalReply builds the provider response for a decision. A decision carrying
 // Raw is echoed verbatim so the structured forms round-trip exactly.
-func approvalReply(method string, decision ports.ChatDecision) any {
-	if method == "item/tool/requestUserInput" {
-		// User-input replies are answers, not decisions; the raw payload is the
-		// whole response body.
-		if len(decision.Raw) > 0 {
-			return json.RawMessage(decision.Raw)
-		}
-		return map[string]any{"answers": map[string]any{}}
-	}
+func approvalReply(decision ports.ChatDecision) any {
 	if len(decision.Raw) > 0 {
 		return map[string]any{"decision": json.RawMessage(decision.Raw)}
 	}

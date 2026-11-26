@@ -515,7 +515,7 @@ func TestGetAgentHooksRefusesForeignSystemPromptFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for foreign system prompt file")
 	}
-	if !strings.Contains(err.Error(), "refusing to overwrite non-AO file") {
+	if !strings.Contains(err.Error(), "refusing to overwrite non-Orchestrator file") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -685,4 +685,35 @@ func countJSONStrings(items []any, want string) int {
 		}
 	}
 	return count
+}
+
+func TestImportedRestoreSkipsProjectInitializationWithoutLosingSelectedSession(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("synthetic existing project"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{resolvedBinary: "crush"}
+	cfg := ports.WorkspaceHookConfig{WorkspacePath: workspace}
+	const nativeID = "96cd75c5-4544-4df3-9959-38c7921dc3ff"
+	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Crush v0.99 Init skips loadInitialSession while its init flag is absent
+	// in a nonempty project without default context files. Its first prompt
+	// then creates a new session instead of continuing --session's UUID.
+	argv, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeID, ports.MetadataKeyImportSourceNativeID: nativeID}}})
+	if err != nil || !ok || !containsSubsequence(argv, []string{"--session", nativeID}) {
+		t.Fatalf("selected native session lost: %v, %v, %v", argv, ok, err)
+	}
+	marker := filepath.Join(workspace, ".crush", "init")
+	if info, err := os.Lstat(marker); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("pending import without hook context remains behind init gate: %v", err)
+	}
+	fresh := t.TempDir()
+	if err := p.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: fresh}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(fresh, ".crush", "init")); !os.IsNotExist(err) {
+		t.Fatalf("fresh launch unexpectedly marked initialized: %v", err)
+	}
 }

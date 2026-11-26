@@ -6,18 +6,14 @@ beforeEach(resetChatSheets);
 describe("chat sheet registry", () => {
 	it("keeps non-serializable sheet data alive only until release", () => {
 		const onSelect = vi.fn();
-		const key = parkChatSheet({ kind: "conversation-map", markers: [], onSelect });
-		expect(readChatSheet(key)).toMatchObject({ kind: "conversation-map", onSelect });
+		const key = parkChatSheet({ kind: "account-picker", onSelect } as never);
+		expect(readChatSheet(key)).toMatchObject({ kind: "account-picker", onSelect });
 		releaseChatSheet(key);
 		expect(readChatSheet(key)).toBeUndefined();
 	});
 
 	it.each([
-		["turn-settings", "/sheets/chat-settings"],
-		["conversation-map", "/sheets/conversation-map"],
-		["composer-picker", "/sheets/composer-picker"],
-		["conversation-actions", "/sheets/conversation-actions"],
-		["conversation-rename", "/sheets/conversation-rename"],
+		["conversation-usage", "/sheets/conversation-usage"],
 	] as const)("routes %s through a native sheet route", (kind, pathname) => {
 		const route = chatSheetRoute({ kind } as never);
 		expect(route.pathname).toBe(pathname);

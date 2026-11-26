@@ -23,6 +23,8 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 		ProjectID:   "scheduled",
 		DisplayName: "Morning triage",
 		Prompt:      "Review new issues",
+		TemplateID:  "daily_issue_triage_v1",
+		UseCase:     "issue_triage",
 		Kind:        domain.KindWorker,
 		Harness:     domain.HarnessCodex,
 		Model:       "gpt-5",
@@ -57,6 +59,15 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 	got, ok, err = store.GetAutomation(ctx, want.ID)
 	if err != nil || !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("updated automation = %#v, want %#v; ok=%v err=%v", got, want, ok, err)
+	}
+	got.TemplateID = "custom" // Store updates must never rewrite origin.
+	got.UseCase = "ci_triage"
+	if ok, err := store.UpdateAutomation(ctx, got); err != nil || !ok {
+		t.Fatalf("update: %v %v", ok, err)
+	}
+	updated, ok, err := store.GetAutomation(ctx, got.ID)
+	if err != nil || !ok || updated.TemplateID != want.TemplateID || updated.UseCase != "ci_triage" || updated.Model != want.Model || updated.Mode != want.Mode || updated.Effort != want.Effort {
+		t.Fatalf("metadata update: %+v %v", updated, err)
 	}
 }
 
@@ -239,6 +250,7 @@ func TestAutomationUpdatePersistsAllMutableFields(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	rec := domain.Automation{
 		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage",
+		TemplateID: "custom", UseCase: "unknown",
 		Prompt: "Review issues", Kind: domain.KindWorker, RRuleText: "FREQ=DAILY",
 		Timezone: "UTC", Enabled: true, NextRunAt: now, CreatedAt: now, UpdatedAt: now,
 	}
@@ -248,6 +260,7 @@ func TestAutomationUpdatePersistsAllMutableFields(t *testing.T) {
 	lastRun := now.Add(time.Hour)
 	rec.DisplayName = "Weekly triage"
 	rec.Prompt = "Review the weekly queue"
+	rec.UseCase = "repo_digest"
 	rec.Kind = domain.KindOrchestrator
 	rec.Harness = domain.HarnessClaudeCode
 	rec.RRuleText = "FREQ=WEEKLY"
@@ -337,6 +350,37 @@ func TestAutomationMaterializationUsesNextRunCompareAndSwap(t *testing.T) {
 	page, err := store.ListAutomationRuns(ctx, domain.AutomationRunFilter{AutomationID: "automation-1", Limit: 10})
 	if err != nil || page.Total != 2 || !definition.NextRunAt.Equal(next) {
 		t.Fatalf("materialized state: definition=%#v runs=%#v err=%v", definition, page, err)
+	}
+}
+
+// Removing a project archives it. Dropping the project filter from the due
+// query must make this test fail: the scheduler would keep firing (and
+// failing) the archived project's automation on every occurrence.
+func TestAutomationDueScanSkipsArchivedProjects(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "live")
+	seedProject(t, store, "removed")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	for _, projectID := range []domain.ProjectID{"live", "removed"} {
+		if _, err := store.CreateAutomation(ctx, domain.Automation{
+			ID: domain.AutomationID("automation-" + string(projectID)), ProjectID: projectID, DisplayName: "Triage", Prompt: "Review",
+			Kind: domain.KindWorker, RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true,
+			NextRunAt: base, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatalf("CreateAutomation(%s): %v", projectID, err)
+		}
+	}
+	if archived, err := store.ArchiveProject(ctx, "removed", base); err != nil || !archived {
+		t.Fatalf("ArchiveProject: archived=%v err=%v", archived, err)
+	}
+
+	due, err := store.ListDueAutomations(ctx, base.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListDueAutomations: %v", err)
+	}
+	if len(due) != 1 || due[0].ID != "automation-live" {
+		t.Fatalf("due automations = %#v, want only automation-live", due)
 	}
 }
 

@@ -17,6 +17,8 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: storage }));
 vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
+// Saving the transcript for after a restart is not under test here.
+vi.mock("./savedConversations", () => ({ conversationSaver: { schedule: () => {}, flush: async () => {} }, loadSavedConversation: async () => null }));
 import { useMobileConversation, type MobileConversation } from "./useConversation";
 
 const config = {} as ServerConfig;
@@ -25,7 +27,7 @@ const excerpts: ChatExcerpt[] = [{ conversationId: "conversation", messageId: "s
 let renderer: ReactTestRenderer | undefined;
 let conversation: MobileConversation;
 let supportsExcerpts: boolean | undefined;
-function Harness() { conversation = useMobileConversation(config, "qa-session"); return null; }
+function Harness() { conversation = useMobileConversation(config, "qa-host", "qa-session"); return null; }
 
 beforeEach(() => {
  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

@@ -12,6 +12,9 @@ import { SessionTabRegistry } from "./sessions";
 import { TrustedInput } from "./trusted-input";
 
 const MAX_BACKOFF_MS = 60_000;
+const RECONNECT_ALARM = "ao-reconnect";
+// Chrome's minimum alarm period.
+const RECONNECT_ALARM_MINUTES = 0.5;
 
 export type BridgeStatus = {
 	state: "connecting" | "connected" | "disconnected";
@@ -54,6 +57,16 @@ export class Bridge {
 			this.handleUi(message).then(sendResponse, (error) => sendResponse({ error: String(error) }));
 			return true as unknown as void;
 		});
+		// Chrome suspends an idle MV3 service worker, which also drops the
+		// reconnect timer, and only an extension event starts it again. These
+		// events reconnect after AO restarts or Chrome starts. An open native
+		// port keeps the worker alive, so connect() is a no-op while connected.
+		this.chrome.alarms.onAlarm.addListener((alarm) => {
+			if (alarm.name === RECONNECT_ALARM) this.connect();
+		});
+		this.chrome.runtime.onStartup.addListener(() => this.connect());
+		this.chrome.runtime.onInstalled.addListener(() => this.connect());
+		void this.chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: RECONNECT_ALARM_MINUTES }).catch(() => undefined);
 		void this.updateBadge();
 		this.connect();
 	}
@@ -85,7 +98,7 @@ export class Bridge {
 			const reason = this.chrome.runtime.lastError?.message;
 			if (reason && !this.lastError) {
 				this.lastError = /not found|specified native messaging host/i.test(reason)
-					? { code: "HOST_NOT_INSTALLED", message: "AO is not set up for Chrome. Run `ao browser chrome setup`." }
+					? { code: "HOST_NOT_INSTALLED", message: "Orchestrator is not set up for Chrome. Run `ao browser chrome setup`." }
 					: { code: "HOST_DISCONNECTED", message: reason };
 			}
 			this.port = undefined;
@@ -169,8 +182,8 @@ export class Bridge {
 					sessions: sessions.map((session) => ({
 						sessionId: session.sessionId,
 						tabs: Object.keys(session.tabs).length,
-						approved: Boolean(approvals[session.sessionId]),
-						trusted: approvals[session.sessionId]?.trusted ?? false,
+						approved: Boolean(this.consent.approvalFor(approvals, session.sessionId)),
+						trusted: this.consent.approvalFor(approvals, session.sessionId)?.trusted ?? false,
 					})),
 				};
 			}
@@ -182,7 +195,7 @@ export class Bridge {
 				for (const entry of this.inFlight.values()) {
 					if (entry.sessionId === sessionId) entry.controller.abort();
 				}
-				await this.consent.revoke(sessionId);
+				await this.consent.revoke(sessionId, true);
 				return { revoked: true };
 			}
 			case "ao-ui-reconnect":
@@ -210,10 +223,10 @@ export class Bridge {
 		await this.chrome.action.setBadgeBackgroundColor({ color: busy ? "#f97316" : "#6b7280" }).catch(() => undefined);
 		const sessions = [...new Set([...this.inFlight.values()].map((entry) => entry.sessionId))];
 		const title = busy
-			? `AO agent working: ${sessions.join(", ")}`
+			? `Orchestrator agent working: ${sessions.join(", ")}`
 			: this.ready
-				? "AO Browser Bridge: connected"
-				: "AO Browser Bridge: not connected to AO";
+				? "Orchestrator Browser Bridge: connected"
+				: "Orchestrator Browser Bridge: not connected to Orchestrator";
 		await this.chrome.action.setTitle({ title }).catch(() => undefined);
 	}
 }

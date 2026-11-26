@@ -5,7 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +22,7 @@ type memStore struct {
 	accounts []domain.AgentAccount
 	defaults map[domain.AgentAccountProvider]string
 	bindings map[domain.SessionID]string
+	hintErr  error // fails UpdateAgentAccountKeyHint
 }
 
 func (m *memStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, error) {
@@ -26,6 +31,18 @@ func (m *memStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, er
 func (m *memStore) CreateAgentAccount(_ context.Context, a domain.AgentAccount) error {
 	m.accounts = append(m.accounts, a)
 	return nil
+}
+func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string) error {
+	if m.hintErr != nil {
+		return m.hintErr
+	}
+	for i := range m.accounts {
+		if m.accounts[i].ID == id && (m.accounts[i].APIKey() || m.accounts[i].SetupToken()) {
+			m.accounts[i].KeyHint = hint
+			return nil
+		}
+	}
+	return ports.ErrAgentAccountUnknown
 }
 func (m *memStore) DeleteAgentAccount(context.Context, string) error { return nil }
 func (m *memStore) GetAgentAccountDefault(_ context.Context, p domain.AgentAccountProvider) (string, bool, error) {
@@ -54,13 +71,64 @@ type fakeClaude struct {
 	signedInAs map[string]string
 	unshared   bool
 	onIdentity func(home string) // runs as a folder's identity is read
-	apiKey     map[string]bool   // folders logged in with an API key
-	failing    map[string]bool   // folders whose check fails (a timeout)
+	onLimits   func()
+	apiKey     map[string]bool // folders logged in with an API key
+	failing    map[string]bool // folders whose check fails (a timeout)
+	pending    map[string]bool // folders whose login waits on its token's renewal
 	windows    []domain.AgentAccountLimitWindow
+	limitsErr  error
+	orgOf      map[string]string
+	orgNameOf  map[string]string
+	// mu guards approved and checked, which concurrent reads of List touch.
+	mu         sync.Mutex
+	approved   map[string]string // the key each folder was told to accept
+	approveErr error             // fails ApproveAPIKey
+	checked    []string          // every folder whose identity was read
+	tokens     map[string]string // each folder's saved setup token
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
+func (f *fakeClaude) ApproveAPIKey(home, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.approveErr != nil {
+		return f.approveErr
+	}
+	if f.approved == nil {
+		f.approved = map[string]string{}
+	}
+	f.approved[home] = key
+	return nil
+}
+func (f *fakeClaude) SaveSetupToken(home, token string) error {
+	if !strings.HasPrefix(token, "sk-ant-oat") {
+		return ports.ErrAgentAccountKeyRejected
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tokens == nil {
+		f.tokens = map[string]string{}
+	}
+	f.tokens[home] = token
+	return nil
+}
+func (f *fakeClaude) SetupTokenOf(home string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if token, ok := f.tokens[home]; ok {
+		return token, nil
+	}
+	return "", os.ErrNotExist
+}
+func (f *fakeClaude) wasChecked(home string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.checked, home)
+}
 func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	f.mu.Lock()
+	f.checked = append(f.checked, home)
+	f.mu.Unlock()
 	if hook := f.onIdentity; hook != nil {
 		f.onIdentity = nil
 		hook(home)
@@ -68,13 +136,29 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	if f.failing[home] {
 		return domain.AgentAccountIdentityCheck{}, errors.New("account/read: context deadline exceeded")
 	}
+	if f.pending[home] {
+		return domain.AgentAccountIdentityCheck{}, fmt.Errorf("%w; Claude Code renews it the next time it runs", ports.ErrAgentAccountRenewalPending)
+	}
+	f.mu.Lock()
+	token := f.tokens[home]
+	f.mu.Unlock()
+	if strings.HasPrefix(token, "sk-ant-oat01-good") {
+		return domain.AgentAccountIdentityCheck{SignedIn: true, LoggedIn: true}, nil
+	}
 	email, ok := f.signedInAs[home]
 	if f.apiKey[home] {
-		return domain.AgentAccountIdentityCheck{LoggedIn: true}, nil
+		return domain.AgentAccountIdentityCheck{LoggedIn: true, Email: email, OrgID: f.orgOf[home]}, nil
 	}
-	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
+	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email, OrgID: f.orgOf[home], OrgName: f.orgNameOf[home]}, nil
 }
 func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
+	if hook := f.onLimits; hook != nil {
+		f.onLimits = nil
+		hook()
+	}
+	if f.limitsErr != nil {
+		return domain.AgentAccountLimits{}, f.limitsErr
+	}
 	return domain.AgentAccountLimits{Windows: f.windows}, nil
 }
 func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
@@ -112,7 +196,7 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 
 	// Signing in to the device's own login again is refused, not saved twice.
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +213,7 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 	}
 
 	// A new login is saved, and new sessions use the default until one is picked.
-	start, _ = svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ = svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, view, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete || view == nil || view.Account.Email != "b@example.com" {
@@ -172,7 +256,7 @@ func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +270,7 @@ func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
 	}
 
 	claude.unshared = true
-	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude); !errors.Is(err, ports.ErrAgentAccountUnshared) {
+	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{}); !errors.Is(err, ports.ErrAgentAccountUnshared) {
 		t.Fatalf("sign-in into a folder that cannot link: %v", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(root, "claude")); len(entries) != 1 {
@@ -212,7 +296,7 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,11 +311,11 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.StartSignInAgain(ctx, "device-claude"); !errors.Is(err, ports.ErrAgentAccountDeviceFixed) {
+	if _, err := svc.StartSignInAgain(ctx, "device-claude", LoginRequest{}); !errors.Is(err, ports.ErrAgentAccountDeviceFixed) {
 		t.Fatalf("sign in again to this computer: %v", err)
 	}
 	// Cancelled: the saved folder stays.
-	again, err := svc.StartSignInAgain(ctx, accountID)
+	again, err := svc.StartSignInAgain(ctx, accountID, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +326,7 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 		t.Fatalf("cancel removed the saved folder: %v", err)
 	}
 	// Another login in the folder is refused and signed out again.
-	again, _ = svc.StartSignInAgain(ctx, accountID)
+	again, _ = svc.StartSignInAgain(ctx, accountID, LoginRequest{})
 	claude.signedInAs[b] = "c@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, again.OperationID); err != nil || status != LoginMismatch {
 		t.Fatalf("other login = %q, %v", status, err)
@@ -251,7 +335,7 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 		t.Fatal("the other login stayed in the account's folder")
 	}
 	// The same login comes back on the same account.
-	again, _ = svc.StartSignInAgain(ctx, accountID)
+	again, _ = svc.StartSignInAgain(ctx, accountID, LoginRequest{})
 	claude.signedInAs[b] = "B@example.com"
 	status, view, err := svc.VerifyLogin(ctx, again.OperationID)
 	if err != nil || status != LoginComplete || view == nil || view.Account.ID != accountID || !view.SignedIn {
@@ -273,7 +357,7 @@ func TestRemoveStopsTheAccountsAgentsFirst(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
@@ -315,7 +399,7 @@ func TestCancelDuringVerifyDoesNotSaveTheAccount(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +429,7 @@ func TestRemovingAnAccountKeepsNewLaunchesOffIt(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
@@ -396,7 +480,7 @@ func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
@@ -462,7 +546,7 @@ func TestAnOldSignedOutDefaultIsReadAgainBeforeMovingOn(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 	now := time.Now()
 	svc.now = func() time.Time { return now }
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -490,7 +574,7 @@ func TestRecheckSessionAccountSeesALoginThatDied(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -527,7 +611,7 @@ func TestRunsOnComputerLoginFollowsTheDefaultAndThePick(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
 		t.Fatal(err)
@@ -559,8 +643,13 @@ func TestAnAPIKeyCLILoginStillLaunchesAsTheDefault(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{}, apiKey: map[string]bool{"": true}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
-	if _, err := svc.List(ctx, true); err != nil {
+	views, err := svc.List(ctx, true)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The app shows it as a login, not as signed out.
+	if len(views) != 1 || views[0].SignedIn || !views[0].LoggedIn {
+		t.Fatalf("API-key CLI login view = %+v, want logged in without a subscription", views)
 	}
 	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); err != nil || store.bindings["s1"] != "device-claude" {
 		t.Fatalf("new task on an API-key CLI login: %q %v", store.bindings["s1"], err)
@@ -581,7 +670,7 @@ func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	if _, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); handled {
 		t.Fatal("answered for the computer's own login")
 	}
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -624,7 +713,7 @@ func TestDefaultSignInFollowsTheAccountNewSessionsStartOn(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 	add := func(email string) string {
 		t.Helper()
-		start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+		start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 		claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = email
 		if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
 			t.Fatal(err)
@@ -680,7 +769,7 @@ func TestAFailedCheckDoesNotReadAsSignedOut(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, failing: map[string]bool{}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -698,6 +787,47 @@ func TestAFailedCheckDoesNotReadAsSignedOut(t *testing.T) {
 	}
 }
 
+// A login waiting on its token's renewal is not checked, since the CLI would
+// try the renewal and a refused one wipes the login (#8724). It still reads as
+// signed in: with no earlier reading, and across several skipped checks, which
+// keep the last reading's limits.
+func TestALoginAwaitingRenewalStaysSignedIn(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		pending:    map[string]bool{"": true},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "5h", Label: "5h", UsedPercent: 12}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	claude.pending[b] = true
+	for round := 1; round <= 2; round++ {
+		views, err := svc.List(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, view := range views {
+			if !view.SignedIn || !view.LoggedIn || !strings.Contains(view.IdentityErr, "token expired") {
+				t.Fatalf("round %d, %s: signed in %v, logged in %v, note %q; want signed in, waiting on renewal",
+					round, view.Account.ID, view.SignedIn, view.LoggedIn, view.IdentityErr)
+			}
+			if view.Account.ID == start.OperationID && view.Limits == nil {
+				t.Fatalf("round %d: the account's last limits were dropped", round)
+			}
+		}
+	}
+}
+
 func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -706,7 +836,7 @@ func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 	now := time.Now()
 	svc.now = func() time.Time { return now }
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "b@example.com"
 	// The read right after sign-in answers before the limits are known.
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -731,5 +861,511 @@ func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 		if view.Account.ID == start.OperationID && (view.Limits == nil || len(view.Limits.Windows) != 1) {
 			t.Fatalf("limits with windows were not kept: %+v", view.Limits)
 		}
+	}
+}
+
+func TestAReadingThatReachesTheProviderConfirmsTheLogin(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{}, failing: map[string]bool{}}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	at := time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return at }
+	var confirmed []string
+	svc.SetLoginConfirmed(func(account domain.AgentAccount, checkedAt time.Time) {
+		if !checkedAt.Equal(at) {
+			t.Errorf("confirmed at %v, want the reading's start %v", checkedAt, at)
+		}
+		confirmed = append(confirmed, account.ID)
+	})
+	read := func() {
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read() // signed out
+	claude.failing[""] = true
+	read() // the check fails
+	if len(confirmed) != 0 {
+		t.Fatalf("confirmed without a working login: %v", confirmed)
+	}
+	// Signed in with the CLI's own login, outside AO.
+	claude.failing[""] = false
+	claude.signedInAs[""] = "a@example.com"
+	read()
+	if len(confirmed) != 1 || confirmed[0] != domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude) {
+		t.Fatalf("confirmed = %v", confirmed)
+	}
+}
+
+func TestFailedLimitsRefreshKeepsTheLastReading(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 40}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	device := func() AccountView {
+		t.Helper()
+		views, err := svc.List(ctx, true)
+		if err != nil || len(views) == 0 {
+			t.Fatalf("List = %v, %v", views, err)
+		}
+		return views[0]
+	}
+	device()
+
+	claude.limitsErr = errors.New("claude could not fetch its usage limits")
+	if view := device(); view.LimitsErr == "" || view.Limits == nil || len(view.Limits.Windows) != 1 || view.Limits.Windows[0].UsedPercent != 40 {
+		t.Fatalf("failed refresh = %+v, want the last windows and the error", view)
+	}
+
+	claude.signedInAs[""] = "b@example.com"
+	if view := device(); view.Limits != nil {
+		t.Fatalf("another login kept the last login's limits: %+v", view.Limits)
+	}
+}
+
+func TestProblemKindSortsFailuresByWhatFailed(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want domain.AgentAccountProblemKind
+	}{
+		{fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded), domain.AgentAccountProblemSlow},
+		{errors.New("account/read: context deadline exceeded"), domain.AgentAccountProblemSlow},
+		{fmt.Errorf("resolve claude: %w", ports.ErrAgentBinaryNotFound), domain.AgentAccountProblemCLIMissing},
+		{&exec.Error{Name: "claude", Err: exec.ErrNotFound}, domain.AgentAccountProblemCLIMissing},
+		{errors.New("claude get_usage: 429 Too Many Requests"), domain.AgentAccountProblemRateLimited},
+		{errors.New("claude get_usage: rate_limit_error"), domain.AgentAccountProblemRateLimited},
+		{errors.New("claude ended without answering get_usage"), domain.AgentAccountProblemUnavailable},
+		{errors.New("claude get_usage: API error: status 429"), domain.AgentAccountProblemRateLimited},
+		{errors.New("claude get_usage: HTTP 429"), domain.AgentAccountProblemRateLimited},
+		// Digits in a port are not a status.
+		{errors.New("dial tcp 127.0.0.1:42901: connect: connection refused"), domain.AgentAccountProblemUnavailable},
+		{errors.New("dial tcp 127.0.0.1:429: connect: connection refused"), domain.AgentAccountProblemUnavailable},
+	} {
+		if got := problemKind(tc.err); got != tc.want {
+			t.Errorf("problemKind(%q) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestASlowCheckIsTriedAgainSoonAndARateLimitIsNot(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 40}},
+	}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	device := func(refresh bool) AccountView {
+		t.Helper()
+		views, err := svc.List(ctx, refresh)
+		if err != nil || len(views) == 0 {
+			t.Fatalf("List = %v, %v", views, err)
+		}
+		return views[0]
+	}
+	device(true)
+
+	claude.limitsErr = fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded)
+	if view := device(true); view.LimitsProblem != domain.AgentAccountProblemSlow || view.Limits == nil {
+		t.Fatalf("slow check = %+v, want kind slow and the last limits", view)
+	}
+	claude.limitsErr = nil
+	now = now.Add(retryFailedAfter + time.Second) // well inside the five-minute window
+	if view := device(false); view.LimitsProblem != "" || view.LimitsErr != "" {
+		t.Fatalf("a minute after a slow check: %+v, want it read again", view)
+	}
+
+	claude.limitsErr = errors.New("claude get_usage: 429 Too Many Requests")
+	if view := device(true); view.LimitsProblem != domain.AgentAccountProblemRateLimited {
+		t.Fatalf("rate limited check = %+v", view)
+	}
+	claude.limitsErr = nil
+	now = now.Add(retryFailedAfter + time.Second)
+	if view := device(false); view.LimitsProblem != domain.AgentAccountProblemRateLimited {
+		t.Fatalf("a refused check was asked again within a minute: %+v", view)
+	}
+}
+
+func TestACLIThatStaysSlowIsAskedLessOften(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		limitsErr:  fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded),
+	}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	id := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	// Each slow check in a row doubles the wait, up to the usual five minutes.
+	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, freshFor, freshFor} {
+		now = now.Add(wait - time.Second)
+		if svc.needsReading(id, false) {
+			t.Fatalf("read again before %v", wait)
+		}
+		now = now.Add(2 * time.Second)
+		if !svc.needsReading(id, false) {
+			t.Fatalf("not read again after %v", wait)
+		}
+		if _, err := svc.List(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A failed read can keep earlier limits with no windows; the failure backoff
+// still applies instead of the 30-second empty-windows retry.
+func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	id := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if _, err := svc.List(ctx, true); err != nil { // limits with no windows
+		t.Fatal(err)
+	}
+	claude.limitsErr = fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded)
+	if view, err := svc.List(ctx, true); err != nil || view[0].Limits == nil || len(view[0].Limits.Windows) != 0 {
+		t.Fatalf("slow check = %+v, %v; want the earlier empty limits kept", view, err)
+	}
+	now = now.Add(retryEmptyAfter + time.Second)
+	if svc.needsReading(id, false) {
+		t.Fatal("a slow check was read again after 30 seconds")
+	}
+	now = now.Add(-retryEmptyAfter - time.Second)
+	// Each slow check in a row doubles the wait: one, two, then four minutes.
+	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		now = now.Add(wait - time.Second)
+		if svc.needsReading(id, false) {
+			t.Fatalf("read again before %v", wait)
+		}
+		now = now.Add(2 * time.Second)
+		if !svc.needsReading(id, false) {
+			t.Fatalf("not read again after %v", wait)
+		}
+		if _, err := svc.List(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestConfirmedLoginsFollowTheIdentityWithoutALimitReading(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com", "/folders/s": "t@example.com"},
+		failing:    map[string]bool{},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "seven_day", UsedPercent: 40}},
+	}
+	store := &memStore{
+		accounts: []domain.AgentAccount{{ID: "acct-s", Provider: domain.AgentAccountProviderClaude, Home: "/folders/s", Email: "s@example.com"}},
+		defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{},
+	}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	read := func() map[string]domain.AgentAccountIdentityCheck {
+		t.Helper()
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+		return svc.ConfirmedLogins()
+	}
+
+	got := read()
+	if !got[device].SignedIn || got[device].Email != "a@example.com" {
+		t.Fatalf("device = %+v, want a@", got[device])
+	}
+	if folder, ok := got["acct-s"]; !ok || folder.SignedIn {
+		t.Fatalf("folder on another login = %+v (known %v), want known and not signed in", folder, ok)
+	}
+
+	claude.signedInAs[""] = "b@example.com"
+	claude.limitsErr = errors.New("claude could not fetch its usage limits")
+	if got := read()[device]; !got.SignedIn || got.Email != "b@example.com" {
+		t.Fatalf("after a switch whose limits failed = %+v, want b@", got)
+	}
+
+	claude.failing[""] = true
+	read()
+	if got := read()[device]; !got.SignedIn || got.Email != "b@example.com" {
+		t.Fatalf("after two failed checks = %+v, want b@ kept", got)
+	}
+
+	claude.failing[""] = false
+	delete(claude.signedInAs, "")
+	if got, ok := read()[device]; !ok || got.SignedIn {
+		t.Fatalf("after signing out = %+v (known %v), want known and signed out", got, ok)
+	}
+}
+
+func TestAnOlderReadDoesNotReplaceANewerOne(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "seven_day", UsedPercent: 40}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	claude.onLimits = func() {
+		claude.signedInAs[""] = "b@example.com"
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Error(err)
+		}
+		claude.limitsErr = errors.New("claude could not fetch its usage limits")
+	}
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if got := svc.ConfirmedLogins()[device]; got.Email != "b@example.com" {
+		t.Fatalf("confirmed = %+v, want b@ from the read that started later", got)
+	}
+	if views[0].Account.Email != "b@example.com" || views[0].Limits == nil {
+		t.Fatalf("view = %+v, want b@ with its limits", views[0])
+	}
+}
+
+func TestAFailedNewerReadDoesNotHideANewerIdentity(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		failing:    map[string]bool{},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "seven_day", UsedPercent: 40}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[""] = "b@example.com"
+	claude.onLimits = func() {
+		claude.failing[""] = true
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Error(err)
+		}
+		claude.failing[""] = false
+	}
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if got := svc.ConfirmedLogins()[device]; got.Email != "b@example.com" {
+		t.Fatalf("confirmed = %+v, want b@ from the last successful check", got)
+	}
+	if views[0].Account.Email != "b@example.com" || views[0].IdentityErr != "" {
+		t.Fatalf("view = %+v, want the successful b@ reading", views[0])
+	}
+}
+
+// A pending renewal says nothing about whose login a folder holds, so a folder
+// last found holding another login stays refused while its token waits.
+func TestAWrongLoginStaysRefusedWhileItsTokenAwaitsRenewal(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, pending: map[string]bool{}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[b] = "someone-else@example.com" // the folder now holds another login
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	claude.pending[b] = true
+	for round := 1; round <= 2; round++ {
+		views, err := svc.List(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, view := range views {
+			if view.Account.ID == start.OperationID && (view.SignedIn || view.IdentityProblem != domain.AgentAccountProblemOtherLogin) {
+				t.Fatalf("round %d: signed in %v, problem %q; want the wrong login still refused", round, view.SignedIn, view.IdentityProblem)
+			}
+		}
+	}
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, start.OperationID); !errors.Is(err, ports.ErrAgentAccountSignedOut) {
+		t.Fatalf("ValidateAccount = %v, want the wrong login refused", err)
+	}
+}
+
+// A timeout between a good check and a pending renewal keeps the last good
+// reading, and a timeout after a mismatch keeps the account refused.
+func TestFailedChecksInARowKeepTheLastGoodReadingAndAnyMismatch(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"}, failing: map[string]bool{}, pending: map[string]bool{},
+		windows: []domain.AgentAccountLimitWindow{{ID: "5h", Label: "5h", UsedPercent: 12}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	view := func() AccountView {
+		t.Helper()
+		views, err := svc.List(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range views {
+			if v.Account.ID == start.OperationID {
+				return v
+			}
+		}
+		t.Fatal("account missing")
+		return AccountView{}
+	}
+	// Good, then a timeout, then a pending renewal.
+	view()
+	claude.failing[b] = true
+	view()
+	claude.failing[b], claude.pending[b] = false, true
+	if got := view(); !got.SignedIn || got.Limits == nil {
+		t.Fatalf("after a timeout and a pending renewal: signed in %v, limits %v; want the last good reading", got.SignedIn, got.Limits)
+	}
+	// Another login, then a timeout, then a pending renewal.
+	claude.pending[b] = false
+	claude.signedInAs[b] = "someone-else@example.com"
+	view()
+	claude.failing[b] = true
+	view()
+	claude.failing[b], claude.pending[b] = false, true
+	if got := view(); got.SignedIn || got.IdentityProblem != domain.AgentAccountProblemOtherLogin {
+		t.Fatalf("after a mismatch, a timeout and a pending renewal: signed in %v, problem %q; want still refused", got.SignedIn, got.IdentityProblem)
+	}
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, start.OperationID); !errors.Is(err, ports.ErrAgentAccountSignedOut) {
+		t.Fatalf("ValidateAccount = %v, want the wrong login refused", err)
+	}
+}
+
+type scriptedClaudeIdentity struct {
+	*fakeClaude
+	identity func(context.Context, string) (domain.AgentAccountIdentityCheck, error)
+}
+
+func (p *scriptedClaudeIdentity) Identity(ctx context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	return p.identity(ctx, home)
+}
+
+// readPublishGate pauses a read after it has copied the previous reading but
+// before it publishes. It lets the test place another result in that gap.
+type readPublishGate struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *readPublishGate) Err() error {
+	g.once.Do(func() {
+		close(g.entered)
+		<-g.release
+	})
+	return g.Context.Err()
+}
+
+func TestFailedReadKeepsMismatchPublishedAfterItsSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"timeout", context.DeadlineExceeded},
+		{"pending renewal", ports.ErrAgentAccountRenewalPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mismatchStarted := make(chan struct{})
+			releaseMismatch := make(chan struct{})
+			gate := &readPublishGate{Context: context.Background(), entered: make(chan struct{}), release: make(chan struct{})}
+			var releaseMismatchOnce, releaseFailedOnce sync.Once
+			releaseMismatchRead := func() { releaseMismatchOnce.Do(func() { close(releaseMismatch) }) }
+			releaseFailedRead := func() { releaseFailedOnce.Do(func() { close(gate.release) }) }
+			t.Cleanup(releaseMismatchRead)
+			t.Cleanup(releaseFailedRead)
+
+			calls := 0
+			var callsMu sync.Mutex
+			provider := &scriptedClaudeIdentity{fakeClaude: &fakeClaude{}}
+			provider.identity = func(context.Context, string) (domain.AgentAccountIdentityCheck, error) {
+				callsMu.Lock()
+				calls++
+				call := calls
+				callsMu.Unlock()
+				switch call {
+				case 1:
+					return domain.AgentAccountIdentityCheck{SignedIn: true, LoggedIn: true, Email: "expected@example.com"}, nil
+				case 2:
+					close(mismatchStarted)
+					<-releaseMismatch
+					return domain.AgentAccountIdentityCheck{SignedIn: true, LoggedIn: true, Email: "other@example.com"}, nil
+				default:
+					return domain.AgentAccountIdentityCheck{}, tc.err
+				}
+			}
+			account := domain.AgentAccount{ID: "saved", Provider: domain.AgentAccountProviderClaude, Home: t.TempDir(), Email: "expected@example.com"}
+			svc := New(&memStore{}, []ports.AgentAccountProviderCLI{provider}, t.TempDir(), fakeTerminals{}, nil)
+			if first := svc.read(context.Background(), account); first == nil || !first.identity.SignedIn {
+				t.Fatalf("initial reading = %+v, want the saved login", first)
+			}
+
+			mismatchDone := make(chan *reading, 1)
+			go func() { mismatchDone <- svc.read(context.Background(), account) }()
+			select {
+			case <-mismatchStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("mismatch read did not start")
+			}
+			failedDone := make(chan *reading, 1)
+			go func() { failedDone <- svc.read(gate, account) }()
+			select {
+			case <-gate.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("failed read did not reach publication")
+			}
+			releaseMismatchRead()
+			select {
+			case mismatch := <-mismatchDone:
+				if !mismatch.mismatch {
+					t.Fatal("the earlier read did not record the wrong login")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("mismatch read did not finish")
+			}
+			releaseFailedRead()
+			var failed *reading
+			select {
+			case failed = <-failedDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("failed read did not finish")
+			}
+			if !failed.mismatch || failed.identity.SignedIn || failed.identity.LoggedIn || failed.identityProblem != domain.AgentAccountProblemOtherLogin {
+				t.Fatalf("failed read = %+v, want the wrong-login refusal preserved", failed)
+			}
+			svc.mu.Lock()
+			stored := svc.readings[account.ID]
+			svc.mu.Unlock()
+			if stored != failed {
+				t.Fatal("the failed read did not publish the checked result")
+			}
+		})
 	}
 }

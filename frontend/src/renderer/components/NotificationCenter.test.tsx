@@ -342,7 +342,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		const trigger = screen.getByRole("button", { name: /unread notifications/ });
 		const bell = trigger.querySelector("svg");
-		const badge = trigger.querySelector("span");
+		const badge = trigger.querySelector("span:not([data-nav-row-highlight])");
 
 		expect(bell?.classList.contains("size-icon-base")).toBe(true);
 		expect(badge?.classList.contains("h-3")).toBe(true);
@@ -1019,7 +1019,7 @@ describe("NotificationCenter cloud rows", () => {
 			"local",
 		]);
 		const cloudRow = rows[1];
-		expect(within(cloudRow).getByText("Cloud")).toBeInTheDocument();
+		expect(within(cloudRow).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
 		expect(within(cloudRow).getByText("acme/cloud")).toBeInTheDocument();
 		expect(within(cloudRow).getByText("Cloud checkout")).toBeInTheDocument();
 		expect(within(cloudRow).getByRole("button", { name: "Clear notification: Pull request ready to merge" })).toBeInTheDocument();

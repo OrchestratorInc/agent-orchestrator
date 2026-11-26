@@ -1,11 +1,14 @@
--- Subscription accounts AO launches Claude Code and Codex with.
+-- Subscription and API key accounts AO launches Claude Code and Codex with.
 
 -- name: ListAgentAccounts :many
 SELECT * FROM agent_accounts ORDER BY provider, created_at, id;
 
 -- name: CreateAgentAccount :exec
-INSERT INTO agent_accounts (id, provider, home, email, plan, created_at)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: UpdateAgentAccountKeyHint :execrows
+UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind IN ('api_key', 'setup_token');
 
 -- name: DeleteAgentAccount :exec
 DELETE FROM agent_accounts WHERE id = ?;
@@ -89,3 +92,55 @@ WHERE e.created_at >= sqlc.arg(since)
   AND b.harness IN ('claude-code', 'codex')
 GROUP BY 1, 2, 3
 ORDER BY 2, 1, 3;
+
+-- AgentAccountUsageSince limited to one session's events, which the session
+-- delete folds into deleted_session_account_usage before they cascade away.
+-- Keep the two in step. The plain session_id equality lets the delete, which
+-- holds the writer, reach the events through the usage_bindings session index
+-- instead of reading every usage event.
+-- name: SessionAgentAccountUsageSince :many
+SELECT
+    CAST(COALESCE(
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+           AND a.bound_at <= e.created_at
+         ORDER BY a.bound_at DESC LIMIT 1),
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+         ORDER BY a.bound_at ASC LIMIT 1),
+        'device-' || CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+    ) AS TEXT) AS account_id,
+    CAST(substr(e.created_at, 1, 10) AS TEXT) AS day,
+    e.model_id,
+    CAST(COALESCE(SUM(e.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COALESCE(SUM(e.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COALESCE(SUM(e.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COALESCE(SUM(e.estimated_cost_nanos), 0) AS INTEGER) AS estimated_cost_nanos
+FROM model_usage_events e
+JOIN usage_bindings b ON b.id = e.binding_id
+WHERE b.session_id = sqlc.arg(session_id)
+  AND e.created_at >= sqlc.arg(since)
+  AND b.harness IN ('claude-code', 'codex')
+GROUP BY 1, 2, 3
+ORDER BY 2, 1, 3;
+
+-- name: DeletedSessionAccountUsageSince :many
+SELECT account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+FROM deleted_session_account_usage
+WHERE day >= CAST(sqlc.arg(since_day) AS TEXT)
+ORDER BY day, account_id, model_id;
+
+-- name: AddDeletedSessionAccountUsage :exec
+INSERT INTO deleted_session_account_usage (
+    account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+) VALUES (
+    sqlc.arg(account_id), sqlc.arg(day), sqlc.arg(model_id), sqlc.arg(input_tokens),
+    sqlc.arg(cached_input_tokens), sqlc.arg(output_tokens), sqlc.arg(estimated_cost_nanos)
+)
+ON CONFLICT (account_id, day, model_id) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    estimated_cost_nanos = estimated_cost_nanos + excluded.estimated_cost_nanos;

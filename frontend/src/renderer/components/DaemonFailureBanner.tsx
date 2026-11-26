@@ -1,10 +1,13 @@
-import { AlertTriangle, Clock3 } from "lucide-react";
+import { uiUsage } from "../lib/ui-usage-telemetry";
+import { AlertTriangle, Clock3 } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { isSlowDaemonStartupStatus } from "../../shared/daemon-startup-status";
 import { daemonFailureHint, daemonFailureMessage, daemonFailureTitle } from "../lib/daemon-failure";
 import { aoBridge } from "../lib/bridge";
+import { startProblemReport } from "../lib/report-problem";
+import { Button } from "./ui/button";
 
 export function DaemonFailureBanner({ status }: { status: DaemonStatus }) {
 	if ((!status.code && !isSlowDaemonStartupStatus(status)) || status.state === "ready") return null;
@@ -17,6 +20,15 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 	const [copied, setCopied] = useState(false);
 	const [restarting, setRestarting] = useState(false);
 	const [restartError, setRestartError] = useState<string | null>(null);
+	const [reporting, setReporting] = useState(false);
+	const [reportError, setReportError] = useState<string | null>(null);
+	const report = async () => {
+		setReporting(true);
+		setReportError(null);
+		const failure = await startProblemReport(status.state);
+		setReporting(false);
+		if (failure) setReportError(failure);
+	};
 	const copiedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const slowStartup = isSlowDaemonStartupStatus(status);
 	const details = status.details?.trim();
@@ -25,10 +37,16 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 	const canRestart =
 		!slowStartup &&
 		(status.code === "not_ready" ||
+			// The binary can come back (an installer finishing, antivirus restoring it).
+			status.code === "binary_missing" ||
 			status.code === "spawn_failed" ||
 			status.code === "exited" ||
 			status.code === "identity_mismatch" ||
 			status.code === "daemon_unreachable");
+	// One count per failure shown, keyed on its code; a slow start is not an error.
+	useEffect(() => {
+		if (!slowStartup) uiUsage.errorShown("daemon_unavailable", "banner", undefined, status.code ? status.code.toUpperCase() : undefined);
+	}, [slowStartup, status.code]);
 	useEffect(() => {
 		setCopied(false);
 		return () => {
@@ -86,32 +104,39 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 					</p>
 					{hint ? <p className="mt-1 text-[var(--color-text-import-muted)]">{hint}</p> : null}
 					{canRestart ? (
-						<button
+						<Button
 							type="button"
-							className="mt-2 inline-flex h-control-md items-center rounded-md bg-accent-strong px-3 font-semibold text-accent-foreground transition-[filter,opacity] hover:brightness-110 disabled:cursor-wait disabled:opacity-60"
+							className="mt-2"
 							disabled={restarting}
+							data-telemetry-id="daemon_banner.retry"
 							onClick={() => void restartDaemon()}
+							size="sm"
+							variant="primary"
 						>
 							{restarting ? t("daemon.restarting") : t("daemon.restart")}
-						</button>
+						</Button>
 					) : null}
+					<Button variant="ghost" size="sm" disabled={reporting} onClick={() => void report()}>{t(reporting ? "report.opening" : "report.action")}</Button>
+					{reportError ? <p className="mt-2 text-error">{reportError}</p> : null}
 					{restartError ? <p className="mt-2 text-error">{restartError}</p> : null}
 					{details ? (
 						<div className="mt-2 flex items-center gap-3">
-							<button
+							<Button
 								type="button"
-								className="text-xs text-[var(--color-text-import-title)] underline-offset-2 hover:underline"
+								className="text-xs text-[var(--color-text-import-title)]"
+								variant="link"
 								onClick={() => setDetailsOpen((open) => !open)}
 							>
 								{detailsOpen ? t("daemon.hideDetails") : t("daemon.showDetails")}
-							</button>
-							<button
+							</Button>
+							<Button
 								type="button"
-								className="text-xs text-[var(--color-text-import-title)] underline-offset-2 hover:underline"
+								className="text-xs text-[var(--color-text-import-title)]"
+								variant="link"
 								onClick={() => void copyDetails()}
 							>
 								{copied ? t("daemon.copied") : t("daemon.copyDetails")}
-							</button>
+							</Button>
 						</div>
 					) : null}
 				</div>

@@ -81,11 +81,21 @@ func Write(path string, info Info) error {
 }
 
 // Read loads running.json. A missing file returns (nil, nil) — that is the
-// normal "no daemon recorded" state, not an error.
+// normal "no daemon recorded" state, not an error. On Windows a file being
+// deleted by another process cannot be opened for a moment (sharing
+// violation) before it disappears, so a failed read is retried briefly.
 func Read(path string) (*Info, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+	var data []byte
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		data, err = os.ReadFile(path)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read run-file: %w", err)
@@ -98,12 +108,18 @@ func Read(path string) (*Info, error) {
 }
 
 // Remove deletes running.json. A missing file is not an error — graceful
-// shutdown should be idempotent.
+// shutdown should be idempotent. On Windows a delete fails while another
+// process has the file open for reading, which the CLI's stop poll does every
+// 100 ms, so a failed delete is retried briefly before it is reported.
 func Remove(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove run-file: %w", err)
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		if err = os.Remove(path); err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return nil
+	return fmt.Errorf("remove run-file: %w", err)
 }
 
 // RemoveIfOwned deletes running.json only if it still belongs to ownerPID. This

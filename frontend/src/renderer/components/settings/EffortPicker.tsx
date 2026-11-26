@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import { Check } from "lucide-react";
+import { Check } from "@/components/app-icons";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -13,6 +13,8 @@ export type EffortMenuProps = {
 	onChange: (value: string) => void;
 	defaultValue?: string | null;
 	defaultEffort?: string;
+	/** Reports a pick of defaultEffort as that level rather than as defaultValue. */
+	keepDefaultPick?: boolean;
 	availability?: EffortAvailability;
 	/** Chat composer menus: 12px rows with muted inactive items, like the model list. */
 	compact?: boolean;
@@ -60,7 +62,7 @@ export function effortDisplayLabel({ value, choices, followLabel, t, defaultEffo
 	return effortLevelKey(reported) ? formatEffortLabel(reported, t) : followLabel;
 }
 
-export function EffortMenuItems({ value, choices, onChange, defaultValue = "", defaultEffort, availability = "supported", compact = false }: EffortMenuProps) {
+export function EffortMenuItems({ value, choices, onChange, defaultValue = "", defaultEffort, keepDefaultPick = false, availability = "supported", compact = false }: EffortMenuProps) {
 	const { t } = useTranslation();
 	const rowSize = compact ? "text-xs" : "text-[length:var(--font-size-base)]";
 	const levels = choices.filter((choice) => choice.value !== defaultValue && choice.value.toLowerCase() !== "default");
@@ -79,7 +81,7 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 			const isDefault = choice === defaultChoice;
 			const active = choice.value === value || (following && isDefault);
 			return <OptionMenuItem key={choice.value} radio active={active}
-				onSelect={() => onChange(isDefault && defaultValue !== null ? defaultValue : choice.value)} className={cn(rowSize, compact && !active ? "text-muted-foreground" : "text-foreground")}>
+				onSelect={() => onChange(isDefault && defaultValue !== null && !keepDefaultPick ? defaultValue : choice.value)} className={cn(rowSize, compact && !active ? "text-muted-foreground" : "text-foreground")}>
 				<span className="flex-1">{choice.label || formatEffortLabel(choice.value, t)}</span>
 				<Check aria-hidden="true" className={`ml-3 size-3 shrink-0 ${active ? "" : "invisible"}`} />
 			</OptionMenuItem>;
@@ -88,19 +90,19 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 	</>;
 }
 
-export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; menuClassName?: string; footer?: ReactNode }) {
+export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; triggerVariant?: "secondary" | "ghost"; menuClassName?: string; footer?: ReactNode; /** Trigger text while following the default; "Effort" when omitted. */ followLabel?: string }) {
 	const { t } = useTranslation();
 	const following = props.value === (props.defaultValue ?? "") || (!props.value && props.defaultValue === "default");
 	const label = effortDisplayLabel({
 		value: following ? "" : props.value,
 		choices: props.choices,
-		followLabel: t("settings.models.effort"),
+		followLabel: props.followLabel || t("settings.models.effort"),
 		t,
 		defaultEffort: props.defaultEffort,
 	});
 	if (!props.choices.some((choice) => choice.value && choice.value.toLowerCase() !== "default") && (!props.value || following)) return null;
 	return <OptionMenu>
-		<OptionMenuTrigger disabled={props.disabled} aria-label={props.label || t("settings.models.effort")} className={props.triggerClassName}>
+		<OptionMenuTrigger variant={props.triggerVariant} disabled={props.disabled} aria-label={props.label || t("settings.models.effort")} className={props.triggerClassName}>
 			<span className="min-w-0 truncate">{label}</span>
 		</OptionMenuTrigger>
 		<OptionMenuContent align="end" className={cn("w-[min(16rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!", props.menuClassName)}><EffortMenuItems {...props} />{props.footer ? <div className="mt-1 border-t border-border pt-1">{props.footer}</div> : null}</OptionMenuContent>

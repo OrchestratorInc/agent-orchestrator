@@ -40,6 +40,9 @@ const (
 	providerStdinGrace   = time.Second
 	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
+	// After the provider exits, its output gets this long before the pipes are
+	// closed on a descendant that still holds them.
+	providerPipeDrainDelay = 2 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -69,6 +72,24 @@ const (
 	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
 	// which can differ from mutable session settings after reconnect.
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
+	// ACPSteerPromptMetaKey marks a session/prompt that steers the running turn
+	// (acp.SteerPrompt). The host admits it while the turn's prompt is active,
+	// and the turn's result is the answer of the last of its prompts to return.
+	ACPSteerPromptMetaKey = "ao.steerPrompt"
+	// ACPSteerKeepsTurnMetaKey also marks a steer prompt that the agent answers
+	// at once while the turn's earlier prompt keeps the work, as Hermes'
+	// `/steer` command is. Its answer is never the turn's result: the turn
+	// ends with the answer of its last other prompt, success or failure.
+	ACPSteerKeepsTurnMetaKey = "ao.steerKeepsTurn"
+	// ACPSteerTurnEndedDataKey is set in the error data of a steer prompt the
+	// host refused because the turn it was meant for had already ended. The
+	// agent never saw it, so the guidance can go as a new turn.
+	ACPSteerTurnEndedDataKey = "ao.steerTurnEnded"
+	// ACPPromptHandoffMethod is an AO-private notification carrying the
+	// non-final answer of a prompt an earlier daemon attachment sent, such as
+	// a running prompt handing the turn to a steer prompt. The reattached
+	// controller has no request of its own to match it to.
+	ACPPromptHandoffMethod = "_ao/persistent_prompt_handoff"
 )
 
 var (
@@ -130,6 +151,10 @@ type ACPState struct {
 	ActivePrompt         bool            `json:"activePrompt,omitempty"`
 	ActiveCompaction     bool            `json:"activeCompaction,omitempty"`
 	PendingResultEventID string          `json:"pendingResultEventId,omitempty"`
+	// AvailableCommands is the latest available_commands_update catalog for
+	// SessionID. Adapters announce it once, as a notification after session
+	// setup, so a controller that reattaches later would otherwise never see it.
+	AvailableCommands json.RawMessage `json:"availableCommands,omitempty"`
 }
 
 // Transport is one authenticated attachment to a persistent provider host.
@@ -650,6 +675,12 @@ func Run(ctx context.Context, cfg Config) error {
 	child := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env
+	// A helper the provider starts in its own session (Codex's npx MCP servers)
+	// escapes the group signal and keeps the output pipes open, which held the
+	// final Wait, and the host, forever: the host kept Codex's thread writer, so
+	// a hibernated chat could not wake (#8632). Once the provider has exited,
+	// Wait gives its output this long, then closes the pipes.
+	child.WaitDelay = providerPipeDrainDelay
 	configureProviderProcess(child)
 	stdin, err := child.StdinPipe()
 	if err != nil {
@@ -659,13 +690,20 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	child.Stderr = io.Discard
+	// The adapter's stderr is the only record of why a turn went silent. Keep it
+	// beside the descriptor instead of discarding it.
+	if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
+		adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
+		defer func() { _ = adapterLog.Close() }()
+		child.Stderr = adapterLog
+	}
 	closeProviderTree, err := startProviderProcess(child)
 	if err != nil {
 		return err
 	}
 	// The job owns descendants even if the direct provider exits first. Close
-	// it before releasing the host lock so Shutdown follows the kill request.
+	// it before waiting for inherited pipes and before releasing the host lock.
+	closeProviderTree = sync.OnceFunc(closeProviderTree)
 	defer closeProviderTree()
 
 	d := Descriptor{
@@ -772,6 +810,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
+	// A surviving descendant can keep child.Wait blocked on the stderr-copy
+	// goroutine after the provider exits. Reap the job before that final wait.
+	closeProviderTree()
 	_ = wait()
 	return runErr
 }

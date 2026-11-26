@@ -1,3 +1,4 @@
+import type { ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Chat conversation view model.
@@ -12,6 +13,7 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
  */
 
 import type { ScriptRun } from "../lib/cloud-script-runs";
+import type { CloudAttachment } from "../lib/cloud-attachments";
 
 /** Which controller currently owns the AO session. */
 export type SessionMode = "chat" | "tui";
@@ -103,6 +105,8 @@ export interface ConversationPlan {
 	steps: PlanStep[];
 	/** The agent keeps this list across turns (Claude's task list), so later turns carry copies of it. */
 	spansTurns?: boolean;
+	/** A later turn or run carries a newer copy of this list; the daemon sets it. */
+	superseded?: boolean;
 }
 
 export interface ConversationUsageLimit {
@@ -129,7 +133,35 @@ export interface ConversationTurn {
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
+	hasEventPrompt?: boolean;
+	/**
+	 * Where the turn's group sorts when that is not its first loaded item: a
+	 * turn whose prompt is above the loaded part of a history began before
+	 * every prompt in it, so it sorts ahead of them (between the sequence
+	 * before the loaded events and their first).
+	 */
+	anchorSequence?: number;
+	/**
+	 * The key of the turn's group, held while its first loaded item changes
+	 * (older history loading above it brings in its prompt), so the reader's
+	 * view stays on it. Without one the group is keyed by its first item.
+	 */
+	groupKey?: string;
 	errorMessage?: string;
+	/** A provider failure with a known way out: a missing API key, or a refused login. */
+	failureCode?: "provider_key_missing" | "auth_required";
+	/**
+	 * The turn ended before an agent started on it (a Cloud message refused
+	 * when its turn came): it reads as not run, with errorMessage as the
+	 * reason, rather than as a run that failed.
+	 */
+	notRun?: boolean;
+	/**
+	 * A running Cloud turn no agent has taken yet: the session is still starting,
+	 * or its worker took the turn while it checks out the project, runs Setup and
+	 * starts the agent. It reads as the session getting ready, not as thinking.
+	 */
+	agentPending?: boolean;
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;
@@ -140,6 +172,12 @@ export interface ConversationTurn {
 	 * empty changed-files panel as if the turn had been inspected.
 	 */
 	diff?: TurnDiff;
+	/**
+	 * The session artifacts the turn created or edited, as the daemon saw them in
+	 * the artifact directory when it ended. Independent of the provider, so it
+	 * lists files written through a shell command. Absent when there were none.
+	 */
+	artifacts?: TurnArtifactChange[];
 	/** The agent's plan for this turn, or absent when it made none. */
 	plan?: ConversationPlan;
 }
@@ -156,6 +194,12 @@ export interface DiffFile {
 	oldPath?: string;
 }
 
+/** One session artifact a turn changed, by its path in the artifact directory. */
+export interface TurnArtifactChange {
+	path: string;
+	status: "added" | "modified";
+}
+
 export interface TurnDiff {
 	files: DiffFile[];
 	/** The daemon cut the list at its cap; the change is larger than what is shown. */
@@ -164,6 +208,7 @@ export interface TurnDiff {
 
 /** Lightweight, durable prompt content retained when a human message is edited. */
 export interface ConversationContentSummary {
+ snapshot?: ChatExcerptSnapshot;
 	fileReference?: ChatFileReference;
 	annotationId?: string;
 	annotationOrder?: number;
@@ -172,6 +217,7 @@ export interface ConversationContentSummary {
 	uri?: string;
 	name?: string;
 	text?: string;
+	comment?: string;
 	sourceConversationId?: string;
  sourceMessageId?: string;
 	sourceRevision?: number;
@@ -215,6 +261,8 @@ export interface ConversationMessage {
 	senderDisplayName?: string;
 	/** The sender's idempotency key. Lets the local echo and this row share one identity. */
 	clientMessageId?: string;
+	/** Files a cloud message carries, read back from the control plane. */
+	cloudAttachments?: CloudAttachment[];
 	createdAt: string;
 }
 
@@ -290,6 +338,8 @@ export interface CommandDetail {
 	outputSource?: "stream" | "aggregate";
 	/** Accumulation stopped at the daemon's cap; the command printed more. */
 	outputTruncated?: boolean;
+	/** The page carries only the head and tail of the output; this is its full size in bytes. */
+	outputBytes?: number;
 	exitCode?: number;
 	durationMs?: number;
 	reason?: string;
@@ -384,7 +434,9 @@ export interface McpToolDetail {
 	toolName?: string;
 	/** The provider's grouping when the tool is namespaced rather than server-scoped. */
 	namespace?: string;
+	/** Codex and Hermes send the call's arguments here; other ACP agents send `input`. */
 	arguments?: unknown;
+	input?: unknown;
 	result?: unknown;
 	/** Structured provider content, including native ACP read output. */
 	content?: unknown;
@@ -483,12 +535,16 @@ export interface SystemEventDetail {
 		| "workspace.setup"
 		| "workspace.script.run"
 		| "account.switched"
+		| "account.limit_handoff"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
-		| "approval_mode.substituted";
+		| "approval_mode.substituted"
+		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
+		| "session.model_unavailable";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
 	accountId?: string;
+	retry?: "sent" | "skipped";
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
@@ -529,6 +585,10 @@ export interface SystemEventDetail {
 	senderProjectId?: string;
 	senderDisplayName?: string;
 	clientMessageId?: string;
+	/** steer: the person deleted the queued message while the agent was taking it; it was delivered. */
+	deliveredBeforeDelete?: boolean;
+	/** steer: the queued turns whose messages this steer carried into the running turn. */
+	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
 	content?: Array<{
 		type: string;
@@ -537,6 +597,11 @@ export interface SystemEventDetail {
 		uri?: string;
 		name?: string;
 		text?: string;
+		excerpt?: {
+			reference?: { id?: string; order?: number; conversationId?: string; messageId?: string; revision?: number; text?: string; comment?: string; snapshot?: ChatExcerptSnapshot };
+			selectedText?: string;
+		};
+		fileReference?: ChatFileReference;
 	}>;
 }
 
@@ -544,6 +609,10 @@ export interface SystemEventDetail {
 export interface PlanDetail {
 	explanation?: string;
 	steps?: PlanStep[];
+	/** The list spans turns; see ConversationPlan.spansTurns. */
+	spansTurns?: boolean;
+	/** See ConversationPlan.superseded. */
+	superseded?: boolean;
 }
 
 export interface UsageDetail {
@@ -613,7 +682,8 @@ export function reviewedPaths(activity: ConversationActivity): string[] {
  * The daemon writes both: the turn column answers "what is the plan now" and this
  * row answers "where in the conversation did the agent plan". They cannot disagree —
  * both are written from one event — so the surface prefers the turn's copy and only
- * falls back to this for a plan whose turn predates the controller.
+ * falls back to this for a plan no turn holds: work the agent did on its own outside
+ * an AO turn, or a provider turn AO never correlated.
  */
 export function activityPlan(activity: ConversationActivity): ConversationPlan | undefined {
 	const steps = activity.detail?.steps;
@@ -707,6 +777,10 @@ export interface ChatModel {
 	defaultEffort?: string;
 	/** The model can run on the provider's faster tier. */
 	supportsFast?: boolean;
+	/** Why the model cannot be chosen now (the installed agent CLI is too old), from the agent's catalog. */
+	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator". */
+	hint?: string;
 }
 
 /** One provider-owned setting advertised for this live chat session. */
@@ -732,6 +806,10 @@ export interface ChatConfigChoice {
 	/** Provider grouping is presentation data, not part of the value sent back. */
 	group?: string;
 	groupName?: string;
+	/** Why the choice cannot be picked now; AO adds it from the agent's catalog, the provider never sends it. */
+	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator"; the provider never sends it. */
+	hint?: string;
 }
 
 /** The two value shapes ACP session config supports. */
@@ -876,6 +954,8 @@ export interface ConversationSnapshot {
 	nativeForkAvailableAfterSequence?: number;
 	activeBranchId?: string;
 	branchedFromEarlierMessage?: boolean;
+	/** Queued turns AO batched into another turn's provider input; `turns` leaves them out. */
+	batchedDeliveries?: BatchedDelivery[];
 	branchPoints?: ConversationBranchPoint[];
 	/** How the active historical branch acquired its provider context. */
 	branchMaterialization?: ConversationBranchMaterialization;
@@ -970,10 +1050,18 @@ export function needsReauth(snapshot: ConversationSnapshot): boolean {
  *
  * A running turn wins over a queued one: with a send queue both exist at once,
  * and the one the agent is actually working on is what the user is waiting on.
+ *
+ * `controllerStopped` says the agent controller is really gone, not handing off,
+ * waking or reconnecting. No agent is working then, so a turn the daemon still
+ * holds open as running is not in flight: it is settled with an unknown outcome
+ * (#6064). Queued turns stay in flight, because Resume dispatches them.
  */
-export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | undefined {
+export function activeTurn(
+	snapshot: ConversationSnapshot,
+	{ controllerStopped = false }: { controllerStopped?: boolean } = {},
+): ConversationTurn | undefined {
 	return (
-		snapshot.turns.find((turn) => turn.state === "running") ??
+		(controllerStopped ? undefined : snapshot.turns.find((turn) => turn.state === "running")) ??
 		snapshot.turns.find((turn) => turn.state === "queued")
 	);
 }
@@ -988,11 +1076,16 @@ export function isUserQueuePrompt(item: ConversationItem): item is ConversationM
 }
 
 /**
- * Turn ids whose user prompt is represented in the queue dock instead.
+ * Turn ids the timeline does not draw, because their message shows elsewhere.
  *
  * The user's prompts for queued turns live in the dock until dispatch. Other
  * automation messages have no dock row, so their queued feedback stays visible
  * in the timeline. Turns cancelled from the dock must not reappear after refresh.
+ *
+ * A message the agent refused for its login waited for the login, and once it
+ * is sent again its copy is that message: the refused original is not drawn
+ * beside it. One that ran a tool or changed a file first stays, so that work
+ * stays in the chat.
  */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	const humanPromptTurnIds = new Set<string>();
@@ -1001,15 +1094,32 @@ export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<strin
 			humanPromptTurnIds.add(item.turnId);
 		}
 	}
+	const resent = new Set(snapshot.turns.flatMap((turn) => turn.retryOfTurnId && !turn.rolledBack ? [turn.retryOfTurnId] : []));
+	// Only read the items when a refused message was sent again.
+	let worked: Set<string> | undefined;
 	return new Set(
 		snapshot.turns
 			.filter(
 				(turn) =>
-					(turn.state === "queued" || turn.state === "cancelled") &&
-					humanPromptTurnIds.has(turn.id),
+					((turn.state === "queued" || turn.state === "cancelled") && humanPromptTurnIds.has(turn.id)) ||
+					(turn.state === "failed" && turn.failureCode === "auth_required" && resent.has(turn.id) &&
+						!(worked ??= turnsThatDidWork(snapshot)).has(turn.id)),
 			)
 			.map((turn) => turn.id),
 	);
+}
+
+/** Activities that act on the workspace: a turn with any of them may not be run twice unasked. */
+const TURN_WORK_ACTIVITY_KINDS: ReadonlySet<ActivityKind> = new Set(["command", "file_change", "mcp_tool", "ao_action"]);
+
+/** The turns that ran a tool or changed a file, so sending one again could repeat that. */
+export function turnsThatDidWork(snapshot: ConversationSnapshot): Set<string> {
+	const turnIds = new Set<string>();
+	for (const turn of snapshot.turns) if (turn.diff?.files.length || turn.artifacts?.length) turnIds.add(turn.id);
+	for (const item of snapshot.items) {
+		if (item.turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)) turnIds.add(item.turnId);
+	}
+	return turnIds;
 }
 
 /**
@@ -1053,4 +1163,11 @@ export function pendingUserInput(snapshot: ConversationSnapshot): ConversationAc
 		(item): item is ConversationActivity =>
 			item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending",
 	);
+}
+
+/** Where a batched queued turn went: a steer that carried it, or else a queue drain into `deliveredWithTurnId`. */
+export interface BatchedDelivery {
+	turnId: string;
+	deliveredWithTurnId: string;
+	steerActivityId?: string;
 }

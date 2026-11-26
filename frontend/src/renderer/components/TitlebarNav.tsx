@@ -1,13 +1,16 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, PanelLeft } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { shellPanelTransition } from "@/lib/motion-spring";
+import { newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { AOMascot } from "./AOMascot";
+import type { AppShortcutId } from "../../shared/shortcuts";
 import { BuildInfoTooltip } from "./BuildInfoTooltip";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
@@ -44,10 +47,12 @@ export function useCanGoForward(): boolean {
 }
 
 export function TitlebarNav({
+  onBack,
   historyLocked = false,
   isFullScreen = false,
   zoomFactor = 1,
 }: {
+  onBack?: () => void;
   historyLocked?: boolean;
   isFullScreen?: boolean;
   zoomFactor?: number;
@@ -65,9 +70,30 @@ export function TitlebarNav({
   // or default width narrower than the label grows to fit it. Fullscreen and
   // zoom move the label with the traffic-light reserve, and the window's own
   // resize fires before that lands, so nudge again once the label has moved.
+  const newDesktopUi = useUiStore(newDesktopUiEnabled);
   useEffect(() => {
+    if (newDesktopUi) return;
     if (showBrand) window.dispatchEvent(new Event("resize"));
-  }, [showBrand, isFullScreen, zoomFactor]);
+  }, [newDesktopUi, showBrand, isFullScreen, zoomFactor]);
+  // Interface v2: the label stays mounted while the sidebar is shut, so after
+  // its first showing only fullscreen and zoom can move it. A synthetic resize
+  // on every sidebar toggle woke every resize listener in the app at the
+  // toggle's start.
+  const brandNudged = useRef(false);
+  useEffect(() => {
+    if (!newDesktopUi || !showBrand || brandNudged.current) return;
+    brandNudged.current = true;
+    window.dispatchEvent(new Event("resize"));
+  }, [newDesktopUi, showBrand]);
+  const chromeKey = `${isFullScreen}:${zoomFactor}`;
+  const lastChromeKey = useRef(chromeKey);
+  useEffect(() => {
+    if (lastChromeKey.current === chromeKey) return;
+    lastChromeKey.current = chromeKey;
+    if (newDesktopUi && showBrand) window.dispatchEvent(new Event("resize"));
+    // showBrand is read, not a trigger: a sidebar toggle must not nudge.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chromeKey]);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
@@ -88,7 +114,7 @@ export function TitlebarNav({
   // collapsed, the arrows take its place.
   const arrowsVisible = !showBrand;
   const prefersReducedMotion = useReducedMotion();
-  const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
+  const transition = prefersReducedMotion ? { duration: 0 } : shellPanelTransition(newDesktopUi);
 
   // The brand sits in this fixed row, not inside the sidebar, so it does not
   // shrink when a small window caps the sidebar narrower than the label. Cap it
@@ -107,7 +133,9 @@ export function TitlebarNav({
       const available = sidebar.offsetWidth - brand.getBoundingClientRect().left - 12;
       setBrandMaxWidth(Math.max(24, Math.floor(available)));
     };
-    fit();
+    // Interface v2 lets the observer's report on attach do the first fit, so
+    // there is no forced layout inside the toggle's task.
+    if (!newDesktopUi) fit();
     const observer = new ResizeObserver(fit);
     observer.observe(sidebar);
     window.addEventListener("resize", fit);
@@ -115,7 +143,7 @@ export function TitlebarNav({
       observer.disconnect();
       window.removeEventListener("resize", fit);
     };
-  }, [showBrand]);
+  }, [showBrand, newDesktopUi]);
 
   return (
     <div
@@ -127,11 +155,7 @@ export function TitlebarNav({
           isSidebarOpen ? t("shell.collapseSidebar") : t("shell.expandSidebar")
         }
         onClick={toggleSidebar}
-        title={
-          isSidebarOpen
-            ? t("titlebar.collapseSidebarShortcut")
-            : t("titlebar.expandSidebarShortcut")
-        }
+        shortcut="toggle-sidebar"
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
@@ -152,7 +176,7 @@ export function TitlebarNav({
           {/* Not a button on purpose. Only the label opts out of window drag (for
               the build-info tooltip); the rest of the row stays draggable. */}
           <span
-            className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+            className="flex w-max select-none items-center gap-1.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
             ref={brandRef}
             style={{ maxWidth: brandMaxWidth }}
@@ -176,10 +200,10 @@ export function TitlebarNav({
         >
           <div className="flex items-center gap-1">
             <TitlebarButton
-              disabled={historyLocked || !canGoBack}
+              disabled={!onBack && (historyLocked || !canGoBack)}
               label={t("titlebar.goBack")}
-              onClick={() => router.history.back()}
-              title={t("titlebar.goBack")}
+              onClick={onBack ?? (() => router.history.back())}
+              shortcut="history-back"
             >
               <ArrowLeft className="size-icon-lg" aria-hidden="true" />
             </TitlebarButton>
@@ -187,7 +211,7 @@ export function TitlebarNav({
               disabled={historyLocked || !canGoForward}
               label={t("titlebar.goForward")}
               onClick={() => router.history.forward()}
-              title={t("titlebar.goForward")}
+              shortcut="history-forward"
             >
               <ArrowRight className="size-icon-lg" aria-hidden="true" />
             </TitlebarButton>
@@ -200,14 +224,14 @@ export function TitlebarNav({
 
 function TitlebarButton({
   label,
-  title,
+  shortcut,
   disabled,
   tabIndex,
   onClick,
   children,
 }: {
   label: string;
-  title: string;
+  shortcut: AppShortcutId;
   disabled?: boolean;
   tabIndex?: number;
   onClick: () => void;
@@ -217,21 +241,23 @@ function TitlebarButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex">
-          <button
+          <Button
             aria-label={label}
             aria-disabled={disabled || undefined}
-            className="grid size-control-md place-items-center rounded-md text-passive transition-colors hover:bg-interactive-hover hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent disabled:hover:text-passive"
+            className="disabled:opacity-55"
             disabled={disabled}
             onClick={onClick}
+            size="icon-sm"
             style={noDragStyle}
             tabIndex={tabIndex}
             type="button"
+            variant="quiet"
           >
             {children}
-          </button>
+          </Button>
         </span>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{title}</TooltipContent>
+      <TooltipContent shortcut={shortcut} side="bottom">{label}</TooltipContent>
     </Tooltip>
   );
 }

@@ -7,13 +7,14 @@
  * turn, and the turn id that reaches the daemon is the one that was clicked.
  */
 
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot } from "../../types/conversation";
 import { renderChat as render } from "../../test/render-chat";
+import { useUiStore } from "../../stores/ui-store";
 
 /** A conversation with one failed turn and nothing in flight. */
 function failedSnapshot(): ConversationSnapshot {
@@ -85,7 +86,40 @@ describe("ChatWorkspace retry", () => {
 		expect(loadOlder).not.toHaveBeenCalled();
 	});
 
-	it("does not offer usage-limit recovery without a durable human prompt", () => {
+	function limitedEventSnapshot(): ConversationSnapshot {
+		const snapshot = limitedSnapshot();
+		snapshot.turns[0] = { ...snapshot.turns[0]!, hasHumanPrompt: false, hasEventPrompt: true };
+		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user"
+			? { ...item, origin: "automation" } : item);
+		return snapshot;
+	}
+
+	it("offers auto-resume for the latest limited turn an event started", async () => {
+		const setAutoResume = vi.fn();
+		render(<ChatWorkspace snapshot={limitedEventSnapshot()} retryControl={{ retry: vi.fn(), setAutoResume }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Auto-resume at reset" }));
+		expect(setAutoResume).toHaveBeenCalledWith("turn-1", true);
+	});
+
+	it("resumes a limited turn an event started once the reset has passed", async () => {
+		const snapshot = limitedEventSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("offers nothing on an event's limited turn once a newer turn ran", () => {
+		const snapshot = limitedEventSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.turns.push({ id: "later", state: "completed", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
+	});
+
+	it("does not offer usage-limit recovery without a durable human or event prompt", () => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.hasHumanPrompt = false;
 		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
@@ -174,6 +208,79 @@ describe("ChatWorkspace retry", () => {
 		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 	});
 
+	it("asks the other owner to close it before retrying", async () => {
+		const retry = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
+				onResumeAgent={retry}
+				resumeError="Reworded by the daemon"
+				resumeOpenElsewhere
+			/>,
+		);
+		expect(screen.getByText("This is open elsewhere")).toBeVisible();
+		expect(screen.getByText("Close it there to continue here. Codex can keep a closed chat for a while. Orchestrator checks again every 30 seconds.")).toBeVisible();
+		const button = screen.getByRole("button", { name: /^Retry$/ });
+		expect(button).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		await userEvent.click(button);
+		expect(retry).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads open elsewhere from the flag, not the message text", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
+				onResumeAgent={vi.fn()}
+				resumeError="this is open elsewhere; close it there to continue here"
+				resumeOpenElsewhere={false}
+			/>,
+		);
+		expect(screen.queryByText("This is open elsewhere")).not.toBeInTheDocument();
+		expect(screen.getByText("this is open elsewhere; close it there to continue here")).toBeVisible();
+	});
+
+	it("stops checking once the agent is running again", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, controller: { state: "ready" } }}
+					onResumeAgent={retry}
+					resumeError="this is open elsewhere; close it there to continue here"
+					resumeOpenElsewhere
+				/>,
+			);
+			act(() => vi.advanceTimersByTime(60_000));
+			expect(retry).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps checking while another app holds the chat", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, harness: "claude-code", controller: { state: "stopped" } }}
+					onResumeAgent={retry}
+					resumeError="this is open elsewhere; close it there to continue here"
+					resumeOpenElsewhere
+				/>,
+			);
+			expect(screen.getByText("Close it there to continue here. Orchestrator checks again every 30 seconds.")).toBeVisible();
+			act(() => vi.advanceTimersByTime(29_000));
+			expect(retry).not.toHaveBeenCalled();
+			act(() => vi.advanceTimersByTime(1_000));
+			return Promise.resolve().then(() => expect(retry).toHaveBeenCalledTimes(1));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("offers a retry on the failed turn and reports the clicked turn", async () => {
 		const onRetryTurn = vi.fn();
 		render(<ChatWorkspace snapshot={failedSnapshot()} retryControl={{ retry: onRetryTurn }} />);
@@ -186,6 +293,20 @@ describe("ChatWorkspace retry", () => {
 		// The failed turn in the fixture is turn-1; the daemon must be given AO's
 		// own turn id, which is what the snapshot exposes.
 		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("opens DeepSeek setup on the session host for a typed missing-key failure", async () => {
+		const snapshot = failedSnapshot();
+		snapshot.harness = "deepseek-harness";
+		snapshot.turns[0]!.failureCode = "provider_key_missing";
+		render(<ChatWorkspace snapshot={snapshot} remoteHostId="host-a" retryControl={{ retry: vi.fn() }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Set up DeepSeek" }));
+		expect(useUiStore.getState().settingsModal).toMatchObject({
+			scope: "global", section: "harness", focusAgentId: "deepseek-harness",
+			hostId: "host-a", harnessView: "local", startLogin: true,
+		});
+		useUiStore.getState().closeSettings();
 	});
 
 	it.each([1, 2])("keeps one retry for a failed turn after %i steers", async (steerCount) => {
@@ -277,6 +398,42 @@ describe("ChatWorkspace retry", () => {
 		const retry = screen.getByRole("button", { name: "Retry this turn" });
 		expect(retry).toBeDisabled();
 		expect(retry).toHaveTextContent("Retrying…");
+	});
+
+	/** turn-1 as an event started it: a review comment relayed by Orchestrator. */
+	function eventFailedSnapshot(hasEventPrompt: boolean): ConversationSnapshot {
+		const snapshot = failedSnapshot();
+		snapshot.turns = snapshot.turns.map((turn) => turn.id === "turn-1"
+			? { ...turn, hasEventPrompt, errorMessage: "Request timed out. If the API is slow to answer, set API_TIMEOUT_MS." }
+			: turn);
+		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user" && item.turnId === "turn-1"
+			? { ...item, origin: "automation" } : item);
+		return snapshot;
+	}
+
+	it("offers a retry on a timed-out turn an event started", async () => {
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={eventFailedSnapshot(true)} retryControl={{ retry: onRetryTurn }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("keeps an event turn's retry when its prompt is paged out", async () => {
+		const snapshot = eventFailedSnapshot(true);
+		snapshot.items = snapshot.items.filter((item) => !(item.kind === "message" && item.role === "user" && item.turnId === "turn-1"));
+		snapshot.hasMoreBefore = true;
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: onRetryTurn }} hasOlder onLoadOlder={vi.fn()} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("offers no retry on an event turn the daemon does not confirm a prompt for", () => {
+		render(<ChatWorkspace snapshot={eventFailedSnapshot(false)} retryControl={{ retry: vi.fn() }} />);
+
+		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
 	});
 
 	it("hides retry when delivery was never provider-confirmed", () => {

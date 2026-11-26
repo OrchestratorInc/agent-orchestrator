@@ -41,6 +41,8 @@ type State struct {
 	// AccountTokenOwner makes issuance idempotent for retries by the same AO
 	// account while still allowing an intentional re-link by another account.
 	AccountTokenOwner string `json:"accountTokenOwner,omitempty"`
+	// RequireDeviceCredentials makes the remote listener refuse the pairing password.
+	RequireDeviceCredentials bool `json:"requireDeviceCredentials,omitempty"`
 	// NoPublicTunnel keeps the self-hosted remote listener off the managed
 	// Cloudflare tunnel, including after daemon restart. Old Connect Mobile
 	// configs default to false and keep their existing behavior.
@@ -57,9 +59,8 @@ type State struct {
 	// ServeCleanupPending survives a failed Tailscale Serve teardown so a later
 	// tunnel-only setup cannot inherit an AO-owned tailnet route.
 	ServeCleanupPending bool `json:"serveCleanupPending,omitempty"`
-	// KeepAwake is the user's choice to keep this Mac from idle-sleeping while
-	// the bridge is on. Kept separate from Enabled so turning the bridge off and
-	// on again does not forget it.
+	// KeepAwake is an independent wake choice. Changing the mobile listener's
+	// Enabled state does not acquire or release wake ownership.
 	KeepAwake    bool `json:"keepAwake"`
 	KeepAwakeLid bool `json:"keepAwakeLid,omitempty"`
 	// BrowserRemoteAccess is an explicit, additional opt-in for streaming and

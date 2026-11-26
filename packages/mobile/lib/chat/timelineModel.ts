@@ -6,7 +6,6 @@ import type {
 	ConversationPlan,
 	ConversationTurn,
 } from "./types";
-import { stagedAttachmentParts } from "./messageAttachments";
 
 export type ConversationGroup = {
 	key: string;
@@ -18,22 +17,14 @@ export type ConversationGroup = {
 	plan?: ConversationPlan;
 };
 
-export type ConversationMarker = {
-	key: string;
-	sequence: number;
-	title: string;
-	detail?: string;
-	state?: ConversationTurn["state"];
-};
-
 export type ActivityNode = {
 	activity: ConversationActivity;
 	children: ActivityNode[];
 };
 
 export type ConversationTimelineRenderPlan =
-	| { kind: "empty"; inverted: false; groups: [] }
-	| { kind: "list"; inverted: boolean; groups: ConversationGroup[] };
+	| { kind: "empty"; groups: [] }
+	| { kind: "list"; groups: ConversationGroup[] };
 
 export type QueuedConversationMessage = { turnId: string; message: ConversationMessage };
 
@@ -69,7 +60,11 @@ export function readableConversationItems(snapshot: ConversationSnapshot, openin
 	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
-		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId))
+		// The model picker already names the model that answered.
+		item.detail?.event !== "model.rerouted" &&
+		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) &&
+		// An older copy of a list that spans turns; a later turn or run carries it.
+		!(item.activityKind === "plan" && item.detail?.superseded)
 	));
 }
 
@@ -98,7 +93,8 @@ export function groupConversationByTurn(
 			// The first loaded item can move backward when an older page arrives. The
 			// durable turn identity cannot, so use it as the React/FlatList key and
 			// preserve expanded rows and scroll measurements across pagination.
-			const group = { key: `turn-${item.turnId}`, turnId: item.turnId, anchor: item.sequence, items: [item], turn: turns.get(item.turnId) } satisfies ConversationGroup;
+			const turn = turns.get(item.turnId);
+			const group = { key: `turn-${item.turnId}`, turnId: item.turnId, anchor: turn?.anchorSequence ?? item.sequence, items: [item], turn } satisfies ConversationGroup;
 			byTurn.set(item.turnId, group);
 			groups.push(group);
 		}
@@ -109,24 +105,14 @@ export function groupConversationByTurn(
 }
 
 /**
- * Gives each turn group the plan it should show, as the desktop does. A list the
- * agent keeps across turns (Claude's task list) reaches every later turn as a copy
- * of the same list. Only the latest copy is current, so only that turn shows it;
- * the earlier copies would otherwise stack down the history.
+ * Gives each turn group the plan it should show, as the desktop does: the turn's
+ * plan, unless the daemon marked it superseded. That is an older copy of a list the
+ * agent keeps across turns (Claude's task list), which a later turn or run carries.
  */
 function attachCurrentPlans(groups: ConversationGroup[]): void {
-	let currentSpanningTurn: string | undefined;
-	for (let index = groups.length - 1; index >= 0; index--) {
-		if (groups[index].turn?.plan?.spansTurns) {
-			currentSpanningTurn = groups[index].turnId;
-			break;
-		}
-	}
 	for (const group of groups) {
 		const plan = group.turn?.plan;
-		if (!plan?.steps.length) continue;
-		if (plan.spansTurns && group.turnId !== currentSpanningTurn) continue;
-		group.plan = plan;
+		if (plan?.steps.length && !plan.superseded) group.plan = plan;
 	}
 }
 
@@ -164,13 +150,42 @@ function rendersNothing(item: ConversationItem): boolean {
 }
 
 /**
- * The one reply that draws the typing cursor: the newest item, while it is
- * still streaming. ACP providers settle a turn's text blocks only when the turn
- * ends, so earlier blocks stay marked streaming after a tool call follows them.
+ * A finished turn's items as the timeline draws them. Older daemons store the
+ * provider's failure notice ("You've hit your 5-hour limit…") again as a running
+ * row each time the agent restarts and replays its history, after the turn has
+ * long ended, so it would spin forever and repeat. On a finished turn nothing
+ * runs: a leftover running row shows the status the daemon gives such rows when
+ * the turn settles, a notice that restates the turn's own error is dropped (the
+ * turn's outcome already says it), and replayed copies of a notice show once.
  */
-export function streamingCursorMessageId(items: ConversationItem[]): string | undefined {
-	const last = items.at(-1);
-	return last?.kind === "message" && last.role === "assistant" && last.streaming ? last.id : undefined;
+export function settledTurnItems(items: ConversationItem[], turn: ConversationTurn | undefined): ConversationItem[] {
+	if (!turn || turn.state === "running" || turn.state === "queued") return items;
+	const turnError = turn.state === "failed" ? turn.errorMessage?.trim() : undefined;
+	const notices = new Set<string>();
+	const settled: ConversationItem[] = [];
+	for (const item of items) {
+		if (item.kind !== "activity") {
+			settled.push(item);
+			continue;
+		}
+		if (item.detail?.event === "provider.failure") {
+			const summary = String(item.summary ?? "").trim();
+			if (turnError && summary === turnError) continue;
+			// A replay repeats the whole notice; one that shares only the title is new.
+			const key = [summary, item.detail.category ?? "", item.detail.severity ?? "", item.detail.text ?? ""].join("\u0000");
+			if (notices.has(key)) continue;
+			notices.add(key);
+		}
+		settled.push(item.status === "running" ? { ...item, status: settledActivityStatus(turn.state) } : item);
+	}
+	return settled;
+}
+
+/** The daemon's terminalActivityStatus: what a settling turn writes over a running row. */
+function settledActivityStatus(state: ConversationTurn["state"]): ConversationActivity["status"] {
+	if (state === "completed" || state === "recovered") return "completed";
+	if (state === "interrupted") return "cancelled";
+	return "failed";
 }
 
 /**
@@ -212,45 +227,18 @@ export function startupPlacement(groups: ReadonlyArray<Pick<ConversationGroup, "
 	return openingTurnId && groups.some((group) => group.turnId === openingTurnId) ? "turn" : "standalone";
 }
 
-/** Latest-first data lets an inverted virtualized list paint the live edge first. */
-export function latestFirstConversationGroups(
-	snapshot: ConversationSnapshot,
-	items = readableConversationItems(snapshot),
-): ConversationGroup[] {
-	return groupConversationByTurn(snapshot, items).reverse();
-}
-
+/**
+ * The conversation in reading order, oldest first, on both platforms. The list
+ * is never inverted: Android's text-selection toolbar needs untransformed
+ * screen coordinates, and iOS 26's navigation bar blurs the list's top edge,
+ * which an inverted list turns into its composer end.
+ */
 export function conversationTimelineRenderPlan(
 	snapshot: ConversationSnapshot,
 	items = readableConversationItems(snapshot),
-	platform: "android" | "ios" = "ios",
 ): ConversationTimelineRenderPlan {
-	// Android's native text-selection toolbar needs untransformed screen
-	// coordinates. FlatList's inverted transform detaches it from selected text.
-	const inverted = platform !== "android";
-	const groups = inverted ? latestFirstConversationGroups(snapshot, items) : groupConversationByTurn(snapshot, items);
-	return groups.length === 0
-		? { kind: "empty", inverted: false, groups: [] }
-		: { kind: "list", inverted, groups };
-}
-
-export function conversationMarkers(snapshot: ConversationSnapshot): ConversationMarker[] {
-	return groupConversationByTurn(snapshot).map((group) => {
-		const human = group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human");
-		const assistant = [...group.items].reverse().find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim());
-		const activity = group.items.find((item): item is ConversationActivity => item.kind === "activity");
-		const title = previewText(human?.kind === "message" ? humanMessageTitle(human.text) : activity?.summary || "Conversation update", 120);
-		const detailSource = assistant?.kind === "message" ? assistant.text : activity?.detail?.text || activity?.summary;
-		const detail = detailSource ? previewText(String(detailSource), 240) : undefined;
-		return { key: group.key, sequence: group.anchor, title, detail: detail && detail !== title ? detail : undefined, state: group.turn?.state };
-	});
-}
-
-/** A marker names what the human wrote, not the staged-path list AO appended. */
-function humanMessageTitle(text: string): string {
-	const { body, attachments } = stagedAttachmentParts(text);
-	if (attachments.length === 0) return text;
-	return body.trim() || (attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`);
+	const groups = groupConversationByTurn(snapshot, items);
+	return groups.length === 0 ? { kind: "empty", groups: [] } : { kind: "list", groups };
 }
 
 /**
@@ -395,14 +383,4 @@ function activityCycle(node: ActivityNode, parent: ActivityNode, byProvider: Map
 		current = parentId ? byProvider.get(parentId) : undefined;
 	}
 	return false;
-}
-
-function previewText(value: string, limit: number): string {
-	const plain = value
-		.replace(/```[\s\S]*?```/g, " code sample ")
-		.replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-		.replace(/[*_`#>~]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	return plain.length > limit ? `${plain.slice(0, limit - 1).trimEnd()}…` : plain;
 }

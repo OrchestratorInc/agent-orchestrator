@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -71,6 +72,79 @@ func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, 
 	}
 	if err := s.qw.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: prURL, ExportAllowed: s.usageAllowed()}); err != nil {
 		slog.Warn("record merged pr usage failed", "error", err)
+	}
+	return nil
+}
+
+// MarkPRMergeQueue records a provider-confirmed merge queue change: entry is
+// the PR's place after joining the queue, or nil once it left. The observer's
+// next fetch reconciles it. A merged PR is never rewritten.
+func (s *Store) MarkPRMergeQueue(ctx context.Context, prURL string, entry *domain.MergeQueueEntry, at time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.MarkPRMergeQueue(ctx, gen.MarkPRMergeQueueParams{
+		MergeQueueEntry: encodeMergeQueueEntry(entry),
+		UpdatedAt:       at,
+		URL:             prURL,
+	})
+	if err != nil {
+		return fmt.Errorf("mark pr merge queue %s: %w", prURL, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("mark pr merge queue %s: updated %d rows", prURL, rows)
+	}
+	return nil
+}
+
+// MarkPRState records the authoritative result of a provider close, reopen,
+// ready-for-review, or convert-to-draft mutation without replacing
+// concurrently refreshed CI or review facts. A merged PR is never rewritten.
+// The pr_cdc_update trigger emits the corresponding pr_updated event.
+func (s *Store) MarkPRState(ctx context.Context, prURL string, state domain.PRState, changedAt time.Time) error {
+	switch state {
+	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateClosed:
+	default:
+		return fmt.Errorf("mark pr state %s: unsupported state %q", prURL, state)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	// Closing keeps a draft a draft, as the providers do, so reopening it brings
+	// back a draft; the other states say outright whether the PR is one.
+	draft := state == domain.PRStateDraft
+	if state == domain.PRStateClosed {
+		current, err := s.qw.GetPR(ctx, prURL)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("mark pr state %s: updated 0 rows", prURL)
+		}
+		if err != nil {
+			return fmt.Errorf("mark pr state %s: %w", prURL, err)
+		}
+		draft = current.IsDraft != 0
+	}
+	rows, err := s.qw.MarkPRState(ctx, gen.MarkPRStateParams{
+		PRState:        state,
+		IsDraft:        boolInt(draft),
+		IsClosed:       boolInt(state == domain.PRStateClosed),
+		StateChangedAt: sql.NullTime{Time: changedAt, Valid: true},
+		UpdatedAt:      changedAt,
+		URL:            prURL,
+	})
+	if err != nil {
+		return fmt.Errorf("mark pr state %s: %w", prURL, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("mark pr state %s: updated %d rows", prURL, rows)
+	}
+	return nil
+}
+
+// UpsertPRReviewComment stores one just-posted review-thread reply so the view
+// shows it before the next review observation, which reconciles it.
+func (s *Store) UpsertPRReviewComment(ctx context.Context, prURL string, comment domain.PullRequestComment) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.UpsertPRComment(ctx, genCommentParams(prURL, comment)); err != nil {
+		return fmt.Errorf("upsert pr review comment %s/%s: %w", prURL, comment.ID, err)
 	}
 	return nil
 }
@@ -155,15 +229,27 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 			return err
 		}
 	}
+	if err := writePRDetails(ctx, q, pr.URL, pr.UpdatedAtProvider, pr.Details); err != nil {
+		return err
+	}
 	if err := q.UpgradeWorkerPRUsageIdentity(ctx, pr.URL); err != nil {
 		slog.Warn("upgrade worker pr usage identity failed", "error", err)
 	}
 	if err := q.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: pr.URL, ExportAllowed: exportAllowed}); err != nil {
 		slog.Warn("record worker pr usage failed", "error", err)
 	}
-	for _, c := range checks {
-		if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {
-			return err
+	// The table has one row per PR, job name, and head. If two workflows use
+	// the same job name, retain an actionable check (and its link) over a
+	// passing sibling; the next all-passing observation replaces it normally.
+	for _, actionable := range []bool{false, true} {
+		for _, c := range checks {
+			isActionable := c.Status == domain.PRCheckFailed || c.Status == domain.PRCheckCancelled
+			if isActionable != actionable {
+				continue
+			}
+			if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {
+				return err
+			}
 		}
 	}
 	if replaceLegacyComments {
@@ -451,7 +537,7 @@ func reviewThreadIDs(threads []domain.PullRequestReviewThread, comments []domain
 
 // GetPRLastNudgeSignature returns the persisted nudge-dedup JSON payload for a
 // PR (empty string when the PR has no row or no signatures yet). The payload is
-// opaque to storage; lifecycle.Manager owns its shape.
+// written by lifecycle.Manager; Kanban queries read its review-delivery entries.
 func (s *Store) GetPRLastNudgeSignature(ctx context.Context, url string) (string, error) {
 	sig, err := s.qr.GetPRLastNudgeSignature(ctx, url)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -472,6 +558,30 @@ func (s *Store) UpdatePRLastNudgeSignature(ctx context.Context, url, payload str
 		return fmt.Errorf("update pr nudge signature %s: %w", url, err)
 	}
 	return nil
+}
+
+// RecordRepositoryRename stores the provider's current name for a renamed or
+// transferred repository.
+func (s *Store) RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.UpsertRepositoryRename(ctx, gen.UpsertRepositoryRenameParams(r)); err != nil {
+		return fmt.Errorf("record repository rename %s/%s: %w", r.Host, r.OldName, err)
+	}
+	return nil
+}
+
+// ListRepositoryRenames returns every known repository rename.
+func (s *Store) ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error) {
+	rows, err := s.qr.ListRepositoryRenames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list repository renames: %w", err)
+	}
+	out := make([]domain.RepositoryRename, len(rows))
+	for i, row := range rows {
+		out[i] = domain.RepositoryRename(row)
+	}
+	return out, nil
 }
 
 // GetPR returns the PR facts for a URL, or ok=false if absent.
@@ -555,17 +665,6 @@ func (s *Store) ListPRComments(ctx context.Context, prURL string) ([]domain.Pull
 	return out, nil
 }
 
-// MarkPRCommentResolved records a provider-resolved review comment locally.
-func (s *Store) MarkPRCommentResolved(ctx context.Context, prURL, commentID string) (bool, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	affected, err := s.qw.MarkPRCommentResolved(ctx, gen.MarkPRCommentResolvedParams{PRURL: prURL, CommentID: commentID})
-	if err != nil {
-		return false, fmt.Errorf("mark pr comment resolved %s/%s: %w", prURL, commentID, err)
-	}
-	return affected > 0, nil
-}
-
 // MarkPRReviewThreadResolved records a provider-resolved review thread and
 // all of its comments locally. The two updates share the writer lock so a
 // concurrent observation cannot interleave with the targeted state change.
@@ -642,6 +741,8 @@ func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 		ProviderID:               r.ProviderID,
 		SourceBranch:             r.SourceBranch,
 		TargetBranch:             r.TargetBranch,
+		HeadFromFork:             r.HeadFromFork,
+		HeadIsDefaultBranch:      r.HeadIsDefaultBranch,
 		HeadSha:                  r.HeadSHA,
 		Title:                    r.Title,
 		Additions:                int64(r.Additions),
@@ -669,8 +770,34 @@ func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 		CIObservedAt:             nullTime(r.CIObservedAt),
 		ReviewObservedAt:         nullTime(r.ReviewObservedAt),
 		ReviewPartial:            r.ReviewPartial,
+		MergeQueueRequired:       r.MergeQueueRequired,
+		MergeQueueEntry:          encodeMergeQueueEntry(r.MergeQueue),
 		ID:                       r.SessionID,
 	}
+}
+
+// encodeMergeQueueEntry stores a merge queue entry as JSON, empty for none.
+func encodeMergeQueueEntry(entry *domain.MergeQueueEntry) string {
+	if entry == nil {
+		return ""
+	}
+	b, err := json.Marshal(entry)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// decodeMergeQueueEntry reads a stored entry; an empty or unreadable one is none.
+func decodeMergeQueueEntry(raw string) *domain.MergeQueueEntry {
+	if raw == "" {
+		return nil
+	}
+	var entry domain.MergeQueueEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil || entry.State == "" {
+		return nil
+	}
+	return &entry
 }
 
 func genLegacyPRParams(r domain.PullRequest) gen.UpsertLegacyPRParams {
@@ -749,6 +876,8 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 		ProviderID:               p.ProviderID,
 		SourceBranch:             p.SourceBranch,
 		TargetBranch:             p.TargetBranch,
+		HeadFromFork:             p.HeadFromFork,
+		HeadIsDefaultBranch:      p.HeadIsDefaultBranch,
 		HeadSHA:                  p.HeadSha,
 		Title:                    p.Title,
 		Additions:                int(p.Additions),
@@ -774,6 +903,8 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 		ReviewObservedAt:         timeFromNull(p.ReviewObservedAt),
 		ReviewPartial:            p.ReviewPartial,
 		AutoInjectCI:             p.AutoInjectCI,
+		MergeQueueRequired:       p.MergeQueueRequired,
+		MergeQueue:               decodeMergeQueueEntry(p.MergeQueueEntry),
 	}
 }
 

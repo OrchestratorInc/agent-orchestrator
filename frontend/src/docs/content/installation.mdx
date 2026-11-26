@@ -11,20 +11,61 @@ On your phone, install [Orchestrator Mobile for iPhone or iPad](https://apps.app
 
 The desktop app is the canonical install path. It owns the local daemon, requires no global `ao` command, and checks for updates after launch and while it is running.
 
-## Optional macOS install with Homebrew
+<span id="optional-macos-install-with-homebrew" />
+## Install with a package manager
 
-The desktop download above is the recommended install. On macOS, you can also install the existing Homebrew cask:
+The desktop download above is the recommended install. You can also install the same desktop app with a package manager.
 
-```bash
-brew install --cask agentwrapper/tap/agent-orchestrator
-```
-
-The desktop app normally updates itself. To refresh a Homebrew-managed install, update Homebrew and then upgrade the cask:
+On macOS, use the official Homebrew cask. It installs the app and links the `ao` command into Homebrew's `bin` folder, so `ao` is on your `PATH`:
 
 ```bash
-brew update
-brew upgrade --cask agentwrapper/tap/agent-orchestrator
+brew install --cask agent-orchestrator
 ```
+
+On Windows, use winget:
+
+```powershell
+winget install --id OrchestratorInc.AgentOrchestrator -e
+```
+
+The desktop app normally updates itself. To refresh a package-manager install, upgrade it the same way:
+
+```bash
+brew upgrade --cask agent-orchestrator
+```
+
+```powershell
+winget upgrade --id OrchestratorInc.AgentOrchestrator -e
+```
+
+If you installed from the older `agentwrapper/tap` tap, switch to the official cask, which is the one that links `ao`:
+
+```bash
+brew uninstall --cask agentwrapper/tap/agent-orchestrator
+brew install --cask agent-orchestrator
+```
+
+<span id="where-ao-is" />
+## Where the `ao` command is
+
+The desktop app bundles the `ao` CLI. You don't need it for normal desktop use, but scripts and coding agents use it to drive Orchestrator.
+
+| How you installed | Where `ao` is |
+| --- | --- |
+| Homebrew cask (macOS) | On your `PATH` as `ao`, linked from the app bundle |
+| Disk image or zip (macOS) | `/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao` |
+| Windows installer or winget | `resources\daemon\ao.exe` inside the app's install folder |
+| Linux `.deb` or `.rpm` | `resources/daemon/ao` inside the app's install folder |
+
+Without the cask, call `ao` by its full path, or add an alias to your shell profile. An alias works only in your interactive shell; scripts don't see it, so they should use the full path or a linked `ao`:
+
+```bash
+alias ao='"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"'
+```
+
+To use the short `ao` name without the cask on macOS, or on Linux with a `.deb` or `.rpm` install, turn on **Developer mode** in **Settings → General** and choose **Link** beside **Global ao command**. AppImage installs cannot be linked. See [Run the CLI](/cli#run-the-cli).
+
+Run `ao status` to confirm it works. Commands that act on projects and sessions need the desktop app open, because the app runs the daemon they talk to. To drive Orchestrator from a coding agent, see [Use Orchestrator from your coding agent](/agent-setup).
 
 ## Prerequisites
 
@@ -35,7 +76,7 @@ brew upgrade --cask agentwrapper/tap/agent-orchestrator
 | External coding agent (called a harness in Orchestrator) | Agent sessions that use an installed CLI | Install a supported tool such as Claude Code, Codex, Cursor, Aider, or OpenCode. See the [agent catalog](/plugins/agents) for the current list and interface support. Unreal Agent is built into Orchestrator for Chat on macOS and Linux. |
 | tmux | macOS preflight and legacy/fallback terminal sessions | Desktop macOS/Linux packages include it. Source launches may need system tmux; see [Runtime](/plugins/runtimes). |
 
-Orchestrator uses the coding agents and sign-ins already installed on your computer. **Settings → Harness** offers setup and readiness checks for supported agents; some need to be installed or signed in outside Orchestrator. Unreal Agent is a built-in Chat-only exception with its own platform and permission limits. See the [agent catalog](/plugins/agents).
+Orchestrator uses the coding agents and sign-ins already installed on your computer. **Settings → Agents** shows each supported agent's readiness and offers **Install** and **Login** for agents that support them. Unreal Agent is a built-in Chat-only exception with its own platform and permission limits. See the [agent catalog](/plugins/agents).
 
 <span id="set-up-ao" />
 ## Set up Orchestrator
@@ -70,7 +111,11 @@ For GitLab, sign in with a GitLab token or `glab`. See [source-control setup](/p
 
 ### Install and sign in to an external agent
 
-For an externally installed harness, install it and run it once outside Orchestrator to complete its sign-in flow. Orchestrator detects available harnesses when you create a session. If you use the built-in Unreal Agent, skip this step and choose it for a Chat session on supported macOS or Linux.
+Open **Settings → Agents** and select the agent you want to use. If it isn't installed, choose **Install** (or **Open installation guide**). If it isn't signed in, choose **Login** and finish the sign-in that opens. The agent is ready when Settings shows it installed and signed in. An agent you already use and are signed in to is detected automatically.
+
+If you prefer the terminal, sign in with the agent's own command instead, for example `codex login`, or run `claude` and use `/login`. Then run `ao agent ls --refresh` so Orchestrator checks again.
+
+If you use the built-in Unreal Agent, skip this step and choose it for a Chat session on supported macOS or Linux.
 
 Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui).
 
@@ -92,14 +137,14 @@ You can also start a projectless standalone task for work that needs no reposito
 <summary>
 	<span className="ao-legacy-cli-summary-copy">
 		<span className="ao-legacy-cli-summary-title">Already have the npm CLI?</span>
-		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> is frozen at <code>0.10.0</code> and is no longer recommended.</span>
+		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> is frozen at <code>0.10.3</code> and is no longer recommended.</span>
 	</span>
 	<span className="ao-legacy-cli-summary-icon" aria-hidden="true" />
 </summary>
 
 <div className="ao-legacy-cli-details__content">
 
-`0.10.0` is the final npm release. The package remains a legacy bridge for existing users and will not receive new product features. Running `ao start` from that install fetches and opens the desktop build.
+`0.10.3` is the final npm release. The package remains a legacy bridge for existing users and will not receive new product features. Running `ao start` from that install fetches and opens the desktop build. The `ao` it leaves on your `PATH` is still `0.10.3` and doesn't match the current app, so prefer the [bundled `ao`](#where-ao-is).
 
 ```bash
 npm install -g @aoagents/ao
@@ -120,7 +165,7 @@ All Orchestrator application state lives under `~/.ao` by default, including the
 
 <Accordions>
 	<Accordion title="No agent is available">
-		For an external harness, install it, run it once to authenticate, then restart Orchestrator so the desktop-launched daemon receives the updated login-shell environment. Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux; choose it directly instead of installing a CLI.
+		Open **Settings → Agents**, select the agent, and use **Install** or **Login**. From a terminal, sign in with the agent's own login command, then run `ao agent ls --refresh`. If a newly installed agent still doesn't appear, quit and reopen Orchestrator so its daemon picks up your updated shell `PATH`. Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux; choose it directly instead of installing a CLI.
 	</Accordion>
 	<Accordion title="GitHub data is missing">
 		Run `gh auth status`. Confirm the active account can access the repository and its pull requests.
@@ -128,8 +173,8 @@ All Orchestrator application state lives under `~/.ao` by default, including the
 	<Accordion title="Terminal UI cannot start on macOS or Linux">
 		Packaged builds include tmux. New sessions normally use native PTY hosts; macOS still checks tmux availability and older sessions may need it. See [runtime diagnostics](/plugins/runtimes/tmux) for source installs and fallback behavior.
 	</Accordion>
-	<Accordion title="The legacy `ao` command is not found">
-		The desktop app does not require it. Only troubleshoot the package manager's global bin path if you intentionally use the frozen legacy CLI.
+	<Accordion title="The `ao` command is not found">
+		The desktop app does not require it. The app bundles `ao` but doesn't add it to your `PATH`; see [where the `ao` command is](#where-ao-is). The official Homebrew cask links it for you. If an older `ao` from the legacy npm package comes first on your `PATH`, `ao doctor` reports which `ao` it found.
 	</Accordion>
 	<Accordion title="macOS says the developer cannot be verified">
 		In Finder, right-click Orchestrator, choose Open, then choose Open again in the confirmation dialog. If macOS still blocks the app, run these diagnostics and include the output when opening an issue:

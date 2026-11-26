@@ -1,5 +1,6 @@
 import {
 	APP_SHORTCUTS,
+	isSplitPaneShortcut,
 	effectiveShortcutBindings,
 	SHORTCUT_CATEGORIES,
 	shortcutBindingKeys,
@@ -15,7 +16,7 @@ import type { MessageKey } from "../i18n/messages";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useKeybindingsStore } from "../stores/keybindings-store";
-import { X } from "lucide-react";
+import { useUiStore } from "../stores/ui-store";
 import { cn } from "@/lib/utils";
 import {
 	Dialog,
@@ -28,8 +29,10 @@ import {
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { ShortcutKeys, shortcutKeysDescription } from "./ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useSplitPanesEnabled } from "../lib/split-panes";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -121,9 +124,15 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 	const overrides = useKeybindingsStore((state) => state.overrides);
 	const paletteShortcuts: readonly AppShortcutId[] = ["command-palette", "quick-open-file"];
 	// The dialog's own chord sits in the header, so it is not repeated as a row.
+	// Dictation is in preview behind Developer mode.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const splitPanes = useSplitPanesEnabled();
 	const availableShortcuts = APP_SHORTCUTS.filter(
 		(shortcut) =>
-			shortcut.id !== "keyboard-shortcuts" && (!paletteShortcuts.includes(shortcut.id) || isCommandPaletteEnabled),
+			shortcut.id !== "keyboard-shortcuts" &&
+			(!paletteShortcuts.includes(shortcut.id) || isCommandPaletteEnabled) &&
+			(shortcut.id !== "dictate" || developerMode) &&
+			(!isSplitPaneShortcut(shortcut.id) || splitPanes),
 	);
 	const helpBindings = effectiveShortcutBindings("keyboard-shortcuts", isMac, overrides);
 
@@ -145,14 +154,12 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 					<DialogTitle className="settings-dialog-title">{t("shortcut.dialogTitle")}</DialogTitle>
 					{helpBindings.length > 0 ? <BindingSummary bindings={helpBindings} isMac={isMac} /> : null}
 					{onCustomize ? (
-						<Button className="ml-auto h-8" type="button" variant="ghost" size="sm" onClick={() => { customizingRef.current = true; onCustomize(); }}>
+						<Button className="ml-auto" type="button" variant="ghost" size="default" onClick={() => { customizingRef.current = true; onCustomize(); }}>
 							{t("shortcut.customize")}
 						</Button>
 					) : null}
 					<DialogClose asChild>
-						<button type="button" className="settings-close-button" aria-label={t("common.close")}>
-							<X className="size-4" aria-hidden="true" />
-						</button>
+						<CloseButton aria-label={t("common.close")} />
 					</DialogClose>
 				</div>
 				<DialogDescription className="sr-only">{t("shortcut.dialogDescription")}</DialogDescription>

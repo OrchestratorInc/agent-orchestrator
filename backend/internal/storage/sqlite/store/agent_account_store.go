@@ -24,20 +24,41 @@ func (s *Store) ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, e
 	for _, row := range rows {
 		out = append(out, domain.AgentAccount{
 			ID: row.ID, Provider: domain.AgentAccountProvider(row.Provider), Home: row.Home,
-			Email: row.Email, Plan: row.Plan, CreatedAt: row.CreatedAt,
+			Email: row.Email, Plan: row.Plan, Kind: domain.AgentAccountKind(row.Kind), Name: row.Name, KeyHint: row.KeyHint,
+			CreatedAt: row.CreatedAt,
 		})
 	}
 	return out, nil
 }
 
-// CreateAgentAccount saves a signed-in account folder.
+// CreateAgentAccount saves a signed-in account folder, or an API key account.
 func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) error {
+	kind := a.Kind
+	if kind == "" {
+		kind = domain.AgentAccountKindSubscription
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.CreateAgentAccount(ctx, gen.CreateAgentAccountParams{
-		ID: a.ID, Provider: string(a.Provider), Home: a.Home, Email: a.Email, Plan: a.Plan, CreatedAt: a.CreatedAt.UTC(),
+		ID: a.ID, Provider: string(a.Provider), Home: a.Home, Email: a.Email, Plan: a.Plan,
+		Kind: string(kind), Name: a.Name, KeyHint: a.KeyHint, CreatedAt: a.CreatedAt.UTC(),
 	}); err != nil {
 		return fmt.Errorf("create agent account %s: %w", a.ID, err)
+	}
+	return nil
+}
+
+// UpdateAgentAccountKeyHint records the last characters of an API key or
+// setup token account's new key or token. Any other account is unknown here.
+func (s *Store) UpdateAgentAccountKeyHint(ctx context.Context, id, hint string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.UpdateAgentAccountKeyHint(ctx, gen.UpdateAgentAccountKeyHintParams{KeyHint: hint, ID: id})
+	if err != nil {
+		return fmt.Errorf("update agent account %s key hint: %w", id, err)
+	}
+	if n == 0 {
+		return ports.ErrAgentAccountUnknown
 	}
 	return nil
 }
@@ -121,13 +142,21 @@ func (s *Store) GetSessionAgentAccount(ctx context.Context, id domain.SessionID,
 	return accountID, true, nil
 }
 
-// AgentAccountUsageSince sums model usage per account, UTC day and model.
+// AgentAccountUsageSince sums model usage per account, UTC day and model,
+// including the spend of sessions deleted since. Callers pass the start of a
+// UTC day, so the deleted sessions' day totals line up with the live events.
+// An account, day and model may appear twice (live and deleted); callers sum.
 func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]domain.AgentAccountUsage, error) {
-	rows, err := s.qr.AgentAccountUsageSince(ctx, sql.NullTime{Time: since.UTC(), Valid: true})
+	since = since.UTC()
+	rows, err := s.qr.AgentAccountUsageSince(ctx, sql.NullTime{Time: since, Valid: true})
 	if err != nil {
 		return nil, fmt.Errorf("read agent account usage: %w", err)
 	}
-	out := make([]domain.AgentAccountUsage, 0, len(rows))
+	deleted, err := s.qr.DeletedSessionAccountUsageSince(ctx, since.Format(time.DateOnly))
+	if err != nil {
+		return nil, fmt.Errorf("read deleted sessions' agent account usage: %w", err)
+	}
+	out := make([]domain.AgentAccountUsage, 0, len(rows)+len(deleted))
 	for _, row := range rows {
 		out = append(out, domain.AgentAccountUsage{
 			AccountID: row.AccountID, Day: row.Day, Model: row.ModelID,
@@ -135,5 +164,31 @@ func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]
 			CostNanos: row.EstimatedCostNanos,
 		})
 	}
+	for _, row := range deleted {
+		out = append(out, domain.AgentAccountUsage{
+			AccountID: row.AccountID, Day: row.Day, Model: row.ModelID,
+			InputTokens: row.InputTokens, CachedInputTokens: row.CachedInputTokens, OutputTokens: row.OutputTokens,
+			CostNanos: row.EstimatedCostNanos,
+		})
+	}
 	return out, nil
+}
+
+// foldDeletedSessionAccountUsage adds a session's usage, attributed to its
+// accounts exactly as AgentAccountUsageSince does, to the deleted-session
+// totals. It runs inside the delete's transaction, before the session row (and
+// with it the usage events and account bindings) cascades away.
+func foldDeletedSessionAccountUsage(ctx context.Context, q *gen.Queries, id domain.SessionID) error {
+	rows, err := q.SessionAgentAccountUsageSince(ctx, gen.SessionAgentAccountUsageSinceParams{
+		SessionID: id, Since: sql.NullTime{Time: time.Time{}, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := q.AddDeletedSessionAccountUsage(ctx, gen.AddDeletedSessionAccountUsageParams(row)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

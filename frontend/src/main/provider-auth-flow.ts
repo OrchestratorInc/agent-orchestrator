@@ -4,8 +4,9 @@ import { access, chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm } from "nod
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { shell } from "electron";
+import { app, shell } from "electron";
 import crypto from "node:crypto";
+import { authCallbackReturnUrl, renderAuthCallbackPage } from "./auth-callback-page";
 
 const MAX_AUTH_DOCUMENT_BYTES = 64 << 10;
 
@@ -322,11 +323,6 @@ const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_SCOPE = "user:inference";
 const CLAUDE_OAUTH_TOKEN_TTL_SECONDS = 31_536_000; // one year, matching `setup-token`
 
-const CLAUDE_CALLBACK_HTML = (title: string, body: string): string =>
-	`<!doctype html><meta charset="utf-8"><title>${title}</title>` +
-	`<body style="font:15px -apple-system,system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#111">` +
-	`<h1 style="font-size:1.25rem">${title}</h1><p style="color:#555">${body}</p></body>`;
-
 // Build the Claude OAuth authorize URL for a PKCE loopback login. Kept pure and
 // exported so the parameter set the CLI depends on (client id, loopback redirect,
 // user:inference scope, S256 challenge) is guarded by a unit test.
@@ -389,7 +385,7 @@ const claudeAuthFlow: ProviderAuthFlow = {
 				cleanup();
 				server?.close();
 				res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-				res.end(CLAUDE_CALLBACK_HTML("Sign-in failed", "Return to Agent Orchestrator and try signing in again."));
+				res.end(renderAuthCallbackPage({ provider: "claude-code", ok: false, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
 				reject(err);
 			};
 
@@ -441,12 +437,7 @@ const claudeAuthFlow: ProviderAuthFlow = {
 						cleanup();
 						server?.close();
 						res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-						res.end(
-							CLAUDE_CALLBACK_HTML(
-								"Signed in to Agent Orchestrator",
-								"You can close this tab and return to Agent Orchestrator.",
-							),
-						);
+						res.end(renderAuthCallbackPage({ provider: "claude-code", ok: true, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
 						resolve({ provider: "claude-code", credentialType: "oauth_token", secret: accessToken });
 					} catch (err) {
 						failCallback(res, err instanceof Error ? err : new Error(String(err)));
@@ -484,11 +475,6 @@ const claudeAuthFlow: ProviderAuthFlow = {
 //   read:org    – read org membership and team membership
 //   repo_hook   – full control of repo webhooks (needed for some cloud features)
 const GITHUB_OAUTH_SCOPES = "repo read:org repo_hook";
-
-const GITHUB_CALLBACK_HTML = (title: string, body: string): string =>
-	`<!doctype html><meta charset="utf-8"><title>${title}</title>` +
-	`<body style="font:15px -apple-system,system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#111">` +
-	`<h1 style="font-size:1.25rem">${title}</h1><p style="color:#555">${body}</p></body>`;
 
 const githubAuthFlow: ProviderAuthFlow = {
 	provider: "github",
@@ -534,7 +520,7 @@ const githubAuthFlow: ProviderAuthFlow = {
 					server?.close();
 					reject(new Error(url.searchParams.get("error_description") || `GitHub sign-in failed: ${errorParam}`));
 					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(GITHUB_CALLBACK_HTML("Sign-in failed", "Return to Agent Orchestrator and try signing in again."));
+					res.end(renderAuthCallbackPage({ provider: "github", ok: false, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
 					return;
 				}
 
@@ -545,7 +531,7 @@ const githubAuthFlow: ProviderAuthFlow = {
 					server?.close();
 					reject(new Error("GitHub sign-in callback is invalid."));
 					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(GITHUB_CALLBACK_HTML("Sign-in failed", "Return to Agent Orchestrator and try signing in again."));
+					res.end(renderAuthCallbackPage({ provider: "github", ok: false, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
 					return;
 				}
 
@@ -593,17 +579,14 @@ const githubAuthFlow: ProviderAuthFlow = {
 						cleanup();
 						server?.close();
 						res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-						res.end(GITHUB_CALLBACK_HTML(
-							"Signed in to Agent Orchestrator",
-							`Authenticated as <strong>${login}</strong>. You can close this tab and return to Agent Orchestrator.`,
-						));
+						res.end(renderAuthCallbackPage({ provider: "github", ok: true, login, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
 						resolve({ provider: "github", credentialType: "access_token", secret: accessToken, refreshToken, expiresIn, refreshTokenExpiresIn });
 					} catch (err) {
 						cleanup();
 						server?.close();
 						reject(err instanceof Error ? err : new Error(String(err)));
 						res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-						res.end(GITHUB_CALLBACK_HTML("Sign-in failed", "Return to Agent Orchestrator and try signing in again."));
+						res.end(renderAuthCallbackPage({ provider: "github", ok: false, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
 					}
 				})();
 			});

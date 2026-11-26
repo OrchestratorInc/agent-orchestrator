@@ -29,14 +29,29 @@ type ShellTerminal struct {
 	SessionID  domain.SessionID `json:"sessionId,omitempty"`
 	WorkingDir string           `json:"workingDir"`
 	Title      string           `json:"title"`
-	CreatedAt  time.Time        `json:"createdAt"`
+	// TerminalTitle is present only when the program's title should label the tab.
+	TerminalTitle string              `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	EndedAt       *time.Time          `json:"endedAt,omitempty"`
+	ResumeHarness domain.AgentHarness `json:"resumeHarness,omitempty"`
+}
+
+// ReopenShellTerminalInput asks to replace an ended shell with a fresh one in
+// the same place. ResumeAgent also resumes the agent that was running there;
+// nothing the old shell ran is ever replayed.
+type ReopenShellTerminalInput struct {
+	HandleID    string
+	Shell       string
+	ResumeAgent bool
+	Cols, Rows  int
 }
 
 // OpenShellTerminalInput is the request to open a new shell pane. An empty
 // ProjectID opens the shell in the daemon's data dir instead of a project root,
 // which is what the topbar action does when no project is selected. SessionID
 // scopes the shell to an agent session so it appears only in that session's tab
-// strip; an empty SessionID makes it a standalone shell on the /terminals screen.
+// strip; an empty SessionID makes it a standalone shell, which no client shows
+// (ReapShellTerminalsFromPreviousAppRuns destroys it on the next launch).
 type OpenShellTerminalInput struct {
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
@@ -50,6 +65,12 @@ type OpenShellTerminalInput struct {
 	// title it shows, so the tab keeps its name when the shell arrives; empty
 	// numbers it after the existing shells.
 	Title string `json:"title,omitempty"`
+	// Cols and Rows give the grid the requesting client will show. When both
+	// are set the shell starts immediately at that grid, in parallel with the
+	// client mounting its terminal, instead of waiting for the attach that
+	// StartOnAttach waits for (saving that round trip before the first prompt).
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
 }
 
 // InitialInputReadyState describes a terminal state relevant to the command's
@@ -70,7 +91,13 @@ type InitialInputReadyState struct {
 // values from the reviewed auth registry; the input is sent only after the
 // harness renders one of its known editor-ready states.
 type OpenCommandTerminalInput struct {
-	Argv                    []string
+	// Owner is a trusted workflow identity, independent of the editable title.
+	// It is persisted so the workflow can reconcile commands after a restart.
+	Owner string
+	Argv  []string
+	// HideFromList keeps a daemon-owned guided login PTY out of the user's
+	// terminal drawer. The auth service still owns and closes its handle.
+	HideFromList            bool
 	Env                     map[string]string
 	WorkingDir              string
 	Title                   string

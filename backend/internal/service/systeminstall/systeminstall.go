@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -45,47 +46,53 @@ type Target string
 
 // The exhaustive set of installable targets. No other value is ever accepted.
 const (
-	TargetTmux        Target = "tmux"
-	TargetGH          Target = "gh"
-	TargetClaude      Target = "claude"
-	TargetClaudeCode  Target = "claude-code"
-	TargetCodex       Target = "codex"
-	TargetCursor      Target = "cursor"
-	TargetOpencode    Target = "opencode"
-	TargetOpencodeV2  Target = "opencode-v2"
-	TargetAider       Target = "aider"
-	TargetCopilot     Target = "copilot"
-	TargetGrok        Target = "grok"
-	TargetKimi        Target = "kimi"
-	TargetPi          Target = "pi"
-	TargetAmp         Target = "amp"
-	TargetAuggie      Target = "auggie"
-	TargetDroid       Target = "droid"
-	TargetCrush       Target = "crush"
-	TargetCline       Target = "cline"
-	TargetGoose       Target = "goose"
-	TargetQwen        Target = "qwen"
-	TargetGemini      Target = "gemini"
-	TargetContinue    Target = "continue"
-	TargetDevin       Target = "devin"
-	TargetKiro        Target = "kiro"
-	TargetKilocode    Target = "kilocode"
-	TargetVibe        Target = "vibe"
-	TargetMuse        Target = "muse"
-	TargetAgy         Target = "agy"
-	TargetAutohand    Target = "autohand"
-	TargetKimchi      Target = "kimchi"
-	TargetPrimeAgent  Target = "prime-agent"
-	TargetOMP         Target = "omp"
-	TargetFX          Target = "fx"
-	TargetUnreal      Target = "unreal-agent"
-	TargetCodewhale   Target = "codewhale"
-	TargetMiMoCode    Target = "mimo-code"
-	TargetDeepSeek    Target = "deepseek-harness"
-	TargetOpenHands   Target = "openhands"
-	TargetCommandCode Target = "command-code"
-	TargetMemcode     Target = "memcode"
-	TargetHermes      Target = "hermes"
+	TargetTmux            Target = "tmux"
+	TargetGH              Target = "gh"
+	TargetClaude          Target = "claude"
+	TargetClaudeCode      Target = "claude-code"
+	TargetCodex           Target = "codex"
+	TargetCursor          Target = "cursor"
+	TargetOpencode        Target = "opencode"
+	TargetOpencodeV2      Target = "opencode-v2"
+	TargetAider           Target = "aider"
+	TargetCopilot         Target = "copilot"
+	TargetGrok            Target = "grok"
+	TargetKimi            Target = "kimi"
+	TargetPi              Target = "pi"
+	TargetAmp             Target = "amp"
+	TargetAuggie          Target = "auggie"
+	TargetDroid           Target = "droid"
+	TargetCrush           Target = "crush"
+	TargetCline           Target = "cline"
+	TargetGoose           Target = "goose"
+	TargetQwen            Target = "qwen"
+	TargetGemini          Target = "gemini"
+	TargetContinue        Target = "continue"
+	TargetDevin           Target = "devin"
+	TargetKiro            Target = "kiro"
+	TargetKilocode        Target = "kilocode"
+	TargetVibe            Target = "vibe"
+	TargetMuse            Target = "muse"
+	TargetAgy             Target = "agy"
+	TargetAutohand        Target = "autohand"
+	TargetKimchi          Target = "kimchi"
+	TargetPrimeAgent      Target = "prime-agent"
+	TargetOMP             Target = "omp"
+	TargetFX              Target = "fx"
+	TargetUnreal          Target = "unreal-agent"
+	TargetCodewhale       Target = "codewhale"
+	TargetMiMoCode        Target = "mimo-code"
+	TargetMiniMaxCode     Target = "minimax-code"
+	TargetDeepSeek        Target = "deepseek-harness"
+	TargetOpenHands       Target = "openhands"
+	TargetCommandCode     Target = "command-code"
+	TargetMastraCode      Target = "mastra-code"
+	TargetDockerAgent     Target = "docker-agent"
+	TargetMemcode         Target = "memcode"
+	TargetHermes          Target = "hermes"
+	TargetStakpak         Target = "stakpak"
+	TargetOpenInterpreter Target = "open-interpreter"
+	TargetTau             Target = "tau"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -101,8 +108,8 @@ var agentTargets = []Target{
 	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen, TargetGemini,
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
-	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetMemcode, TargetHermes,
+	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetMiniMaxCode, TargetDeepSeek, TargetOpenHands,
+	TargetCommandCode, TargetMastraCode, TargetDockerAgent, TargetMemcode, TargetHermes, TargetStakpak, TargetOpenInterpreter, TargetTau,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -112,15 +119,6 @@ var agentTargetSet = func() map[Target]bool {
 	}
 	return out
 }()
-
-const openCodeV2ReplacementNotice = "Installing OpenCode 2 at the default location replaces the default OpenCode 1 `opencode` executable; the two majors are not installed side by side by default."
-
-func installNotice(target Target) string {
-	if target == TargetOpencodeV2 {
-		return openCodeV2ReplacementNotice
-	}
-	return ""
-}
 
 // systemTargetSet is the stable contract of the legacy /system/install route.
 // Agent-only targets use /agents/{agent}/install instead.
@@ -188,7 +186,11 @@ type Plan struct {
 	// Homebrew's metadata so `brew upgrade` sees the release AO announced. A
 	// failed step is noted in the output; Command still runs and post-update
 	// verification decides the outcome.
-	Prepare             [][]string
+	Prepare [][]string
+	// Cleanup runs after Command with the same environment, whether or not
+	// Command succeeded, e.g. restoring a Homebrew link Prepare removed. After
+	// a successful Command, a failed step fails the operation.
+	Cleanup             [][]string
 	Script              *ports.InstallScriptCommand
 	Package             string
 	PackagePrefix       string
@@ -219,6 +221,13 @@ type Plan struct {
 	// migration. Method and Package always describe what the operation runs.
 	sourceMethod  string
 	sourcePackage string
+	// alsoChanges are other harnesses whose executable the run makes
+	// unavailable for a while (Prepare unlinks it, Cleanup restores it). The
+	// run holds each one's harness gate throughout, so its launches wait and
+	// its own install, reinstall or update is refused meanwhile.
+	alsoChanges []Target
+	// homebrewV1Prefix defers the v1 linked-state check until its gate is held.
+	homebrewV1Prefix string
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -323,6 +332,14 @@ const maxOutputBytes = 4000
 // realistic expected duration.
 const defaultInstallTimeout = 15 * time.Minute
 
+// cleanupTimeout bounds each of a plan's Cleanup steps, which still run after
+// the install itself timed out.
+const cleanupTimeout = 2 * time.Minute
+
+// otherHarnessHoldWait is how long a run waits for launches of a harness in
+// Plan.alsoChanges to release it before failing.
+const otherHarnessHoldWait = 10 * time.Second
+
 // defaultPersistenceTimeout keeps best-effort worker state writes from
 // consuming the daemon's entire shutdown drain budget behind a blocked DB.
 const defaultPersistenceTimeout = 2 * time.Second
@@ -331,7 +348,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status    `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string    `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string    `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -396,6 +413,10 @@ type Deps struct {
 	// while they run (AO_UPDATE_WHEN_IDLE).
 	UpdateWhenIdle     bool
 	PrivateNPMPrefixes map[Target]string
+	// PrivateInstallerHomes is the HOME a target's official installer runs
+	// with, for installers that write only under $HOME and would otherwise
+	// replace another harness's executable there (OpenCode 2 over OpenCode 1).
+	PrivateInstallerHomes map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -409,18 +430,19 @@ type Service struct {
 	harnessGatesMu    sync.Mutex
 	harnessGates      map[domain.AgentHarness]*sync.RWMutex
 
-	executables         ports.ExecutableFinder
-	commands            ports.CommandRunner
-	installCommands     ports.InstallCommandRunner
-	installScripts      ports.InstallScriptRunner
-	managedBinaries     ports.ManagedBinaryInstaller
-	installCapabilities ports.InstallCapabilityProbe
-	pathWritable        ports.PathWritableProbe
-	privateNPMPrefixes  map[Target]string
-	jobStore            ports.AgentInstallJobStore
-	verifier            HarnessVerifier
-	sessions            SessionLister
-	reviewers           ReviewerLister
+	executables           ports.ExecutableFinder
+	commands              ports.CommandRunner
+	installCommands       ports.InstallCommandRunner
+	installScripts        ports.InstallScriptRunner
+	managedBinaries       ports.ManagedBinaryInstaller
+	installCapabilities   ports.InstallCapabilityProbe
+	pathWritable          ports.PathWritableProbe
+	privateNPMPrefixes    map[Target]string
+	privateInstallerHomes map[Target]string
+	jobStore              ports.AgentInstallJobStore
+	verifier              HarnessVerifier
+	sessions              SessionLister
+	reviewers             ReviewerLister
 	// goos selects the platform branch in planFor. Real use is always
 	// runtime.GOOS; tests override it to exercise every OS branch from one
 	// machine, the same seam lookPath provides for PATH probing.
@@ -431,6 +453,9 @@ type Service struct {
 	// override it with a short duration to exercise the timeout path without
 	// a real multi-minute wait.
 	installTimeout time.Duration
+	// cleanupStepLimit bounds each Cleanup step; zero means cleanupTimeout.
+	// Tests shorten it.
+	cleanupStepLimit time.Duration
 	// persistenceTimeout bounds worker-owned transition and terminal writes.
 	persistenceTimeout   time.Duration
 	onSucceeded          func(Target)
@@ -563,6 +588,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		updateAdvisoryCalls:        make(map[Target]*updateAdvisoryCall),
 		pathWritable:               pathWritable,
 		privateNPMPrefixes:         deps.PrivateNPMPrefixes,
+		privateInstallerHomes:      deps.PrivateInstallerHomes,
 	}
 }
 
@@ -922,6 +948,14 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.mu.Unlock()
 		return Job{}, ErrInstallActive
 	}
+	if !requiresHarnessGate && s.changing[target] {
+		// Another run holds this harness (e.g. OpenCode 2's Homebrew install
+		// has OpenCode 1 unlinked); installing it now would race that run.
+		// Checked under the same lock that registers this job, and that
+		// holdOtherHarnesses reserves under, so exactly one of them proceeds.
+		s.mu.Unlock()
+		return Job{}, ErrInstallActive
+	}
 	previous, hadPrevious := s.jobs[target]
 	status := StatusInstalling
 	finishedAt := (*time.Time)(nil)
@@ -1159,7 +1193,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	previous, hadPrevious := s.jobs[target]
 	now := time.Now().UTC()
-	job := &Job{Target: target, Status: StatusVerifying, Notice: installNotice(target), StartedAt: &now, UpdatedAt: &now}
+	job := &Job{Target: target, Status: StatusVerifying, StartedAt: &now, UpdatedAt: &now}
 	if current, ok := s.jobs[target]; ok {
 		job.Method = current.Method
 		job.Command = current.Command
@@ -1200,6 +1234,23 @@ func (s *Service) beginWorker() bool {
 	}
 	s.workers.Add(1)
 	return true
+}
+
+// ShutdownTimeout reserves time for both Homebrew cleanup steps, a pending
+// harness hold, command termination delays, and terminal state persistence. The daemon
+// must drain for at least this long so normal shutdown cannot skip v1 relinking.
+func (s *Service) ShutdownTimeout() time.Duration {
+	return shutdownTimeoutForCleanup(s.cleanupStepTimeout())
+}
+
+// DefaultShutdownTimeout is the installer drain budget available before the
+// service is constructed, so a replacement daemon can wait for its predecessor.
+func DefaultShutdownTimeout() time.Duration {
+	return shutdownTimeoutForCleanup(cleanupTimeout)
+}
+
+func shutdownTimeoutForCleanup(stepTimeout time.Duration) time.Duration {
+	return 2*stepTimeout + otherHarnessHoldWait + 2*defaultPersistenceTimeout + 30*time.Second
 }
 
 // Close cancels and drains daemon-owned harness installation work.
@@ -1339,6 +1390,16 @@ func (s *Service) systemTargetInstalled(ctx context.Context, target Target) bool
 }
 
 func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
+	release, err := s.holdOtherHarnesses(plan.alsoChanges)
+	if err != nil {
+		s.finishAgentJob(job, StatusFailed, "", err.Error(), "")
+		return
+	}
+	defer release()
+	plan = plan.withLinkedOpenCodeV1()
+	s.mu.Lock()
+	job.Command = displayCommand(plan)
+	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
@@ -1378,19 +1439,33 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if plan.Method == "official-installer" {
 			env = append(env, vendorUpdateEnv[plan.Target]...)
 		}
-		runCommand := func(argv []string) error {
+		runCommand := func(ctx context.Context, argv []string) error {
 			if s.installCommands != nil {
 				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, progress, progress)
 			}
 			return s.commands.Run(ctx, argv, progress, progress)
 		}
 		for _, argv := range plan.Prepare {
-			if err := runCommand(argv); err != nil && ctx.Err() == nil {
+			if err := runCommand(ctx, argv); err != nil && ctx.Err() == nil {
 				_, _ = fmt.Fprintf(out, "\n%s failed (%v); continuing.\n", strings.Join(argv, " "), err)
 			}
 		}
 		if ctx.Err() == nil {
-			runErr = runCommand(plan.Command)
+			runErr = runCommand(ctx, plan.Command)
+		}
+		// Cleanup undoes what Prepare changed, so it runs even after a timeout
+		// or a failed Command. Each step has its own deadline: one that hangs
+		// must not leave the next (restoring another harness) without time.
+		for _, argv := range plan.Cleanup {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), s.cleanupStepTimeout())
+			err := runCommand(cleanupCtx, argv)
+			cancelCleanup()
+			if err != nil {
+				_, _ = fmt.Fprintf(out, "\n%s failed (%v).\n", strings.Join(argv, " "), err)
+				if runErr == nil && ctx.Err() == nil {
+					runErr = fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
+				}
+			}
 		}
 	}
 	stopProgress()
@@ -1420,11 +1495,26 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 			strings.Contains(out.String(), "The existing installation was not changed.") {
 			message = fmt.Sprintf("Autohand could not start the downloaded CLI; the existing installation was not changed. Its startup check can time out on a busy machine. Let other updates finish, then retry. (%v)", runErr)
 		}
+		// Cursor's update service accepts anonymous requests but rejects a
+		// stale or revoked saved login, which `cursor-agent status` still
+		// reports as logged in. Without a stored login the update succeeds.
+		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
+			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
+		}
+		// winget reports "no package found" for an ID its catalog dropped, and
+		// also when its local source data is stale. Suggest refreshing the
+		// sources first; if it still fails, the package is gone from the catalog.
+		if plan.Method == "winget" && wingetPackageNotFound(runErr) {
+			message = fmt.Sprintf("winget could not find package %s. Run `winget source update` and retry. If it still fails, the package is no longer in the winget catalog, so install it another way, then choose Verify again. (%v)", plan.Package, runErr)
+		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
 
 	if err := s.transitionAgentJob(job, StatusVerifying, out.String(), "", ""); err != nil {
+		// AO's own state write failed; network and user-environment install
+		// failures are expected and are not reported.
+		sentryobs.CaptureBackground(parent, err, "systeminstall", "agent_install", map[string]string{"agent": string(job.Target), "reason": "persist"})
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
@@ -1433,6 +1523,18 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		updaterReport = lastOutputLine(out.String())
 	}
 	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
+}
+
+// wingetNoApplicationsFound is APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND,
+// winget's exit code for an ID its catalog does not have. Matching the code,
+// not winget's "No package found" text, keeps this working in every locale.
+const wingetNoApplicationsFound uint32 = 0x8A150014
+
+func wingetPackageNotFound(err error) bool {
+	var exited interface{ ExitCode() int }
+	// Go reports Windows exit codes unsigned; compare the low 32 bits so a
+	// signed report of the same code matches too.
+	return errors.As(err, &exited) && uint32(exited.ExitCode()) == wingetNoApplicationsFound //nolint:gosec // exit codes are 32-bit
 }
 
 // maxUpdaterReportRunes keeps the updater line quoted in a failed update
@@ -1498,8 +1600,13 @@ func lastOutputLine(output string) string {
 // the update command's last line: self-updaters can exit 0 without replacing
 // the binary ("already up to date", "update manually", "restart to finish"),
 // and a failed update quotes it so the user sees which.
+// errVerifierMissing reports a wiring bug: an agent install ran without the
+// adapter-backed verifier.
+var errVerifierMissing = errors.New("systeminstall: adapter-backed install verifier is not configured")
+
 func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline, updaterReport string) {
 	if s.verifier == nil {
+		sentryobs.CaptureBackground(ctx, errVerifierMissing, "systeminstall", "agent_install", map[string]string{"agent": string(job.Target), "reason": "verify"})
 		s.finishAgentJob(job, StatusFailed, "", "adapter-backed install verifier is not configured", "")
 		return
 	}
@@ -1620,7 +1727,7 @@ func jobFromRecord(record ports.AgentInstallJobRecord) Job {
 	return Job{
 		Target: Target(record.Target), Status: Status(record.Status), Method: record.Method,
 		Command: record.Command, ExpectedDestination: record.ExpectedDestination,
-		Output: record.Output, Error: record.Error, Notice: installNotice(Target(record.Target)), StartedAt: &startedAt,
+		Output: record.Output, Error: record.Error, StartedAt: &startedAt,
 		FinishedAt: record.FinishedAt, UpdatedAt: &updatedAt,
 	}
 }
@@ -1663,11 +1770,15 @@ func displayCommand(plan Plan) string {
 	if plan.NeedsRoot && len(argv) > 0 {
 		argv = append([]string{"sudo"}, argv...)
 	}
-	steps := make([]string, 0, len(plan.Prepare)+1)
+	steps := make([]string, 0, len(plan.Prepare)+1+len(plan.Cleanup))
 	for _, prepare := range plan.Prepare {
 		steps = append(steps, strings.Join(prepare, " "))
 	}
-	return strings.Join(append(steps, strings.Join(argv, " ")), "; ")
+	steps = append(steps, strings.Join(argv, " "))
+	for _, cleanup := range plan.Cleanup {
+		steps = append(steps, strings.Join(cleanup, " "))
+	}
+	return strings.Join(steps, "; ")
 }
 
 // capturedOutput is an io.Writer that keeps only the last max bytes written,
@@ -1767,7 +1878,7 @@ func (s *Service) planTmux() Plan {
 	case "windows":
 		return Plan{
 			Target: TargetTmux, Unsupported: true,
-			Reason: "tmux is not required on Windows; AO uses the built-in ConPTY terminal runtime instead.",
+			Reason: "tmux is not required on Windows; Orchestrator uses the built-in ConPTY terminal runtime instead.",
 		}
 	case "darwin":
 		return s.planBrew(TargetTmux, "tmux")
@@ -1948,7 +2059,7 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			if privatePrefix != "" {
 				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
 			} else {
-				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; Orchestrator will not use sudo.", prefix)
 			}
 			return plan
 		}
@@ -1967,7 +2078,7 @@ func minimumNodeVersionForTarget(target Target) [3]int {
 		return [3]int{20, 0, 0}
 	case TargetClaudeCode, TargetQwen, TargetAutohand:
 		return [3]int{22, 0, 0}
-	case TargetPi:
+	case TargetPi, TargetMiniMaxCode:
 		return [3]int{22, 19, 0}
 	default:
 		return [3]int{16, 0, 0}
@@ -2016,7 +2127,7 @@ func (s *Service) planOpencode() Plan {
 	}
 	return Plan{
 		Target: TargetOpencode, Unsupported: true, Method: "manual",
-		Reason: "AO does not automatically execute opencode's mutable remote installer script.",
+		Reason: "Orchestrator does not automatically execute opencode's mutable remote installer script.",
 	}
 }
 
@@ -2069,7 +2180,7 @@ func (p requestPlanner) planHomebrew(target Target, pkg string, cask bool) Plan 
 			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: "Homebrew's installation prefix could not be resolved."}
 		}
 		if !homebrew.PrefixWritable {
-			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: fmt.Sprintf("Homebrew's prefix %s is not writable by the current user. Repair Homebrew ownership; AO will not use sudo.", prefix)}
+			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: fmt.Sprintf("Homebrew's prefix %s is not writable by the current user. Repair Homebrew ownership; Orchestrator will not use sudo.", prefix)}
 		}
 		if cask {
 			installed = homebrewPackageInstalled(homebrew.Casks, pkg)
@@ -2107,9 +2218,10 @@ func (s *Service) planWinget(target Target, id string) Plan {
 		}
 		return plan
 	}
-	command := []string{"winget", "install", "-e", "--id", id}
+	// Pin the community source so a fresh Windows profile never opens msstore's
+	// interactive source-agreement prompt in this background process.
+	command := []string{"winget", "install", "-e", "--id", id, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 	if IsAgentTarget(target) {
-		command = append(command, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
 		return Plan{Target: target, Command: command, Method: "winget", Package: id}
 	}
 	return Plan{Target: target, Command: command}
@@ -2142,7 +2254,7 @@ func (s *Service) planLinuxPackage(target Target, pkgFor func(mgr string) string
 		argv := linuxInstallArgv(mgr, pkgFor(mgr))
 		return Plan{
 			Target: target, Command: argv, Manager: mgr, NeedsRoot: true, Unsupported: true,
-			Reason: "AO cannot ask for your administrator password. Run the command below in a terminal.",
+			Reason: "Orchestrator cannot ask for your administrator password. Run the command below in a terminal.",
 		}
 	}
 	return Plan{

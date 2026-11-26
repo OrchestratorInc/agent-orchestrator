@@ -55,8 +55,8 @@ func RedactValues(output string, configured map[string]string) string {
 	return output
 }
 
-// RedactError drops the original error when it contains a sensitive value so
-// unwrapping and telemetry cannot expose that value.
+// RedactError hides the original error when it contains a sensitive value so
+// unwrapping and telemetry cannot expose that value; errors.Is still matches it.
 func RedactError(err error, configured map[string]string) error {
 	if err == nil {
 		return nil
@@ -65,8 +65,17 @@ func RedactError(err error, configured map[string]string) error {
 	if message == err.Error() {
 		return err
 	}
-	return errors.New(message)
+	return redactedError{message: message, cause: err}
 }
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e redactedError) Error() string { return e.message }
+
+func (e redactedError) Is(target error) bool { return errors.Is(e.cause, target) }
 
 // PinnedPATH prepends an AO-only directory to the supplied
 // PATH. It rejects executables not named ao because their directory cannot
@@ -194,7 +203,21 @@ func restorePinnedDir(parts []string, dir string) []string {
 	return parts
 }
 
+// ProviderEnvMarker is the $0 of the POSIX wrapper that reapplies explicit
+// provider env after login-shell startup: sh -c <script> ao-provider-env <argv>.
+const ProviderEnvMarker = "ao-provider-env"
+
+// UnwrapProviderEnv returns the agent argv inside a provider-env wrapper, so
+// binary validation and PATH augmentation see the agent rather than sh.
+func UnwrapProviderEnv(argv []string) []string {
+	if len(argv) >= 5 && filepath.Base(argv[0]) == "sh" && argv[1] == "-c" && argv[3] == ProviderEnvMarker {
+		return argv[4:]
+	}
+	return argv
+}
+
 func launchBinary(argv []string) (string, bool) {
+	argv = UnwrapProviderEnv(argv)
 	if len(argv) == 0 {
 		return "", false
 	}
