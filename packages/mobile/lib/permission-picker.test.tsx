@@ -120,6 +120,27 @@ describe("permission button", () => {
 		act(() => button().props.onPress());
 		expect(slider.isOpen()).toBe(false);
 	});
+
+	// A finger sliding off and back on fires onPressIn again.
+	it("toggles once per touch, even when the finger slides off and back on", () => {
+		const slider = createEffortSliderSwitch();
+		act(() => { renderer = create(<PermissionPickerButton slider={slider} choices={modes("auto")} disabled={false} testID="perm" />); });
+		const button = () => all("Pressable")[0];
+		act(() => button().props.onPressIn());
+		act(() => button().props.onPressIn());
+		expect(slider.isOpen()).toBe(true);
+	});
+
+	// A touch let go outside the button gets no onPress to clear it.
+	it("still answers a screen reader after a touch released outside", () => {
+		const slider = createEffortSliderSwitch();
+		act(() => { renderer = create(<PermissionPickerButton slider={slider} choices={modes("auto")} disabled={false} testID="perm" />); });
+		const button = () => all("Pressable")[0];
+		act(() => button().props.onPressIn());
+		act(() => { button().props.onTouchEnd(); vi.runAllTimers(); });
+		act(() => button().props.onPress());
+		expect(slider.isOpen()).toBe(false);
+	});
 });
 
 describe("permission picker host", () => {
@@ -135,6 +156,15 @@ describe("permission picker host", () => {
 		expect(slider.isOpen()).toBe(true);
 		act(() => all("Pressable")[0].props.onPress());
 		expect(onChoose).toHaveBeenCalledWith("accept-edits");
+		expect(slider.isOpen()).toBe(false);
+	});
+
+	it("closes the composer's switch when the host goes away", () => {
+		const slider = createEffortSliderSwitch();
+		slider.setBottom(120);
+		act(() => { renderer = create(<PermissionPickerHost slider={slider} choices={modes("auto")} busy={false} onChoose={() => {}} />); });
+		act(() => slider.setOpen(true));
+		act(() => renderer!.update(<></>));
 		expect(slider.isOpen()).toBe(false);
 	});
 });

@@ -2,7 +2,7 @@ import Hand from "lucide-react-native/icons/hand";
 import PencilLine from "lucide-react-native/icons/pencil-line";
 import ShieldAlert from "lucide-react-native/icons/shield-alert";
 import ShieldCheck from "lucide-react-native/icons/shield-check";
-import { memo, useRef, useSyncExternalStore, type ComponentType } from "react";
+import { memo, useEffect, useSyncExternalStore, type ComponentType } from "react";
 import { Pressable, StyleSheet, Text, View, type DimensionValue } from "react-native";
 import type { ApprovalMode } from "./chat/types";
 import { ComposerOverlay } from "./composer-overlay";
@@ -12,6 +12,7 @@ import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, radius, space, touchTarget, type } from "./tokens";
 import { markTouchInside } from "./touchOutside";
+import { useTouchDownPress } from "./useTouchDownPress";
 import { useEffortSliderOpen, useEffortSliderSwitchOpen, type EffortSliderSwitch } from "./useEffortSlider";
 
 /*
@@ -76,20 +77,16 @@ export function PermissionPickerButton({ slider, choices, disabled, onPress, tes
 	const open = useEffortSliderSwitchOpen(slider) && !disabled && choices.length > 0;
 	const current = choices.find((choice) => choice.selected);
 	const Icon = permissionIcon(current?.look);
-	const touched = useRef(false);
-	const toggle = () => {
+	// Once per physical touch, and still for a screen reader (see useTouchDownPress).
+	const press = useTouchDownPress(() => {
 		haptics.tap();
 		onPress?.();
 		slider.setOpen(!open);
-	};
+	});
 	return (
 		<Pressable
+			{...press}
 			onTouchStart={markTouchInside}
-			onPressIn={() => { touched.current = true; toggle(); }}
-			onPress={() => {
-				if (touched.current) { touched.current = false; return; }
-				toggle();
-			}}
 			disabled={disabled}
 			accessibilityRole="button"
 			accessibilityLabel={`Permissions, ${current?.label ?? "default"}`}
@@ -116,6 +113,9 @@ export const PermissionPickerHost = memo(function PermissionPickerHost({ slider,
 	onChoose: (value: string) => void;
 }) {
 	const { open } = useEffortSliderOpen(choices, busy, undefined, slider, null);
+	// As the effort slider's host: a request card replacing the composer must
+	// not leave the picker to reopen by itself when the card goes.
+	useEffect(() => () => slider.setOpen(false), [slider]);
 	const bottom = useSyncExternalStore(slider.subscribe, slider.bottom);
 	const warm = useWarmAfterIdle();
 	if (!(open || warm) || !bottom) return null;
