@@ -3707,7 +3707,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			ctx, c.conversation.ID, event.ProviderTurnID, state, message, failureCode, event.UsageLimitResetsAt, now); err != nil {
 			return err
 		}
-		if holds, ok := c.store.(queueHoldStore); ok && state == domain.TurnStateCompleted &&
+		if holds, ok := c.store.(queueHoldStore); ok && (state == domain.TurnStateCompleted || errors.Is(event.Err, ports.ErrChatPromptStalled)) &&
 			(event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID()) {
 			if err := holds.ReleaseConversationQueueAfterTurn(ctx, c.conversation.ID, event.ProviderTurnID); err != nil {
 				return err
@@ -4118,13 +4118,8 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// the queue so it cannot cascade through the same outage (issue #4861). A
 		// prompt the host's watchdog failed for silence is not an outage: the
 		// provider never answered, so the queued messages get their own turns.
-		stalled := errors.Is(event.Err, ports.ErrChatPromptStalled)
-		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted || stalled
-		if stalled {
-			if err := releaseHeldQueue(ctx, c.store, c.conversation.ID); err != nil {
-				c.log.Error("failed to release held queue", "session", c.sessionID, "error", err)
-			}
-		}
+		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
+			errors.Is(event.Err, ports.ErrChatPromptStalled)
 		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)

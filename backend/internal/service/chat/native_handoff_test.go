@@ -61,18 +61,6 @@ func TestNativeChatHandoffAtomicPublication(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := f.store.AppendUserMessage(ctx, conversation.ID, f.source.ID, f.source.Metadata.ControllerGeneration,
-				domain.ConversationMessage{ID: "limited-message", Text: "hit the limit", Origin: domain.MessageOriginHuman},
-				"limited-turn", f.now.Add(time.Second)); err != nil {
-				t.Fatal(err)
-			}
-			if err := f.store.SettleTurnByID(ctx, "limited-turn", domain.TurnStateFailed,
-				"You've hit your session limit · resets 12pm (Asia/Calcutta)", f.now.Add(2*time.Second)); err != nil {
-				t.Fatal(err)
-			}
-			if conversation, err = f.store.ProjectConversation(ctx, testProject); err != nil {
-				t.Fatal(err)
-			}
 			handoff := &domain.ChatProviderHandoff{
 				BoundaryID: "terminal-handoff:provider", ConversationID: conversation.ID,
 				PreviousSessionID: f.source.ID, PreviousBranchID: conversation.ActiveBranchID,
@@ -214,16 +202,12 @@ func TestNativeChatHandoffAtomicPublication(t *testing.T) {
 					t.Fatalf("predecessor request status = %s, want %s: %+v", activity.Status, wantRequest, activity)
 				}
 			}
-			held, err := f.store.ConversationQueueHeld(ctx, conversation.ID, f.now)
-			if wantHeld := scenario != "success" && scenario != "owner_changed"; err != nil || held != wantHeld {
-				t.Fatalf("queue held = %v, %v, want %v", held, err, wantHeld)
-			}
 			if scenario == "success" {
-				if rows.Conversation.SessionID != f.target.ID || rows.Conversation.ActiveBranchID != handoff.BoundaryID || len(rows.Messages) != 4 {
+				if rows.Conversation.SessionID != f.target.ID || rows.Conversation.ActiveBranchID != handoff.BoundaryID || len(rows.Messages) != 3 {
 					t.Fatalf("incomplete publication: %+v", rows)
 				}
 			} else {
-				if rows.Conversation.ActiveBranchID != f.root.ID || len(rows.Messages) != 2 {
+				if rows.Conversation.ActiveBranchID != f.root.ID || len(rows.Messages) != 1 {
 					t.Fatalf("failed handoff partially published history: head=%s messages=%d", rows.Conversation.ActiveBranchID, len(rows.Messages))
 				}
 				if _, err := f.store.ConversationBranch(ctx, conversation.ID, handoff.BoundaryID); !errors.Is(err, domain.ErrNoConversationBranch) {

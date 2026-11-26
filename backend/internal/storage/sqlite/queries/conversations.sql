@@ -1179,9 +1179,11 @@ SET queue_held_turn_id = sqlc.arg(turn_id)
 WHERE conversations.id = sqlc.arg(conversation_id)
   AND EXISTS (
       SELECT 1 FROM conversation_messages
+      JOIN conversation_turns AS turn ON turn.id = conversation_messages.turn_id
       WHERE conversation_messages.turn_id = sqlc.arg(turn_id)
         AND conversation_messages.role = 'user'
-        AND conversation_messages.origin = 'human'
+        AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
+        AND (conversations.scope <> 'project' OR turn.handled_by_session_id = conversations.current_session_id)
   );
 
 -- name: ReleaseConversationQueue :exec
@@ -1204,9 +1206,31 @@ WHERE conversations.id = sqlc.arg(conversation_id)
   );
 
 -- name: SelectConversationQueueHoldTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
 SELECT conversation_turns.* FROM conversation_turns
 JOIN conversations ON conversations.queue_held_turn_id = conversation_turns.id
-WHERE conversations.id = ?;
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversations.id = sqlc.arg(conversation_id)
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.sequence <= path.max_sequence
+  ));
 
 -- name: SelectQueuedConversationBatch :many
 SELECT conversation_turns.id,

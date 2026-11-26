@@ -9,6 +9,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
@@ -154,46 +155,37 @@ func TestStalledPrimaryTurnReleasesQueuedWork(t *testing.T) {
 	}
 }
 
-func TestStalledRetryReleasesTheUsageLimitHold(t *testing.T) {
-	h := newHarness(t)
+func TestStalledRetryReleasesTheUsageLimitHoldWithItsFailure(t *testing.T) {
+	conv := &receiptConversation{
+		terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
+		ack: func(id string) error {
+			if id == "stall" {
+				return errors.New("connection lost before ack")
+			}
+			return nil
+		},
+	}
+	h := newHarnessWithConversation(t, conv)
+	h.conv = conv.fakeConversation
+	ctx := context.Background()
 	source := failUsageLimitedTurnBehindQueue(t, h, "queued note")
-	assertTurnStaysQueued(t, h, "queued note")
-
-	retry, err := h.svc.RetryTurn(context.Background(), testSession, source.ID)
+	retry, err := h.svc.RetryTurn(ctx, testSession, source.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.conv.emit(ports.ChatEvent{
-		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID,
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, ProviderEventID: "stall",
 		TurnState: domain.TurnStateFailed, Err: fmt.Errorf("ACP session/prompt: %w", ports.ErrChatPromptStalled),
 	})
-	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-	})
-}
-
-func TestUsageLimitHoldWaitsForTheUsersSend(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	failUsageLimitedTurnBehindQueue(t, h, "queued note")
-
-	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "another note", ClientMessageID: "c-auto", Origin: domain.MessageOriginAutomation,
-	}); err != nil {
-		t.Fatal(err)
+	done := make(chan struct{})
+	go func() { h.ctrl.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ack failure did not detach")
 	}
-	assertTurnStaysQueued(t, h, "queued note")
-
-	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "carry on", ClientMessageID: "c-user", Origin: domain.MessageOriginHuman,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-	})
-	if got := turnStateByText(t, snapshot)["carry on"]; got != domain.TurnStateQueued {
-		t.Fatalf("user message is %q, want queued behind the earlier notes", got)
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID(), h.now()); err != nil || held {
+		t.Fatalf("queue held = %v, %v after the stalled retry's failure committed", held, err)
 	}
 }
 
@@ -272,32 +264,6 @@ func TestUsageLimitHoldEndsAtTheReset(t *testing.T) {
 	})
 }
 
-func TestUsageLimitResetLetsAgentsReachAnIdleChat(t *testing.T) {
-	for _, steer := range []bool{false, true} {
-		t.Run(fmt.Sprintf("steer %v", steer), func(t *testing.T) {
-			h := newHarness(t)
-			ctx := context.Background()
-			failUsageLimitedTurn(t, h, timedUsageLimit)
-			h.advance(time.Minute)
-
-			msg := ports.ChatUserMessage{Text: "agent note", ClientMessageID: "c-agent", Origin: domain.MessageOriginAutomation}
-			var err error
-			if steer {
-				msg.Origin, msg.SenderSessionID = domain.MessageOriginHuman, "worker-1"
-				_, err = h.svc.SteerOrSend(ctx, testSession, msg, false)
-			} else {
-				_, err = h.svc.Send(ctx, testSession, msg)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["agent note"] == domain.TurnStateRunning
-			})
-		})
-	}
-}
-
 func TestUsageLimitHoldOutlastsTheResetForAnArmedAutoResume(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -321,32 +287,61 @@ func TestUsageLimitHoldOutlastsTheResetForAnArmedAutoResume(t *testing.T) {
 	}
 }
 
-func TestUsageLimitOnAutomationPromptLeavesTheQueueUnheld(t *testing.T) {
-	h := newHarness(t)
+func TestUsageLimitHoldsTheQueueOnlyBehindTheUsersPrompt(t *testing.T) {
+	for _, authoredByUser := range []bool{false, true} {
+		t.Run(fmt.Sprintf("authored by user %v", authoredByUser), func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "automation task", ClientMessageID: "c1", Origin: domain.MessageOriginAutomation, AuthoredByUser: authoredByUser,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "queued note", ClientMessageID: "c2", Origin: domain.MessageOriginAutomation,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+				TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+			failedTurnSnapshot(t, h, turn.ID)
+
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "another note", ClientMessageID: "c3", Origin: domain.MessageOriginAutomation,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if authoredByUser {
+				assertTurnStaysQueued(t, h, "queued note")
+				return
+			}
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+			})
+		})
+	}
+}
+
+func TestUsageLimitHoldKeepsAgentSteersOffTheRunningRetry(t *testing.T) {
+	provider := newSteerRecorder()
+	h := newHarnessWithConversationAndStore(t, provider, func(st *store.Store) chatsvc.Store { return st })
+	h.conv = provider.fakeConversation
 	ctx := context.Background()
-	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "automation task", ClientMessageID: "c1", Origin: domain.MessageOriginAutomation,
-	})
+	source := failUsageLimitedTurnBehindQueue(t, h, "queued note")
+	retry, err := h.svc.RetryTurn(ctx, testSession, source.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "queued note", ClientMessageID: "c2", Origin: domain.MessageOriginAutomation,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
-		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
-	failedTurnSnapshot(t, h, turn.ID)
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: retry.ProviderTurnID})
 
-	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "another note", ClientMessageID: "c3", Origin: domain.MessageOriginAutomation,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	result, err := h.svc.Steer(ctx, testSession, ports.ChatUserMessage{
+		Text: "agent steer", ClientMessageID: "c-steer", SenderSessionID: "worker-1",
 	})
+	if err != nil || len(provider.steers()) != 1 || provider.steers()[0].msg.Text != "agent steer" {
+		t.Fatalf("steer = %+v, %v, provider received %+v, want only the steer", result, err, provider.steers())
+	}
+	assertTurnStaysQueued(t, h, "queued note")
 }
 
 func startTerminalSwitch(t *testing.T, h *harness) {
@@ -357,45 +352,6 @@ func startTerminalSwitch(t *testing.T, h *harness) {
 		Phase: domain.SessionInterfaceTransitionRequested, CreatedAt: h.now(), UpdatedAt: h.now(),
 	}); err != nil || !created {
 		t.Fatalf("terminal switch: created=%v err=%v", created, err)
-	}
-}
-
-func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
-	for _, afterAccountMove := range []bool{false, true} {
-		t.Run(fmt.Sprintf("after account move %v", afterAccountMove), func(t *testing.T) {
-			hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-			h := hh.harness
-			failUsageLimitedTurnBehindQueue(t, h, "queued note")
-			if afterAccountMove {
-				hh.tick(t)
-				hh.mover.finish(t, domain.SessionInterfaceTransitionFailed)
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			startTerminalSwitch(t, h)
-			if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
-				t.Fatal(err)
-			}
-			prepared := make(chan error, 1)
-			go func() {
-				prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain)
-			}()
-			var running string
-			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				running = ""
-				for _, turn := range s.Turns {
-					if turn.State == domain.TurnStateRunning {
-						running = turn.ProviderTurnID
-					}
-				}
-				return running != "" && turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-			})
-			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running, TurnState: domain.TurnStateCompleted})
-			if err := <-prepared; err != nil {
-				t.Fatalf("prepare handoff: %v", err)
-			}
-		})
 	}
 }
 

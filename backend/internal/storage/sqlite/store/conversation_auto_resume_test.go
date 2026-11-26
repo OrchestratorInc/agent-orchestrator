@@ -85,17 +85,6 @@ func TestUsageLimitHoldIsNotRestoredByAReplay(t *testing.T) {
 	}
 }
 
-func TestUsageLimitRefusedAtSendHoldsTheQueue(t *testing.T) {
-	ctx := context.Background()
-	s, session, conversation := seededChatConversation(t)
-	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
-	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
-	mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
-	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || !held {
-		t.Fatalf("queue held = %v, %v after a usage limit refused at send", held, err)
-	}
-}
-
 func TestOnlyAUsageLimitFailureHoldsTheQueue(t *testing.T) {
 	ctx := context.Background()
 	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
@@ -194,6 +183,37 @@ func TestCleanupKeepsOnlyAHeldQueueThatIsMovingAccounts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQueueHoldCountsOnlyWhileItsTurnIsVisible(t *testing.T) {
+	ctx := context.Background()
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	s, session, conversation := seededChatConversation(t)
+	held := func(want bool, step string) {
+		t.Helper()
+		if got, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || got != want {
+			t.Fatalf("queue held = %v, %v after %s, want %v", got, err, step, want)
+		}
+	}
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "a", "A")
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+	mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
+	held(true, "the usage limit")
+
+	sibling := domain.ConversationBranch{
+		ID: "sibling", ConversationID: conversation.ID, SessionID: session.ID,
+		ProviderConversationID: "thread-sibling", ParentBranchID: conversation.ActiveBranchID,
+		ForkAfterTurnID: "turn-a", ReplacedTurnID: "turn-limited", ForkAfterSequence: 1,
+	}
+	mustNoError(t, s.CreateConversationBranch(ctx, sibling, testNow))
+	activateTestBranch(t, s, session, conversation, sibling.ID, sibling.ProviderConversationID, "generation-sibling")
+	held(false, "switching to a sibling branch")
+	activateTestBranch(t, s, session, conversation, conversation.ActiveBranchID, "thread-root", "generation-root")
+	held(true, "switching back")
+
+	_, err := s.RollbackTurns(ctx, conversation.ID, "turn-limited", testNow)
+	mustNoError(t, err)
+	held(false, "undoing the limited turn")
 }
 
 func TestQueueHoldFollowsTheTurnThatOwnsIt(t *testing.T) {

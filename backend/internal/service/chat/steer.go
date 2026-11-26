@@ -488,7 +488,14 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			return replaySteerDelivery(delivery, requestJSON)
 		}
 	}
-	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, false, 0, c.now())
+	held := false
+	if !domain.UserSentMessage(normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser) {
+		held, err = c.queueHeld(ctx)
+	}
+	var batch []domain.QueuedTurn
+	if err == nil && !held {
+		batch, err = c.store.ClaimQueuedBatch(ctx, c.conversation.ID, false, 0, c.now())
+	}
 	if errors.Is(err, domain.ErrNoQueuedTurn) {
 		batch = nil
 	} else if err != nil {

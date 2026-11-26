@@ -953,9 +953,11 @@ SET queue_held_turn_id = ?1
 WHERE conversations.id = ?2
   AND EXISTS (
       SELECT 1 FROM conversation_messages
+      JOIN conversation_turns AS turn ON turn.id = conversation_messages.turn_id
       WHERE conversation_messages.turn_id = ?1
         AND conversation_messages.role = 'user'
-        AND conversation_messages.origin = 'human'
+        AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
+        AND (conversations.scope <> 'project' OR turn.handled_by_session_id = conversations.current_session_id)
   )
 `
 
@@ -3870,13 +3872,35 @@ func (q *Queries) SelectConversationProviderInputContent(ctx context.Context, ar
 }
 
 const selectConversationQueueHoldTurn = `-- name: SelectConversationQueueHoldTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
 SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text, conversation_turns.failure_code, conversation_turns.batch_delivery_kind, conversation_turns.batch_delivery_steer_id, conversation_turns.artifacts_json FROM conversation_turns
 JOIN conversations ON conversations.queue_held_turn_id = conversation_turns.id
-WHERE conversations.id = ?
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversations.id = ?1
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.sequence <= path.max_sequence
+  ))
 `
 
-func (q *Queries) SelectConversationQueueHoldTurn(ctx context.Context, id string) (ConversationTurn, error) {
-	row := q.db.QueryRowContext(ctx, selectConversationQueueHoldTurn, id)
+func (q *Queries) SelectConversationQueueHoldTurn(ctx context.Context, conversationID string) (ConversationTurn, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationQueueHoldTurn, conversationID)
 	var i ConversationTurn
 	err := row.Scan(
 		&i.ID,

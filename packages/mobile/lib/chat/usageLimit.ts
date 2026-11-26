@@ -39,9 +39,8 @@ export type UsageLimitNoticeView = {
 
 /**
  * What the notice offers, as on the desktop: a way to have the daemon resume at
- * the reset, or Resume when the reset time is unknown. Nothing is offered once
- * the limit has reset. The daemon owns the resuming, so the phone need not be
- * open when it happens.
+ * the reset, or Resume when the reset time is unknown. The daemon owns the
+ * resuming, so the phone need not be open when it happens.
  */
 export function usageLimitNoticeView(limit: ConversationUsageLimit, now: number): UsageLimitNoticeView {
 	const resetAt = usageLimitResetAt(limit);
