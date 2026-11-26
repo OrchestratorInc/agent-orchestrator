@@ -4078,6 +4078,26 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	transition-property: background-color, border-color, color, box-shadow, opacity, gap, padding-inline;
 }
 
+/* A page's top bar (board, artifacts, automations, usage, settings) spaces its
+ * controls 8px apart, the panel's trailing controls included, so filled pills
+ * don't crowd each other; a session's tab strip keeps its tighter 4px. The
+ * reserve for the trailing controls is their width, that 8px, and the panel
+ * edge's own inset (one 4px gap, less its 1px edge). */
+.center-panel-titlebar > .workspace-topbar-actions {
+	gap: var(--space-2);
+}
+
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .center-panel-titlebar {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--space-2) + var(--gap-topbar-control) - 1px);
+}
+
+/* A search field in the bar (board, artifacts, automations) stands as tall as
+ * the buttons beside it. */
+.workspace-topbar-actions [data-slot="input"] {
+	-webkit-app-region: no-drag;
+	height: var(--size-topbar-control);
+}
+
 .workspace-topbar-actions .group\/button:disabled {
 	pointer-events: auto;
 	cursor: not-allowed;
