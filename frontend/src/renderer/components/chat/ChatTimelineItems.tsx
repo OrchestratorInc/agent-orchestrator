@@ -144,6 +144,7 @@ import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CHAT_BOX_CLASS, ChatBoxHeader } from "./ChatBox";
+import { FileDiffCard, FileReadCard, fileCardPath, readFileLines } from "./ChatFileCard";
 import { ChatFileIcon } from "./ChatFileIcon";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
@@ -849,24 +850,31 @@ export function useFreshFailureReport(state: string | undefined, failedAt: strin
 }
 
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
+	// Icon-only like copy and roll back beside it; the tooltip names it the same way.
+	const tip = retry.pending ? "Retrying…" : retry.disabled ? "Wait for the current turn to finish" : "Retry this turn";
 	return (
-		<Button
-			type="button"
-			variant="quiet"
-			size="sm"
-			onClick={retry.onRetry}
-			disabled={retry.pending || retry.disabled}
-			aria-label="Retry this turn"
-			data-telemetry-id="chat.retry"
-			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-			data-testid="retry-turn"
-		>
-			<RotateCw
-				aria-hidden="true"
-				className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
-			/>
-			{retry.pending ? "Retrying…" : "Retry"}
-		</Button>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="quiet"
+					size="icon-sm"
+					onClick={retry.onRetry}
+					disabled={retry.pending || retry.disabled}
+					aria-label="Retry this turn"
+					aria-busy={retry.pending || undefined}
+					data-telemetry-id="chat.retry"
+					data-testid="retry-turn"
+				>
+					<RotateCw
+						aria-hidden="true"
+						className={cn("size-3.5", retry.pending && "animate-spin motion-reduce:animate-none")}
+					/>
+					{retry.pending ? <span className="sr-only">Retrying…</span> : null}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{tip}</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -2280,17 +2288,19 @@ function GenericActivityBody({ activity, commandTitled = false }: {
 		activity.activityKind === "command" &&
 		(detail?.command || detail?.output || detail?.terminalInput)
 	) {
+		const read = commandFileRead(activity);
+		if (read) return <FileReadCard path={read.path} label={read.label} file={read.file} />;
 		return <CommandExploreBody activity={activity} showCommand={!commandTitled} />;
 	}
-	// Several files: their own list, hung on the row's thread by the caller.
-	if (files.length > 1) return <FileChangeList files={files} />;
+	// Several files: their own list, hung on the row's rail by the caller.
+	if (files.length > 1) return <FileChangeList files={files} cwd={detail?.cwd} />;
+	// One file: open straight onto its card, which names the file. Listing the same
+	// name again under "Edited name" is noise.
+	if (isFileChange && files.length === 1 && fileChangePatch(files[0])) {
+		return <FileChangePatchCard file={files[0]!} hints={{ cwd: detail?.cwd, summary: activity.summary }} />;
+	}
 	return (
 		<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
-			{/* One file: open straight onto its patch. Listing the same
-			    basename again under "Edited name" is noise. */}
-			{files.length === 1 && fileChangePatch(files[0]) ? (
-				<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
-			) : null}
 			{!isFileChange && detail?.command ? (
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
@@ -2318,6 +2328,67 @@ function GenericActivityBody({ activity, commandTitled = false }: {
 	);
 }
 
+type FileRead = { path: string; label: string; file: NonNullable<ReturnType<typeof readFileLines>> };
+
+/**
+ * A finished command that printed one file and nothing else (`cat`, `cat -n`, `nl`,
+ * `head`, `sed -n 'A,Bp'`), as that file. Anything with a pipe, a redirect, a
+ * second command or a cut output keeps the command card: its output is not the file.
+ */
+function commandFileRead(activity: ConversationActivity): FileRead | undefined {
+	const detail = activity.detail;
+	if (activity.status !== "completed" || typeof detail?.output !== "string") return undefined;
+	// Only an exit the harness reported as clean: one that reports none may have
+	// failed, and its error message must not read as the file.
+	if (detail.exitCode !== 0 || detail.outputTruncated || detail.outputBytes !== undefined || detail.terminalInput) return undefined;
+	const command = ranCommand(detail);
+	if (!command) return undefined;
+	if (/[|;&<>$`\n]/.test(command)) return undefined;
+	const words = command.split(/\s+/).map((word) => word.replace(/^(['"])(.*)\1$/, "$2"));
+	const [binary, ...args] = words;
+	const file = args.at(-1);
+	// A quoted name with a space in it split above; it is not this word.
+	if (!file || file.startsWith("-") || /['"]/.test(file)) return undefined;
+	const flags = args.slice(0, -1).join(" ");
+	let start: number | undefined;
+	if (binary === "cat" && (flags === "" || flags === "-n")) start = 1;
+	// nl numbers its own lines, which readFileLines takes as given.
+	else if (binary === "nl" && /^(?:|-ba|-b a)$/.test(flags)) start = undefined;
+	else if (binary === "head" && /^(?:|-\d+|-n ?\d+)$/.test(flags)) start = 1;
+	else if (binary === "sed") {
+		const range = /^-n (\d+)(?:,\d+)?p$/.exec(flags);
+		if (!range) return undefined;
+		start = Number(range[1]);
+	} else return undefined;
+	const lines = readFileLines(detail.output, start);
+	if (!lines) return undefined;
+	return { path: file, label: fileCardPath(file, { cwd: detail.cwd }), file: lines };
+}
+
+/** Claude Code's Read tool, finished: the lines it returned, as the file. */
+function toolFileRead(activity: ConversationActivity): FileRead | undefined {
+	const detail = activity.detail;
+	if (activity.status !== "completed" || !detail || detail.error || detail.success === false) return undefined;
+	const claudeRead = detail.providerToolName === "Read";
+	// Another ACP agent names no tool; its read says so by kind.
+	const agentRead = !detail.providerToolName && detail.toolKind === "read";
+	if (!claudeRead && !agentRead) return undefined;
+	const input = detail.input && typeof detail.input === "object" ? (detail.input as Record<string, unknown>) : {};
+	const locations = (detail as { locations?: unknown }).locations;
+	const located = Array.isArray(locations) ? (locations[0] as { path?: unknown } | undefined)?.path : undefined;
+	const path = [input.file_path, input.path, input.filePath, input.absolute_path, input.absolutePath, located].find((value): value is string => typeof value === "string" && value !== "");
+	if (!path) return undefined;
+	// An image read keeps its card: there is no text to show.
+	if (Array.isArray(detail.content) && JSON.stringify(detail.content).includes('"type":"image"')) return undefined;
+	let raw = typeof detail.output === "string" && detail.output ? detail.output : normalizeToolCode(toolContentText(detail.content));
+	// OpenCode wraps a read in <file>…</file> with a closing note after it.
+	if (agentRead) raw = raw.replace(/^<file>\n/, "").replace(/\n?<\/file>[\s\S]*$/, "");
+	const lines = readFileLines(raw);
+	if (!lines) return undefined;
+	// Claude's Read numbers every line it returns; anything else from it (a notice) keeps its card.
+	if (claudeRead && lines.lines.every((line) => line.no === undefined)) return undefined;
+	return { path, label: fileCardPath(path, { cwd: detail.cwd, summary: activity.summary }), file: lines };
+}
 
 /**
  * The running step the live row names in place of its own row: a command, a file
@@ -2692,18 +2763,18 @@ function ActivityState({
  * expanded edit reads the same as the turn-level changed-files list. Hovering the
  * basename shows the full location; a file that carries a patch can still open it.
  */
-export function FileChangeList({ files }: { files: FileChangeFile[] }) {
+export function FileChangeList({ files, cwd }: { files: FileChangeFile[]; cwd?: string }) {
 	if (!files.length) return null;
 	return (
 		<ul className="flex flex-col">
 			{files.map((file) => (
-				<FileChangeRow key={`${file.oldPath ?? ""}→${file.path}`} file={file} />
+				<FileChangeRow key={`${file.oldPath ?? ""}→${file.path}`} file={file} cwd={cwd} />
 			))}
 		</ul>
 	);
 }
 
-function FileChangeRow({ file }: { file: FileChangeFile }) {
+function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 	const [open, setOpen] = useState(false);
 	const status = diffStatusMark[file.status ?? "modified"] ?? diffStatusMark.modified;
 	const hasPatch = Boolean(file.patch);
@@ -2755,7 +2826,7 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 			{/* The diff starts where the row's text does, under "Edited". */}
 			{open ? (
 				<ActivityStepBody className="pl-2.5">
-					<Patch patch={file.patch!} truncated={file.patchTruncated} />
+					<FileChangePatchCard file={file} hints={{ cwd }} />
 				</ActivityStepBody>
 			) : null}
 		</li>
@@ -2773,22 +2844,6 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
  * grammar renders as plain text. That is the right outcome: there is no diff to
  * colour, only a new file to read.
  */
-function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
-	return (
-		// `chat-code` is what the token colours are scoped to, so a patch without it
-		// tokenizes correctly and renders in one flat colour.
-			<div className="mb-1 mt-0.5 overflow-hidden bg-background">
-			<ToolDiffCode text={patch} />
-			{truncated ? (
-				<p className="border-t border-border px-2.5 py-1.5 text-xs leading-relaxed text-warning">
-					This patch is longer than Orchestrator stores, so it stops early. The whole change is in the
-					worktree and in the turn&rsquo;s diff.
-				</p>
-			) : null}
-		</div>
-	);
-}
-
 function fileChangePatch(file: FileChangeFile | undefined): string | undefined {
 	if (!file) return undefined;
 	if (file.patch) return file.patch;
@@ -2801,6 +2856,23 @@ function fileChangePatch(file: FileChangeFile | undefined): string | undefined {
 		...oldLines.map((line) => `-${line}`),
 		...newLines.map((line) => `+${line}`),
 	].join("\n");
+}
+
+function FileChangePatchCard({ file, hints }: { file: FileChangeFile; hints: { cwd?: string; summary?: string } }) {
+	const patch = fileChangePatch(file);
+	if (!patch) return null;
+	return (
+		<FileDiffCard
+			path={file.path}
+			oldPath={file.oldPath}
+			label={fileCardPath(file.path, hints)}
+			patch={patch}
+			status={file.status}
+			additions={file.additions}
+			deletions={file.deletions}
+			truncated={file.patchTruncated}
+		/>
+	);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3044,6 +3116,14 @@ function mcpToolHasBody(activity: ConversationActivity): boolean {
 function McpToolBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const args = mcpToolArguments(activity);
+	const read = toolFileRead(activity);
+	if (read) {
+		return (
+			<div className="pb-1.5">
+				<FileReadCard path={read.path} label={read.label} file={read.file} />
+			</div>
+		);
+	}
 	return (
 		<div className="flex flex-col gap-2 pb-2.5">
 			{detail?.error ? (

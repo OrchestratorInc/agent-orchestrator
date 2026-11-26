@@ -127,3 +127,13 @@
 :is(.chat-code, .diff-code, .markdown-code) .hljs-strong {
 	font-weight: var(--font-weight-semibold);
 }
+
+/* A removed line's edge mark in a chat file card: hatched where an added line's is
+   solid, so the two differ by more than hue. */
+.chat-diff-removed-bar {
+	background: repeating-linear-gradient(
+		-45deg,
+		var(--color-error) 0 2px,
+		transparent 2px 4px
+	);
+}
