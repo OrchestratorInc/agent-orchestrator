@@ -13,6 +13,7 @@ import {
 	ATTACHMENT_TILE_PILL_CLASS,
 	ATTACHMENT_TILE_SOLID_FILL_CLASS,
 	attachmentTypeLabel,
+	formatAttachmentSize,
 	type AttachmentPreviewKind,
 } from "./messageAttachments";
 
@@ -23,18 +24,24 @@ const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ defaul
 /** Enough of a text file to fill a tile. */
 export const TEXT_PREVIEW_BYTES = 2048;
 
+/** As much of a text file as the viewer reads into the window. */
+const TEXT_VIEWER_BYTES = 4 * 1024 * 1024;
+
 /**
- * The first TEXT_PREVIEW_BYTES of a response, then the read is cancelled. A
- * file just sent is read from its local copy, which takes no Range, and it may
- * be gigabytes: reading it whole for a tile would stream all of it.
+ * The first `limit` bytes of a response, and whether it had more, then the read
+ * is cancelled. A file just sent is read from its local copy, which takes no
+ * Range, and it may be gigabytes: reading it whole would stream all of it.
  */
-export async function readTextPrefix(response: Response): Promise<string> {
+async function readTextUpTo(response: Response, limit: number): Promise<{ text: string; more: boolean }> {
 	const reader = response.body?.getReader();
-	if (!reader) return (await response.text()).slice(0, TEXT_PREVIEW_BYTES);
+	if (!reader) {
+		const text = await response.text();
+		return { text: text.slice(0, limit), more: text.length > limit };
+	}
 	const chunks: Uint8Array[] = [];
 	let size = 0;
 	try {
-		while (size < TEXT_PREVIEW_BYTES) {
+		while (size <= limit) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			chunks.push(value);
@@ -43,7 +50,7 @@ export async function readTextPrefix(response: Response): Promise<string> {
 	} finally {
 		void reader.cancel().catch(() => undefined);
 	}
-	const bytes = new Uint8Array(Math.min(size, TEXT_PREVIEW_BYTES));
+	const bytes = new Uint8Array(Math.min(size, limit));
 	let offset = 0;
 	for (const chunk of chunks) {
 		if (offset >= bytes.length) break;
@@ -51,7 +58,12 @@ export async function readTextPrefix(response: Response): Promise<string> {
 		bytes.set(part, offset);
 		offset += part.length;
 	}
-	return new TextDecoder().decode(bytes);
+	return { text: new TextDecoder().decode(bytes, { stream: size > limit }), more: size > limit };
+}
+
+/** The first TEXT_PREVIEW_BYTES of a response, for a tile. */
+export async function readTextPrefix(response: Response): Promise<string> {
+	return (await readTextUpTo(response, TEXT_PREVIEW_BYTES)).text;
 }
 const PREVIEW_CLASS = "pointer-events-none absolute inset-0 flex flex-col overflow-hidden";
 
@@ -66,15 +78,18 @@ function TextViewer({ src, name, start, onOpenChange }: {
 	onOpenChange: (open: boolean) => void;
 }) {
 	const { t } = useTranslation();
-	const [full, setFull] = useState<string>();
+	const [full, setFull] = useState<{ text: string; more: boolean }>();
 	const [failed, setFailed] = useState(false);
 	const [attempt, setAttempt] = useState(0);
 	useEffect(() => {
 		const controller = new AbortController();
-		void fetch(rawTextUrl(src), { signal: controller.signal })
+		void fetch(rawTextUrl(src), {
+			signal: controller.signal,
+			headers: src.startsWith("blob:") ? undefined : { Range: `bytes=0-${TEXT_VIEWER_BYTES}` },
+		})
 			.then((response) => {
 				if (!response.ok) throw new Error(`Read failed: ${response.status}`);
-				return response.text();
+				return readTextUpTo(response, TEXT_VIEWER_BYTES);
 			})
 			.then(setFull)
 			.catch(() => {
@@ -87,8 +102,10 @@ function TextViewer({ src, name, start, onOpenChange }: {
 			<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
 				<div className="flex min-w-0 items-center gap-2 pr-8">
 					<DialogTitle className="min-w-0 flex-1 truncate text-sm">{name}</DialogTitle>
-					{full !== undefined ? (
-						<CopyButton text={full} label="Copy text" />
+					{full?.more ? (
+						<span className="text-xs text-muted-foreground">{t("chat.attachment.viewerTruncated", { size: formatAttachmentSize(TEXT_VIEWER_BYTES) })}</span>
+					) : full ? (
+						<CopyButton text={full.text} label="Copy text" />
 					) : failed ? (
 						<>
 							<span role="alert" className="text-xs text-destructive">{t("chat.attachment.readFailed")}</span>
@@ -108,7 +125,7 @@ function TextViewer({ src, name, start, onOpenChange }: {
 						<span className="text-xs text-muted-foreground">{t("common.loading")}</span>
 					)}
 				</div>
-				<pre className="m-0 min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words font-mono text-sm text-foreground">{full ?? start}</pre>
+				<pre className="m-0 min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap break-words font-mono text-sm text-foreground">{full?.text ?? start}</pre>
 			</DialogContent>
 		</Dialog>
 	);

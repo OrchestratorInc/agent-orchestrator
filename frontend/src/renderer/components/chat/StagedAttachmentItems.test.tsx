@@ -116,6 +116,12 @@ describe("AttachmentStrip", () => {
 	});
 });
 
+const VIEWER_BYTES = 4 * 1024 * 1024;
+
+function tileRead(init?: RequestInit): boolean {
+	return (init?.headers as Record<string, string> | undefined)?.Range === "bytes=0-2047";
+}
+
 describe("StagedAttachmentItems opening a text file", () => {
 	beforeEach(() => {
 		vi.stubGlobal("IntersectionObserver", class {
@@ -134,7 +140,7 @@ describe("StagedAttachmentItems opening a text file", () => {
 	it("shows a sent text file's whole saved copy with Copy", async () => {
 		const whole = `first line\n${"middle\n".repeat(500)}last line`;
 		const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
-			new Response((init?.headers as Record<string, string> | undefined)?.Range ? "first line" : whole, { status: 200 }));
+			new Response(tileRead(init) ? "first line" : whole, { status: 200 }));
 		vi.stubGlobal("fetch", fetch);
 		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
 
@@ -143,13 +149,13 @@ describe("StagedAttachmentItems opening a text file", () => {
 		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
 		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
 		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
-		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`, expect.not.objectContaining({ headers: expect.anything() }));
+		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`, expect.objectContaining({ headers: { Range: `bytes=0-${VIEWER_BYTES}` } }));
 	});
 
 	it("says when the whole file can't be read, and loads it on Retry", async () => {
 		let reachable = false;
 		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-			if ((init?.headers as Record<string, string> | undefined)?.Range) return new Response("first line", { status: 200 });
+			if (tileRead(init)) return new Response("first line", { status: 200 });
 			return reachable ? new Response("first line\nlast line", { status: 200 }) : new Response("", { status: 502 });
 		}));
 		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
@@ -167,5 +173,18 @@ describe("StagedAttachmentItems opening a text file", () => {
 		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
 		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
 		expect(within(viewer).queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("reads at most 4 MB of a larger file, says so, and offers no Copy", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+			new Response(tileRead(init) ? "first line" : "x".repeat(VIEWER_BYTES + 100), { status: 200 })));
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByText("Showing the first 4.0 MB")).toBeInTheDocument();
+		expect(viewer.querySelector("pre")?.textContent).toHaveLength(VIEWER_BYTES);
+		expect(within(viewer).queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
 	});
 });
