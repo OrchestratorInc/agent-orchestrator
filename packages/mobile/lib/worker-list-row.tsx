@@ -87,7 +87,6 @@ export const WorkerListRow = memo(
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const closeActionRailRef = useRef<() => void>(() => {});
-	const [renameTitle, setRenameTitle] = useState("");
 	const [renameSaving, setRenameSaving] = useState(false);
 	// One way out of each rename: Return and the blur that follows it, or a
 	// cancel and the blur the dismissed keyboard sends, must not both act.
@@ -95,6 +94,9 @@ export const WorkerListRow = memo(
 	const renaming = useRef(isRenaming);
 	renaming.current = isRenaming;
 	const row = workerRowPresentation(t, session, projectName);
+	// Starts at the title the effect below keeps it at, so a new row does not
+	// render twice: choosing a machine on the board builds every row again.
+	const [renameTitle, setRenameTitle] = useState(row.title);
 	const visual = statusVisual(t, session.status);
 	const indicator = workerRowIndicator(session);
 	// The subtitle is project and machine alone (no branch: a long worktree path
