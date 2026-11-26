@@ -11,6 +11,8 @@ const fixtures = vi.hoisted(() => ({
 	hostId: "dev",
 	cloudClient: {} as Record<string, ReturnType<typeof vi.fn>>,
 	theme: new Proxy({}, { get: () => "#000000" }),
+	getSessionPR: vi.fn(async (): Promise<unknown[]> => []),
+	loadPRDetails: vi.fn(async (): Promise<void> => {}),
 }));
 
 vi.mock("react-native", async () => {
@@ -60,7 +62,8 @@ vi.mock("./api", () => ({
 		runs: [],
 		reviewerSurface: fixtures.reviewerSurface,
 	} as unknown as SessionReviews)),
-	getSessionPR: vi.fn(async () => []),
+	getSessionPR: fixtures.getSessionPR,
+	loadPRDetails: fixtures.loadPRDetails,
 	getSession: fixtures.getSession,
 	sessionTitle: (session: DashboardSession) => session.displayName ?? session.id,
 	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: vi.fn(), restoreSessionReviewer: vi.fn(), sendMessage: vi.fn(), triggerSessionReview: vi.fn(),
@@ -92,6 +95,8 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.sessions = [];
 	fixtures.getSession.mockReset();
+	fixtures.getSessionPR.mockReset().mockResolvedValue([]);
+	fixtures.loadPRDetails.mockReset().mockResolvedValue(undefined);
 	fixtures.restore.mockReset();
 	fixtures.reviewerSurface = undefined;
 	fixtures.hostId = "dev";
@@ -207,6 +212,48 @@ it("keeps Review now available while automatic review is on", async () => {
 	await render();
 	const reviewNow = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Review now");
 	expect(reviewNow.props.disabled).toBe(false);
+});
+
+// A PR whose threads were never read gets one details read. A quiet reload (the
+// page polls every 2 s while a review runs or auto-review is on) hands the section
+// a new PR object; that must not throw the read's answer away.
+it("finishes the details read even when the page reloads while it is out", async () => {
+	const pr = () => ({
+		url: "https://github.com/acme/repo/pull/12", htmlUrl: "https://github.com/acme/repo/pull/12", number: 12, title: "Improve mobile review", state: "open", provider: "github",
+		repo: "acme/repo", author: "ao", sourceBranch: "ao/fix", targetBranch: "main", additions: 1, deletions: 0, changedFiles: 1,
+		ci: { state: "passing", failingChecks: [] }, review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		mergeability: { state: "mergeable", reasons: [] },
+	});
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
+	fixtures.getSessionPR.mockImplementation(async () => [pr()]);
+	let finish!: (failed?: boolean) => void;
+	fixtures.loadPRDetails.mockImplementation(() => new Promise<void>((resolve, reject) => { finish = (failed) => failed ? reject(new Error("forge down")) : resolve(); }));
+	const spinner = () => renderer!.root.findAll((node) => (node.type as unknown) === "Spinner" && node.props.accessibilityLabel === "Loading comments");
+	const text = (value: string) => renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === value);
+	await render();
+	expect(fixtures.loadPRDetails).toHaveBeenCalledTimes(1);
+	expect(spinner()).toHaveLength(1);
+
+	// The reload lands while the read is out: a new PR object, the same PR.
+	const scroll = renderer!.root.find((node) => (node.type as unknown) === "ScrollView");
+	await act(async () => { await scroll.props.refreshControl.props.onRefresh(); });
+	await act(async () => { finish(true); await Promise.resolve(); });
+
+	expect(fixtures.loadPRDetails).toHaveBeenCalledTimes(1);
+	expect(spinner()).toHaveLength(0);
+	expect(text("Could not load this pull request's threads.")).toHaveLength(1);
+
+	// Retry, reload mid-read again, and this time the read lands: the page reloads for the threads.
+	const retry = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Retry");
+	await act(async () => { retry.props.onPress(); });
+	expect(fixtures.loadPRDetails).toHaveBeenCalledTimes(2);
+	await act(async () => { await scroll.props.refreshControl.props.onRefresh(); });
+	const reads = fixtures.getSessionPR.mock.calls.length;
+	await act(async () => { finish(); await Promise.resolve(); });
+	await act(async () => { await Promise.resolve(); });
+	expect(spinner()).toHaveLength(0);
+	expect(text("No comments yet.")).toHaveLength(1);
+	expect(fixtures.getSessionPR.mock.calls.length).toBeGreaterThan(reads);
 });
 
 describe("a Cloud worker's pull request", () => {

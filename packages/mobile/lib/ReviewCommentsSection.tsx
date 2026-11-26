@@ -99,19 +99,31 @@ export function ReviewCommentsSection({
 	const [details, setDetails] = useState<"idle" | "loading" | "failed">("idle");
 	const [detailsAttempt, retryDetails] = useReducer((count: number) => count + 1, 0);
 	const askedDetails = useRef(new Set<string>());
-	const provider = block.provider;
 	const loadDetails = backend.loadDetails;
+	// Keyed on the PR, not its summary object: every quiet reload (the page polls
+	// while a review runs) hands over a new object for the same PR, and a re-run
+	// for that must not throw away the read already out.
+	const detailsUrl = block.provider?.url;
+	const detailsNumber = block.provider?.number;
+	const detailsRead = Boolean(block.provider?.detailsObservedAt);
+	// The PR on screen, and whether the section still is: the only reasons to drop a read's answer.
+	const shownDetailsUrl = useRef(detailsUrl);
+	shownDetailsUrl.current = detailsUrl;
+	const mounted = useRef(true);
 	useEffect(() => {
-		if (!provider || provider.detailsObservedAt || !loadDetails || askedDetails.current.has(provider.url)) return;
-		askedDetails.current.add(provider.url);
-		let current = true;
+		mounted.current = true;
+		return () => { mounted.current = false; };
+	}, []);
+	useEffect(() => {
+		if (!detailsUrl || detailsNumber === undefined || detailsRead || !loadDetails || askedDetails.current.has(detailsUrl)) return;
+		askedDetails.current.add(detailsUrl);
+		const stillShown = () => mounted.current && shownDetailsUrl.current === detailsUrl;
 		setDetails("loading");
-		void loadDetails({ number: provider.number, url: provider.url }).then(
-			async () => { if (current) { setDetails("idle"); await onChanged(); } },
-			() => { if (current) setDetails("failed"); },
+		void loadDetails({ number: detailsNumber, url: detailsUrl }).then(
+			async () => { if (stillShown()) { setDetails("idle"); await onChanged(); } },
+			() => { if (stillShown()) setDetails("failed"); },
 		);
-		return () => { current = false; };
-	}, [detailsAttempt, loadDetails, onChanged, provider]);
+	}, [detailsAttempt, detailsNumber, detailsRead, detailsUrl, loadDetails, onChanged]);
 
 	const setError = useCallback((key: string, message?: string) => setErrors((current) => {
 		if (!message && !current.has(key)) return current;
