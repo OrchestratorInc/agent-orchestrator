@@ -97,6 +97,13 @@ export function oneRowPerLogin<T extends Pick<AgentAccount, "id" | "sameLoginAs"
 
 export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean; kind?: AgentAccount["kind"]; name?: string }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
 	const name = agentAccountName(account, t);
+	if (account.provider === "codex" && (account.orgId || account.orgName)) {
+		const matching = peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === account.email?.toLowerCase() && peer.orgName === account.orgName);
+		const otherWorkspace = matching.some((peer) => peer.orgId && peer.orgId !== account.orgId);
+		const sameWorkspace = matching.some((peer) => peer.orgId === account.orgId);
+		return [name, account.orgName, account.orgId && (!account.orgName || otherWorkspace) ? account.orgId.slice(0, 8) : null,
+			account.device && sameWorkspace ? t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames.codex }) : null].filter(Boolean).join(" · ");
+	}
 	const email = account.email?.toLowerCase();
 	const orgKnown = (peer: Pick<AgentAccount, "orgId" | "orgName">) => Boolean(peer.orgId || peer.orgName);
 	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email && orgKnown(peer) === orgKnown(account)) : [];
@@ -136,7 +143,10 @@ export function useAgentAccountLabel(enabled = true, hostId?: HostId) {
 	const accounts = useAgentAccounts(enabled, hostId);
 	return (id: string | undefined) => {
 		const account = accounts.data?.find((candidate) => candidate.id === id);
-		return account ? agentAccountName(account, t) : t("settings.agentAccounts.removedAccount");
+		if (!account) return t("settings.agentAccounts.removedAccount");
+		return account.provider === "codex"
+			? agentAccountLabel(account, accounts.data?.filter((peer) => peer.provider === "codex") ?? [], t)
+			: agentAccountName(account, t);
 	};
 }
 
@@ -171,7 +181,7 @@ export function useAgentAccountActions(hostId?: HostId) {
 		startLogin: async (provider: AgentAccountProvider, request: AgentAccountLoginRequest = {}) =>
 			unwrap(await client(hostId).POST("/api/v1/agents/accounts/login", { body: { provider, ...request } })),
 		/** Signs a saved account in again in its own folder; verify and cancel are the same as a new sign-in. */
-		signInAgain: async (accountId: string, request: Omit<AgentAccountLoginRequest, "name"> = {}) =>
+		signInAgain: async (accountId: string, request: Omit<AgentAccountLoginRequest, "name" | "workspaceId"> = {}) =>
 			unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } }, body: request })),
 		verifyLogin: async (operationId: string) => {
 			const result = unwrap(await client(hostId).POST("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId } } }));

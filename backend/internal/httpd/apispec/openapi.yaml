@@ -27583,6 +27583,9 @@ components:
           type: string
         secret:
           type: string
+        workspaceId:
+          format: uuid
+          type: string
       required:
       - provider
       type: object

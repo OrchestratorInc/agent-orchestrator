@@ -16,6 +16,25 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestCodexWorkspaceIDReadsOnlyValidLocalMetadata(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "auth.json")
+	const id = "ab12cd34-0000-4000-8000-000000000001"
+	if got := codexWorkspaceID(home); got != "" {
+		t.Fatalf("missing credential returned a workspace: %q", got)
+	}
+	write(t, path, `{"tokens":{"account_id":"`+id+`","access_token":"synthetic-token"}}`)
+	if got := codexWorkspaceID(home); got != id {
+		t.Fatalf("workspace ID = %q, want %q", got, id)
+	}
+	for _, invalid := range []string{`{"tokens":{"account_id":"synthetic-token"}}`, `{"tokens":{"account_id":"` + id + `"}}{}`} {
+		write(t, path, invalid)
+		if got := codexWorkspaceID(home); got != "" {
+			t.Fatalf("invalid credential returned a workspace: %q", got)
+		}
+	}
+}
+
 func write(t *testing.T, path, data string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

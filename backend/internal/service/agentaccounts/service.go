@@ -153,9 +153,10 @@ type login struct {
 	account *domain.AgentAccount
 	// method and authOp are a sign-in run through the CLI in the background
 	// (the in-app sign-in) instead of a terminal; name labels the new account.
-	method string
-	authOp string
-	name   string
+	method      string
+	authOp      string
+	name        string
+	workspaceID string
 }
 
 // New builds the service. root must be absolute; the account folders' paths
@@ -287,12 +288,15 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		r := s.readings[account.ID]
 		lastOrg := s.lastOrg[account.ID]
 		s.mu.Unlock()
+		if account.WorkspaceID != "" {
+			lastOrg.id = account.WorkspaceID
+		}
 		view := AccountView{Account: account, Default: def == account.ID, OrgID: lastOrg.id, OrgName: lastOrg.name}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
 			view.IdentityProblem, view.LimitsProblem = r.identityProblem, r.limitsProblem
 			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
-			if r.identity.SignedIn && r.identity.OrgID != "" {
+			if r.identity.SignedIn && (r.identity.OrgID != "" || r.identity.OrgName != "") {
 				view.OrgID, view.OrgName = r.identity.OrgID, r.identity.OrgName
 			}
 			if account.Device() {
@@ -314,7 +318,7 @@ func markSameLogin(views []AccountView) {
 			continue
 		}
 		for _, saved := range views {
-			if !saved.Account.Device() && saved.Account.Provider == device.Account.Provider && saved.SignedIn && strings.EqualFold(saved.Account.Email, device.Account.Email) && sameOrg(saved.OrgID, device.OrgID) {
+			if !saved.Account.Device() && saved.Account.Provider == device.Account.Provider && saved.SignedIn && strings.EqualFold(saved.Account.Email, device.Account.Email) && sameAccountOrg(device.Account.Provider, domain.AgentAccountKindSubscription, saved.OrgID, device.OrgID) {
 				device.SameLoginAs = saved.Account.ID
 				break
 			}
@@ -324,6 +328,13 @@ func markSameLogin(views []AccountView) {
 
 func sameOrg(a, b string) bool {
 	return a == "" || b == "" || a == b
+}
+
+func sameAccountOrg(provider domain.AgentAccountProvider, kind domain.AgentAccountKind, a, b string) bool {
+	if provider == domain.AgentAccountProviderCodex && kind == domain.AgentAccountKindSubscription {
+		return a == b
+	}
+	return sameOrg(a, b)
 }
 
 func orgLabel(name, id string) string {
@@ -400,6 +411,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	s.mu.Lock()
 	known := s.lastOrg[account.ID]
 	s.mu.Unlock()
+	if account.WorkspaceID != "" {
+		known.id = account.WorkspaceID
+	}
 	// A per-token sign-in is never a subscription, so it is checked for the
 	// login and organization it was added with here, before it skips limits.
 	perToken := account.PerToken() && identity.LoggedIn
@@ -423,7 +437,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.mismatch = true
 		r.identityProblem = domain.AgentAccountProblemOtherLogin
 		r.identityErr = fmt.Sprintf("the folder is now signed in as %s, not %s", identity.Email, account.Email)
-	case !account.Device() && !sameOrg(known.id, identity.OrgID):
+	case !account.Device() && ((account.WorkspaceID != "" && identity.OrgID != account.WorkspaceID) || !sameOrg(known.id, identity.OrgID)):
 		r.identity.SignedIn = false
 		r.mismatch = true
 		r.identityProblem = domain.AgentAccountProblemOtherOrg
@@ -439,7 +453,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			s.mu.Unlock()
 		} else {
 			r.limits = &limits
-			email, plan := identity.Email, identity.Plan
+			if r.identity.Plan == "" {
+				r.identity.Plan = limits.ReportedPlan
+			}
+			email, plan := identity.Email, r.identity.Plan
 			if email == "" {
 				email = account.Email
 			}
@@ -809,14 +826,22 @@ type LoginStart struct {
 // (a setup token, an OpenAI API key); Name labels a new account without an
 // email of its own.
 type LoginRequest struct {
-	Method string
-	Secret string
-	Name   string
+	Method      string
+	Secret      string
+	Name        string
+	WorkspaceID string
 }
 
 // StartLogin creates a new account folder and runs the provider's own sign-in
 // for it.
 func (s *Service) StartLogin(ctx context.Context, p domain.AgentAccountProvider, req LoginRequest) (LoginStart, error) {
+	if req.WorkspaceID != "" {
+		id, err := uuid.Parse(req.WorkspaceID)
+		if p != domain.AgentAccountProviderCodex || (req.Method != "" && req.Method != "browser" && req.Method != "device_code") || err != nil || id == uuid.Nil || len(req.WorkspaceID) != 36 {
+			return LoginStart{}, ports.ErrAgentAccountWorkspaceInvalid
+		}
+		req.WorkspaceID = id.String()
+	}
 	return s.startLogin(ctx, p, nil, req)
 }
 
@@ -847,6 +872,9 @@ func (s *Service) StartSignInAgain(ctx context.Context, accountID string, req Lo
 		if kind != accountKind(account) {
 			return LoginStart{}, ports.ErrAgentAccountKindMismatch
 		}
+	}
+	if account.WorkspaceID != "" && (req.Method == "" || req.Method == "browser" || req.Method == "device_code") {
+		req.WorkspaceID = account.WorkspaceID
 	}
 	return s.startLogin(ctx, account.Provider, &account, req)
 }
@@ -888,6 +916,9 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 		discard()
 		return LoginStart{}, err
 	}
+	if req.WorkspaceID != "" {
+		argv = append(argv, "-c", fmt.Sprintf("forced_chatgpt_workspace_id=%q", req.WorkspaceID))
+	}
 	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{
 		Owner: "agentaccounts:" + string(p), Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title,
 	})
@@ -896,7 +927,7 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 		return LoginStart{}, fmt.Errorf("open sign-in terminal: %w", err)
 	}
 	s.mu.Lock()
-	s.logins[id] = &login{id: id, provider: p, home: home, terminal: terminal.HandleID, account: account}
+	s.logins[id] = &login{id: id, provider: p, home: home, terminal: terminal.HandleID, account: account, workspaceID: req.WorkspaceID}
 	s.mu.Unlock()
 	return LoginStart{OperationID: id, Provider: p, Terminal: terminal}, nil
 }
@@ -955,6 +986,10 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	if !s.claimLogin(op) {
 		return "", nil, ports.ErrAgentAccountLoginUnknown
 	}
+	if op.account == nil && op.workspaceID != "" && op.workspaceID != identity.OrgID {
+		s.endLogin(ctx, op, true)
+		return "", nil, ports.ErrAgentAccountWorkspaceMismatch
+	}
 	for _, view := range views {
 		if op.account != nil && (view.Account.ID == op.account.ID || view.Account.Device()) {
 			continue
@@ -962,7 +997,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		heldBy := view.SignedIn || (op.account == nil && !view.Account.Device() && view.Account.Email != "")
 		// One login is one account of its kind: a Console login of the same
 		// email as a subscription is a different account.
-		if view.Account.Provider == op.provider && accountKind(view.Account) == kind && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameOrg(view.OrgID, identity.OrgID) {
+		if view.Account.Provider == op.provider && accountKind(view.Account) == kind && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameAccountOrg(op.provider, kind, view.OrgID, identity.OrgID) {
 			s.endLogin(ctx, op, true)
 			return LoginDuplicate, &view, nil
 		}
@@ -971,6 +1006,9 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return s.finishSignInAgain(ctx, op, identity, views)
 	}
 	account := domain.AgentAccount{ID: op.id, Provider: op.provider, Home: op.home, Email: identity.Email, Plan: identity.Plan, Kind: kind, Name: op.name, CreatedAt: s.now()}
+	if op.provider == domain.AgentAccountProviderCodex && kind == domain.AgentAccountKindSubscription {
+		account.WorkspaceID = identity.OrgID
+	}
 	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
 		s.releaseLogin(op) // still pending: a later check can save it
 		return "", nil, err
@@ -1024,7 +1062,7 @@ func (s *Service) finishSignInAgain(ctx context.Context, op *login, identity dom
 	s.mu.Lock()
 	known := s.lastOrg[op.account.ID]
 	s.mu.Unlock()
-	if (op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email)) || !sameOrg(known.id, identity.OrgID) {
+	if (op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email)) || (op.account.WorkspaceID != "" && op.account.WorkspaceID != identity.OrgID) || !sameOrg(known.id, identity.OrgID) {
 		s.endLogin(ctx, op, true)
 		return LoginMismatch, saved, nil
 	}

@@ -114,7 +114,7 @@ func (c *AgentAccountsController) startLogin(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	start, err := c.Svc.StartLogin(r.Context(), in.Provider, agentaccounts.LoginRequest{Method: in.Method, Secret: in.Secret, Name: in.Name})
+	start, err := c.Svc.StartLogin(r.Context(), in.Provider, agentaccounts.LoginRequest{Method: in.Method, Secret: in.Secret, Name: in.Name, WorkspaceID: strings.TrimSpace(in.WorkspaceID)})
 	if err != nil {
 		writeAgentAccountError(w, r, err)
 		return
@@ -347,6 +347,10 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_KIND_MISMATCH", "This account does not support that action", nil)
 	case errors.Is(err, ports.ErrAgentAccountMethodInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_METHOD_INVALID", "This sign-in method cannot add an account here", nil)
+	case errors.Is(err, ports.ErrAgentAccountWorkspaceInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_WORKSPACE_INVALID", "Enter a valid ChatGPT workspace ID and use browser or device-code sign-in.", nil)
+	case errors.Is(err, ports.ErrAgentAccountWorkspaceMismatch):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_WORKSPACE_MISMATCH", "Codex didn't confirm the selected workspace. Start a new sign-in and choose that workspace in ChatGPT.", nil)
 	case errors.Is(err, ports.ErrAgentAccountSignInUnavailable):
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_SIGN_IN_UNAVAILABLE", "The in-app sign-in is unavailable. Use the terminal sign-in instead.", nil)
 	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):

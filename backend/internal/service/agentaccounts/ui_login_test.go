@@ -19,16 +19,17 @@ type fakeUILogin struct {
 }
 
 type fakeUIStart struct {
-	harness domain.AgentHarness
-	method  string
-	secret  string
-	env     map[string]string
+	harness     domain.AgentHarness
+	method      string
+	secret      string
+	env         map[string]string
+	workspaceID string
 }
 
-func (f *fakeUILogin) StartAccountLogin(_ context.Context, harness domain.AgentHarness, method, secret string, env map[string]string) (string, error) {
+func (f *fakeUILogin) StartAccountLogin(_ context.Context, harness domain.AgentHarness, method, secret, workspaceID string, env map[string]string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.started = append(f.started, fakeUIStart{harness, method, secret, env})
+	f.started = append(f.started, fakeUIStart{harness: harness, method: method, secret: secret, env: env, workspaceID: workspaceID})
 	return "auth-" + method, nil
 }
 

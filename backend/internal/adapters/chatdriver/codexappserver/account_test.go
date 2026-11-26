@@ -29,7 +29,7 @@ func TestAccountFactoryUsesManagedHomeAndFileCredentialStore(t *testing.T) {
 	}
 	go serveAccountTestProtocol(serverReads, serverWrites, map[string]any{
 		"initialize":   map[string]any{},
-		"account/read": map[string]any{"account": map[string]any{"type": "chatgpt", "email": "person@example.com", "planType": "pro"}, "requiresOpenaiAuth": true},
+		"account/read": map[string]any{"account": map[string]any{"type": "chatgpt", "email": "person@example.com", "planType": "pro", "workspaceName": "Workspace A"}, "requiresOpenaiAuth": true},
 	})
 	home := t.TempDir()
 	if err := os.Chmod(home, 0o700); err != nil {
@@ -55,6 +55,9 @@ func TestAccountFactoryUsesManagedHomeAndFileCredentialStore(t *testing.T) {
 	}
 	if account.Authentication != domain.AgentAuthenticationAuthorized || account.Method != domain.CodexAuthMethodChatGPT || account.Email == nil || *account.Email != "person@example.com" {
 		t.Fatalf("account = %#v", account)
+	}
+	if account.WorkspaceName == nil || *account.WorkspaceName != "Workspace A" {
+		t.Fatalf("workspace name = %v", account.WorkspaceName)
 	}
 }
 

@@ -132,11 +132,11 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 		setLogins(pendingLogins);
 	};
 	// accountId signs that saved account in again, in its own folder.
-	const startLogin = (accountId?: string) => run(`login:${provider}`, async () => {
+	const startLogin = (accountId?: string, workspaceId?: string) => run(`login:${provider}`, async () => {
 		if (login?.operationId) await actions.cancelLogin(login.operationId).catch(() => undefined);
 		setLogin(undefined);
 		setLoginNote("");
-		setLogin(await (accountId ? actions.signInAgain(accountId) : actions.startLogin(provider)));
+		setLogin(await (accountId ? actions.signInAgain(accountId) : workspaceId ? actions.startLogin(provider, { workspaceId }) : actions.startLogin(provider)));
 	});
 	// One check at a time: the CLI exiting checks on its own, and a second check
 	// racing a click would find the sign-in already finished and report an error.
@@ -148,13 +148,19 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	};
 	const verifyLogin = (current: TerminalLogin) => run(`verify:${provider}`, async () => {
 		verifying.current = true;
-		const result = await actions.verifyLogin(current.operationId).finally(() => { verifying.current = false; });
+		const result = await actions.verifyLogin(current.operationId).catch((err: unknown) => {
+			if (!(err instanceof Error) || apiErrorCode(err.cause) !== "AGENT_ACCOUNT_WORKSPACE_MISMATCH") throw err;
+			setLogin(undefined);
+			setError(t("settings.agentAccounts.workspaceMismatch"));
+			return null;
+		}).finally(() => { verifying.current = false; });
+		if (!result) return;
 		if (result.status === "waiting") setLoginNote(t("settings.agentAccounts.loginWaiting"));
 		else if (result.status === "not_subscription") setLoginNote(t("settings.agentAccounts.loginNotSubscription"));
 		else {
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
-			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
+			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName || result.account?.orgId].filter(Boolean).join(" · ") }));
 			if (result.status === "complete") {
 				// A chat turn that sent the user here to log in gets them back.
 				const ui = useUiStore.getState();
@@ -169,10 +175,9 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 		setLogin(undefined);
 		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
-	// Opens the in-app sign-in for a new account, or for account again; with no
-	// method that suits it, the CLI's own sign-in runs in a terminal instead.
+	// A new Codex login can target a workspace even when only terminal login is available.
 	const openSignIn = (account?: AgentAccount) => {
-		if (methodsFor(account).length === 0) {
+		if (methodsFor(account).length === 0 && !(provider === "codex" && !account)) {
 			if (!panelOnly(account)) void startLogin(account?.id);
 			return;
 		}
@@ -199,7 +204,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	// daemon, a setup token saved at once; any other method signs the account's
 	// own folder in in the background, which the panel follows like the
 	// harness's own sign-in.
-	const startAccountSignIn = async (method: string, secret: string, name: string): Promise<AgentLoginSnapshot> => {
+	const startAccountSignIn = async (method: string, secret: string, name: string, workspaceId?: string): Promise<AgentLoginSnapshot> => {
 		const target = signIn?.account;
 		// A start that resolves after the user opened or closed another sign-in
 		// belongs to a panel that is gone: it never writes the newer one's refs.
@@ -217,7 +222,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 			const request = { method, ...(secret ? { secret } : {}) } as AgentAccountLoginRequest;
 			const started = target
 				? await actions.signInAgain(target.id, request)
-				: await actions.startLogin(provider, { ...request, ...(name ? { name } : {}) });
+				: await actions.startLogin(provider, { ...request, ...(name ? { name } : {}), ...(workspaceId ? { workspaceId } : {}) });
 			if (started.account || !started.authOperationId) {
 				await actions.refresh();
 				if (current()) finishedAccount.current = started.account?.id ?? target?.id;
@@ -260,7 +265,15 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 			finishedAccount.current = undefined;
 			return true;
 		}
-		const result = await actions.verifyLogin(operation);
+		const result = await actions.verifyLogin(operation).catch((err: unknown) => {
+			if (!(err instanceof Error) || apiErrorCode(err.cause) !== "AGENT_ACCOUNT_WORKSPACE_MISMATCH") throw err;
+			if (accountOperation.current === operation) {
+				accountOperation.current = undefined;
+				setError(t("settings.agentAccounts.workspaceMismatch"));
+			}
+			return null;
+		});
+		if (!result) return false;
 		if (result.status === "waiting") return false;
 		if (result.status === "not_subscription") {
 			setError(t("settings.agentAccounts.loginNotSubscription"));
@@ -269,7 +282,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 		// Another account's sign-in may have taken the ref meanwhile; leave it be.
 		if (accountOperation.current === operation) accountOperation.current = undefined;
 		if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
-		if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
+		if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName || result.account?.orgId].filter(Boolean).join(" · ") }));
 		if (result.status !== "complete") return false;
 		returnToChat(result.account?.id);
 		return true;
@@ -339,9 +352,9 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				account={{ start: startAccountSignIn, named: !signInTarget }}
 				onVerify={verifyAccountSignIn}
 				onClose={closeSignIn}
-				onTerminal={panelOnly(signInTarget) ? undefined : async () => {
+				onTerminal={panelOnly(signInTarget) ? undefined : async (workspaceId) => {
 					closeSignIn();
-					await startLogin(signInTarget?.id);
+					await startLogin(signInTarget?.id, workspaceId);
 				}}
 			/> : null}
 			{hasTerminal(login) ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
@@ -411,7 +424,8 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 		// So does a metered sign-in, such as Anthropic Console.
 		account.loggedIn ? t("settings.agentAccounts.apiKeyBilled") : t("settings.agentAccounts.signedOut"),
 	] : [
-		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
+		account.provider === "codex" && account.signedIn && !account.orgId && !account.orgName ? t("settings.agentAccounts.workspaceUnknown") : null,
+		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : account.provider === "codex" && account.signedIn ? t("settings.agentAccounts.planNotReported") : null,
 		kind === "setup_token" && account.keyHint ? t("settings.agentAccounts.tokenEnding", { hint: account.keyHint }) : null,
 		// An API key (or a cloud provider login) in the CLI's own folder launches
 		// it but is not a subscription: no limits, and no account to move to.
@@ -421,7 +435,7 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
 				<p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-					<span className="truncate">{name}</span>
+					<span className="truncate" title={account.provider === "codex" ? account.orgId : undefined}>{name}</span>
 					{badge ? <Badge>{badge}</Badge> : null}
 				</p>
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
@@ -513,8 +527,14 @@ export function AccountLimits({ account }: { account: AgentAccount }) {
 
 export function formatPlanName(plan: string | null | undefined): string | null {
 	const value = plan?.trim();
-	if (!value) return null;
-	const known: Record<string, string> = { free: "Free", plus: "Plus", pro: "Pro", max: "Max", team: "Team", business: "Business", enterprise: "Enterprise" };
+	if (!value || value.toLowerCase() === "unknown") return null;
+	const known: Record<string, string> = {
+		free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro", promax: "Pro (Max)", max: "Max",
+		team: "Team", business: "Business", enterprise: "Enterprise", ent26: "Enterprise",
+		self_serve_business_prolite: "Business Pro Lite", self_serve_business_usage_based: "Business (Usage Based)",
+		enterprise_cbp_automation: "Enterprise (Automation)", enterprise_cbp_usage_based: "Enterprise (Usage Based)",
+		edu: "Edu", edu_plus: "Edu Plus", edu_pro: "Edu Pro", sci: "Academic Researchers", sci_plus: "Academic Researchers Plus",
+	};
 	return known[value.toLowerCase()] ?? value;
 }
 

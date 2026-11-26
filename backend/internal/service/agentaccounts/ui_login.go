@@ -18,7 +18,7 @@ import (
 // login: the app shows its link, device code and code field instead of a
 // terminal. env points the CLI at the account's folder.
 type UILogin interface {
-	StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret string, env map[string]string) (string, error)
+	StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret, workspaceID string, env map[string]string) (string, error)
 	CancelAccountLogin(ctx context.Context, harness domain.AgentHarness, id string) error
 }
 
@@ -135,13 +135,13 @@ func (s *Service) startUILogin(ctx context.Context, p domain.AgentAccountProvide
 		discard()
 		return LoginStart{}, err
 	}
-	authOp, err := ui.StartAccountLogin(ctx, harnessOf(p), req.Method, req.Secret, provider.LaunchEnv(home))
+	authOp, err := ui.StartAccountLogin(ctx, harnessOf(p), req.Method, req.Secret, req.WorkspaceID, provider.LaunchEnv(home))
 	if err != nil {
 		discard()
 		return LoginStart{}, err
 	}
 	s.mu.Lock()
-	s.logins[id] = &login{id: id, provider: p, home: home, account: account, method: req.Method, authOp: authOp, name: cleanAPIKeyName(req.Name)}
+	s.logins[id] = &login{id: id, provider: p, home: home, account: account, method: req.Method, authOp: authOp, name: cleanAPIKeyName(req.Name), workspaceID: req.WorkspaceID}
 	s.mu.Unlock()
 	return LoginStart{OperationID: id, Provider: p, AuthOperationID: authOp}, nil
 }

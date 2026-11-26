@@ -58,6 +58,19 @@ beforeEach(() => {
 	});
 });
 
+it("lets a new Codex account target a workspace even with terminal-only sign-in", async () => {
+	const user = userEvent.setup();
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	postMock.mockResolvedValue({ data: { ...login, provider: "codex" } });
+	render(<QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="codex" /></TooltipProvider></QueryClientProvider>);
+	await user.click(screen.getByRole("button", { name: "Add account" }));
+	const workspaceId = "a997ab10-022e-4f11-a773-2b4a5f84fd5e";
+	await user.type(screen.getByRole("textbox", { name: "ChatGPT workspace ID (optional)" }), workspaceId);
+	await user.click(screen.getByRole("button", { name: "Open terminal login" }));
+	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", { body: { provider: "codex", workspaceId } });
+});
+
 it("signs a signed-out saved account in again in its own folder", async () => {
 	const user = userEvent.setup();
 	renderPanel();
@@ -368,6 +381,21 @@ it("names each organization when one email has accounts in several", async () =>
 	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-p"]')).toBeInTheDocument());
 	expect(document.querySelector('[data-agent-account="acct-a"]')).toHaveTextContent("a@example.com · Acme");
 	expect(document.querySelector('[data-agent-account="acct-p"]')).toHaveTextContent("a@example.com · Personal");
+});
+
+it("shows Codex workspace names and reported plans without rendering the unknown sentinel", async () => {
+	const account = { ...device, id: "device-codex", provider: "codex", orgName: "Studio", orgId: "abcd0123", plan: "unknown" };
+	const work = { ...account, id: "work", device: false, default: false, orgName: "Work", orgId: "1234abcd", plan: "self_serve_business_usage_based" };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [account, work] },
+	}));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(<QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="codex" /></TooltipProvider></QueryClientProvider>);
+	await screen.findByText("a@example.com · Studio");
+	expect(screen.getByText("a@example.com · Work")).toBeInTheDocument();
+	expect(screen.getByText("Business (Usage Based) plan")).toBeInTheDocument();
+	expect(screen.getByText("Plan not reported by Codex")).toBeInTheDocument();
+	expect(screen.queryByText(/unknown plan/i)).not.toBeInTheDocument();
 });
 
 it("names the organization when signing in again lands in another one", async () => {

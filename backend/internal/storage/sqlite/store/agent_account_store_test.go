@@ -10,6 +10,19 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestCodexWorkspaceIDRoundTrips(t *testing.T) {
+	s := newTestStore(t)
+	const workspace = "ab12cd34-0000-4000-8000-000000000001"
+	mustNoError(t, s.CreateAgentAccount(t.Context(), domain.AgentAccount{
+		ID: "work", Provider: domain.AgentAccountProviderCodex, Home: "/accounts/work", WorkspaceID: workspace,
+	}))
+	accounts, err := s.ListAgentAccounts(t.Context())
+	mustNoError(t, err)
+	if len(accounts) != 1 || accounts[0].WorkspaceID != workspace {
+		t.Fatalf("saved workspace not restored: %+v", accounts)
+	}
+}
+
 // TestAgentAccountUsageFollowsBindingHistory pins the per-account statistics:
 // each usage event counts for the account the session was on when it happened,
 // so a session moved from one account to another splits its usage between them.

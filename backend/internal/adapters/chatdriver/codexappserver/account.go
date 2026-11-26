@@ -273,7 +273,13 @@ var _ ports.CodexAccountClient = (*accountClient)(nil)
 func (c *accountClient) Read(ctx context.Context, refreshToken bool) (ports.CodexAccountObservation, error) {
 	refresh := refreshToken
 	params := codexproto.GetAccountParams{RefreshToken: &refresh}
-	var response codexproto.GetAccountResponse
+	var response struct {
+		RequiresOpenaiAuth bool `json:"requiresOpenaiAuth"`
+		Account            *struct {
+			codexproto.Account
+			WorkspaceName *string `json:"workspaceName"`
+		} `json:"account"`
+	}
 	if err := c.conn.request(ctx, codexproto.MethodAccountRead, params, &response); err != nil {
 		if isRevokedOAuthTokenError(err) {
 			return ports.CodexAccountObservation{}, ports.ErrCodexOAuthTokenRevoked
@@ -294,7 +300,12 @@ func (c *accountClient) Read(ctx context.Context, refreshToken bool) (ports.Code
 	case codexproto.AccountTypeApiKey:
 		method = domain.CodexAuthMethodAPIKey
 	}
-	return ports.CodexAccountObservation{Authentication: domain.AgentAuthenticationAuthorized, Method: method, Email: safeCodexAccountEmail(response.Account.Email)}, nil
+	return ports.CodexAccountObservation{
+		Authentication: domain.AgentAuthenticationAuthorized, Method: method,
+		Email:         safeCodexAccountEmail(response.Account.Email),
+		WorkspaceName: safeCodexAccountEmail(response.Account.WorkspaceName),
+		Plan:          safeCodexAccountEmail((*string)(response.Account.PlanType)),
+	}, nil
 }
 
 // Logout asks Codex to own the complete sign-out operation, including OAuth

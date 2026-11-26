@@ -29,6 +29,8 @@ type CodexAccountObservation struct {
 	Authentication domain.AgentAuthenticationState
 	Method         domain.CodexAuthMethod
 	Email          *string
+	WorkspaceName  *string
+	Plan           *string
 }
 
 // CodexCapacityObservation is normalized provider data before cache freshness

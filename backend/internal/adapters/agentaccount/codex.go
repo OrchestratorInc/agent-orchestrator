@@ -2,11 +2,16 @@ package agentaccount
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -111,11 +116,61 @@ func (c *Codex) Identity(ctx context.Context, home string) (domain.AgentAccountI
 		out.Email = *account.Email
 	}
 	if out.SignedIn {
-		if capacity, err := client.ReadCapacity(ctx); err == nil && capacity.Plan != nil {
-			out.Plan = *capacity.Plan
+		if home == "" {
+			home = c.DeviceHome
 		}
+		out.OrgID = codexWorkspaceID(home)
+		if account.WorkspaceName != nil {
+			out.OrgName = *account.WorkspaceName
+		}
+		out.Plan = reportedCodexPlan(account.Plan)
 	}
 	return out, nil
+}
+
+// "unknown" is Codex's placeholder for a missing plan, not a plan name.
+func reportedCodexPlan(raw *string) string {
+	if raw == nil {
+		return ""
+	}
+	plan := strings.TrimSpace(*raw)
+	if strings.EqualFold(plan, "unknown") {
+		return ""
+	}
+	return plan
+}
+
+// Codex's account/read reports the name on newer versions, but not the ID.
+// Project only the workspace UUID from the CLI's file store, never its tokens.
+func codexWorkspaceID(home string) string {
+	if home == "" {
+		return ""
+	}
+	path := filepath.Join(home, "auth.json")
+	const maxSize = 1 << 20
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() >= maxSize {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var auth struct {
+		Tokens struct {
+			AccountID string `json:"account_id"`
+		} `json:"tokens"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(f, maxSize))
+	if decoder.Decode(&auth) != nil || decoder.Decode(new(struct{})) != io.EOF {
+		return ""
+	}
+	id, err := uuid.Parse(auth.Tokens.AccountID)
+	if err != nil || id == uuid.Nil || len(auth.Tokens.AccountID) != 36 {
+		return ""
+	}
+	return id.String()
 }
 
 // Limits reads the account's windows, resets and activity through Codex.
@@ -132,6 +187,7 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 	out := domain.AgentAccountLimits{
 		Windows: []domain.AgentAccountLimitWindow{}, FetchedAt: time.Now().UTC(),
 		AutoResumeResetsAt: capacity.AutoResumeResetsAt,
+		ReportedPlan:       reportedCodexPlan(capacity.Plan),
 	}
 	addBucket := func(bucket *domain.CodexCapacityBucket, prefix string) {
 		if bucket == nil {
