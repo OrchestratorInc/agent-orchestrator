@@ -23,6 +23,10 @@ var (
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
 )
 
+// ErrAgentAccountImportPinned refuses a move of an imported conversation whose
+// agent resumes in the import's own folder, which names the login it runs on.
+var ErrAgentAccountImportPinned = errors.New("the imported conversation resumes in its own folder, not the account's")
+
 // ErrAgentAccountRenewalPending skips a check of a stored login whose access
 // token expired and is renewed by the agent's next run. The login is still
 // signed in; asking the CLI would try the renewal itself.

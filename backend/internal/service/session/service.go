@@ -2136,6 +2136,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
+	case errors.Is(err, ports.ErrAgentAccountImportPinned):
+		return apierr.Conflict("AGENT_ACCOUNT_IMPORT_PINNED", "This imported conversation resumes in its own agy folder, so it stays on this computer's own login and cannot move to a saved account.", nil)
 	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
 			"Turn on Windows Developer Mode to use this account: search Windows Settings for Developer Mode (System > Advanced on Windows 11 25H2 and later).",

@@ -120,7 +120,11 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if hooks.configValue != nil {
 		value = hooks.configValue(ref.ConfigDir)
 	}
+	accountHome := env[key]
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
+	if rec.Harness == domain.HarnessAgy && !sameDirectory(accountHome, value) {
+		m.pinImportToComputerLogin(ctx, rec, env)
+	}
 }
 
 // relocateImportedSession lets a provider that finds a session by the directory
