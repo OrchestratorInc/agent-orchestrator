@@ -16,7 +16,7 @@ function isTaskReading(data: BackgroundTaskReading | undefined): data is Backgro
 		&& ["ready", "partial", "unavailable"].includes(data.availability);
 }
 
-const missingTaskRoute = new Error("This host does not report background tasks");
+const missingTaskRoute = new AoError("BACKGROUND_TASKS_UNSUPPORTED", "This host does not report background tasks");
 
 const selectReadings = (data: components["schemas"]["ListBackgroundTasksResponse"]) =>
 	new Map(data.sessions.map((reading) => [reading.sessionId, reading]));
