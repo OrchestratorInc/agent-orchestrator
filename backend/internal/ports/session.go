@@ -113,6 +113,13 @@ type SpawnConfig struct {
 	// Transfer, when set, continues a session moved from another machine
 	// instead of starting a new conversation.
 	Transfer *SpawnTransfer
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction ("200k", "500k", "1m" or "off"), saved with its new
+	// conversation. They are chat settings, not launch options: a spawn that
+	// asks for a terminal (RequestedMode TUI) ignores them, and any other spawn
+	// is refused when the agent it launches cannot take them.
+	FastMode          bool
+	AutoCompactWindow string
 }
 
 // SpawnFork describes a fork of an existing session. The source's worktree and
@@ -128,6 +135,10 @@ type SpawnFork struct {
 	// KeepSeedRef marks a SeedRef the fork borrowed, such as a turn's saved
 	// rollback snapshot. It is applied but never deleted.
 	KeepSeedRef bool
+	// SeedDir, for a source in a plain folder with no git repository, is a
+	// copy of its files to move into the new workspace. StartPoint and
+	// SeedRef are then empty.
+	SeedDir string
 	// SourceTitle names the original in the fork's standing instructions.
 	SourceTitle string
 	// ArtifactsAsOf, when set, copies the original's artifacts as they were

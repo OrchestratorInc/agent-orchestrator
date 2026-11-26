@@ -572,6 +572,7 @@ beforeEach(() => {
 	cloudSessionState.signOut.mockReset().mockResolvedValue(undefined);
 	useUiStore.setState({
 		developerMode: false,
+		newDesktopUi: false,
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
@@ -1704,8 +1705,18 @@ describe("Sidebar", () => {
 			"opacity-100",
 			"focus-visible-in-session-row:opacity-0",
 		);
+		// Without Interface v2 a project's rows keep their plain indent.
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
+		expect(openSession.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2 they sit in its tree: the rail fills the indent and the
+		// pill starts after the arm, with the indent still pressable.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
+		const treeSession = screen.getByLabelText("Open fix login");
+		expect(treeSession).toHaveClass("pl-0.5", "before:w-(--tree-indent)");
+		expect(treeSession.closest("li")).toHaveClass("sidebar-tree-item");
+		expect(treeSession.closest(".sidebar-tree")).not.toHaveAttribute("data-tree-more");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 	});
 
 	it("keeps session status and actions stable when an action receives keyboard focus", async () => {
@@ -2836,6 +2847,7 @@ describe("Sidebar", () => {
 
 	it("starts the same inline rename from the session context menu", async () => {
 		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
@@ -2843,21 +2855,47 @@ describe("Sidebar", () => {
 		const menu = renameItem.closest('[role="menu"]');
 		if (!menu) throw new Error("Session context menu not found");
 		await within(menu as HTMLElement).findByRole("menuitem", { name: "Open in" });
-		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Open in",
-			"Copy path",
-			"Rename",
-			"Pin session",
-			"Fork session",
-			"Move to Orchestrator Cloud…",
-			"Archive session",
+		// Each row's label, without its key hint; the hint is the row's letter.
+		const label = (item: Element) =>
+			[...item.childNodes].filter((node) => !(node instanceof Element && node.matches('[data-slot="menu-shortcut"]'))).map((node) => node.textContent).join("");
+		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => [label(item), item.getAttribute("aria-keyshortcuts")])).toEqual([
+			["Open in", null],
+			["Copy path", "C"],
+			["Rename", "R"],
+			["Pin session", "P"],
+			["Fork session", "F"],
+			["Move to Orchestrator Cloud…", null],
+			["Archive session", "A"],
 		]);
-		expect(renameItem).toHaveTextContent(/^Rename$/);
+		expect(label(renameItem)).toBe("Rename");
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
 		expect(screen.getByRole("textbox", { name: "Rename fix login" })).toHaveFocus();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("shows no letter keys on menu rows without Interface v2", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const rename = await screen.findByRole("menuitem", { name: "Rename fix login" });
+		expect(rename).not.toHaveAttribute("aria-keyshortcuts");
+		expect(rename.closest('[role="menu"]')?.querySelector("[data-menu-accelerator]")).toBeNull();
+	});
+
+	it("runs a session menu row from its letter while the menu is open", async () => {
+		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const menu = (await screen.findByRole("menuitem", { name: "Rename fix login" })).closest('[role="menu"]') as HTMLElement;
+		await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
+		await user.keyboard("r");
+
+		expect(await screen.findByRole("textbox", { name: "Rename fix login" })).toBeInTheDocument();
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
 
 	it("lists every open target in the editor row's submenu", async () => {
@@ -3063,6 +3101,13 @@ describe("Sidebar", () => {
 		const list = screen.getByTestId("session-list-proj-1");
 		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
 		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+		expect(list.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2, Show more is the tree's last leaf, so the rail's elbow ends on it.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
+		expect(list.closest(".sidebar-tree")).toHaveAttribute("data-tree-more", "");
+		expect(screen.getByRole("button", { name: "Show 3 more agents" }).closest(".sidebar-tree-item")).toHaveAttribute("data-tree-more", "");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 
 		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
 
@@ -3393,11 +3438,12 @@ describe("Sidebar", () => {
 		const marker = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<SVGElement | HTMLElement>("[data-session-status]");
 
-		expect(marker("input task")).toHaveAttribute("data-session-marker", "attention");
-		expect(marker("input task")).toHaveClass("text-destructive");
+		expect(marker("input task")).toHaveAttribute("data-session-marker", "input");
+		expect(marker("input task")).toHaveClass("icon-question-mark", "text-status-in-review");
+		expect(marker("input task")).not.toHaveClass("text-destructive");
 		expect(marker("input task")).not.toHaveClass("rounded-full");
 		expect(marker("ci task")).toHaveAttribute("data-session-marker", "attention");
-		expect(marker("ci task")).toHaveClass("text-destructive");
+		expect(marker("ci task")).toHaveClass("icon-circle-alert", "text-destructive");
 	});
 
 	it("gives Scratchpad rows the same status icons and age as project rows", () => {
@@ -3420,7 +3466,7 @@ describe("Sidebar", () => {
 
 		expect(dot("idle chat")).toHaveAttribute("data-session-idle", "idle");
 		expect(dot("working chat")).toHaveAttribute("data-session-spinner");
-		expect(dot("input chat")).toHaveAttribute("data-session-marker", "attention");
+		expect(dot("input chat")).toHaveAttribute("data-session-marker", "input");
 		expect(row("idle chat").closest("[data-session-row]")?.querySelector("[data-session-message-age]")).toBeInTheDocument();
 		expect(document.querySelector("[data-scratchpad-section] img")).toBeNull();
 	});
@@ -3442,13 +3488,13 @@ describe("Sidebar", () => {
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 	});
 
-	it("replaces the folder with a warning when a collapsed project needs attention", () => {
+	it("replaces the folder with a question mark when a collapsed project waits on the user", () => {
 		useUiStore.setState({ projectAvatars: false });
 		renderSidebar({
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
 		});
-		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="input"]')).toHaveClass("icon-question-mark", "text-status-in-review");
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
@@ -3473,7 +3519,7 @@ describe("Sidebar", () => {
 		expect(dot("read task")).not.toHaveClass("bg-muted-foreground/60");
 	});
 
-	it("badges a collapsed project's icon like the orchestrator button: attention, then working, then an unread finished turn", () => {
+	it("badges a collapsed project's icon like the orchestrator button: a question, then working, then an unread finished turn", () => {
 		useUiStore.setState({ projectAvatars: false });
 		useSessionReadStore.setState({ baseline: 0, readAt: {} });
 		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
@@ -3496,8 +3542,8 @@ describe("Sidebar", () => {
 
 		cleanup();
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working, input] }] });
-		expect(projectMarker()).toHaveAttribute("data-project-marker", "attention");
-		expect(projectMarker()).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "input");
+		expect(projectMarker()).toHaveClass("icon-question-mark", "text-status-in-review");
 	});
 
 	it("keeps the open session read while its project is collapsed", () => {

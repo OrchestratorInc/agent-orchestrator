@@ -958,6 +958,9 @@ func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 			if !ok || turn.State != domain.TurnStateFailed || turn.HasHumanPrompt != wantHuman {
 				t.Errorf("%s turn=%s state=%s hasHumanPrompt=%v, want failed/%v", name, turn.ID, turn.State, turn.HasHumanPrompt, wantHuman)
 			}
+			if turn.HasEventPrompt == wantHuman {
+				t.Errorf("%s turn=%s hasEventPrompt=%v, want %v", name, turn.ID, turn.HasEventPrompt, !wantHuman)
+			}
 		}
 	}
 }

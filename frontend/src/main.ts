@@ -7,7 +7,7 @@ import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { launchTriageInTerminal } from "./main/triage-launch";
 import { initializeDesktopLog } from "./main/desktop-log";
 import { syncMacWindowButtons } from "./main/window-chrome";
-import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
+import { MAC_INTERFACE_V2_EDGE_EXTRA, MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
 import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
@@ -74,7 +74,7 @@ import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { createLaunchTiming } from "./main/launch-timing";
 import { createResourceSampler } from "./main/resource-sampler";
-import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
+import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -101,7 +101,10 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
+import { type DaemonLaunchSpec, bundledDaemonIdentityError, bundledDaemonMissingMessage, resolveDaemonLaunch } from "./shared/daemon-launch";
+import { daemonExitReason } from "./shared/daemon-exit-reason";
+import { waitForFile } from "./main/wait-for-file";
+import { childStdioDrained } from "./main/child-stdio-drained";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
@@ -119,6 +122,7 @@ import { relayScrollPhases } from "./main/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
+	APP_SHORTCUT_PRESSED_CHANNEL,
 	QUIT_CONFIRM_REQUEST_CHANNEL,
 	QUIT_CONFIRM_RESULT_CHANNEL,
 	type QuitConfirmRequest,
@@ -242,7 +246,6 @@ import {
 	type BrowserProfileIpc,
 	type BrowserProfileMenuItem,
 } from "./main/browser-profile-ipc";
-import type { BrowserProfileMenuInput } from "./shared/browser-profiles";
 import { createWindowComposition, type WindowComposition } from "./main/window-composition";
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
@@ -376,6 +379,9 @@ const desktopLaunchWorkingDirectory = process.cwd();
 const processStartedAt = process.getCreationTime() ?? performance.timeOrigin;
 const launchTiming = createLaunchTiming(processStartedAt);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
+// Read before the daemon can create it: no database means this launch is the
+// first run on this data directory, which ao.launches.timed reports apart.
+const firstRunAtLaunch = !existsSync(path.join(desktopDataDir, "ao.db"));
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
@@ -613,6 +619,9 @@ let rendererWindowBackground: string | null = null;
 // macOS window transparency: the shell paints translucent surfaces and the
 // native vibrancy material underneath blurs the desktop.
 let windowTranslucent = false;
+// Interface v2 sits the shell 2px further from the window edges, native buttons
+// included (shared/window-chrome.ts). The renderer reports it per document.
+let macWindowEdgeExtra = 0;
 // What each window last received, so theme changes and resizes skip identical
 // native calls. A new window (a Dock reopen) starts with no entry.
 const appliedNativeBackground = new WeakMap<BaseWindow, { vibrancy: string | null; color: string }>();
@@ -1151,7 +1160,9 @@ async function createWindowInternal(): Promise<void> {
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
 	shellLaunchStarts.set(
 		shellWebContents.id,
-		shellWindowsCreated++ === 0 ? { kind: "cold", startedAtMs: processStartedAt } : { kind: "warm", startedAtMs: windowRequestedAt },
+		shellWindowsCreated++ === 0
+			? { kind: "cold", startedAtMs: processStartedAt, ...(firstRunAtLaunch ? { firstRun: true } : {}) }
+			: { kind: "warm", startedAtMs: windowRequestedAt },
 	);
 	// The start belongs to the first document. A reload that lands before that
 	// page read it must not report a launch, so later documents get none.
@@ -1322,6 +1333,7 @@ async function createWindowInternal(): Promise<void> {
 		() => terminalFocused,
 		() => terminalFontSizeFocused,
 		() => artifactZoomEngaged,
+		(id) => shellWebContents.send(APP_SHORTCUT_PRESSED_CHANNEL, id),
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -1373,26 +1385,6 @@ async function createWindowInternal(): Promise<void> {
 			const menu = Menu.buildFromTemplate(items as Electron.MenuItemConstructorOptions[]);
 			return { popup: (options) => menu.popup(options as Electron.PopupOptions) };
 		},
-		confirmSwitch: async (labels: BrowserProfileMenuInput["labels"]) => {
-			const result = await dialog.showMessageBox({
-				type: "warning",
-				title: labels.switchTitle,
-				message: labels.switchMessage,
-				detail: labels.switchDetail,
-				buttons: [labels.cancel, labels.confirm],
-				defaultId: 0,
-				cancelId: 0,
-			});
-			return result.response === 1;
-		},
-		reportSwitchFailure: (message, labels) => {
-			if (!mainWindow || mainWindow.isDestroyed()) return;
-			void dialog.showMessageBox(mainWindow, {
-				type: "error",
-				title: labels.switchTitle,
-				message,
-			}).catch((error) => console.error("browser profile error dialog failed:", error));
-		},
 	});
 	if (daemonStatus.state === "ready") {
 		establishBrowserRuntimeLink();
@@ -1414,7 +1406,7 @@ async function createWindowInternal(): Promise<void> {
 	const syncWindowChrome = (force = true) => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
 		syncNativeWindowBackground(force);
-		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
+		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents, macWindowEdgeExtra);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
@@ -1825,6 +1817,13 @@ const browserRuntimeToken = (() => {
 	}
 })();
 let stagedBundledTmuxBinary: string | null = null;
+
+// How long a launch waits for a bundled daemon executable that is not on disk
+// yet before reporting it missing.
+const BUNDLED_DAEMON_WAIT_MS = 10_000;
+// How long an exit waits for the daemon's pipes to deliver its last lines,
+// which name the fatal error, before it is classified.
+const DAEMON_EXIT_DRAIN_MS = 250;
 
 async function ensureBundledTmuxStaged(): Promise<void> {
 	const source = bundledTmuxBinaryPath(app.isPackaged, process.resourcesPath, process.platform);
@@ -2592,10 +2591,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		}
 	}
 
-	if (launch.source === "bundled" && !existsSync(launch.command)) {
+	// An installer still copying files, or an antivirus scan holding the fresh
+	// executable, can hide the bundled binary for a few seconds after launch.
+	if (launch.source === "bundled" && !(await waitForFile(launch.command, { timeoutMs: BUNDLED_DAEMON_WAIT_MS }))) {
+		// The wait is long enough for a stop or a newer start to land; never
+		// overwrite their status.
+		if (startCancelled()) return daemonStatus;
 		setDaemonStatus({
 			state: "error",
-			message: `Bundled Orchestrator daemon binary was not found at ${launch.command}. Rebuild the desktop package.`,
+			message: bundledDaemonMissingMessage(launch.command, process.platform),
 			code: "binary_missing",
 		});
 		return daemonStatus;
@@ -2611,7 +2615,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		});
 		return daemonStatus;
 	}
-	if (autoRestartIntent && startCancelled()) return daemonStatus;
+	if (startCancelled()) return daemonStatus;
 
 	daemonOutput = "";
 	setDaemonStatus({ state: "starting" });
@@ -2690,6 +2694,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		...(autoRestartIntent ? { crashedPid: autoRestartIntent.crashedPid } : {}),
 	});
 	let child: ChildProcess;
+	launchTiming.mark("daemonSpawned");
 	try {
 		child = spawn(spawnLaunch.command, spawnLaunch.args, {
 			cwd: launch.cwd,
@@ -2746,6 +2751,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// streams are scanned) and the running.json handshake — first one wins.
 	const spawnedAtMs = Date.now();
 	let portConfirmed = false;
+	// Set as soon as the child exits: its pipes can still deliver a listen line
+	// while the exit waits for them to drain, and a dead child is never ready.
+	let childExited = false;
 	let runFileTimer: ReturnType<typeof setInterval> | undefined;
 	let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -2757,7 +2765,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	};
 
 	const reportBoundPort = (port: number) => {
-		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
+		if (portConfirmed || childExited || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
 		lifecycleLog("daemon_ready", { daemonPid: child.pid ?? null, port, startupMs: Date.now() - spawnedAtMs });
@@ -2866,6 +2874,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 
 	child.once("exit", (code, signal) => {
 		stopDiscovery();
+		childExited = true;
 		lifecycleLog("daemon_exit", {
 			daemonPid: child.pid ?? null,
 			code,
@@ -2877,6 +2886,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			restartAfterStop: daemonRestartAfterExitProcess === child,
 			quitting: browserQuitRequested,
 		});
+		if (daemonProcess !== child) return;
+		// The daemon's last stderr line names its fatal error, and Node can
+		// report the exit before the pipes deliver it.
+		const drained = childStdioDrained(child, DAEMON_EXIT_DRAIN_MS);
+		if (drained) void drained.then(() => handleDaemonExit(code, signal));
+		else handleDaemonExit(code, signal);
+	});
+
+	function handleDaemonExit(code: number | null, signal: NodeJS.Signals | null): void {
 		if (daemonProcess !== child) return;
 		daemonProcess = null;
 		// An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
@@ -2923,6 +2941,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			code: "exited",
 			exitCode: code,
 			signal,
+			exitReason: daemonExitReason(daemonOutput, code),
 		});
 		const exitedPid = child.pid ?? null;
 		const generation = daemonAutoRestartGeneration;
@@ -2958,7 +2977,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 				});
 			}
 		});
-	});
+	}
 
 	return daemonStatus;
 }
@@ -3457,7 +3476,7 @@ ipcMain.handle("app:closePrivacyGuide", (event) => {
 
 ipcMain.handle("window:getZoomFactor", () => {
 	const shell = getShellWebContents();
-	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell);
+	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell, macWindowEdgeExtra);
 	return shell?.getZoomFactor() ?? 1;
 });
 ipcMain.handle("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
@@ -3502,6 +3521,13 @@ ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
 	syncNativeWindowBackground(true);
+});
+
+ipcMain.handle("theme:set-interface-v2", (_event, enabled: unknown) => {
+	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
+	macWindowEdgeExtra = enabled ? MAC_INTERFACE_V2_EDGE_EXTRA : 0;
+	const shell = getShellWebContents();
+	if (mainWindow && !mainWindow.isDestroyed() && shell) syncMacWindowButtons(mainWindow, shell, macWindowEdgeExtra);
 });
 
 ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
@@ -3608,17 +3634,17 @@ ipcMain.handle("menu:action", (event, action: string) => {
 			return toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
 		case "view.zoomIn":
 			wc.setZoomLevel(wc.getZoomLevel() + 0.5);
-			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc, macWindowEdgeExtra);
 			wc.send("window:zoom", wc.getZoomFactor());
 			return;
 		case "view.zoomOut":
 			wc.setZoomLevel(wc.getZoomLevel() - 0.5);
-			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc, macWindowEdgeExtra);
 			wc.send("window:zoom", wc.getZoomFactor());
 			return;
 		case "view.zoomReset":
 			wc.setZoomLevel(0);
-			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc, macWindowEdgeExtra);
 			wc.send("window:zoom", wc.getZoomFactor());
 			return;
 		case "view.fullscreen":
@@ -3719,6 +3745,22 @@ ipcMain.handle("telemetry:takeLaunchStart", (event): LaunchTimingStart | null =>
 	const start = shellLaunchStarts.get(event.sender.id) ?? null;
 	shellLaunchStarts.delete(event.sender.id);
 	return start;
+});
+// The cold launch's main-process steps, read when the renderer sends
+// ao.launches.timed. Marks keep their first time, so a later daemon restart
+// does not move them.
+ipcMain.handle("telemetry:launchSteps", (event): LaunchSteps | null => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
+	const marks = launchTiming.marks();
+	const spawned = marks.daemonSpawned;
+	const ready = marks.daemonReady;
+	return {
+		appReadyMs: marks.appReady,
+		windowShownMs: marks.windowShown,
+		serverSpawnMs: spawned,
+		serverReadyMs: ready,
+		...(ready === undefined ? {} : { serverReused: spawned === undefined || spawned > ready }),
+	};
 });
 ipcMain.handle("telemetry:takeResourceSummary", (event): ResourceSummary | null => {
 	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;

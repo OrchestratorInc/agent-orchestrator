@@ -95,6 +95,34 @@ export function Frost({ stops, from, style }: { stops: readonly FrostStop[]; fro
 	);
 }
 
+/** How far the tab bar's fade runs up into the page: long, so rows melt rather than dim. */
+export const TAB_BAR_TAIL = 96;
+/** The tab bar's cover at the screen's edge, behind the system navigation: light, so the page still shows. */
+const TAB_BAR_EDGE = 0.95;
+/** The tab bar's cover where the bar meets its fade: a light wash, so rows show faintly behind the labels. */
+const TAB_BAR_COVER = 0.85;
+/** Samples along the fade: enough that the eased curve shows no bands. */
+const TAB_BAR_SAMPLES = 12;
+
+/**
+ * The tab bar's backdrop: a light wash of the page's colour, densest at the
+ * screen's edge and thinning across the bar, so the rows still show faintly
+ * behind its icons and labels; then a long fade up into the page along a
+ * smoothstep curve (gentle at both ends), so the wash melts away instead of
+ * ending in a visible band.
+ */
+export function tabBarFrostStops(barHeight: number, tail = TAB_BAR_TAIL): FrostStop[] {
+	const bar = barHeight / (barHeight + tail);
+	// Eased through the bar too, so the edge's cover thins into the bar's without a seam.
+	const stops: FrostStop[] = [[0, TAB_BAR_EDGE], [bar * 0.5, TAB_BAR_EDGE - (TAB_BAR_EDGE - TAB_BAR_COVER) * 0.4], [bar, TAB_BAR_COVER]];
+	for (let i = 1; i <= TAB_BAR_SAMPLES; i++) {
+		const at = i / TAB_BAR_SAMPLES;
+		const eased = at * at * (3 - 2 * at);
+		stops.push([bar + (1 - bar) * at, Number((TAB_BAR_COVER * (1 - eased)).toFixed(4))]);
+	}
+	return stops;
+}
+
 /**
  * Under an opaque bar, the frost's tail alone: content scrolling up dissolves
  * into the bar over this short seam rather than meeting a hard edge, and the
@@ -117,7 +145,7 @@ export function useTabBarFrost(): { inset: number; frost: ReactElement | null } 
 	const insets = useSafeAreaInsets();
 	if (Platform.OS !== "android") return { inset: 0, frost: null };
 	const inset = boardBarFootprint(insets.bottom);
-	return { inset, frost: <Frost from="bottom" stops={frostStops(inset)} style={[styles.footer, { height: inset + FROST_TAIL }]} /> };
+	return { inset, frost: <Frost from="bottom" stops={tabBarFrostStops(inset)} style={[styles.footer, { height: inset + TAB_BAR_TAIL }]} /> };
 }
 
 const styles = StyleSheet.create({

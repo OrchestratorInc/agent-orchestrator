@@ -30,6 +30,7 @@ import {
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
+	useStageAttachments,
 	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
@@ -1061,6 +1062,7 @@ describe("useConversation snapshot mapping", () => {
 						retryOfTurnId: "turn-source",
 						hasRetryAttempt: true,
 						hasHumanPrompt: true,
+						hasEventPrompt: true,
 					},
 				],
 			},
@@ -1074,6 +1076,7 @@ describe("useConversation snapshot mapping", () => {
 			retryOfTurnId: "turn-source",
 			hasRetryAttempt: true,
 			hasHumanPrompt: true,
+			hasEventPrompt: true,
 		});
 	});
 
@@ -1709,6 +1712,61 @@ describe("controller recovery", () => {
 			expect(paths().filter((path) => path === RESTORE)).toHaveLength(1);
 			expect(paths().indexOf(RESTORE)).toBeLessThan(paths().indexOf(MESSAGES));
 			expect(sentIds()).toEqual(["m1"]);
+		});
+
+		it("stages a file taken during the restore only once the restore is done", async () => {
+			const ATTACHMENTS = "/api/v1/sessions/{sessionId}/attachments";
+			const restored = deferred<{ data: object; error: undefined }>();
+			postMock.mockImplementation((path: string) => path === RESTORE
+				? restored.promise
+				: Promise.resolve({ data: path === ATTACHMENTS ? { paths: [".ao/attachments/a.png"] } : { turnId: "turn-1", state: "running" }, error: undefined }));
+			const queryClient = archivedClient();
+			const { result } = renderHook(() => ({ commands: useConversationCommands("ao-1", undefined, true), stage: useStageAttachments("ao-1", undefined, true) }), {
+				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+			});
+
+			let sending: Promise<unknown> = Promise.resolve();
+			act(() => {
+				sending = result.current.commands.send({ text: "pick this up", clientMessageId: "m1" });
+			});
+			await waitFor(() => expect(paths()).toEqual([RESTORE]));
+			const staging = result.current.stage([{ mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+			const removed = new AbortController();
+			const cancelled = result.current.stage([{ mimeType: "image/png", data: "iVBORw0KGgo=" }], removed.signal).catch((error: unknown) => error);
+			removed.abort();
+			await act(async () => {});
+			expect(paths()).toEqual([RESTORE]);
+
+			await act(async () => {
+				restored.resolve({ data: {}, error: undefined });
+				await sending;
+			});
+			await expect(staging).resolves.toEqual([".ao/attachments/a.png"]);
+			expect(await cancelled).toMatchObject({ name: "AbortError" });
+			expect(paths().filter((path) => path === ATTACHMENTS)).toHaveLength(1);
+		});
+
+		it("stages nothing when the restore fails", async () => {
+			apiErrorMessageMock.mockImplementation((error: { message?: string }, fallback: string) => error?.message ?? fallback);
+			const restored = deferred<{ data: undefined; error: object; response: { status: number } }>();
+			postMock.mockImplementation((path: string) => path === RESTORE ? restored.promise : Promise.reject(new Error(`unexpected ${path}`)));
+			const queryClient = archivedClient();
+			const { result } = renderHook(() => ({ commands: useConversationCommands("ao-1", undefined, true), stage: useStageAttachments("ao-1", undefined, true) }), {
+				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+			});
+
+			let sending: Promise<unknown> = Promise.resolve();
+			act(() => {
+				sending = result.current.commands.send({ text: "keep me", clientMessageId: "m1" }).catch(() => undefined);
+			});
+			await waitFor(() => expect(paths()).toEqual([RESTORE]));
+			const staging = result.current.stage([{ mimeType: "image/png", data: "iVBORw0KGgo=" }]).catch((error: unknown) => error);
+			await act(async () => {
+				restored.resolve({ data: undefined, error: { code: "WORKSPACE_RESTORE_FAILED", message: "Workspace restore failed" }, response: { status: 500 } });
+				await sending;
+			});
+			expect(await staging).toMatchObject({ code: "SESSION_RESTORE_FAILED" });
+			expect(paths()).toEqual([RESTORE]);
 		});
 
 		it("sends nothing and keeps the session archived when the restore fails", async () => {

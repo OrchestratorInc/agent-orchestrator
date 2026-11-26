@@ -123,6 +123,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 				label: t("shell.rename"),
 				onSelect: onRename,
 				shortcut: renameShortcut,
+				accelerator: "r",
 			},
 			{
 				kind: "item",
@@ -130,6 +131,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 				icon: session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />,
 				label: session.isPinned ? t("shell.unpinSession") : t("shell.pinSession"),
 				onSelect: () => (session.isPinned ? unpinSession(session) : pinSession(session)),
+				accelerator: "p",
 			},
 		);
 	}
@@ -149,6 +151,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 			disabled: Boolean(refused),
 			description: refused?.refusal?.message,
 			onSelect: () => forkSession(session),
+			accelerator: "f",
 		});
 	}
 	if (canMove) {
@@ -166,6 +169,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 				icon: <ExternalLink aria-hidden="true" />,
 				label: t("command.openPr", { number: pr.number }),
 				onSelect: () => openPullRequest(pr.url, t("command.openPr", { number: pr.number })),
+				accelerator: "o",
 			},
 			{
 				kind: "item",
@@ -177,12 +181,12 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 		);
 	}
 	if (showBranch && branch) {
-		entries.push({ kind: "item", id: "session-copy-branch", icon: <GitBranch aria-hidden="true" />, label: t("command.copyBranch"), onSelect: () => copyToClipboard(branch) });
+		entries.push({ kind: "item", id: "session-copy-branch", icon: <GitBranch aria-hidden="true" />, label: t("command.copyBranch"), onSelect: () => copyToClipboard(branch), accelerator: "b" });
 	}
 	if (onArchive) {
 		entries.push(
 			{ kind: "separator", id: "session-archive-sep" },
-			{ kind: "item", id: "session-archive", icon: <Archive aria-hidden="true" />, label: t("shell.archiveSession"), onSelect: onArchive },
+			{ kind: "item", id: "session-archive", icon: <Archive aria-hidden="true" />, label: t("shell.archiveSession"), onSelect: onArchive, accelerator: "a" },
 		);
 	}
 	return entries;
@@ -257,7 +261,7 @@ function useSessionWorkspaceEntries(session: WorkspaceSession | undefined): Menu
 		});
 	}
 	if (state?.workspaceAvailable !== false) {
-		entries.push({ kind: "item", id: "copy-workspace-path", icon: <Copy aria-hidden="true" />, label: t("editor.copyPath"), onSelect: copyPath });
+		entries.push({ kind: "item", id: "copy-workspace-path", icon: <Copy aria-hidden="true" />, label: t("editor.copyPath"), onSelect: copyPath, accelerator: "c" });
 	}
 	return entries;
 }

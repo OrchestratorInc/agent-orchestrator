@@ -3,6 +3,7 @@ import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
+import { AttachmentLightbox } from "./AttachmentLightbox";
 import { useChatImageSrc } from "./chat-image-source";
 import {
 	ATTACHMENT_TILE_OVERLAY_PILL_CLASS,
@@ -17,14 +18,14 @@ import {
 const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ default: module.PdfPreview })));
 
 /** Enough of a text file to fill a tile. */
-const TEXT_PREVIEW_BYTES = 2048;
+export const TEXT_PREVIEW_BYTES = 2048;
 
 /**
  * The first TEXT_PREVIEW_BYTES of a response, then the read is cancelled. A
  * file just sent is read from its local copy, which takes no Range, and it may
  * be gigabytes: reading it whole for a tile would stream all of it.
  */
-async function readTextPrefix(response: Response): Promise<string> {
+export async function readTextPrefix(response: Response): Promise<string> {
 	const reader = response.body?.getReader();
 	if (!reader) return (await response.text()).slice(0, TEXT_PREVIEW_BYTES);
 	const chunks: Uint8Array[] = [];
@@ -145,18 +146,16 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 					{type ? <span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{type}</span> : null}
 				</>
 			) : null}
-			{open && src ? (
+			{open && src && kind === "video" ? (
+				<AttachmentLightbox open onOpenChange={setOpen} kind="video" src={src} name={name} details={type} onError={onError} />
+			) : open && src ? (
 				<Dialog open onOpenChange={setOpen}>
 					<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
 						<DialogTitle className="truncate text-sm">{name}</DialogTitle>
 						<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-							{kind === "pdf" ? (
-								<Suspense fallback={null}>
-									<PdfPreview onError={onError} path={name} src={src} />
-								</Suspense>
-							) : (
-								<video crossOrigin={mediaCrossOrigin(src)} controls onError={onError} playsInline preload="metadata" src={src} className="size-full min-h-0 object-contain" />
-							)}
+							<Suspense fallback={null}>
+								<PdfPreview onError={onError} path={name} src={src} />
+							</Suspense>
 						</div>
 					</DialogContent>
 				</Dialog>

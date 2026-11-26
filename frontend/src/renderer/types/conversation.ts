@@ -133,6 +133,7 @@ export interface ConversationTurn {
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
+	hasEventPrompt?: boolean;
 	/**
 	 * Where the turn's group sorts when that is not its first loaded item: a
 	 * turn whose prompt is above the loaded part of a history began before
@@ -760,8 +761,8 @@ export interface TurnSettings {
 	fastMode?: boolean;
 	/** Ask the provider to plan rather than act, where AO sets that per turn. */
 	planMode?: boolean;
-	/** Where Claude Code compacts on its own. Unset leaves it to Claude Code. */
-	autoCompactWindow?: "200k" | "1m";
+	/** Where Claude Code compacts on its own, or "off" for OpenCode's. Unset leaves it to the agent. */
+	autoCompactWindow?: "200k" | "500k" | "1m" | "off";
 }
 
 /** One model the provider offers for this session. */

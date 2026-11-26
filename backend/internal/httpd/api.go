@@ -219,7 +219,8 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		cfg:  cfg,
 		deps: deps,
 		agents: &controllers.AgentsController{
-			Catalog: deps.Agents,
+			Catalog:  deps.Agents,
+			Projects: deps.Projects,
 		},
 		codexAccounts: &controllers.CodexAccountsController{Svc: deps.CodexAccounts},
 		agentAccounts: newAgentAccountsController(deps),
