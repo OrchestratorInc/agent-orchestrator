@@ -46,11 +46,14 @@ var (
 //   - ADC (AGY_ADC_AUTH inherited by the daemon, so every Agy launch uses
 //     it): authorized when Application Default Credentials exist,
 //     unauthorized when they do not.
-//   - Google sign-in (Google account or Google Cloud project, both from
-//     Agy's own login menu): authorized when Agy's keyring entry exists. A missing
-//     entry stays unknown because Agy falls back to undocumented file-based
-//     token storage when the keyring is locked or unavailable, and an
-//     unauthorized verdict would block agent switching and reviewer launches.
+//   - Google sign-in on macOS (Google account or Google Cloud project, both
+//     from Agy's own login menu): authorized when Agy's Keychain entry
+//     exists. A missing entry stays unknown because Agy falls back to
+//     undocumented file-based token storage when the keyring is locked or
+//     unavailable, and an unauthorized verdict would block agent switching
+//     and reviewer launches.
+//   - Elsewhere no local sign-in evidence is known, so an installed binary
+//     counts as authorized and launch stays authoritative, as before.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -68,14 +71,15 @@ func localAuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 		}
 		return ports.AgentAuthStatusUnauthorized, nil
 	}
-	if authGOOS == "darwin" {
-		found, err := keychainItemExists(ctx, keychainService, keychainAccount)
-		if err != nil && ctx.Err() != nil {
-			return ports.AgentAuthStatusUnknown, ctx.Err()
-		}
-		if err == nil && found {
-			return ports.AgentAuthStatusAuthorized, nil
-		}
+	if authGOOS != "darwin" {
+		return ports.AgentAuthStatusAuthorized, nil
+	}
+	found, err := keychainItemExists(ctx, keychainService, keychainAccount)
+	if err != nil && ctx.Err() != nil {
+		return ports.AgentAuthStatusUnknown, ctx.Err()
+	}
+	if err == nil && found {
+		return ports.AgentAuthStatusAuthorized, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }

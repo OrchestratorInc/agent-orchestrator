@@ -92,6 +92,9 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 	case "kimi":
 		return []LoginMethod{{"device_code_global", "Kimi account (kimi.ai)", false}, {"device_code_cn", "Kimi account (kimi.com)", false}, {"native", "Other native sign-in", false}}
 	case "agy":
+		if !planByAgentID[agentID].guidedSupported() {
+			return []LoginMethod{{"native", "Native sign-in", false}}
+		}
 		return []LoginMethod{{agyGoogleMethod, "Google account in browser", false}, {agyCloudMethod, "Google Cloud project", false}, {"native", "Other native sign-in", false}}
 	default:
 		// A plan whose login screen opens only when the user types terminalInput
@@ -242,7 +245,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		}
 		return s.startNativeLogin(ctx, agentID)
 	}
-	if steps, ok := planByAgentID[agentID].guidedMethods[method]; ok {
+	if steps, ok := planByAgentID[agentID].guidedMethods[method]; ok && planByAgentID[agentID].guidedSupported() {
 		if secret != "" || model != "" || opts.sharesDevice() || account {
 			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This sign-in method does not accept a credential or setting.", nil)
 		}
@@ -512,7 +515,7 @@ func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, 
 	op := &loginOperation{
 		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires},
 		cancel:   cancel, done: make(chan struct{}), terminalID: result.Terminal.HandleID,
-		guidedSteps: steps, keepsRunning: plan.signInKeepsRunning,
+		guidedSteps: steps, keepsRunning: plan.signInKeepsRunning && plan.guidedSupported(),
 	}
 	if method == "native" {
 		op.snapshot.NativePrompt = "waiting"

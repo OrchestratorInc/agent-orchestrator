@@ -95,14 +95,13 @@ func TestAuthStatusUnknownWhenKeychainProbeFails(t *testing.T) {
 	}
 }
 
-func TestAuthStatusSkipsKeychainOffMacOS(t *testing.T) {
+func TestAuthStatusKeepsInstalledMeansAuthorizedOffMacOS(t *testing.T) {
 	f := newAuthProbeFixture(t)
 	f.goos = "linux"
-	f.keychainHit = true
 	f.install(t)
 
-	if got := authStatus(t); got != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = %q, want unknown", got)
+	if got := authStatus(t); got != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want authorized", got)
 	}
 	if f.keychainHits != 0 {
 		t.Fatalf("keychain probed %d times off macOS", f.keychainHits)

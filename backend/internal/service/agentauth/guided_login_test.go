@@ -60,6 +60,15 @@ func waitFor(t *testing.T, what string, timeout time.Duration, done func() bool)
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// onPlatform pins the platform guided sign-in is checked against. Tests using
+// it must not run in parallel.
+func onPlatform(t *testing.T, goos string) {
+	t.Helper()
+	previous := currentGOOS
+	currentGOOS = goos
+	t.Cleanup(func() { currentGOOS = previous })
+}
+
 func (f *guidedTerminalFake) setOutput(output string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -79,7 +88,7 @@ func (f *guidedTerminalFake) isClosed() bool {
 }
 
 func TestAgyLoginMethodsListGoogleAccountAndCloudProject(t *testing.T) {
-	t.Parallel()
+	onPlatform(t, "darwin")
 
 	var ids []string
 	for _, method := range loginMethods("agy") {
@@ -94,7 +103,7 @@ func TestAgyLoginMethodsListGoogleAccountAndCloudProject(t *testing.T) {
 }
 
 func TestAgyGoogleLoginDrivesMenuShowsLinkAndFinishesWhileAgyRuns(t *testing.T) {
-	t.Parallel()
+	onPlatform(t, "darwin")
 
 	pty := &guidedTerminalFake{output: agyMenuScreen}
 	prober := &switchableProberFake{state: domain.AgentAuthenticationUnknown}
@@ -143,7 +152,7 @@ func TestAgyGoogleLoginDrivesMenuShowsLinkAndFinishesWhileAgyRuns(t *testing.T) 
 }
 
 func TestAgyCloudProjectLoginWalksBothMenus(t *testing.T) {
-	t.Parallel()
+	onPlatform(t, "darwin")
 
 	pty := &guidedTerminalFake{output: agyMenuScreen}
 	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationUnknown}, pty, "")
@@ -169,7 +178,7 @@ func TestAgyCloudProjectLoginWalksBothMenus(t *testing.T) {
 }
 
 func TestGuidedLoginWaitsForItsMenu(t *testing.T) {
-	t.Parallel()
+	onPlatform(t, "darwin")
 
 	pty := &guidedTerminalFake{output: "⣷  Signing in...\n"}
 	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationUnknown}, pty, "")
@@ -189,12 +198,44 @@ func TestGuidedLoginWaitsForItsMenu(t *testing.T) {
 }
 
 func TestGuidedLoginRefusesCredentials(t *testing.T) {
-	t.Parallel()
+	onPlatform(t, "darwin")
 
 	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{}, &guidedTerminalFake{}, "")
 	t.Cleanup(svc.Close)
 	if _, err := svc.StartLogin(t.Context(), "agy", "browser", "secret"); err == nil {
 		t.Fatal("guided login accepted a credential")
+	}
+}
+
+func TestAgyOffMacOSKeepsPlainNativeSignIn(t *testing.T) {
+	onPlatform(t, "linux")
+
+	methods := loginMethods("agy")
+	if len(methods) != 1 || methods[0].ID != "native" {
+		t.Fatalf("agy methods off macOS = %+v, want only native sign-in", methods)
+	}
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	// Off macOS Agy's probe reports an installed binary as authorized, so a
+	// login that finished while Agy runs would succeed before any sign-in.
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+	t.Cleanup(svc.Close)
+	if _, err := svc.StartLogin(t.Context(), "agy", "browser", ""); err == nil {
+		t.Fatal("started a guided row off macOS")
+	}
+	started, err := svc.StartLogin(t.Context(), "agy", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2500 * time.Millisecond)
+	current, err := svc.Login(t.Context(), "agy", started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "running" || len(pty.pressed()) != 0 {
+		t.Fatalf("snapshot = %+v keys = %v, want native sign-in still running untouched", current, pty.pressed())
+	}
+	if _, err := svc.CancelLogin(t.Context(), "agy", started.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 

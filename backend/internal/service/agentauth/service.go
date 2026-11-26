@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -109,6 +111,20 @@ type Plan struct {
 	// loginURLRules allow the sign-in link printed in the hidden terminal to
 	// be shown in the panel.
 	loginURLRules []loginURLRule
+	// guidedPlatforms limits guidedMethods and signInKeepsRunning to the
+	// operating systems where the harness's auth probe can confirm a sign-in
+	// while the CLI runs. Empty means every platform.
+	guidedPlatforms []string
+}
+
+// currentGOOS is the platform guidedPlatforms is checked against; tests
+// replace it.
+var currentGOOS = runtime.GOOS
+
+// guidedSupported reports whether this plan's guided methods and
+// keep-running completion apply on this platform.
+func (p Plan) guidedSupported() bool {
+	return len(p.guidedPlatforms) == 0 || slices.Contains(p.guidedPlatforms, currentGOOS)
 }
 
 // TerminalOpener opens the daemon-trusted terminal used for a native
