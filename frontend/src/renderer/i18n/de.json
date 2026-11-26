@@ -3362,8 +3362,6 @@
 	"settings.harness.endpoint.apiKey": "API-Schlüssel",
 	"settings.harness.endpoint.apiKeyPlaceholder": "API-Schlüssel einfügen",
 	"settings.harness.endpoint.apiKeyKeep": "Leer lassen, um den gespeicherten Schlüssel zu behalten",
-	"settings.harness.endpoint.model": "Modell (optional)",
-	"settings.harness.endpoint.modelPlaceholder": "Standardmodell verwenden",
 	"settings.harness.endpoint.storageNote": "Gespeichert im Datenordner von Orchestrator auf dem Host, der diese Sitzungen ausführt, und nur für dessen Eigentümerkonto lesbar. Der Schlüssel wird nie wieder angezeigt.",
 	"settings.harness.endpoint.save": "Speichern",
 	"settings.harness.endpoint.remove": "Entfernen",

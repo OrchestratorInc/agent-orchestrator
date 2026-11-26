@@ -3432,8 +3432,6 @@
 	"settings.harness.endpoint.apiKey": "Chave de API",
 	"settings.harness.endpoint.apiKeyPlaceholder": "Cole sua chave de API",
 	"settings.harness.endpoint.apiKeyKeep": "Deixe em branco para manter a chave salva",
-	"settings.harness.endpoint.model": "Modelo (opcional)",
-	"settings.harness.endpoint.modelPlaceholder": "Usar o modelo padrão",
 	"settings.harness.endpoint.storageNote": "Armazenada na pasta de dados do Orchestrator no host que executa estas sessões, legível apenas pela conta proprietária. A chave nunca é exibida novamente.",
 	"settings.harness.endpoint.save": "Salvar",
 	"settings.harness.endpoint.remove": "Remover",

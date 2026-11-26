@@ -9439,7 +9439,7 @@ export interface components {
             authStyle?: "bearer" | "api-key";
             /** @description Absolute http(s) provider endpoint URL. */
             baseUrl: string;
-            /** @description Optional model override. */
+            /** @description Default model. Omit it to keep the saved model or use the first model the endpoint lists. */
             model?: string;
         };
         SetBrowserRemoteAccessRequest: {

@@ -3362,8 +3362,6 @@
 	"settings.harness.endpoint.apiKey": "API キー",
 	"settings.harness.endpoint.apiKeyPlaceholder": "API キーを貼り付け",
 	"settings.harness.endpoint.apiKeyKeep": "保存済みのキーを使い続けるには空欄のままにします",
-	"settings.harness.endpoint.model": "モデル（任意）",
-	"settings.harness.endpoint.modelPlaceholder": "既定のモデルを使用",
 	"settings.harness.endpoint.storageNote": "これらのセッションを実行するホスト上の Orchestrator のデータフォルダーに保存され、所有者のアカウントだけが読み取れます。キーが再び表示されることはありません。",
 	"settings.harness.endpoint.save": "保存",
 	"settings.harness.endpoint.remove": "削除",

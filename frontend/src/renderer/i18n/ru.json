@@ -2298,8 +2298,6 @@
 	"settings.harness.endpoint.apiKey": "API-ключ",
 	"settings.harness.endpoint.apiKeyPlaceholder": "Вставьте API-ключ",
 	"settings.harness.endpoint.apiKeyKeep": "Оставьте пустым, чтобы сохранить текущий ключ",
-	"settings.harness.endpoint.model": "Модель (необязательно)",
-	"settings.harness.endpoint.modelPlaceholder": "Использовать модель по умолчанию",
 	"settings.harness.endpoint.storageNote": "Хранится в папке данных Orchestrator на хосте, где запускаются эти сеансы, и доступно только его учётной записи-владельцу. Ключ больше не будет показан.",
 	"settings.harness.endpoint.save": "Сохранить",
 	"settings.harness.endpoint.remove": "Удалить",

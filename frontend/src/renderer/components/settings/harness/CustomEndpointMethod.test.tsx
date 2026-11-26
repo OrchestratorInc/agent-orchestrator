@@ -66,15 +66,15 @@ describe("CustomEndpointMethod", () => {
 		fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: " https://gateway.example.com " } });
 		expect(save).toBeDisabled();
 		fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-test" } });
-		fireEvent.change(screen.getByLabelText("Model (optional)"), { target: { value: "claude-sonnet" } });
+		expect(screen.queryByLabelText("Model (optional)")).not.toBeInTheDocument();
 		fireEvent.click(save);
 
 		await waitFor(() => expect(onChanged).toHaveBeenCalled());
-		// How the key is sent is left to the daemon, which asks the endpoint.
+		// How the key is sent and the default model are left to the daemon,
+		// which asks the endpoint; models are picked in the Models section.
 		expect(endpointMocks.setAgentEndpoint).toHaveBeenCalledWith("claude-code", {
 			baseUrl: "https://gateway.example.com",
 			apiKey: "sk-test",
-			model: "claude-sonnet",
 		}, "host-a");
 	});
 
