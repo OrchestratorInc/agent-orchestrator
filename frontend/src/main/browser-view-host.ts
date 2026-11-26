@@ -2373,9 +2373,11 @@ export function createBrowserViewHost(
   const openUserTab = async (
     session: BrowserSessionEntry,
     url?: string,
+    preview = false,
   ): Promise<BrowserTabsState> => {
     if (!options.agentBrowserRuntime) {
-      await openTab(session, url, true);
+      const entry = await openTab(session, url, true);
+      if (preview) session.previewTabId = entry.tabId;
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
@@ -2388,7 +2390,8 @@ export function createBrowserViewHost(
       // CDP identity first (ensureNativeActiveTab), as after a person closes a
       // tab. Creating it directly also keeps a first tab from racing the
       // bootstrap page agent-browser makes when it connects to zero targets.
-      await openTab(session, url, true);
+      const entry = await openTab(session, url, true);
+      if (preview) session.previewTabId = entry.tabId;
       session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
       options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
@@ -4146,10 +4149,7 @@ export function createBrowserViewHost(
       }
       return listTabs(session);
     }
-    const state = await openUserTab(session, url);
-    if (!input.preview) return state;
-    session.previewTabId = session.activeTabId;
-    return listTabs(session);
+    return openUserTab(session, url, input.preview);
   });
   handle(
     "browser:annotation:setMode",
