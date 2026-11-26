@@ -143,13 +143,26 @@ func TestProbeTargetKeepsTheSavedStyleForTheSameEndpoint(t *testing.T) {
 	}
 }
 
-// Codex sends its key one way only, so its endpoint is never asked.
-func TestDetectAuthStyleSkipsSingleStyleHarnesses(t *testing.T) {
+// Codex sends its key one way only: its listing is asked once, under the
+// versioned base URL, for the models and to catch a refused key.
+func TestDetectAsksASingleStyleHarnessOnce(t *testing.T) {
 	var probes atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { probes.Add(1) }))
+	var refuse atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probes.Add(1)
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer sk-test" || refuse.Load() {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.WriteString(w, listing)
+	}))
 	defer server.Close()
-	got, err := DetectAuthStyle(context.Background(), server.Client(), "codex", server.URL+"/v1", "sk-test")
-	if err != nil || got != AuthBearer || probes.Load() != 0 {
-		t.Fatalf("DetectAuthStyle = %q, %v after %d probes; want bearer without a probe", got, err, probes.Load())
+	got, err := Detect(context.Background(), server.Client(), "codex", server.URL+"/v1", "sk-test")
+	if err != nil || got.Style != AuthBearer || !slices.Equal(got.Models, []string{"glm-5", "glm-4.6"}) || probes.Load() != 1 {
+		t.Fatalf("Detect = %+v, %v after %d probes; want bearer and the listed models after one", got, err, probes.Load())
+	}
+	refuse.Store(true)
+	if _, err := Detect(context.Background(), server.Client(), "codex", server.URL+"/v1", "sk-test"); !errors.Is(err, ErrKeyRejected) {
+		t.Fatalf("refused key: err = %v, want ErrKeyRejected", err)
 	}
 }

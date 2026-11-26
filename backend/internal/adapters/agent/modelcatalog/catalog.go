@@ -344,6 +344,9 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 		return Base(request.AgentID), nil
 	}
 	if request.AgentID == "codex" {
+		if _, _, _, ok := codexEndpoint(request.Env); ok {
+			return discoverCodexEndpointCatalog(ctx, request)
+		}
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
 	if list := d.ACPOptions[request.AgentID]; list != nil {
@@ -1013,6 +1016,13 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 	}
 	if agentID == "claude-code" {
 		return "config=" + claudeCodeDiscoveryFingerprint(ctx, workingDir, env)
+	}
+	if agentID == "codex" {
+		// A custom endpoint replaces Codex's catalog with the endpoint's own
+		// list, so the endpoint, its key and its default model name the catalog.
+		if endpoint := codexEndpointFingerprint(env); endpoint != "" {
+			return endpoint
+		}
 	}
 	if agentID == "docker-agent" {
 		return "config=" + dockerAgentDiscoveryFingerprint(env)

@@ -121,6 +121,9 @@ var specs = map[string]Spec{
 		},
 		DefaultAuthStyle: AuthBearer,
 		ModelEnv:         CodexModelEnv,
+		// The base URL carries the API version, as Codex expects, so the
+		// OpenAI-compatible listing sits right under it.
+		ModelsPath: "/models",
 	},
 }
 
