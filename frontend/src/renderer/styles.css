@@ -6738,9 +6738,9 @@ html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
 	--surface: var(--color-bg-secondary);
 }
 
-/* A Cloud session's startup and interface-switch screens cover the session
- * beneath them; on a clear canvas that session would show through the steps,
- * so they keep the solid one. */
+/* A Cloud session's startup, startup-failure and interface-switch screens
+ * cover the session beneath them; on a clear canvas that session would show
+ * through, so they keep the solid one. */
 html[data-window-translucent="true"] [data-startup-cover] {
 	background-color: var(--solid-bg-primary);
 }

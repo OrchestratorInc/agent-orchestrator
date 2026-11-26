@@ -150,10 +150,10 @@ export function cloudWorkerAnswering(session?: WorkspaceSession): boolean {
 
 /**
  * The requests that (re)start a cloud session's startup: waking it, asking its
- * worker to prepare the workspace again, and restoring it. One of each is in
- * flight per session; every caller shares it.
+ * worker to prepare the workspace again, restoring it, and retrying a failed
+ * startup. One of each is in flight per session; every caller shares it.
  */
-export type CloudSessionStartRequest = "resume" | "checkout" | "restore";
+export type CloudSessionStartRequest = "resume" | "checkout" | "restore" | "retry";
 
 const startRequestsInFlight = new Map<string, Promise<unknown>>();
 const startRequestListeners = new Set<() => void>();
@@ -208,6 +208,16 @@ export function resumeCloudSession(client: Pick<CloudCpClient, "resumeSession">,
  */
 export function requestCloudWorkspaceCheckout(client: Pick<CloudCpClient, "requestWorkspaceCheckout">, orgId: string, sessionId: string): Promise<unknown> {
 	return shareStartRequest("checkout", orgId, sessionId, () => client.requestWorkspaceCheckout(orgId, sessionId));
+}
+
+/**
+ * Retries a cloud session's failed startup, sharing a request already in
+ * flight for it. A session AO parked after its start failed (or after its
+ * sandbox stopped responding) is started again only by this: a resume leaves
+ * it parked.
+ */
+export function retryCloudSessionStartup(client: Pick<CloudCpClient, "retrySessionStartup">, orgId: string, sessionId: string): Promise<unknown> {
+	return shareStartRequest("retry", orgId, sessionId, () => client.retrySessionStartup(orgId, sessionId));
 }
 
 /** Restores a deleted cloud session, sharing a request already in flight for it. */

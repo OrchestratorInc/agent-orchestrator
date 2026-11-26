@@ -8,7 +8,7 @@ import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { useCloudSessionStartRequestInFlight } from "../hooks/useCloudWorkspaceReady";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CloudCpError, type CloudCpClient } from "../lib/cloud-cp";
-import { isWorkspaceStartupError, requestCloudWorkspaceCheckout, type CloudStartupProblem } from "../lib/cloud-lifecycle";
+import { isWorkspaceStartupError, requestCloudWorkspaceCheckout, retryCloudSessionStartup, type CloudStartupProblem } from "../lib/cloud-lifecycle";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { cn } from "../lib/utils";
 import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
@@ -142,7 +142,7 @@ export function CloudSessionStartupError({
 			const abort = new AbortController();
 			retryAbort.current = abort;
 			if (workspaceProblem) await requestWorkspaceRetry(client, orgId, sessionId, abort.signal);
-			else await client.retrySessionStartup(orgId, sessionId);
+			else await retryCloudSessionStartup(client, orgId, sessionId);
 			return afterSequence;
 		},
 		onSuccess: async (afterSequence) => {
@@ -197,6 +197,9 @@ export function CloudSessionStartupError({
 	return (
 		<div
 			className={cn("absolute inset-0 z-chrome grid place-items-center bg-background p-4", setupRun && "overflow-y-auto")}
+			// Covers the session beneath it, Chat included: solid in a
+			// translucent window too (styles.css [data-startup-cover]).
+			data-startup-cover=""
 			data-testid="cloud-session-startup-error"
 		>
 			<div className={cn("flex max-w-full flex-col items-center gap-4", setupRun ? "w-[36rem]" : "w-96")}>

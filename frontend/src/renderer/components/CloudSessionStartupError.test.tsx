@@ -229,6 +229,14 @@ describe("CloudSessionStartupError", () => {
 		expect(retrySessionStartup).toHaveBeenCalledWith("org-1", "sess-1");
 	});
 
+	// Prod: in a translucent window the failure screen's background was clear,
+	// so the Chat it covers showed through its title, message and Retry. It
+	// is a startup cover, which keeps the solid canvas there.
+	it("covers the session beneath it with the solid startup cover", () => {
+		mount({ phase: "failed", code: "sandbox_unresponsive", message: "The sandbox stopped responding." });
+		expect(screen.getByTestId("cloud-session-startup-error")).toHaveAttribute("data-startup-cover");
+	});
+
 	it.each([
 		["workspace_setup_not_ready", "The workspace setup didn't finish"],
 		["project_setup_failed", "The project's Setup script failed"],

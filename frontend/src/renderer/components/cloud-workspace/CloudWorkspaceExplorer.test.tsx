@@ -15,16 +15,17 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { CloudWorkspaceExplorer } from "./CloudWorkspaceExplorer";
 
-const { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } = vi.hoisted(() => ({
+const { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, retrySessionStartup, searchWorkspaceReview } = vi.hoisted(() => ({
 	getWorkspaceReview: vi.fn(),
 	resumeSession: vi.fn(),
+	retrySessionStartup: vi.fn(),
 	getWorkspaceReviewDiffs: vi.fn(),
 	getWorkspaceReviewTree: vi.fn(),
 	searchWorkspaceReview: vi.fn(),
 }));
 
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ baseUrl: "https://cloud.test", ready: true, client: { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } }),
+	useCloudCp: () => ({ baseUrl: "https://cloud.test", ready: true, client: { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, retrySessionStartup, searchWorkspaceReview } }),
 }));
 vi.mock("../../hooks/useCloudWorkspaceReview", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudWorkspaceReview")>();
@@ -191,9 +192,9 @@ describe("CloudWorkspaceExplorer", () => {
 		resetCloudWorkerStartingForTests();
 	});
 
-	it("sends one resume for a double Retry while it is in flight", async () => {
+	it("sends one startup retry for a double Retry while it is in flight", async () => {
 		let answer: (value: unknown) => void = () => undefined;
-		resumeSession.mockReset().mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+		retrySessionStartup.mockReset().mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
 		const gaveUp: WorkspaceSession = {
 			...session, runtimeConnected: false,
 			cloud: { orgId: "org-1", sandboxProvider: "nodeops", runtimeState: "terminated", startupError: { code: "sandbox_start_failed", message: "The sandbox could not start.", at: "2026-10-31T00:00:00Z" } },
@@ -203,13 +204,14 @@ describe("CloudWorkspaceExplorer", () => {
 		await userEvent.click(retry);
 		await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled());
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-		expect(resumeSession).toHaveBeenCalledTimes(1);
+		expect(retrySessionStartup).toHaveBeenCalledTimes(1);
 		await act(async () => answer({}));
 		await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
 	});
 
 	it("says a session whose worker will not come back has no files, instead of loading forever", async () => {
 		resumeSession.mockReset().mockResolvedValue({});
+		retrySessionStartup.mockReset().mockResolvedValue({});
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const gaveUp: WorkspaceSession = {
 			...session, runtimeConnected: false,
@@ -223,9 +225,12 @@ describe("CloudWorkspaceExplorer", () => {
 		expect(screen.getByText("The sandbox could not start.")).toBeInTheDocument();
 		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
 		expect(getWorkspaceReview).not.toHaveBeenCalled();
-		// Retry asks AO to start the session again.
+		// Retry asks AO to retry the failed startup. A resume would leave a
+		// session AO parked after a failed start parked (prod: five resumes
+		// that each answered and started nothing).
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-		expect(resumeSession).toHaveBeenCalledWith("org-1", "session-1");
+		expect(retrySessionStartup).toHaveBeenCalledWith("org-1", "session-1");
+		expect(resumeSession).not.toHaveBeenCalled();
 		// A deleted session's worker is gone for good: no Retry.
 		view.rerender(
 			<QueryClientProvider client={queryClient}>
@@ -234,6 +239,18 @@ describe("CloudWorkspaceExplorer", () => {
 		);
 		expect(screen.getByText("Files are not available for this session.")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+	});
+
+	it("wakes a session whose worker could not prepare its workspace, which prepares it again as it starts", async () => {
+		resumeSession.mockReset().mockResolvedValue({});
+		retrySessionStartup.mockReset().mockResolvedValue({});
+		renderExplorer({
+			...session, runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "freestyle", runtimeState: "stopped", startupError: { code: "repository_checkout_failed", message: "The repository checkout failed.", at: "2026-10-31T00:00:00Z" } },
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(resumeSession).toHaveBeenCalledWith("org-1", "session-1");
+		expect(retrySessionStartup).not.toHaveBeenCalled();
 	});
 
 	it("switches from categorized changes to the complete repository tree", async () => {
