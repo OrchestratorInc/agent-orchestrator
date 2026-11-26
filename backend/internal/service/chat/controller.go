@@ -1071,6 +1071,20 @@ type nativeHistoryTurn struct {
 	activities     map[string]int
 	// steers counts the user-message fingerprints of inputs steered into this turn.
 	steers map[string]int
+	// assistantText holds the turn's assistant messages, in order.
+	assistantText []string
+}
+
+// nativeHistoryReplyText is a turn's whole reply without whitespace, so it
+// compares the same however the reply was divided into messages.
+func nativeHistoryReplyText(parts []string) string {
+	var text strings.Builder
+	for _, part := range parts {
+		for _, field := range strings.Fields(part) {
+			text.WriteString(field)
+		}
+	}
+	return text.String()
 }
 
 func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) string {
@@ -1210,6 +1224,9 @@ func indexNativeHistoryTurnsForHarness(
 			continue
 		}
 		candidate.messages[nativeHistoryFingerprintForHarness(harness, message.Role, nativeHistoryMessageText(message))]++
+		if message.Role == domain.MessageRoleAssistant {
+			candidate.assistantText = append(candidate.assistantText, message.Text)
+		}
 		rememberProviderItem(message.ProviderItemID, candidate)
 		if message.Role == domain.MessageRoleUser && candidate.text == "" {
 			candidate.text = nativeHistoryMessageText(message)
@@ -1480,6 +1497,21 @@ func reconcileNativeHistoryForHarness(
 		}
 		return match
 	}
+	// A steer taken mid-reply ends AO's live message where it arrived. The
+	// provider's own history keeps that reply whole, or divides it elsewhere, so
+	// no replayed message equals a recorded one. When the turn's whole replayed
+	// reply is the reply AO recorded in parts, all of it is already projected.
+	replayedReply := make(map[*nativeHistoryTurn][]string)
+	for _, event := range events {
+		if candidate := mapped[event.ProviderTurnID]; candidate != nil && event.Kind == ports.ChatEventMessageCompleted {
+			replayedReply[candidate] = append(replayedReply[candidate], event.Text)
+		}
+	}
+	sameReply := make(map[*nativeHistoryTurn]bool)
+	for candidate, parts := range replayedReply {
+		sameReply[candidate] = len(candidate.steers) > 0 && len(candidate.assistantText) > 1 &&
+			nativeHistoryReplyText(parts) == nativeHistoryReplyText(candidate.assistantText)
+	}
 	// A native provider may omit persisted item ids even though its live stream
 	// supplied them. Codex does this today: a live assistant message can be
 	// `msg_...`, while thread/read later calls the same item `item-2`. Stable turn
@@ -1509,6 +1541,9 @@ func reconcileNativeHistoryForHarness(
 		}
 		if fingerprint, ok := nativeHistoryEventFingerprintForHarness(harness, event); ok && candidate.messages[fingerprint] > 0 {
 			candidate.messages[fingerprint]--
+			matched = true
+		}
+		if event.Kind == ports.ChatEventMessageCompleted && sameReply[candidate] {
 			matched = true
 		}
 		if event.Kind == ports.ChatEventActivityCompleted {

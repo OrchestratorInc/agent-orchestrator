@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -135,5 +136,54 @@ func TestReplayKeepsUnrecordedRepeatOfSteerText(t *testing.T) {
 	want := map[string]int{"history-c keep going": 1, "history-d start": 1}
 	if len(kept) != len(want) || kept["history-c keep going"] != 1 || kept["history-d start"] != 1 {
 		t.Fatalf("kept user messages = %v, want %v", kept, want)
+	}
+}
+
+// A steer taken mid-reply divides AO's live message where it arrived, while the
+// provider's history keeps the reply whole or divides it elsewhere (Pi replays
+// the reply and its follow-up as one message). A replay of the same reply adds
+// nothing; a reply that differs is still imported.
+func TestReplayOfAReplyDividedByASteerAddsNothing(t *testing.T) {
+	turns := []domain.ConversationTurn{{ID: "prompt", ProviderTurnID: "live-turn", State: domain.TurnStateCompleted}}
+	messages := []domain.ConversationMessage{
+		{TurnID: "prompt", Role: domain.MessageRoleUser, ClientMessageID: "client-prompt", Text: "Explain the config."},
+		{TurnID: "prompt", Role: domain.MessageRoleAssistant, ProviderItemID: "live-1", Text: "Part 1. Part 2. "},
+		{TurnID: "prompt", Role: domain.MessageRoleAssistant, ProviderItemID: "live-2", Text: "Part 3. Adding retries."},
+	}
+	steer := []domain.ConversationActivity{steerActivity("prompt", "client-steer", "also mention retries")}
+	for _, tc := range []struct {
+		name       string
+		activities []domain.ConversationActivity
+		replay     []ports.ChatEvent
+		want       []string
+	}{
+		{name: "kept whole", activities: steer, replay: []ports.ChatEvent{assistant("r1", "Part 1. Part 2. Part 3. Adding retries.")}},
+		{name: "divided elsewhere", activities: steer, replay: []ports.ChatEvent{assistant("r1", "Part 1. Part 2. Part 3."), assistant("r2", "Adding retries.")}},
+		{name: "divided where AO divided it", activities: steer, replay: []ports.ChatEvent{assistant("r1", "Part 1. Part 2. "), assistant("r2", "Part 3. Adding retries.")}},
+		{
+			name: "more than AO recorded", activities: steer,
+			replay: []ports.ChatEvent{assistant("r1", "Part 1. Part 2. Part 3. Adding retries. And timeouts.")},
+			want:   []string{"Part 1. Part 2. Part 3. Adding retries. And timeouts."},
+		},
+		{
+			name:   "no steer in the turn",
+			replay: []ports.ChatEvent{assistant("r1", "Part 1. Part 2. Part 3. Adding retries.")},
+			want:   []string{"Part 1. Part 2. Part 3. Adding retries."},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, event := range reconcileNativeHistory(historyTurn("replayed", "Explain the config.", tc.replay...), turns, messages, tc.activities) {
+				if event.Kind == ports.ChatEventMessageCompleted {
+					got = append(got, event.Text)
+				}
+				if event.ProviderTurnID != "live-turn" {
+					t.Fatalf("event %+v left the turn it belongs to", event)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("imported replies = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
