@@ -815,7 +815,9 @@ function ArtifactImage({ backend, sessionId, artifact, source }: { backend: Arti
 	const t = useTheme();
 	const [failed, setFailed] = useState(false);
 	const entry = useMemo(() => artifactCacheEntry(backend.key, sessionId, artifact.path, artifact.updatedAt), [artifact.path, artifact.updatedAt, backend.key, sessionId]);
-	const cacheable = artifact.size <= MAX_CACHED_IMAGE_BYTES;
+	// Only a listed size is trusted: an unlisted file says 0 (unknown), and could be
+	// any size, so it loads from the machine instead of being downloaded to check.
+	const cacheable = artifact.size > 0 && artifact.size <= MAX_CACHED_IMAGE_BYTES;
 	// The copy on the phone, or `network` once it cannot be had.
 	const [local, setLocal] = useState<{ name: string; uri?: string; network?: boolean }>(() => ({ name: entry.name, uri: cacheable ? cachedArtifactUri(entry) : undefined, network: !cacheable }));
 	const current = local.name === entry.name ? local : { name: entry.name, uri: cacheable ? cachedArtifactUri(entry) : undefined, network: !cacheable };
