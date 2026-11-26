@@ -49,12 +49,10 @@ WHERE NOT EXISTS (
 -- +goose StatementEnd
 
 -- +goose Down
--- The computer's own bindings this migration recorded go first; any other
--- Antigravity row refuses the rollback below.
--- +goose StatementBegin
-DELETE FROM session_agent_accounts WHERE provider = 'antigravity' AND account_id = 'device-antigravity';
--- +goose StatementEnd
--- Refuse a rollback while any other Antigravity row would violate the restored CHECK.
+-- Refuse a rollback while any Antigravity row other than the computer's own
+-- bindings this migration recorded would violate the restored CHECK. The
+-- check runs before anything changes: outside a transaction, a refusal after
+-- the delete below would leave those bindings gone.
 -- +goose StatementBegin
 CREATE TEMP TABLE IF NOT EXISTS antigravity_account_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
 -- +goose StatementEnd
@@ -62,12 +60,15 @@ CREATE TEMP TABLE IF NOT EXISTS antigravity_account_schema_guard (valid INTEGER 
 INSERT INTO antigravity_account_schema_guard (valid)
 SELECT CASE WHEN EXISTS (SELECT 1 FROM agent_accounts WHERE provider = 'antigravity')
     OR EXISTS (SELECT 1 FROM agent_account_defaults WHERE provider = 'antigravity')
-    OR EXISTS (SELECT 1 FROM session_agent_accounts WHERE provider = 'antigravity')
+    OR EXISTS (SELECT 1 FROM session_agent_accounts WHERE provider = 'antigravity' AND account_id <> 'device-antigravity')
     OR EXISTS (SELECT 1 FROM agent_limit_readings WHERE provider = 'antigravity')
     THEN 0 ELSE 1 END;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE antigravity_account_schema_guard;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM session_agent_accounts WHERE provider = 'antigravity' AND account_id = 'device-antigravity';
 -- +goose StatementEnd
 -- +goose StatementBegin
 PRAGMA writable_schema = ON;

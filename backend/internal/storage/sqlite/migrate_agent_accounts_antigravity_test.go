@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/pressly/goose/v3"
 )
 
 // TestAntigravityAccountsMigrationAcceptsTheProvider: after the upgrade every
@@ -70,4 +72,38 @@ func TestAntigravityAccountsMigrationKeepsExistingSessionsOnTheComputersLogin(t 
 	if _, err := db.Exec(`INSERT INTO agent_account_defaults (provider, account_id) VALUES ('antigravity', 'a1')`); err == nil {
 		t.Fatal("the rollback kept the antigravity provider in the CHECK")
 	}
+}
+
+// TestAntigravityAccountsRollbackRefusalChangesNothing: a saved Antigravity
+// account refuses the rollback before it removes anything, so the computer's
+// own bindings and the provider stay as they were.
+func TestAntigravityAccountsRollbackRefusalChangesNothing(t *testing.T) {
+	const before, version = 20261124180938781, 20261126090000000
+	db := openMigratedDatabaseCopy(t, before)
+	created := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	mustExec(t, db, `INSERT INTO projects(id,path,registered_at) VALUES ('p1','/tmp/p1',?)`, created)
+	mustExec(t, db, `INSERT INTO sessions(id,project_id,num,harness,created_at,updated_at,activity_last_at) VALUES ('old-agy','p1',1,'agy',?,?,?)`, created, created, created)
+	upTo(t, db, version)
+	mustExec(t, db, `INSERT INTO agent_accounts (id, provider, home, created_at) VALUES ('a1', 'antigravity', '/accounts/antigravity/a1', ?)`, created)
+
+	if err := tryDownTo(db, before); err == nil {
+		t.Fatal("rollback succeeded with a saved Antigravity account")
+	}
+	var device int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM session_agent_accounts WHERE session_id = 'old-agy' AND account_id = 'device-antigravity'`).Scan(&device); err != nil || device != 1 {
+		t.Fatalf("device bindings after a refused rollback = %d, %v; want 1", device, err)
+	}
+	mustExec(t, db, `INSERT INTO agent_account_defaults (provider, account_id) VALUES ('antigravity', 'a1')`)
+}
+
+// tryDownTo is downTo returning the rollback's error instead of failing.
+func tryDownTo(db *sql.DB, version int64) error {
+	gooseMu.Lock()
+	defer gooseMu.Unlock()
+	goose.SetBaseFS(migrationsFS)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		return err
+	}
+	return goose.DownTo(db, "migrations", version)
 }
