@@ -891,6 +891,14 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 			}
 		}
 	}
+	// User-authored agent profiles hidden by AO's own .git/info/exclude glob
+	// are invisible to git's dirtiness checks; without this probe teardown
+	// would silently delete them (#9007). Refuse so the Session Manager
+	// preserves the workspace; git stays the authority when the probe itself
+	// fails, so a probe error never blocks a teardown git would allow.
+	if profiles, profileErr := w.unmanagedExcludedAgentProfiles(ctx, path); profileErr == nil && len(profiles) > 0 {
+		return reclaim, fmt.Errorf("gitworktree: preserve %d unmanaged agent profile(s) under %q: %w", len(profiles), path, ports.ErrWorkspaceDirty)
+	}
 	// Move the directory aside rather than waiting out `git worktree remove`'s
 	// walk of an ignored-file mountain; falls through to the git-driven path
 	// below whenever the move is not clearly safe.
@@ -1051,11 +1059,24 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", nil
 	}
 
+	// User-authored agent profiles hidden by AO's own exclude glob (#9007)
+	// must survive in the stash; a failed probe aborts the capture rather
+	// than risk losing them.
+	profiles, err := w.unmanagedExcludedAgentProfiles(ctx, path)
+	if err != nil {
+		return "", fmt.Errorf("gitworktree: StashUncommitted agent profile probe: %w", err)
+	}
+
 	// Log the count of ignored paths that will be skipped.
 	if skipCount, err := w.countIgnoredPaths(ctx, path); err == nil {
+		skipped := skipCount - len(profiles)
+		if skipped < 0 {
+			skipped = 0
+		}
 		slog.InfoContext(ctx, "gitworktree: StashUncommitted skipping ignored paths",
 			"session", string(info.SessionID),
-			"skipped_count", skipCount,
+			"skipped_count", skipped,
+			"preserved_profiles", len(profiles),
 		)
 	}
 
@@ -1080,6 +1101,16 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	addCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", commandError{args: append([]string{w.binary}, addAllTempIndexArgs(path)...), output: string(out), err: err}
+	}
+
+	// Force-add the user-authored agent profiles exclude rules hid from the
+	// plain add, so the captured tree carries them too (#9007).
+	if len(profiles) > 0 {
+		forceCmd := aoprocess.CommandContext(ctx, w.binary, forceAddTempIndexArgs(path, profiles...)...)
+		forceCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
+		if out, err := forceCmd.CombinedOutput(); err != nil {
+			return "", commandError{args: append([]string{w.binary}, forceAddTempIndexArgs(path, profiles...)...), output: string(out), err: err}
+		}
 	}
 
 	// Write the staged tree to get a tree SHA.
@@ -2223,7 +2254,16 @@ func (w *Workspace) isDirty(ctx context.Context, path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("gitworktree: status %q: %w", path, err)
 	}
-	return strings.TrimSpace(string(out)) != "", nil
+	if strings.TrimSpace(string(out)) != "" {
+		return true, nil
+	}
+	// `git status` cannot see user-authored agent profiles hidden by AO's own
+	// exclude glob (#9007); their presence is uncommitted work too.
+	profiles, err := w.unmanagedExcludedAgentProfiles(ctx, path)
+	if err != nil {
+		return false, err
+	}
+	return len(profiles) > 0, nil
 }
 
 func (w *Workspace) listRecords(ctx context.Context, repo string) ([]worktreeRecord, error) {
