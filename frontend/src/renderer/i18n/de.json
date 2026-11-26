@@ -3353,6 +3353,8 @@
 	"settings.harness.endpoint.edit": "Bearbeiten",
 	"settings.harness.endpoint.active": "Verwendet {{host}}",
 	"settings.harness.endpoint.notSet": "Nicht festgelegt",
+	"settings.harness.endpoint.unusable": "Gespeicherter Endpunkt nicht nutzbar",
+	"settings.harness.endpoint.unusableSummary": "Sitzungen starten erst, wenn du ihn mit einem neuen API-Schlüssel bearbeitest oder entfernst.",
 	"settings.harness.endpoint.summary": "Eigene Basis-URL und eigenen API-Schlüssel statt der nativen Anmeldung verwenden.",
 	"settings.harness.endpoint.title": "Benutzerdefinierter API-Endpunkt",
 	"settings.harness.endpoint.description": "Führen Sie {{agent}} mit Ihrer eigenen Basis-URL und Ihrem API-Schlüssel aus. Orchestrator übergibt beides an jede {{agent}}-Sitzung, die es startet, statt der nativen Anmeldung.",

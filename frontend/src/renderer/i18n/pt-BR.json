@@ -3423,6 +3423,8 @@
 	"settings.harness.endpoint.edit": "Editar",
 	"settings.harness.endpoint.active": "Usando {{host}}",
 	"settings.harness.endpoint.notSet": "Não definido",
+	"settings.harness.endpoint.unusable": "Não é possível usar o endpoint salvo",
+	"settings.harness.endpoint.unusableSummary": "As sessões não vão iniciar até você editá-lo com uma nova chave de API ou removê-lo.",
 	"settings.harness.endpoint.summary": "Use sua própria URL base e chave de API em vez do login nativo.",
 	"settings.harness.endpoint.title": "Endpoint de API personalizado",
 	"settings.harness.endpoint.description": "Execute o {{agent}} com sua própria URL base e chave de API. O Orchestrator as repassa para cada sessão do {{agent}} que inicia, em vez do login nativo.",

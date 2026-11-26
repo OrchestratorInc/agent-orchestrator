@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -110,5 +112,31 @@ func TestEndpointErrors(t *testing.T) {
 	}
 	if plan := claudePlan(t, withoutStore); plan.CustomEndpoint != nil {
 		t.Fatalf("plans without a data directory must omit endpoint status: %+v", plan.CustomEndpoint)
+	}
+}
+
+// An endpoint launches reject stays on the card as a problem the user can
+// edit or remove, not as "Not set"; saving a new key repairs it.
+func TestEndpointStatusReportsUnusableEndpoint(t *testing.T) {
+	t.Parallel()
+	svc, _ := newEndpointService(t)
+	path := filepath.Join(svc.dataDir, "harness-endpoints", "claude-code", "endpoint.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status := claudePlan(t, svc).CustomEndpoint
+	if status == nil || status.Error != harnessendpoint.UnusableMessage || status.HasAPIKey {
+		t.Fatalf("CustomEndpoint = %+v, want the unusable endpoint reported without a saved key", status)
+	}
+
+	if _, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-new"}); err != nil {
+		t.Fatalf("SetEndpoint with a new key: %v", err)
+	}
+	if status := claudePlan(t, svc).CustomEndpoint; status == nil || status.Error != "" || !status.Configured {
+		t.Fatalf("CustomEndpoint after repair = %+v, want a configured endpoint without an error", status)
 	}
 }

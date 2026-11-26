@@ -15,9 +15,14 @@ import (
 // the account-aware check.
 func (s *Service) authenticationOverride(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
 	if s.dataDir != "" {
-		// A read failure falls through to the usual checks rather than
-		// reporting a harness signed out that may well work.
-		if configured, err := harnessendpoint.ForDataDir(s.dataDir).Configured(agentID); err == nil && configured {
+		// The same check every launch makes: a saved endpoint that cannot be
+		// read or used stops launches, so readiness must not fall back to the
+		// native login and report the harness ready.
+		env, err := harnessendpoint.ForDataDir(s.dataDir).Env(agentID)
+		if err != nil {
+			return failedAuthentication(s.now(), domain.AgentReadinessReasonAuthCheckFailed, harnessendpoint.UnusableMessage), true
+		}
+		if env != nil {
 			return successfulAuthentication(s.now(), domain.AgentAuthenticationConfigured, domain.AgentReadinessReasonAuthConfigured,
 				"Using a custom API endpoint. Orchestrator has not verified the key."), true
 		}

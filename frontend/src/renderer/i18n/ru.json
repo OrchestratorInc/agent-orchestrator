@@ -2289,6 +2289,8 @@
 	"settings.harness.endpoint.edit": "Изменить",
 	"settings.harness.endpoint.active": "Используется {{host}}",
 	"settings.harness.endpoint.notSet": "Не задано",
+	"settings.harness.endpoint.unusable": "Сохранённую конечную точку нельзя использовать",
+	"settings.harness.endpoint.unusableSummary": "Сеансы не запустятся, пока вы не измените её, указав новый ключ API, или не удалите её.",
 	"settings.harness.endpoint.summary": "Используйте собственный базовый URL и API-ключ вместо встроенного входа.",
 	"settings.harness.endpoint.title": "Собственный API-адрес",
 	"settings.harness.endpoint.description": "Запускайте {{agent}} с собственным базовым URL и API-ключом. Orchestrator передаёт их в каждый сеанс {{agent}}, который запускает, вместо встроенного входа.",

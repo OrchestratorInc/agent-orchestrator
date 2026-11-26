@@ -2255,6 +2255,8 @@
 	"settings.harness.endpoint.edit": "Edit",
 	"settings.harness.endpoint.active": "Using {{host}}",
 	"settings.harness.endpoint.notSet": "Not set",
+	"settings.harness.endpoint.unusable": "Saved endpoint can't be used",
+	"settings.harness.endpoint.unusableSummary": "Sessions won't start until you edit it with a new API key or remove it.",
 	"settings.harness.endpoint.summary": "Use your own base URL and API key instead of the native sign-in.",
 	"settings.harness.endpoint.title": "Custom API endpoint",
 	"settings.harness.endpoint.description": "Run {{agent}} against your own base URL and API key. Orchestrator passes them to every {{agent}} session it starts, instead of the native sign-in.",
