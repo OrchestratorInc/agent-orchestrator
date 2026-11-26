@@ -60,6 +60,18 @@ describe("cloudAutomationErrorMessage", () => {
 		expect(cloudAutomationErrorMessage(refusal("WEEKLY_LIMIT_REACHED"), t)).toBe("automations.cloud.error.PLAN_LIMIT");
 		expect(cloudAutomationErrorMessage(refusal("SOMETHING_NEW"), t)).toBe("server says SOMETHING_NEW");
 	});
+	// A save is refused for a full workspace or plan only when its limit is
+	// zero, which a bigger plan or limit fixes; Run now is refused for being
+	// full right now, which freeing a session or waiting fixes.
+	it("reads a full workspace or plan as a zero limit when saving, and as full right now otherwise", () => {
+		expect(cloudAutomationErrorMessage(refusal("SANDBOX_QUOTA_EXCEEDED"), t, { saving: true })).toBe("automations.cloud.error.save.SANDBOX_QUOTA_EXCEEDED");
+		expect(cloudAutomationErrorMessage(refusal("WORKER_SLOTS_FULL"), t, { saving: true })).toBe("automations.cloud.error.save.PLAN_LIMIT");
+		expect(cloudAutomationErrorMessage(refusal("SESSION_LIMIT_REACHED"), t, { saving: true })).toBe("automations.cloud.error.save.PLAN_LIMIT");
+		expect(cloudAutomationErrorMessage(refusal("SANDBOX_QUOTA_EXCEEDED"), t)).toBe("automations.cloud.error.SANDBOX_QUOTA_EXCEEDED");
+		expect(cloudAutomationErrorMessage(refusal("WORKER_SLOTS_FULL"), t)).toBe("automations.cloud.error.PLAN_LIMIT");
+		// Other refusals read the same either way.
+		expect(cloudAutomationErrorMessage(refusal("PLAN_REQUIRED"), t, { saving: true })).toBe("automations.cloud.error.PLAN_REQUIRED");
+	});
 	it("names the agent a missing login is for when the request's harness is known", () => {
 		const withArgs = ((key: string, options?: Record<string, unknown>) => options ? `${key} ${JSON.stringify(options)}` : key) as unknown as Parameters<typeof cloudAutomationErrorMessage>[1];
 		expect(cloudAutomationErrorMessage(refusal("agent_provider_required"), withArgs, { harness: "codex" })).toBe('automations.cloud.error.agentLoginRequired {"agent":"Codex"}');

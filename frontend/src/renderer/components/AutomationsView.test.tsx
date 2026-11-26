@@ -1055,6 +1055,25 @@ describe("automation starters", () => {
 			expect(within(screen.getByRole("dialog")).getByText("Log in to Claude Code in AO Cloud first: the automation runs with that login.")).toHaveAttribute("role", "alert");
 		});
 
+		it("says a full plan means a zero limit when saving, and full right now on Run now", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			// A save is refused for a plan limit only when the limit is zero.
+			mocks.createCloudError = new CloudCpError("Your plan has 0 worker slots.", { status: 409, code: "WORKER_SLOTS_FULL" });
+			mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: { ...cloudAutomation.latestRun, status: "completed", errorCode: undefined, errorMessage: undefined } }];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			expect(dialog.getByRole("alert")).toHaveTextContent("Your plan allows none of these cloud sessions (its limit is 0), so this automation could never run. Choose a plan that includes them in Settings > Plans, then save again.");
+			await user.click(dialog.getByRole("button", { name: "Cancel" }));
+
+			// Run now is refused for being full right now: free a session or wait.
+			mocks.runNow.mockRejectedValue(new CloudCpError("Your plan's worker slots are full.", { status: 409, code: "WORKER_SLOTS_FULL" }));
+			await user.click(screen.getByRole("button", { name: "Run Nightly debt now" }));
+			expect(await screen.findByText("Your plan has no room for another session right now, so the run couldn't start. Free a session or wait for your limit to reset, then try again.")).toHaveAttribute("role", "alert");
+			expect(screen.queryByText(/its limit is 0/)).toBeNull();
+		});
+
 		it("offers only the agents logged in to AO Cloud", async () => {
 			const user = userEvent.setup();
 			mocks.cloudAvailable = true;

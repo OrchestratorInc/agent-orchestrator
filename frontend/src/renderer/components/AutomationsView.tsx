@@ -355,7 +355,7 @@ export function AutomationsView() {
 				</ScrollArea.Scrollbar>
 			</main>
 			</ScrollArea.Root>
-			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t, { harness: createCloud.variables?.harness })} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async (input) => {
+			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t, { harness: createCloud.variables?.harness, saving: true })} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async (input) => {
 				if (input.runsOn === "cloud") {
 					// A cloud run is unattended: trusted mode, the default time limit.
 					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName!, prompt: input.prompt!, harness: input.harness!, timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: input.deleteSessionOnComplete ?? false, enabled: true });
@@ -366,7 +366,7 @@ export function AutomationsView() {
 				setCreateOpen(false);
 			}} />
 			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget || input.runsOn !== "local") return; const { runsOn: _runsOn, ...body } = input; await update.mutateAsync({ id: editTarget.id, body }); setEditTarget(null); }} />
-			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudUserId={cloud.userId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t, { harness: updateCloud.variables?.body.harness ?? cloudEditTarget?.harness })} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
+			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudUserId={cloud.userId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t, { harness: updateCloud.variables?.body.harness ?? cloudEditTarget?.harness, saving: true })} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
 				if (!cloudEditTarget || input.runsOn !== "cloud") return;
 				// Only what changed: any change makes the automation run as the editor, so
 				// an unchanged save must not rebind it.
@@ -535,7 +535,7 @@ function CloudAutomationRow({ item, userId, sessionTerminated, projectName, busy
 		} catch (error) {
 			onError(enabled && turnOnRebinds && error instanceof CloudCpError && error.code === "agent_provider_required"
 				? t("automations.cloud.error.turnOnNeedsLogin", { agent: agentLabel(item.harness) })
-				: cloudAutomationErrorMessage(error, t, { harness: item.harness }) ?? t("automations.updateError"));
+				: cloudAutomationErrorMessage(error, t, { harness: item.harness, saving: enabled }) ?? t("automations.updateError"));
 		}
 	}
 	const toggleSwitch = <Switch checked={item.enabled} disabled={busy || !item.canEdit} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void toggle(checked)} />;

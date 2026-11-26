@@ -249,16 +249,24 @@ const ERROR_CODES = [
  * A control-plane refusal as the person reads it; the server's own message for
  * anything else. harness is the agent the refused request runs with: a missing
  * login then names the agent to log in to, as the control plane's message does.
+ *
+ * saving is a save or a turn-on, which the control plane refuses for a full
+ * workspace or plan only when its limit is zero (no run could ever start), so
+ * the fix is a bigger limit or plan. Anything else (Run now) is refused for
+ * being full right now, which freeing a session or waiting fixes.
  */
-export function cloudAutomationErrorMessage(error: unknown, t: TFunction, { harness }: { harness?: string } = {}): string | null {
+export function cloudAutomationErrorMessage(error: unknown, t: TFunction, { harness, saving = false }: { harness?: string; saving?: boolean } = {}): string | null {
 	if (!error) return null;
 	if (error instanceof CloudCpError && error.code === "agent_provider_required" && harness) {
 		return t("automations.cloud.error.agentLoginRequired", { agent: agentLabel(harness) });
 	}
+	if (saving && error instanceof CloudCpError && error.code === "SANDBOX_QUOTA_EXCEEDED") return t("automations.cloud.error.save.SANDBOX_QUOTA_EXCEEDED");
 	if (error instanceof CloudCpError && error.code && (ERROR_CODES as readonly string[]).includes(error.code)) {
 		return t(`automations.cloud.error.${error.code as (typeof ERROR_CODES)[number]}`);
 	}
-	if (error instanceof CloudCpError && error.code && PLAN_LIMIT_CODES.has(error.code)) return t("automations.cloud.error.PLAN_LIMIT");
+	if (error instanceof CloudCpError && error.code && PLAN_LIMIT_CODES.has(error.code)) {
+		return t(saving ? "automations.cloud.error.save.PLAN_LIMIT" : "automations.cloud.error.PLAN_LIMIT");
+	}
 	return error instanceof Error ? error.message : String(error);
 }
 
