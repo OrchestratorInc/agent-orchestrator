@@ -121,7 +121,7 @@ describe("a background task's output", () => {
 	}
 	const reply = (availability: string, output: string) => ({ data: { sessionId: "s", taskId: "dev", availability, output } });
 
-	it("stops polling a live task's output on a host without the output route", async () => {
+	it("rechecks a live task's output once a minute on a host without the output route", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		getMock.mockResolvedValue({ error: { message: "not found" }, response: { status: 404 } });
 		function Live() {
@@ -133,6 +133,8 @@ describe("a background task's output", () => {
 		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
 		await vi.advanceTimersByTimeAsync(5_000);
 		expect(getMock).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(55_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
 		view.unmount();
 		client.clear();
 		vi.useRealTimers();

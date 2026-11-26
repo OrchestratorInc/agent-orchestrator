@@ -151,7 +151,7 @@ export function useBackgroundTaskOutput(
 			}
 			return data as BackgroundTaskOutput;
 		},
-		refetchInterval: (query) => live && query.state.error !== missingTaskRoute ? 1_000 : false,
+		refetchInterval: (query) => !live ? false : query.state.error === missingTaskRoute ? 60_000 : 1_000,
 		gcTime: Infinity,
 		retry: false,
 	});
