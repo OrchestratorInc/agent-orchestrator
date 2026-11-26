@@ -4920,7 +4920,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	border-radius: 6px;
 	border: 1px solid color-mix(in srgb, var(--red) 28%, transparent);
 	background: color-mix(in srgb, var(--red) 8%, transparent);
-	padding: 9px 11px;
+	padding: 8px 10px;
 	font-size: 11.5px;
 	line-height: 1.45;
 	color: var(--red);
@@ -4931,7 +4931,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	border-radius: 6px;
 	border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
 	background: color-mix(in srgb, var(--green) 8%, transparent);
-	padding: 9px 11px;
+	padding: 8px 10px;
 	font-size: 11.5px;
 	line-height: 1.45;
 	color: var(--green);
@@ -6325,7 +6325,7 @@ html[data-shell-linux] body > .files-popout-overlay {
 	right: 10px;
 	bottom: 10px;
 	margin: 0;
-	padding: 9px 11px;
+	padding: 8px 10px;
 	border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
 	border-radius: 7px;
 	background: color-mix(in srgb, var(--red) 8%, var(--bg));
