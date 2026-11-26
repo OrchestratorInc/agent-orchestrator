@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { LATTICE_SIDE, LATTICE_TRAIL, LATTICE_COMET, LATTICE_EDGE_OPACITY, LATTICE_LAP_MS, createLatticeClock, latticeCellOrigin, latticeCometPath, latticeTrailOpacity } from "./latticeTrail";
+import { LATTICE_SIDE, LATTICE_TRAIL, LATTICE_COMET, LATTICE_EDGE_OPACITY, latticeCellOrigin, latticeCometPath, latticeTrailOpacity } from "./latticeTrail";
 
 // The lattice mirrors the desktop's working mark, so what is worth pinning is the
 // shape of the trail and the beat each dot plays, not the animation plumbing.
@@ -70,40 +70,28 @@ describe("the trail's comet", () => {
 		expect(latticeTrailOpacity(4.5 / steps)).toBeCloseTo(LATTICE_EDGE_OPACITY, 1);
 	});
 
-	it("places each comet dot on the edge dot it has reached at every step, clockwise", () => {
+	it("holds each comet dot on the edge dot it has reached for the whole step, clockwise, and wraps onto the lap", () => {
 		const dot = 3;
 		const gap = 1;
-		const head = latticeCometPath(0, dot, gap);
-		const tail = latticeCometPath(2, dot, gap);
-		expect(head.inputRange).toEqual(LATTICE_TRAIL.map((_, step) => step));
-		const at = (path: typeof head, step: number) => ({ left: path.left[step], top: path.top[step] });
-		for (let step = 0; step < LATTICE_TRAIL.length; step++) {
-			expect(at(head, step)).toEqual(latticeCellOrigin(LATTICE_TRAIL[step]!, dot, gap));
-			expect(at(tail, step)).toEqual(latticeCellOrigin(LATTICE_TRAIL[(step + LATTICE_TRAIL.length - 2) % LATTICE_TRAIL.length]!, dot, gap));
+		const steps = LATTICE_TRAIL.length;
+		// What Animated's interpolate (clamped, linear between points) reads at `value`.
+		const read = (path: ReturnType<typeof latticeCometPath>, value: number) => {
+			const { inputRange: input } = path;
+			let i = 0;
+			while (i < input.length - 2 && value > input[i + 1]!) i++;
+			const t = Math.min(1, Math.max(0, (value - input[i]!) / (input[i + 1]! - input[i]!)));
+			return { left: path.left[i]! + (path.left[i + 1]! - path.left[i]!) * t, top: path.top[i]! + (path.top[i + 1]! - path.top[i]!) * t };
+		};
+		for (const behind of [0, 2]) {
+			const path = latticeCometPath(behind, dot, gap);
+			for (let i = 1; i < path.inputRange.length; i++) expect(path.inputRange[i]!).toBeGreaterThan(path.inputRange[i - 1]!);
+			expect(path.inputRange[0]).toBe(0);
+			expect(path.inputRange.at(-1)).toBe(steps);
+			for (let step = 0; step < steps; step++) {
+				const cell = latticeCellOrigin(LATTICE_TRAIL[(step - behind + steps) % steps]!, dot, gap);
+				for (const into of [0, 0.5, 0.99]) expect(read(path, step + into)).toEqual(cell);
+			}
+			expect(read(path, steps)).toEqual(read(path, 0));
 		}
-	});
-});
-
-describe("the lattice clock", () => {
-	afterEach(() => vi.useRealTimers());
-
-	it("steps round the edge a twelfth of a lap at a time, only while held", () => {
-		vi.useFakeTimers();
-		const steps: number[] = [];
-		const hold = createLatticeClock((step) => steps.push(step));
-		vi.advanceTimersByTime(LATTICE_LAP_MS);
-		expect(steps).toEqual([]);
-		const first = hold();
-		const second = hold();
-		vi.advanceTimersByTime(LATTICE_LAP_MS + LATTICE_LAP_MS / 12);
-		// One clock however many lattices hold it, wrapping onto the lap.
-		expect(steps).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 1]);
-		first();
-		first();
-		vi.advanceTimersByTime(LATTICE_LAP_MS / 12);
-		expect(steps).toHaveLength(14);
-		second();
-		vi.advanceTimersByTime(LATTICE_LAP_MS);
-		expect(steps).toHaveLength(14);
 	});
 });

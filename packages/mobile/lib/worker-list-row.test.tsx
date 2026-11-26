@@ -16,7 +16,7 @@ const boardStore = vi.hoisted(() => ({
 const archivePages = vi.hoisted(() => ({
 	requests: [] as { hostId?: string; cursor?: string | null; resolve(page: { sessions: unknown[]; nextCursor: string | null }): void; reject(cause: unknown): void }[],
 }));
-vi.mock("./chat/LatticeLoader", () => ({ LatticeLoader: () => null }));
+vi.mock("./chat/LatticeCometLoader", () => ({ LatticeCometLoader: () => null }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));

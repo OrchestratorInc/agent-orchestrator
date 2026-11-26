@@ -56,7 +56,7 @@ describe("worker row working indicator", () => {
 	// starting row does not breathe, and was left with that loader standing still.
 	it("shows the desktop's lattice in a working or starting row's lead", () => {
 		expect(row).toContain("const indicator = workerRowIndicator(session);");
-		expect(row).toContain('{indicator === "working" ? <LatticeLoader color={t.orange} />');
+		expect(row).toContain('{indicator === "working" ? <LatticeCometLoader color={t.orange} />');
 		expect(spinner).toContain("<ActivityIndicator");
 	});
 

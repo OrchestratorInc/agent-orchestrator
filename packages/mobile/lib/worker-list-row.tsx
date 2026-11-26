@@ -20,7 +20,7 @@ import { workerContextActions, type WorkerActionId } from "./worker-action-model
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
 import { Spinner } from "./Spinner";
-import { LatticeLoader } from "./chat/LatticeLoader";
+import { LatticeCometLoader } from "./chat/LatticeCometLoader";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { useOpenPage } from "./pageNavigation";
 import { iconSize, space, type } from "./tokens";
@@ -339,7 +339,7 @@ function WorkerRowContents({
 				    lattice while the agent works, an icon only for what asks something
 				    of the user, and a quiet ring for everything else. */}
 				<View style={styles.lead}>
-					{indicator === "working" ? <LatticeLoader color={t.orange} />
+					{indicator === "working" ? <LatticeCometLoader color={t.orange} />
 					: indicator ? <WorkerMarkerIcon marker={indicator} t={t} />
 					: <View testID="worker-status-ring" style={styles.ring} />}
 				</View>

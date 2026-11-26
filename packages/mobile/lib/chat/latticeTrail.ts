@@ -1,6 +1,7 @@
 /**
- * The timing of the live turn's lattice loader (see LatticeLoader.tsx), kept free
- * of React Native so it stays unit-testable under Node.
+ * The timing of the live turn's lattice loader (see LatticeLoader.tsx) and the
+ * Workers board's stepped comet version of it (LatticeCometLoader.tsx), kept
+ * free of React Native so it stays unit-testable under Node.
  *
  * A port of the desktop's `.chat-lattice` (frontend styles.css and
  * LatticeLoader.tsx): a 4×4 lattice whose outer twelve dots share one
@@ -88,46 +89,31 @@ export const LATTICE_EDGE_OPACITY = 0.2;
 export const LATTICE_COMET = [1, 1, 0.8] as const;
 
 /**
- * Where a comet dot `behind` dots back from the head sits at each step of the
- * lap, as an interpolation's input range (the step) and the left and top
- * offsets it maps to.
+ * How far before a step's end a comet dot jumps to the next edge dot, in
+ * steps: a sliver of a frame, so the comet steps rather than glides.
+ */
+const LATTICE_STEP_EDGE = 0.001;
+
+/**
+ * Where a comet dot `behind` dots back from the head sits through a lap, as a
+ * stepped interpolation over a value running 0 to 12 (one per edge dot): the
+ * input range holds each step's place from the step's start to just before the
+ * next, and 12 lands back on step 0's place, so a looping lap wraps cleanly.
  */
 export function latticeCometPath(behind: number, dot: number, gap: number): { inputRange: number[]; left: number[]; top: number[] } {
 	const steps = LATTICE_TRAIL.length;
 	const inputRange: number[] = [];
 	const left: number[] = [];
 	const top: number[] = [];
-	for (let step = 0; step < steps; step++) {
-		const origin = latticeCellOrigin(LATTICE_TRAIL[(step - behind + steps) % steps]!, dot, gap);
-		inputRange.push(step);
-		left.push(origin.left);
-		top.push(origin.top);
+	const place = (step: number) => latticeCellOrigin(LATTICE_TRAIL[(step - behind + steps) % steps]!, dot, gap);
+	for (let step = 0; step <= steps; step++) {
+		const origin = place(step);
+		const at = step === steps ? [step] : [step, step + 1 - LATTICE_STEP_EDGE];
+		for (const input of at) {
+			inputRange.push(input);
+			left.push(origin.left);
+			top.push(origin.top);
+		}
 	}
 	return { inputRange, left, top };
-}
-
-/**
- * One clock for every lattice on screen: it steps the comet on a twelfth of a
- * lap, and runs only while some lattice holds it. Stepping, it costs a step's
- * work ten times a second, where a per-frame animation cost a frame's work on
- * every frame for every lattice, whether or not a dot moved.
- */
-export function createLatticeClock(onStep: (step: number) => void, schedule: { setInterval: typeof setInterval; clearInterval: typeof clearInterval } = globalThis): () => () => void {
-	let holders = 0;
-	let step = 0;
-	let timer: ReturnType<typeof setInterval> | undefined;
-	return function hold() {
-		if (holders++ === 0) {
-			timer = schedule.setInterval(() => {
-				step = (step + 1) % LATTICE_TRAIL.length;
-				onStep(step);
-			}, LATTICE_LAP_MS / LATTICE_TRAIL.length);
-		}
-		let held = true;
-		return () => {
-			if (!held) return;
-			held = false;
-			if (--holders === 0) schedule.clearInterval(timer);
-		};
-	};
 }
