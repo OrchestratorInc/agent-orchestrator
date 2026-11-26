@@ -138,7 +138,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 		SessionMode:         sessionMode,
 		SessionModeForAgent: sessionModeForAgent,
 		OptionalDirectories: func(cfg acpdriver.LaunchConfig) []string {
-			return agy.SkillDirectories(cfg.DataDir, string(cfg.SessionID))
+			return agy.SkillDirectories(cfg.DataDir, string(ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID)))
 		},
 		SessionOptions:    sessionOptions,
 		SplitModelVariant: splitModelVariant,

@@ -24,7 +24,7 @@ var sharedSkillToken = regexp.MustCompile(`^\s*/([^\s/]+)(\s|$)`)
 
 // withSharedSkills adds the user's skills the agent did not list itself.
 func withSharedSkills(skills []ports.ChatSkill, shared []skillbridge.Skill) []ports.ChatSkill {
-	own := skillNames(skills)
+	own := skillNameSet(skills)
 	for _, skill := range shared {
 		if own[strings.ToLower(skill.Name)] || !invocable(skill.Name) {
 			continue
@@ -36,7 +36,7 @@ func withSharedSkills(skills []ports.ChatSkill, shared []skillbridge.Skill) []po
 	return skills
 }
 
-func skillNames(skills []ports.ChatSkill) map[string]bool {
+func skillNameSet(skills []ports.ChatSkill) map[string]bool {
 	names := make(map[string]bool, len(skills))
 	for _, skill := range skills {
 		names[strings.ToLower(strings.TrimPrefix(skill.Name, skillCommandPrefix))] = true
@@ -51,9 +51,11 @@ func invocable(name string) bool {
 
 // withSharedSkillInstructions hands the agent the instructions of the skills a
 // message starts with and the agent does not have: `/name` invokes a skill only
-// there. Only a message the user wrote counts. A relayed review comment that
-// says /deploy must not run the user's skill, nor must an issue quoted inside an
-// opening prompt.
+// there. Only a message from the user's side counts: what they typed, and a
+// session's opening prompt, which includes one an orchestrator writes for a
+// worker it spawns. A relayed review comment that says /deploy must not run the
+// user's skill, nor must an issue quoted inside an opening prompt. A skill
+// named twice is added once.
 func (c *Controller) withSharedSkillInstructions(ctx context.Context, msg ports.ChatUserMessage) ports.ChatUserMessage {
 	return withSharedSkillInstructions(ctx, c.dataDir, c.sessionID, c.conv, msg)
 }
@@ -83,14 +85,20 @@ func withSharedSkillInstructions(
 	rest := msg.Text
 	var names, sections []string
 	var own map[string]bool
+	added := map[string]bool{}
 	for len(names) < maxSharedSkills {
 		token := sharedSkillToken.FindStringSubmatchIndex(rest)
 		if token == nil {
 			break
 		}
-		skill, ok := shared[strings.ToLower(rest[token[2]:token[3]])]
+		key := strings.ToLower(rest[token[2]:token[3]])
+		skill, ok := shared[key]
 		if !ok {
 			break
+		}
+		if added[key] {
+			rest = rest[token[3]:]
+			continue
 		}
 		if own == nil {
 			own = ownSkillNames(ctx, conv)
@@ -102,6 +110,7 @@ func withSharedSkillInstructions(
 		if !ok {
 			break
 		}
+		added[key] = true
 		names = append(names, fmt.Sprintf("%q", skill.Name))
 		sections = append(sections, section)
 		rest = rest[token[3]:]
@@ -139,7 +148,7 @@ func ownSkillNames(ctx context.Context, conv ports.ChatConversation) map[string]
 	if err != nil {
 		return map[string]bool{}
 	}
-	return skillNames(skills)
+	return skillNameSet(skills)
 }
 
 func sharedSkillSection(skill skillbridge.Skill) (string, bool) {

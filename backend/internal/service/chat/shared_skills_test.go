@@ -71,6 +71,7 @@ func TestSharedSkillInstructionsGoWithTheMessage(t *testing.T) {
 	}{
 		{"named first", ports.ChatUserMessage{Text: "/deploy to staging"}, true},
 		{"ignoring case", ports.ChatUserMessage{Text: "  /DEPLOY to staging"}, true},
+		{"named twice", ports.ChatUserMessage{Text: "/deploy /deploy to staging"}, true},
 		{"in a sentence", ports.ChatUserMessage{Text: "please /deploy to staging"}, false},
 		{"a path", ports.ChatUserMessage{Text: "/deploy/staging.yml is wrong"}, false},
 		{"a longer name", ports.ChatUserMessage{Text: "/deploy-all now"}, false},
@@ -103,6 +104,9 @@ func TestSharedSkillInstructionsGoWithTheMessage(t *testing.T) {
 			if !strings.HasPrefix(sent, "Use the \"deploy\" skill.\n\nto staging\n\n<user_skill name=\"deploy\"") ||
 				!strings.Contains(sent, "Ship it with ./ship.sh") || !strings.Contains(sent, filepath.ToSlash(skill.Path)) {
 				t.Fatalf("sent %q, want the skill's instructions", sent)
+			}
+			if n := strings.Count(sent, "<user_skill "); n != 1 {
+				t.Fatalf("sent %d copies of the skill, want 1: %q", n, sent)
 			}
 			// The timeline keeps what the user wrote.
 			snapshot, err := h.svc.Snapshot(context.Background(), testSession)

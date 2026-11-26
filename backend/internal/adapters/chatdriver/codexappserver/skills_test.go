@@ -126,14 +126,21 @@ func TestDriverGivesANewAppServerTheBridgedSkills(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		session domain.SessionID
+		skills  domain.SessionID
 		resume  bool
+		fork    bool
 		refused bool
 		want    bool
 	}{
 		{name: "start", session: "s-1", want: true},
 		{name: "resume", session: "s-1", resume: true, want: true},
+		{name: "fork", session: "s-1", fork: true, want: true},
 		{name: "refused by an older Codex", session: "s-1", refused: true, want: true},
 		{name: "no skills", session: "s-2"},
+		// A side conversation runs in a host of its own and takes its session's skills.
+		{name: "side start", session: "side-host", skills: "s-1", want: true},
+		{name: "side resume", session: "side-host", skills: "s-1", resume: true, want: true},
+		{name: "side fork", session: "side-host", skills: "s-1", fork: true, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			driver, srv := newTestDriver(t)
@@ -144,14 +151,17 @@ func TestDriverGivesANewAppServerTheBridgedSkills(t *testing.T) {
 			}
 			var conv ports.ChatConversation
 			var err error
-			if tc.resume {
+			start := ports.ChatStartConfig{SessionID: tc.session, SkillSessionID: tc.skills, DataDir: data, WorkspacePath: workspace}
+			switch {
+			case tc.resume:
 				conv, err = driver.Resume(context.Background(), ports.ChatResumeConfig{
-					SessionID: tc.session, DataDir: data, WorkspacePath: workspace, ProviderConversationID: "thread-1",
+					SessionID: tc.session, SkillSessionID: tc.skills, DataDir: data, WorkspacePath: workspace, ProviderConversationID: "thread-1",
 				})
-			} else {
-				conv, err = driver.Start(context.Background(), ports.ChatStartConfig{
-					SessionID: tc.session, DataDir: data, WorkspacePath: workspace,
-				})
+			case tc.fork:
+				srv.reply("thread/fork", `{"thread":{"id":"fork-thread"},"model":"test-model"}`)
+				conv, err = driver.ForkIntoHost(context.Background(), "thread-1", "turn-1", start)
+			default:
+				conv, err = driver.Start(context.Background(), start)
 			}
 			if err != nil {
 				t.Fatalf("the session did not start: %v", err)

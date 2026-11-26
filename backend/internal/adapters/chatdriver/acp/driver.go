@@ -53,6 +53,9 @@ type LaunchConfig struct {
 	// a binding can migrate provider-side history into a fresh process home.
 	// Empty on first start.
 	ProviderConversationID string
+	// SkillSessionID is the session whose shared skills the agent gets; a side
+	// conversation's host uses its session's.
+	SkillSessionID domain.SessionID
 }
 
 // Config binds one harness to an ACP agent implementation.
@@ -508,6 +511,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		DisableTools:    cfg.DisableTools,
 		ReadOnly:        cfg.ReadOnly,
 		ProviderScopeID: cfg.ProviderScopeID,
+		SkillSessionID:  ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	if err := d.checkReadOnly(launchCfg); err != nil {
 		return nil, err
@@ -680,6 +684,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// The connect below spawns a fresh process, so a resumed conversation's
 		// provider-side history has to be reachable from the new process home.
 		ProviderConversationID: cfg.ProviderConversationID,
+		SkillSessionID:         ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	if err := d.checkReadOnly(launchCfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)

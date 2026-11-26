@@ -39,6 +39,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Env: cfg.Env, Model: cfg.Model, Permissions: cfg.Permissions,
 		SystemPrompt: cfg.SystemPrompt, ProviderScopeID: cfg.ProviderScopeID,
+		SkillSessionID: ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {

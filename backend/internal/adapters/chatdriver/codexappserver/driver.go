@@ -416,7 +416,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("persistent chat host already owns a provider conversation for a fresh session")
 	}
 
-	d.addSkillRoots(ctx, conv, cfg.DataDir, cfg.SessionID)
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork
@@ -523,7 +523,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		return conv, nil
 	}
 
-	d.addSkillRoots(ctx, conv, cfg.DataDir, cfg.SessionID)
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.launchMode = cfg.Permissions
@@ -967,6 +967,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 		_ = conv.Close()
 		return nil, errors.New("side provider host already owns a conversation")
 	}
+	d.addSkillRoots(ctx, conv, cfg.DataDir, ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID))
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork

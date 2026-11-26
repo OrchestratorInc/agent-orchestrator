@@ -13,6 +13,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -238,9 +239,18 @@ func TestACPAdditionalDirectoriesLifecycle(t *testing.T) {
 // An optional directory is added where the agent supports it, and never fails
 // a session where it does not.
 func TestOptionalDirectoriesFollowAgentSupport(t *testing.T) {
-	for _, mode := range []string{"new", "load", "resume", "fork-resume"} {
+	// A side conversation runs in a host of its own and takes its session's skills.
+	for _, mode := range []string{"new", "load", "resume", "fork-resume", "side-new", "side-resume", "side-fork"} {
 		for _, supported := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/supported=%v", mode, supported), func(t *testing.T) {
+				mode, side := strings.CutPrefix(mode, "side-")
+				host, skillSession := domain.SessionID("s-1"), domain.SessionID("")
+				if side {
+					host, skillSession = "side-host", "s-1"
+					if mode == "fork" {
+						mode = "fork-resume"
+					}
+				}
 				root, skills := t.TempDir(), t.TempDir()
 				caps := acpsdk.AgentCapabilities{LoadSession: mode == "load",
 					SessionCapabilities: acpsdk.SessionCapabilities{
@@ -253,13 +263,13 @@ func TestOptionalDirectoriesFollowAgentSupport(t *testing.T) {
 				agent := &fakeAgent{forkID: "child", capabilities: &caps}
 				driver := forkTestDriver(agent)
 				driver.cfg.OptionalDirectories = func(launch LaunchConfig) []string {
-					if launch.SessionID != "s-1" || launch.DataDir == "" {
-						t.Errorf("launch = %+v, want the session and data folder", launch)
+					if launch.SessionID != host || launch.SkillSessionID != "s-1" || launch.DataDir == "" {
+						t.Errorf("launch = %+v, want host %s with session s-1's skills and the data folder", launch, host)
 					}
 					return []string{skills}
 				}
 				data := t.TempDir()
-				cfg := ports.ChatStartConfig{SessionID: "s-1", DataDir: data, WorkspacePath: root}
+				cfg := ports.ChatStartConfig{SessionID: host, SkillSessionID: skillSession, DataDir: data, WorkspacePath: root}
 				var conv ports.ChatConversation
 				var err error
 				switch mode {
@@ -269,7 +279,7 @@ func TestOptionalDirectoriesFollowAgentSupport(t *testing.T) {
 					conv, err = driver.ForkIntoHost(t.Context(), "owned:parent", "", cfg)
 				default:
 					conv, err = driver.Resume(t.Context(), ports.ChatResumeConfig{
-						SessionID: "s-1", DataDir: data, WorkspacePath: root, ProviderConversationID: "owned:provider",
+						SessionID: host, SkillSessionID: skillSession, DataDir: data, WorkspacePath: root, ProviderConversationID: "owned:provider",
 					})
 				}
 				if err != nil {
