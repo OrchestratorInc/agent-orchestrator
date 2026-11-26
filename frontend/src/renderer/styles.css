@@ -7827,6 +7827,13 @@ html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"]):
 	content: none;
 }
 
+/* The composer sits tighter: 8px around its text and controls (12px
+ * before), so the send button's corners stay close to concentric with the
+ * composer's. */
+html[data-new-desktop-ui] .cursor-chat-composer {
+	padding: 8px;
+}
+
 /* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
  * no layout space and follows the corners). Light keeps its own ring and
  * shadow. */
