@@ -61,6 +61,8 @@ export function useEffortSliderOpen(choices: readonly EffortChoice[], busy: bool
 	closeRef.current = onClose;
 	const wasShown = useRef(false);
 	const close = useCallback(() => store.setOpen(false), [store]);
+	// Unmounting while shown is a close too: the owner's commit must hear it.
+	useEffect(() => () => { if (wasShown.current) closeRef.current?.(); }, []);
 	useEffect(() => {
 		if (wasShown.current && !shown) closeRef.current?.();
 		wasShown.current = shown;
@@ -85,11 +87,14 @@ export type EffortSliderProps = {
  * The slider's level: the thumb's stop follows the finger at once while the
  * owner's choice catches up, and each new stop ticks and is chosen.
  */
-export function useEffortSlider(choices: readonly EffortChoice[], onChoose: (value: string) => void, tick: () => void) {
+export function useEffortSlider(choices: readonly EffortChoice[], onChoose: (value: string) => void, tick: () => void, visible = true) {
 	const chosen = choices.findIndex((choice) => choice.selected);
 	const [index, setIndex] = useState(chosen);
 	const indexRef = useRef(chosen);
-	useEffect(() => { indexRef.current = chosen; setIndex(chosen); }, [chosen]);
+	// Back on the chosen level whenever it changes, and each time the slider
+	// is put away: it is kept mounted between opens, and a pick whose save
+	// failed never moves `chosen`, so the next open would show that level.
+	useEffect(() => { indexRef.current = chosen; setIndex(chosen); }, [chosen, visible]);
 	const pick = (next: number) => {
 		if (next < 0 || next >= choices.length || next === indexRef.current) return;
 		indexRef.current = next;
