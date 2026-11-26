@@ -175,9 +175,12 @@ export function HeaderPillButton({
 			disabled={disabled}
 			onPress={onPress}
 			testID={testID}
-			style={({ pressed }) => [styles.surface, styles.round, pressed && feedback.pressed, disabled && styles.disabled]}
+			style={({ pressed }) => [styles.surface, styles.round, pressed && feedback.pressed]}
 		>
-			{children ?? (icon ? <AppSymbol name={icon} size={iconSize.xl} color={t.textPrimary} /> : null)}
+			{/* Disabled dims the glyph alone: faded as a whole, the pill's surface
+			    let the rows scrolling under it show through, the very thing the
+			    pill is there to stop. */}
+			{children ?? (icon ? <AppSymbol name={icon} size={iconSize.xl} color={disabled ? t.textTertiary : t.textPrimary} /> : null)}
 		</Pressable>
 	);
 }
@@ -195,7 +198,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 		justifyContent: "center",
 	},
 	round: { width: HEADER_PILL_SIZE },
-	disabled: { opacity: 0.4 },
 	// Hugs what it holds, from the bar's leading edge, rather than stretching
 	// over the slot the bar gives it and centring its content in the middle; the
 	// margin keeps it off the action pill when a long title fills the slot.

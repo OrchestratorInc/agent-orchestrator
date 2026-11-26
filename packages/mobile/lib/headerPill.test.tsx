@@ -17,7 +17,7 @@ vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./cupertinoChevron", () => ({ CupertinoChevron: "CupertinoChevron" }));
 vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: {} }) }));
 vi.mock("./ThemeProvider", () => {
-	const theme = { bgSurface: "#surface", borderDefault: "#border", textPrimary: "#text" };
+	const theme = { bgSurface: "#surface", borderDefault: "#border", textPrimary: "#text", textTertiary: "#tertiary" };
 	return { useTheme: () => theme, useThemedStyles: (make: (t: typeof theme) => object) => make(theme) };
 });
 
@@ -120,10 +120,14 @@ describe("PillHeaderRight", () => {
 });
 
 describe("HeaderPillButton", () => {
-	it("dims and holds its press while disabled, and says so", () => {
+	it("dims only its glyph and holds its press while disabled, and says so", () => {
 		act(() => { renderer = create(<HeaderPillButton icon="checkmark" label="Save" disabled onPress={() => {}} />); });
 		const button = renderer!.root.findByType("Pressable" as never);
 		expect(button.props.disabled).toBe(true);
 		expect(button.props.accessibilityState).toEqual({ disabled: true });
+		// The surface stays solid, so rows scrolling under the bar don't show through.
+		const style = (button.props.style as (state: { pressed: boolean }) => unknown[])({ pressed: false }).flat();
+		expect(style.some((entry) => entry && typeof entry === "object" && "opacity" in entry)).toBe(false);
+		expect(renderer!.root.findByType("AppSymbol" as never).props.color).toBe("#tertiary");
 	});
 });
