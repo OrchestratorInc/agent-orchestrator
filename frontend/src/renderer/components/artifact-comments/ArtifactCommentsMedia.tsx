@@ -66,8 +66,10 @@ export function artifactCommentTimelinePoints(groups: readonly ArtifactCommentGr
  * the frame. On the frame a drag draws a box (pausing there) and a click
  * plays or pauses.
  */
-export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onShown, picked, selected, selectedKeys, source, src, threads, title }: {
+export function ArtifactCommentsMedia({ focused = null, kind, onPick, onSelect, onSelection, onShown, picked, selected, selectedKeys, source, src, threads, title }: {
 	kind: "image" | "video";
+	/** A video: the anchor key of the thread open in the popover; the frame outlines only its box. */
+	focused?: string | null;
 	src: string;
 	title: string;
 	threads: readonly ArtifactCommentThread[];
@@ -210,7 +212,11 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	// An image shows every group's pin or box; a video only the selected
 	// moment's boxes, on its frame (its badges are on the seek bar).
 	const highlighted = new Set(selectedKeys && selectedKeys.length > 0 ? selectedKeys : selected !== null ? [selected] : []);
-	const visible = groups.filter((group) => group.anchor.region && (kind === "image" || highlighted.has(group.path)));
+	// A video with a thread open in the popover outlines only that thread's box (resolved ones too; none for the whole frame).
+	const focusedAnchor = kind === "video" && focused !== null ? threads.find((thread) => artifactCommentAnchorKey(thread.anchor) === focused)?.anchor ?? null : null;
+	const visible = kind === "video" && focused !== null
+		? (focusedAnchor?.region ? [{ path: focused, anchor: focusedAnchor } as ArtifactCommentGroup] : [])
+		: groups.filter((group) => group.anchor.region && (kind === "image" || highlighted.has(group.path)));
 	const pickedHere = picked && artifactCommentAnchorKind(picked) === kind ? picked : null;
 	const draftRegion = drag ? artifactCommentRegionFromDrag(drag.from, drag.to) : pickedHere?.region;
 	const togglePlay = () => {

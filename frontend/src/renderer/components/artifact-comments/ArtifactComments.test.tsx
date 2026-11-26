@@ -273,7 +273,7 @@ describe("ArtifactCommentsWorkspace", () => {
 			comments: [{ ...base.comments[0], author: { id: null, name: "" } }, { ...base.comments[1], author: { id: "u-9", name: "" } }],
 		})] })));
 		const popover = await openElement(port);
-		await userEvent.click(await within(popover).findByRole("button", { name: /1 resolved on this element · Show/ }));
+		await userEvent.click(await within(popover).findByRole("button", { name: "Resolved (1)" }));
 		expect(within(popover).getByText("Resolved by Former user")).toBeInTheDocument();
 		expect(within(popover).getByText("Former user")).toBeInTheDocument();
 		expect(within(popover).getByText("Orchestrator user")).toBeInTheDocument();
@@ -315,11 +315,13 @@ describe("ArtifactCommentsWorkspace", () => {
 		expect(within(list).getByText(/staging only/)).toBeInTheDocument();
 		expect(within(list).getByText("Title is too long for the sidebar.")).toBeInTheDocument();
 		// Read-only: no reply, resolve, send or ⋯ menu.
-		for (const name of ["Reply", "Resolve", "Reopen", "Send to agent", "Comment actions"]) {
+		for (const name of ["Resolve", "Reopen", "Send to agent", "Comment actions"]) {
 			expect(within(list).queryByRole("button", { name })).not.toBeInTheDocument();
 		}
+		expect(within(list).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+		expect(within(list).queryByTestId("artifact-comments-add")).not.toBeInTheDocument();
 		expect(within(list).queryByText("Fixed the wording.")).not.toBeInTheDocument();
-		await userEvent.click(within(list).getByRole("button", { name: /Resolved \(1\) · Show/ }));
+		await userEvent.click(within(list).getByRole("button", { name: "Resolved (1)" }));
 		expect(within(list).getByText("Fixed the wording.")).toBeInTheDocument();
 
 		// ✕ leaves comment mode: there is nothing else to do on this page.
@@ -328,27 +330,29 @@ describe("ArtifactCommentsWorkspace", () => {
 		port.close();
 	});
 
-	it("opens the reply box from Reply, and closes it on Esc while empty or once the reply posts", async () => {
+	it("keeps a quiet reply box under the open thread: Enter posts and clears it, Esc while empty closes the popover", async () => {
 		const client = fakeClient();
 		client.replyArtifactShareThread.mockResolvedValue({ id: "c9", threadId: "t1", clientId: "k9", author: aditi, body: "Done", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false });
 		const { port } = await ready(client);
 		const popover = await openElement(port);
 		await within(popover).findByText("Yes, will add.");
-		expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
-
-		await userEvent.click(within(popover).getByRole("button", { name: "Reply" }));
-		expect(within(popover).getByRole("textbox", { name: "Reply…" })).toHaveFocus();
+		const box = within(popover).getByRole("textbox", { name: "Reply…" });
+		// Not focused on its own, and no send arrow until there's text.
+		expect(box).not.toHaveFocus();
+		expect(within(popover).queryByRole("button", { name: "Send reply" })).not.toBeInTheDocument();
 		expect(within(popover).queryByRole("button", { name: "Reply" })).not.toBeInTheDocument();
-		await userEvent.keyboard("{Escape}");
-		expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
-		// Esc closed the box only: the popover stays.
-		expect(screen.getByRole("complementary", { name: "Comments" })).toBeInTheDocument();
 
-		await userEvent.click(within(popover).getByRole("button", { name: "Reply" }));
-		await userEvent.type(within(popover).getByRole("textbox", { name: "Reply…" }), "Done{Enter}");
-		await waitFor(() => expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument());
-		expect(client.replyArtifactShareThread).toHaveBeenCalledWith("cf-staging-x7", "t1", { body: "Done", clientId: expect.any(String) });
-		expect(within(popover).getByRole("button", { name: "Reply" })).toBeInTheDocument();
+		await userEvent.type(box, "Done");
+		expect(within(popover).getByRole("button", { name: "Send reply" })).toBeInTheDocument();
+		// Esc with text keeps the popover.
+		await userEvent.keyboard("{Escape}");
+		expect(screen.getByRole("complementary", { name: "Comments" })).toBeInTheDocument();
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(client.replyArtifactShareThread).toHaveBeenCalledWith("cf-staging-x7", "t1", { body: "Done", clientId: expect.any(String) }));
+		await waitFor(() => expect(within(popover).getByRole("textbox", { name: "Reply…" })).toHaveValue(""));
+
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument());
 		port.close();
 	});
 
@@ -357,8 +361,7 @@ describe("ArtifactCommentsWorkspace", () => {
 		client.replyArtifactShareThread.mockRejectedValue(new Error("offline"));
 		const { port } = await ready(client);
 		const popover = await openElement(port);
-		await userEvent.click(await within(popover).findByRole("button", { name: "Reply" }));
-		const box = within(popover).getByRole("textbox", { name: "Reply…" });
+		const box = await within(popover).findByRole("textbox", { name: "Reply…" });
 		await userEvent.type(box, "On it{Enter}");
 		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
 		expect(box).toHaveValue("On it");
@@ -373,8 +376,7 @@ describe("ArtifactCommentsPanel: a retry after an edit", () => {
 		client.replyArtifactShareThread.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ id: "c9", threadId: "t1", clientId: "k9", author: aditi, body: "On it, today", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false });
 		const { port } = await ready(client);
 		const popover = await openElement(port);
-		await userEvent.click(await within(popover).findByRole("button", { name: "Reply" }));
-		const box = within(popover).getByRole("textbox", { name: "Reply…" });
+		const box = await within(popover).findByRole("textbox", { name: "Reply…" });
 		await userEvent.type(box, "On it{Enter}");
 		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
 		await userEvent.type(box, ", today");
@@ -467,7 +469,7 @@ describe("ArtifactCommentsPanel: one element's comments", () => {
 		const popover = await openElement(port);
 		const threadIds = () => [...popover.querySelectorAll("[data-thread-id]")].map((node) => [node.getAttribute("data-thread-id"), node.hasAttribute("data-thread-folded")]);
 		await waitFor(() => expect(threadIds()).toEqual([["t2", false], ["t1", true]]));
-		expect(within(popover).getAllByRole("button", { name: "Reply" })).toHaveLength(1);
+		expect(within(popover).getAllByRole("textbox", { name: "Reply…" })).toHaveLength(1);
 		const folded = within(popover).getByRole("button", { expanded: false, name: /staging only/ });
 		expect(within(folded).getByText("1 reply")).toBeInTheDocument();
 		await userEvent.click(folded);
@@ -495,16 +497,43 @@ describe("ArtifactCommentsPanel: one element's comments", () => {
 		port.close();
 	});
 
-	it("keeps resolved threads behind Show, with who resolved them and Reopen, never Send to agent", async () => {
-		const { port } = await ready(fakeClient(snapshot({ threads: [thread({ status: "resolved", resolvedBy: aditi, resolvedAt: "2026-11-23T10:00:00Z" })] })));
+	it("keeps resolved threads behind Resolved (N), with who resolved them and Reopen, never Send to agent or a reply box", async () => {
+		const client = fakeClient(snapshot({ threads: [thread({ status: "resolved", resolvedBy: aditi, resolvedAt: "2026-11-23T10:00:00Z" })] }));
+		const { port } = await ready(client);
 		const popover = await openElement(port);
-		expect(await within(popover).findByRole("button", { name: /1 resolved on this element · Show/ })).toBeInTheDocument();
+		const toggle = await within(popover).findByRole("button", { name: "Resolved (1)" });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
 		expect(within(popover).queryByText("Resolved by Aditi")).not.toBeInTheDocument();
-		await userEvent.click(within(popover).getByRole("button", { name: /1 resolved on this element · Show/ }));
+		await userEvent.click(toggle);
 		expect(within(popover).getByText("Resolved by Aditi")).toBeInTheDocument();
-		expect(within(popover).getByRole("button", { name: "Reopen" })).toBeInTheDocument();
 		expect(within(popover).queryByRole("button", { name: /Send to agent|Send again/ })).not.toBeInTheDocument();
-		expect(within(popover).queryByRole("button", { name: "Reply" })).not.toBeInTheDocument();
+		expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+		await userEvent.click(within(popover).getByRole("button", { name: "Reopen" }));
+		await waitFor(() => expect(client.setArtifactShareThreadStatus).toHaveBeenCalledWith("cf-staging-x7", "t1", "open"));
+		port.close();
+	});
+
+	it("shows the other threads as grey rows to open, and Resolve as an icon on the open one", async () => {
+		const client = fakeClient(snapshot({ threads: twoThreads() }));
+		const { port } = await ready(client);
+		const popover = await openElement(port);
+		const row = await within(popover).findByRole("button", { expanded: false, name: /staging only/ });
+		expect(row).toHaveAttribute("data-thread-folded", "true");
+		expect(row.className).toMatch(/bg-interactive-hover/);
+		await userEvent.click(within(popover).getByRole("button", { name: "Resolve" }));
+		await waitFor(() => expect(client.setArtifactShareThreadStatus).toHaveBeenCalledWith("cf-staging-x7", "t2", "resolved"));
+		port.close();
+	});
+
+	it("starts a new comment on the same element from the footer's Add a comment…", async () => {
+		const client = fakeClient();
+		const { port } = await ready(client);
+		const popover = await openElement(port);
+		await userEvent.click(await within(popover).findByTestId("artifact-comments-add"));
+		await userEvent.type(within(popover).getByRole("textbox", { name: "Add a comment…" }), "One more");
+		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
+		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
+		expect(client.createArtifactShareThread.mock.calls[0]![1]).toMatchObject({ anchor: thread().anchor, body: "One more" });
 		port.close();
 	});
 

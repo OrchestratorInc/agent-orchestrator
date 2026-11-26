@@ -181,7 +181,7 @@ describe("comments on an image", () => {
 		await renderWorkspace(client, "image");
 		await userEvent.click(screen.getByRole("button", { name: "Region near bottom-right: 1 open" }));
 		const popover = await screen.findByRole("complementary", { name: "Comments" });
-		await userEvent.click(within(popover).getByRole("button", { name: "Add comment" }));
+		await userEvent.click(within(popover).getByTestId("artifact-comments-add"));
 		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add a comment…" }), "And too dark");
 		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
 		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
@@ -302,7 +302,7 @@ describe("comments on a video", () => {
 		expect(client.createArtifactShareThread.mock.calls[0]![1].anchor).toMatchObject({ kind: "video", time: 125.25, region: { x: 0.5, y: 0.5, w: 0.4, h: 0.3 } });
 	});
 
-	it("adds another comment on the same moment and box from its popover", async () => {
+	it("adds a comment on the whole frame at the same moment from its popover's footer", async () => {
 		stubSizes();
 		stubVideo(250);
 		const anchor = videoCommentAnchor(83.5, { x: 0.05, y: 0.05, w: 0.2, h: 0.2 });
@@ -311,11 +311,11 @@ describe("comments on a video", () => {
 		act(() => { document.querySelector("video")!.dispatchEvent(new Event("loadedmetadata")); });
 		await userEvent.click(badges()[0]!);
 		const popover = await screen.findByRole("complementary", { name: "Comments" });
-		await userEvent.click(within(popover).getByRole("button", { name: "Add comment" }));
+		await userEvent.click(within(popover).getByTestId("artifact-comments-add"));
 		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add a comment…" }), "Also the colour");
 		await userEvent.click(within(popover).getByRole("button", { name: "Comment" }));
 		await waitFor(() => expect(client.createArtifactShareThread).toHaveBeenCalled());
-		expect(client.createArtifactShareThread.mock.calls[0]![1].anchor).toEqual(anchor);
+		expect(client.createArtifactShareThread.mock.calls[0]![1].anchor).toEqual(videoCommentAnchor(83.5));
 	});
 });
 

@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, ArrowUp, Check, MoreHorizontal, Plus, RotateCcw, Send, X } from "@/components/app-icons";
+import { ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, MoreHorizontal, Plus, RotateCcw, Send, X } from "@/components/app-icons";
 import { formatTimeTerse } from "../../lib/format-time";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { RetryButton } from "../WorkspaceDiffView";
 import {
 	ARTIFACT_COMMENT_MAX_BODY_LENGTH,
+	artifactCommentAnchorKey,
 	artifactCommentAnchorKind,
 	formatArtifactCommentTime,
 	type ArtifactComment,
@@ -144,11 +146,11 @@ function NewCommentBox({ draft, onCancel, onChange, onSubmit }: {
 }
 
 /**
- * The chat-style reply box, opened by Reply: Enter sends, Shift+Enter adds a
- * line, and the accent arrow sends. It closes once the reply is posted, or on
- * Esc while empty; a failed post keeps it open with the text and Retry.
+ * The thread's reply box, always under it: a quiet outlined field. Enter sends,
+ * Shift+Enter adds a line, and the send arrow shows once there is text. A
+ * failed post keeps the text with Retry.
  */
-function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body: string, clientId: string) => Promise<unknown> }) {
+function ReplyBox({ onSubmit }: { onSubmit: (body: string, clientId: string) => Promise<unknown> }) {
 	const { t } = useTranslation();
 	const [text, setText] = useState("");
 	const [failed, setFailed] = useState(false);
@@ -163,7 +165,6 @@ function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body:
 		try {
 			await onSubmit(body, clientId.current);
 			clientId.current = crypto.randomUUID();
-			onClose();
 		} catch {
 			setText(body);
 			setFailed(true);
@@ -175,18 +176,13 @@ function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body:
 		if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
 			event.preventDefault();
 			void submit();
-		} else if (event.key === "Escape" && !text.trim()) {
-			// Closes the box, not the popover.
-			event.preventDefault();
-			onClose();
 		}
 	};
 	return (
 		<div className="flex flex-col gap-1">
-			<div className="flex items-end gap-1 rounded-md border border-border bg-background py-1 pr-1 pl-2.5 focus-within:border-logo-accent">
+			<div className="flex min-h-7 items-end gap-1 rounded-md border border-border bg-background py-0.5 pr-0.5 pl-2.5 focus-within:border-border-strong" data-testid="artifact-comments-reply">
 				<textarea
 					aria-label={t("artifactComments.replyPlaceholder")}
-					autoFocus
 					className="board-scrollbar max-h-32 min-h-6 w-full resize-none border-0 bg-transparent py-0.5 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 					maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
 					onChange={(event) => {
@@ -199,9 +195,11 @@ function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body:
 					rows={1}
 					value={text}
 				/>
-				<Button aria-label={t("artifactComments.sendReply")} disabled={!text.trim() || sending} onClick={() => void submit()} size="icon-xs" type="button" variant="primary">
-					<ArrowUp aria-hidden="true" className="size-3.5" />
-				</Button>
+				{text.trim() ? (
+					<Button aria-label={t("artifactComments.sendReply")} disabled={sending} onClick={() => void submit()} size="icon-xs" type="button" variant="primary">
+						<ArrowUp aria-hidden="true" className="size-3.5" />
+					</Button>
+				) : null}
 			</div>
 			{failed ? (
 				<p className="flex items-center gap-1 text-caption text-destructive" role="alert">
@@ -210,6 +208,18 @@ function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body:
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/** A small icon action on a thread's first row (Resolve, Send to agent, Reopen), named by its tooltip. */
+function ThreadAction({ children, label, onClick }: { children: ReactNode; label: string; onClick: () => void }) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button aria-label={label} className="-my-1" onClick={onClick} size="icon-xs" type="button" variant="quiet">{children}</Button>
+			</TooltipTrigger>
+			<TooltipContent side="top">{label}</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -306,8 +316,9 @@ function CommentItem({ aside, comment, comments, readOnly = false, reply, viewer
 }
 
 /**
- * A folded thread in an element's popover: avatar, name, time, its first comment
- * cut to one line, and its reply count. Click to open it.
+ * A folded thread: a faint grey row, so it reads as something to open, with
+ * its first comment cut to one line, its reply count and a chevron. Click to
+ * open it in place.
  */
 function ThreadLine({ onExpand, thread, viewer }: { onExpand: () => void; thread: ArtifactCommentThread; viewer: Viewer }) {
 	const { t } = useTranslation();
@@ -319,22 +330,20 @@ function ThreadLine({ onExpand, thread, viewer }: { onExpand: () => void; thread
 	return (
 		<button
 			aria-expanded={false}
-			className="-mx-1 flex min-w-0 flex-col gap-0.5 rounded-md px-1 py-1.5 text-left text-xs outline-none hover:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+			className="group flex min-h-8 w-full min-w-0 items-center gap-1.5 rounded-md bg-interactive-hover px-2 py-1 text-left text-xs text-muted-foreground outline-none hover:bg-interactive-active hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
 			data-thread-id={thread.id}
 			data-thread-folded="true"
 			onClick={onExpand}
 			type="button"
 		>
-			<span className="flex min-w-0 items-center gap-1.5">
-				<Avatar author={first.author} name={name} />
-				<span className="max-w-[40%] shrink-0 truncate font-semibold text-foreground">{name}</span>
-				<span className="shrink-0 text-muted-foreground tabular-nums">· {formatTimeTerse(first.createdAt)}</span>
-				<span className={cn("min-w-0 flex-1 truncate text-sm", first.deleted ? "italic text-muted-foreground" : "text-foreground")}>
-					{first.deleted ? t("artifactComments.deleted") : first.body}
-				</span>
+			<span className="opacity-70 group-hover:opacity-100"><Avatar author={first.author} name={name} /></span>
+			<span className="sr-only">{name}: </span>
+			<span className={cn("min-w-0 flex-1 truncate text-sm", first.deleted && "italic")}>
+				{first.deleted ? t("artifactComments.deleted") : first.body}
 			</span>
 			{/* Nothing when there are no replies yet. */}
-			{replies > 0 && <span className="pl-6 text-caption text-muted-foreground">{t("artifactComments.replies", { count: replies })}</span>}
+			{replies > 0 && <span className="shrink-0 text-caption tabular-nums">{t("artifactComments.replies", { count: replies })}</span>}
+			<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 opacity-60 group-hover:opacity-100" />
 		</button>
 	);
 }
@@ -352,11 +361,11 @@ function ThreadView({ comments, readOnly = false, sendTarget, thread, viewer, ve
 	const authorLabel = useArtifactCommentAuthorLabel();
 	const [sendOpen, setSendOpen] = useState(false);
 	const [statusError, setStatusError] = useState(false);
-	const [replying, setReplying] = useState(false);
 	const pending = isPendingId(thread.id);
 	const resolved = thread.status === "resolved";
+	const actions = !pending && !readOnly;
 	// Send to agent: the app's owner only, and only when the session that made the file is here.
-	const canSend = viewer.isOwner && Boolean(sendTarget) && !pending && !resolved && !readOnly;
+	const canSend = viewer.isOwner && Boolean(sendTarget) && actions && !resolved;
 	const setStatus = (status: "open" | "resolved") => {
 		setStatusError(false);
 		comments.setStatus(thread.id, status).catch(() => setStatusError(true));
@@ -364,47 +373,39 @@ function ThreadView({ comments, readOnly = false, sendTarget, thread, viewer, ve
 	const sentTime = thread.sentToAgentAt
 		? new Intl.DateTimeFormat(i18n.resolvedLanguage ?? "en", { hour: "2-digit", minute: "2-digit" }).format(new Date(thread.sentToAgentAt))
 		: null;
-	// On the first comment's row: who resolved it, or when it went to the agent.
-	const aside = resolved ? (
-		<span className="min-w-0 shrink-[3] truncate rounded-sm border border-border px-1.5 text-caption text-muted-foreground">
-			{t("artifactComments.resolvedBy", { name: authorLabel(thread.resolvedBy) })}
-		</span>
-	) : sentTime ? (
-		<span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground" data-testid="artifact-comments-sent">
-			<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
-			<span className="truncate">{t("artifactComments.sentAt", { time: sentTime })}</span>
-		</span>
-	) : null;
+	// On the first comment's row: who resolved it or when it went to the agent,
+	// then the thread's actions as icons, before the comment's ⋯ menu.
+	const aside = (
+		<>
+			{resolved ? (
+				<span className="min-w-0 shrink-[3] truncate rounded-sm border border-border px-1.5 text-caption text-muted-foreground">
+					{t("artifactComments.resolvedBy", { name: authorLabel(thread.resolvedBy) })}
+				</span>
+			) : sentTime ? (
+				<span className="flex min-w-0 shrink items-center gap-1 text-caption text-muted-foreground" data-testid="artifact-comments-sent">
+					<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+					<span className="truncate">{t("artifactComments.sentAt", { time: sentTime })}</span>
+				</span>
+			) : null}
+			{actions && resolved ? (
+				<ThreadAction label={t("artifactComments.reopen")} onClick={() => setStatus("open")}><RotateCcw aria-hidden="true" className="size-3.5" /></ThreadAction>
+			) : null}
+			{actions && !resolved ? (
+				<ThreadAction label={t("artifactComments.resolve")} onClick={() => setStatus("resolved")}><Check aria-hidden="true" className="size-3.5" /></ThreadAction>
+			) : null}
+			{canSend ? (
+				<ThreadAction label={thread.sentToAgentAt ? t("artifactComments.sendAgain") : t("artifactComments.sendToAgent")} onClick={() => setSendOpen(true)}>
+					<Send aria-hidden="true" className="size-3.5" />
+				</ThreadAction>
+			) : null}
+		</>
+	);
 	return (
-		<div className="flex flex-col gap-2 py-2.5 first:pt-0 last:pb-0" data-thread-id={thread.id}>
+		<div className="flex flex-col gap-2" data-thread-id={thread.id}>
 			{visibleComments(thread).map((comment, index) => (
 				<CommentItem aside={index === 0 ? aside : undefined} comment={comment} comments={comments} key={comment.id} readOnly={readOnly} reply={index > 0} viewer={viewer} />
 			))}
-			{replying && !resolved && !pending && !readOnly ? (
-				<ReplyBox onClose={() => setReplying(false)} onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)} />
-			) : null}
-			{!pending && !readOnly ? (
-				<div className="flex items-center gap-1">
-					{!resolved && !replying ? (
-						<Button onClick={() => setReplying(true)} size="xs" type="button" variant="secondary">{t("artifactComments.reply")}</Button>
-					) : null}
-					{resolved ? (
-						<Button onClick={() => setStatus("open")} size="xs" type="button" variant="secondary">
-							<RotateCcw aria-hidden="true" className="size-3" />{t("artifactComments.reopen")}
-						</Button>
-					) : (
-						<Button onClick={() => setStatus("resolved")} size="xs" type="button" variant="secondary">
-							<Check aria-hidden="true" className="size-3" />{t("artifactComments.resolve")}
-						</Button>
-					)}
-					{canSend && sendTarget ? (
-						<Button onClick={() => setSendOpen(true)} size="xs" type="button" variant="quiet">
-							<Send aria-hidden="true" className="size-3.5" />
-							{thread.sentToAgentAt ? t("artifactComments.sendAgain") : t("artifactComments.sendToAgent")}
-						</Button>
-					) : null}
-				</div>
-			) : null}
+			{actions && !resolved ? <ReplyBox onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)} /> : null}
 			{statusError ? <p className="text-caption text-destructive" role="alert">{t("artifactComments.actionFailed")}</p> : null}
 			{canSend && sendTarget ? (
 				<SendThreadToAgentDialog markSent={comments.markSent} onOpenChange={setSendOpen} open={sendOpen} target={sendTarget} thread={thread} version={version} />
@@ -459,17 +460,19 @@ export type ArtifactCommentsPanelProps = {
 	/** The height the popover would take with nothing capping it, as it changes. */
 	onNaturalHeight?: (height: number) => void;
 	/**
-	 * Offered on a group's threads: a new comment on the same point, region or
-	 * moment (images and videos, where the place can't be clicked again).
+	 * The footer's "Add a comment…": a new comment on the same element, lines,
+	 * point, region or frame.
 	 */
 	onAddComment?: () => void;
+	/** The open thread's anchor key as it changes (null for none), so the page can outline just its place. */
+	onOpenThread?: (key: string | null) => void;
 };
 
 /**
- * One element's popover, beside it. From its count: its open threads, newest
- * first with one open at a time, and its resolved threads behind "N resolved
- * on this element · Show". From a click on the element: a box for a new
- * comment on it, and nothing else.
+ * One element's popover, beside it, the same for every kind of file. From its
+ * count: its threads, one open at a time and the others as grey rows to click,
+ * resolved ones behind "Resolved (N)", and "Add a comment…" at the foot. From
+ * a click on the element: a box for a new comment on it, and nothing else.
  */
 export function ArtifactCommentsPanel({
 	className,
@@ -479,6 +482,7 @@ export function ArtifactCommentsPanel({
 	onAddComment,
 	onClose,
 	onNaturalHeight,
+	onOpenThread,
 	onPosted,
 	sendTarget,
 	style,
@@ -500,14 +504,25 @@ export function ArtifactCommentsPanel({
 	const where = whereKind === "image" ? null
 		: whereKind === "video" ? t("artifactComments.frameAt", { time: formatArtifactCommentTime(whereAnchor?.time ?? 0) })
 		: artifactCommentAnchorText(t, whereAnchor);
-	// One thread open: the newest, until another is clicked; back to the newest
-	// for another element or once a new thread is posted here.
+	// One thread open, open or resolved: the first open one until another is
+	// clicked; back to it for another element or once a new thread is posted here.
 	const [openThreadId, setOpenThreadId] = useState<string | null>(null);
 	const [showResolved, setShowResolved] = useState(false);
 	useEffect(() => {
 		setOpenThreadId(null);
 		setShowResolved(false);
 	}, [element.path]);
+	const chosen = anchor ? null
+		: (openThreadId !== null ? [...threads, ...resolvedThreads].find((thread) => thread.id === openThreadId) : undefined)
+			// Only resolved threads here: the first opens once they're shown.
+			?? threads[0] ?? (showResolved ? resolvedThreads[0] : undefined) ?? null;
+	const chosenKey = chosen ? artifactCommentAnchorKey(chosen.anchor) : null;
+	const onOpenThreadRef = useRef(onOpenThread);
+	onOpenThreadRef.current = onOpenThread;
+	useEffect(() => {
+		onOpenThreadRef.current?.(chosenKey);
+	}, [chosenKey]);
+	useEffect(() => () => onOpenThreadRef.current?.(null), []);
 	// The new comment's text, by element, so a failed post or a refresh never loses it.
 	const [drafts, setDrafts] = useState<Record<string, NewCommentDraft>>({});
 	const draft = drafts[element.path] ?? { text: "", failed: false, sending: false, clientId: "" };
@@ -549,7 +564,8 @@ export function ArtifactCommentsPanel({
 			aria-label={t("artifactComments.title")}
 			className={cn("flex w-[340px] flex-col", className)}
 			onKeyDown={(event) => {
-				if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLTextAreaElement)) {
+				// A box with text keeps Esc; an empty one (the reply box at rest) lets it close the popover.
+				if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLTextAreaElement && event.target.value.trim())) {
 					// Handled here: full screen's own Esc leaves it alone.
 					event.preventDefault();
 					onClose();
@@ -577,34 +593,27 @@ export function ArtifactCommentsPanel({
 						</div>
 					) : null}
 					{!anchor && threads.length > 0 ? (
-						<div className="flex flex-col divide-y divide-border">
-							{threads.map((thread, index) => {
-								const chosen = openThreadId !== null && threads.some((other) => other.id === openThreadId);
-								return (chosen ? thread.id === openThreadId : index === 0) ? threadView(thread) : (
-									<div className="flex flex-col py-1 first:pt-0 last:pb-0" key={thread.id}>
-										<ThreadLine onExpand={() => setOpenThreadId(thread.id)} thread={thread} viewer={viewer} />
-									</div>
-								);
-							})}
+						<div className="flex flex-col gap-1.5">
+							{threads.map((thread) => thread.id === chosen?.id
+								? <div className="py-1" key={thread.id}>{threadView(thread)}</div>
+								: <ThreadLine key={thread.id} onExpand={() => setOpenThreadId(thread.id)} thread={thread} viewer={viewer} />)}
 						</div>
 					) : null}
 					{!anchor && resolvedThreads.length > 0 ? (
-						<div className={cn("flex flex-col gap-2", threads.length > 0 && "border-t border-border pt-2.5")}>
+						<div className="flex flex-col gap-1.5">
 							<button
 								aria-expanded={showResolved}
-								className="text-left text-caption text-logo-accent-text hover:underline"
+								className="-mx-1 flex items-center justify-between rounded-md px-1 py-0.5 text-left text-caption text-muted-foreground outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
 								onClick={() => setShowResolved((current) => !current)}
 								type="button"
 							>
-								{t("artifactComments.resolvedOnElement", { n: resolvedThreads.length })} · {showResolved ? t("artifactComments.hide") : t("artifactComments.show")}
+								{t("artifactComments.resolvedSection", { n: resolvedThreads.length })}
+								{showResolved ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
 							</button>
-							{showResolved ? <div className="flex flex-col divide-y divide-border">{resolvedThreads.map(threadView)}</div> : null}
+							{showResolved ? resolvedThreads.map((thread) => thread.id === chosen?.id
+								? <div className="py-1" key={thread.id}>{threadView(thread)}</div>
+								: <ThreadLine key={thread.id} onExpand={() => setOpenThreadId(thread.id)} thread={thread} viewer={viewer} />) : null}
 						</div>
-					) : null}
-					{!anchor && onAddComment && (threads.length > 0 || resolvedThreads.length > 0) ? (
-						<Button className="self-start" onClick={onAddComment} size="xs" type="button" variant="secondary">
-							<Plus aria-hidden="true" className="size-3" />{t("artifactComments.addComment")}
-						</Button>
 					) : null}
 					{snapshot && anchor ? (
 						<NewCommentBox
@@ -616,6 +625,18 @@ export function ArtifactCommentsPanel({
 					) : null}
 				</div>
 			</div>
+			{!anchor && onAddComment ? (
+				<div className="shrink-0 border-t border-border p-2.5">
+					<button
+						className="flex min-h-7 w-full items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-left text-sm text-muted-foreground outline-none hover:border-border-strong hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+						data-testid="artifact-comments-add"
+						onClick={onAddComment}
+						type="button"
+					>
+						<Plus aria-hidden="true" className="size-3.5 shrink-0" />{t("artifactComments.newPlaceholder")}
+					</button>
+				</div>
+			) : null}
 		</aside>
 	);
 }
@@ -645,7 +666,7 @@ export function ArtifactCommentsReadOnlyList({ className, comments, groups, onCl
 	const section = (group: (typeof open)[number]) => (
 		<section className="flex flex-col gap-1.5" data-testid="artifact-comments-readonly-group" key={group.path}>
 			<p className="truncate border-l-2 border-border pl-2 text-caption text-muted-foreground">{group.anchor.excerpt}</p>
-			<div className="flex flex-col divide-y divide-border">
+			<div className="flex flex-col gap-3">
 				{group.threads.map((thread) => (
 					<ThreadView comments={comments} key={thread.id} readOnly thread={thread} version={version} viewer={viewer} />
 				))}
@@ -685,11 +706,12 @@ export function ArtifactCommentsReadOnlyList({ className, comments, groups, onCl
 						<div className={cn("flex flex-col gap-3", open.length > 0 && "border-t border-border pt-2.5")}>
 							<button
 								aria-expanded={showResolved}
-								className="text-left text-caption text-logo-accent-text hover:underline"
+								className="-mx-1 flex items-center justify-between rounded-md px-1 py-0.5 text-left text-caption text-muted-foreground outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
 								onClick={() => setShowResolved((current) => !current)}
 								type="button"
 							>
-								{t("artifactComments.resolvedSection", { n: resolvedCount })} · {showResolved ? t("artifactComments.hide") : t("artifactComments.show")}
+								{t("artifactComments.resolvedSection", { n: resolvedCount })}
+								{showResolved ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
 							</button>
 							{showResolved ? groups.resolved.map(section) : null}
 						</div>

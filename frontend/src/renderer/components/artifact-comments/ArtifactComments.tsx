@@ -17,6 +17,7 @@ import {
 	type ArtifactCommentAnchor,
 	type ArtifactCommentGroup,
 	type ArtifactCommentsPickKind,
+	videoCommentAnchor,
 } from "../../../shared/artifact-comments";
 import type { ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { useArtifactComments } from "./useArtifactComments";
@@ -116,6 +117,8 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 	// Where the selected element is in the frame, from the bridge: the popover sits beside it.
 	const [selection, setSelection] = useState<({ path: string } & CommentsSelectionRect) | null>(null);
 	const closePopover = useCallback(() => setElement(null), []);
+	// The thread open in the popover, by anchor key: a video outlines only its box on the frame.
+	const [openThreadKey, setOpenThreadKey] = useState<string | null>(null);
 	// From a new comment to the element's threads, once it is posted.
 	const showThreads = useCallback(() => setElement((current) => current && { path: current.path, anchor: null }), []);
 	const elementRef = useRef(element);
@@ -221,6 +224,7 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 							onPick={(anchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor })}
 							onSelect={(key, keys) => setElement({ path: key, anchor: null, keys })}
 							onSelection={(rect) => setSelection(rect && selectedPath !== null ? { path: selectedPath, ...rect } : null)}
+							focused={element && !element.anchor ? openThreadKey : null}
 							onShown={mediaShown}
 							picked={element?.anchor ?? null}
 							selected={selectedPath}
@@ -248,10 +252,13 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 						comments={comments}
 						element={element}
 						groups={popoverGroups}
-						onAddComment={media ? () => {
-							const group = groups.open.find((item) => item.path === element.path) ?? groups.resolved.find((item) => item.path === element.path);
-							if (group) writeOn(group.anchor);
-						} : undefined}
+						onAddComment={() => {
+							const group = [...groups.open, ...groups.unanchored, ...groups.resolved].find((item) => item.path === element.path);
+							if (!group) return;
+							// A video's footer is about the frame: a new comment on the whole frame; drag a box for a place on it.
+							writeOn(media === "video" ? videoCommentAnchor(group.anchor.time ?? 0) : group.anchor);
+						}}
+						onOpenThread={setOpenThreadKey}
 						onClose={closePopover}
 						onNaturalHeight={setPopoverHeight}
 						onPosted={showThreads}
