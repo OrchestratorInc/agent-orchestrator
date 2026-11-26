@@ -49,7 +49,7 @@ var plans = []Plan{
 	plan("kilocode", ActionLogin, "Log in to Kilo Code", []string{"kilo", "auth", "login"}, "Native browser flow", "https://kilo.ai/docs/code-with-ai/platforms/cli"),
 	plan("vibe", ActionSetup, "Set up Vibe", []string{"vibe", "--setup"}, "Native provider setup; Orchestrator forwards terminal input without persisting or logging the raw input, while Vibe controls credential storage", "https://github.com/mistralai/mistral-vibe"),
 	plan("muse", ActionLogin, "Log in to Muse", []string{"muse", "login"}, "Native login flow", "https://ai.meta.com/llama/"),
-	plan("agy", ActionLogin, "Log in to Agy", []string{"agy"}, "Native first-run browser sign-in", "https://github.com/google-antigravity/antigravity-cli"),
+	loginMenuPlan("agy", "agy-login", nil, "Log in to Agy", []string{"agy"}, "Choose Google account or Google Cloud Application Default Credentials", "https://github.com/google-antigravity/antigravity-cli"),
 	plan("autohand", ActionLogin, "Log in to Autohand", []string{"autohand", "login"}, "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference"),
 	kimchiLoginPlan(),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),

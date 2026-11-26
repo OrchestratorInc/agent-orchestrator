@@ -67,6 +67,13 @@ var _ ports.BlockedActivitySignaler = (*Plugin)(nil)
 // reached AGY's execution loop.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
+// AugmentRuntimeEnv applies the sign-in method chosen in AO's Agy login menu
+// (Google account or Application Default Credentials) to every launch and
+// restore. Without a recorded choice the inherited environment is untouched.
+func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
+	ApplyAuthModeEnv(env, dataDir)
+}
+
 // EmitsBlockedActivity is false because current AGY hooks do not expose a
 // permission-wait event that AO can safely correlate with a session.
 func (p *Plugin) EmitsBlockedActivity() bool { return false }

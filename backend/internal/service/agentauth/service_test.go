@@ -336,6 +336,26 @@ func TestStartFallsBackToAgentResolvedBinaryOutsidePATH(t *testing.T) {
 	}
 }
 
+func TestStartOpensAgyLoginMethodMenu(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	resolver := managedExecutableResolver{agentID: "agy", path: "/managed/bin/agy"}
+	svc := NewWithAgentResolver(resolver, resolver, opener, "")
+	svc.selfExecutable = func() (string, error) { return "/Applications/AO.app/Contents/MacOS/ao", nil }
+
+	got, err := svc.Start(context.Background(), "agy")
+	if err != nil {
+		t.Fatalf("Start(agy): %v", err)
+	}
+	if want := []string{"/Applications/AO.app/Contents/MacOS/ao", "agy-login", "--executable", "/managed/bin/agy"}; !reflect.DeepEqual(opener.input.Argv, want) {
+		t.Fatalf("terminal argv = %#v, want trusted Agy login menu %#v", opener.input.Argv, want)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(agy) TerminalInput = %q, want none: the menu drives the flow", got.TerminalInput)
+	}
+}
+
 func TestStartOpensCodexLoginMethodMenu(t *testing.T) {
 	t.Parallel()
 

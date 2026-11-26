@@ -80,6 +80,7 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err := seedTrustedWorkspace(env.ConfigRoot, inv.WorkspacePath); err != nil {
 		return ports.ReviewCommandSpec{}, fmt.Errorf("agy reviewer: seed workspace trust: %w", err)
 	}
+	agentagy.ApplyAuthModeEnv(envVars, inv.DataDir)
 	if err := r.verifyCompatibility(ctx, binary, envVars); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
