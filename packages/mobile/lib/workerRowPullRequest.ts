@@ -16,6 +16,14 @@ export type WorkerRowPullRequest = {
 	lifecycle: PRLifecycle;
 	/** How many more pull requests the worker has. */
 	more: number;
+	/**
+	 * The `+N`'s own tone, from the pull requests it counts: red when any of
+	 * them closed, purple when all merged, green when one is still open, quiet
+	 * for drafts. Null with no others.
+	 */
+	moreTone: Tone | null;
+	/** What the `+N` counts, by lifecycle, in the lead order. Empty with no others. */
+	moreLifecycles: { lifecycle: PRLifecycle; count: number }[];
 	/** The board card's tones (`prLine`): open green, merged purple, closed red, a draft quiet. */
 	tone: Tone;
 	glyph: "git-pull-request" | "git-pull-request-draft" | "git-merge" | "git-pull-request-closed";
@@ -43,15 +51,35 @@ export function workerRowPullRequest(session: DashboardSession): WorkerRowPullRe
 	});
 	const lifecycle = prLifecycle(lead);
 	const more = real.length - 1;
+	const counts = new Map<PRLifecycle, number>();
+	for (const pr of real) {
+		if (pr === lead) continue;
+		const life = prLifecycle(pr);
+		counts.set(life, (counts.get(life) ?? 0) + 1);
+	}
+	const moreLifecycles = [...counts.entries()]
+		.map(([life, count]) => ({ lifecycle: life, count }))
+		.sort((a, b) => LEAD_ORDER[a.lifecycle] - LEAD_ORDER[b.lifecycle]);
 	return {
 		label: more > 0 ? `#${lead.number} +${more}` : `#${lead.number}`,
 		lead,
 		number: lead.number,
 		lifecycle,
 		more,
+		moreTone: moreToneOf(counts),
+		moreLifecycles,
 		tone: TONES[lifecycle],
 		glyph: GLYPHS[lifecycle],
 	};
+}
+
+// A closed one is the thing to notice, so it wins; merged only when every one is.
+function moreToneOf(counts: Map<PRLifecycle, number>): Tone | null {
+	if (counts.size === 0) return null;
+	if (counts.has("closed")) return TONES.closed;
+	if (counts.has("open")) return TONES.open;
+	if (counts.has("draft")) return TONES.draft;
+	return TONES.merged;
 }
 
 const INDICATOR_WORDS: Record<Exclude<WorkerRowIndicator, null | "attention">, string> = {
@@ -86,11 +114,19 @@ export function workerRowAccessibilityLabel({ title, project, indicator, display
 			? INDICATOR_WORDS[indicator]
 			: displayStatus || statusLabel;
 	const parts = [title, state];
-	if (pr) parts.push(`Pull request ${pr.number}, ${pr.lifecycle}${pr.more ? `, and ${pr.more} more` : ""}`);
+	if (pr) parts.push(`Pull request ${pr.number}, ${pr.lifecycle}${moreWords(pr)}`);
 	// One sentence for where it runs: "web on Studio", not "web. on Studio".
 	parts.push(machine ? `${project} on ${machine}` : project);
 	if (updated) parts.push(`Updated ${spokenAge(updated)}`);
 	return `${parts.join(". ")}.${unreachable ? " Last known; its machine can't be reached." : ""}`;
+}
+
+/** `, and 3 more merged`, or `, and 3 more: 2 merged, 1 closed`; the colour alone says nothing to a screen reader. */
+function moreWords(pr: WorkerRowPullRequest): string {
+	const groups = pr.moreLifecycles;
+	if (groups.length === 0) return "";
+	if (groups.length === 1) return `, and ${pr.more} more ${groups[0].lifecycle}`;
+	return `, and ${pr.more} more: ${groups.map((g) => `${g.count} ${g.lifecycle}`).join(", ")}`;
 }
 
 const UNITS: Record<string, [string, string]> = { m: ["minute", "minutes"], h: ["hour", "hours"], d: ["day", "days"], w: ["week", "weeks"] };
