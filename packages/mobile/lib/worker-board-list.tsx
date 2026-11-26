@@ -158,14 +158,16 @@ function WorkerBoard({
 	/** The list's scroll, for what floats over it (the Android FAB's fold). */
 	onScroll?: ScrollViewProps["onScroll"];
 	/**
-	 * Changes when the *set* of workers changes wholesale — a different project
-	 * filter, or a search. The list is remounted on a new value.
+	 * Changes when the *set* of workers changes wholesale: another machine or
+	 * project filter. The board starts over on a new value (at its top, in the
+	 * current order, Archive folded, no swipe or rename left open), but a row
+	 * on both boards stays as it is.
 	 *
-	 * Swapping the filter in place left the board showing two lists at once:
-	 * recycled cells of the old grouping drawn under the new data, the empty state
-	 * on top of rows that were still on screen. A remount has no old cells to
-	 * recycle, and no row-to-row layout animation to run for a change that is not
-	 * a row moving.
+	 * The whole list used to be remounted instead, so that recycled cells and
+	 * row exit animations of the old board could not draw under the new one.
+	 * Neither exists now (a plain FlatList, and rows with no layout
+	 * animations), and building every row again made choosing a machine take
+	 * seconds on an Android phone.
 	 */
 	identityKey?: string;
 	/**
@@ -264,6 +266,18 @@ function WorkerBoard({
 	);
 	const archiveStatusShown = pagedArchive.loading || pagedArchive.error !== null || pagedArchive.hasMore;
 	const [snapshot, setSnapshot] = useState<OrderSnapshot>(() => snapshotOrder(freshLive, hostedSessionKey));
+	// A new board starts over in the render that shows it, so its first frame is
+	// already in its own order, without the last board's held news.
+	const [shownIdentity, setShownIdentity] = useState(identityKey);
+	const boardMoved = shownIdentity !== identityKey;
+	if (boardMoved) {
+		setShownIdentity(identityKey);
+		setSnapshot(snapshotOrder(freshLive, hostedSessionKey));
+		setArchiveOpen(initialArchiveOpen);
+		setCollapsedSections({});
+		setRenamingWorkerId(undefined);
+		setActiveSwipeId(undefined);
+	}
 	const freshLiveRef = useRef(freshLive);
 	freshLiveRef.current = freshLive;
 	// The list's own handle when the page passes none (a project's page passes
@@ -324,6 +338,16 @@ function WorkerBoard({
 		const top = restingTop.current;
 		list.current?.scrollToOffset({ offset: top ? -top : 0, animated: false });
 	}, [latestRequest, list]);
+	// A new board opens at its top with no rail left open on a row it kept.
+	const shownBoard = useRef(identityKey);
+	useLayoutEffect(() => {
+		if (shownBoard.current === identityKey) return;
+		shownBoard.current = identityKey;
+		activeSwipeRef.current?.close();
+		activeSwipeRef.current = undefined;
+		const top = restingTop.current;
+		list.current?.scrollToOffset({ offset: top ? -top : 0, animated: false });
+	}, [identityKey, list]);
 	// Opening the board, coming back to the app, or a different set of workers
 	// is looking again, so each re-sorts. Leaving it counts too: tabs keep
 	// visited screens mounted, so unmounting alone does not say the user moved on.
@@ -338,7 +362,7 @@ function WorkerBoard({
 		});
 		return () => sub.remove();
 	}, [resort]);
-	useEffect(resort, [resort, identityKey]);
+	useEffect(resort, [resort]);
 	// Pulling to refresh is asking for the latest order too.
 	const refreshAndResort = useCallback(async () => {
 		setArchiveRefresh((value) => value + 1);
@@ -591,12 +615,9 @@ function WorkerBoard({
 
 	return (
 		<View style={styles.listWrap}>
-			{/* A filter/search scope is a wholesale replacement, not rows moving
-			    inside one board. Key this boundary and suppress both sides of that
-			    replacement so outgoing native cells cannot overlap the new list or
-			    retain invisible height. Same-board row changes still animate below.
-			    A new text size rebuilds it the same way, so every row is measured again. */}
-			<LayoutAnimationConfig key={`${identityKey}:${fontScale}`} skipEntering skipExiting>
+			{/* A new text size rebuilds the list, so every row is measured again.
+			    Nothing enters or leaves with an animation as it does. */}
+			<LayoutAnimationConfig key={fontScale} skipEntering skipExiting>
 				<FlatList
 					ref={list}
 					data={listData}

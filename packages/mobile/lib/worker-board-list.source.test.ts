@@ -10,15 +10,14 @@ const list = source("./worker-board-list.tsx");
 const board = source("../app/(tabs)/(workers)/index.tsx");
 
 describe("worker board list identity", () => {
-	// Swapping the project filter in place left the board showing two lists at
-	// once: recycled cells of the old grouping under the new data, and the empty
-	// state drawn on top of rows that were still on screen. A different set of
-	// workers is a different list, so it is mounted as one.
-	it("remounts the whole animation boundary without retaining outgoing rows", () => {
-		expect(list).toContain("<LayoutAnimationConfig key={`${identityKey}:${fontScale}`} skipEntering skipExiting>");
-		expect(list).not.toContain("<FlatList\n\t\t\t\t\tref={listRef}\n\t\t\t\t\tkey={identityKey}");
+	// Choosing a machine used to remount the whole board, building every row
+	// again, which took seconds on an Android phone. Rows on both boards stay;
+	// the board starts over through `identityKey` instead (see its tests).
+	it("keeps the list across a filter change and rebuilds it only for a new text size", () => {
+		expect(list).toContain("<LayoutAnimationConfig key={fontScale} skipEntering skipExiting>");
+		expect(list).not.toContain("key={`${identityKey}");
 		expect(board).toContain("const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;");
-		expect(board).toContain("key={boardIdentityKey}");
+		expect(board).not.toContain("key={boardIdentityKey}");
 		expect(board).toContain("identityKey={boardIdentityKey}");
 	});
 

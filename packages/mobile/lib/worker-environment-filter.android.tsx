@@ -1,4 +1,5 @@
 import { Box, FilterChip, Host, Icon, LazyRow, Text } from "@expo/ui/jetpack-compose";
+import { startTransition, useState } from "react";
 import { background, clip, semantics, Shapes, size, testID } from "@expo/ui/jetpack-compose/modifiers";
 import { freshnessAccessibilityLabel, freshnessColor, freshnessTone } from "./machineFreshness";
 import { haptics } from "./haptics";
@@ -24,10 +25,17 @@ const FRESHNESS_DOT = 7;
 export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, onSelectEnvironment }: WorkerEnvironmentFilterProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
+	// The tapped chip is checked at once, ahead of the board it asks for: the
+	// board below is rebuilt for the new machine, which on a phone took seconds,
+	// and the check waited for all of it. Kept only while the board is still
+	// where the tap found it; once it moves, the board says what is chosen.
+	const [tapped, setTapped] = useState<{ id: string; from: string }>();
+	const chosenId = tapped?.from === selectedEnvironmentId ? tapped.id : selectedEnvironmentId;
 	const select = (environmentId: string) => {
-		if (environmentId === selectedEnvironmentId) return;
+		if (environmentId === chosenId) return;
 		haptics.select();
-		onSelectEnvironment(environmentId);
+		setTapped({ id: environmentId, from: selectedEnvironmentId });
+		startTransition(() => onSelectEnvironment(environmentId));
 	};
 	return (
 		<Host matchContents={{ vertical: true }} colorScheme={scheme}>
@@ -39,7 +47,7 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 			>
 				{workerEnvironmentOptions(environments).map((environment) => {
 					const all = environment.id === ALL_WORKER_ENVIRONMENTS;
-					const selected = environment.id === selectedEnvironmentId;
+					const selected = environment.id === chosenId;
 					const tone = freshnessTone(environment.freshness);
 					return (
 						<FilterChip

@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-import Animated, { Easing, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
-import { scheduleOnRN } from "react-native-worklets";
+import Animated, { Easing, ReduceMotion, useAnimatedStyle, useDerivedValue, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
+import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 import { AppSymbol } from "./AppSymbol";
 import { haptics } from "./haptics";
 import { useTheme } from "./ThemeProvider";
 import { iconSize, space } from "./tokens";
 import { workerActionSymbol, type WorkerActionId } from "./worker-action-model";
-import { isFullSwipe, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
+import { isFullSwipe, swipeOffset, swipeReleaseTarget, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { useMenuRowWidth } from "./useMenuRowWidth";
 import { WorkerRowContextMenu } from "./worker-rename-context-menu";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
@@ -30,17 +29,28 @@ const ARM_DURATION = 120;
 const ARM_EASING = Easing.out(Easing.cubic);
 /** How much of the rail a drag uncovers before its controls start to appear. */
 const REVEAL_START = WORKER_ACTION_REVEAL_WIDTH * 0.2;
+/**
+ * How a released row settles: Gesture Handler's swipeable's spring, which the
+ * row used before it drew its own swipe. Quick, with no bounce past the rail.
+ */
+const SETTLE = { mass: 2, damping: 1000, stiffness: 700, overshootClamping: true, reduceMotion: ReduceMotion.System } as const;
+
+type SwipeEvent = "drag" | "open" | "willClose" | "closed";
 
 /**
- * A worker row's touch surface, the same on both platforms: Gesture Handler's
- * Reanimated swipeable, so the drag and its settle run on the UI thread, around
- * the row's Pressable and its native long-press menu (SwiftUI on iOS, Compose on
- * Android).
+ * A worker row's touch surface, the same on both platforms: one pan that drags
+ * the row open over its rail and runs on the UI thread, around the row's
+ * Pressable and its native long-press menu (SwiftUI on iOS, Compose on
+ * Android). Past the full-swipe point the drag arms (a haptic, and the
+ * uncovered rail turns destructive), and letting go armed archives the row
+ * through the same confirmation as the Archive button. While the rail is open,
+ * a tap on the row closes it rather than opening the worker.
  *
- * The swipeable has no full swipe of its own. A second pan, recognised with
- * its own, watches the same drag: past the full-swipe point it arms (a haptic,
- * and the uncovered rail turns destructive), and letting go armed archives the
- * row through the same confirmation as the Archive button.
+ * It was Gesture Handler's swipeable with a second pan watching for the full
+ * swipe: three gesture detectors, a dozen shared values and three animated
+ * styles under every row, resting or not. Choosing a machine on the board
+ * builds a screenful of rows, and that was most of their cost; this draws the
+ * same swipe with one detector, a few shared values and one style.
  */
 export function WorkerRowInteraction({
 	sessionId,
@@ -60,19 +70,56 @@ export function WorkerRowInteraction({
 	onSwipeClose,
 	onReady,
 }: WorkerRowInteractionProps) {
-	const swipeable = useRef<SwipeableMethods>(null);
 	const [open, setOpen] = useState(false);
-	// The rail's controls exist only while the row is off its resting position: a
-	// resting row hides them behind its foreground, and building native buttons
-	// under every mounted row was most of a row's cost.
+	// The rail exists only while the row is off its resting position: a resting
+	// row hides it behind its foreground, and building it under every mounted
+	// row was most of a row's cost.
 	const [railMounted, setRailMounted] = useState(false);
 	const menuWidth = useMenuRowWidth();
-	const rowWidth = useSharedValue(0);
+	// Where the foreground sits: 0 at rest, minus the rail when open, further
+	// while a full swipe is dragged.
+	const translation = useSharedValue(0);
 	const railOpen = useSharedValue(false);
 	const dragOrigin = useSharedValue(0);
+	const rowWidth = useSharedValue(0);
 	const armed = useSharedValue(false);
-	const close = useCallback(() => swipeable.current?.close(), []);
 	const canFullSwipe = enabled && actions.some((action) => action.id === FULL_SWIPE_ACTION);
+
+	// What the UI thread tells the row, read on the JS thread so a settle that
+	// began before a new render reports to the board's current handlers.
+	const latest = useRef({ sessionId, onSwipeOpen, onSwipeClose, close: () => {} });
+	latest.current.sessionId = sessionId;
+	latest.current.onSwipeOpen = onSwipeOpen;
+	latest.current.onSwipeClose = onSwipeClose;
+	const report = useCallback((event: SwipeEvent) => {
+		const current = latest.current;
+		if (event === "drag") {
+			setRailMounted(true);
+		} else if (event === "open") {
+			setRailMounted(true);
+			setOpen(true);
+			current.onSwipeOpen(current.sessionId, current.close);
+		} else if (event === "willClose") {
+			setOpen(false);
+		} else {
+			setRailMounted(false);
+			setOpen(false);
+			current.onSwipeClose(current.sessionId);
+		}
+	}, []);
+	const settle = useCallback((to: number, velocity: number) => {
+		"worklet";
+		const opening = to !== 0;
+		// A resting row has nothing to close.
+		if (!opening && !railOpen.value && translation.value === 0) return;
+		railOpen.value = opening;
+		scheduleOnRN(report, opening ? "open" : "willClose");
+		translation.value = withSpring(to, { ...SETTLE, velocity }, (finished) => {
+			if (finished && !opening) scheduleOnRN(report, "closed");
+		});
+	}, [railOpen, report, translation]);
+	const close = useCallback(() => scheduleOnUI(settle, 0, 0), [settle]);
+	latest.current.close = close;
 
 	useEffect(() => {
 		onReady?.(close);
@@ -87,33 +134,48 @@ export function WorkerRowInteraction({
 		close();
 		onAction(id);
 	}, [close, onAction]);
-	const fullSwipe = useCallback(() => runAction(FULL_SWIPE_ACTION), [runAction]);
+	const archive = useCallback(() => onAction(FULL_SWIPE_ACTION), [onAction]);
 	const arm = useCallback(() => haptics.armed(), []);
-	const fullSwipeWatch = useMemo(
-		() =>
-			Gesture.Pan()
-				.enabled(canFullSwipe)
+	const gesture = useMemo(() => {
+		const pan = Gesture.Pan()
+			.enabled(enabled)
+			// Only a leftward drag opens a resting row; an open one closes either way.
+			.activeOffsetX([-DRAG_DISTANCE, open ? DRAG_DISTANCE : NEVER])
+			.onStart(() => {
+				dragOrigin.value = railOpen.value ? -WORKER_ACTION_REVEAL_WIDTH : 0;
+				if (!railOpen.value) scheduleOnRN(report, "drag");
+			})
+			.onUpdate((event) => {
+				translation.value = swipeOffset(dragOrigin.value, event.translationX, canFullSwipe);
+				if (!canFullSwipe) return;
 				// A full swipe only ever runs leftward.
-				.activeOffsetX([-DRAG_DISTANCE, NEVER])
-				.onStart(() => {
-					dragOrigin.value = railOpen.value ? -WORKER_ACTION_REVEAL_WIDTH : 0;
-				})
-				.onUpdate((event) => {
-					const next = isFullSwipe(dragOrigin.value + event.translationX, rowWidth.value);
-					if (next === armed.value) return;
-					armed.value = next;
-					if (next) scheduleOnRN(arm);
-				})
-				// Only a finger lifted while armed archives. A drag the system or
-				// another handler cancels ends here too, with success false.
-				.onEnd((_event, success) => {
-					if (success && armed.value) scheduleOnRN(fullSwipe);
-				})
-				.onFinalize(() => {
-					armed.value = false;
-				}),
-		[canFullSwipe, dragOrigin, railOpen, rowWidth, armed, arm, fullSwipe],
-	);
+				const next = isFullSwipe(dragOrigin.value + event.translationX, rowWidth.value);
+				if (next === armed.value) return;
+				armed.value = next;
+				if (next) scheduleOnRN(arm);
+			})
+			// Only a finger lifted while armed archives. A drag the system or
+			// another handler cancels ends here too, with success false.
+			.onEnd((event, success) => {
+				if (success && armed.value) {
+					settle(0, event.velocityX);
+					scheduleOnRN(archive);
+					return;
+				}
+				settle(swipeReleaseTarget(railOpen.value, event.translationX, event.velocityX), event.velocityX);
+			})
+			.onFinalize(() => {
+				armed.value = false;
+			});
+		const tap = Gesture.Tap()
+			.shouldCancelWhenOutside(true)
+			.enabled(open)
+			.onStart(() => {
+				settle(0, 0);
+			});
+		return Gesture.Race(pan, tap);
+	}, [enabled, open, canFullSwipe, dragOrigin, railOpen, report, translation, rowWidth, armed, arm, archive, settle]);
+	const slide = useAnimatedStyle(() => ({ transform: [{ translateX: translation.value }] }));
 	const { ref: menuSlot, onLayout: measureMenuWidth } = menuWidth;
 	const measure = useCallback((event: LayoutChangeEvent) => {
 		rowWidth.value = event.nativeEvent.layout.width;
@@ -121,44 +183,17 @@ export function WorkerRowInteraction({
 	}, [rowWidth, measureMenuWidth]);
 
 	return (
-		<GestureDetector gesture={fullSwipeWatch}>
-			{/* Its own native view: two detectors cannot share the swipeable's. */}
-			<View ref={menuSlot} collapsable={false} onLayout={measure}>
-				<ReanimatedSwipeable
-					ref={swipeable}
-					enabled={enabled}
-					containerStyle={shellStyle}
-					childrenContainerStyle={foregroundStyle}
-					dragOffsetFromRightEdge={DRAG_DISTANCE}
-					dragOffsetFromLeftEdge={open ? DRAG_DISTANCE : NEVER}
-					rightThreshold={WORKER_ACTION_REVEAL_WIDTH / 2}
-					// The row travels past the rail only toward a full swipe.
-					overshootRight={canFullSwipe}
-					simultaneousWithExternalGesture={fullSwipeWatch}
-					onSwipeableOpenStartDrag={() => setRailMounted(true)}
-					onSwipeableWillOpen={() => {
-						railOpen.value = true;
-						setRailMounted(true);
-						setOpen(true);
-						onSwipeOpen(sessionId, close);
-					}}
-					onSwipeableWillClose={() => {
-						railOpen.value = false;
-						setOpen(false);
-					}}
-					onSwipeableClose={() => {
-						// Also fires when a short or cancelled drag settles back at rest.
-						railOpen.value = false;
-						setRailMounted(false);
-						setOpen(false);
-						onSwipeClose(sessionId);
-					}}
-					renderRightActions={(_progress, translation) => (
+		<GestureDetector gesture={gesture}>
+			<View ref={menuSlot} collapsable={false} onLayout={measure} style={shellStyle}>
+				{railMounted ? (
+					<View style={styles.railSlot}>
 						<SwipeRail translation={translation} armed={armed}>
-							{railMounted ? rightActions : null}
+							{rightActions}
 						</SwipeRail>
-					)}
-				>
+					</View>
+				) : null}
+				{/* Open, the row takes a tap itself (to close) instead of passing it on. */}
+				<Animated.View testID="worker-row-foreground" pointerEvents={open ? "box-only" : "auto"} style={[foregroundStyle, slide]}>
 					{enabled ? (
 						<WorkerRowContextMenu
 							onPress={onPress}
@@ -173,7 +208,7 @@ export function WorkerRowInteraction({
 					) : (
 						<View style={rowStyle}>{children}</View>
 					)}
-				</ReanimatedSwipeable>
+				</Animated.View>
 			</View>
 		</GestureDetector>
 	);
@@ -232,14 +267,18 @@ function SwipeRail({ translation, armed, children }: {
 					<AppSymbol name={workerActionSymbol(FULL_SWIPE_ACTION)} size={iconSize.xl} color={t.onDestructive} />
 				</Animated.View>
 			</Animated.View>
-			{/* The rail keeps its width before its controls mount: the swipeable
-			    measures it to resolve the very first drag. */}
 			<Animated.View style={[styles.rail, controls]}>{children}</Animated.View>
 		</>
 	);
 }
 
 const styles = StyleSheet.create({
+	// Behind the foreground, the rail at its trailing edge.
+	railSlot: {
+		...StyleSheet.absoluteFill,
+		flexDirection: "row-reverse",
+		overflow: "hidden",
+	},
 	fill: {
 		position: "absolute",
 		top: 0,

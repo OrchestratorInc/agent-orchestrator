@@ -32,3 +32,33 @@ export function isFullSwipe(offset: number, rowWidth: number): boolean {
 	if (rowWidth <= 0) return false;
 	return -offset >= Math.max(rowWidth * FULL_SWIPE_SHARE, MIN_FULL_SWIPE);
 }
+
+/**
+ * How far of its speed a released drag is carried on, in seconds: a flick
+ * opens a row a slow drag of the same length would not. Gesture Handler's
+ * swipeable used the same toss, and the row's own swipe keeps its feel.
+ */
+const DRAG_TOSS = 0.05;
+
+/**
+ * Where a row's foreground sits during a drag that began at `origin` (0 at
+ * rest, minus the rail when open) and has moved `translationX`. The row only
+ * opens leftward; it stops at the rail unless a full swipe can archive it.
+ */
+export function swipeOffset(origin: number, translationX: number, canOvershoot: boolean): number {
+	"worklet";
+	const offset = origin + translationX;
+	return Math.min(0, canOvershoot ? offset : Math.max(-WORKER_ACTION_REVEAL_WIDTH, offset));
+}
+
+/**
+ * Where a released row settles: the open rail or rest. A drag counts with its
+ * toss, against half the rail, from the state it began in.
+ */
+export function swipeReleaseTarget(open: boolean, translationX: number, velocityX: number): number {
+	"worklet";
+	const travel = translationX + DRAG_TOSS * velocityX;
+	const half = WORKER_ACTION_REVEAL_WIDTH / 2;
+	const stayOpen = open ? travel < half : travel < -half;
+	return stayOpen ? -WORKER_ACTION_REVEAL_WIDTH : 0;
+}
