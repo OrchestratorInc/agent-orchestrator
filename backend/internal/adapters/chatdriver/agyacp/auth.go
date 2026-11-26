@@ -63,11 +63,11 @@ func cliSignedIn(agyCLI func(context.Context) (string, error)) func(context.Cont
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, cliProbeTimeout)
 		defer cancel()
-		// agy reads its folder from --gemini-dir only, so a session's
+		// agy reads its folder from its flag only, so a session's
 		// GEMINI_HOME (an Antigravity account's folder) is checked there.
 		args := []string{"models"}
 		if home := strings.TrimSpace(env["GEMINI_HOME"]); home != "" {
-			args = []string{"--gemini-dir", home, "models"}
+			args = []string{agy.GeminiDirFlag(home), "models"}
 		}
 		cmd := aoprocess.CommandContext(probeCtx, path, args...)
 		cmd.Env = os.Environ()

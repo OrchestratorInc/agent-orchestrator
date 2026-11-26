@@ -311,7 +311,7 @@ func TestImportedTerminalRestoreUsesPrivateRootAndRefusesMissingHistory(t *testi
 	if err != nil || !ok {
 		t.Fatalf("restore = %v,%v,%v", cmd, ok, err)
 	}
-	if !slices.Equal(cmd[:3], []string{"agy", "--gemini-dir", ref.ConfigDir}) || !slices.Equal(cmd[len(cmd)-2:], []string{"--conversation", importTestID}) {
+	if !slices.Equal(cmd[:2], []string{"agy", "--gemini_dir=" + ref.ConfigDir}) || !slices.Equal(cmd[len(cmd)-2:], []string{"--conversation", importTestID}) {
 		t.Fatalf("restore argv = %v", cmd)
 	}
 	if err := os.Remove(ref.TranscriptPath); err != nil {

@@ -28,7 +28,7 @@ func (f *fakeAgy) Limits(context.Context, string) (domain.AgentAccountLimits, er
 	return domain.AgentAccountLimits{}, ports.ErrAgentAccountNoLimits
 }
 func (*fakeAgy) HomeLoginArgv(_ context.Context, home string) ([]string, error) {
-	return []string{"agy", "--gemini-dir", home}, nil
+	return []string{"agy", "--gemini_dir=" + home}, nil
 }
 func (*fakeAgy) LaunchEnv(home string) map[string]string {
 	if home == "" {
@@ -63,7 +63,7 @@ func TestAntigravityAccountsSignInInTheirFolderAndHaveNoLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	home := filepath.Join(root, "antigravity", start.OperationID)
-	if want := []string{"agy", "--gemini-dir", home}; !slices.Equal(terminals.argv, want) {
+	if want := []string{"agy", "--gemini_dir=" + home}; !slices.Equal(terminals.argv, want) {
 		t.Fatalf("sign-in argv = %v, want %v", terminals.argv, want)
 	}
 	agy.signedInAs[home] = "b@example.com"

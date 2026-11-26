@@ -92,7 +92,7 @@ func TestGetLaunchCommandNoModel(t *testing.T) {
 }
 
 // TestLaunchAndRestorePassTheSessionFolder: agy reads its folder from
-// --gemini-dir only, so a session's GEMINI_HOME (an Antigravity account's
+// its --gemini_dir= flag only, so a session's GEMINI_HOME (an Antigravity account's
 // folder) is passed as the flag on launch and on resume.
 func TestLaunchAndRestorePassTheSessionFolder(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "agy"}
@@ -102,7 +102,7 @@ func TestLaunchAndRestorePassTheSessionFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"agy", "--gemini-dir", "/accounts/a1", "--add-dir", "/tmp/ws"}; !reflect.DeepEqual(cmd, want) {
+	if want := []string{"agy", "--gemini_dir=/accounts/a1", "--add-dir", "/tmp/ws"}; !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("launch = %#v, want %#v", cmd, want)
 	}
 
@@ -116,7 +116,7 @@ func TestLaunchAndRestorePassTheSessionFolder(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore ok=%v err=%v", ok, err)
 	}
-	if want := []string{"agy", "--gemini-dir", "/accounts/a1", "--add-dir", "/tmp/ws", "--conversation", "native-id-123"}; !reflect.DeepEqual(cmd, want) {
+	if want := []string{"agy", "--gemini_dir=/accounts/a1", "--add-dir", "/tmp/ws", "--conversation", "native-id-123"}; !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore = %#v, want %#v", cmd, want)
 	}
 }

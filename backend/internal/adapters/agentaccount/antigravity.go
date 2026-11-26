@@ -23,14 +23,14 @@ import (
 // agy keeps the computer's own sign-in in the OS keyring (the Keychain,
 // Credential Manager, the Secret Service): one login per computer, whatever
 // folder agy runs with. AGY_CLI_FORCE_FILE_TOKEN_STORAGE makes it keep the
-// sign-in in a file of its --gemini-dir instead, the store agy already uses
+// sign-in in a file of its --gemini_dir instead, the store agy already uses
 // where no keyring exists, so each account folder holds a sign-in of its own.
 const (
 	agyFileTokenEnv = "AGY_CLI_FORCE_FILE_TOKEN_STORAGE" //nolint:gosec // a variable name, not a credential
 	agyTokenFile    = "antigravity-oauth-token"          //nolint:gosec // a file name, not a credential
 )
 
-// agyHomeEnv is AO's name for agy's --gemini-dir. agy itself reads only the
+// agyHomeEnv is AO's name for agy's folder flag (--gemini_dir=). agy itself reads only the
 // flag; AO's agy launches pass this variable as it.
 const agyHomeEnv = "GEMINI_HOME"
 
@@ -75,7 +75,7 @@ var agySignInNeeded = regexp.MustCompile(`(?i)authentication required|please vis
 const agyProbeTimeout = 20 * time.Second
 
 // Antigravity runs the `agy` CLI under an account folder passed as its
-// --gemini-dir. A saved account's identity is the email agy records beside
+// --gemini_dir=. A saved account's identity is the email agy records beside
 // its file sign-in; AO reads only that label and whether a token is present.
 type Antigravity struct {
 	// Binary resolves the agy executable.
@@ -119,7 +119,7 @@ func (a *Antigravity) HomeLoginArgv(ctx context.Context, home string) ([]string,
 	if err != nil || home == "" {
 		return argv, err
 	}
-	return append(argv, "--gemini-dir", home), nil
+	return append(argv, agy.GeminiDirFlag(home)), nil
 }
 
 // Logout removes home's file sign-in. agy signs out only from inside its own

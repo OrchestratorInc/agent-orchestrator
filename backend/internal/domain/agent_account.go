@@ -67,7 +67,7 @@ const (
 )
 
 // AgentAccount is one login AO can launch a provider's CLI with. Home is the
-// CLI config folder (CLAUDE_CONFIG_DIR, CODEX_HOME or agy's --gemini-dir); it is empty for the
+// CLI config folder (CLAUDE_CONFIG_DIR, CODEX_HOME or agy's --gemini_dir); it is empty for the
 // device account, whose folder is the CLI's own default. Name and KeyHint (the
 // key's last four characters) are set only on an API key account.
 type AgentAccount struct {

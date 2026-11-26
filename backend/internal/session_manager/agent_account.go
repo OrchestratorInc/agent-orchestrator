@@ -152,13 +152,13 @@ func (m *Manager) preflightAccountTarget(
 	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID, env)
 }
 
-// agyFileTokenEnv makes agy keep its sign-in in a file of its --gemini-dir: an
+// agyFileTokenEnv makes agy keep its sign-in in a file of its --gemini_dir: an
 // Antigravity account's launch sets it, so agy signs in as the account.
 const agyFileTokenEnv = "AGY_CLI_FORCE_FILE_TOKEN_STORAGE" //nolint:gosec // a variable name, not a credential
 
 // refuseImportPinnedMove refuses moving an imported agy session to a saved
 // account whose folder is not the import's own: agy resumes an import with the
-// import's folder as its --gemini-dir, whatever the account, so the session
+// import's folder as its --gemini_dir, whatever the account, so the session
 // would record an account its agent never signs in as. A move to the
 // computer's own login is allowed; that login is the one agy uses there. Once
 // the session runs another conversation than the imported one, its launches

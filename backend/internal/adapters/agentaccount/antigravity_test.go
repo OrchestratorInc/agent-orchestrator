@@ -219,7 +219,7 @@ func TestAntigravityLaunchAndSignInNameTheFolder(t *testing.T) {
 		t.Fatalf("launch env = %v, want %v", env, want)
 	}
 	argv, err := a.HomeLoginArgv(context.Background(), "/acct")
-	if err != nil || !reflect.DeepEqual(argv, []string{"/bin/agy", "--gemini-dir", "/acct"}) {
+	if err != nil || !reflect.DeepEqual(argv, []string{"/bin/agy", "--gemini_dir=/acct"}) {
 		t.Fatalf("sign-in argv = %v, %v", argv, err)
 	}
 	if _, err := a.Limits(context.Background(), "/acct"); !errors.Is(err, ports.ErrAgentAccountNoLimits) {
