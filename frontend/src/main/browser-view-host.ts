@@ -2971,6 +2971,7 @@ export function createBrowserViewHost(
       }
       const entry = activeEntry(session);
       if (preview) session.previewTabId = entry.tabId;
+      else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
       return navigateEntry(entry, url);
     });
   };
@@ -3049,6 +3050,7 @@ export function createBrowserViewHost(
           ? active
           : previewTab(session);
       if (!entry) return pushNavState(options, active);
+      session.previewTabId = undefined;
       cancelAnnotation(options, entry, "navigation");
       if (entry === active) {
         if (session.devtools) destroyDevTools(session);

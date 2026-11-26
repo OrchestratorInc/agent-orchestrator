@@ -4916,6 +4916,9 @@ describe("agent browser runtime", () => {
 			expect(views[0].webContents.getURL()).toBe("http://localhost:4001/");
 			expect(agent.getURL()).toBe(viewer);
 			expect((await tabs()).find((tab) => tab.active)?.id).toBe("a1");
+			await invoke("browser:selectTab", { viewId, tabId: "t2" });
+			await invoke("browser:navigate", { viewId, url: "http://localhost:4002/" });
+			expect(await previewOf("t2")).toBeUndefined();
 		});
 
 		it("leaves Cmd+F in an agent tab to its viewer, whose find searches the agent's page", async () => {
