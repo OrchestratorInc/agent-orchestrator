@@ -671,6 +671,7 @@ type BrowserSessionEntry = {
   sessionId: string;
   viewId: string;
   hostId?: string;
+  previewTabId?: string;
   profileId: BrowserProfileId | null;
   profilePartition: string;
   tabs: Map<string, BrowserEntry>;
@@ -859,6 +860,12 @@ function isPreviewPage(url: string, hostId?: string): boolean {
   } catch {
     return false;
   }
+}
+
+function previewTab(session: BrowserSessionEntry): BrowserEntry | undefined {
+  const tab = session.previewTabId ? session.tabs.get(session.previewTabId) : undefined;
+  if (!tab || tab.agentTab !== undefined) return undefined;
+  return isPreviewPage(tab.view.webContents.getURL(), session.hostId) ? tab : undefined;
 }
 
 function temporaryBrowserPartition(): string {
@@ -2972,6 +2979,8 @@ export function createBrowserViewHost(
     if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
       throw new Error("Unsupported browser URL");
     }
+    const owner = entries.get(entry.state.viewId);
+    if (owner && isPreviewPage(normalized.href, owner.hostId)) owner.previewTabId = entry.tabId;
     return entry.driver().navigate(normalized.href, loadOptions);
   };
 
@@ -3034,9 +3043,7 @@ export function createBrowserViewHost(
       const entry =
         active.agentTab === undefined
           ? active
-          : [...session.tabs.values()].find(
-              (tab) => tab.agentTab === undefined && isPreviewPage(tab.view.webContents.getURL(), session.hostId),
-            );
+          : previewTab(session);
       if (!entry) return pushNavState(options, active);
       cancelAnnotation(options, entry, "navigation");
       if (entry === active) {
@@ -5852,12 +5859,13 @@ function listTabs(
   session: BrowserSessionEntry,
   change?: BrowserTabsState["change"],
 ): BrowserTabsState & { untrustedExternalContent: true } {
+  const preview = previewTab(session);
   return {
     viewId: session.viewId,
     activeTabId: session.activeTabId,
     tabs: [...session.tabs.values()].map((entry) => {
       const tab = tabResult(entry, entry.tabId === session.activeTabId);
-      return isPreviewPage(tab.url, session.hostId) ? { ...tab, preview: true } : tab;
+      return entry === preview ? { ...tab, preview: true } : tab;
     }),
     untrustedExternalContent: true,
     ...(change ? { change } : {}),

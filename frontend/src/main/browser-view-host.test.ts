@@ -4898,19 +4898,20 @@ describe("agent browser runtime", () => {
 
 		it("clears the person's preview tab behind an agent tab, never the agent's page", async () => {
 			const { invoke, agent, views, viewId, tabs } = await openAgent(undefined, "remote:h_box:ao-1");
-			const load = views[0].webContents.loadURL as unknown as (url: string) => Promise<void>;
-			const preview = async () => (await tabs()).find((tab) => tab.id === "t1")?.preview;
-			await invoke("browser:navigate", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/" });
-			expect(await preview()).toBe(true);
+			const previewOf = async (id: string) => (await tabs()).find((tab) => tab.id === id)?.preview;
+			await invoke("browser:navigate", { viewId, url: "http://localhost:4000/" });
+			await invoke("browser:openTab", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/" });
+			const load = views[2].webContents.loadURL as unknown as (url: string) => Promise<void>;
+			await load("http://localhost:5173/");
+			expect([await previewOf("t1"), await previewOf("t2")]).toEqual([undefined, true]);
 			await load("https://example.com/");
-			expect(await preview()).toBeUndefined();
-			await load("https://localhost:8443/");
-			expect(await preview()).toBe(true);
-			await load("http://localhost:3000/");
+			expect(await previewOf("t2")).toBeUndefined();
+			await load("http://localhost:5173/");
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });
 			// `ao preview clear`, with the agent's page in front.
 			await invoke("browser:clear", viewId);
-			expect(views[0].webContents.getURL()).toBe("about:blank");
+			expect(views[2].webContents.getURL()).toBe("about:blank");
+			expect(views[0].webContents.getURL()).toBe("http://localhost:4000/");
 			expect(agent.getURL()).toBe(viewer);
 			expect((await tabs()).find((tab) => tab.active)?.id).toBe("a1");
 		});
