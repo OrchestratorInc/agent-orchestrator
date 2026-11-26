@@ -18,10 +18,11 @@
  * re-plans.
  */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown, ListChecks } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { Pressable } from "../ui/pressable";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
 import { syncEdgeFade as syncViewportEdgeFade } from "../../hooks/useEdgeFade";
@@ -144,9 +145,10 @@ export const TurnPlan = memo(function TurnPlan({
 						className="overflow-hidden"
 					>
 						{plan.explanation ? (
-							<p className="px-3.5 pb-1.5 text-xs leading-relaxed text-muted-foreground">
-								{plan.explanation}
-							</p>
+							// Markdown like the reply around it, so a path or link reads as its chip.
+							<div className="px-3.5 pb-1.5" style={{ "--chat-readable-font-size": "var(--text-xs)" } as CSSProperties}>
+								<ChatMarkdown text={plan.explanation} muted className="chat-md-small text-xs leading-relaxed" />
+							</div>
 						) : null}
 
 						<div
@@ -167,7 +169,7 @@ export const TurnPlan = memo(function TurnPlan({
 										<StepMark status={step.status} live={Boolean(live)} />
 										{/* The strike is always there and only its colour changes, so a step
 										    being ticked off fades its line in, even across a wrapped line. */}
-										<span
+										<div
 											className={cn(
 												"min-w-0 flex-1 text-sm leading-6 line-through transition-[color,text-decoration-color] duration-300 motion-reduce:transition-none",
 												step.status === "completed"
@@ -176,9 +178,11 @@ export const TurnPlan = memo(function TurnPlan({
 												step.status === "in_progress" && "text-foreground",
 												step.status === "pending" && "text-muted-foreground",
 											)}
+											style={{ "--chat-readable-font-size": "var(--text-sm)" } as CSSProperties}
 										>
-											{step.text}
-										</span>
+											{/* The step's colour and strike carry into its markdown. */}
+											<ChatMarkdown text={step.text} className="leading-6 text-inherit" />
+										</div>
 									</li>
 								))}
 							</ol>

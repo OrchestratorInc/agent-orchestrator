@@ -2496,6 +2496,25 @@ html[data-new-desktop-ui] .chat-tree.chat-tree-updates {
 .chat-md-stream [data-animated="true"] { animation: stream-char-in 300ms ease backwards; }
 .chat-md-stream :is(pre, [data-markdown="code"]) [data-animated="true"] { animation: none; }
 
+/* Markdown set in small text (a plan's explanation, the question dock's notes):
+   its chips shrink with it, so a link or path does not stand taller than its line. */
+.chat-md-small [data-chat-chip] {
+	height: 1.125rem;
+	gap: 0.1875rem;
+	padding-inline: 0.3125rem;
+	font-size: inherit;
+	line-height: 1.125rem;
+}
+.chat-md-small [data-chat-chip] :is(svg, img, [data-link-favicon]) {
+	width: 0.75rem;
+	height: 0.75rem;
+}
+/* As specific as the timeline's own code size, which it must win over. */
+.chat-md.chat-md-small :is(code, .font-mono),
+.cursor-chat-timeline .chat-md.chat-md-small :is(code, .font-mono) {
+	font-size: var(--font-size-caption);
+}
+
 @keyframes chat-working-shimmer {
 	from { background-position: -10% center, 0 0; }
 	to { background-position: 110% center, 0 0; }

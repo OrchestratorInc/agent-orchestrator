@@ -65,8 +65,8 @@ describe("ElicitationHistory", () => {
 			} } },
 			inputResponse: { action: "accept", content: { question_0: "fix/login", question_1: "fix/settings" } },
 		})} />);
-		expect(screen.getByText("Which worktrees should I delete?").parentElement).toHaveTextContent("fix/login");
-		expect(screen.getByText("Which worktrees should I keep?").parentElement).toHaveTextContent("fix/settings");
+		expect(screen.getByText("Which worktrees should I delete?").closest("[data-history-question]")).toHaveTextContent("fix/login");
+		expect(screen.getByText("Which worktrees should I keep?").closest("[data-history-question]")).toHaveTextContent("fix/settings");
 	});
 
 	it("pairs each Antigravity answer with the prompt from its field title", () => {
@@ -77,7 +77,7 @@ describe("ElicitationHistory", () => {
 			} } },
 			inputResponse: { action: "accept", content: { q1: "2" } },
 		})} harness="agy" />);
-		expect(screen.getByText("Which color?").parentElement).toHaveTextContent("Blue");
+		expect(screen.getByText("Which color?").closest("[data-history-question]")).toHaveTextContent("Blue");
 		expect(screen.queryByText("The agent has a question.")).not.toBeInTheDocument();
 	});
 
