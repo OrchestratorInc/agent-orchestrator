@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode, Ref } from "react";
+import { useEffect, useState, type ReactNode, type Ref } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { CloudCpClient } from "../../lib/cloud-cp";
 import { TooltipProvider } from "../ui/tooltip";
@@ -15,14 +15,37 @@ import {
 	type ArtifactCommentThread,
 } from "../../../shared/artifact-comments";
 
-const mocks = vi.hoisted(() => ({ client: {} as Record<string, unknown> }));
+const mocks = vi.hoisted(() => ({
+	client: {} as Record<string, unknown>,
+	// The media URL and when it was fetched; refresh() hands out a new one.
+	media: { url: "https://share.test/file", fetchedAt: Date.now(), refreshes: 0, listeners: new Set<() => void>() },
+}));
 vi.mock("../../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: mocks.client, ready: true, baseUrl: "https://cp.test", userId: "owner-1" }) }));
 vi.mock("../../hooks/useSendToSessionWorker", () => ({ useSendToSessionWorker: () => vi.fn() }));
 vi.mock("../../lib/navigate-to-session", () => ({ useNavigateToSession: () => vi.fn() }));
 // The published file: a plain frame, or the comment view's own media from its content URL.
 vi.mock("../SharedArtifactFrame", () => ({
-	SharedArtifactFrame: ({ frameRef, renderMedia, title }: { frameRef?: Ref<HTMLIFrameElement>; renderMedia?: (url: string, shown: () => void) => ReactNode; title: string }) =>
-		renderMedia ? <>{renderMedia("https://share.test/file", () => undefined)}</> : <iframe data-testid="published-frame" ref={frameRef} title={title} />,
+	SharedArtifactFrame: function Frame({ frameRef, renderMedia, title }: {
+		frameRef?: Ref<HTMLIFrameElement>;
+		renderMedia?: (url: string, shown: () => void, source: { fetchedAt: number; refresh: () => void }) => ReactNode;
+		title: string;
+	}) {
+		const [, rerender] = useState(0);
+		useEffect(() => {
+			const listener = () => rerender((n) => n + 1);
+			mocks.media.listeners.add(listener);
+			return () => { mocks.media.listeners.delete(listener); };
+		}, []);
+		const refresh = () => {
+			mocks.media.refreshes += 1;
+			mocks.media.url = `https://share.test/file?v=${mocks.media.refreshes}`;
+			mocks.media.fetchedAt = Date.now();
+			for (const listener of mocks.media.listeners) listener();
+		};
+		return renderMedia
+			? <>{renderMedia(mocks.media.url, () => undefined, { fetchedAt: mocks.media.fetchedAt, refresh })}</>
+			: <iframe data-testid="published-frame" ref={frameRef} title={title} />;
+	},
 }));
 
 const sam = { id: "sam-1", name: "Sam" };
@@ -91,6 +114,8 @@ function stubSizes() {
 
 function stubVideo(duration = 250) {
 	const state = { time: 0, paused: true };
+	// Its metadata is in: it can seek.
+	vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(1);
 	vi.spyOn(HTMLMediaElement.prototype, "duration", "get").mockReturnValue(duration);
 	vi.spyOn(HTMLMediaElement.prototype, "currentTime", "get").mockImplementation(() => state.time);
 	vi.spyOn(HTMLMediaElement.prototype, "currentTime", "set").mockImplementation((value: number) => { state.time = value; });
@@ -100,7 +125,10 @@ function stubVideo(duration = 250) {
 	return state;
 }
 
-beforeEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+	vi.restoreAllMocks();
+	Object.assign(mocks.media, { url: "https://share.test/file", fetchedAt: Date.now(), refreshes: 0 });
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("artifactCommentsKind", () => {
@@ -206,6 +234,45 @@ describe("comments on a video", () => {
 		await waitFor(() => expect(within(screen.getByRole("complementary", { name: "Comments" })).getByText("Intro drags")).toBeInTheDocument());
 		expect(video.time).toBe(12);
 		expect(screen.queryByTestId("artifact-comments-frame-highlight")).not.toBeInTheDocument();
+	});
+
+	it("fetches a fresh URL before seeking once its view token is near its end, then seeks to the badge's frame", async () => {
+		stubSizes();
+		const video = stubVideo(250);
+		await renderWorkspace(fakeClient([thread("t1", videoCommentAnchor(5), "Let us not highlight in yellow")]), "video");
+		const element = document.querySelector("video")!;
+		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
+		// Opened 9 minutes ago: its token (10 minutes) is nearly spent.
+		mocks.media.fetchedAt = Date.now() - 9 * 60_000;
+		await userEvent.click(badges()[0]!);
+		expect(mocks.media.refreshes).toBe(1);
+		await waitFor(() => expect(element.getAttribute("src")).toBe("https://share.test/file?v=1"));
+		// The new URL loads from 00:00, then goes to the badge's frame.
+		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
+		expect(video.time).toBe(5);
+		expect(video.paused).toBe(true);
+	});
+
+	it("comes back to the same moment when its URL is refused and fetched again", async () => {
+		stubSizes();
+		const video = stubVideo(250);
+		await renderWorkspace(fakeClient([]), "video");
+		const element = document.querySelector("video")!;
+		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
+		video.time = 42;
+		act(() => { element.dispatchEvent(new Event("timeupdate")); });
+		act(() => { element.dispatchEvent(new Event("error")); });
+		expect(mocks.media.refreshes).toBe(1);
+		await waitFor(() => expect(element.getAttribute("src")).toBe("https://share.test/file?v=1"));
+		video.time = 0;
+		act(() => { element.dispatchEvent(new Event("loadedmetadata")); });
+		expect(video.time).toBe(42);
+		// Only once per URL: a second error on the same URL fetches nothing more.
+		act(() => {
+			element.dispatchEvent(new Event("error"));
+			element.dispatchEvent(new Event("error"));
+		});
+		expect(mocks.media.refreshes).toBe(2);
 	});
 
 	it("a click on the frame plays and pauses; a drag draws a box and comments on it at that time", async () => {

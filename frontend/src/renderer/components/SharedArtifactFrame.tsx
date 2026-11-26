@@ -20,6 +20,18 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * a document, which a video stored without its type turns into a refused
  * download.
  */
+/**
+ * Where a media file's URL came from: its view token works for a while
+ * (shareViewTokenTTL, 10 minutes), and a video asks for more bytes on every
+ * seek, so it needs a fresh URL once the token is near its end.
+ */
+export type SharedMediaSource = {
+	/** When the URL was fetched (ms since the epoch). */
+	fetchedAt: number;
+	/** Fetches a fresh URL (a new contentUrl follows). */
+	refresh: () => void;
+};
+
 export function SharedArtifactFrame({ frameRef, linkId, onShown, renderMedia, title }: {
 	/** The page's frame, for the comments bridge; a video has none. */
 	frameRef?: Ref<HTMLIFrameElement>;
@@ -31,7 +43,7 @@ export function SharedArtifactFrame({ frameRef, linkId, onShown, renderMedia, ti
 	 * URL (with its own overlay) instead of the frame or plain video. Call
 	 * `shown` once there is something to see.
 	 */
-	renderMedia?: (contentUrl: string, shown: () => void) => ReactNode;
+	renderMedia?: (contentUrl: string, shown: () => void, source: SharedMediaSource) => ReactNode;
 	title: string;
 }) {
 	const { t } = useTranslation();
@@ -56,7 +68,12 @@ export function SharedArtifactFrame({ frameRef, linkId, onShown, renderMedia, ti
 	if (view.error instanceof CloudCpError && view.error.status === 404) return <PanelMessage>{t("artifacts.sharedUnavailable")}</PanelMessage>;
 	if (view.isError) return <PanelMessage action={<RetryButton onClick={() => { void view.refetch(); }} />}>{t("artifacts.accessError")}</PanelMessage>;
 	if (!view.data) return <PanelMessage>{t("files.loading")}</PanelMessage>;
-	if (renderMedia) return renderMedia(view.data.contentUrl, () => onShownRef.current?.());
+	if (renderMedia) {
+		return renderMedia(view.data.contentUrl, () => onShownRef.current?.(), {
+			fetchedAt: view.dataUpdatedAt,
+			refresh: () => { void view.refetch(); },
+		});
+	}
 	if (isSharedVideo(view.data.contentType, view.data.name)) {
 		return (
 			<div className="flex h-full w-full items-center justify-center bg-background">

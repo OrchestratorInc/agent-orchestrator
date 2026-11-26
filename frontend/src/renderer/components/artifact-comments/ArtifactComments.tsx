@@ -215,7 +215,7 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 					frameRef={setFrame}
 					linkId={slug}
 					onShown={shown}
-					renderMedia={media ? (contentUrl, mediaShown) => (
+					renderMedia={media ? (contentUrl, mediaShown, source) => (
 						<ArtifactCommentsMedia
 							kind={media}
 							onPick={(anchor) => setElement({ path: artifactCommentAnchorKey(anchor), anchor })}
@@ -225,6 +225,7 @@ export function ArtifactCommentsWorkspace({ kind, onClose, onShown, outdated, se
 							picked={element?.anchor ?? null}
 							selected={selectedPath}
 							selectedKeys={element?.keys ?? null}
+							source={source}
 							src={contentUrl}
 							threads={threads ?? []}
 							title={title}

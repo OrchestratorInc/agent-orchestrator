@@ -19,6 +19,7 @@ import {
 	type ArtifactCommentThread,
 	type CommentsSelectionRect,
 } from "../../../shared/artifact-comments";
+import type { SharedMediaSource } from "../SharedArtifactFrame";
 import { artifactCommentAnchorText } from "./anchor-label";
 
 const percent = (value: number) => `${value * 100}%`;
@@ -26,6 +27,9 @@ const regionStyle = (region: ArtifactCommentRegion) => ({ left: percent(region.x
 const pinStyle = (region: ArtifactCommentRegion) => (isPointRegion(region) ? { left: percent(region.x), top: percent(region.y) } : regionStyle(region));
 
 const PIN = "pointer-events-auto absolute flex h-5 min-w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-background bg-logo-accent px-1 text-[11px] leading-none font-semibold text-logo-accent-foreground tabular-nums shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground";
+
+/** How long a media URL is used for seeking before a fresh one is fetched (its view token lasts 10 minutes). */
+const URL_FRESH_FOR = 8 * 60_000;
 
 /** Comments closer than this share one point on the seek bar (a fraction of its length). */
 const SAME_POINT = 0.012;
@@ -62,7 +66,7 @@ export function artifactCommentTimelinePoints(groups: readonly ArtifactCommentGr
  * the frame. On the frame a drag draws a box (pausing there) and a click
  * plays or pauses.
  */
-export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onShown, picked, selected, selectedKeys, src, threads, title }: {
+export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onShown, picked, selected, selectedKeys, source, src, threads, title }: {
 	kind: "image" | "video";
 	src: string;
 	title: string;
@@ -79,6 +83,8 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	/** The selected pin, rectangle or dot's top and bottom inside this view, for the popover; null when none. */
 	onSelection: (rect: CommentsSelectionRect | null) => void;
 	onShown?: () => void;
+	/** Where src came from, to fetch a fresh one before its view token ends. */
+	source?: SharedMediaSource;
 }) {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -122,12 +128,53 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 		if (picked && artifactCommentAnchorKey(picked) === selected) return picked.time ?? null;
 		return groups.find((group) => group.path === selected)?.anchor.time ?? null;
 	}, [kind, selected, picked, groups]);
-	useEffect(() => {
+	// Seeking asks the file host for more bytes, with the URL's view token, so
+	// a URL near the token's end is fetched again first; a seek made before
+	// the video can take it (or across a new URL) waits for its metadata.
+	const sourceRef = useRef(source);
+	sourceRef.current = source;
+	const pendingSeek = useRef<number | null>(null);
+	const lastTime = useRef(0);
+	const seek = (at: number) => {
 		const video = videoRef.current;
-		if (!video || selectedTime === null) return;
-		video.pause();
-		if (Math.abs(video.currentTime - selectedTime) > 0.01) video.currentTime = selectedTime;
+		if (!video) return;
+		const current = sourceRef.current;
+		if (current && Date.now() - current.fetchedAt > URL_FRESH_FOR) {
+			pendingSeek.current = at;
+			current.refresh();
+			// The same URL back (no reload): seek anyway once the fetch has had its moment.
+			window.setTimeout(() => {
+				const still = videoRef.current;
+				if (still && pendingSeek.current === at && still.readyState >= 1) {
+					pendingSeek.current = null;
+					still.currentTime = at;
+				}
+			}, 3000);
+			return;
+		}
+		if (video.readyState < 1) {
+			pendingSeek.current = at;
+			return;
+		}
+		if (Math.abs(video.currentTime - at) > 0.01) video.currentTime = at;
+	};
+	const seekRef = useRef(seek);
+	seekRef.current = seek;
+	useEffect(() => {
+		if (selectedTime === null) return;
+		videoRef.current?.pause();
+		seekRef.current(selectedTime);
 	}, [selectedTime]);
+	// A new URL reloads the video from 00:00: it comes back where it was (or at the selected moment).
+	const firstSrc = useRef(src);
+	const selectedTimeRef = useRef(selectedTime);
+	selectedTimeRef.current = selectedTime;
+	const retriedFor = useRef<string | null>(null);
+	useEffect(() => {
+		if (src === firstSrc.current) return;
+		firstSrc.current = src;
+		pendingSeek.current ??= selectedTimeRef.current ?? lastTime.current;
+	}, [src]);
 
 	// Where the selected pin, rectangle or dot is, for the popover beside it.
 	// Measured after every render (the box, the time and the selection all move
@@ -284,8 +331,7 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 	}
 
 	const seekTo = (fraction: number) => {
-		const video = videoRef.current;
-		if (video && duration > 0) video.currentTime = Math.min(duration, Math.max(0, fraction * duration));
+		if (duration > 0) seek(Math.min(duration, Math.max(0, fraction * duration)));
 	};
 	return (
 		<div className="flex h-full w-full flex-col bg-background" ref={rootRef}>
@@ -297,14 +343,33 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 					aria-label={title}
 					className="absolute inset-0 h-full w-full object-contain"
 					onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+					onError={() => {
+						// Its view token ran out (or the host refused it): once per URL, a fresh one, back at the same moment.
+						const current = sourceRef.current;
+						if (!current || retriedFor.current === src) return;
+						retriedFor.current = src;
+						pendingSeek.current ??= selectedTimeRef.current ?? lastTime.current;
+						current.refresh();
+					}}
 					onLoadedMetadata={(event) => {
-						setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0);
+						const video = event.currentTarget;
+						setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+						if (pendingSeek.current !== null) {
+							video.currentTime = pendingSeek.current;
+							pendingSeek.current = null;
+						}
 						onShown?.();
 					}}
 					onPause={() => setPlaying(false)}
 					onPlay={() => setPlaying(true)}
-					onSeeked={(event) => setTime(event.currentTarget.currentTime)}
-					onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
+					onSeeked={(event) => {
+						lastTime.current = event.currentTarget.currentTime;
+						setTime(event.currentTarget.currentTime);
+					}}
+					onTimeUpdate={(event) => {
+						lastTime.current = event.currentTarget.currentTime;
+						setTime(event.currentTarget.currentTime);
+					}}
 					playsInline
 					preload="metadata"
 					ref={videoRef}
@@ -335,7 +400,7 @@ export function ArtifactCommentsMedia({ kind, onPick, onSelect, onSelection, onS
 						if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
 						event.preventDefault();
 						const video = videoRef.current;
-						if (video) video.currentTime = Math.max(0, video.currentTime + (event.key === "ArrowLeft" ? -5 : 5));
+						if (video) seek(Math.max(0, video.currentTime + (event.key === "ArrowLeft" ? -5 : 5)));
 					}}
 					onPointerDown={(event) => {
 						if ((event.target as HTMLElement).closest("button")) return;
