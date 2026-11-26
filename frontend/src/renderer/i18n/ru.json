@@ -458,6 +458,7 @@
 	"firstRun.defaultsIssuesDetail": "Нужен GitHub. Агент берётся за каждую новую задачу.",
 	"firstRun.agentsTitle": "Выберите агентов",
 	"firstRun.agentsBody": "Каждый добавленный проект начинает с них. Позже их можно изменить в настройках проекта.",
+	"firstRun.agentsChecking": "Проверяем ваших агентов…",
 	"firstRun.agentsOrchestrator": "Оркестратор",
 	"firstRun.agentsOrchestratorDetail": "Планирует работу и раздаёт её воркерам.",
 	"firstRun.agentsWorkers": "Воркеры",

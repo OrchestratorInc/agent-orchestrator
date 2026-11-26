@@ -500,6 +500,7 @@
 	"firstRun.defaultsIssuesDetail": "GitHub が必要です。新しい Issue ごとにエージェントが着手します。",
 	"firstRun.agentsTitle": "エージェントを選ぶ",
 	"firstRun.agentsBody": "追加するすべてのプロジェクトはこの設定で始まります。あとで各プロジェクトの設定で変更できます。",
+	"firstRun.agentsChecking": "エージェントを確認しています…",
 	"firstRun.agentsOrchestrator": "オーケストレーター",
 	"firstRun.agentsOrchestratorDetail": "作業を計画し、ワーカーに割り振ります。",
 	"firstRun.agentsWorkers": "ワーカー",

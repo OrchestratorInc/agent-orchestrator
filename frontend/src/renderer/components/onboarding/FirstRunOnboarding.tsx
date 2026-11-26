@@ -307,8 +307,9 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	const skips = (candidate: Step) =>
 		candidate === "signin" ? cloud.status === "authenticated"
 		: candidate === "tools" ? ghReady && agentReady
-		// Nothing to pick from until an agent is ready.
-		: candidate === "agents" ? !agentReady
+		// The agents page is never passed over: which agent runs what is a
+		// choice even on a set-up machine. Right after an install, Tools can
+		// finish before the readiness list catches up; the page waits for it.
 		: false;
 	// Past the last page with something to do, setup is over: the app takes
 	// over with Add Project open. `skipped`: the person moved on without doing
@@ -1482,11 +1483,14 @@ function DefaultAgentsStep({ onNext, onOrchestratorPick }: { onNext: () => void;
 		// labelFor is fresh each render; the pick is what changes.
 	}, [orchestrator]);
 	const finish = () => {
-		saveProjectDefaults({ orchestratorAgent: orchestrator, workerAgent: worker });
+		// Nothing picked yet (still checking): new projects rank their own.
+		if (orchestrator && worker) saveProjectDefaults({ orchestratorAgent: orchestrator, workerAgent: worker });
 		onNext();
 	};
 	return (
 		<StepSplit title={t("firstRun.agentsTitle")} body={t("firstRun.agentsBody")}>
+			{/* Right after Tools, the ready list can still be catching up. */}
+			{!orchestrator || !worker ? <Waiting>{t("firstRun.agentsChecking")}</Waiting> : (
 			<ul className={ROW_LIST}>
 				<CheckRow
 					icon={<OrchestratorIcon className="size-icon-md text-muted-foreground" />}
@@ -1507,6 +1511,7 @@ function DefaultAgentsStep({ onNext, onOrchestratorPick }: { onNext: () => void;
 					) : null}
 				/>
 			</ul>
+			)}
 			<StepAction>
 				<NextButton onClick={finish}>{t("firstRun.continue")}</NextButton>
 			</StepAction>

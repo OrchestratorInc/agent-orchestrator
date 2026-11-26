@@ -500,6 +500,7 @@
 	"firstRun.defaultsIssuesDetail": "需要 GitHub。每个新 issue 都会由一个智能体接手。",
 	"firstRun.agentsTitle": "选择你的智能体",
 	"firstRun.agentsBody": "你添加的每个项目都会以此开始。之后可以在每个项目的设置中更改。",
+	"firstRun.agentsChecking": "正在检查你的智能体…",
 	"firstRun.agentsOrchestrator": "编排器",
 	"firstRun.agentsOrchestratorDetail": "规划工作并分配给工作智能体。",
 	"firstRun.agentsWorkers": "工作智能体",

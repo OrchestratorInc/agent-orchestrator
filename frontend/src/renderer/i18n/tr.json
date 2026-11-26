@@ -462,6 +462,7 @@
 	"firstRun.defaultsIssuesDetail": "GitHub gerekir. Her yeni issue'yu bir aracı üstlenir.",
 	"firstRun.agentsTitle": "Ajanlarınızı seçin",
 	"firstRun.agentsBody": "Eklediğiniz her proje bunlarla başlar. Daha sonra her projenin ayarlarından değiştirebilirsiniz.",
+	"firstRun.agentsChecking": "Ajanlarınız kontrol ediliyor…",
 	"firstRun.agentsOrchestrator": "Orchestrator",
 	"firstRun.agentsOrchestratorDetail": "İşi planlar ve worker’lara dağıtır.",
 	"firstRun.agentsWorkers": "Worker’lar",

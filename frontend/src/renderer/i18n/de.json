@@ -500,6 +500,7 @@
 	"firstRun.defaultsIssuesDetail": "Braucht GitHub. Ein Agent übernimmt jedes neue Issue.",
 	"firstRun.agentsTitle": "Wählen Sie Ihre Agenten",
 	"firstRun.agentsBody": "Jedes Projekt, das Sie hinzufügen, startet damit. Sie können das später in den Einstellungen jedes Projekts ändern.",
+	"firstRun.agentsChecking": "Ihre Agenten werden geprüft…",
 	"firstRun.agentsOrchestrator": "Orchestrator",
 	"firstRun.agentsOrchestratorDetail": "Plant die Arbeit und verteilt sie an Worker.",
 	"firstRun.agentsWorkers": "Worker",
