@@ -35,6 +35,7 @@ import { useTabListTabStop } from "../../hooks/useTabListTabStop";
  */
 
 import {
+	Fragment,
 	memo,
 	useContext,
 	useCallback,
@@ -169,7 +170,15 @@ import {
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
+import { chatFailureReason } from "../../lib/chat-failure-reason";
 import {
+	type BackgroundTally,
+	BackgroundTurnRow,
+	BackgroundUpdates,
+	BackgroundWorkerRow,
+	needsYouNow,
+	piggybackedUpdates,
+	senderOf,
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
@@ -186,10 +195,12 @@ import {
 	placeBatchedReports,
 	ReportsLine,
 	type WorkerUpdate,
+	type WorkerUpdateIndex,
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
@@ -209,13 +220,13 @@ import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
-import { isOrdinaryActivity } from "./activity-action";
+import { aoActionName, isOrdinaryActivity } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
-import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchChip } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
 import type { OutgoingAttachment } from "../../lib/attachment-uploads";
@@ -257,12 +268,8 @@ import {
 
 const NO_SKILLS: ChatSkill[] = [];
 
-const EMPTY_CHAT_PLACEHOLDERS = [
-	"Fix a failing test in this project",
-	"Explain how this project is structured",
-	"Plan the next step for this feature",
-	"Find and fix a bug in this project",
-] as const;
+// The empty composer teaches its two shortcuts: "/" opens skills, "@" adds context.
+const EMPTY_CHAT_PLACEHOLDER = "Ask anything, / for skills, @ for context";
 
 /**
  * The newest pending approval or question the live turn is waiting on.
@@ -1048,7 +1055,7 @@ function ChatWorkspaceContent({
 	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
 		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
-		latestSettledTurn.hasHumanPrompt
+		(latestSettledTurn.hasHumanPrompt || latestSettledTurn.hasEventPrompt)
 		? latestSettledTurn : undefined;
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
@@ -1067,6 +1074,9 @@ function ChatWorkspaceContent({
 	if (terminated) restoringArchived.current = session?.id;
 	else if (!resumingAgent) restoringArchived.current = undefined;
 	const restoring = Boolean(resumingAgent) && restoringArchived.current !== undefined && restoringArchived.current === session?.id;
+	// Nothing here resumes a chat that is a saved copy, blocked on its import, archived
+	// or mid-restore: the stopped banner and the version chip both stay out of it.
+	const resumeHidden = savedCopy || Boolean(importBlock) || terminated || restoring;
 	// After a restart the daemon is still verifying this session and reconnects
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
@@ -1660,6 +1670,22 @@ function ChatWorkspaceContent({
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const ownComposerRef = useRef<ChatComposerHandle>(null);
 	const composerFocusRef = composerRef ?? ownComposerRef;
+	// Coming back to the Chat tab (Ctrl+Tab or a tab click) puts the caret back in the
+	// composer, as the conversation panel stays mounted and nothing else refocuses it.
+	// Only take focus that nothing else holds: the body, or the tab strip that switched.
+	const chatTabInFront = !workspaceActiveTabKey && !reviewerActive && !shellActive;
+	const chatTabWasInFront = useRef(chatTabInFront);
+	useEffect(() => {
+		const returned = chatTabInFront && !chatTabWasInFront.current;
+		chatTabWasInFront.current = chatTabInFront;
+		if (!returned) return;
+		const active = document.activeElement;
+		const unclaimed = !active || active === document.body ||
+			(active.closest("[role='tab'], [role='tablist']") !== null && !active.closest("[role='dialog']"));
+		if (!unclaimed) return;
+		const composer = surfaceRef.current?.querySelector<HTMLElement>('[aria-label="Message the agent"]');
+		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
+	}, [chatTabInFront, composerFocusRef]);
 	const artifactSession = session?.requestedOutput === "artifact";
 	// The sample prompts show only while the composer is empty: picking one hides
 	// them, and clearing the draft brings them back. A saved draft hides them from
@@ -1952,9 +1978,9 @@ function ChatWorkspaceContent({
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
-				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} onResolve={onResolveInput} />
+				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} harness={snapshot.harness} onResolve={onResolveInput} />
 			) : undefined,
-		[onResolveInput, stablePendingUserInput],
+		[onResolveInput, snapshot.harness, stablePendingUserInput],
 	);
 	const canSteerQueuedMessage =
 		Boolean(onSteer) && Boolean(onPromoteQueuedTurn) && can(snapshot, "steer") && turn?.state === "running";
@@ -2086,11 +2112,6 @@ function ChatWorkspaceContent({
 	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
 	const openedDocked = settledDocked !== false;
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
-	const [emptyChatPlaceholder] = useState(
-		() => sessionRole === "orchestrator"
-			? "Ask anything about this project"
-			: EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
-	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	// The composer itself, not the dock: the dock also holds the welcome heading, which
 	// disappears on the first send, and sliding from the dock's top would make the
@@ -2098,6 +2119,8 @@ function ChatWorkspaceContent({
 	const composerBoxRef = useRef<HTMLDivElement>(null);
 	const wasConversationEmpty = useRef(conversationEmpty);
 	const [welcomeLeaving, setWelcomeLeaving] = useState(false);
+	// The open welcome stack's height, so wrapped sample prompts get their room too.
+	const [welcomeRoom, setWelcomeRoom] = useState(0);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
 	const composerSessionRef = useRef(uiSessionId);
@@ -2201,7 +2224,20 @@ function ChatWorkspaceContent({
 				onCloseShellTerminal={onCloseShellTerminal}
 				onRenameShellTerminal={onRenameShellTerminal}
 				onTabsKeyDown={handleChatTabsKeyDown}
-				headerActions={headerActions}
+				headerActions={
+					<>
+						<VersionSwitchChip
+							staleBinary={resumeHidden ? undefined : session?.staleBinary}
+							hostId={activeRemoteHostId}
+							harness={snapshot.harness}
+							// Only a resume starts a stopped agent, on the new release.
+							agentStopped={controllerStopped}
+							onResume={newWorkDisabled ? undefined : onResumeAgent}
+							resuming={resumingAgent}
+						/>
+						{headerActions}
+					</>
+				}
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
@@ -2289,7 +2325,7 @@ function ChatWorkspaceContent({
 					) : null}
 					{/* An archived chat reads as an ordinary one: sending to it restores it, and the
 					    composer, not a banner, says so until the agent is back. */}
-					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock || terminated || restoring ? null : (
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : resumeHidden ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -2310,12 +2346,6 @@ function ChatWorkspaceContent({
 						/>
 					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
-					<VersionSwitchBanner
-						staleBinary={session?.staleBinary}
-						hostId={activeRemoteHostId}
-						// Only a resume starts a stopped agent, on the new release.
-						agentStopped={controllerStopped}
-					/>
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", (arrivingWithHistory || openedDocked) && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -2395,7 +2425,15 @@ function ChatWorkspaceContent({
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
 
-						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
+						{/* An empty chat centers the composer on its own; the heading and sample
+						    prompts stand in a stack above it. The top padding is that stack's
+						    room, measured with the prompts shown so it holds while they come and
+						    go, and so the composer sits where the centered group used to put it. */}
+						<div
+							ref={composerDockRef}
+							className="cursor-chat-composer-dock shrink-0 px-4 pb-3"
+							style={conversationEmpty ? { paddingTop: `max(6.5rem, ${welcomeRoom}px)` } : undefined}
+						>
 							<div
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
@@ -2416,19 +2454,6 @@ function ChatWorkspaceContent({
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
 									/>
 								) : null}
-								{conversationEmpty ? (
-									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
-									</h1>
-								) : null}
-								<WelcomePromptSuggestions
-									// While an orchestrator starts the prompts stay put, disabled, so they don't
-									// pop in at the handoff. Other fenced chats keep them hidden.
-									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
-									artifact={artifactSession}
-									unavailable={newWorkDisabled || pendingInPlaceStart}
-									onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
-								/>
 								{/* The guided tour's last stop (GuidedTour). */}
 								<div
 									ref={composerBoxRef}
@@ -2436,6 +2461,18 @@ function ChatWorkspaceContent({
 									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
 									data-tour="composer"
 								>
+									{conversationEmpty ? (
+										<WelcomeStack
+											heading={welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											// While an orchestrator starts the prompts stay put, disabled, so they don't
+											// pop in at the handoff. Other fenced chats keep them hidden.
+											promptsOpen={composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
+											artifact={artifactSession}
+											unavailable={newWorkDisabled || pendingInPlaceStart}
+											onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
+											onRoom={setWelcomeRoom}
+										/>
+									) : null}
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -2556,7 +2593,7 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
+										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : EMPTY_CHAT_PLACEHOLDER) : undefined}
 										skills={skills}
 										skillsLoading={skillsLoading}
 										filePaths={filePaths}
@@ -3663,10 +3700,10 @@ export function Timeline({
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
 	const annotationRetryCount = useRef(0);
-	// Group count when navigation last asked for older history. A finished load
-	// that adds nothing (a failed page or a source outside this branch) must end
+	// Oldest loaded sequence when navigation last asked for older history. A finished
+	// load that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
-	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
+	const annotationOlderRequestCursor = useRef<number | undefined>(undefined);
 	// A search match in a tool call or command: the activity whose folds open, and
 	// the history window asked for around it (done once its request settled).
 	const [revealedActivity, setRevealedActivity] = useState<string>();
@@ -3681,7 +3718,7 @@ export function Timeline({
 		releaseFollow();
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
-		annotationOlderRequestGroups.current = undefined;
+		annotationOlderRequestCursor.current = undefined;
 		annotationWindow.current = undefined;
 		if (!annotation.messageId) {
 			const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
@@ -4517,6 +4554,8 @@ export function Timeline({
 		() => workerUpdates ? placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items) : NO_BATCHED_REPORTS,
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
+	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4538,17 +4577,19 @@ export function Timeline({
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
 		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return placed;
-		return placed
+		const cleaned = spawnedIds.size === 0 ? placed : placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdates]);
+		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
+		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
+		return folded;
+	}, [batchedReports, controllerStopped, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
 	const subagentPanelEnabled = subagentPanel !== undefined;
 	const subagents = useMemo(
-		() => (subagentPanelEnabled ? conversationSubagents(groups) : NO_SUBAGENTS),
+		() => (subagentPanelEnabled ? conversationSubagents(groups.flatMap(turnsIn)) : NO_SUBAGENTS),
 		[groups, subagentPanelEnabled],
 	);
 	const [openSubagentId, setOpenSubagentId] = useState<string>();
@@ -4573,7 +4614,6 @@ export function Timeline({
 	// Whether the reader opened a step from the live row, kept for the step's own row
 	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
 	const [liveStepChoices] = useState(() => new Map<string, boolean>());
-	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
 	// anywhere else first would make it jump lines when the turn arrives.
@@ -4706,8 +4746,8 @@ export function Timeline({
 			.some((element) => element.dataset.findMessageId === findTarget.messageId);
 		// The active highlight persists; mounting completes this one reveal request.
 		if (mounted) { setFindTarget(undefined); return; }
-		const disclosureKey = `${groups[index].key}:worked`;
-		if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+		const keys = revealKeys(groups[index], (item) => item.id === findTarget.messageId);
+		if (keys.some((key) => !activityDisclosureOverrides[key])) setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
 		if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 	}, [find.open, find.engaged, find.active, findTarget, groups, virtualRows, virtualized, virtualizer, activityDisclosureOverrides]);
 	renderedVirtualHeight.current = virtualHeight;
@@ -4715,13 +4755,7 @@ export function Timeline({
 		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;
 	// Fork is offered on finished turns; the latest is marked because every
 	// agent can fork it, while older turns need one that cuts its copy.
-	const latestForkTurnId = useMemo(() => {
-		for (let i = groups.length - 1; i >= 0; i--) {
-			const group = groups[i];
-			if (forkableGroup(group)) return group.turnId as string;
-		}
-		return undefined;
-	}, [groups]);
+	const latestForkTurnId = useMemo(() => groups.flatMap(turnsIn).findLast(forkableGroup)?.turnId, [groups]);
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
@@ -4753,13 +4787,15 @@ export function Timeline({
 			setRevealedActivity(activity.id);
 			// A child's step is drawn under its launch, not in its own turn: in the
 			// Subagents panel when the chat has one, else inline under the launch's team.
-			const owner = owningSubagent(groups, activity.id);
+			const members = groups.flatMap((group, outer) => turnsIn(group).map((turn) => ({ turn, outer })));
+			const found = owningSubagent(members.map((each) => each.turn), activity.id);
+			const owner = found && { ...found, groupIndex: members[found.groupIndex]!.outer };
 			const inPanel = Boolean(owner && openSubagent);
 			const holder = owner?.groupIndex ?? index;
 			if (owner && inPanel) {
 				if (openSubagentId !== owner.launchId) openSubagent!(owner.launchId);
 			} else {
-				const keys = [`${groups[holder]!.key}:worked`];
+				const keys = revealKeys(groups[holder]!, (item) => item.id === (owner?.launchId ?? activity.id));
 				if (owner) keys.push(owner.teamKey, `${owner.teamKey}:agent:${owner.launchId}`);
 				if (keys.some((key) => !activityDisclosureOverrides[key])) {
 					setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
@@ -4806,8 +4842,8 @@ export function Timeline({
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === annotationTarget.messageId));
 		if (index < 0) {
 			if (loadingOlder) return;
-			if (hasOlder && onLoadOlder && annotationOlderRequestGroups.current !== groups.length) {
-				annotationOlderRequestGroups.current = groups.length;
+			if (hasOlder && onLoadOlder && annotationOlderRequestCursor.current !== sourceSnapshot.oldestSequence) {
+				annotationOlderRequestCursor.current = sourceSnapshot.oldestSequence;
 				onLoadOlder();
 				return;
 			}
@@ -4818,9 +4854,9 @@ export function Timeline({
 		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
 		if (!source) {
-			const disclosureKey = `${groups[index].key}:worked`;
-			if (!activityDisclosureOverrides[disclosureKey]) {
-				setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+			const keys = revealKeys(groups[index], (item) => item.id === annotationTarget.messageId);
+			if (keys.some((key) => !activityDisclosureOverrides[key])) {
+				setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
 			}
 			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 			if (annotationRetryCount.current++ >= 20) {
@@ -4906,7 +4942,7 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt, openSubagent, openSubagentId, subagentPanel?.container]);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, sourceSnapshot.oldestSequence, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt, openSubagent, openSubagentId, subagentPanel?.container]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -5201,15 +5237,17 @@ export function Timeline({
 	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
 		const node = scroller.current;
 		if (!node || !initialLayoutDone.current) return undefined;
-		if (!groups.some((group) => group.key === key && !group.live)) return undefined;
+		const folded = !groups.some((group) => group.key === key && !group.live);
+		if (folded && !(pinnedRef.current && groups.some((group) => group.folded?.members.some((member) => member.key === key)))) return undefined;
 		const wrapper = Array.from(virtualContent.current?.children ?? [])
 			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
 		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
 		if (!turn) return undefined;
+		const following = pinnedRef.current;
+		if (folded) return { turn, rows: [], tops: [], scrollTop: node.scrollTop, following, index: -1, offset: 0 };
 		const { top, bottom } = node.getBoundingClientRect();
 		const rows = Array.from(turn.children) as HTMLElement[];
 		const rects = rows.map((row) => row.getBoundingClientRect());
-		const following = pinnedRef.current;
 		const index = following ? -1 : rects.findIndex((rect) => rect.bottom > top);
 		// A reader who sees none of the turn has nothing to hold: below it, no row reaches
 		// their view; above it, the first row starts past the view's bottom edge.
@@ -5244,7 +5282,7 @@ export function Timeline({
 		// later, and only then shrinks; take it now, so the end is final before paint.
 		const wrapper = turn.parentElement;
 		const virtualIndex = Number(wrapper?.dataset.index);
-		if (virtualized && wrapper && Number.isInteger(virtualIndex)) {
+		if (virtualized && wrapper?.isConnected && Number.isInteger(virtualIndex)) {
 			spacerTakes(settle.following);
 			virtualizer.resizeItem(virtualIndex, Math.round(wrapper.getBoundingClientRect().height));
 			const total = virtualizer.getTotalSize();
@@ -5791,53 +5829,39 @@ export function Timeline({
 					<div ref={virtualContent} className={virtualized ? "relative w-full" : "contents"}
 						style={virtualized ? { height: virtualHeight } : undefined}>
 					{renderedGroups.map(({ group, row, index }) => {
-						const retrySelected = !retryControl?.turnId || retryControl.turnId === group.turnId;
-						const retryableTurn = group.turnId ? retryableTurns.get(group.turnId) : undefined;
-						const retry =
-							group.turnId &&
-							retryControl &&
-							retryableTurn &&
-							group.turnId !== composerRecoveryTurnId &&
-								group.outcome?.state === "failed"
-								? {
-										onRetry: () => {
-											void Promise.resolve(retryTurn(group.turnId as string)).catch(
-												() => undefined,
-											);
-										},
-										pending: retryControl.pending && retrySelected,
-										error: retrySelected ? retryControl.error : undefined,
-										disabled:
-											Boolean(durableTurn) ||
-											Boolean(retryControl.pending) ||
-											Boolean(newWorkDisabled),
-									}
-								: undefined;
-						return (
-							<div
-								key={group.key}
-								ref={virtualizer.measureElement}
-								data-index={index}
-								style={row ? {
-									position: "absolute", top: 0, left: 0, width: "100%",
-									transform: `translateY(${row.start - virtualScrollMargin}px)`,
-								} : undefined}
-								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
-								data-chat-turn={group.key}
-							>
-								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
-								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
-								<BatchedReportsContext.Provider value={batchedReports}>
-								<LatestForkTurnContext.Provider value={latestForkTurnId}>
-								<ForkableTurnContext.Provider value={forkableGroup(group) ? (group.turnId as string) : null}>
+						const renderTurn = (turn: TimelineGroup) => {
+							const retrySelected = !retryControl?.turnId || retryControl.turnId === turn.turnId;
+							const retryableTurn = turn.turnId ? retryableTurns.get(turn.turnId) : undefined;
+							const retry =
+								turn.turnId &&
+								retryControl &&
+								retryableTurn &&
+								turn.turnId !== composerRecoveryTurnId &&
+									turn.outcome?.state === "failed"
+									? {
+											onRetry: () => {
+												void Promise.resolve(retryTurn(turn.turnId as string)).catch(
+													() => undefined,
+												);
+											},
+											pending: retryControl.pending && retrySelected,
+											error: retrySelected ? retryControl.error : undefined,
+											disabled:
+												Boolean(durableTurn) ||
+												Boolean(retryControl.pending) ||
+												Boolean(newWorkDisabled),
+										}
+									: undefined;
+							return (
+								<ForkableTurnContext.Provider value={forkableGroup(turn) ? (turn.turnId as string) : null}>
 								<TurnGroup
-									group={group}
+									group={turn}
 									harness={snapshot.harness}
-									login={group.turnId && group.outcome?.state === "failed" && group.outcome.failureCode === "auth_required"
-										? loginLines?.get(group.turnId)
+									login={turn.turnId && turn.outcome?.state === "failed" && turn.outcome.failureCode === "auth_required"
+										? loginLines?.get(turn.turnId)
 										: undefined}
 									workerUpdates={workerUpdates}
-									startup={group.key === startupGroupKey ? rowStartup : undefined}
+									startup={turn.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
@@ -5861,14 +5885,14 @@ export function Timeline({
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
-									editBusy={turnEditing(group, messageEdit) && Boolean(editBusy || newWorkDisabled)}
+									editBusy={turnEditing(turn, messageEdit) && Boolean(editBusy || newWorkDisabled)}
 									editError={translateDraft(editError ??
 										draftPersistenceError ??
 										inlineEditRecoveryNotice ??
 										inlineEditOutcomeNotice)}
 									branchPoints={branchPoints}
 									editableTurns={editableTurns}
-									newHumanMessageIds={turnNewHumanMessageIds(group, newHumanMessageIds)}
+									newHumanMessageIds={turnNewHumanMessageIds(turn, newHumanMessageIds)}
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
 									activateBranchDisabled={activateBranchDisabled || Boolean(durableTurn)}
@@ -5877,12 +5901,38 @@ export function Timeline({
 									// Only a turn the provider actually accepted can be undone: a turn it
 									// never saw holds no history to discard, and the daemon refuses it
 									// rather than hiding rows the agent still remembers.
-									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
+									canRollback={Boolean(onRollback && turn.turnId && turn.rollbackable)}
 									rollbackDisabled={rollbackDisabled}
-									busy={turnShowsApproval(group) ? busy : undefined}
-									queued={Boolean(group.turnId && queued.has(group.turnId))}
+									busy={turnShowsApproval(turn) ? busy : undefined}
+									queued={Boolean(turn.turnId && queued.has(turn.turnId))}
 								/>
 								</ForkableTurnContext.Provider>
+							);
+						};
+						return (
+							<div
+								key={group.key}
+								ref={virtualizer.measureElement}
+								data-index={index}
+								style={row ? {
+									position: "absolute", top: 0, left: 0, width: "100%",
+									transform: `translateY(${row.start - virtualScrollMargin}px)`,
+								} : undefined}
+								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
+								data-chat-turn={group.key}
+							>
+								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
+								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<BatchedReportsContext.Provider value={batchedReports}>
+								<LatestForkTurnContext.Provider value={latestForkTurnId}>
+								{group.folded ? (
+									<FoldedTurns
+										group={group}
+										overrides={activityDisclosureOverrides}
+										onOpenChange={onActivityDisclosureChange}
+										renderTurn={renderTurn}
+									/>
+								) : renderTurn(group)}
 								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
@@ -6281,6 +6331,7 @@ const TurnGroup = memo(function TurnGroup({
 }) {
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
+	const updateIndex = useContext(WorkerUpdateIndexContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
@@ -6289,6 +6340,8 @@ const TurnGroup = memo(function TurnGroup({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
 		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
+	// A review round arrives as one message per comment; it draws as one event.
+	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6310,7 +6363,10 @@ const TurnGroup = memo(function TurnGroup({
 		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
 		: undefined;
 	// Counted here, not in the outcome, so a failure shown as a login note counts too.
-	useFreshFailureReport(endsWithOutcome ? group.outcome?.state : undefined, group.outcome?.completedAt, group.turnId, group.outcome?.failureCode);
+	// A usage limit carries no failure code of its own, so it is named here; any
+	// other failure is named from its error text, which itself is never sent.
+	const reportedFailureCode = group.outcome?.failureCode ?? (group.outcome?.usageLimit ? "usage_limit" : chatFailureReason(group.outcome?.error));
+	useFreshFailureReport(endsWithOutcome ? group.outcome?.state : undefined, group.outcome?.completedAt, group.turnId, reportedFailureCode);
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
 				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
@@ -6349,7 +6405,7 @@ const TurnGroup = memo(function TurnGroup({
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
-	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && isWorkerLead(group.items[0]);
+	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && (group.leadless || isWorkerLead(group.items[0]));
 	// What the live row names: the step the agent is on right now. Items the user acts
 	// on (approvals, questions) are not work, and a provider retry has its own slot. A
 	// subagent's step is the child's work, named in its own row and panel instead.
@@ -6408,6 +6464,8 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
+			reviewBurst={bursts.get(run.items[0]!.id)}
+			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
 			onDecide={onDecide}
@@ -6479,8 +6537,13 @@ const TurnGroup = memo(function TurnGroup({
 		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		// Reports delivered with a human message or steer are not drawn: the message stands alone.
-		return renderRun(run);
+		// Reports delivered with a human message or steer draw only where a worker still needs the user.
+		const waiting = (item.kind === "message" ? item.role === "user" : isSteer(item))
+			? [...piggybackedUpdates(item), ...(batched?.under.get(item.id) ?? [])].filter((update) => needsYouNow(updateIndex, update))
+			: [];
+		if (waiting.length === 0) return renderRun(run);
+		drewReportsUnder = true;
+		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
@@ -6656,6 +6719,7 @@ function TurnLiveStatus({ blocked }: { blocked?: boolean }) {
 
 function TimelineItem({
 	item,
+	harness,
 	sessionId,
 	apiBaseUrl,
 	onDecide,
@@ -6687,8 +6751,10 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
+	reviewBurst,
 }: {
 	item: ConversationItem;
+	harness?: string;
 	sessionId: string;
 	apiBaseUrl: string | null;
 	onDecide?: (requestId: string, decisionId: string) => void;
@@ -6728,6 +6794,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
+	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
+	reviewBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6743,7 +6811,7 @@ function TimelineItem({
 		}
 		// A continue after a stop reaches the agent as a message, but the user did
 		// not write it: mark where the turn picked back up instead of a bubble.
-		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
+		if (item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
 		// worker relay, and is attributed differently. So is one an outside tool
 		// sent through the API, which AO can store as the human's.
@@ -6783,9 +6851,11 @@ function TimelineItem({
 				/>
 			);
 		}
+		// An earlier message of its review burst draws this one.
+		if (reviewBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
@@ -6796,7 +6866,7 @@ function TimelineItem({
 		return <ApprovalCard activity={item} onDecide={onDecide} busy={busy} />;
 	}
 	if (item.activityKind === "user_input") {
-		return item.status === "pending" ? null : <ElicitationHistory activity={item} />;
+		return item.status === "pending" ? null : <ElicitationHistory activity={item} harness={harness} />;
 	}
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;
@@ -6983,8 +7053,207 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		a.items.length === b.items.length &&
 		// The items are already identity-stable by the time a group is compared, so a
 		// reference check here is exact and avoids walking their contents twice.
-		a.items.every((item, index) => item === b.items[index])
+		a.items.every((item, index) => item === b.items[index]) &&
+		a.folded?.kind === b.folded?.kind &&
+		a.folded?.members.length === b.folded?.members.length &&
+		(a.folded?.members.every((member, index) => member.key === b.folded!.members[index]!.key && sameGroup(member, b.folded!.members[index]!)) ?? true)
 	);
+}
+
+const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members ?? [group];
+
+function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
+	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
+	const turn = member ?? group;
+	const inside = [`${turn.key}:worked`];
+	if (!member) return inside;
+	const { kind } = group.folded!;
+	if (member === bannerOf(group) && (kind === "failed" || !holds(member.items[0]!))) return inside;
+	if (kind === "replaced") return [`${group.key}:open`, ...inside];
+	return [`${member.key}:line`, `${member.key}:worker`, `${member.key}:open`, ...inside];
+}
+
+const isAccountFailure = (group: TimelineGroup) => Boolean(group.outcome && accountFailure(group.outcome));
+
+const LOOSE_ACTIONS: Readonly<Record<string, "started" | "stopped">> = { "session.spawned": "started", "session.terminated": "stopped" };
+
+function looseNotice(item: ConversationItem): "started" | "stopped" | "reset" | undefined {
+	if (item.kind !== "activity" || outlived.has(item)) return undefined;
+	if (item.activityKind === "system" && item.detail?.event === "context.reset") return "reset";
+	return item.activityKind === "ao_action" && item.status === "completed" ? LOOSE_ACTIONS[aoActionName(item)] : undefined;
+}
+
+const isLooseNotices = (group: TimelineGroup) => !group.turnId && group.items.length > 0 && group.items.every((item) => looseNotice(item) !== undefined);
+
+function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
+	const { kind, members } = group.folded!;
+	if (kind === "failed") return members.at(-1);
+	if (kind !== "background") return undefined;
+	const last = members.findLast((member) => !isLooseNotices(member));
+	return last && isAccountFailure(last) ? last : undefined;
+}
+
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
+	const out: TimelineGroup[] = [];
+	const used = new Set<string>();
+	const held: TimelineGroup[] = [];
+	let run: { kind: "background" | "failed"; key: string; members: TimelineGroup[] } | undefined;
+	const close = () => {
+		if (!run) return;
+		const { kind, members } = run;
+		const first = members[0]!;
+		const fallback = `${kind}:${members.at(-1)!.key}`;
+		const key = members.map((member) => prior.get(member.key)).find((carried) => carried?.startsWith(`${kind}:`) && !used.has(carried))
+			?? (used.has(fallback) ? `${fallback}:${first.key}` : fallback);
+		if (kind !== "failed" || members.length > 1) used.add(key);
+		out.push(kind === "failed" && members.length === 1
+			? first
+			: { key, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
+		out.push(...held.splice(0));
+		run = undefined;
+	};
+	const segments = new Map<string, number>();
+	for (const group of groups) if (group.turnId) segments.set(group.turnId, (segments.get(group.turnId) ?? 0) + 1);
+	const afterGap = gap === undefined ? undefined : groups.find((group) => group.items.some((item) => item.sequence >= gap));
+	for (const group of groups) {
+		if (group === afterGap) close();
+		if (run?.kind === "background" && isLooseNotices(group)) {
+			held.push(group);
+			continue;
+		}
+		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
+			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
+			: undefined;
+		const { steps, live, stopped } = groupSubagents(group);
+		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
+		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome, index, carried) : "yours";
+		if (standing !== "background" && standing !== "failed") {
+			close();
+			out.push(standing === "replaced"
+				? { key: `replaced:${group.key}`, anchor: group.anchor, items: group.items, folded: { kind: "replaced", members: [group] } }
+				: group);
+			continue;
+		}
+		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?<![\w:.])\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[AP]M)?(?![\w:])/gi, "")}` : standing;
+		if (run?.key !== key) {
+			close();
+			run = { kind: standing, key, members: [] };
+		}
+		run.members.push(...held.splice(0), group);
+	}
+	close();
+	return out;
+}
+
+const leadless = new WeakMap<TimelineGroup, TimelineGroup>();
+function withoutLead(member: TimelineGroup): TimelineGroup {
+	let body = leadless.get(member);
+	if (!body) leadless.set(member, body = { ...member, items: member.items.slice(1), leadless: true });
+	return body;
+}
+
+function backgroundRows(members: readonly TimelineGroup[], updatesOf: ReadonlyMap<TimelineGroup, readonly WorkerUpdate[]>) {
+	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; at?: string; handled?: boolean; count: number }[] = [];
+	const latest = new Map<string, WorkerUpdate>();
+	for (const member of members) {
+		const updates = updatesOf.get(member) ?? [];
+		if (!isAccountFailure(member)) for (const update of updates) latest.set(senderOf(update), update);
+		const senders = new Set(updates.map(senderOf));
+		const sender = senders.size === 1 ? [...senders][0] : undefined;
+		const at = sender === undefined ? -1 : rows.findIndex((row) => row.sender === sender);
+		const row = at >= 0 ? rows.splice(at, 1)[0]! : { key: member.key, members: [], sender, count: 0 };
+		row.members.push(member);
+		if (sender !== undefined) {
+			const handled = !isAccountFailure(member);
+			if (handled || !row.handled) {
+				row.latest = updates.at(-1);
+				row.at = member.items[0]!.createdAt;
+				row.handled = handled;
+			}
+			row.count += updates.length;
+		}
+		rows.push(row);
+	}
+	const tally: BackgroundTally = {};
+	const add = (name: keyof BackgroundTally, count = 1) => { tally[name] = (tally[name] ?? 0) + count; };
+	for (const { state } of latest.values()) {
+		if (state === "done") add("done");
+		else if (state === "needs_input") add("neededYou");
+		else if (state === "stuck") add("stuck");
+	}
+	for (const member of members) {
+		if (isAccountFailure(member)) add("notHandled", Math.max(1, updatesOf.get(member)?.length ?? 0));
+		if (isLooseNotices(member)) for (const item of member.items) add(looseNotice(item)!);
+	}
+	return { rows, tally };
+}
+
+function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
+	group: TimelineGroup;
+	overrides: Readonly<Record<string, boolean>>;
+	onOpenChange: (key: string, open: boolean) => void;
+	renderTurn: (turn: TimelineGroup) => ReactNode;
+}) {
+	const carried = (useContext(BatchedReportsContext) ?? NO_BATCHED_REPORTS).under;
+	const { kind, members } = group.folded!;
+	const lineKey = `${group.key}:open`;
+	const body = (member: TimelineGroup) => renderTurn(withoutLead(member));
+	if (kind === "replaced") {
+		return (
+			<ReplacedNotice open={Boolean(overrides[lineKey])} onOpenChange={(open) => onOpenChange(lineKey, open)}>
+				{body(members[0]!)}
+			</ReplacedNotice>
+		);
+	}
+	const banner = bannerOf(group);
+	const listed = kind === "failed" ? members.slice(0, -1) : members;
+	const updates = new Map(listed.map((member) => [member, turnUpdates(member.items, carried)] as const));
+	const toggleAll = (suffix: string, among: readonly TimelineGroup[]) => ({
+		open: among.some((member) => overrides[`${member.key}:${suffix}`]),
+		onOpenChange: (open: boolean) => { for (const member of among) onOpenChange(`${member.key}:${suffix}`, open); },
+	});
+	const turnRow = (member: TimelineGroup) => (
+		<BackgroundTurnRow
+			key={member.key}
+			items={member.items}
+			open={Boolean(overrides[`${member.key}:open`])}
+			onOpenChange={(open) => onOpenChange(`${member.key}:open`, open)}
+		>
+			{member === banner ? null : body(member)}
+		</BackgroundTurnRow>
+	);
+	const { rows, tally } = kind === "background" ? backgroundRows(listed, updates) : { rows: undefined, tally: undefined };
+	const line = (
+		<BackgroundUpdates
+			turns={listed.filter((member) => !isLooseNotices(member)).map((member) => ({ at: member.items[0]!.createdAt, updates: updates.get(member)! }))}
+			tally={tally}
+			failed={kind === "failed"}
+			{...toggleAll("line", listed)}
+		>
+			{rows ? rows.map((row) => {
+				const [only] = row.members;
+				if (row.members.length === 1) return isLooseNotices(only!) ? <Fragment key={row.key}>{renderTurn(only!)}</Fragment> : turnRow(only!);
+				const worker = toggleAll("worker", row.members);
+				return (
+					<BackgroundWorkerRow
+						key={row.key}
+						update={row.latest!}
+						count={row.count}
+						at={row.at!}
+						open={worker.open || row.members.some((member) => overrides[`${member.key}:open`])}
+						onOpenChange={(open) => {
+							worker.onOpenChange(open);
+							if (!open) for (const member of row.members) onOpenChange(`${member.key}:open`, false);
+						}}
+					>
+						{row.members.map(turnRow)}
+					</BackgroundWorkerRow>
+				);
+			}) : listed.map(turnRow)}
+		</BackgroundUpdates>
+	);
+	if (!banner) return line;
+	return <div className="flex min-w-0 flex-col gap-2.5">{line}{renderTurn(kind === "failed" ? banner : withoutLead(banner))}</div>;
 }
 
 /**
@@ -7114,6 +7383,8 @@ type TimelineGroup = {
 	accountSwitched?: boolean;
 	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
 	subagents?: GroupSubagents;
+	folded?: { kind: "background" | "failed" | "replaced"; members: TimelineGroup[] };
+	leadless?: boolean;
 };
 
 type GroupSubagents = {
@@ -7211,7 +7482,10 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 	// still makes the final failed group retryable, even when it is in an earlier one.
 	// A usage limit and a refused login are offered on their own (the limit's notice,
 	// the login band), so the daemon's word that the turn has a prompt is enough
-	// for them, even when history paging left that prompt out.
+	// for them, even when history paging left that prompt out. So is a turn an event
+	// started (a review comment, a CI failure) that failed for another reason, such
+	// as a timeout: such a turn often runs long enough to page its prompt out, and
+	// the daemon sends the event again as it was.
 	const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
 		item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
 			? [item.turnId]
@@ -7225,7 +7499,8 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 					Boolean(turn.providerTurnId) &&
 					!consumed.has(turn.id) &&
 					(humanPromptTurnIds.has(turn.id) ||
-						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt)),
+						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt) ||
+						Boolean(!turn.usageLimit && turn.hasEventPrompt)),
 			)
 			.map((turn) => [turn.id, turn]),
 	);
@@ -7859,6 +8134,7 @@ function turnShowsApproval(group: TimelineGroup): boolean {
 }
 
 const detachedActions = new WeakMap<ConversationItem, ConversationItem>();
+const outlived = new WeakSet<ConversationItem>();
 
 /** An AO action filed under a turn the timeline drops, as a turn-less row; anything else unchanged. */
 function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): ConversationItem {
@@ -7867,6 +8143,7 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 	if (!detached) {
 		detached = { ...item, turnId: undefined };
 		detachedActions.set(item, detached);
+		outlived.add(detached);
 	}
 	return detached;
 }
@@ -7942,57 +8219,105 @@ const CHAT_PROMPTS = [
 	{ prompt: "chat.welcome.prompt.simplify", chip: "chat.welcome.chip.simplify", icon: WandSparkles },
 ] as const;
 
+/** The heading settling into the space the sample prompts leave: a soft deceleration. */
+const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
+
 /**
- * Sample requests above an empty chat's composer; picking one fills the composer.
- * The list collapses its height, and the gap below it, on the way in and out so the
- * centered composer glides instead of jumping.
+ * An empty chat's heading and sample requests, standing on the composer's top
+ * edge. Picking a request fills the composer.
+ *
+ * The stack hangs from the composer instead of sharing its centered column, so the
+ * composer never moves while the prompts come and go: typing fades them where they
+ * stand and the heading glides down into their place. Every frame is a transform or
+ * an opacity, so the animation that starts on the first keystroke never relays out
+ * the page while the user types.
  */
-function WelcomePromptSuggestions({ open, artifact, unavailable = false, onPick }: { open: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void }) {
+function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
+	// The prompts sit out of the flow, pinned to the composer's top edge, and this
+	// spacer holds their room. When they leave, the spacer closes at once and the
+	// prompts travel down with the heading, tucking behind the composer's top edge
+	// (the stack clips below it) as they fade; coming back, they rise out of it.
+	//
+	// Their height comes from an invisible copy that is always laid out, so the
+	// stack's full room is known from the first frame even when a restored draft
+	// keeps the prompts hidden, and it never changes as typing hides or shows them.
+	// The composer keeps that room above it, so it stays put.
+	const headingRef = useRef<HTMLHeadingElement>(null);
+	const ghostRef = useRef<HTMLUListElement>(null);
+	const [promptsHeight, setPromptsHeight] = useState(0);
+	useLayoutEffect(() => {
+		const heading = headingRef.current;
+		const ghost = ghostRef.current;
+		if (!heading || !ghost) return;
+		const measure = () => {
+			setPromptsHeight(ghost.offsetHeight);
+			onRoom(heading.offsetHeight + (Number.parseFloat(getComputedStyle(heading).marginBottom) || 0) + ghost.offsetHeight);
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(heading);
+		observer.observe(ghost);
+		return () => observer.disconnect();
+	}, [onRoom]);
+	const chips = (onClick?: (text: string) => void) => prompts.map(({ prompt, chip, icon: Icon }) => (
+		<li key={prompt}>
+			<Button
+				type="button"
+				variant="quiet"
+				shape="pill"
+				title={onClick ? t(prompt) : undefined}
+				tabIndex={onClick ? undefined : -1}
+				className="welcome-prompt-suggestion border-border"
+				disabled={unavailable}
+				onClick={onClick ? () => onClick(t(prompt)) : undefined}
+			>
+				<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
+				<span className="whitespace-nowrap">{t(chip)}</span>
+			</Button>
+		</li>
+	));
 	return (
-		<AnimatePresence initial={false}>
-			{open ? (
-				<motion.div
-					key="welcome-prompts"
-					initial={{ height: 0, opacity: 0 }}
-					animate={{ height: "auto", opacity: 1, transition: { duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] } }}
-					// The chips fade first, then the row folds away with a soft ease in and out,
-					// so the composer below settles instead of being yanked up.
-					exit={{
-						height: 0,
-						opacity: 0,
-						transition: reducedMotion ? { duration: 0 } : {
-							height: { duration: 0.32, ease: [0.65, 0, 0.35, 1] },
-							opacity: { duration: 0.14, ease: "easeOut" },
-						},
-					}}
-					// The dock's gap-2 sits outside this box. Cancel it and put the space back as
-					// padding inside, so it collapses with the height instead of snapping.
-					className="-mb-2 overflow-hidden"
-				>
-					{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
-						{prompts.map(({ prompt, chip, icon: Icon }) => (
-							<li key={prompt}>
-								<Button
-									type="button"
-									variant="quiet"
-									shape="pill"
-									title={t(prompt)}
-									className="welcome-prompt-suggestion border-border"
-									disabled={unavailable}
-									onClick={() => onPick(t(prompt))}
-								>
-									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
-									<span className="whitespace-nowrap">{t(chip)}</span>
-								</Button>
-							</li>
-						))}
-					</ul>
-				</motion.div>
-			) : null}
-		</AnimatePresence>
+		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
+			<motion.h1
+				ref={headingRef}
+				layout={reducedMotion ? false : "position"}
+				// Glide only when the prompts come or go. The first measurement fills the
+				// spacer on mount, and a resize can change it; neither is a move to animate,
+				// or every new chat would open with the heading rising into place.
+				layoutDependency={promptsOpen}
+				transition={{ layout: WELCOME_SETTLE }}
+				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
+				// Anchored on the composer box alone: a group-has variant would restyle the app
+				// on every DOM change (style-invalidation.test.ts).
+				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
+			>
+				{heading}
+			</motion.h1>
+			<div aria-hidden="true" className="w-full shrink-0" style={{ height: promptsOpen ? promptsHeight : 0 }} />
+			<ul ref={ghostRef} aria-hidden="true" className="invisible absolute inset-x-0 bottom-0 flex flex-wrap justify-center gap-2 pb-4">
+				{chips()}
+			</ul>
+			<AnimatePresence initial={false}>
+				{promptsOpen ? (
+					<motion.div
+						key="welcome-prompts"
+						className="pointer-events-auto absolute inset-x-0 bottom-0"
+						initial={{ opacity: 0, y: promptsHeight }}
+						// Rise with the heading, on the heading's curve, fading in a little behind it.
+						animate={{ opacity: 1, y: 0, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.24, delay: 0.06, ease: [0.23, 1, 0.32, 1] } } }}
+						// Sink with the heading; the fade finishes before they reach the composer.
+						exit={{ opacity: 0, y: promptsHeight, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.2, ease: [0.4, 0, 1, 1] } } }}
+					>
+						{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
+						<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
+							{chips(onPick)}
+						</ul>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
 	);
 }

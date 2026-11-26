@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	launch: vi.fn(),
 	launchFallback: vi.fn(),
+	chooseTurnSettings: vi.fn(),
 	fallbackAction: undefined as string | undefined,
 	isCloudProject: false,
 	error: undefined as string | undefined,
@@ -83,7 +84,7 @@ vi.mock("./TaskComposer", () => ({
 		chatModels: h.chatModels,
 		turnSettings: { model: h.model, reasoningEffort: "high", approvalMode: h.approvalMode },
 		approvalModes: h.approvalModes,
-		chooseTurnSettings: vi.fn(),
+		chooseTurnSettings: h.chooseTurnSettings,
 		agent: { value: h.harness },
 		model: {},
 		effort: {},
@@ -114,6 +115,7 @@ beforeEach(() => {
 	h.navigate.mockReset();
 	h.launch.mockReset();
 	h.launchFallback.mockReset();
+	h.chooseTurnSettings.mockReset();
 	h.fallbackAction = undefined;
 	h.isCloudProject = false;
 	h.error = undefined;
@@ -761,5 +763,29 @@ describe("New Chat model menu", () => {
 		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
 			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
 		]);
+	});
+
+	it("keeps a project-pinned model the account's catalog lacks re-selectable after picking a listed one", () => {
+		const note = "Set for this project · Codex doesn't list it for this account";
+		h.chatModels = [
+			{ id: "gpt-6", displayName: "GPT-6", default: true },
+			{ id: "gpt-5.4-mini", displayName: "gpt-5.4-mini", default: false, hint: note },
+		];
+		h.model = "gpt-5.4-mini";
+		const page = renderPage();
+		const showBar = () => render(<QueryClientProvider client={page}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		showBar();
+		expect(modelPicker.current?.modelId).toBe("gpt-5.4-mini");
+		expect(modelPicker.current?.models.find((model) => model.id === "gpt-5.4-mini")).toEqual(expect.objectContaining({ hint: note }));
+		act(() => modelPicker.current?.onPickModel?.("gpt-6"));
+		expect(h.chooseTurnSettings).toHaveBeenLastCalledWith(expect.objectContaining({ model: "gpt-6" }));
+
+		h.model = "gpt-6";
+		page.refresh();
+		showBar();
+		expect(modelPicker.current?.modelId).toBe("gpt-6");
+		expect(modelPicker.current?.models.map((model) => model.id)).toEqual(["gpt-6", "gpt-5.4-mini"]);
+		act(() => modelPicker.current?.onPickModel?.("gpt-5.4-mini"));
+		expect(h.chooseTurnSettings).toHaveBeenLastCalledWith(expect.objectContaining({ model: "gpt-5.4-mini" }));
 	});
 });

@@ -165,3 +165,16 @@ func TestCopyOnceCheckRefusesTheCopy(t *testing.T) {
 		t.Fatalf("temporary files left behind: %v", leftovers)
 	}
 }
+
+func TestDeleteField(t *testing.T) {
+	got, err := DeleteField([]byte(`{"cwd":"/work","lastCwd":"/src","n":1}`), "lastCwd")
+	if err != nil || string(got) != `{"cwd":"/work","n":1}` {
+		t.Fatalf("DeleteField = %s, %v", got, err)
+	}
+	if got, err := DeleteField([]byte(`{"cwd":"/work"}`), "lastCwd"); err != nil || string(got) != `{"cwd":"/work"}` {
+		t.Fatalf("DeleteField without the field = %s, %v", got, err)
+	}
+	if _, err := DeleteField([]byte(`null`), "lastCwd"); err == nil {
+		t.Fatal("null record accepted")
+	}
+}

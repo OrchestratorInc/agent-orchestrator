@@ -318,7 +318,10 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
 		const removeImage = await screen.findByRole("button", { name: "Remove shot.png" });
 		const row = screen.getByTestId("composer-attachments-and-annotations");
-		expect(row).toHaveClass("flex", "flex-wrap", "items-center");
+		// One row that scrolls sideways and fades at an edge with more past it, never wraps.
+		expect(row).toHaveClass("edge-fade", "edge-fade-x", "overflow-x-auto");
+		expect(row.firstElementChild).toHaveClass("flex", "w-max", "items-start");
+		expect(row.firstElementChild).not.toHaveClass("flex-wrap");
 		expect(row).toContainElement(removeImage);
 		expect(row).toContainElement(screen.getByRole("button", { name: "1 annotation" }));
 		await userEvent.click(screen.getByRole("button", { name: "Remove all annotations" }));

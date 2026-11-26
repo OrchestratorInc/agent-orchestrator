@@ -468,6 +468,10 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 	return toSnapshot(await fetchConversationWire(sessionId, hostId, conversationPageQuery(hostId, beforeSequence)));
 }
 
+export async function fetchRecentConversation(sessionId: string, hostId?: string): Promise<ConversationSnapshot> {
+	return toSnapshot(await fetchConversationWire(sessionId, hostId, { limit: 200, outputLimit: 64 }));
+}
+
 /** The whole output of one activity, for a page that carries only its head and tail. */
 export async function fetchActivityOutput(sessionId: string, hostId: string | undefined, sequence: number, activityId: string): Promise<string | undefined> {
 	const wire = await fetchConversationWire(sessionId, hostId, { beforeSequence: sequence + 1, afterSequence: sequence > 1 ? sequence - 1 : undefined, limit: 1 });
@@ -2549,6 +2553,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			retryOfTurnId: turn.retryOfTurnId,
 			hasRetryAttempt: turn.hasRetryAttempt,
 			hasHumanPrompt: turn.hasHumanPrompt,
+			hasEventPrompt: turn.hasEventPrompt,
 			errorMessage: turn.errorMessage,
 			failureCode: turn.failureCode,
 			usageLimit: turn.usageLimit ? {

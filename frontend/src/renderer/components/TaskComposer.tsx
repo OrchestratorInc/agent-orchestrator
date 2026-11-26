@@ -857,11 +857,24 @@ export function useTaskLaunch({ projectId, hostId }: {
 		() => (isCloudProject ? withoutLocalAvailability(localOfferedModels) : localOfferedModels),
 		[isCloudProject, localOfferedModels],
 	);
+	// A model the project pins that the account's list lacks (Codex lists only the
+	// models an account offers) stays selectable, with a note, rather than reading
+	// as a bare id with no row behind it. The agent still decides at launch (#5679).
+	const unlistedProjectModel = !isCloudProject && localCatalog && isConcreteModelID(projectModelForSelectedAgent) &&
+		!offeredModels.some((item) => item.id === projectModelForSelectedAgent)
+		? projectModelForSelectedAgent
+		: "";
+	const pinnedNote = t("settings.models.pinnedNotListed", { agent: agentLabel(selectedAgent) });
+	const localModels = useMemo(() => {
+		if (unlistedProjectModel === "") return offeredModels;
+		const pinned: AgentModelOption & { note: string } = { id: unlistedProjectModel, label: unlistedProjectModel, isDefault: false, note: pinnedNote };
+		return [...offeredModels, pinned];
+	}, [offeredModels, pinnedNote, unlistedProjectModel]);
 	const localModelCatalog: TaskComposerModelCatalog | undefined = localCatalog
 		? {
 				allowCustom: localCatalog.allowCustom,
 				customModelEntry: localCatalog.customModelEntry,
-				models: offeredModels,
+				models: localModels,
 				refreshError: localCatalog.refreshError,
 				refreshState: localCatalog.refreshState,
 				retryAt: localCatalog.retryAt,
@@ -1465,14 +1478,21 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const orchestratorModelHint = orchestratorModelIsValid
 		? { id: orchestratorModelForSelectedAgent, label: t("newTask.sameAsOrchestrator") }
 		: undefined;
-	const chatModels = useMemo<ChatModel[]>(() => catalogModels.map((item) => ({
-		id: item.id,
-		displayName: item.id === "auto" ? t("settings.models.autoRouteLabel") : catalogUsesModes ? modelChoiceLabel(item) : item.label,
-		default: Boolean(item.isDefault),
-		efforts: item.efforts,
-		defaultEffort: item.defaultEffort,
-		...(orchestratorModelHint?.id === item.id ? { hint: orchestratorModelHint.label } : {}),
-	})), [catalogModels, catalogUsesModes, orchestratorModelHint?.id, orchestratorModelHint?.label, t]);
+	// The project's off-catalog pin is listed here too, so /new can re-select it, but
+	// it is never the default and stays out of the catalog the automatic picks read.
+	const chatModels = useMemo<ChatModel[]>(() => [
+		...catalogModels.map((item) => ({
+			id: item.id,
+			displayName: item.id === "auto" ? t("settings.models.autoRouteLabel") : catalogUsesModes ? modelChoiceLabel(item) : item.label,
+			default: Boolean(item.isDefault),
+			efforts: item.efforts,
+			defaultEffort: item.defaultEffort,
+			...(orchestratorModelHint?.id === item.id ? { hint: orchestratorModelHint.label } : {}),
+		})),
+		...(unlistedProjectModel !== "" && !catalogModels.some((item) => item.id === unlistedProjectModel)
+			? [{ id: unlistedProjectModel, displayName: unlistedProjectModel, default: false, hint: pinnedNote }]
+			: []),
+	], [catalogModels, catalogUsesModes, orchestratorModelHint?.id, orchestratorModelHint?.label, pinnedNote, t, unlistedProjectModel]);
 	const turnSettings: TurnSettings = {
 		model: (selectedModel || selectedMode) || undefined,
 		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,

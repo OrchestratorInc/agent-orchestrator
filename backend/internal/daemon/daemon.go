@@ -49,6 +49,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/hostupdate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -173,6 +174,9 @@ func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals co
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) (retErr error) {
+	// ao.daemon.ready's steps start here, so config loading and data
+	// directory preparation count toward the prepare step.
+	steps := newStartupSteps(time.Now(), time.Now)
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -283,10 +287,12 @@ func Run(buildVersion string) (retErr error) {
 	// lifecycle stack) are not covered: a predecessor stuck in one past the
 	// wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, cmp.Or(cfg.InstallerShutdownTimeout, systeminstall.DefaultShutdownTimeout()))
+	steps.done(stepPrepare)
 	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, dataDirTakeoverWait(cfg.ShutdownTimeout, installerShutdownTimeout), log)
 	if err != nil {
 		return err
 	}
+	steps.done(stepLockWait)
 	openLogFile(cfg.DataDir)
 	defer func() { _ = dataDirLock.Release() }()
 
@@ -301,6 +307,7 @@ func Run(buildVersion string) (retErr error) {
 	if _, err := store.RequeueClaimedReports(context.Background()); err != nil {
 		return fmt.Errorf("recover report delivery claims: %w", err)
 	}
+	steps.done(stepStoreOpen)
 	// Refresh the embedded using-ao skill into the data dir so worker sessions
 	// in any project can read the ao CLI catalog from a stable absolute path.
 	// Non-fatal: the skill is an enhancement over `ao --help`, not required.
@@ -425,6 +432,7 @@ func Run(buildVersion string) (retErr error) {
 	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
 	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log, cdcPipe.sessionChanges())
+	steps.done(stepLifecycleSetup)
 	// ao.sessions.ended joins the usage summaries through the same grouping IDs,
 	// which are scoped to the install and only minted while export is on.
 	lcStack.LCM.DeliveryTelemetry().SetInstallID(func() string {
@@ -680,6 +688,7 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("reviewer resolver: %w", err)
 	}
+	steps.done(stepChatSetup)
 	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, reviewRefresher, log)
 	if err != nil {
 		stop()
@@ -730,7 +739,7 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	// The mode-aware messenger, so a Chat original is told as a chat message.
-	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
+	sessionForkSvc := wireSessionFork(cfg.DataDir, store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
 		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
@@ -831,7 +840,21 @@ func Run(buildVersion string) (retErr error) {
 	wireManagedPreviewExit(managedPreview, sessionSvc, log)
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
+	sessionImportSvc.SetImportVersionCheck(func(ctx context.Context, harness domain.AgentHarness) error {
+		agent, ok := agents.Agent(harness)
+		if !ok {
+			return nil
+		}
+		if checker, ok := agent.(ports.AgentImportVersionChecker); ok {
+			return checker.CheckImportVersion(ctx)
+		}
+		return nil
+	})
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
+	// The Orchestrator attribution beta credits Orchestrator on new sessions'
+	// commits and PRs. Wired before tracker intake starts, so a session its
+	// first poll spawns already sees the setting.
+	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -896,6 +919,7 @@ func Run(buildVersion string) (retErr error) {
 		PrivateNPMPrefixes:        privateNPMPrefixes,
 		PrivateInstallerHomes:     privateInstallerHomes,
 	})
+	steps.done(stepSessionSetup)
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
 		lcStack.Stop()
@@ -904,6 +928,7 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("recover harness install jobs: %w", err)
 	}
+	steps.done(stepInstallRecovery)
 	sessMgr.SetHarnessUseGate(systemInstall)
 	systemInstall.SetHarnessUpdateObserver(sessMgr)
 	systemInstall.SetIdleUpdateCoordinator(sessMgr)
@@ -1152,9 +1177,11 @@ func Run(buildVersion string) (retErr error) {
 
 	// Codex switch recovery is best effort and never blocks unrelated daemon
 	// startup. Its own credential gate still protects any local mutation.
+	steps.done(stepServicesSetup)
 	if reconcileErr := agentSvc.ReconcileCodexAccountSwitches(ctx); reconcileErr != nil {
 		log.Warn("Codex account switch recovery deferred", "err", reconcileErr)
 	}
+	steps.done(stepCodexRecovery)
 
 	// Durable interface-transition recovery is the startup
 	// safety boundary. The in-memory input fence disappeared with the previous
@@ -1170,6 +1197,7 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
+	steps.done(stepStartupReconcile)
 	agentSvc.WarmCodexAccounts()
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, telemetrySink, log)
 	lcStack.automationDone = automationDone
@@ -1306,6 +1334,10 @@ func Run(buildVersion string) (retErr error) {
 	if usageHookQueue != nil {
 		usageHooks = usageHookQueue
 	}
+	deviceSvc := newDeviceService(cfg.DataDir, sessionSvc, log)
+	// Devices are a Developer mode preview: the desktop turns them on through
+	// PUT /devices/availability, and only then do new sessions hear of them.
+	sessMgr.SetDevicesOffered(deviceSvc.Offered)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
@@ -1313,6 +1345,7 @@ func Run(buildVersion string) (retErr error) {
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
+		HostUpdate:         hostupdate.New(cfg.Telemetry.AppVersion, cfg.DataDir, browserBroker),
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
@@ -1383,11 +1416,15 @@ func Run(buildVersion string) (retErr error) {
 		PRPreview:                prPreview,
 		SessionSearch:            sessionSearchSvc,
 		PreviewServer:            managedPreview,
+		Devices:                  deviceSvc,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
 	})
 	if err != nil {
 		stop()
+		if devErr := deviceSvc.Shutdown(); devErr != nil {
+			log.Error("device support shutdown", "err", devErr)
+		}
 		lcStack.Stop()
 		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
@@ -1488,6 +1525,8 @@ func Run(buildVersion string) (retErr error) {
 	var startupReconcileDone <-chan struct{}
 	var usageLimitResumeDone <-chan struct{}
 	runErr := srv.RunWithReady(ctx, func() {
+		steps.done(stepListen)
+		emitStartupSteps(telemetrySink, daemonReadyEvent, steps, daemonReadyTotal)
 		// Agent-readiness warming is advisory and idempotent, and request paths
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous
@@ -1507,10 +1546,12 @@ func Run(buildVersion string) (retErr error) {
 			defer sentryobs.RecoverBackground()
 			defer close(done)
 			defer lcStack.StartReaperLoop()
+			restore := newStartupSteps(time.Now(), time.Now)
 			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store, cfg.AppRunID); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
 				sentryobs.CaptureBackground(ctx, reconcileErr, "chat", "reconcile", map[string]string{"reason": "chat_host"})
 			}
+			restore.done(stepChatHosts)
 			close(persistentHostsReconciled)
 			// Reviewer-owned Chat controllers wait for persistent host reconciliation.
 			// Recover them only after the listener is ready and the gate is closed, or
@@ -1518,13 +1559,20 @@ func Run(buildVersion string) (retErr error) {
 			if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
 				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
 			}
+			restore.done(stepReviewerRecovery)
 			close(reviewerChatsRecovered)
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}
+			restore.done(stepSessions)
 			if reconcileErr := lcStack.ReconcileRuntime(ctx); reconcileErr != nil {
 				log.Error("background agent-process reconciliation on boot failed", "err", reconcileErr)
 				sentryobs.CaptureBackground(ctx, reconcileErr, "lifecycle", "reconcile", map[string]string{"reason": "runtime"})
+			}
+			restore.done(stepRuntime)
+			// A restore cut short by shutdown is not a startup measurement.
+			if ctx.Err() == nil {
+				emitStartupSteps(telemetrySink, daemonStartupReconciledEvent, restore, daemonReconcileTotal)
 			}
 		}()
 		go func() {
@@ -1562,7 +1610,7 @@ func Run(buildVersion string) (retErr error) {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
-				reapForkSeeds(ctx, store, log)
+				reapForkSeeds(ctx, cfg.DataDir, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
@@ -1687,6 +1735,9 @@ func Run(buildVersion string) (retErr error) {
 	}
 	codexSwitchCancel()
 	managedPreview.Close()
+	if err := deviceSvc.Shutdown(); err != nil {
+		log.Error("device support shutdown", "err", err)
+	}
 	<-previewDone
 	// Daemon replacement detaches providers. Desktop exit stops processes
 	// while keeping the sessions and worktrees available for resume.
