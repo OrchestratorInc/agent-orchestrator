@@ -240,7 +240,7 @@ function BinaryArtifactPreview({ path, sessionId, local }: { path: string; sessi
 				<Button size="sm" variant="secondary" disabled={open.isPending} onClick={() => open.mutate({ sessionId, path, targetId: "file-manager" })}>
 					{t("artifacts.showIn", { name: fileManagerName() })}
 				</Button>
-				{open.error ? <p role="alert">{open.error.message}</p> : null}
+				{open.error ? <p role="alert" className="text-destructive">{open.error.message}</p> : null}
 			</div>
 		) : undefined}>
 			{t(extension ? "files.previewUnavailableType" : "files.previewUnavailable", { type: extension })}
