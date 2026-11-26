@@ -3826,7 +3826,7 @@ setPasswordCipher(() => protectedStorageAvailable() ? {
 void app.whenReady().then(() => sealSavedPasswords(remotesFilePath())).catch((error: unknown) => {
 	console.warn("[remotes] could not encrypt saved host passwords", error);
 });
-registerRemotesIpc(ipcMain, {
+const remotesIpc = registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
 	requireAccount: async () => {
@@ -4459,6 +4459,8 @@ function notifyRenderersOfCloudSession(
 	// file names the owner), so one who signed in since the last run never sees them.
 	if (!account || (notifiedCloudUserId !== undefined && account.user.id !== notifiedCloudUserId)) {
 		void sessionShareUrls.clear().catch(() => undefined);
+		// The computer-use target's credential belongs to the account's hosts too.
+		void remotesIpc.reconcileComputerUseTarget();
 	}
 	notifiedCloudUserId = account?.user.id;
 	// The Cloud artifact previews on disk belong to one account: another one signing in, or this one
