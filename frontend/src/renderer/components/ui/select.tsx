@@ -102,6 +102,8 @@ function SelectItem({ className, children, ...props }: React.ComponentProps<type
 				OPTION_MENU_ROW,
 				"select-none data-[state=checked]:text-foreground data-[state=checked]:before:bg-interactive-active data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
 				"[&_svg]:pointer-events-none [&_svg]:shrink-0",
+				// The panel stops at the option menu's width, so a long label ends in an ellipsis.
+				"[&>span]:min-w-0 [&>span]:truncate",
 				className,
 			)}
 			{...props}

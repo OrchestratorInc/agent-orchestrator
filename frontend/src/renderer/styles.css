@@ -8318,8 +8318,9 @@ html[data-new-desktop-ui]:not([data-theme="light"]) .switch-inset:active:not(:di
  * input edge), the control corner and 13px text, and focus brings the edge up
  * to a soft ring. Only the height and a leading icon tell the shapes apart:
  * field 32px, compact 28px (in menus and rows), search (compact with an icon;
- * a top bar's takes the bar's control height), dropdown (a field with a
- * chevron, 28px when small), text area and inline edit. A self-styled field
+ * a top bar's takes the bar's control height), dropdown (a 32px field with
+ * a chevron at every size, so it lines up with the inputs beside it), text
+ * area and inline edit. A self-styled field
  * joins with `data-field` (field, compact, search, textarea, inline); the
  * browser's address bar and the chat composer keep their own. The lists sit
  * in :where() so a field's own state rules (a dropdown's hover face, the
