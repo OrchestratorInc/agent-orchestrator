@@ -48,6 +48,7 @@ describe("CustomEndpointMethod", () => {
 		expect(row).toHaveAttribute("aria-expanded", "false");
 		expect(screen.getByText("Not set")).toBeInTheDocument();
 		expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+		expect(screen.queryByText("Send key as")).not.toBeInTheDocument();
 		fireEvent.click(row);
 		expect(onToggle).toHaveBeenCalled();
 
@@ -69,9 +70,9 @@ describe("CustomEndpointMethod", () => {
 		fireEvent.click(save);
 
 		await waitFor(() => expect(onChanged).toHaveBeenCalled());
+		// How the key is sent is left to the daemon, which asks the endpoint.
 		expect(endpointMocks.setAgentEndpoint).toHaveBeenCalledWith("claude-code", {
 			baseUrl: "https://gateway.example.com",
-			authStyle: "bearer",
 			apiKey: "sk-test",
 			model: "claude-sonnet",
 		}, "host-a");

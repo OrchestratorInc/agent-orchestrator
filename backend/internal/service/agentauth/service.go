@@ -6,6 +6,7 @@ package agentauth
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,12 +129,15 @@ type StartResult struct {
 // dataDir roots the stable per-harness auth workspaces used by plans with a
 // prepareWorkspace hook.
 type Service struct {
-	executables    ExecutableFinder
-	agents         AgentBinaryResolver
-	terminals      TerminalOpener
-	dataDir        string
-	selfExecutable func() (string, error)
-	mu             sync.Mutex
+	executables ExecutableFinder
+	agents      AgentBinaryResolver
+	terminals   TerminalOpener
+	dataDir     string
+	// endpointProbeClient asks a custom endpoint which auth style it accepts;
+	// nil uses harnessendpoint.ProbeClient. Tests point it at a local server.
+	endpointProbeClient *http.Client
+	selfExecutable      func() (string, error)
+	mu                  sync.Mutex
 	// keysMu serializes changes to AO's provider keys and their OS user
 	// environment copies: saves, removals and the startup republication.
 	keysMu         sync.Mutex

@@ -52,6 +52,11 @@ type Spec struct {
 	// it away from BaseURLEnv. Without this a subscription token from a bound
 	// account or the daemon's environment could reach the custom endpoint.
 	ClearEnv []string
+	// ProbePath is a read-only GET under the base URL that needs the key, used
+	// to tell which auth style an endpoint accepts. Empty means no probe.
+	ProbePath string
+	// ProbeHeaders are sent with the probe beside the key.
+	ProbeHeaders map[string]string
 }
 
 // AuthStyles returns the spec's supported auth styles in stable order.
@@ -93,6 +98,9 @@ var specs = map[string]Spec{
 		},
 		DefaultAuthStyle: AuthBearer,
 		ModelEnv:         "ANTHROPIC_MODEL",
+		// Claude Code's gateway check lists models the same way.
+		ProbePath:    "/v1/models",
+		ProbeHeaders: map[string]string{"anthropic-version": "2023-06-01"},
 	},
 	"codex": {
 		AgentID:    "codex",
@@ -168,6 +176,42 @@ func (s Spec) activeIn(env map[string]string) bool {
 func Lookup(agentID string) (Spec, bool) {
 	spec, ok := specs[agentID]
 	return spec, ok
+}
+
+// ProbeTarget is what an auth-style probe for a save would use.
+type ProbeTarget struct {
+	BaseURL string
+	Key     string
+	// SavedStyle is set when the save keeps the saved base URL and key: the
+	// style that already works is kept, so a save that changes only the model
+	// never re-probes, and a gateway that is briefly down cannot reset it.
+	SavedStyle AuthStyle
+}
+
+// ProbeTarget validates in for agentID and returns the base URL and key a save
+// would store: the key from in, or the saved one when in leaves it empty. ok
+// is false when there is no key to probe with.
+func (s *Store) ProbeTarget(agentID string, in Input) (ProbeTarget, bool, error) {
+	spec, supported := specs[agentID]
+	if !supported {
+		return ProbeTarget{}, false, ErrUnsupported
+	}
+	cfg, err := normalize(spec, in)
+	if err != nil {
+		return ProbeTarget{}, false, err
+	}
+	if cfg.APIKey != "" {
+		return ProbeTarget{BaseURL: cfg.BaseURL, Key: cfg.APIKey}, true, nil
+	}
+	existing, saved, loadErr := s.Load(agentID)
+	if loadErr != nil || !saved {
+		return ProbeTarget{}, false, nil
+	}
+	target := ProbeTarget{BaseURL: cfg.BaseURL, Key: existing.APIKey}
+	if strings.TrimRight(existing.BaseURL, "/") == cfg.BaseURL {
+		target.SavedStyle = existing.AuthStyle
+	}
+	return target, true, nil
 }
 
 // AgentIDs lists every harness with a custom endpoint spec, sorted.
