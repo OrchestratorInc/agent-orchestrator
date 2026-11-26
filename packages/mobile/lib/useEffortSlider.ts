@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { BackHandler, Keyboard } from "react-native";
 import { onTouchOutside } from "./touchOutside";
 import type { EffortChoice } from "./modelEffort";
@@ -12,18 +12,27 @@ export const EFFORT_SLIDER_TIMEOUT_MS = 12_000;
  * each subscribe on their own, so opening the slider re-renders those two and
  * not the composer around them: re-rendering a whole chat composer (its native
  * menus included) on each open held the slider back by a good half second.
+ *
+ * It also holds the level being picked, ahead of the owner's choices: the
+ * level under the finger while it drags, then the one it chose until the
+ * owner's choices show it saved (see useChatEffort). The gauge and the slider
+ * both show it, so they never disagree, and the composer is not re-rendered
+ * for each level the finger crosses.
  */
 export type EffortSliderSwitch = {
 	isOpen(): boolean;
 	setOpen(open: boolean): void;
 	bottom(): number;
 	setBottom(bottom: number): void;
+	pick(): string | undefined;
+	setPick(value: string | undefined): void;
 	subscribe(listener: () => void): () => void;
 };
 
 export function createEffortSliderSwitch(): EffortSliderSwitch {
 	let open = false;
 	let bottom = 0;
+	let pick: string | undefined;
 	const listeners = new Set<() => void>();
 	const emit = () => { for (const listener of [...listeners]) listener(); };
 	return {
@@ -31,6 +40,8 @@ export function createEffortSliderSwitch(): EffortSliderSwitch {
 		setOpen: (next) => { if (next !== open) { open = next; emit(); } },
 		bottom: () => bottom,
 		setBottom: (next) => { if (next !== bottom) { bottom = next; emit(); } },
+		pick: () => pick,
+		setPick: (next) => { if (next !== pick) { pick = next; emit(); } },
 		subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
 	};
 }
@@ -43,6 +54,18 @@ export function useEffortSliderSwitch(): EffortSliderSwitch {
 /** Whether the switch is on, re-rendering the caller only when that changes. */
 export function useEffortSliderSwitchOpen(slider: EffortSliderSwitch): boolean {
 	return useSyncExternalStore(slider.subscribe, slider.isOpen);
+}
+
+/** `choices` with the switch's pick checked in place of the owner's, when it is one of them. */
+export function withPick<T extends { value: string; selected: boolean }>(choices: readonly T[], pick: string | undefined): readonly T[] {
+	if (pick === undefined || !choices.some((choice) => choice.value === pick)) return choices;
+	return choices.map((choice) => (choice.selected === (choice.value === pick) ? choice : { ...choice, selected: choice.value === pick }));
+}
+
+/** The choices as the gauge and the slider show them: the level being picked, else the owner's. */
+export function useEffortChoicesShown<T extends { value: string; selected: boolean }>(slider: EffortSliderSwitch, choices: readonly T[]): readonly T[] {
+	const pick = useSyncExternalStore(slider.subscribe, slider.pick);
+	return useMemo(() => withPick(choices, pick), [choices, pick]);
 }
 
 /**

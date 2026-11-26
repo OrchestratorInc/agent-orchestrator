@@ -2,27 +2,28 @@ import Hand from "lucide-react-native/icons/hand";
 import PencilLine from "lucide-react-native/icons/pencil-line";
 import ShieldAlert from "lucide-react-native/icons/shield-alert";
 import ShieldCheck from "lucide-react-native/icons/shield-check";
-import { memo, useEffect, useSyncExternalStore, type ComponentType } from "react";
-import { Pressable, StyleSheet, Text, View, type DimensionValue } from "react-native";
+import { memo, useEffect, type ComponentType } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { COMPOSER_RADIUS } from "./chat/composerStyles";
 import type { ApprovalMode } from "./chat/types";
 import { ComposerOverlay } from "./composer-overlay";
 import { useWarmAfterIdle } from "./effort-slider-host";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { iconSize, radius, space, touchTarget, type } from "./tokens";
+import { iconSize, space, touchTarget, type } from "./tokens";
 import { markTouchInside } from "./touchOutside";
 import { useTouchDownPress } from "./useTouchDownPress";
 import { useEffortSliderOpen, useEffortSliderSwitchOpen, type EffortSliderSwitch } from "./useEffortSlider";
 
 /*
  * The chat's permission mode, picked the way its effort is: the composer's
- * button opens the modes floating over the chat on the overlay's veil, with no
- * card of their own, listed as desktop's permission picker lists them. Every
- * row is the same height and lines up the same
- * way: the mode's icon, its name, and one line on what it lets
- * the agent do. The one in force sits in a soft wash of the text colour rather
- * than being ticked.
+ * button lays the modes over the composer, on the overlay's veil with no card
+ * or heading, the full width of the composer, listed as desktop's permission
+ * picker lists them. Every row is the same height and
+ * lines up the same way: the mode's icon, its name, and one line on what it
+ * lets the agent do. The one in force sits in a soft wash of the text colour
+ * rather than being ticked.
  */
 
 export type PermissionChoice = {
@@ -34,15 +35,12 @@ export type PermissionChoice = {
 	look?: ApprovalMode;
 };
 
-// The list's width: a little wider than the effort slider's card, so the
-// highlight on the mode in force has room around its words.
-const PICKER_WIDTH = 360;
-// The veil's reach above the list: its arch is solid only over its lower half
-// or so, and the list is three times the slider's height.
-const VEIL_RISE = 220;
 // Every row this tall, whatever its text, so the list reads as an even stack.
 const ROW_HEIGHT = 58;
-const ROW_RADIUS = radius.lg;
+// The list is laid over the composer's pill, its full width, and the rows'
+// corners are concentric with the pill's, an even inset in.
+const LIST_INSET = space.xs;
+const ROW_RADIUS = COMPOSER_RADIUS - LIST_INSET;
 // The icons' column, so every name starts at the same place.
 const ICON_COLUMN = 24;
 
@@ -116,13 +114,12 @@ export const PermissionPickerHost = memo(function PermissionPickerHost({ slider,
 	// As the effort slider's host: a request card replacing the composer must
 	// not leave the picker to reopen by itself when the card goes.
 	useEffect(() => () => slider.setOpen(false), [slider]);
-	const bottom = useSyncExternalStore(slider.subscribe, slider.bottom);
 	const warm = useWarmAfterIdle();
-	if (!(open || warm) || !bottom) return null;
+	if (!(open || warm)) return null;
 	return (
 		<PermissionPickerOverlay
 			visible={open}
-			bottom={bottom}
+			onDismiss={() => slider.setOpen(false)}
 			choices={choices}
 			onChoose={(value) => {
 				slider.setOpen(false);
@@ -132,9 +129,9 @@ export const PermissionPickerHost = memo(function PermissionPickerHost({ slider,
 	);
 });
 
-export function PermissionPickerOverlay({ bottom, visible = true, choices, onChoose }: { bottom: DimensionValue; visible?: boolean; choices: readonly PermissionChoice[]; onChoose: (value: string) => void }) {
+export function PermissionPickerOverlay({ visible = true, onDismiss, choices, onChoose }: { visible?: boolean; onDismiss?: () => void; choices: readonly PermissionChoice[]; onChoose: (value: string) => void }) {
 	return (
-		<ComposerOverlay bottom={bottom} visible={visible} veilRise={VEIL_RISE}>
+		<ComposerOverlay overKeyboard onDismiss={onDismiss} visible={visible} fill>
 			<PermissionPicker choices={choices} onChoose={onChoose} />
 		</ComposerOverlay>
 	);
@@ -144,36 +141,38 @@ export function PermissionPicker({ choices, onChoose }: { choices: readonly Perm
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return (
-		<View style={styles.list} accessibilityRole="radiogroup" accessibilityLabel="Permissions" testID="permission-picker">
-			{choices.map((choice) => {
-				const Icon = permissionIcon(choice.look);
-				const warning = warns(choice.look);
-				return (
-					<Pressable
-						key={choice.value}
-						onPress={() => {
-							if (!choice.selected) haptics.select();
-							onChoose(choice.value);
-						}}
-						accessibilityRole="radio"
-						accessibilityState={{ checked: choice.selected }}
-						accessibilityLabel={choice.label}
-						accessibilityHint={choice.description}
-						testID={`permission-${choice.value}`}
-						style={({ pressed }) => [styles.row, choice.selected ? styles.rowSelected : pressed && styles.rowPressed]}
-					>
-						<View style={styles.icon}>
-							<Icon size={iconSize.md} strokeWidth={2} color={warning ? t.amber : choice.selected ? t.textPrimary : t.textSecondary} />
-						</View>
-						<View style={styles.text}>
-							<Text style={[styles.title, warning && styles.warning]} numberOfLines={1}>{choice.label}</Text>
-							{choice.description ? (
-								<Text style={[styles.description, warning && styles.warningSoft]} numberOfLines={1}>{choice.description}</Text>
-							) : null}
-						</View>
-					</Pressable>
-				);
-			})}
+		<View style={styles.stack}>
+			<View style={styles.list} accessibilityRole="radiogroup" accessibilityLabel="Permissions" testID="permission-picker">
+				{choices.map((choice) => {
+					const Icon = permissionIcon(choice.look);
+					const warning = warns(choice.look);
+					return (
+						<Pressable
+							key={choice.value}
+							onPress={() => {
+								if (!choice.selected) haptics.select();
+								onChoose(choice.value);
+							}}
+							accessibilityRole="radio"
+							accessibilityState={{ checked: choice.selected }}
+							accessibilityLabel={choice.label}
+							accessibilityHint={choice.description}
+							testID={`permission-${choice.value}`}
+							style={({ pressed }) => [styles.row, choice.selected ? styles.rowSelected : pressed && styles.rowPressed]}
+						>
+							<View style={styles.icon}>
+								<Icon size={iconSize.md} strokeWidth={2} color={warning ? t.amber : choice.selected ? t.textPrimary : t.textSecondary} />
+							</View>
+							<View style={styles.text}>
+								<Text style={[styles.title, warning && styles.warning]} numberOfLines={1}>{choice.label}</Text>
+								{choice.description ? (
+									<Text style={[styles.description, warning && styles.warningSoft]} numberOfLines={1}>{choice.description}</Text>
+								) : null}
+							</View>
+						</Pressable>
+					);
+				})}
+			</View>
 		</View>
 	);
 }
@@ -185,7 +184,8 @@ const buttonStyles = StyleSheet.create({
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		list: { width: PICKER_WIDTH, gap: space.hair },
+		stack: { gap: space.xs, alignItems: "center", alignSelf: "stretch" },
+		list: { alignSelf: "stretch", padding: LIST_INSET, gap: space.hair },
 		row: {
 			flexDirection: "row",
 			alignItems: "center",

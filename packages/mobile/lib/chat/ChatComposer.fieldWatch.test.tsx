@@ -66,6 +66,7 @@ vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurn
 vi.mock("./RequestCard", () => ({ RequestCard: "RequestCard" }));
 vi.mock("../effort-slider", () => ({ EffortSliderOverlay: "EffortSliderOverlay" }));
 vi.mock("../permission-picker", () => ({ PermissionPickerHost: "PermissionPickerHost", PermissionPickerButton: "PermissionPickerButton" }));
+vi.mock("../model-wheel", () => ({ ModelWheelHost: "ModelWheelHost" }));
 vi.mock("./PRChip", () => ({ PRChipContent: "PRChipContent", prChipAccessibilityLabel: () => "Pull request" }));
 import { ChatComposer } from "./ChatComposer";
 import type { RequestDockModel } from "./requestDockModel";

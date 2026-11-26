@@ -1,47 +1,67 @@
 import { StyleSheet, View } from "react-native";
-import Svg, { Defs, Ellipse, RadialGradient, Stop } from "react-native-svg";
+import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { useTheme } from "./ThemeProvider";
 import { space } from "./tokens";
 
-/** How far above the slider's heading the veil reaches before it is gone. */
-export const VEIL_RISE = 112;
+/** How tall the fade above the overlay is, from the page's colour to clear. */
+export const VEIL_RISE = 120;
 /** How far past the composer's sides it reaches, so it meets the screen's edges. */
 const VEIL_BLEED = 24;
+/** How far the solid part reaches past the overlay's top, over a composer's padding it would otherwise leave showing. */
+const SOLID_OVERHANG = space.md;
+
+// The fade's opacity from its top to its foot, on an ease-in-out curve: a
+// straight ramp reads as a hard band where it meets the solid part, and an
+// 8-bit dark gradient bands visibly on Android with only two stops.
+const FADE = [0, 0.03, 0.1, 0.21, 0.36, 0.53, 0.7, 0.84, 0.94, 1];
 
 /**
- * A veil of the page's own colour behind the effort slider, from the card up
- * past its heading and across the whole screen: solid behind the card and the
- * words, then a soft arch fading into the conversation above, highest in the
- * middle and curving down at both ends, so the heading
- * reads over a busy chat without a box around it. It takes no touches, so a
- * tap on the chat through it still closes the slider.
+ * A veil of the page's own colour behind a composer overlay, edge to edge:
+ * solid behind the overlay, so whatever it sits on (the composer it covers,
+ * the chat it floats over) is hidden rather than ghosting through, then a
+ * fade above it into the conversation, even across the screen's width. It
+ * takes no touches, so a tap on the chat through it still closes the overlay.
  */
-export function EffortSliderVeil({ rise = VEIL_RISE }: { rise?: number }) {
+export function EffortSliderVeil({ rise = VEIL_RISE, fall = 0 }: {
+	rise?: number;
+	/** How far it also fades down past the overlay's foot: over the keys' top rows, for an overlay above the keyboard. */
+	fall?: number;
+}) {
 	const t = useTheme();
 	return (
-		<View pointerEvents="none" style={[styles.veil, { top: -rise }]}>
-			<Svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 100 100">
-				<Defs>
-					{/* An arch rather than a flat edge: an ellipse centred on the bottom
-					    middle and wider than the screen, the gradient fitted to it, so it
-					    rises highest behind the heading and its two ends curve down
-					    toward the screen's sides. (A gradient given its own rx and ry is
-					    drawn as a circle on Android.) */}
-					<RadialGradient id="effort-slider-veil" cx="50%" cy="50%" r="50%" gradientUnits="objectBoundingBox">
-						<Stop offset="0" stopColor={t.bgBase} stopOpacity={1} />
-						<Stop offset="0.58" stopColor={t.bgBase} stopOpacity={1} />
-						<Stop offset="0.72" stopColor={t.bgBase} stopOpacity={0.88} />
-						<Stop offset="0.87" stopColor={t.bgBase} stopOpacity={0.42} />
-						<Stop offset="1" stopColor={t.bgBase} stopOpacity={0} />
-					</RadialGradient>
-				</Defs>
-				<Ellipse cx="50" cy="100" rx="72" ry="100" fill="url(#effort-slider-veil)" />
-			</Svg>
-		</View>
+		<>
+			<View pointerEvents="none" style={[styles.solid, { backgroundColor: t.bgBase }]} />
+			{fall ? (
+				<View pointerEvents="none" style={[styles.fade, { bottom: -space.sm - fall, height: fall }]}>
+					<Svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 1 1">
+						<Defs>
+							<LinearGradient id="composer-overlay-veil-fall" x1="0" y1="1" x2="0" y2="0">
+								{FADE.map((opacity, i) => (
+									<Stop key={i} offset={i / (FADE.length - 1)} stopColor={t.bgBase} stopOpacity={opacity} />
+								))}
+							</LinearGradient>
+						</Defs>
+						<Rect x="0" y="0" width="1" height="1" fill="url(#composer-overlay-veil-fall)" />
+					</Svg>
+				</View>
+			) : null}
+			<View pointerEvents="none" style={[styles.fade, { top: -SOLID_OVERHANG - rise, height: rise }]}>
+				<Svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 1 1">
+					<Defs>
+						<LinearGradient id="composer-overlay-veil" x1="0" y1="0" x2="0" y2="1">
+							{FADE.map((opacity, i) => (
+								<Stop key={i} offset={i / (FADE.length - 1)} stopColor={t.bgBase} stopOpacity={opacity} />
+							))}
+						</LinearGradient>
+					</Defs>
+					<Rect x="0" y="0" width="1" height="1" fill="url(#composer-overlay-veil)" />
+				</Svg>
+			</View>
+		</>
 	);
 }
 
 const styles = StyleSheet.create({
-	// Down to the composer, across the gap the card floats above it.
-	veil: { position: "absolute", top: -VEIL_RISE, bottom: -space.sm, left: -VEIL_BLEED, right: -VEIL_BLEED },
+	solid: { position: "absolute", top: -SOLID_OVERHANG, bottom: -space.sm, left: -VEIL_BLEED, right: -VEIL_BLEED },
+	fade: { position: "absolute", left: -VEIL_BLEED, right: -VEIL_BLEED },
 });

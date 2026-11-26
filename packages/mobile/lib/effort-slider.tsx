@@ -1,13 +1,14 @@
+import Zap from "lucide-react-native/icons/zap";
 import { useEffect, useRef, useState } from "react";
-import { StyleSheet, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
+import { Pressable, StyleSheet, useWindowDimensions, View, type DimensionValue, type GestureResponderEvent, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
-import { ComposerOverlay, OverlayHeading, overlayCardStyle } from "./composer-overlay";
+import { ComposerOverlay, OverlayHeading, overlayCardStyle, useInOwnWindow } from "./composer-overlay";
 import { haptics } from "./haptics";
 import { magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { duration, space } from "./tokens";
+import { duration, iconSize, space } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
 
@@ -18,7 +19,12 @@ import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
  * rides inside it. The blob follows the finger but is pulled toward the
  * nearest level, ticks as it lands on each, and glides onto its level when let
  * go. It stays up until a tap lands outside it (see useEffortSliderOpen).
+ * Where the model has a fast mode, a bolt at the heading's right flips it,
+ * filled while it is on, as desktop marks a fast model.
  */
+
+/** Fast mode as the slider's bolt: on or off, and a flip. */
+export type FastToggle = { on: boolean; toggle: () => void };
 
 const TRACK = 40;
 const INSET = 4;
@@ -30,27 +36,32 @@ const DOT = 3;
 // long as the levels need, and never shorter than MIN_TRACK to drag along.
 const LEVEL_GAP = 68;
 const MIN_TRACK = 240;
+// The room kept between the card's track and each side of the screen.
+const SCREEN_GUTTER = 28;
 // The blob is white in both themes, as a system switch's thumb is.
 const BLOB_FILL = "#ffffff";
 const BLOB_SHADOW = "#000000";
 
 /** The slider floating over the chat above the composer (see ComposerOverlay). */
-export function EffortSliderOverlay({ bottom, visible = true, ...props }: EffortSliderProps & { bottom: DimensionValue; visible?: boolean }) {
+export function EffortSliderOverlay({ bottom, overKeyboard, onDismiss, visible = true, ...props }: EffortSliderProps & { bottom?: DimensionValue; overKeyboard?: boolean; onDismiss?: () => void; visible?: boolean; fast?: FastToggle }) {
 	return (
-		<ComposerOverlay bottom={bottom} visible={visible}>
+		<ComposerOverlay bottom={bottom} overKeyboard={overKeyboard} onDismiss={onDismiss} visible={visible}>
 			<EffortSlider {...props} />
 		</ComposerOverlay>
 	);
 }
 
-export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps) {
+export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSliderProps & { fast?: FastToggle }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
 	const [width, setWidth] = useState(0);
 	const { index, label, pick } = useEffortSlider(choices, onChoose, haptics.detent);
 	const count = choices.length;
-	const trackWidth = Math.max(MIN_TRACK, END * 2 + Math.max(count - 1, 0) * LEVEL_GAP);
+	// No wider than the screen leaves it, in from the sides by the card's pad
+	// and a gutter: with Ultracode a sixth level ran the track off the screen.
+	const { width: screen } = useWindowDimensions();
+	const trackWidth = Math.min(screen - SCREEN_GUTTER * 2, Math.max(MIN_TRACK, END * 2 + Math.max(count - 1, 0) * LEVEL_GAP));
 	const stepFor = (trackWidth: number) => count > 1 ? (trackWidth - END * 2) / (count - 1) : 0;
 	const step = stepFor(width);
 	const stopX = (i: number) => END + Math.max(i, 0) * step;
@@ -102,44 +113,95 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 		})
 		.onUpdate((event) => follow(event.x, false))
 		.onFinalize(release);
+	// Over the keyboard the slider is in a window of its own, which gesture
+	// handler never hears: the same drag through the responder system, claimed
+	// as the finger lands and kept to the end.
+	const ownWindow = useInOwnWindow();
+	const trackLeft = useRef(0);
+	const responder = ownWindow ? {
+		onStartShouldSetResponder: () => true,
+		onMoveShouldSetResponder: () => true,
+		onResponderTerminationRequest: () => false,
+		onResponderGrant: (event: GestureResponderEvent) => {
+			dragging.current = true;
+			// Moves are read from the page, against the track's edge as the
+			// finger landed: a finger off the track still drives it.
+			trackLeft.current = event.nativeEvent.pageX - event.nativeEvent.locationX;
+			follow(event.nativeEvent.locationX, true);
+		},
+		onResponderMove: (event: GestureResponderEvent) => follow(event.nativeEvent.pageX - trackLeft.current, false),
+		onResponderRelease: release,
+		onResponderTerminate: release,
+	} : undefined;
 
+	const track = (
+		<View
+			{...responder}
+			style={[styles.track, { width: trackWidth }]}
+			onLayout={(event: LayoutChangeEvent) => {
+				const next = event.nativeEvent.layout.width;
+				// The blob and fill mount with this width, already on the
+				// level: set in an effect after they mount, while the card
+				// fades in, the move never reached the fill on Android,
+				// and at the top level the track showed no fill at all.
+				if (!dragging.current) blobX.value = END + Math.max(index, 0) * stepFor(next);
+				setWidth(next);
+			}}
+			accessible
+			accessibilityRole="adjustable"
+			accessibilityLabel="Effort"
+			accessibilityValue={{ text: label }}
+			accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+			onAccessibilityAction={(event) => pick(Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1))}
+			testID="effort-slider"
+		>
+			{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} /> : null}
+			{width ? choices.map((choice, i) => (
+				<View key={choice.value} pointerEvents="none" style={[styles.dot, { left: stopX(i) - DOT, backgroundColor: i <= index ? t.textSecondary : t.textFaint }]} />
+			)) : null}
+			{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.blob, blobStyle]} /> : null}
+		</View>
+	);
 	return (
 		<View style={styles.stack}>
 			{/* What the track sets, then the level it is on. The track itself is
 			    "Effort", adjustable, valued the level, for screen readers. */}
-			<OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" />
+			{/* The heading centred over the card, the bolt at the card's right. */}
+			<View style={[styles.header, fast && styles.headerWithBolt, { width: trackWidth + CARD_PAD * 2 }]}>
+				<OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" />
+				{fast ? <FastBolt {...fast} /> : null}
+			</View>
 			<View style={styles.card}>
-				<GestureDetector gesture={drag}>
-					<View
-						style={[styles.track, { width: trackWidth }]}
-						onLayout={(event: LayoutChangeEvent) => {
-							const next = event.nativeEvent.layout.width;
-							// The blob and fill mount with this width, already on the
-							// level: set in an effect after they mount, while the card
-							// fades in, the move never reached the fill on Android,
-							// and at the top level the track showed no fill at all.
-							if (!dragging.current) blobX.value = END + Math.max(index, 0) * stepFor(next);
-							setWidth(next);
-						}}
-						accessible
-						accessibilityRole="adjustable"
-						accessibilityLabel="Effort"
-						accessibilityValue={{ text: label }}
-						accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
-						onAccessibilityAction={(event) => pick(Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1))}
-						testID="effort-slider"
-					>
-						{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} /> : null}
-						{width ? choices.map((choice, i) => (
-							<View key={choice.value} pointerEvents="none" style={[styles.dot, { left: stopX(i) - DOT, backgroundColor: i <= index ? t.textSecondary : t.textFaint }]} />
-						)) : null}
-						{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.blob, blobStyle]} /> : null}
-					</View>
-				</GestureDetector>
+				{ownWindow ? track : <GestureDetector gesture={drag}>{track}</GestureDetector>}
 			</View>
 		</View>
 	);
 }
+
+/** Fast mode's bolt: outlined while off, filled in amber while on. */
+function FastBolt({ on, toggle }: FastToggle) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<Pressable
+			onPress={() => { haptics.select(); toggle(); }}
+			hitSlop={BOLT_SLOP}
+			accessibilityRole="switch"
+			accessibilityLabel="Fast mode"
+			accessibilityState={{ checked: on }}
+			testID="effort-slider-fast"
+			style={({ pressed }) => [styles.bolt, pressed && styles.boltPressed]}
+		>
+			<Zap size={iconSize.md} strokeWidth={2} color={on ? t.amber : t.textSecondary} fill={on ? t.amber : "none"} />
+		</Pressable>
+	);
+}
+
+// The card's pad around the track.
+const CARD_PAD = space.xs;
+// The bolt's room, and the reach of a touch past it, to a full touch target.
+const BOLT = 32;
+const BOLT_SLOP = 6;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
@@ -147,11 +209,15 @@ const makeStyles = (t: Theme) =>
 		// the track's stops are spaced from its measured width, so a narrow
 		// screen packs them closer rather than spilling the card off it.
 		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
+		header: { alignItems: "center", justifyContent: "center" },
+		headerWithBolt: { height: BOLT },
+		bolt: { position: "absolute", right: 0, top: 0, width: BOLT, height: BOLT, alignItems: "center", justifyContent: "center" },
+		boltPressed: { opacity: 0.5 },
 		card: {
 			maxWidth: "100%",
-			padding: space.xs,
+			padding: CARD_PAD,
 			// Concentric with the track's ends, an even pad in from the card's.
-			...overlayCardStyle(t, TRACK / 2 + space.xs),
+			...overlayCardStyle(t, TRACK / 2 + CARD_PAD),
 		},
 		track: { maxWidth: "100%", height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
 		fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK / 2, backgroundColor: t.accentBorder },

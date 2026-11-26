@@ -28,6 +28,23 @@ const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapsho
 });
 
 describe("turnSettingsRows", () => {
+	// Desktop's Fast mode toggle, for a model that has a fast mode.
+	it("offers fast mode as an on/off for a model that has one, and none for one that does not", () => {
+		const models = [
+			{ id: "opus", displayName: "Opus", default: true, supportsFast: true },
+			{ id: "sonnet", displayName: "Sonnet", default: false },
+		] as ChatModel[];
+		const on = snapshot({ capabilities: [], settings: { model: "opus", fastMode: true } });
+		const fast = turnSettingsRows(on, models, []).find((row) => row.id === "fast")!;
+		expect(fast).toMatchObject({ kind: "boolean", enabled: true, label: "Fast mode" });
+		expect(turnSettingWrite(on.settings, fast, false)).toEqual({ kind: "settings", settings: { model: "opus", fastMode: undefined } });
+		expect(turnSettingWrite({ model: "opus" }, fast, true)).toEqual({ kind: "settings", settings: { model: "opus", fastMode: true } });
+		expect(turnSettingsRows(snapshot({ capabilities: [], settings: { model: "sonnet" } }), models, []).some((row) => row.id === "fast")).toBe(false);
+		// A new model starts without the old one's fast mode.
+		const model = turnSettingsRows(on, models, []).find((row) => row.id === "model")!;
+		expect(turnSettingWrite(on.settings, model, "sonnet")).toEqual({ kind: "settings", settings: { model: "sonnet", reasoningEffort: undefined, fastMode: undefined } });
+	});
+
 	it("identifies the native controls Android promotes above generic provider options", () => {
 		const controls: ChatConfigOption[] = [
 			{ id: "fast", name: "Fast mode", type: "boolean", currentBoolean: true, choices: [] },

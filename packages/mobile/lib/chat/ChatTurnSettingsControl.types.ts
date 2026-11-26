@@ -25,6 +25,12 @@ export type ChatTurnSettingsControlProps = {
 	 */
 	permissions?: { choices: readonly PermissionChoice[]; slider: EffortSliderSwitch };
 	/**
+	 * The model's wheels over the keyboard (see useChatModelWheel): the
+	 * capsule opens them in place of its menu. Absent, the capsule keeps its
+	 * menu.
+	 */
+	modelWheel?: { slider: EffortSliderSwitch };
+	/**
 	 * The capsule's "Other agents", as the new task's menu lists them: each
 	 * agent opens onto its models. Choosing one only records it (`pending`);
 	 * the switch runs with the next message, as on desktop. Choosing one of the

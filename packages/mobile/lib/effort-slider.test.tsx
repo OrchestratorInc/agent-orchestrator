@@ -16,14 +16,24 @@ const fixtures = vi.hoisted(() => ({
 vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.setOptions }) }));
 
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
-vi.mock("./haptics", () => ({ haptics: { detent: fixtures.detent } }));
+vi.mock("./haptics", () => ({ haptics: { detent: fixtures.detent, select: () => {} } }));
+vi.mock("lucide-react-native/icons/zap", () => ({ default: "Zap" }));
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./effort-slider-veil", () => ({ EffortSliderVeil: "EffortSliderVeil" }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => fixtures.reduceMotion }));
+// Over the keyboard, the overlay is a window of its own; here it is drawn in place.
+vi.mock("react-native-keyboard-controller", async () => {
+	const React = await import("react");
+	return {
+		OverKeyboardView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("OverKeyboardView", props, children),
+		useReanimatedKeyboardAnimation: () => ({ height: { value: 0 }, progress: { value: 0 } }),
+	};
+});
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Platform: { get OS() { return fixtures.os; } }, StyleSheet: { create: (styles: object) => styles }, Text: host("Text"), View: host("View") };
+	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Platform: { get OS() { return fixtures.os; } }, StyleSheet: { create: (styles: object) => styles, absoluteFill: {} }, Pressable: host("Pressable"), Text: host("Text"), View: host("View"), useWindowDimensions: () => ({ width: 400, height: 800 }) };
 });
 // The pan's builder keeps its callbacks, so a test can play a drag through them.
 vi.mock("react-native-gesture-handler", async () => {
@@ -43,6 +53,7 @@ vi.mock("react-native-gesture-handler", async () => {
 	return {
 		Gesture: { Pan: pan },
 		GestureDetector: ({ gesture, children }: { gesture: unknown; children?: React.ReactNode }) => React.createElement("GestureDetector", { gesture }, children),
+		GestureHandlerRootView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("GestureHandlerRootView", props, children),
 	};
 });
 vi.mock("react-native-reanimated", async () => {
@@ -68,7 +79,7 @@ vi.mock("react-native-reanimated", async () => {
 });
 
 import { EffortSlider, EffortSliderOverlay } from "./effort-slider";
-import { markTouchInside } from "./touchOutside";
+import { markTouchInside, rootTouchStart } from "./touchOutside";
 
 const levels = (selected?: string) => ["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1), selected: value === selected }));
 
@@ -195,8 +206,69 @@ describe("effort slider", () => {
 		expect(heading.findAll((node) => hostType(node) === "AppSymbol")[0].props.name).toBe("chevronForward");
 	});
 
+	// Fast mode as a bolt at the heading's right, filled while on, as desktop marks it.
+	it("flips fast mode from a bolt beside the heading, filled while it is on", async () => {
+		const toggle = vi.fn();
+		await act(async () => { renderer = create(<EffortSlider choices={levels("medium")} onChoose={() => {}} fast={{ on: false, toggle }} />); });
+		const bolt = () => renderer!.root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === "effort-slider-fast")[0];
+		const zap = () => renderer!.root.findAll((node) => hostType(node) === "Zap")[0];
+		expect(bolt().props.accessibilityState).toEqual({ checked: false });
+		expect(zap().props).toMatchObject({ color: "#textSecondary", fill: "none" });
+		act(() => bolt().props.onPress());
+		expect(toggle).toHaveBeenCalledOnce();
+		await act(async () => renderer!.update(<EffortSlider choices={levels("medium")} onChoose={() => {}} fast={{ on: true, toggle }} />));
+		expect(bolt().props.accessibilityState).toEqual({ checked: true });
+		expect(zap().props).toMatchObject({ color: "#amber", fill: "#amber" });
+	});
+
+	it("draws no bolt for a model with no fast mode", async () => {
+		await render("medium");
+		expect(renderer!.root.findAll((node) => hostType(node) === "Zap")).toHaveLength(0);
+	});
+
 	// Kept mounted between opens: hidden, it takes no touch, reads to no
 	// screen reader, and leaves the screen's back swipe alone.
+	// As ChatGPT's: over the keyboard, in a window of its own, so the keys stay
+	// up and the field keeps its focus; a tap anywhere else only puts it away.
+	it("opens over the keyboard in its own window, any other tap putting it away", async () => {
+		const onDismiss = vi.fn();
+		await act(async () => { renderer = create(<EffortSliderOverlay overKeyboard onDismiss={onDismiss} choices={levels("low")} onChoose={() => {}} />); });
+		const window = renderer!.root.findAll((node) => hostType(node) === "OverKeyboardView")[0];
+		expect(window.props.visible).toBe(true);
+		// A touch in the window still bubbles to the app root through React's
+		// tree: the content's touches are marked as its own, so they close nothing.
+		const content = window.findAll((node) => hostType(node) === "View" && typeof node.props.onTouchStart === "function")[0];
+		act(() => { content.props.onTouchStart(); rootTouchStart(); });
+		expect(onDismiss).not.toHaveBeenCalled();
+		const backdrop = window.findAll((node) => hostType(node) === "Pressable")[0];
+		act(() => backdrop.props.onPressIn());
+		expect(onDismiss).toHaveBeenCalledOnce();
+		// Gesture handler hears nothing in a window of its own: the track takes
+		// the drag through the responder system, as the finger lands.
+		expect(window.findAll((node) => hostType(node) === "GestureDetector")).toHaveLength(0);
+		const track = window.findAll((node) => node.props.testID === "effort-slider" && hostType(node) === "View")[0];
+		expect(track.props.onStartShouldSetResponder()).toBe(true);
+		expect(track.props.onResponderTerminationRequest()).toBe(false);
+		await act(async () => renderer!.update(<EffortSliderOverlay overKeyboard visible={false} onDismiss={onDismiss} choices={levels("low")} onChoose={() => {}} />));
+		expect(renderer!.root.findAll((node) => hostType(node) === "OverKeyboardView")[0].props.visible).toBe(false);
+	});
+
+	it("drags over the keyboard, a finger off the track still driving it", async () => {
+		const onChoose = vi.fn();
+		const onRelease = vi.fn();
+		await act(async () => { renderer = create(<EffortSliderOverlay overKeyboard choices={levels("low")} onChoose={onChoose} onRelease={onRelease} />); });
+		const track = () => renderer!.root.findAll((node) => node.props.testID === "effort-slider" && hostType(node) === "View")[0];
+		// A 240-wide track 80 in from the page's edge: stops at 20, 70, 120, 170, 220.
+		await act(async () => track().props.onLayout({ nativeEvent: { layout: { width: 240 } } }));
+		await act(async () => track().props.onResponderGrant({ nativeEvent: { locationX: 20, pageX: 100 } }));
+		await act(async () => track().props.onResponderMove({ nativeEvent: { locationX: 0, pageX: 80 + 170 } }));
+		// Past the track's end, read from the page: the top level.
+		await act(async () => track().props.onResponderMove({ nativeEvent: { locationX: 0, pageX: 80 + 400 } }));
+		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["xhigh", "max"]);
+		await act(async () => track().props.onResponderRelease());
+		expect(onRelease).toHaveBeenCalledOnce();
+	});
+
 	it("takes no touches and holds nothing while hidden", async () => {
 		await act(async () => { renderer = create(<EffortSliderOverlay visible={false} choices={levels("low")} onChoose={() => {}} bottom="100%" />); });
 		const overlay = () => renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];

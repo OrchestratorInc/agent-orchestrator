@@ -298,6 +298,19 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 				target: { kind: "settings", key: "reasoningEffort" },
 			});
 		}
+		// Fast mode, where the model has one: desktop's toggle beside the model.
+		if (selectedModel?.supportsFast) {
+			const on = Boolean(snapshot.settings.fastMode);
+			rows.push({
+				id: "fast",
+				label: "Fast mode",
+				value: on ? "On" : "Off",
+				kind: "boolean",
+				enabled: on,
+				choices: [],
+				target: { kind: "settings", key: "fastMode" },
+			});
+		}
 	}
 
 	if (!providerControls || !providerMode) {
@@ -419,6 +432,7 @@ function controlPriority(row: TurnSettingRow): number {
 		return { fast: 0, model: 1, effort: 2, permissions: 3, other: 10 }[row.providerKind ?? "other"];
 	}
 	const key = row.id;
+	if (key === "fast") return 0;
 	if (key === "model") return 1;
 	if (key === "effort") return 2;
 	if (key === "approvals") return 4;
@@ -452,12 +466,15 @@ export function turnSettingWrite(settings: TurnSettings, row: TurnSettingRow, ch
 	if (row.target.kind === "option") {
 		return { kind: "option", id: row.target.optionId, value: typeof choice === "boolean" ? { enabled: choice } : { value: choice } };
 	}
+	// An on/off setting of AO's own (fast mode): off clears it rather than saving false.
+	if (typeof choice === "boolean" && row.target.kind === "settings") return { kind: "settings", settings: { ...settings, [row.target.key]: choice || undefined } };
 	return { kind: "settings", settings: applyTurnSettingChoice(settings, row, String(choice)) };
 }
 
 function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
 	if (row.target.kind !== "settings") return settings;
-	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined };
+	// A new model starts on its own effort, and fast mode is the old model's to have.
+	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined, fastMode: undefined };
 	if (row.defaultValue !== undefined && value === row.defaultValue) return { ...settings, [row.target.key]: undefined };
 	return { ...settings, [row.target.key]: value } as TurnSettings;
 }

@@ -25,7 +25,7 @@ describe("chat composer pill", () => {
 		const pill = composer.slice(composer.indexOf("{requestCard ?? <View style={[styles.composer"));
 		const tray = pill.indexOf("<ComposerAttachmentTray items={trayItems}");
 		expect(tray).toBeGreaterThan(0);
-		expect(tray).toBeLessThan(pill.indexOf("<TextInput"));
+		expect(tray).toBeLessThan(pill.indexOf("<ComposerField"));
 		expect(composer.indexOf("<ComposerAttachmentTray")).toBe(composer.indexOf("<ComposerAttachmentTray items={trayItems}"));
 		expect(composer).toContain("useMemo(() => composerTrayItems(attachments), [attachments])");
 	});
@@ -169,7 +169,7 @@ describe("collapsed and expanded composer", () => {
 
 	// Moving the field between two parents would remount it and drop the keyboard.
 	it("keeps the field in one row in both shapes", () => {
-		expect(composer.match(/<TextInput\n/g)).toHaveLength(1);
+		expect(composer.match(/<ComposerField\n/g)).toHaveLength(1);
 		expect(composer.match(/\{attachMenu\}/g)).toHaveLength(1);
 		expect(composer.match(/\{roundButton\}/g)).toHaveLength(1);
 	});

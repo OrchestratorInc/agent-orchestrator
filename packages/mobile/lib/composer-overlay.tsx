@@ -1,7 +1,9 @@
 import { useNavigation } from "expo-router";
-import { useEffect, useLayoutEffect, type ReactNode } from "react";
-import { Platform, StyleSheet, Text, View, type DimensionValue, type ViewStyle } from "react-native";
+import { createContext, useContext, useEffect, useLayoutEffect, type ReactNode } from "react";
+import { Platform, Pressable, StyleSheet, Text, View, type DimensionValue, type ViewStyle } from "react-native";
+import { OverKeyboardView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
 import { EffortSliderVeil } from "./effort-slider-veil";
 import type { Theme } from "./theme";
@@ -19,12 +21,27 @@ import { useReducedMotion } from "./useReducedMotion";
 
 // How far below its place the overlay starts as it is revealed.
 const REVEAL_LIFT = 6;
+// The gap a floating overlay keeps above its `bottom` once revealed.
+const FLOAT_GAP = space.sm;
+// Over the keyboard: how far the content reaches down over the keys' top edge,
+// across the suggestion strip, as ChatGPT's slider does.
+const KEYS_OVERLAP = 32;
+// How far the veil fades down past the content, over the keys below it.
+const KEYS_FALL = 56;
+// With no keyboard up: the gap between the content and the screen's foot.
+const FOOT_GAP = space.sm;
+// The header's room below the status bar: taps there go through to it on iOS.
+const HEADER_ROOM = 64;
+// Over the keyboard: the veil's reach above the content.
+const KEYS_RISE = 160;
 const CARD_SHADOW = "#000000";
 
 /**
  * The overlay floating over the screen, a small gap above `bottom` in its
- * container: nothing under it moves when it opens. Android hands it a touch
- * outside its container only while no ancestor clips.
+ * container, or, with `cover`, laid over the container itself: at least its
+ * height, its content at its foot, the veil hiding the composer behind it.
+ * Nothing under it moves when it opens. Android hands it a touch outside its
+ * container only while no ancestor clips.
  *
  * Kept mounted while hidden by its host, so opening is a reveal on the UI
  * thread rather than a build: a quick fade with a small lift, in place at
@@ -39,10 +56,19 @@ const CARD_SHADOW = "#000000";
  * Android, which has no such swipe, skips it rather than hold up the first
  * frame.
  */
-export function ComposerOverlay({ bottom, visible = true, veilRise, children }: {
-	bottom: DimensionValue;
+export function ComposerOverlay({ bottom, overKeyboard = false, onDismiss, lift = 0, visible = true, veilRise, fill, children }: {
+	/** Where a floating overlay sits in its container; unused over the keyboard. */
+	bottom?: DimensionValue;
+	/** Opens over the keyboard, in a window of its own (see OverKeyboardOverlay). */
+	overKeyboard?: boolean;
+	/** Over the keyboard: a tap anywhere but on the content, which only puts the overlay away. */
+	onDismiss?: () => void;
+	/** Room left under the content, inside the veil, so the veil still reaches the composer's bottom edge below it. */
+	lift?: number;
+	/** Spans the composer's width, as the permission picker laid over the pill does, rather than centring a card of its own width. */
+	fill?: boolean;
 	visible?: boolean;
-	/** How far above the content the veil reaches; a taller overlay needs more for its arch to stay solid behind it. */
+	/** How tall the veil's fade above the overlay is. */
 	veilRise?: number;
 	children: ReactNode;
 }) {
@@ -63,8 +89,15 @@ export function ComposerOverlay({ bottom, visible = true, veilRise, children }: 
 	}, [visible, reduceMotion, shown]);
 	const reveal = useAnimatedStyle(() => ({
 		opacity: shown.value,
-		transform: [{ translateY: -space.sm + (1 - shown.value) * REVEAL_LIFT }],
+		transform: [{ translateY: (overKeyboard ? 0 : -FLOAT_GAP) + (1 - shown.value) * REVEAL_LIFT }],
 	}));
+	if (overKeyboard) {
+		return (
+			<OverKeyboardOverlay visible={visible} onDismiss={onDismiss} fill={fill} reveal={reveal}>
+				{children}
+			</OverKeyboardOverlay>
+		);
+	}
 	// box-none: the overlay spans the composer's width to centre its card, and
 	// a touch beside the card must still count as one outside it.
 	return (
@@ -76,8 +109,88 @@ export function ComposerOverlay({ bottom, visible = true, veilRise, children }: 
 			style={[styles.overlay, { bottom }, reveal]}
 		>
 			<EffortSliderVeil rise={veilRise} />
-			<View style={styles.stack}>{children}</View>
+			<View pointerEvents="box-none" style={[styles.stack, fill && styles.fill, lift ? { paddingBottom: lift } : null]}>
+				{children}
+			</View>
 		</Animated.View>
+	);
+}
+
+const OwnWindowContext = createContext(false);
+
+/**
+ * True inside an overlay drawn in a window of its own (over the keyboard):
+ * gesture handler hears no touch there, so a control in it takes its touches
+ * through React Native's responder system, which the window feeds itself.
+ * Nothing scrolls under it there to take a drag away.
+ */
+export function useInOwnWindow(): boolean {
+	return useContext(OwnWindowContext);
+}
+
+/**
+ * The overlay over the keyboard, as ChatGPT's effort slider is: in a window of
+ * its own above every other, the keyboard's included (keyboard-controller's
+ * OverKeyboardView), so the field keeps its focus and the keys stay up under
+ * it. The content sits on the keys' top edge, across the suggestion strip,
+ * over the composer, on a veil that hides the composer, fades up into the
+ * chat and down over the keys' top rows; with no keyboard up it sits over
+ * the composer at the screen's foot.
+ *
+ * Touches: one on the content is the content's. One on the chat between the
+ * header and the content only puts the overlay away (`onDismiss`), nothing
+ * under it pressed or scrolled. One on the header or the keys puts it away
+ * and goes on to them, so the key types and the header's button works. On
+ * iOS that is the window's own: a point no view of it claims falls through
+ * to the window below. Android's window takes every touch on the screen, so
+ * there any touch outside the content only puts the overlay away; typing
+ * still puts it away (see the composer's field). Gesture handler hears
+ * nothing in a window of its own, so controls here use the responder system
+ * (see useInOwnWindow).
+ */
+function OverKeyboardOverlay({ visible, onDismiss, fill, reveal, children }: {
+	visible: boolean;
+	onDismiss?: () => void;
+	fill?: boolean;
+	reveal: ReturnType<typeof useAnimatedStyle>;
+	children: ReactNode;
+}) {
+	const styles = useThemedStyles(makeStyles);
+	const insets = useSafeAreaInsets();
+	const keyboard = useReanimatedKeyboardAnimation();
+	// Across the keys' top edge while they are up, over the composer at the
+	// foot of the screen while they are not; it follows them as they move. The
+	// band is the chat from under the header down to the content's foot: the
+	// part of the screen a tap only closes it in.
+	const band = useAnimatedStyle(() => {
+		const keys = -keyboard.height.value;
+		return { bottom: keys > insets.bottom ? keys - KEYS_OVERLAP : insets.bottom + FOOT_GAP };
+	}, [insets.bottom]);
+	const passThrough = Platform.OS === "ios";
+	return (
+		<OverKeyboardView visible={visible}>
+			<View style={styles.window} pointerEvents="box-none">
+				{passThrough ? null : <Pressable style={StyleSheet.absoluteFill} onPressIn={onDismiss} accessible={false} />}
+				<Animated.View pointerEvents="box-none" style={[styles.band, { top: passThrough ? insets.top + HEADER_ROOM : 0 }, band]}>
+					{passThrough ? <Pressable style={StyleSheet.absoluteFill} onPressIn={onDismiss} accessible={false} /> : null}
+					<Animated.View
+						pointerEvents="box-none"
+						accessibilityElementsHidden={!visible}
+						importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
+						style={[styles.aboveKeys, reveal]}
+					>
+						<EffortSliderVeil rise={KEYS_RISE} fall={KEYS_FALL} />
+						{/* Its touches are its own. The window is native, but a touch in it
+						    still bubbles through React's tree to the app root, which would
+						    otherwise take it for a tap outside and close it as the finger
+						    lands. */}
+						<View style={[styles.stack, fill && styles.fill]} onTouchStart={markTouchInside}>
+							<OwnWindowContext.Provider value>{children}</OwnWindowContext.Provider>
+						</View>
+					</Animated.View>
+				</Animated.View>
+			</View>
+		</OverKeyboardView>
 	);
 }
 
@@ -126,8 +239,14 @@ const makeStyles = (t: Theme) =>
 			// and the card sat on the composer's edge.
 			alignItems: "center",
 		},
+		window: { flex: 1 },
+		// Over the keyboard: the chat from under the header to the content's foot.
+		band: { position: "absolute", left: 0, right: 0 },
+		// The content at the band's foot, a composer's inset in from the screen's sides.
+		aboveKeys: { position: "absolute", left: space.sm, right: space.sm, bottom: 0, alignItems: "center" },
 		// No wider than the composer, so a card inside can be capped to it.
 		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
+		fill: { alignSelf: "stretch" },
 		heading: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xxs },
 		title: { ...type.footnote, color: t.textSecondary },
 		value: { ...type.footnote, fontFamily: type.headline.fontFamily, color: t.textPrimary, flexShrink: 1 },

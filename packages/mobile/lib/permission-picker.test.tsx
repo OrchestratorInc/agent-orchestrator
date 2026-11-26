@@ -32,10 +32,11 @@ vi.mock("./composer-overlay", async () => {
 	return {
 		ComposerOverlay: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("ComposerOverlay", props, children),
 		OverlayHeading: (props: object) => React.createElement("OverlayHeading", props),
-		overlayCardStyle: () => ({}),
 	};
 });
 vi.mock("./effort-slider-host", () => ({ useWarmAfterIdle: () => false }));
+// The pill's corner, which the rows' corners follow.
+vi.mock("./chat/composerStyles", () => ({ COMPOSER_RADIUS: 30 }));
 
 import { PermissionPicker, PermissionPickerButton, PermissionPickerHost, type PermissionChoice } from "./permission-picker";
 import { createEffortSliderSwitch } from "./useEffortSlider";
@@ -146,12 +147,12 @@ describe("permission button", () => {
 describe("permission picker host", () => {
 	it("shows the picker while open, closes it on a pick, and has no timeout", () => {
 		const slider = createEffortSliderSwitch();
-		slider.setBottom(120);
 		const onChoose = vi.fn();
 		act(() => { renderer = create(<PermissionPickerHost slider={slider} choices={modes("auto")} busy={false} onChoose={onChoose} />); });
 		expect(all("ComposerOverlay")).toHaveLength(0);
 		act(() => slider.setOpen(true));
-		expect(all("ComposerOverlay")[0].props).toMatchObject({ visible: true, bottom: 120 });
+		// Over the keyboard, closing on a tap anywhere else.
+		expect(all("ComposerOverlay")[0].props).toMatchObject({ visible: true, fill: true, overKeyboard: true });
 		act(() => { vi.advanceTimersByTime(60_000); });
 		expect(slider.isOpen()).toBe(true);
 		act(() => all("Pressable")[0].props.onPress());

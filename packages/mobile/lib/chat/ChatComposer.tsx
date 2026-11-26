@@ -14,7 +14,6 @@ import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { textSelectionColors } from "../textSelection";
 import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import { Button } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
@@ -36,9 +35,13 @@ import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_HEIGHT, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
+import { ComposerField } from "../composer-field";
 import { EffortSliderHost } from "../effort-slider-host";
+import { ModelWheelHost } from "../model-wheel";
 import { PermissionPickerHost } from "../permission-picker";
 import { useChatEffort } from "./useChatEffort";
+import { withUltracode } from "./ultracode";
+import { useChatModelWheel } from "./useChatModelWheel";
 import { useChatPermissions } from "./useChatPermissions";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
@@ -423,6 +426,8 @@ function Composer({
 	// Whether a send can start now. Hardware Return is taken only then; otherwise it
 	// stays the field's and inserts a newline, rather than being caught and dropped.
 	const canSubmit = !submitting && !pending && !disabled && !(draftKey && !draftLoaded);
+	// Claude Code's Ultracode, picked on the effort slider: each message asks for it.
+	const ultracodeOn = useRef(false);
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send", from: "button" | "keyboard" = "button") => {
 		if (!canSubmit) return;
 		const trimmed = responseReplyText(text, quotes);
@@ -452,8 +457,8 @@ function Composer({
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
 			const route = composerDeliveryRoute(intent, steerEligible);
 			const id = route === "steer"
-				? await onSteer(trimmed)
-				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
+				? await onSteer(ultracodeOn.current ? withUltracode(trimmed) : trimmed)
+				: await onSend(ultracodeOn.current ? withUltracode(trimmed) : trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
 			if (draftKey) {
 				const current = latestText.current;
 				const currentQuotes = latestQuotes.current;
@@ -608,7 +613,11 @@ function Composer({
 	}, []);
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	const effort = useChatEffort(settingsProps);
+	ultracodeOn.current = effort.ultracode;
 	const permissions = useChatPermissions(settingsProps);
+	// Fast mode is the effort slider's bolt where the slider shows, so the wheels leave it out.
+	const modelWheel = useChatModelWheel({ ...settingsProps, otherAgents, fastOnEffort: Boolean(effort.fast && effort.choices.length) });
+	const overlays = useMemo(() => [effort.slider, permissions.slider, modelWheel.slider], [effort.slider, permissions.slider, modelWheel.slider]);
 	// Typing is a tap outside the slider and the picker that the keyboard, not
 	// the app, hears.
 	const closeEffort = effort.close;
@@ -862,16 +871,7 @@ function Composer({
 			/> : null}
 			{/* The field spans the pill between its two controls, so a touch on the
 			    pill focuses it and the pill opens. */}
-			{/* The pill's height goes to the effort slider and the permission picker
-			    floating over it, through their switches, so a change re-renders
-			    them, not the composer. A
-			    percentage `bottom` resolves against the pill's content box, which
-			    leaves out its padding, and sat the slider that far down over the
-			    pill's top edge. */}
-			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => {
-				effort.slider.setBottom(event.nativeEvent.layout.height);
-				permissions.slider.setBottom(event.nativeEvent.layout.height);
-			}}>
+			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
 					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
@@ -897,8 +897,10 @@ function Composer({
 					{/* Return on a hardware keyboard (iPad); the wrapper holds the field's
 					    place in the row, so it hides with the field while dictating. */}
 					<HardwareReturn style={[styles.inputSlot, dictating && styles.hiddenField]} enabled={!sendBlocked} onReturn={(modifiers) => { void submit(hardwareReturnIntent(modifiers), "keyboard"); }}>
-						<TextInput
+						<ComposerField
 							ref={inputRef}
+							// Its caret and handles step aside for the slider and the picker.
+							overlays={overlays}
 							onLayout={pasteLayout}
 							accessibilityLabel="Message the agent"
 							editable={!stopped && !submitting}
@@ -910,7 +912,6 @@ function Composer({
 							placeholder={placeholder}
 							placeholderTextColor={t.textFaint}
 							maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
-							{...textSelectionColors(t)}
 							// No height of its own: a multiline field grows with its text
 							// between the rule's min and max and then scrolls. Setting the
 							// height from the content-size event lagged a line behind, so
@@ -925,7 +926,7 @@ function Composer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} permissions={{ choices: permissions.choices, slider: permissions.slider }} />
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} permissions={{ choices: permissions.choices, slider: permissions.slider }} modelWheel={{ slider: modelWheel.slider }} />
 					</View>
 					{steerAction}
 				</Animated.View>
@@ -936,10 +937,25 @@ function Composer({
 				<View style={[styles.corner, styles.cornerTrailing]}>
 					{roundButton}
 				</View>
-				{/* The effort slider floats just above the pill, over the conversation. */}
-				<EffortSliderHost slider={effort.slider} choices={effort.choices} busy={effort.busy} onChoose={effort.choose} onRelease={effort.commit} onClose={effort.commit} />
-				<PermissionPickerHost slider={permissions.slider} choices={permissions.choices} busy={permissions.busy} onChoose={permissions.choose} />
 			</View>}
+			{/* The effort slider and the permission picker open over the
+			    keyboard, in a window of their own, as ChatGPT's do (see
+			    ComposerOverlay's overKeyboard). */}
+			{requestCard ? null : <>
+				<EffortSliderHost slider={effort.slider} choices={effort.choices} busy={effort.busy} onChoose={effort.choose} onRelease={effort.commit} onClose={effort.commit} fast={effort.fast} overKeyboard />
+				<PermissionPickerHost slider={permissions.slider} choices={permissions.choices} busy={permissions.busy} onChoose={permissions.choose} />
+				<ModelWheelHost
+					slider={modelWheel.slider}
+					busy={modelWheel.busy}
+					agents={modelWheel.agents}
+					chosenAgent={modelWheel.chosenAgent}
+					chosenModel={modelWheel.chosenModel}
+					settings={modelWheel.settings}
+					agentsLocked={modelWheel.agentsLocked}
+					choose={modelWheel.choose}
+					toggleSetting={modelWheel.toggleSetting}
+				/>
+			</>}
 		</Animated.View>
 	);
 }

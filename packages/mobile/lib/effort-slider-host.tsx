@@ -1,8 +1,9 @@
 import { memo, useEffect, useState, useSyncExternalStore } from "react";
+import type { FastToggle } from "./effort-slider";
 import type { EffortChoice } from "./modelEffort";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
-import { useEffortSliderOpen, useEffortSliderSwitchOpen, type EffortSliderSwitch } from "./useEffortSlider";
+import { useEffortChoicesShown, useEffortSliderOpen, useEffortSliderSwitchOpen, type EffortSliderSwitch } from "./useEffortSlider";
 
 /*
  * A composer's effort gauge and slider, wired to the composer's switch (see
@@ -19,7 +20,8 @@ export function EffortSliderGauge({ slider, choices, disabled, onPress, testID }
 	testID: string;
 }) {
 	const open = useEffortSliderSwitchOpen(slider) && !disabled && choices.length > 0;
-	return <EffortGaugeButton choices={choices} open={open} disabled={disabled} testID={testID} onPress={() => { onPress?.(); slider.setOpen(!open); }} />;
+	const shown = useEffortChoicesShown(slider, choices);
+	return <EffortGaugeButton choices={shown} open={open} disabled={disabled} testID={testID} onPress={() => { onPress?.(); slider.setOpen(!open); }} />;
 }
 
 type HostProps = {
@@ -31,6 +33,10 @@ type HostProps = {
 	onRelease?: () => void;
 	/** Hears every close, however it came about. */
 	onClose?: () => void;
+	/** Opens over the keyboard (see ComposerOverlay), rather than floating at the height the composer reports. */
+	overKeyboard?: boolean;
+	/** Fast mode's bolt, at the right of the slider's heading; none where the model has no fast mode. */
+	fast?: FastToggle;
 };
 
 /**
@@ -41,7 +47,8 @@ type HostProps = {
  * its card, track and veil on the tap held the slider back. Memoised, so a
  * composer re-rendering under a streaming reply leaves it alone.
  */
-export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices, busy, onChoose, onRelease, onClose }: HostProps) {
+export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices: owned, busy, onChoose, onRelease, onClose, overKeyboard, fast }: HostProps) {
+	const choices = useEffortChoicesShown(slider, owned);
 	const { open } = useEffortSliderOpen(choices, busy, onClose, slider);
 	// The switch belongs to the composer and outlives this host: a request
 	// card replaces the composer's pill, and the host with it. Close the
@@ -52,7 +59,7 @@ export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices
 	// change re-renders this and not the composer.
 	const bottom = useSyncExternalStore(slider.subscribe, slider.bottom);
 	const warm = useWarmAfterIdle();
-	return (open || warm) && bottom ? <EffortSliderOverlay visible={open} choices={choices} onChoose={onChoose} onRelease={onRelease} bottom={bottom} /> : null;
+	return (open || warm) && (overKeyboard || bottom) ? <EffortSliderOverlay visible={open} choices={choices} onChoose={onChoose} onRelease={onRelease} fast={fast} bottom={bottom} overKeyboard={overKeyboard} onDismiss={() => slider.setOpen(false)} /> : null;
 });
 
 /**

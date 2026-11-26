@@ -4,8 +4,8 @@ import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types"
 
 vi.mock("react-native", () => ({ BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Keyboard: { addListener: () => ({ remove: () => {} }) } }));
 
-import { useEffortSliderOpen } from "../useEffortSlider";
-import { useChatEffort } from "./useChatEffort";
+import { useEffortSliderOpen, withPick } from "../useEffortSlider";
+import { EFFORT_CONFIRM_MS, useChatEffort } from "./useChatEffort";
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -34,8 +34,8 @@ let composerRenders = 0;
 beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
 
-function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; models?: ChatModel[] } = {}) {
-	const onSettings = vi.fn(() => Promise.resolve());
+function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; models?: ChatModel[]; onSettings?: () => Promise<void> } = {}) {
+	const onSettings = vi.fn(over.onSettings ?? (() => Promise.resolve()));
 	const onOption = vi.fn(() => Promise.resolve([] as ChatConfigOption[]));
 	// The slider's side as EffortSliderHost has it: subscribed to the
 	// composer's switch on its own.
@@ -43,15 +43,22 @@ function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; mod
 		slider = useEffortSliderOpen(chat.choices, chat.busy, chat.commit, chat.slider);
 		return null;
 	}
-	function Harness() {
+	function Harness({ current }: { current: ConversationSnapshot }) {
 		composerRenders += 1;
-		effort = useChatEffort({ snapshot: over.snapshot ?? snapshot(), models: over.models ?? models, options: [], disabled: over.disabled, onSettings, onOption });
+		effort = useChatEffort({ snapshot: current, models: over.models ?? models, options: [], disabled: over.disabled, onSettings, onOption });
 		return <SliderHost chat={effort} />;
 	}
 	composerRenders = 0;
-	act(() => { renderer = create(<Harness />); });
-	return { onSettings, onOption };
+	act(() => { renderer = create(<Harness current={over.snapshot ?? snapshot()} />); });
+	// The conversation reporting a new level.
+	const report = (reasoningEffort: string) => act(() => renderer!.update(<Harness current={snapshot({ settings: { model: "opus", approvalMode: "auto", reasoningEffort } })} />));
+	// The conversation reporting any snapshot.
+	const update = (current: ConversationSnapshot) => act(() => renderer!.update(<Harness current={current} />));
+	return { onSettings, onOption, report, update };
 }
+
+// The level the gauge and the slider show.
+const shown = () => withPick(effort.choices, effort.slider.pick()).find((choice) => choice.selected)?.value;
 
 describe("chat effort", () => {
 	it("offers the model's levels with the one in effect chosen", () => {
@@ -142,5 +149,140 @@ describe("chat effort", () => {
 		render({ disabled: true });
 		act(() => slider.toggle());
 		expect(slider.open).toBe(false);
+	});
+	// The gauge and the slider show one level: the finger's, then the saved
+	// one until the conversation reports it, so neither lags nor disagrees.
+	describe("the level shown", () => {
+		beforeEach(() => { vi.useFakeTimers(); });
+		afterEach(() => { vi.useRealTimers(); });
+
+		it("follows the finger, and holds the saved level until the conversation reports it", () => {
+			const { report } = render();
+			act(() => slider.toggle());
+			act(() => effort.choose("medium"));
+			expect(shown()).toBe("medium");
+			act(() => effort.choose("high"));
+			expect(shown()).toBe("high");
+			act(() => effort.commit());
+			expect(shown()).toBe("high");
+			act(() => effort.close());
+			expect(shown()).toBe("high");
+			report("high");
+			expect(effort.slider.pick()).toBeUndefined();
+			expect(shown()).toBe("high");
+		});
+
+		it("keeps the saved level through a report that has not caught up", () => {
+			const { report } = render();
+			act(() => slider.toggle());
+			act(() => { effort.choose("high"); effort.commit(); });
+			report("medium");
+			expect(shown()).toBe("high");
+		});
+
+		it("goes back to the conversation's level when the save fails", async () => {
+			render({ onSettings: () => Promise.reject(new Error("offline")) });
+			act(() => slider.toggle());
+			act(() => { effort.choose("high"); effort.commit(); });
+			expect(shown()).toBe("high");
+			await act(async () => {});
+			expect(shown()).toBe("low");
+		});
+
+		it("goes back to the conversation's level when it never reports the save", () => {
+			render();
+			act(() => slider.toggle());
+			act(() => { effort.choose("high"); effort.commit(); });
+			act(() => { vi.advanceTimersByTime(EFFORT_CONFIRM_MS - 1); });
+			expect(shown()).toBe("high");
+			act(() => { vi.advanceTimersByTime(1); });
+			expect(shown()).toBe("low");
+		});
+
+		it("lets only the newest save drop the level, an older one failing late changing nothing", async () => {
+			const fails: (() => void)[] = [];
+			render({ onSettings: () => new Promise<void>((_resolve, reject) => { fails.push(() => reject(new Error("late"))); }) });
+			act(() => slider.toggle());
+			act(() => { effort.choose("medium"); effort.commit(); });
+			act(() => { effort.choose("high"); effort.commit(); });
+			await act(async () => { fails[0](); });
+			expect(shown()).toBe("high");
+		});
+
+		it("does not drop the level under a finger still choosing", async () => {
+			const fails: (() => void)[] = [];
+			render({ onSettings: () => new Promise<void>((_resolve, reject) => { fails.push(() => reject(new Error("late"))); }) });
+			act(() => slider.toggle());
+			act(() => { effort.choose("high"); effort.commit(); });
+			act(() => effort.choose("medium"));
+			await act(async () => { fails[0](); });
+			expect(shown()).toBe("medium");
+		});
+
+		it("lets go of the pick when let go on the level already saved", () => {
+			render();
+			act(() => slider.toggle());
+			act(() => effort.choose("high"));
+			act(() => { effort.choose("low"); effort.commit(); });
+			expect(effort.slider.pick()).toBeUndefined();
+			expect(shown()).toBe("low");
+		});
+	});
+
+	// Claude Code's Ultracode, desktop's level above Extra High: Extra High
+	// saved, and asked for in each message while it is on.
+	describe("ultracode", () => {
+		const claude = [{ id: "opus", displayName: "Opus", efforts: ["low", "high", "xhigh", "max"], defaultEffort: "high" }] as ChatModel[];
+		const claudeChat = (reasoningEffort?: string) => snapshot({ harness: "claude-code", settings: { model: "opus", approvalMode: "auto", reasoningEffort } });
+
+		it("is the last level for Claude Code on a model with Extra High, and for no one else", () => {
+			render({ models: claude, snapshot: claudeChat() });
+			expect(effort.choices.map((choice) => choice.label)).toEqual(["Low", "High", "Xhigh", "Max", "Ultracode"]);
+			render({ models: claude, snapshot: snapshot({ harness: "codex", settings: { model: "opus", approvalMode: "auto" } }) });
+			expect(effort.choices.some((choice) => choice.value === "ultracode")).toBe(false);
+		});
+
+		it("saves Extra High, and is on once the conversation reports it", () => {
+			const onSettings = vi.fn(() => Promise.resolve());
+			const { update } = render({ models: claude, snapshot: claudeChat(), onSettings });
+			act(() => slider.toggle());
+			act(() => { effort.choose("ultracode"); effort.commit(); });
+			expect(onSettings).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasoningEffort: "xhigh" }));
+			update(claudeChat("xhigh"));
+			expect(effort.ultracode).toBe(true);
+			expect(effort.choices.find((choice) => choice.selected)?.value).toBe("ultracode");
+			// Another level turns it off.
+			act(() => { effort.choose("max"); effort.commit(); });
+			expect(effort.ultracode).toBe(false);
+		});
+	});
+
+	// Fast mode rides on the slider as a bolt, where the model has it.
+	it("flips fast mode at once, keeps it until the conversation reports it, and drops it if the save fails", async () => {
+		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], supportsFast: true }] as ChatModel[];
+		let fail = false;
+		const { onSettings, update } = render({ models: fastModels, onSettings: () => (fail ? Promise.reject(new Error("no")) : Promise.resolve()) });
+		expect(effort.fast?.on).toBe(false);
+		act(() => effort.fast!.toggle());
+		expect(effort.fast?.on).toBe(true);
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", fastMode: true });
+		update(snapshot({ settings: { model: "opus", approvalMode: "auto", fastMode: true } }));
+		expect(effort.fast?.on).toBe(true);
+		fail = true;
+		await act(async () => effort.fast!.toggle());
+		expect(effort.fast?.on).toBe(true);
+		render();
+		expect(effort.fast).toBeUndefined();
+	});
+
+	it("shows fast mode as the conversation has it again when a flip is never reported", () => {
+		vi.useFakeTimers();
+		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], supportsFast: true }] as ChatModel[];
+		render({ models: fastModels, snapshot: snapshot({ settings: { model: "opus", approvalMode: "auto", fastMode: true } }) });
+		act(() => effort.fast!.toggle());
+		expect(effort.fast?.on).toBe(false);
+		act(() => { vi.advanceTimersByTime(EFFORT_CONFIRM_MS); });
+		expect(effort.fast?.on).toBe(true);
+		vi.useRealTimers();
 	});
 });
