@@ -20,11 +20,10 @@ export function withUltracode(text: string): string {
 }
 
 /**
- * Whether a send recorded as `sentDraft` (a retried send's record) was this
- * reply, sent as typed or with Ultracode's prefix: the record holds what was
- * sent, the composer what was typed, and a mismatch kept a delivered draft to
- * be sent again.
+ * Whether a retried send, recorded as the draft it was typed as
+ * (`retriedDraft`, without Ultracode's prefix), was this reply. Exact: a draft
+ * changed since, even to or from the prefix's words, is kept.
  */
-export function isSentDraft(sentDraft: string, reply: string, excerpts?: readonly ChatExcerpt[]): boolean {
-	return excerptDraftText(reply, excerpts) === sentDraft || excerptDraftText(withUltracode(reply), excerpts) === sentDraft;
+export function isSentDraft(typedDraft: string, reply: string, excerpts?: readonly ChatExcerpt[]): boolean {
+	return excerptDraftText(reply, excerpts) === typedDraft;
 }

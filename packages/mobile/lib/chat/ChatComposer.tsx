@@ -183,10 +183,11 @@ function Composer({
 	pending?: boolean;
 	interrupting?: boolean;
 	disabled?: boolean;
-	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
+	/** `typed` is the draft as typed, where `text` adds Ultracode's prefix to it. */
+	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], typed?: string): Promise<string>;
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
-	onSteer(text: string): Promise<string>;
+	onSteer(text: string, typed?: string): Promise<string>;
 	/** Steers with a queued message. Left out where the host can't, which hides the action. */
 	onPromoteQueuedTurn?(turnId: string): Promise<void>;
 	/** Deletes a queued message. Left out where the host can't, which hides the action. */
@@ -456,9 +457,13 @@ function Composer({
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
 			const route = composerDeliveryRoute(intent, steerEligible);
+			// With Ultracode's prefix added, the draft as typed goes too: a retry's
+			// completion matches the composer against it, exactly.
+			const sentText = ultracodeOn.current ? withUltracode(trimmed) : trimmed;
+			const typed: [] | [string] = sentText === trimmed ? [] : [trimmed];
 			const id = route === "steer"
-				? await onSteer(ultracodeOn.current ? withUltracode(trimmed) : trimmed)
-				: await onSend(ultracodeOn.current ? withUltracode(trimmed) : trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
+				? await onSteer(sentText, ...typed)
+				: await onSend(sentText, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined, ...typed);
 			if (draftKey) {
 				const current = latestText.current;
 				const currentQuotes = latestQuotes.current;

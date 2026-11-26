@@ -46,8 +46,7 @@ import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
 import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
-import { excerptDraftText } from "./responseQuotes";
-import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
+import { clearPendingSend, needsAttachmentRecovery, pendingDraft, pendingSendKey, readPendingSend, reservePendingSend, retriedDraft } from "./pendingSend";
 
 const REFRESH_WINDOW_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
@@ -57,6 +56,7 @@ const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
 export type PendingSend = {
 	id: string;
 	draftText: string;
+	typedDraft?: string;
 	text: string;
 	kind?: "send" | "steer";
 	state: "sending" | "failed";
@@ -110,12 +110,16 @@ export type MobileConversation = {
 	 */
 	loadTurnOptions(options?: { refresh?: boolean; ifMissing?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
 	loadSkills(): Promise<ChatSkill[]>;
-	/** With `providerSwitch`, the chat switches to that agent and sends to it in one request. */
-	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput): Promise<string>;
+	/**
+	 * With `providerSwitch`, the chat switches to that agent and sends to it in
+	 * one request. `typed` is the draft as the composer held it, where `text`
+	 * adds to it (Ultracode's prefix): a retry's completion is matched to it.
+	 */
+	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput, typed?: string): Promise<string>;
 	retrySend(id: string): Promise<void>;
 	discardSend(id: string): Promise<void>;
 	acknowledgeSend(id: string): Promise<void>;
-	steer(text: string): Promise<string>;
+	steer(text: string, typed?: string): Promise<string>;
 	promoteQueuedTurn(turnId: string): Promise<void>;
 	cancelQueuedTurn(turnId: string): Promise<void>;
 	interrupt(): Promise<void>;
@@ -454,7 +458,7 @@ export function useMobileConversation(
 	);
 
 	const send = useCallback(
-		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput) => {
+		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput, typed?: string) => {
 			if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
 			// Before anything is reserved: a record written here that never reaches
 			// `pendingSends` would block the next send with nothing to resolve.
@@ -472,7 +476,7 @@ export function useMobileConversation(
 				if (!snapshot?.capabilities?.includes("images")) nativeAttachments = undefined;
 			}
 			const saved = await reservePendingSend(pendingKey, {
-				id, draftText: excerptDraftText(text, excerpts), text: message, excerpts, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
+				id, ...pendingDraft(text, typed, excerpts), text: message, excerpts, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
 				...(providerSwitch ? { providerSwitch } : {}),
 			});
 			await deliver({
@@ -490,7 +494,7 @@ export function useMobileConversation(
 			const pending = pendingSends.find((item) => item.id === id);
 			if (pending) {
 				await deliver(pending);
-				setCompletedRetry({ id, draftText: pending.draftText });
+				setCompletedRetry({ id, draftText: retriedDraft(pending) });
 			}
 		},
 		[pendingSends, deliver],
@@ -504,11 +508,11 @@ export function useMobileConversation(
 		if (pendingKey) await clearPendingSend(pendingKey, id);
 		setCompletedRetry((current) => current?.id === id ? undefined : current);
 	}, [pendingKey]);
-	const steer = useCallback(async (text: string) => {
+	const steer = useCallback(async (text: string, typed?: string) => {
 		if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
 		if (!cfg) throw new Error(offline);
 		const id = clientMessageId();
-		const saved = await reservePendingSend(pendingKey, { id, draftText: text, text, hasAttachments: false, kind: "steer" });
+		const saved = await reservePendingSend(pendingKey, { id, ...pendingDraft(text, typed), text, hasAttachments: false, kind: "steer" });
 		await deliver({ ...saved, state: "sending", restored: saved.id !== id });
 		setActionCodes((old) => ({ ...old, steer: undefined }));
 		return saved.id;

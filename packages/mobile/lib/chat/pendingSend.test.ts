@@ -9,7 +9,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 	},
 }));
 
-import { afterDraftWrites, clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
+import { afterDraftWrites, clearPendingSend, needsAttachmentRecovery, pendingDraft, pendingSendKey, readPendingSend, reservePendingSend, retriedDraft } from "./pendingSend";
 
 beforeEach(() => saved.clear());
 
@@ -82,6 +82,20 @@ describe("pending Chat send", () => {
 		await expect(reservePendingSend(key, { ...plain, id: "running-agent" })).rejects.toThrow("different agent or model");
 		expect(await reservePendingSend(key, { ...toCodex, id: "same-pick" })).toEqual(toCodex);
 		expect(await readPendingSend(key)).toEqual(toCodex);
+	});
+
+	// A send with Ultracode's prefix keeps the draft as typed, through relaunch,
+	// for its retry's completion to match the composer against.
+	it("keeps the draft as typed beside what was sent", async () => {
+		const key = pendingSendKey("host", "typed");
+		const record = { id: "first", ...pendingDraft("Ultracode:\nfix it", "fix it"), text: "Ultracode:\nfix it", hasAttachments: false };
+		expect(record).toMatchObject({ draftText: "Ultracode:\nfix it", typedDraft: "fix it" });
+		await reservePendingSend(key, record);
+		const read = await readPendingSend(key);
+		expect(read && retriedDraft(read)).toBe("fix it");
+		expect(pendingDraft("fix it", "fix it")).toEqual({ draftText: "fix it" });
+		saved.set(key, JSON.stringify({ id: "x", draftText: "a", typedDraft: 3, text: "a", hasAttachments: false }));
+		await expect(readPendingSend(key)).rejects.toThrow("damaged");
 	});
 
 	it("treats a damaged switch on a saved send as a damaged record", async () => {

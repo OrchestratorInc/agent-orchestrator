@@ -238,9 +238,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const agentSwitchSending = conversation.pendingSends.some((item) => item.state === "sending" && Boolean(item.providerSwitch));
 	const sendConversation = conversation.send;
 	const send = useCallback(
-		(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => sendConversation(
+		(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], typed?: string) => sendConversation(
 			text, attachments, resources, excerpts,
 			pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
+			typed,
 		),
 		[pendingSwitch, sendConversation],
 	);

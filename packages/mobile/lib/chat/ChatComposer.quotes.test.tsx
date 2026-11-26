@@ -132,7 +132,7 @@ it("saves an immediately submitted reply and quote before an old host rejects it
 	p.machine = "host.draft-rejection-host";
 	function Harness({ quote = true }: { quote?: boolean }) {
 		const conversation = useMobileConversation(p.config, p.machine, p.sessionId);
-		return <ChatComposer {...p} onSend={conversation.send} onAcknowledgeSend={conversation.acknowledgeSend}
+		return <ChatComposer {...p} onSend={(text, images, resources, excerpts, typed) => conversation.send(text, images, resources, excerpts, undefined, typed)} onAcknowledgeSend={conversation.acknowledgeSend}
 			quoteRequest={quote ? { id: "immediate", text: "Quoted context", source, composerKey: "session" } : undefined} />;
 	}
 	await act(async () => { renderer = create(<Harness />); });
