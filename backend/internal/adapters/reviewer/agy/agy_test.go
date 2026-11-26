@@ -49,6 +49,10 @@ func TestReviewCommandSignInProbe(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not signed in") || !strings.Contains(err.Error(), home) {
 		t.Fatalf("signed-out err = %v, want sign-in guidance naming %s", err, home)
 	}
+	var authErr *ports.ReviewerAuthRequiredError
+	if !errors.Is(err, ports.ErrChatAuthRequired) || !errors.As(err, &authErr) || !strings.Contains(authErr.Guidance, home) {
+		t.Fatalf("signed-out err = %#v, want ReviewerAuthRequiredError matching ErrChatAuthRequired", err)
+	}
 
 	for name, r := range map[string]*Reviewer{
 		"signed in":   signInReviewer("gemini-3-flash\tGemini 3 Flash\n", nil),

@@ -144,7 +144,7 @@ func (r *Reviewer) verifySignedIn(ctx context.Context, binary, configRoot string
 	if !strings.Contains(strings.ToLower(string(out)), "please sign in") {
 		return nil
 	}
-	return fmt.Errorf("agy reviewer: Agy is not signed in for reviews; sign in once in the reviewer home by running `HOME=%q XDG_CONFIG_HOME=%q %q` and choosing a login method, then retry the review", configRoot, configRoot, binary)
+	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in once in the reviewer home by running `HOME=%q XDG_CONFIG_HOME=%q %q` and choosing a login method, then retry the review.", configRoot, configRoot, binary)}
 }
 
 func appendEnvironment(base []string, overrides map[string]string) []string {
