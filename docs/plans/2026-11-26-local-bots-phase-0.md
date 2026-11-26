@@ -101,7 +101,19 @@ $AO_DATA_DIR/bots/<bot-id>/
   - emits a change event.
 - **Secrets: reduce the risk; no guarantee.** AO cannot guarantee that a secret never reaches bot memory. The credential-format check only catches text in recognizable formats, such as provider token prefixes and private-key blocks. A password written as ordinary prose passes it. Phase 0 layers these controls on top:
   - Memory content is always owner-visible. Every write shows up as a diff in the Memory tab.
-  - `ao bot memory purge` removes a value from `MEMORY.md`, every `.history/` snapshot, and the `journal/` files, for when a secret slips through.
+  - `ao bot memory purge` is for when a secret slips through. It removes the value from `MEMORY.md`, every `.history/` snapshot, and the `journal/` files. It also clears the local prompt copies:
+    - Each bot session's prompt, including SOUL and MEMORY, is written to `$AO_DATA_DIR/prompts/<session-id>/system.md` by `writeSystemPromptFile`. Some harnesses keep their own files in subfolders of the same directory.
+    - So purge also recycles the bot. It ends the current bot session, whether live or hibernated, after any turn in progress settles.
+    - Ending the session runs the existing `cleanupSystemPromptDir`, which deletes the whole `prompts/<session-id>/` directory.
+    - The next turn starts a fresh session built from the purged files.
+    - Earlier bot sessions are already terminated, and their prompt directories were removed at termination. Purge verifies that none remain for this bot's sessions and deletes any it finds.
+    - Purge succeeds only after all of these steps. It reports any copy it could not remove.
+  - Purge cannot reach copies outside the bot folder and prompt directories:
+    - text in the bot conversation itself (for example, a secret the owner typed in chat);
+    - a harness's own transcript store;
+    - what the model provider already received.
+
+    The purge result lists these limits.
   - The bot skill and system prompt tell the bot not to store secrets, and to refer to credentials by name only. This is a model instruction, not enforcement.
   - AO never syncs memory, uploads it to AO services, or puts it in telemetry. **It does leave the home through the model provider:**
     - Every bot session sends its system prompt, including `SOUL.md` and `MEMORY.md`, to the bot's model provider when the model is remote (see Injection).
@@ -120,6 +132,7 @@ $AO_DATA_DIR/bots/<bot-id>/
 ### 4. Bot sessions hibernate between turns and are recycled
 
 - **Hibernate.** Idle hibernation currently skips orchestrators (`service/chat/hibernate.go`). Bots take the opposite choice: they hibernate after `IdleBeforeHibernate`, and they wake when a message, schedule, crew report, or answered ask arrives. This mirrors "machine sleeps between turns" in Capy, keeps prompt cache warm for 10 minutes, and costs nothing while idle.
+- **Prompt directory across hibernate and wake.** Hibernation does not terminate the session, so `prompts/<session-id>/` stays on disk while the bot sleeps. On wake, the bot service regenerates `system.md` from the current SOUL, MEMORY, open asks, and crew summary before relaunching. A woken bot therefore never runs on a stale or purged prompt. The directory is deleted when the session ends: on recycle, archive, or purge, through `cleanupSystemPromptDir`.
 - **Recycle.** When a bot session hits a context threshold (provider-reported context use above about 60%, or 7 days old), the bot service ends it after its turn settles. It then starts a fresh `KindBot` session bound to the same bot conversation. The new session's prompt carries SOUL, MEMORY, and a handoff note from the existing `chat.Service.HandoffNote`. Recycling is a normal event in the bot's timeline, not an error. Devin exposes the same idea as "Recycle".
 
 ### 5. Crew attribution is durable, and limits are enforced by the daemon
@@ -309,7 +322,7 @@ ao bot create --project <p> --handle <h> --name <n> [--purpose ...] [--agent ...
 ao bot ls [--project <p>]
 ao bot get|send|pause|resume|archive|rm <bot> [--project <p>] [<text>]
 ao bot memory show | append <text> | replace --file <f> | history | undo   # agent-facing writes
-ao bot memory purge <bot> <text> [--project <p>]                           # owner only; scrubs MEMORY.md, .history/ and journal/
+ao bot memory purge <bot> <text> [--project <p>]                           # owner only; scrubs memory files, recycles the bot to clear prompt copies
 ao bot ask --kind decision|approval|review|info "<question>" [--option ...] [--subject <ref>]
 ao inbox [--bot <bot>] [--project <p>]
 ```
@@ -346,7 +359,7 @@ Ten PRs of about two weeks' total work, each with tests for the boundary it chan
 4. The bot service with create, get, list, pause, resume, archive, and delete; HTTP routes and DTOs (`npm run api`); and the CLI.
 5. The bot folder and memory routes: size cap, best-effort credential check, history and undo, purge, and system-prompt injection.
 6. Crew attribution, permissions inheritance, the worker cap, and report routing to the bot conversation.
-7. Hibernate and wake for bots, and recycle with a handoff note.
+7. Hibernate and wake for bots (regenerating `system.md` on wake), recycle with a handoff note, and purge's recycle step. Tests cover the prompt directory after hibernate, wake, recycle, and purge.
 8. Automations targeting bots, with bundled templates as bot templates.
 9. The Needs-you projection and APIs, the ask answer route, and push rules.
 10. Renderer: sidebar rows, bot route, inspector tabs, create dialog, and the cross-host inbox. Then the memory tidy, the export bundle with its round-trip test, and the dogfood bots.
