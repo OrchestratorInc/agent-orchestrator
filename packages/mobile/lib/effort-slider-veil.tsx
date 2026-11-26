@@ -22,17 +22,19 @@ const FADE = [0, 0.03, 0.1, 0.21, 0.36, 0.53, 0.7, 0.84, 0.94, 1];
  * fade above it into the conversation, even across the screen's width. It
  * takes no touches, so a tap on the chat through it still closes the overlay.
  */
-export function EffortSliderVeil({ rise = VEIL_RISE, fall = 0 }: {
+export function EffortSliderVeil({ rise = VEIL_RISE, fall = 0, fallNativeID }: {
 	rise?: number;
 	/** How far it also fades down past the overlay's foot: over the keys' top rows, for an overlay above the keyboard. */
 	fall?: number;
+	/** Names the fall's view for a native window that draws it (Android's over-keyboard overlay). */
+	fallNativeID?: string;
 }) {
 	const t = useTheme();
 	return (
 		<>
 			<View pointerEvents="none" style={[styles.solid, { backgroundColor: t.bgBase }]} />
 			{fall ? (
-				<View pointerEvents="none" style={[styles.fade, { bottom: -space.sm - fall, height: fall }]}>
+				<View nativeID={fallNativeID} collapsable={fallNativeID ? false : undefined} pointerEvents="none" style={[styles.fade, { bottom: -space.sm - fall, height: fall }]}>
 					<Svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 1 1">
 						<Defs>
 							<LinearGradient id="composer-overlay-veil-fall" x1="0" y1="1" x2="0" y2="0">

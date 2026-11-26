@@ -36,6 +36,8 @@ const FOOT_GAP = space.sm;
 // the view it ends at, the event it sends for a touch outside it, and the
 // Android version from which it can leave the header's touches to the app.
 const TOUCH_REGION_ID = "RNKC_OverKeyboardTouchRegion";
+/** The fade over the keys, which the patched Android window reaches down to draw. */
+const FADE_ID = "RNKC_OverKeyboardFade";
 const TOUCH_OUTSIDE_EVENT = "KeyboardController::overKeyboardTouchOutside";
 const ANDROID_TOUCHABLE_REGION = 33;
 // The header's room below the status bar: taps there go through to it on iOS.
@@ -195,9 +197,10 @@ function OverKeyboardOverlay({ visible, onDismiss, fill, reveal, children }: {
 						importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
 						style={[styles.aboveKeys, reveal]}
 					>
-						{/* No fade over the keys on Android: the window ends above them,
-						    so they stay the keyboard's to tap. */}
-						<EffortSliderVeil rise={KEYS_RISE} fall={Platform.OS === "android" ? 0 : KEYS_FALL} />
+						{/* The fade over the keys' top rows. On Android the patched window
+						    reaches down to its foot; a tap on it closes the overlay, and the
+						    keys below it stay the keyboard's to tap. */}
+						<EffortSliderVeil rise={KEYS_RISE} fall={KEYS_FALL} fallNativeID={Platform.OS === "android" ? FADE_ID : undefined} />
 						{/* Its touches are its own. The window is native, but a touch in it
 						    still bubbles through React's tree to the app root, which would
 						    otherwise take it for a tap outside and close it as the finger

@@ -59,6 +59,8 @@ vi.mock("react-native-gesture-handler", async () => {
 		Gesture: { Pan: pan },
 		GestureDetector: ({ gesture, children }: { gesture: unknown; children?: React.ReactNode }) => React.createElement("GestureDetector", { gesture }, children),
 		GestureHandlerRootView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("GestureHandlerRootView", props, children),
+		Pressable: ({ children, style, ...props }: { children?: React.ReactNode; style?: unknown }) =>
+			React.createElement("Pressable", { ...props, style: typeof style === "function" ? style({ pressed: false }) : style }, children),
 	};
 });
 // The drag's worklets call JS through scheduleOnRN; here it calls at once.
@@ -315,7 +317,7 @@ describe("effort slider", () => {
 		expect(toggle).toHaveBeenCalledOnce();
 		await act(async () => renderer!.update(<EffortSlider choices={levels("medium")} onChoose={() => {}} fast={{ on: true, toggle }} />));
 		expect(bolt().props.accessibilityState).toEqual({ checked: true });
-		expect(zap().props).toMatchObject({ color: "#amber", fill: "#amber" });
+		expect(zap().props).toMatchObject({ color: "#textPrimary", fill: "#textPrimary" });
 	});
 
 	it("draws no bolt for a model with no fast mode", async () => {

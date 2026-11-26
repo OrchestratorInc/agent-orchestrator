@@ -20,6 +20,14 @@ vi.mock("react-native", async () => {
 		View: host("View"),
 	};
 });
+// The overlay's buttons are gesture handler's: they hit-test natively, in the overlay's own window.
+vi.mock("react-native-gesture-handler", async () => {
+	const React = await import("react");
+	return {
+		Pressable: ({ children, style, ...props }: { children?: React.ReactNode; style?: unknown }) =>
+			React.createElement("Pressable", { ...props, style: typeof style === "function" ? style({ pressed: false }) : style }, children),
+	};
+});
 // Desktop's permission icons, drawn by name.
 vi.mock("lucide-react-native/icons/hand", () => ({ default: "Hand" }));
 vi.mock("lucide-react-native/icons/pencil-line", () => ({ default: "PencilLine" }));

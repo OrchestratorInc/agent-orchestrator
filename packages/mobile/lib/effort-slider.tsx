@@ -1,7 +1,7 @@
 import Zap from "lucide-react-native/icons/zap";
 import { memo, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
-import { Pressable, StyleSheet, useWindowDimensions, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { StyleSheet, useWindowDimensions, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
+import { Gesture, GestureDetector, Pressable } from "react-native-gesture-handler";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { ComposerOverlay, OverlayHeading, overlayCardStyle } from "./composer-overlay";
@@ -267,7 +267,7 @@ function useStableCallback<A extends unknown[]>(fn: (...args: A) => void): (...a
 	return useRef((...args: A) => latest.current(...args)).current;
 }
 
-/** Fast mode's bolt: outlined while off, filled in amber while on. */
+/** Fast mode's bolt: outlined while off, filled solid in the text colour while on. */
 function FastBolt({ on, toggle }: FastToggle) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -281,7 +281,7 @@ function FastBolt({ on, toggle }: FastToggle) {
 			testID="effort-slider-fast"
 			style={({ pressed }) => [styles.bolt, pressed && styles.boltPressed]}
 		>
-			<Zap size={iconSize.md} strokeWidth={2} color={on ? t.amber : t.textSecondary} fill={on ? t.amber : "none"} />
+			<Zap size={iconSize.md} strokeWidth={2} color={on ? t.textPrimary : t.textSecondary} fill={on ? t.textPrimary : "none"} />
 		</Pressable>
 	);
 }

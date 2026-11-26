@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
-index 6ba79e2..fdd6dac 100644
+index 6ba79e2..9bc84a9 100644
 --- a/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
 +++ b/node_modules/react-native-keyboard-controller/android/src/main/java/com/reactnativekeyboardcontroller/views/overlay/OverKeyboardViewGroup.kt
 @@ -3,9 +3,18 @@ package com.reactnativekeyboardcontroller.views.overlay
@@ -60,7 +60,7 @@ index 6ba79e2..fdd6dac 100644
      }
    }
  }
-@@ -247,3 +265,87 @@ class OverKeyboardRootViewGroup(
+@@ -247,3 +265,111 @@ class OverKeyboardRootViewGroup(
      stateWrapper?.updateState(newStateData)
    }
  }
@@ -68,7 +68,8 @@ index 6ba79e2..fdd6dac 100644
 +/**
 + * The overlay window's root. JS marks the part of the screen the overlay
 + * claims with a view whose nativeID is [TOUCH_REGION_ID]; the window then ends
-+ * at that view's bottom, so the keyboard below it is outside the window and
++ * at that view's bottom (or the foot of its fade over the keys' top rows, view
++ * [FADE_ID], where a tap only closes it), so the keyboard below is outside the window and
 + * gets its own touches (since Android 12 a window from another app over a
 + * point blocks touches there, so the frame itself must end, not only its
 + * touchable area). On API 33+ the part above the region is made not
@@ -84,11 +85,13 @@ index 6ba79e2..fdd6dac 100644
 +  private val windowManager: WindowManager,
 +) : FrameLayout(reactContext) {
 +  private var region: Rect? = null
++  private var drawnBottom: Int? = null
 +  private val preDraw =
 +    ViewTreeObserver.OnPreDrawListener {
 +      syncRegion()
 +      true
 +    }
++
 +
 +  init {
 +    clipChildren = true
@@ -104,6 +107,7 @@ index 6ba79e2..fdd6dac 100644
 +  override fun onDetachedFromWindow() {
 +    viewTreeObserver.removeOnPreDrawListener(preDraw)
 +    region = null
++    drawnBottom = null
 +    super.onDetachedFromWindow()
 +  }
 +
@@ -117,10 +121,23 @@ index 6ba79e2..fdd6dac 100644
 +      } else {
 +        null
 +      }
-+    if (next == region) return
++    // The window also draws the overlay's fade down over the keys' top rows
++    // (JS's view with nativeID [FADE_ID]); taps there are not the keyboard's,
++    // and land outside the touchable region, which closes the overlay.
++    val fadeView = ReactFindViewUtil.findView(hostView, FADE_ID)
++    val fadeBottom =
++      if (next != null && fadeView != null && fadeView.height > 0 && hostView is android.view.ViewGroup) {
++        val rect = Rect(0, 0, fadeView.width, fadeView.height)
++        hostView.offsetDescendantRectToMyCoords(fadeView, rect)
++        maxOf(next.bottom, rect.bottom)
++      } else {
++        next?.bottom
++      }
++    if (next == region && fadeBottom == drawnBottom) return
 +    region = next
++    drawnBottom = fadeBottom
 +    val params = layoutParams as? WindowManager.LayoutParams ?: return
-+    val height = next?.bottom ?: WindowManager.LayoutParams.MATCH_PARENT
++    val height = fadeBottom ?: WindowManager.LayoutParams.MATCH_PARENT
 +    if (params.height != height) {
 +      params.height = height
 +      try {
@@ -132,11 +149,17 @@ index 6ba79e2..fdd6dac 100644
 +      }
 +    }
 +    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-+      rootSurfaceControl?.setTouchableRegion(next?.let { Region(it) })
++      rootSurfaceControl?.setTouchableRegion(next?.let { Region(it.left, it.top, it.right, fadeBottom ?: it.bottom) })
 +    }
 +  }
 +
 +  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
++    // A tap on the fade over the keys is outside the overlay too.
++    val below = region?.bottom
++    if (event.actionMasked == MotionEvent.ACTION_DOWN && below != null && event.y > below) {
++      reactContext.emitEvent("KeyboardController::overKeyboardTouchOutside", Arguments.createMap())
++      return true
++    }
 +    if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) {
 +      reactContext.emitEvent("KeyboardController::overKeyboardTouchOutside", Arguments.createMap())
 +      return true
@@ -146,5 +169,6 @@ index 6ba79e2..fdd6dac 100644
 +
 +  companion object {
 +    const val TOUCH_REGION_ID = "RNKC_OverKeyboardTouchRegion"
++    const val FADE_ID = "RNKC_OverKeyboardFade"
 +  }
 +}

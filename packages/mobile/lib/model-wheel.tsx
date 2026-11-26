@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { Pressable } from "react-native-gesture-handler";
 import type { WheelAgent, WheelSetting } from "./chat/useChatModelWheel";
 import { ComposerOverlay } from "./composer-overlay";
 import { useWarmAfterIdle } from "./effort-slider-host";
