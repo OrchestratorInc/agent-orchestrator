@@ -1,3 +1,4 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { InspectorSection, NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "@aoagents/product-ui";
@@ -11,6 +12,7 @@ import { ChatImageDialog } from "./chat/ChatImage";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Pressable } from "./ui/pressable";
 import { THIS_COMPUTER, useComputerUseTargets } from "../hooks/useComputerUseTargets";
+import { apiClient } from "../lib/api-client";
 
 type Screenshot = { url: string; label: string };
 
@@ -110,24 +112,52 @@ export function ComputerUsePanel({ entries, sessionId }: { entries: ComputerUseT
 	);
 }
 
+const sessionTargetQueryKey = (sessionId: string) => ["computer-use", "session-target", sessionId] as const;
+const SESSION_TARGET_POLL_MS = 15_000;
+
 /**
  * Where this chat's computer use runs, and the switch to move it: choosing a
  * computer here moves computer use there for this chat too, though it started
- * elsewhere.
+ * elsewhere. It shows the chat's own computer, which stays where the chat
+ * started when "Run computer use on" changes in Settings, and falls back to
+ * that setting while the daemon has not seen the chat start or call.
  */
 function RunsOnPicker({ sessionId }: { sessionId: string }) {
 	const { t } = useTranslation();
+	const queryClient = useQueryClient();
 	const targets = useComputerUseTargets();
+	const bound = useQuery({
+		queryKey: sessionTargetQueryKey(sessionId),
+		queryFn: async ({ signal }) => {
+			const { data, error } = await apiClient.GET("/api/v1/computer-use/sessions/{sessionId}/target", {
+				params: { path: { sessionId } },
+				signal,
+			});
+			// An older daemon has no such route: fall back to the setting.
+			if (error || !data) return null;
+			return data.target ?? null;
+		},
+		refetchInterval: SESSION_TARGET_POLL_MS,
+		retry: false,
+	});
+	const value = bound.data ?? targets.target?.hostId ?? THIS_COMPUTER;
+	const options = targets.options.some((option) => option.value === value)
+		? targets.options
+		: [...targets.options, { value, label: targets.saved.find((host) => host.hostId === value)?.label ?? value }];
 	const unavailable = targets.target && targets.targetChecked && !targets.targetAvailable;
+	const choose = async (hostId: string) => {
+		await targets.choose(hostId, sessionId);
+		void queryClient.invalidateQueries({ queryKey: sessionTargetQueryKey(sessionId) });
+	};
 	return (
 		<div className="mx-3 mt-3 mb-2 flex flex-col gap-1">
 			<div className="flex min-h-8 items-center justify-between gap-2 text-sm">
 				<span className="text-muted-foreground">{t("computerUse.runsOn")}</span>
 				<SettingsOptionMenu
 					aria-label={t("computerUse.runsOn")}
-					value={targets.target?.hostId ?? THIS_COMPUTER}
-					options={targets.options}
-					onChange={(hostId) => void targets.choose(hostId, sessionId)}
+					value={value}
+					options={options}
+					onChange={(hostId) => void choose(hostId)}
 					disabled={!targets.remote.data || targets.choosing}
 				/>
 			</div>

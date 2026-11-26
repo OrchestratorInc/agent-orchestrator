@@ -3657,6 +3657,45 @@ paths:
       summary: Read one screenshot an AO session's computer-use call saved
       tags:
       - computer-use
+  /api/v1/computer-use/sessions/{sessionId}/target:
+    get:
+      operationId: getComputerUseSessionTarget
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseSessionTargetResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report where an AO session's computer-use calls run
+      tags:
+      - computer-use
   /api/v1/computer-use/sessions/{sessionId}/timeline:
     get:
       operationId: getComputerUseTimeline
@@ -20168,6 +20207,15 @@ components:
       - hostId
       - label
       - url
+      type: object
+    ComputerUseSessionTargetResponse:
+      properties:
+        target:
+          description: 'Where the session''s computer-use calls run: "local" or the
+            remote host ID. A session that started before "Run computer use on" changed
+            keeps its own, unless the user moved it from its panel. Absent when the
+            daemon has not seen the session start or call since it started.'
+          type: string
       type: object
     ComputerUseStatus:
       properties:

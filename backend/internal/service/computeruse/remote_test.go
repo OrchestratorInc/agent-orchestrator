@@ -814,3 +814,31 @@ func TestRemoteCallerIDIsBounded(t *testing.T) {
 	_, err := remote.ServeRemoteCall(context.Background(), RemoteCallRequest{Tool: "list_windows", Caller: strings.Repeat("a", maxRemoteCallerBytes+1)})
 	wantCode(t, err, "COMPUTER_USE_INVALID_CALLER")
 }
+
+// A chat shows where its own calls run: where it was set up, until the user
+// moves it from its panel, even after "Run computer use on" changes.
+func TestSessionTargetIsWhereTheChatRuns(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	if got, err := s.SessionTarget(ctx, "ao-1"); err != nil || got != "" {
+		t.Fatalf("unseen session target = %q, %v", got, err)
+	}
+	s.BindSession("ao-1", LocalTarget)
+	setTarget(t, s, "http://192.0.2.1:1")
+	if got, _ := s.SessionTarget(ctx, "ao-1"); got != LocalTarget {
+		t.Fatalf("target after Settings changed = %q, want the chat's own %q", got, LocalTarget)
+	}
+	if _, err := s.SetRemoteTarget(ctx, SetRemoteTargetRequest{HostID: "host-mac", Label: "Studio Mac", URL: "http://192.0.2.1:1", Credential: "secret", SessionID: "ao-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SessionTarget(ctx, "ao-1"); got != "host-mac" {
+		t.Fatalf("target after moving the chat = %q, want host-mac", got)
+	}
+	// A call reports the target its tool server was given.
+	_, _ = s.Call(ctx, CallRequest{Tool: "list_windows", SessionID: "ao-2", Target: "host-pc"})
+	if got, _ := s.SessionTarget(ctx, "ao-2"); got != "host-pc" {
+		t.Fatalf("target from a call = %q, want host-pc", got)
+	}
+	_, err := s.SessionTarget(ctx, "../x")
+	wantCode(t, err, "COMPUTER_USE_INVALID_SESSION")
+}

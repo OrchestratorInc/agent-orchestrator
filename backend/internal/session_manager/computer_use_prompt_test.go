@@ -214,10 +214,15 @@ func TestStartingSessionSeesOneComputerUseTarget(t *testing.T) {
 	if err != nil || !strings.Contains(sp, `"Studio Mac"`) {
 		t.Fatalf("prompt = %v, %q", err, sp)
 	}
+	bound := map[string]string{}
+	m.SetComputerUseBinding(func(sessionID, target string) { bound[sessionID] = target })
 	hostID, label = "", ""
 	servers := m.aoMCPServers(ctx, domain.HarnessClaudeCode, map[string]string{EnvSessionID: "mer-9"})
 	if got := servers[0].Env[config.EnvComputerUseTarget]; got != "host-mac" {
 		t.Fatalf("tool server target = %q, want the computer the prompt names", got)
+	}
+	if bound["mer-9"] != "host-mac" {
+		t.Fatalf("binding reported = %v, want mer-9 on host-mac", bound)
 	}
 	// The tool server released the snapshot: the session's next start reads
 	// the setting again.

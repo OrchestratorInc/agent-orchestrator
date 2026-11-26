@@ -29,8 +29,8 @@ type fakeDriver struct {
 	onCall   func(args []string) ([]byte, []byte, error)
 	// onCallCtx, when set, runs instead of onCall and sees the call's context.
 	onCallCtx func(ctx context.Context, args []string) ([]byte, []byte, error)
-	started  int
-	startsUp bool
+	started   int
+	startsUp  bool
 }
 
 func (f *fakeDriver) Locate(context.Context) (string, error) {

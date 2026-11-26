@@ -492,6 +492,56 @@ func (s *remoteState) adopt(current, sessionID string) {
 	s.Adopted[sessionID] = current
 }
 
+// maxBoundSessions bounds the sessions whose computer-use target is kept.
+const maxBoundSessions = 1024
+
+// BindSession records where sessionID's computer use was set up to run:
+// LocalTarget or a remote host ID. Session starts and calls report it; either
+// being empty records nothing.
+func (s *Service) BindSession(sessionID, target string) {
+	sessionID, target = strings.TrimSpace(sessionID), strings.TrimSpace(target)
+	if sessionID == "" || target == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bindings == nil {
+		s.bindings = map[string]string{}
+	}
+	if _, ok := s.bindings[sessionID]; !ok && len(s.bindings) >= maxBoundSessions {
+		for session := range s.bindings {
+			delete(s.bindings, session)
+			break
+		}
+	}
+	s.bindings[sessionID] = target
+}
+
+// SessionTarget is where sessionID's computer-use calls run: LocalTarget or a
+// remote host ID. A session the user moved from its own panel runs on the
+// current target; another runs where it was set up. "" means this daemon has
+// not seen the session start or call since it started.
+func (s *Service) SessionTarget(_ context.Context, sessionID string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if !scopePattern.MatchString(sessionID) {
+		return "", apierr.Invalid("COMPUTER_USE_INVALID_SESSION", "sessionId may contain only letters, digits, '.', '_' and '-'.", nil)
+	}
+	state, err := s.remoteState()
+	if err != nil {
+		return "", err
+	}
+	current := LocalTarget
+	if state.Target != nil {
+		current = state.Target.HostID
+	}
+	if state.Adopted[sessionID] == current {
+		return current, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bindings[sessionID], nil
+}
+
 // CurrentTarget names the other computer this computer's agents run computer
 // use on, by host ID and name, or "" for both when they run it here.
 func (s *Service) CurrentTarget(context.Context) (hostID, label string) {

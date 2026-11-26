@@ -574,6 +574,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ComputeruseRemoteImage":                         "RemoteComputerUseImage",
 	"ComputeruseTimelineEntry":                       "ComputerUseTimelineEntry",
 	"ControllersComputerUseTimelineResponse":         "ComputerUseTimelineResponse",
+	"ControllersComputerUseSessionTargetResponse":    "ComputerUseSessionTargetResponse",
 	// service/systeminstall: Job backs both StartInstallResponse and
 	// InstallStatusResponse (they're the same Go type), so it reflects to one
 	// shared component — name it after the domain concept, not either alias.
@@ -1260,6 +1261,17 @@ func computerUseOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ComputerUseTimelineResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/computer-use/sessions/{sessionId}/target", id: "getComputerUseSessionTarget", tag: "computer-use",
+			summary:    "Report where an AO session's computer-use calls run",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ComputerUseSessionTargetResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

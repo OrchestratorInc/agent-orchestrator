@@ -29,6 +29,7 @@ type ComputerUse interface {
 	RemoteOffer(ctx context.Context) (computeruse.RemoteOffer, error)
 	RemoteAgentTools(ctx context.Context) ([]computeruse.AgentTool, error)
 	ServeRemoteCall(ctx context.Context, request computeruse.RemoteCallRequest) (computeruse.RemoteCallResult, error)
+	SessionTarget(ctx context.Context, sessionID string) (string, error)
 
 	Timeline(ctx context.Context, sessionID string) ([]computeruse.TimelineEntry, error)
 	ScreenshotPath(ctx context.Context, sessionID, name string) (string, error)
@@ -59,6 +60,7 @@ func (c *ComputerUseController) Register(r chi.Router) {
 	r.Put("/computer-use/remote/target", c.setRemoteTarget)
 	r.Delete("/computer-use/remote/target", c.clearRemoteTarget)
 	r.Get("/computer-use/sessions/{sessionId}/timeline", c.timeline)
+	r.Get("/computer-use/sessions/{sessionId}/target", c.sessionTarget)
 	r.Get("/computer-use/sessions/{sessionId}/screenshots/{name}", c.screenshot)
 
 	r.Get("/remote-computer-use/status", c.remoteOffer)
@@ -237,6 +239,21 @@ func (c *ComputerUseController) timeline(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ComputerUseTimelineResponse{Entries: entries})
+}
+
+// sessionTarget reports where one session's computer-use calls run, which
+// can differ from "Run computer use on" for a session that started earlier.
+func (c *ComputerUseController) sessionTarget(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/computer-use/sessions/{sessionId}/target")
+		return
+	}
+	target, err := c.Svc.SessionTarget(r.Context(), chi.URLParam(r, "sessionId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ComputerUseSessionTargetResponse{Target: target})
 }
 
 // screenshot serves one saved screenshot. A name is never reused, so the

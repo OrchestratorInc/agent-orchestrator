@@ -192,6 +192,10 @@ type Service struct {
 	remoteCalls   map[uint64]context.CancelCauseFunc
 	remoteCallSeq uint64
 	remoteSweptAt time.Time
+	// bindings is where each session's computer use was set up to run, by
+	// session ID: from its start, or from its latest call's target; guarded
+	// by mu.
+	bindings map[string]string
 }
 
 // SetEnabled supplies the "Let agents use this computer" setting, which Call
@@ -362,6 +366,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if err != nil {
 		return CallResult{}, err
 	}
+	s.BindSession(request.SessionID, request.Target)
 	notice, err := checkTarget(request.Target, to.target, to.adopted)
 	if err != nil {
 		return CallResult{}, err

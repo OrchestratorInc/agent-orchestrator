@@ -614,6 +614,8 @@ type Manager struct {
 	computerUseMu     sync.Mutex
 	computerUse       func(context.Context) bool
 	computerUseRemote func(context.Context) (hostID, label string)
+	// computerUseBind reports a starting session's computer-use target.
+	computerUseBind func(sessionID, target string)
 	// computerUseSpawns holds the target each starting session saw, so its
 	// prompt and its tool server are bound to the same computer.
 	computerUseSpawns map[domain.SessionID]computerUseSnapshot

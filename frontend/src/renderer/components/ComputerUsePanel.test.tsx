@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
 	target: undefined as { hostId: string; label: string; url: string } | undefined,
+	sessionTarget: undefined as string | undefined,
 	GET: vi.fn(),
 	DELETE: vi.fn(),
 }));
@@ -24,7 +25,10 @@ function render(ui: ReactElement) {
 
 beforeEach(() => {
 	apiMocks.target = undefined;
-	apiMocks.GET.mockReset().mockImplementation(async () => ({ data: { allowRemote: false, target: apiMocks.target, activity: [] } }));
+	apiMocks.sessionTarget = undefined;
+	apiMocks.GET.mockReset().mockImplementation(async (path: string) => path.endsWith("/target")
+		? { data: { target: apiMocks.sessionTarget } }
+		: { data: { allowRemote: false, target: apiMocks.target, activity: [] } });
 	apiMocks.DELETE.mockReset().mockImplementation(async () => ({ data: { allowRemote: false, activity: [] } }));
 });
 import type { ComputerUseTimelineEntry } from "../hooks/useComputerUseTimeline";
@@ -51,6 +55,15 @@ describe("ComputerUsePanel", () => {
 		render(<ComputerUsePanel entries={entries} sessionId="ao-1" />);
 		const picker = await screen.findByRole("button", { name: "Runs on" });
 		await waitFor(() => expect(picker).toHaveTextContent("Studio Mac"));
+	});
+
+	it("names the computer this chat runs on, not the one Settings chose since", async () => {
+		apiMocks.target = { hostId: "h_mac", label: "Studio Mac", url: "http://192.0.2.1:1" };
+		apiMocks.sessionTarget = "local";
+		render(<ComputerUsePanel entries={entries} sessionId="ao-1" />);
+		const picker = await screen.findByRole("button", { name: "Runs on" });
+		await waitFor(() => expect(picker).toHaveTextContent("This computer"));
+		expect(apiMocks.GET).toHaveBeenCalledWith("/api/v1/computer-use/sessions/{sessionId}/target", expect.objectContaining({ params: { path: { sessionId: "ao-1" } } }));
 	});
 
 	it("moves this chat's computer use back to this computer from the panel", async () => {

@@ -963,6 +963,7 @@ func Run(buildVersion string) (retErr error) {
 		return settingsSvc.ComputerUseEnabled(ctx) || hostID != ""
 	})
 	sessMgr.SetComputerUseRemote(computerUse.CurrentTarget)
+	sessMgr.SetComputerUseBinding(computerUse.BindSession)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})

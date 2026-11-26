@@ -2729,6 +2729,12 @@ type ComputerUseTimelineResponse struct {
 	Entries []computeruse.TimelineEntry `json:"entries"`
 }
 
+// ComputerUseSessionTargetResponse is the body of
+// GET /api/v1/computer-use/sessions/{sessionId}/target.
+type ComputerUseSessionTargetResponse struct {
+	Target string `json:"target,omitempty" description:"Where the session's computer-use calls run: \"local\" or the remote host ID. A session that started before \"Run computer use on\" changed keeps its own, unless the user moved it from its panel. Absent when the daemon has not seen the session start or call since it started."`
+}
+
 // ComputerUseScreenshotParam names one saved screenshot.
 type ComputerUseScreenshotParam struct {
 	Name string `path:"name" description:"Screenshot file name from a timeline entry."`

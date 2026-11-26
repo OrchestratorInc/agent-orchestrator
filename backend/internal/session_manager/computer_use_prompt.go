@@ -47,6 +47,23 @@ func (m *Manager) SetComputerUseRemote(target func(context.Context) (hostID, lab
 	m.computerUseRemote = target
 }
 
+// SetComputerUseBinding supplies where a starting session's tool server sends
+// its computer-use calls, so the daemon can show each chat where it runs.
+func (m *Manager) SetComputerUseBinding(bind func(sessionID, target string)) {
+	m.computerUseMu.Lock()
+	defer m.computerUseMu.Unlock()
+	m.computerUseBind = bind
+}
+
+func (m *Manager) bindComputerUse(sessionID domain.SessionID, target string) {
+	m.computerUseMu.Lock()
+	bind := m.computerUseBind
+	m.computerUseMu.Unlock()
+	if bind != nil {
+		bind(string(sessionID), target)
+	}
+}
+
 func (m *Manager) computerUseTarget(ctx context.Context) (hostID, label string) {
 	m.computerUseMu.Lock()
 	target := m.computerUseRemote

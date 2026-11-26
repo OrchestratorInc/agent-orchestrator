@@ -1425,6 +1425,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/computer-use/sessions/{sessionId}/target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report where an AO session's computer-use calls run */
+        get: operations["getComputerUseSessionTarget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/computer-use/sessions/{sessionId}/timeline": {
         parameters: {
             query?: never;
@@ -6902,6 +6919,10 @@ export interface components {
             label: string;
             /** @description The other computer's remote-host address. */
             url: string;
+        };
+        ComputerUseSessionTargetResponse: {
+            /** @description Where the session's computer-use calls run: "local" or the remote host ID. A session that started before "Run computer use on" changed keeps its own, unless the user moved it from its panel. Absent when the daemon has not seen the session start or call since it started. */
+            target?: string;
         };
         ComputerUseStatus: {
             /** @description The cua-driver executable AO runs. */
@@ -15464,6 +15485,56 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseSessionTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseSessionTargetResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
