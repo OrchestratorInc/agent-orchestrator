@@ -477,9 +477,29 @@ describe("prLine", () => {
 		expect(prLine(session({ pr: pr({ number: 4 }) }))?.text).toBe("PR #4 open");
 	});
 
-	it("takes its tone from the worst lifecycle present", () => {
-		expect(prLine(session({ prs: [pr({ number: 1, state: "closed" })] }))?.tone).toBe("error");
-		expect(prLine(session({ prs: [pr({ number: 1 })] }))?.tone).toBe("success");
+	it("colors each lifecycle group on its own, leaving the lead and separators plain", () => {
+		const line = prLine(
+			session({
+				prs: [
+					pr({ number: 9137 }),
+					pr({ number: 9125, state: "merged" }),
+					pr({ number: 9120, state: "merged" }),
+					pr({ number: 9001, state: "closed" }),
+					pr({ number: 8990, isDraft: true }),
+				],
+			}),
+		);
+		expect(line?.segments).toEqual([
+			{ text: "PR " },
+			{ text: "#9137 open", tone: "success" },
+			{ text: " · " },
+			{ text: "#9125, #9120 merged", tone: "merged" },
+			{ text: " · " },
+			{ text: "#9001 closed", tone: "error" },
+			{ text: " · " },
+			{ text: "#8990 draft", tone: "passive" },
+		]);
+		expect(line?.text).toBe("PR #9137 open · #9125, #9120 merged · #9001 closed · #8990 draft");
 	});
 });
 
