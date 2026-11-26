@@ -7734,6 +7734,18 @@ html[data-new-desktop-ui] .button-raised:not(.button-classic) {
 	box-shadow: none;
 }
 
+/* Dropdown triggers keep their quieter 2% edge: this repeats the trigger rule
+ * above so it lands after the general one, which otherwise wins on order. */
+html[data-new-desktop-ui] .button-raised:not(.button-classic):is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+	border-color: color-mix(in oklch, var(--color-text-primary) 2%, transparent);
+}
+
+/* In dark the trigger's face is itself a light tint, and any edge on top of it
+ * adds up into a ring, so the face alone draws the shape. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:not(.button-classic):is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+	border-color: transparent;
+}
+
 html[data-new-desktop-ui] .button-classic {
 	--accent-9: var(--button-color);
 	--accent-10: color-mix(in oklab, var(--button-color), #000 6%);
