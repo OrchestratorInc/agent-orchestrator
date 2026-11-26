@@ -45,19 +45,21 @@ describe("swipeOffset", () => {
 });
 
 describe("swipeReleaseTarget", () => {
-	it("opens a resting row dragged past half the rail, and settles a shorter drag back", () => {
-		expect(swipeReleaseTarget(false, -37, 0)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
-		expect(swipeReleaseTarget(false, -35, 0)).toBe(0);
+	it("opens a row let go past half the rail, and settles a shorter drag back", () => {
+		expect(swipeReleaseTarget(-37, 0)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
+		expect(swipeReleaseTarget(-35, 0)).toBe(0);
 	});
 
 	it("counts a flick's speed, as a toss of a twentieth of it", () => {
-		expect(swipeReleaseTarget(false, -20, -400)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
-		expect(swipeReleaseTarget(false, -40, 200)).toBe(0);
+		expect(swipeReleaseTarget(-20, -400)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
+		expect(swipeReleaseTarget(-40, 200)).toBe(0);
 	});
 
+	// From the open rail (-72) the swipeable kept a row open unless the drag
+	// carried it back more than half the rail: the same line, measured from rest.
 	it("keeps an open row open unless the drag carries it back past half the rail", () => {
-		expect(swipeReleaseTarget(true, 30, 0)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
-		expect(swipeReleaseTarget(true, 37, 0)).toBe(0);
-		expect(swipeReleaseTarget(true, 10, 600)).toBe(0);
+		expect(swipeReleaseTarget(-WORKER_ACTION_REVEAL_WIDTH + 30, 0)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
+		expect(swipeReleaseTarget(-WORKER_ACTION_REVEAL_WIDTH + 37, 0)).toBe(0);
+		expect(swipeReleaseTarget(-WORKER_ACTION_REVEAL_WIDTH + 10, 600)).toBe(0);
 	});
 });

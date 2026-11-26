@@ -52,13 +52,13 @@ export function swipeOffset(origin: number, translationX: number, canOvershoot: 
 }
 
 /**
- * Where a released row settles: the open rail or rest. A drag counts with its
- * toss, against half the rail, from the state it began in.
+ * Where a row let go at `offset` settles: the open rail or rest. The drag
+ * counts with its toss, against half the rail. From a settled row this is the
+ * swipeable's rule (open from rest past half the rail, close an open row
+ * carried back past half of it), and a row caught mid-motion settles by where
+ * it actually is.
  */
-export function swipeReleaseTarget(open: boolean, translationX: number, velocityX: number): number {
+export function swipeReleaseTarget(offset: number, velocityX: number): number {
 	"worklet";
-	const travel = translationX + DRAG_TOSS * velocityX;
-	const half = WORKER_ACTION_REVEAL_WIDTH / 2;
-	const stayOpen = open ? travel < half : travel < -half;
-	return stayOpen ? -WORKER_ACTION_REVEAL_WIDTH : 0;
+	return offset + DRAG_TOSS * velocityX < -WORKER_ACTION_REVEAL_WIDTH / 2 ? -WORKER_ACTION_REVEAL_WIDTH : 0;
 }

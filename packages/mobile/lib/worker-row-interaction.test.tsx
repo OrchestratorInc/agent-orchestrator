@@ -54,6 +54,7 @@ vi.mock("react-native-reanimated", () => ({
 	withSpring: (to: number, _config: unknown, done?: (finished: boolean) => void) => { springs.pending.push({ to, done }); return to; },
 	Easing: { out: (easing: unknown) => easing, cubic: "cubic" },
 	ReduceMotion: { System: "system" },
+	cancelAnimation: () => {},
 }));
 vi.mock("react-native-worklets", () => ({
 	scheduleOnRN: (fn: (...args: unknown[]) => void, ...args: unknown[]) => fn(...args),
@@ -149,6 +150,30 @@ it("releases the rail after a short swipe snaps back without opening", () => {
 	settle();
 	expect(railControls(view)).toHaveLength(0);
 	expect(onSwipeOpen).not.toHaveBeenCalled();
+});
+
+it("releases the rail after a drag that comes back exactly to rest", () => {
+	const onSwipeClose = vi.fn();
+	const view = mount({ onSwipeClose });
+	begin();
+	move(-30);
+	move(0);
+	release(0);
+	settle();
+	expect(railControls(view)).toHaveLength(0);
+	expect(onSwipeClose).toHaveBeenCalledWith("worker");
+});
+
+// A finger that catches the row while it is still moving drags it from where it
+// is, not from where it was heading.
+it("starts a drag from where the row is, not where it was settling", () => {
+	const view = mount();
+	begin();
+	move(-30);
+	// A second drag starts before the first one ended.
+	begin();
+	move(20);
+	expect(foreground(view).props.style).toContainEqual({ transform: [{ translateX: -10 }] });
 });
 
 it("follows the drag and opens on a flick shorter than half the rail", () => {

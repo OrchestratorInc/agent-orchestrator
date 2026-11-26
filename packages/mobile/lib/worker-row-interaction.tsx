@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { Easing, ReduceMotion, useAnimatedStyle, useDerivedValue, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { cancelAnimation, Easing, ReduceMotion, useAnimatedStyle, useDerivedValue, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 import { AppSymbol } from "./AppSymbol";
 import { haptics } from "./haptics";
@@ -79,7 +79,9 @@ export function WorkerRowInteraction({
 	// Where the foreground sits: 0 at rest, minus the rail when open, further
 	// while a full swipe is dragged.
 	const translation = useSharedValue(0);
-	const railOpen = useSharedValue(false);
+	// Whether the rail is mounted for this row: from a drag's start, or an
+	// opening, until a close has finished. A row without it has nothing to close.
+	const railShown = useSharedValue(false);
 	const dragOrigin = useSharedValue(0);
 	const rowWidth = useSharedValue(0);
 	const armed = useSharedValue(false);
@@ -110,14 +112,15 @@ export function WorkerRowInteraction({
 	const settle = useCallback((to: number, velocity: number) => {
 		"worklet";
 		const opening = to !== 0;
-		// A resting row has nothing to close.
-		if (!opening && !railOpen.value && translation.value === 0) return;
-		railOpen.value = opening;
+		if (!opening && !railShown.value) return;
+		railShown.value = true;
 		scheduleOnRN(report, opening ? "open" : "willClose");
 		translation.value = withSpring(to, { ...SETTLE, velocity }, (finished) => {
-			if (finished && !opening) scheduleOnRN(report, "closed");
+			if (!finished || opening) return;
+			railShown.value = false;
+			scheduleOnRN(report, "closed");
 		});
-	}, [railOpen, report, translation]);
+	}, [railShown, report, translation]);
 	const close = useCallback(() => scheduleOnUI(settle, 0, 0), [settle]);
 	latest.current.close = close;
 
@@ -142,8 +145,12 @@ export function WorkerRowInteraction({
 			// Only a leftward drag opens a resting row; an open one closes either way.
 			.activeOffsetX([-DRAG_DISTANCE, open ? DRAG_DISTANCE : NEVER])
 			.onStart(() => {
-				dragOrigin.value = railOpen.value ? -WORKER_ACTION_REVEAL_WIDTH : 0;
-				if (!railOpen.value) scheduleOnRN(report, "drag");
+				// From where the row is: a finger can catch it while it settles.
+				cancelAnimation(translation);
+				dragOrigin.value = translation.value;
+				if (railShown.value) return;
+				railShown.value = true;
+				scheduleOnRN(report, "drag");
 			})
 			.onUpdate((event) => {
 				translation.value = swipeOffset(dragOrigin.value, event.translationX, canFullSwipe);
@@ -162,7 +169,7 @@ export function WorkerRowInteraction({
 					scheduleOnRN(archive);
 					return;
 				}
-				settle(swipeReleaseTarget(railOpen.value, event.translationX, event.velocityX), event.velocityX);
+				settle(swipeReleaseTarget(dragOrigin.value + event.translationX, event.velocityX), event.velocityX);
 			})
 			.onFinalize(() => {
 				armed.value = false;
@@ -174,7 +181,7 @@ export function WorkerRowInteraction({
 				settle(0, 0);
 			});
 		return Gesture.Race(pan, tap);
-	}, [enabled, open, canFullSwipe, dragOrigin, railOpen, report, translation, rowWidth, armed, arm, archive, settle]);
+	}, [enabled, open, canFullSwipe, dragOrigin, railShown, report, translation, rowWidth, armed, arm, archive, settle]);
 	const slide = useAnimatedStyle(() => ({ transform: [{ translateX: translation.value }] }));
 	const { ref: menuSlot, onLayout: measureMenuWidth } = menuWidth;
 	const measure = useCallback((event: LayoutChangeEvent) => {
