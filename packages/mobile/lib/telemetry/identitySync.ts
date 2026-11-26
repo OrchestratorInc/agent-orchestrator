@@ -15,7 +15,8 @@ export function createDesktopIdentitySync(
 	adopt: (identity: DesktopTelemetryIdentity | null) => void,
 	// Each connected desktop's daemon version by host id, from every answer, not
 	// only the adopted one, so an error can name the daemon that served it.
-	versions: (byHost: Record<string, string>) => void = () => {},
+	// `complete` is whether every connected desktop reported one.
+	versions: (byHost: Record<string, string>, complete: boolean) => void = () => {},
 ): (configs: ServerConfig[]) => Promise<void> {
 	let generation = 0;
 	let currentHosts = "";
@@ -29,7 +30,7 @@ export function createDesktopIdentitySync(
 			adopt(null);
 		}
 		if (configs.length === 0) {
-			versions({});
+			versions({}, false);
 			return;
 		}
 		let hosts: string;
@@ -53,11 +54,13 @@ export function createDesktopIdentitySync(
 		const results = await Promise.all(configs.map((cfg) => fetchIdentity(cfg).catch(() => null)));
 		if (mine !== generation) return;
 		const byHost: Record<string, string> = {};
+		let complete = true;
 		configs.forEach((cfg, index) => {
 			const version = results[index]?.daemonVersion;
 			if (cfg.hostId && version) byHost[cfg.hostId] = version;
+			else complete = false;
 		});
-		versions(byHost);
+		versions(byHost, complete);
 		const reported = results.filter((r): r is DesktopTelemetryIdentity => r !== null);
 		const next = reported.find((r) => r.optedOut) ?? reported.find((r) => r.distinctId);
 		adopt(next ?? null);

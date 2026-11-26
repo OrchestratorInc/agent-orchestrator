@@ -14,8 +14,10 @@ let permitted = false;
 let initPromise: Promise<void> | null = null;
 let sentry: typeof import("@sentry/react-native") | null = null;
 let pairedInstallId: string | null = null;
-// Each connected desktop's daemon version, by host id.
+// Each connected desktop's daemon version, by host id, and whether every
+// connected desktop reported one (an older daemon or a failed fetch does not).
 let daemonVersions: Record<string, string> = {};
+let daemonVersionsComplete = false;
 const DAEMON_VERSION = /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/;
 let observabilityContext: MobileObservabilityContext = {};
 let consentGeneration = 0;
@@ -113,18 +115,20 @@ export function setMobileSentryContext(context: MobileObservabilityContext): voi
 	if (permitted) void initMobileSentry();
 }
 
-/** Each connected desktop's daemon version by host id; empty while none answers. */
-export function setMobileDaemonVersions(byHost: Record<string, string>): void {
+/** Each connected desktop's daemon version by host id; `complete` when every connected desktop reported one. */
+export function setMobileDaemonVersions(byHost: Record<string, string>, complete: boolean): void {
 	daemonVersions = { ...byHost };
+	daemonVersionsComplete = complete;
 }
 
 // The daemon an error came from: the host's own version for an API error;
-// otherwise the one version every connected desktop runs, or none when they
-// differ, rather than naming a desktop that may not be involved.
+// otherwise the one version every connected desktop runs, known for all of
+// them, or none, rather than naming a desktop that may not be involved.
 function daemonVersionFor(hostId?: string): Record<string, string> {
 	const version = hostId !== undefined
 		? daemonVersions[hostId]
 		: (() => {
+			if (!daemonVersionsComplete) return undefined;
 			const distinct = [...new Set(Object.values(daemonVersions))];
 			return distinct.length === 1 ? distinct[0] : undefined;
 		})();

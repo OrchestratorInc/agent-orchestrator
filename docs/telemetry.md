@@ -108,7 +108,7 @@ frame names, release version and build number, the running OTA update ID
 daemon's version as `ao.daemon_version`, and the production or preview
 environment. For a failed request that is the version of the desktop the
 request went to; for other errors it is sent only when every connected desktop
-runs the same version. A failed daemon request is named by its method and route as
+reported its version and they are all the same. A failed daemon request is named by its method and route as
 `ao.operation`, such as `POST /api/v1/sessions/:id/send`: only the app's fixed
 route words are kept, every other path segment becomes `:id`, and a workspace
 file path becomes `*`, so no session, project, branch or file name is sent.

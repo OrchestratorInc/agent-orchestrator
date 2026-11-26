@@ -26,12 +26,26 @@ describe("createDesktopIdentitySync", () => {
 				? { distinctId: "ins_a", optedOut: false, daemonVersion: "1.9.0" }
 				: { distinctId: "ins_b", optedOut: false, daemonVersion: "1.7.2" }),
 			() => {},
-			(byHost) => versions.push(byHost),
+			(byHost, complete) => versions.push({ ...byHost, complete: String(complete) }),
 		);
 		await sync([cfg("a"), cfg("b")]);
-		expect(versions.at(-1)).toEqual({ a: "1.9.0", b: "1.7.2" });
+		expect(versions.at(-1)).toEqual({ a: "1.9.0", b: "1.7.2", complete: "true" });
 		await sync([]);
-		expect(versions.at(-1)).toEqual({});
+		expect(versions.at(-1)).toEqual({ complete: "false" });
+	});
+
+	// An older daemon sends no version, and a fetch can fail: the set is incomplete.
+	it("says when a connected desktop reported no version", async () => {
+		const versions: Array<[Record<string, string>, boolean]> = [];
+		const sync = createDesktopIdentitySync(
+			(c) => c.hostId === "a"
+				? Promise.resolve({ distinctId: "ins_a", optedOut: false, daemonVersion: "1.9.0" })
+				: Promise.reject(new Error("unreachable")),
+			() => {},
+			(byHost, complete) => versions.push([byHost, complete]),
+		);
+		await sync([cfg("a"), cfg("b")]);
+		expect(versions.at(-1)).toEqual([{ a: "1.9.0" }, false]);
 	});
 
 	it("discards a slow response from an obsolete connection set", async () => {
