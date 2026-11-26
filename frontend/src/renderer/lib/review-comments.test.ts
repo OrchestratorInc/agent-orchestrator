@@ -309,6 +309,30 @@ describe("buildReviewBlocks", () => {
 		expect(block.comments.map((comment) => [comment.author, comment.rerequestReviewerId])).toEqual([["maya", "maya"], ["coderabbitai[bot]", undefined]]);
 	});
 
+	// An app and a person can share a base login; the newer bot review must not hide the person or replace their review.
+	it("keeps a person apart from a bot with the same base login", () => {
+		const block = blockFor({
+			provider: summary({
+				requestedReviewers: [{ login: "dana", isTeam: false }],
+				review: {
+					decision: "changes_requested",
+					hasUnresolvedHumanComments: false,
+					unresolvedBy: [],
+					reviews: [
+						{ reviewerId: "dana", verdict: "changes_requested", submittedAt: "2026-06-15T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-11`, body: "Please fix.", autoInjectReview: false },
+						{ reviewerId: "dana[bot]", isBot: true, verdict: "changes_requested", submittedAt: "2026-06-16T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-12`, body: "Automated check.", autoInjectReview: false },
+					],
+				},
+			}),
+		});
+		expect(block.reviewers.map((reviewer) => [reviewer.id, reviewer.isBot, reviewer.status])).toEqual([
+			["dana[bot]", true, "changes_requested"],
+			// Asked again: the request is for the person, not the app.
+			["dana", false, "pending"],
+		]);
+		expect(block.comments.map((comment) => [comment.author, comment.earlier])).toEqual([["dana[bot]", false], ["dana", false]]);
+	});
+
 	it("titles a PR from its review state, then the provider, then its number", () => {
 		expect(blockFor({ states: [state({ title: "From state" })], provider: summary() }).title).toBe("From state");
 		expect(blockFor({ provider: summary({ title: "From provider" }) }).title).toBe("From provider");

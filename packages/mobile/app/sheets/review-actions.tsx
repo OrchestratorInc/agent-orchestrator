@@ -20,7 +20,7 @@ import type { ReviewFeedbackItem, ReviewFeedbackSection, ReviewPolicyKey, Review
 import { useReviewBackend, type ReviewSettings } from "../../lib/reviewBackend";
 import { reviewerEffortPick, reviewerModelPick, reviewerModelView, type ReviewerModelState } from "../../lib/reviewer-picker.types";
 import { reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
-import { pullRequestSummaryForURL, rerequestableReviewers } from "../../lib/reviewView";
+import { pullRequestSummaryForURL, rerequestableReviewers, rerequestKey } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useThemedStyles } from "../../lib/ThemeProvider";
@@ -103,7 +103,9 @@ function ReviewActionsContent() {
 		return () => polling.abort();
 	}, [backend, effectiveReviewer, hostMatches]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
-	const externalReviewers = useMemo(() => rerequestableReviewers(pr, reviews), [pr, reviews]);
+	// Asked from here: left out at once, so a second tap cannot ask again before the provider's next read shows them waited on.
+	const [asked, setAsked] = useState<ReadonlySet<string>>(new Set());
+	const externalReviewers = useMemo(() => rerequestableReviewers(pr, reviews, asked), [asked, pr, reviews]);
 	// Like the spawn sheet, only offer reviewers that can run now. A saved
 	// override that has since become unavailable stays listed so it can be read.
 	const availableReviewers = useMemo(() => agents
@@ -193,6 +195,7 @@ function ReviewActionsContent() {
 		setError("");
 		try {
 			await ask(sessionId, pr.url, reviewerId);
+			setAsked((current) => new Set(current).add(rerequestKey(reviewerId)));
 			haptics.success();
 		} catch (cause) {
 			setError(userFacingError(cause, "Could not request another review."));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
-import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, rerequestableReviewers, reviewStatusVisual, reviewVerdictLabel, sessionPRReadyForReview, shortCommit, workerRouteForSession } from "./reviewView";
+import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, rerequestableReviewers, rerequestKey, reviewStatusVisual, reviewVerdictLabel, sessionPRReadyForReview, shortCommit, workerRouteForSession } from "./reviewView";
 
 const run = (over: Partial<ReviewRun> = {}): ReviewRun => ({
 	id: "run-1", reviewId: "review-1", sessionId: "worker-1", batchId: "", harness: "codex",
@@ -215,6 +215,25 @@ describe("reviewers to ask again", () => {
 			requestedReviewers: [{ login: "sam" }],
 		});
 		expect(ids(value)).toEqual([]);
+	});
+
+	it("leaves out a reviewer once asked from here, until the provider's next read", () => {
+		const value = pr({ review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [entry("dana"), entry("lee")] } });
+		expect(ids(value)).toEqual(["dana", "lee"]);
+		expect(rerequestableReviewers(value, undefined, new Set([rerequestKey("@Dana")])).map((reviewer) => reviewer.reviewerId)).toEqual(["lee"]);
+	});
+
+	// An app sharing a person's base login is not them: its comments are not theirs.
+	it("counts only a person's own comments, not a same-named bot's", () => {
+		const value = pr({
+			review: { decision: "changes_requested", hasUnresolvedHumanComments: true, reviews: [entry("dana")], unresolvedBy: [] },
+			detailsObservedAt: "2026-11-20T10:05:00Z",
+			threads: [
+				{ id: "t1", path: "a.ts", line: 1, resolved: false, comments: [{ id: "c1", author: "dana", body: "Mine.", isBot: false, url: `${PR}#discussion_r1` }] },
+				{ id: "t2", path: "b.ts", line: 2, resolved: false, comments: [{ id: "c2", author: "dana[bot]", body: "Automated.", isBot: true, url: `${PR}#discussion_r2` }] },
+			],
+		});
+		expect(rerequestableReviewers(value, undefined)).toEqual([{ reviewerId: "dana", count: 1 }]);
 	});
 
 	it("leaves out the review the Orchestrator posted", () => {

@@ -205,11 +205,13 @@ const loginKey = (login: string) => login.trim().replace(/^@+/, "").toLowerCase(
  * how many inline comments each left. Read from the shared comment model, so
  * the phone offers whom the desktop's Reviewers menu does: not a bot (GitHub
  * refuses review requests for apps), not one who approved or is already asked,
- * not the PR's author, and not the Orchestrator's own reviews.
+ * not the PR's author, and not the Orchestrator's own reviews. `asked` holds the
+ * reviewers asked from here, left out until the provider's next read says so.
  */
 export function rerequestableReviewers(
 	pr: SessionPRSummary | undefined,
 	reviews: Pick<SessionReviews, "reviews" | "runs"> | undefined,
+	asked: ReadonlySet<string> = new Set(),
 ): { reviewerId: string; count: number }[] {
 	if (!pr) return [];
 	const [block] = buildReviewBlocks({
@@ -220,9 +222,15 @@ export function rerequestableReviewers(
 	});
 	if (!block) return [];
 	return block.reviewers
-		.filter((reviewer) => !reviewer.orchestrator && reviewer.canRerequest)
+		.filter((reviewer) => !reviewer.orchestrator && reviewer.canRerequest && !asked.has(loginKey(reviewer.id)))
 		.map((reviewer) => ({
 			reviewerId: reviewer.id,
-			count: block.comments.filter((comment) => comment.source === "provider" && comment.kind === "inline" && loginKey(comment.author) === loginKey(reviewer.id)).length,
+			// A person's own comments: an app sharing their base login ("dana[bot]") is not them.
+			count: block.comments.filter((comment) => comment.source === "provider" && comment.kind === "inline" && !comment.isBot && loginKey(comment.author) === loginKey(reviewer.id)).length,
 		}));
+}
+
+/** The key `rerequestableReviewers` matches an asked reviewer by. */
+export function rerequestKey(reviewerId: string): string {
+	return loginKey(reviewerId);
 }

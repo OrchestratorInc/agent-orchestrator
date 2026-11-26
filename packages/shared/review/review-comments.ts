@@ -204,6 +204,13 @@ const time = (value?: string | null) => {
 /** A login as GitHub's two APIs write it: REST adds "[bot]" to an app's login, GraphQL does not. */
 const loginKey = (login: string) => login.trim().replace(/^@+/, "").toLowerCase().replace(/\[bot\]$/i, "");
 
+/**
+ * Who a reviewer is: their login, and whether they are an app. A bot and a
+ * person can share a base login ("dana[bot]" beside "dana"), and must not
+ * stand in for each other.
+ */
+const reviewerKey = (login: string, isBot: boolean) => `${isBot ? "bot:" : ""}${loginKey(login)}`;
+
 /** GitHub anchors a review at #pullrequestreview-<id> on the PR page. */
 export function providerReviewId(reviewUrl: string | undefined): string | undefined {
 	return reviewUrl?.match(/#pullrequestreview-(\d+)/)?.[1];
@@ -397,7 +404,7 @@ function buildComments(pr: ReviewPRFacts | undefined, aoRuns: ReviewRunFacts[]):
 		// A bodyless approval or change request still replaces the reviewer's older
 		// review; a bodyless comment (inline comments only) does not.
 		if (!body && providerVerdict(review.verdict) === "commented") continue;
-		const reviewer = loginKey(review.reviewerId);
+		const reviewer = reviewerKey(review.reviewerId, Boolean(review.isBot));
 		const earlier = newestByReviewer.has(reviewer);
 		newestByReviewer.add(reviewer);
 		if (!body) continue;
@@ -585,9 +592,9 @@ function buildReviewers(pr: ReviewPRFacts | undefined, aoState: ReviewStateFacts
 	const seen = new Set<string>();
 	const latestFirst = [...(pr.review?.reviews ?? [])].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
 	for (const review of latestFirst) {
-		const login = loginKey(review.reviewerId);
-		if (seen.has(login) || login === author || aoReviewIds.has(providerReviewId(review.reviewUrl) ?? "")) continue;
-		seen.add(login);
+		const key = reviewerKey(review.reviewerId, Boolean(review.isBot));
+		if (seen.has(key) || loginKey(review.reviewerId) === author || aoReviewIds.has(providerReviewId(review.reviewUrl) ?? "")) continue;
+		seen.add(key);
 		const status = providerVerdict(review.verdict);
 		reviewers.push({
 			id: review.reviewerId,
@@ -598,17 +605,18 @@ function buildReviewers(pr: ReviewPRFacts | undefined, aoState: ReviewStateFacts
 		});
 	}
 	for (const requested of pr.requestedReviewers ?? []) {
-		const login = loginKey(requested.login);
-		if (seen.has(login)) {
+		// A requested reviewer is a person or a team, never an app.
+		const key = reviewerKey(requested.login, false);
+		if (seen.has(key)) {
 			// Asked again after reviewing: the provider now waits on them.
-			const existing = reviewers.find((reviewer) => !reviewer.orchestrator && loginKey(reviewer.id) === login);
+			const existing = reviewers.find((reviewer) => !reviewer.orchestrator && reviewerKey(reviewer.id, reviewer.isBot) === key);
 			if (existing) {
 				existing.status = "pending";
 				existing.canRerequest = false;
 			}
 			continue;
 		}
-		seen.add(login);
+		seen.add(key);
 		reviewers.push({ id: requested.login, orchestrator: false, isBot: false, isTeam: requested.isTeam, status: "pending", canRerequest: false });
 	}
 	return reviewers;
