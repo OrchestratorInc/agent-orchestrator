@@ -33,7 +33,8 @@ export type ModelEffortSelection = Pick<ModelTuningControlsProps,
 	"effort" | "effortsWithoutModel" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
 >;
 
-type AgentModel = NonNullable<AgentModelCatalog["models"]>[number];
+// note is a quiet line under the name, such as why a kept model is not listed.
+type AgentModel = NonNullable<AgentModelCatalog["models"]>[number] & { note?: string };
 
 type IndexedModel = {
 	model: AgentModel;
@@ -73,6 +74,8 @@ export function AgentModelCombobox({
 	onChange,
 	onCustom,
 	onUseDefault,
+	useDefaultLabel,
+	preserveDefaultSelection = false,
 	emptyLabel,
 	footer,
 	modelHint,
@@ -105,6 +108,14 @@ export function AgentModelCombobox({
 	onCustom?: (value: string) => void;
 	/** Offers the agent's native default as a choice, above the listed models. */
 	onUseDefault?: () => void;
+	/** Names the onUseDefault choice where "project or agent default" does not fit. */
+	useDefaultLabel?: string;
+	/**
+	 * Reports a pick of the catalog's default model or effort as that value
+	 * rather than as "" (inherit), so a caller can pin it. Project settings
+	 * use this; the composer keeps "default means follow the agent".
+	 */
+	preserveDefaultSelection?: boolean;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
 	/** A note under the models, such as where they come from. */
@@ -170,9 +181,12 @@ export function AgentModelCombobox({
 	// model is chosen, so the control never reads as unset.
 	const aoDefaultEffort = fallbackEffort(effortOptions, providerEffort);
 	const effectiveEffort = explicitEffort || defaultEffort || aoDefaultEffort || "";
+	// A caller that pins choices treats an unset model as "follow the agent", so
+	// AO's fallback level is not written for it: that would pin an effort right
+	// after the choices were cleared.
 	useApplyEffortDefault(
 		explicitModel,
-		tuning && !explicitEffort ? aoDefaultEffort : undefined,
+		tuning && !explicitEffort && !(preserveDefaultSelection && !explicitModel) ? aoDefaultEffort : undefined,
 		tuning?.onEffortChange ?? ignoreEffortChange,
 		{ disabled: disabled || !tuning },
 	);
@@ -270,7 +284,7 @@ export function AgentModelCombobox({
 			const next = rememberRecentModel(recentScope, modelID);
 			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
 		}
-		onChange(modelID === defaultModel ? "" : modelID);
+		onChange(!preserveDefaultSelection && modelID === defaultModel ? "" : modelID);
 	};
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
 		const family = families?.find((entry) => entry.id === item.id);
@@ -436,9 +450,9 @@ export function AgentModelCombobox({
 					>
 						{onUseDefault && normalizedSearch === "" && (
 							<>
-								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
+								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "" && !(preserveDefaultSelection && explicitEffort))}>
 									<span className="truncate text-settings-label">
-										{t("settings.models.useConfiguredDefault")}
+										{useDefaultLabel ?? t("settings.models.useConfiguredDefault")}
 									</span>
 								</DropdownMenuItem>
 								{visibleModels.length > 0 && <DropdownMenuSeparator />}
@@ -465,6 +479,9 @@ export function AgentModelCombobox({
 												{item.model.unavailableReason && (
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 												)}
+												{item.model.note && !item.model.unavailableReason && (
+													<p className="text-xs text-settings-muted">{item.model.note}</p>
+												)}
 											</div>
 											{modelHint?.id === item.id && (
 												<span className="ml-2 shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
@@ -485,6 +502,9 @@ export function AgentModelCombobox({
 													)}
 													{item.model.unavailableReason && (
 														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
+													)}
+													{item.model.note && !item.model.unavailableReason && (
+														<p className="text-xs text-settings-muted">{item.model.note}</p>
 													)}
 												</div>
 												{modelHint?.id === item.id && (
@@ -617,7 +637,7 @@ export function AgentModelCombobox({
 								{effortOptions.map((effort) => (
 									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === effectiveEffort}
 										active={effort === effectiveEffort} onSelect={() => {
-											tuning.onEffortChange(effort === defaultEffort ? "" : effort);
+											tuning.onEffortChange(!preserveDefaultSelection && effort === defaultEffort ? "" : effort);
 											setEffortMenuOpen(false);
 											setAwaitingEffort(false);
 											setMenuOpen(false);
@@ -647,6 +667,7 @@ export function AgentModelCombobox({
 						value={effectiveEffort}
 						choices={effortOptions.map((effort) => ({ value: effort }))}
 						defaultEffort={defaultEffort || undefined}
+						keepDefaultPick={preserveDefaultSelection}
 						availability={effortAvailability}
 						disabled={disabled}
 						triggerClassName="w-fit"

@@ -736,6 +736,9 @@ func Run(buildVersion string) (retErr error) {
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
+	if recorder, ok := wiredSessMgr.(chatsvc.AgentChoiceRecorder); ok {
+		chatSvc.SetAgentChoiceRecorder(recorder)
+	}
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)

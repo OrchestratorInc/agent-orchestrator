@@ -31,13 +31,17 @@ describe("worker board list identity", () => {
 describe("worker row second line", () => {
 	const row = source("./worker-list-row.tsx");
 
-	// The line led with the branch unconditionally, so every row carried a worktree
-	// path under its title. Dropping the branch outright then left rows with no PR
-	// showing nothing at all, on exactly the sessions whose branch was the only
-	// thing naming their worktree.
-	it("falls back to the branch when the row has no pull request", () => {
-		expect(row).toContain("const details = prs?.text ?? row.branch ?? \"\";");
-		expect(row).not.toContain("const details = prs?.text ?? \"\";");
+	// The second line was the PR or else the branch, so a row with no PR carried
+	// a long worktree path. It now always reads project · status, so it is never
+	// blank, and the branch (shown in the session's own header) stays off it.
+	// The pull request moved to a pill on the row's end: its number in the
+	// status's colour and glyph, and no pill at all without one.
+	it("reads project and machine alone, with the pull request in a pill", () => {
+		expect(row).not.toContain("row.branch");
+		expect(row).toContain("{row.project}</Text>");
+		// The pill follows the pull request, not the session's status.
+		expect(row).toContain("{pr ? <PullRequestPill pr={pr}");
+		expect(row).not.toContain("statusVisual(t, session.status).color");
 	});
 });
 
@@ -50,8 +54,9 @@ describe("worker row working indicator", () => {
 	// bare glyph, then as a pulse (a waiting signal, not a working one), then as
 	// a turning Lucide loader, which only imitated the system's indicator. A
 	// starting row does not breathe, and was left with that loader standing still.
-	it("shows the system spinner in a working or starting row's status slot", () => {
-		expect(row).toMatch(/visual\.breathing \|\| glyph === "loader"\s*\?\s*<Spinner size=\{iconSize\.xs\} color=\{visual\.color\} \/>/);
+	it("shows the desktop's lattice in a working or starting row's lead", () => {
+		expect(row).toContain("const indicator = workerRowIndicator(session);");
+		expect(row).toContain('{indicator === "working" ? <LatticeCometLoader color={t.orange} />');
 		expect(spinner).toContain("<ActivityIndicator");
 	});
 
