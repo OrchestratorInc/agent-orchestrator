@@ -109,8 +109,8 @@ $AO_DATA_DIR/bots/<bot-id>/
        - the question, option, and answer text of the bot's asks, since open asks are injected into the prompt;
        - any remaining prompt directory of the bot's earlier sessions, which normally were removed when those sessions terminated.
     4. **Invalidate stale writers.** Purge bumps the `MEMORY.md` revision. A `replace` prepared against any pre-purge revision is rejected even after the fence lifts, including a tidy's conflict retry.
-    5. **Restart clean.** The fence lifts, and queued messages are delivered to a fresh session. That session starts from the purged SOUL, MEMORY, and asks with **no handoff note**, because the note is derived from pre-purge conversation turns that may contain the value. The conversation shows a purge marker, and the owner is told the new session has no summary of earlier turns.
-    6. **Verify and report.** Purge succeeds only after re-reading every location in step 3 and finding no match. It reports any copy it could not remove. If any step fails, the fence stays up, and the bot remains stopped until the owner retries or cancels.
+    5. **Verify and report, with the fence still up.** Purge re-reads every location in step 3 and must find no match. It reports any copy it could not remove. If verification or any earlier step fails, the fence stays up: no session starts, no memory write is accepted, and the bot remains stopped until the owner retries or cancels.
+    6. **Restart clean, only after step 5 passes.** The fence lifts, and queued messages are delivered to a fresh session. That session starts from the verified SOUL, MEMORY, and asks with **no handoff note**, because the note is derived from pre-purge conversation turns that may contain the value. The conversation shows a purge marker, and the owner is told the new session has no summary of earlier turns.
   - Purge cannot reach copies outside the bot folder and prompt directories:
     - text in the bot conversation itself (for example, a secret the owner typed in chat);
     - a harness's own transcript store;
