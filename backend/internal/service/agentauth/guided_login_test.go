@@ -215,6 +215,33 @@ func TestGuidedLoginFinishesOnlyAfterItsStepsAreSent(t *testing.T) {
 	}
 }
 
+func TestGuidedLoginThatExitsWithStepsUnsentFails(t *testing.T) {
+	onPlatform(t, "darwin")
+
+	// An earlier Google sign-in is already in the Keychain.
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "cloud_project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the project entry to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 2 })
+	// Agy exits before its Cloud menu appears.
+	pty.mu.Lock()
+	pty.alive = false
+	pty.mu.Unlock()
+	var current LoginSnapshot
+	waitFor(t, "the login to end", 5*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.Status != "running"
+	})
+	if current.Status != "failed" {
+		t.Fatalf("status = %q, want failed with a reviewed step unsent", current.Status)
+	}
+}
+
 func TestGuidedLoginWaitsForItsMenu(t *testing.T) {
 	onPlatform(t, "darwin")
 

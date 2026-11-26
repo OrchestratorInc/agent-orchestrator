@@ -568,8 +568,11 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			// their own credentials are there without the old key; the
 			// operation succeeds and the panel shows it as configured, not
 			// verified. A signed-out or inconclusive probe fails the operation
-			// so the panel offers a retry or the terminal.
-			found := s.probeOwnSignIn(ctx, op.snapshot.AgentID)
+			// so the panel offers a retry or the terminal. A guided login that
+			// exited before every reviewed step was sent, or after a failed
+			// key send, fails without probing: an earlier sign-in (a Google
+			// account in the Keychain, say) is not the one the user chose.
+			found := len(op.guidedSteps) == 0 && !op.guidedStuck && s.probeOwnSignIn(ctx, op.snapshot.AgentID)
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "failed"
