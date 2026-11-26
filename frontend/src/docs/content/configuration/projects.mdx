@@ -50,6 +50,7 @@ ao project rm <project-id>
 | `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. A step may set its own time limit the same way. |
 | `agentConfig` | Default model, permission, and effort settings. Set effort through Project Settings or the daemon API; CLI replacement drops it. |
 | `worker` | Worker harness and agent-config overrides. |
+| `workerCompaction` | Compacts a Chat worker's conversation before an orchestrator hands it a new task, when its context is over `thresholdTokens` (100,000 to 1,000,000; default 300,000). Set `disabled: true` to turn it off. |
 | `orchestrator` | Orchestrator harness and agent-config overrides. |
 | `agentRules` | Standing instructions for workers. |
 | `agentRulesFile` | Repository-relative instructions appended to worker instructions. |

@@ -286,6 +286,10 @@ type Controller struct {
 	sendingTurnID string
 	// A compact request can be accepted before its provider turn starts.
 	compactionPending bool
+	// preTaskPolicy and preTask are the compact-before-task rule and its state
+	// (pre_task_compaction.go).
+	preTaskPolicy PreTaskCompactionPolicy
+	preTask       preTaskCompaction
 	// Provider calls keep automatic hibernation out without blocking explicit Kill.
 	operations int
 	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
@@ -1689,6 +1693,12 @@ func (c *Controller) sendLocked(
 		}
 	}
 	shouldQueue := queueWhenBusy && (c.busy() || queuedAhead)
+	// An orchestrator's task for a worker over the project's context threshold
+	// waits, queued, behind a compaction started once its row is recorded.
+	compactFirst := queueWhenBusy && !shouldQueue && c.wantsPreTaskCompaction(ctx, turnID, msg.SenderSessionID)
+	if compactFirst {
+		shouldQueue = true
+	}
 	markedSending := false
 	if !shouldQueue {
 		c.setSendingTurn(turnID)
@@ -1760,7 +1770,11 @@ func (c *Controller) sendLocked(
 			State:              domain.TurnStateQueued,
 			RequestedAt:        now,
 		}
-		if queuedAhead && !c.busy() {
+		if compactFirst && c.startPreTaskCompaction(ctx, turnID) {
+			// The compaction's settlement drains this turn.
+			return queuedTurn, nil
+		}
+		if (queuedAhead || compactFirst) && !c.busy() {
 			if err := c.drainLocked(ctx, true); err != nil {
 				return queuedTurn, err
 			}
@@ -2381,7 +2395,9 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	c.mu.Lock()
 	cutoff := c.cancelQueuedAt
 	c.cancelQueuedAt = time.Time{}
-	busy := c.pendingTurnID != ""
+	// A compaction started for the next queued task holds it until it settles,
+	// including the gap before its provider turn starts.
+	busy := c.pendingTurnID != "" || c.preTask.running
 	handoff := c.handoff
 	c.mu.Unlock()
 
@@ -2427,6 +2443,10 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 				continue
 			}
 			return err
+		}
+		if len(preview) > 0 && c.compactBeforeQueuedTurn(ctx, preview[0]) {
+			// The compaction's settlement drains this batch.
+			return nil
 		}
 		break
 	}
@@ -2805,13 +2825,31 @@ var ErrCompactionWhileBusy = errors.New("cannot compact while a turn is in fligh
 // The lock is released as soon as the provider accepts. Until its turn-started
 // event commits, compactionPending keeps sends queued and idle hibernation out.
 func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
-	compactor, ok := c.conv.(ports.ChatCompactor)
-	if !ok || !c.Capabilities().Has(ports.ChatCapabilityCompaction) {
+	if _, ok := c.compactor(); !ok {
 		return ports.ChatCompactionResult{}, ErrCompactionUnsupported
 	}
 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.compactLocked(ctx)
+}
+
+// compactor returns the conversation's compaction surface when the provider both
+// implements it and advertised the capability.
+func (c *Controller) compactor() (ports.ChatCompactor, bool) {
+	compactor, ok := c.conv.(ports.ChatCompactor)
+	if !ok || !c.Capabilities().Has(ports.ChatCapabilityCompaction) {
+		return nil, false
+	}
+	return compactor, true
+}
+
+// compactLocked is Compact with sendMu already held.
+func (c *Controller) compactLocked(ctx context.Context) (ports.ChatCompactionResult, error) {
+	compactor, ok := c.compactor()
+	if !ok {
+		return ports.ChatCompactionResult{}, ErrCompactionUnsupported
+	}
 	if c.handoffActive() {
 		return ports.ChatCompactionResult{}, ErrControllerHandoff
 	}
@@ -4090,8 +4128,11 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// the queue so it cannot cascade through the same outage (issue #4861). A
 		// prompt the host's watchdog failed for silence is not an outage: the
 		// provider never answered, so the queued messages get their own turns.
+		// A compaction AO started ahead of a queued task releases it either way:
+		// without the compaction the task would already have been dispatched.
+		preTask := c.finishPreTaskCompaction()
 		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
-			errors.Is(event.Err, ports.ErrChatPromptStalled)
+			errors.Is(event.Err, ports.ErrChatPromptStalled) || preTask
 		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)
@@ -4115,6 +4156,7 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		}
 		c.mu.Unlock()
 		if settled {
+			c.finishPreTaskCompaction()
 			_ = c.drainLocked(ctx, true)
 		}
 	case ports.ChatEventControllerState:

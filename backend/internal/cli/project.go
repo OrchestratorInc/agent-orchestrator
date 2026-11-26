@@ -113,6 +113,12 @@ type attributionConfig struct {
 	DisablePRFooter      bool `json:"disablePRFooter,omitempty"`
 }
 
+// workerCompactionConfig mirrors domain.WorkerCompactionConfig.
+type workerCompactionConfig struct {
+	Disabled        bool  `json:"disabled,omitempty"`
+	ThresholdTokens int64 `json:"thresholdTokens,omitempty"`
+}
+
 // projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json. Every domain key must be modeled here, or set-config drops it
@@ -142,6 +148,8 @@ type projectConfig struct {
 	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
 	// Attribution must round-trip too, so a CLI edit keeps a project's opt-out.
 	Attribution *attributionConfig `json:"attribution,omitempty"`
+	// WorkerCompaction round-trips so a CLI edit keeps the project's threshold.
+	WorkerCompaction *workerCompactionConfig `json:"workerCompaction,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for

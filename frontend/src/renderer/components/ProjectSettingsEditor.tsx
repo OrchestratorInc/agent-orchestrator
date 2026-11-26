@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import { MAX_PROJECT_DISPLAY_NAME_LEN, ProjectSettingsFormView, ProjectSettingsInputRow, ProjectSettingsRow, ProjectSettingsSection, ProjectSettingsValueRow } from "@aoagents/product-ui";
 import { Pencil } from "@/components/app-icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -32,6 +33,8 @@ export type ProjectSettingsDraft = {
 	autoReview: boolean;
 	/** Local-only: workers may ask AO to review their own PRs. */
 	workersRequestReview?: boolean;
+	/** Local-only: when a Chat worker compacts before an orchestrator's new task. "" is the default threshold, "off" turns it off, otherwise a token count. */
+	workerCompaction?: string;
 	/** Cloud-only: agent commits name the AO GitHub App as a co-author. */
 	coAuthorCommits?: boolean;
 	/** Local-only, Orchestrator attribution beta: add the Co-authored-by trailer to commits. */
@@ -62,6 +65,7 @@ type Capabilities = {
 	reviewer: boolean;
 	requiredAgents: boolean;
 	workersRequestReview?: boolean;
+	workerCompaction?: boolean;
 	coAuthorCommits?: boolean;
 	/** Shown while the Orchestrator attribution beta is on (Settings, Advanced). */
 	attribution?: boolean;
@@ -275,6 +279,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-fit" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
 						</div></div></ProjectSettingsRow>)}
 						{settingRow(`${role}-permissions`, [fields.permissions], <ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>)}
+						{role === "worker" && capabilities.workerCompaction && settingRow("workerCompaction", ["workerCompaction"], <ProjectSettingsRow label={t("settings.project.workerCompaction")}><SettingsOptionMenu aria-label={t("settings.project.workerCompaction")} value={draft.workerCompaction ?? ""} triggerClassName="w-fit" options={workerCompactionOptions(draft.workerCompaction ?? "", t)} onChange={(workerCompaction) => patch({ workerCompaction })} /></ProjectSettingsRow>)}
 					</ProjectSettingsSection>;
 				})}
 				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
@@ -292,4 +297,29 @@ function ProjectRolePermissions({ role, agent, value, runtimeDefaults, onChange 
 	const values = runtimeDefaults ? ["", "default", "auto", ...(agent === "opencode" ? [] : ["accept-edits"]), "bypass-permissions"] : [...(agent === "codex" ? [] : ["default"]), "auto", "accept-edits", "bypass-permissions"];
 	const options = values.map((permission) => ({ value: permission, label: permission === "" ? t("settings.cloudProject.sessionPolicy") : permission === "default" ? t(agent === "claude-code" ? "settings.project.permissionUseClaude" : "settings.project.permissionUseAgent") : t(permission === "accept-edits" ? "settings.project.permissionAcceptEdits" : permission === "auto" ? "settings.project.permissionAuto" : "settings.project.permissionBypass") }));
 	return <SettingsOptionMenu aria-label={label} value={runtimeDefaults ? value : value === "default" && agent === "codex" ? "bypass-permissions" : value || "auto"} options={options} disabled={runtimeDefaults && !agent} placeholder={t("settings.project.permissionNotReported")} triggerClassName="w-fit" onChange={onChange} />;
+}
+
+/** The worker compaction thresholds offered, in tokens. "" is the daemon's default. */
+/** Mirrors domain.DefaultWorkerCompactionThreshold. */
+export const WORKER_COMPACTION_DEFAULT_TOKENS = 300_000;
+const WORKER_COMPACTION_CHOICES = [200_000, 500_000];
+
+function formatCompactionTokens(tokens: number): string {
+	return tokens >= 1_000_000 ? `${tokens / 1_000_000}M` : `${Math.round(tokens / 1_000)}k`;
+}
+
+/** Options for the worker compaction menu. A threshold set elsewhere, such as from the CLI, stays selectable. */
+export function workerCompactionOptions(current: string, t: TFunction): Array<{ value: string; label: string }> {
+	const thresholds = [WORKER_COMPACTION_DEFAULT_TOKENS, ...WORKER_COMPACTION_CHOICES];
+	const saved = Number(current);
+	if (current !== "" && current !== "off" && Number.isFinite(saved) && !thresholds.includes(saved)) thresholds.push(saved);
+	thresholds.sort((a, b) => a - b);
+	return [
+		// The default is stored as unset, so a project follows the daemon's default.
+		...thresholds.map((tokens) => ({
+			value: tokens === WORKER_COMPACTION_DEFAULT_TOKENS ? "" : String(tokens),
+			label: t("settings.project.workerCompactionOver", { tokens: formatCompactionTokens(tokens) }),
+		})),
+		{ value: "off", label: t("settings.project.workerCompactionOff") },
+	];
 }

@@ -1132,6 +1132,9 @@ func (s *Service) installStartedBranchController(
 	sourceBranchID string,
 ) error {
 	owner := source.owner()
+	if owner.Kind == domain.ConversationOwnerSession {
+		replacement.SetPreTaskCompactionPolicy(s.preTaskCompactionPolicy(id))
+	}
 	s.mu.Lock()
 	if s.ownerControllers[owner] != source {
 		s.mu.Unlock()

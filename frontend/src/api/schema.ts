@@ -8740,6 +8740,7 @@ export interface components {
             terminateOnPrMerge?: null | boolean;
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
             worker?: components["schemas"]["RoleOverride"];
+            workerCompaction?: components["schemas"]["WorkerCompactionConfig"];
             workersRequestReview?: boolean;
         };
         ProjectGetResponse: {
@@ -10500,6 +10501,11 @@ export interface components {
             account?: components["schemas"]["AgentAccountResponse"];
             /** @enum {string} */
             status: "waiting" | "complete" | "duplicate" | "mismatch" | "not_subscription";
+        };
+        WorkerCompactionConfig: {
+            disabled?: boolean;
+            /** Format: int64 */
+            thresholdTokens?: number;
         };
         WorkspaceBranchResponse: {
             checkedOut: boolean;

@@ -1,6 +1,10 @@
 package chat
 
-import "time"
+import (
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
 
 // SetNativeHistoryLoadAttemptLimit shortens the per-attempt provider load bound
 // for tests and returns a restore function.
@@ -37,4 +41,10 @@ func SetForcedHandoffInterruptLimit(limit time.Duration) (restore func()) {
 	previous := forcedHandoffInterruptLimit
 	forcedHandoffInterruptLimit = limit
 	return func() { forcedHandoffInterruptLimit = previous }
+}
+
+// PreTaskCompactionPolicyFor exposes the service's compact-before-task rule for
+// a Chat session, so tests can check who it applies to without a provider.
+func (s *Service) PreTaskCompactionPolicyFor(target domain.SessionID) PreTaskCompactionPolicy {
+	return s.preTaskCompactionPolicy(target)
 }

@@ -90,6 +90,8 @@ type Service struct {
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.
 	versionRefresh func() (time.Duration, bool)
+	// projects reads the compact-before-task threshold. Nil turns it off.
+	projects ProjectReader
 	// versionSwitches holds the release each stopped-for-refresh session is
 	// moving to, until its wake succeeds or fails.
 	versionSwitchMu sync.Mutex
@@ -226,6 +228,14 @@ type Options struct {
 	// harness release moves to the installed one on its next message, and the
 	// quiet time required first. Nil never moves a session.
 	VersionRefresh func() (time.Duration, bool)
+	// Projects reads the project config for the compact-before-task threshold.
+	// Nil turns compact-before-task off.
+	Projects ProjectReader
+}
+
+// ProjectReader is the project lookup compact-before-task needs.
+type ProjectReader interface {
+	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 }
 
 // New builds a Chat service.
@@ -259,6 +269,7 @@ func New(opts Options) *Service {
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		versionRefresh:         opts.VersionRefresh,
+		projects:               opts.Projects,
 		controllers:            make(map[domain.SessionID]*Controller),
 		handoffInterrupted:     make(map[domain.SessionID]string),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
@@ -1403,6 +1414,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.ExpectedControllerOwner.RuntimeLaunchID = ""
 		cfg.ExpectedControllerOwner.ProviderConversationID = controller.ProviderConversationID()
 		cfg.ExpectedControllerOwner.ControllerGeneration = controller.Generation()
+	}
+	if owner.Kind == domain.ConversationOwnerSession {
+		controller.SetPreTaskCompactionPolicy(s.preTaskCompactionPolicy(cfg.SessionID))
 	}
 	s.mu.Lock()
 	if !liveReconnect {

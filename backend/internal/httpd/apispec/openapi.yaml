@@ -24981,6 +24981,8 @@ components:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
           $ref: '#/components/schemas/RoleOverride'
+        workerCompaction:
+          $ref: '#/components/schemas/WorkerCompactionConfig'
         workersRequestReview:
           type: boolean
       type: object
@@ -29433,6 +29435,14 @@ components:
           type: string
       required:
       - status
+      type: object
+    WorkerCompactionConfig:
+      properties:
+        disabled:
+          type: boolean
+        thresholdTokens:
+          format: int64
+          type: integer
       type: object
     WorkspaceBranchResponse:
       properties:
