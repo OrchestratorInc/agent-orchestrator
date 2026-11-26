@@ -37,8 +37,9 @@ vi.mock("./chat/ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmen
 vi.mock("./voice/DictationField", () => ({ DictationField: "DictationField" }));
 vi.mock("./chat/useImagePaste", () => ({ useImagePaste: fixtures.useImagePaste }));
 vi.mock("./chat/composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
+vi.mock("./chat/ComposerSuggestionPanel", () => ({ ComposerSuggestionPanel: "ComposerSuggestionPanel" }));
 
-import { SpawnComposer, type SpawnComposerProps } from "./spawn-composer";
+import { SpawnComposer, SpawnSuggestionHost, type SpawnComposerProps, type SpawnSuggestionOverlay } from "./spawn-composer";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -194,5 +195,102 @@ describe("SpawnComposer", () => {
 		transitionEnd({ data: { closing: false } });
 		transitionEnd({ data: { closing: false } });
 		expect(focus).toHaveBeenCalledOnce();
+	});
+
+	describe("/ skills", () => {
+		const skills = [
+			{ name: "review", displayName: "review", description: "Review the diff" },
+			{ name: "plan", displayName: "plan", description: "Write a plan" },
+		];
+		const panel = (root: ReactTestInstance) => root.findAll((node) => hostType(node) === "ComposerSuggestionPanel")[0];
+		async function typed(props: SpawnComposerProps, prompt: string) {
+			const next = { ...props, prompt };
+			await act(async () => renderer!.update(<SpawnComposer {...next} />));
+			const field = renderer!.root.findByType("TextInput" as never);
+			await act(async () => field.props.onSelectionChange({ nativeEvent: { selection: { start: prompt.length, end: prompt.length } } }));
+			return next;
+		}
+
+		it("lists the agent's skills for a / at the start while the field has focus, and filters them", async () => {
+			const onLoadSkills = vi.fn(async () => skills);
+			const props = baseProps({ prompt: "", onLoadSkills });
+			const root = await render(props);
+			await typed(props, "/");
+			expect(panel(root)).toBeUndefined();
+			expect(onLoadSkills).not.toHaveBeenCalled();
+
+			await act(async () => root.findByType("TextInput" as never).props.onFocus());
+			expect(onLoadSkills).toHaveBeenCalledOnce();
+			expect(panel(root).props.kind).toBe("skills");
+			expect(panel(root).props.items.map((item: { value: string }) => item.value)).toEqual(["plan", "review"]);
+
+			await typed(props, "/rev");
+			expect(panel(root).props.items.map((item: { value: string }) => item.value)).toEqual(["review"]);
+			// Filtering reads the list already loaded rather than the machine again.
+			expect(onLoadSkills).toHaveBeenCalledOnce();
+		});
+
+		it("replaces the typed command with the chosen skill", async () => {
+			const onChangePrompt = vi.fn();
+			const props = baseProps({ prompt: "", onChangePrompt, onLoadSkills: async () => skills });
+			const root = await render(props);
+			await act(async () => root.findByType("TextInput" as never).props.onFocus());
+			await typed(props, "/re");
+			await act(async () => panel(root).props.onSelect("review"));
+			expect(onChangePrompt).toHaveBeenLastCalledWith("/review ");
+		});
+
+		it("lists nothing for an @, a / after text, an unknown command, or without skills to offer", async () => {
+			const props = baseProps({ prompt: "", onLoadSkills: async () => skills });
+			const root = await render(props);
+			await act(async () => root.findByType("TextInput" as never).props.onFocus());
+			await typed(props, "@src");
+			expect(panel(root)).toBeUndefined();
+			await typed(props, "fix /re");
+			expect(panel(root)).toBeUndefined();
+			await typed(props, "/usr/bin");
+			expect(panel(root)).toBeUndefined();
+
+			const cloud = baseProps({ prompt: "" });
+			const cloudRoot = await render(cloud);
+			await act(async () => cloudRoot.findByType("TextInput" as never).props.onFocus());
+			await typed(cloud, "/");
+			expect(panel(cloudRoot)).toBeUndefined();
+		});
+
+		it("hands the list to the page's host, with the composer's height, instead of drawing it in its column", async () => {
+			const overlays: (SpawnSuggestionOverlay | null)[] = [];
+			const host = (overlay: SpawnSuggestionOverlay | null) => { overlays.push(overlay); };
+			let props = baseProps({ prompt: "", onLoadSkills: async () => skills });
+			const hosted = (next: SpawnComposerProps) => <SpawnSuggestionHost.Provider value={host}><SpawnComposer {...next} /></SpawnSuggestionHost.Provider>;
+			await act(async () => { renderer = create(hosted(props)); });
+			const root = renderer!.root;
+			const pill = root.findAll((node) => hostType(node) === "View" && typeof node.props.onLayout === "function")[0];
+			await act(async () => pill.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 370, height: 112 } } }));
+			await act(async () => root.findByType("TextInput" as never).props.onFocus());
+			props = { ...props, prompt: "/" };
+			await act(async () => renderer!.update(hosted(props)));
+			await act(async () => root.findByType("TextInput" as never).props.onSelectionChange({ nativeEvent: { selection: { start: 1, end: 1 } } }));
+			expect(panel(root)).toBeUndefined();
+			const shown = overlays.at(-1);
+			expect(shown?.composerHeight).toBe(112);
+			expect((shown?.panel as { props: { kind: string } }).props.kind).toBe("skills");
+
+			props = { ...props, prompt: "/plan now" };
+			await act(async () => renderer!.update(hosted(props)));
+			await act(async () => root.findByType("TextInput" as never).props.onSelectionChange({ nativeEvent: { selection: { start: 9, end: 9 } } }));
+			expect(overlays.at(-1)).toBeNull();
+		});
+
+		it("says when the machine offers none, and closes when the field loses focus", async () => {
+			const props = baseProps({ prompt: "", onLoadSkills: async () => [] });
+			const root = await render(props);
+			const field = root.findByType("TextInput" as never);
+			await act(async () => field.props.onFocus());
+			await typed(props, "/");
+			expect(panel(root).props.items).toEqual([]);
+			await act(async () => field.props.onBlur());
+			expect(panel(root)).toBeUndefined();
+		});
 	});
 });

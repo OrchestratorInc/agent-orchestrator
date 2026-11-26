@@ -68,6 +68,7 @@ export function SpawnComposerControls({
 	voice,
 	prompt,
 	onChangePrompt,
+	onLoadSkills,
 	placeholder,
 	attachments,
 	onSpawn,
@@ -170,6 +171,7 @@ export function SpawnComposerControls({
 					prompt={prompt}
 					attachments={attachments}
 					onChangePrompt={onChangePrompt}
+					onLoadSkills={onLoadSkills}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}
 					onChooseFile={onChooseFile}
