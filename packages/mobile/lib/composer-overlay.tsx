@@ -191,10 +191,14 @@ function OverKeyboardOverlay({ visible, onDismiss, fill, reveal, children }: {
 					    are the keyboard's own, and on Android 13+ it is untouchable
 					    above it. Never flattened away, so the window can find it. */}
 					{Platform.OS === "android" ? <View nativeID={TOUCH_REGION_ID} collapsable={false} pointerEvents="none" style={styles.touchRegion} /> : null}
+					{/* The touch areas that put it away are no screen reader elements,
+					    so VoiceOver's escape (the two-finger scrub) does instead;
+					    TalkBack's back does through the host's back handler. */}
 					<Animated.View
 						pointerEvents="box-none"
 						accessibilityElementsHidden={!visible}
 						importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
+						onAccessibilityEscape={visible ? onDismiss : undefined}
 						style={[styles.aboveKeys, reveal]}
 					>
 						{/* The fade over the keys' top rows. On Android the patched window
