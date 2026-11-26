@@ -3857,6 +3857,7 @@
 	"artifacts.share.pageFiles.skipped_other": "Bu sayfanın kullandığı {{count}} dosya eklenmedi, bu yüzden paylaşılan sayfa onları göstermeyecek.",
 	"artifacts.share.pageFiles.unsupported": "Bu sayfanın görselleri eklenmedi: Orchestrator Cloud bunları henüz bir sayfayla paylaşamıyor.",
 	"artifacts.share.pageFiles.videos": "Videolar henüz bir sayfayla paylaşılamıyor.",
+	"artifacts.share.pageFiles.hostOutdated": "Bazıları eski bir Orchestrator sürümü çalıştıran bir makinede: bunları eklemek için oradaki Orchestrator'ı güncelleyin.",
 	"artifacts.share.unpublished": "Bu dosyanın bağlantısı yayından kaldırıldı. Yayımlarsanız yeni bir bağlantı oluşturulur.",
 	"artifacts.share.upgradeTitle": "Daha fazla yayımlamak için planınızı yükseltin",
 	"artifacts.share.limitReached": "Ücretsiz planda en fazla {{limit}} etkin bağlantı olabilir. Daha fazla yayımlamak için planınızı yükseltin.",

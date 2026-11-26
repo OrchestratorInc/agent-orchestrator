@@ -21031,6 +21031,8 @@ components:
           - cline
           - autohand
           type: string
+        roleAgent:
+          type: string
         scmStatus:
           enum:
           - pr_open

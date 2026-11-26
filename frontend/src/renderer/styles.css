@@ -4078,6 +4078,26 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	transition-property: background-color, border-color, color, box-shadow, opacity, gap, padding-inline;
 }
 
+/* A page's top bar (board, artifacts, automations, usage, settings) spaces its
+ * controls 8px apart, the panel's trailing controls included, so filled pills
+ * don't crowd each other; a session's tab strip keeps its tighter 4px. The
+ * reserve for the trailing controls is their width, that 8px, and the panel
+ * edge's own inset (one 4px gap, less its 1px edge). */
+.center-panel-titlebar > .workspace-topbar-actions {
+	gap: var(--space-2);
+}
+
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .center-panel-titlebar {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--space-2) + var(--gap-topbar-control) - 1px);
+}
+
+/* A search field in the bar (board, artifacts, automations) stands as tall as
+ * the buttons beside it. */
+.workspace-topbar-actions [data-slot="input"] {
+	-webkit-app-region: no-drag;
+	height: var(--size-topbar-control);
+}
+
 .workspace-topbar-actions .group\/button:disabled {
 	pointer-events: auto;
 	cursor: not-allowed;
@@ -7873,6 +7893,12 @@ html[data-new-desktop-ui] .cursor-chat-composer {
 	padding: var(--composer-inset);
 }
 
+/* The user's message bubble tightens by 1px on every side: 9px above and
+ * below and 11px at the sides (10px and 12px with the flag off). */
+html[data-new-desktop-ui] .cursor-chat-human-message {
+	padding: 9px 11px;
+}
+
 /* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
  * no layout space and follows the corners). Light keeps its own ring and
  * shadow. */
@@ -8113,8 +8139,11 @@ html[data-new-desktop-ui] [role="menu"] {
 }
 
 /* The row under the pointer or keyboard, and an open submenu's row, take a
- * clear fill: the theme's hover tint was too faint on the menu surface. */
-html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled]) {
+ * clear fill: the theme's hover tint was too faint on the menu surface.
+ * Option-menu rows that paint theirs on a rounded ::before (their row boxes
+ * stay square for the dividers) keep the box itself clear; settings rows have
+ * no ::before and keep the box fill. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled], .settings-menu-surface [class*="before:absolute"]) {
 	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
 }
 
@@ -8135,4 +8164,153 @@ html[data-new-desktop-ui] [role="menu"] [data-slot="menu-shortcut"] {
 html[data-new-desktop-ui] [role="menu"] > [role="separator"] {
 	margin: 4px 8px;
 	background-color: color-mix(in oklab, var(--border), transparent 35%);
+}
+
+/* Overlays nest their corners by R = r + d: an outer corner is the inner
+ * corner plus the gap between them, the only radius that keeps the gap even
+ * round the curve. Rows (a highlight, a search field) keep an 8px corner
+ * (`--radius-md`); a menu, select or option panel has a 1px edge and 4px of
+ * padding, so the gap is 5px and the panel takes 8 + 5 = 13px. Cmd+K's rows
+ * sit 7px in (a 1px edge and a 6px margin), so its panel takes 15px. */
+html[data-new-desktop-ui] {
+	--radius-overlay-row: var(--radius-md);
+	--radius-overlay: calc(var(--radius-overlay-row) + 5px);
+	--radius-command-palette: calc(var(--radius-overlay-row) + 1px + var(--size-command-item-inset));
+}
+
+html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) {
+	border-radius: var(--radius-overlay);
+}
+
+html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [data-slot="select-item"]),
+html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"])::before,
+html[data-new-desktop-ui] .settings-menu-surface [role="radio"].size-7::before,
+html[data-new-desktop-ui] .menu-search-input {
+	border-radius: var(--radius-overlay-row);
+}
+
+/* Option-menu rows draw their highlight on ::before, so the row box itself
+ * stays square: a row that opens a group draws the divider as its top edge,
+ * which a rounded box would curl at both ends. Rows without a ::before box
+ * (settings menus) paint the box itself, so they keep the row corner. */
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"])[class*="before:absolute"] {
+	border-radius: 0;
+}
+
+/* A segmented switch inside an overlay (the model picker's Auto/200k/1M):
+ * its 8px track has 2px of padding, so each segment takes 6px. */
+html[data-new-desktop-ui] .settings-menu-surface [role="radiogroup"].rounded-md > [role="radio"] {
+	border-radius: calc(var(--radius-md) - 2px);
+}
+
+/* One overlay family. Selects, option menus, popovers and hover cards take
+ * the action menu's edge, and select rows its rows: 28px, full-strength
+ * labels and the same 12% highlight. Cmd+K's edge and highlight follow. */
+html[data-new-desktop-ui] :is([data-slot="select-content"], .settings-menu-surface, [data-slot="popover-content"], [data-slot="hover-card-content"], [role="dialog"]:has(> [data-slot="command"])) {
+	border-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+html[data-new-desktop-ui] [data-slot="select-item"] {
+	padding-block: 4px;
+	line-height: 20px;
+	color: var(--foreground);
+}
+
+html[data-new-desktop-ui] [data-slot="select-item"]:is(:focus, [data-highlighted]):not([data-disabled]),
+html[data-new-desktop-ui] [data-slot="command"] [role="option"][aria-selected="true"] {
+	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled])::before {
+	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+/* An option menu's dividers sit like an action menu's: inset to the row
+ * text and a step quieter than the strong hairline. */
+html[data-new-desktop-ui] .settings-menu-surface > .border-t,
+html[data-new-desktop-ui] .settings-menu-surface > [role="separator"] {
+	border-color: color-mix(in oklab, var(--border), transparent 35%);
+}
+
+/* Controls share one corner. Settings and select triggers, and inspector
+ * and board fields, take the control radius like every button; a trigger's
+ * 18px line in 4px of padding and a 1px edge makes it 28px, so its label
+ * sits on a whole pixel (it was 29.5px). The composer's pickers keep their
+ * own size and corner, concentric with the composer. */
+html[data-new-desktop-ui] :is(.settings-option-trigger, .inspector-field-input, .settings-inline-input, .settings-inline-edit-input, [data-slot="input"], [data-slot="textarea"]):not(.cursor-chat-composer *) {
+	border-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui] .settings-option-trigger:not(.cursor-chat-composer *, .border-0) {
+	line-height: 18px;
+}
+
+/* Settings groups round with the controls they hold, and in dark the
+ * dividers between their rows drop to the menu dividers' quieter tint. */
+html[data-new-desktop-ui] .settings-grouped-rows {
+	border-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .settings-grouped-rows > * + * {
+	border-top-color: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+/* Chat blocks (code, tables, tool output, plans, queued and unsent
+ * messages) take the composer's 6% hairline in dark instead of the strong
+ * 9% edge, so the transcript reads as text with quiet frames. A table's
+ * header row takes a faint fill and its rows a quieter divider. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-surface :is(.border-border, [class*="border-border/"]) {
+	border-color: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-surface .chat-md table th {
+	background-color: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-surface .chat-md table td {
+	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+}
+
+/* Board cards. In dark the card's fill draws it: a 9% edge on the 5% face
+ * added up into a ring, so the edge drops to 4% and the footer line with
+ * it; under the pointer the face brightens (the hover tint replaced it
+ * with a fainter one, so the card sank). A selected, needs-you or ended
+ * card keeps its own edge and tint. No card shrinks on press. */
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"]:not([data-selected], .border-status-needs-you, .session-card-terminated) {
+	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"] .border-t {
+	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"]:not([data-selected], .border-status-needs-you, .session-card-terminated):is(:hover, :focus-within) {
+	background-color: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+}
+
+html[data-new-desktop-ui] [data-testid="board-session-card"] {
+	scale: none;
+}
+
+/* Switches are flat like every v2 control: no inset bevel on the track or
+ * the thumb. In dark the track brightens under the pointer and a step more
+ * while pressed, as dropdown triggers do; light keeps the deepening. */
+html[data-new-desktop-ui] .switch-inset,
+html[data-new-desktop-ui] .switch-inset:active:not(:disabled),
+html[data-new-desktop-ui] .switch-inset [data-slot="switch-thumb"] {
+	box-shadow: none;
+}
+
+html[data-new-desktop-ui] .switch-inset {
+	border-color: transparent;
+}
+
+@media (hover: hover) {
+	html[data-new-desktop-ui]:not([data-theme="light"]) .switch-inset:hover:not(:disabled) {
+		--switch-face: color-mix(in oklab, var(--switch-color), #fff 8%);
+	}
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .switch-inset:active:not(:disabled) {
+	--switch-face: color-mix(in oklab, var(--switch-color), #fff 14%);
 }

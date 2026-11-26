@@ -3880,6 +3880,7 @@
 	"artifacts.share.pageFiles.skipped_other": "{{count}} Dateien, die diese Seite verwendet, wurden nicht mitgeteilt, daher fehlen sie auf der geteilten Seite.",
 	"artifacts.share.pageFiles.unsupported": "Die Bilder dieser Seite wurden nicht mitgeteilt: Orchestrator Cloud kann sie noch nicht mit einer Seite teilen.",
 	"artifacts.share.pageFiles.videos": "Videos können noch nicht mit einer Seite geteilt werden.",
+	"artifacts.share.pageFiles.hostOutdated": "Einige liegen auf einem Rechner mit einer älteren Orchestrator-Version: Aktualisiere sie dort, um sie einzubeziehen.",
 	"artifacts.share.unpublished": "Die Veröffentlichung des Links dieser Datei wurde aufgehoben. Beim Veröffentlichen erhält sie einen neuen Link.",
 	"artifacts.share.upgradeTitle": "Upgrade, um mehr zu teilen",
 	"artifacts.share.limitReached": "Kostenloser Plan: bis zu {{limit}} aktive Links. Führe ein Upgrade durch, um mehr zu teilen.",

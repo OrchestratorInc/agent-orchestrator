@@ -397,6 +397,12 @@ type SessionMetadata struct {
 	// means the provider default, including an explicit task-level reset. The
 	// resolved value is pinned so project-default changes cannot alter resume.
 	Effort string `json:"effort,omitempty"`
+	// RoleAgent is the agent the project named for this session's role when
+	// the session's agent was last chosen: at spawn, or by switching to another
+	// agent. A project setting that differs from it changed afterwards. A
+	// session's own agent differing from the setting is not drift: a spawn or
+	// switch may pick any agent. Empty for sessions from before it was recorded.
+	RoleAgent AgentHarness `json:"-"`
 	// ArtifactDir is the session-owned artifact directory under AO's data dir.
 	// It is outside the git workspace and is never exposed directly on the API.
 	ArtifactDir string `json:"-"`
