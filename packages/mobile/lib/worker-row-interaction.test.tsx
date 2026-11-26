@@ -107,6 +107,8 @@ const drag = (translationX: number, velocityX = 0) => {
 	move(translationX);
 	release(translationX, true, velocityX);
 };
+// A tap on the open row's foreground, the one view that takes it.
+const tapRow = (view: ReactTestRenderer) => act(() => foreground(view).props.onResponderRelease());
 // Lets every spring started so far reach its target.
 const settle = () => act(() => {
 	const done = springs.pending;
@@ -119,7 +121,8 @@ const settle = () => act(() => {
 it("mounts one gesture detector and no rail while the row rests", () => {
 	const view = mount();
 	expect(view.root.findAll((node) => node.type === ("GestureDetector" as never))).toHaveLength(1);
-	expect(gestures.race).toEqual(["pan", "tap"]);
+	// The close-on-tap of an open row is a plain responder, built only while open.
+	expect(foreground(view).props.onStartShouldSetResponder).toBeUndefined();
 	expect(railControls(view)).toHaveLength(0);
 	expect(animatedLayers(view)).toHaveLength(1);
 });
@@ -135,12 +138,23 @@ it("mounts the rail when a drag starts and keeps it until the row settles closed
 	expect(onSwipeOpen).toHaveBeenCalledWith("worker", expect.any(Function));
 	settle();
 	// A tap on the open row closes it; only the end of that motion removes the rail.
-	act(() => gestures.tap.handlers.onStart());
+	tapRow(view);
 	expect(railControls(view)).toHaveLength(1);
 	expect(onSwipeClose).not.toHaveBeenCalled();
 	settle();
 	expect(railControls(view)).toHaveLength(0);
 	expect(onSwipeClose).toHaveBeenCalledWith("worker");
+});
+
+// A gesture that closes the row on a tap would also take the tap from the
+// rail's Pin, which Gesture Handler does by cancelling the press under it. The
+// close is the foreground's own, and the rail is beside it, not inside it.
+it("leaves the rail's buttons their own presses while the row is open", () => {
+	const view = mount();
+	drag(-60);
+	settle();
+	expect(railControls(view)).toHaveLength(1);
+	expect(foreground(view).findAll((node) => node.type === ("RailControls" as never))).toHaveLength(0);
 });
 
 it("releases the rail after a short swipe snaps back without opening", () => {
@@ -194,13 +208,13 @@ it("claims a rightward drag and taps only while the rail is open", () => {
 	const view = mount();
 	expect(gestures.pan.activeOffsetX[0]).toBe(-16);
 	expect(gestures.pan.activeOffsetX[1]).toBeGreaterThan(1000);
-	expect(gestures.tap.enabled).toBe(false);
+	expect(foreground(view).props.onStartShouldSetResponder).toBeUndefined();
 	expect(foreground(view).props.pointerEvents).toBe("auto");
 	drag(-60);
 	expect(gestures.pan.activeOffsetX).toEqual([-16, 16]);
-	expect(gestures.tap.enabled).toBe(true);
+	expect(foreground(view).props.onStartShouldSetResponder()).toBe(true);
 	expect(foreground(view).props.pointerEvents).toBe("box-only");
-	act(() => gestures.tap.handlers.onStart());
+	tapRow(view);
 	expect(springs.pending.at(-1)?.to).toBe(0);
 	expect(gestures.pan.activeOffsetX[1]).toBeGreaterThan(1000);
 });
@@ -250,17 +264,17 @@ it("archives on a full swipe, with one haptic as it arms", () => {
 
 it("does not archive a drag that only opens the rail, is carried back, or is cancelled", () => {
 	const onAction = vi.fn();
-	mount({ onAction });
+	const view = mount({ onAction });
 	drag(-100);
 	settle();
-	act(() => gestures.tap.handlers.onStart());
+	tapRow(view);
 	settle();
 	begin();
 	move(-300);
 	move(-100);
 	release(-100);
 	settle();
-	act(() => gestures.tap.handlers.onStart());
+	tapRow(view);
 	settle();
 	begin();
 	move(-300);

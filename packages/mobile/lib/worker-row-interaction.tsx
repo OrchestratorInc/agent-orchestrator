@@ -37,6 +37,9 @@ const SETTLE = { mass: 2, damping: 1000, stiffness: 700, overshootClamping: true
 
 type SwipeEvent = "drag" | "open" | "willClose" | "closed";
 
+/** An open row's foreground takes every tap on it, to close. */
+const TAKE_TAP = () => true;
+
 /**
  * A worker row's touch surface, the same on both platforms: one pan that drags
  * the row open over its rail and runs on the UI thread, around the row's
@@ -44,13 +47,15 @@ type SwipeEvent = "drag" | "open" | "willClose" | "closed";
  * Android). Past the full-swipe point the drag arms (a haptic, and the
  * uncovered rail turns destructive), and letting go armed archives the row
  * through the same confirmation as the Archive button. While the rail is open,
- * a tap on the row closes it rather than opening the worker.
+ * a tap on the row closes it rather than opening the worker: a plain responder
+ * on the foreground, not a gesture, so it never takes a tap from the rail's
+ * Pin beside it (an activating gesture cancels the press under it).
  *
  * It was Gesture Handler's swipeable with a second pan watching for the full
  * swipe: three gesture detectors, a dozen shared values and three animated
  * styles under every row, resting or not. Choosing a machine on the board
  * builds a screenful of rows, and that was most of their cost; this draws the
- * same swipe with one detector, a few shared values and one style.
+ * same swipe with one pan, a few shared values and one style.
  */
 export function WorkerRowInteraction({
 	sessionId,
@@ -174,13 +179,7 @@ export function WorkerRowInteraction({
 			.onFinalize(() => {
 				armed.value = false;
 			});
-		const tap = Gesture.Tap()
-			.shouldCancelWhenOutside(true)
-			.enabled(open)
-			.onStart(() => {
-				settle(0, 0);
-			});
-		return Gesture.Race(pan, tap);
+		return pan;
 	}, [enabled, open, canFullSwipe, dragOrigin, railShown, report, translation, rowWidth, armed, arm, archive, settle]);
 	const slide = useAnimatedStyle(() => ({ transform: [{ translateX: translation.value }] }));
 	const { ref: menuSlot, onLayout: measureMenuWidth } = menuWidth;
@@ -200,7 +199,13 @@ export function WorkerRowInteraction({
 					</View>
 				) : null}
 				{/* Open, the row takes a tap itself (to close) instead of passing it on. */}
-				<Animated.View testID="worker-row-foreground" pointerEvents={open ? "box-only" : "auto"} style={[foregroundStyle, slide]}>
+				<Animated.View
+					testID="worker-row-foreground"
+					pointerEvents={open ? "box-only" : "auto"}
+					onStartShouldSetResponder={open ? TAKE_TAP : undefined}
+					onResponderRelease={open ? close : undefined}
+					style={[foregroundStyle, slide]}
+				>
 					{enabled ? (
 						<WorkerRowContextMenu
 							onPress={onPress}
