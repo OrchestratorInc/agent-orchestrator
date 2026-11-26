@@ -983,10 +983,12 @@ export class Executor {
 				title?: string;
 				focusId?: string;
 			};
+			// Capturing can bring the tab to the front and wait for a frame: only
+			// do it once the daemon knows it will ask (a second describe).
 			let image: string | undefined;
-			const placed = await this.inTabViewport(ctx, fresh, described.facts?.rect, described.viewport, described.dpr);
-			const crop = approvalCropRect(placed.rect, placed.viewport);
-			if (crop) {
+			const placed = args.image === true ? await this.inTabViewport(ctx, fresh, described.facts?.rect, described.viewport, described.dpr) : undefined;
+			const crop = placed ? approvalCropRect(placed.rect, placed.viewport) : undefined;
+			if (crop && placed) {
 				try {
 					const shot = await Promise.race([
 						this.captureTab(ctx, fresh),

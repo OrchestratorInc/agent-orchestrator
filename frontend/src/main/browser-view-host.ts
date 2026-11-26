@@ -5172,6 +5172,7 @@ export function createBrowserViewHost(
             const describeDocument = describeEntry.documentGeneration;
             const described = await describePanelApprovalTarget({
               action: typeof args.action === "string" ? args.action : "",
+              image: args.image === true,
               ref: typeof args.ref === "string" ? args.ref : undefined,
               instruction:
                 typeof args.instruction === "string" ? args.instruction : undefined,

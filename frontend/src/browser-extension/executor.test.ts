@@ -598,6 +598,22 @@ describe("Executor", () => {
 		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
 	});
 
+	it("describes without capturing the tab unless an image is asked for", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		const shots = () => fake.captures.length + fake.debuggerCalls.filter((call) => call.method === "Page.captureScreenshot").length;
+		const before = shots();
+		const plain = await run("describe", { action: "click", ref: buy });
+		expect(plain).toMatchObject({ target: { name: "Buy now" } });
+		expect(plain).not.toHaveProperty("image");
+		expect(shots()).toBe(before);
+		await run("describe", { action: "click", ref: buy, image: true });
+		expect(shots()).toBeGreaterThan(before);
+	});
+
 	it("describes a drag's drop target for the approval gate", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);
