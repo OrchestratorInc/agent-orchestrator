@@ -5011,7 +5011,7 @@
 	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
 	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…",
 	"settings.harness.loginUi.methods.setup_token": "설정 토큰",
-	"settings.harness.loginUi.hints.setup_token": "claude setup-token으로 받은 토큰을 붙여 넣으세요.",
+	"settings.harness.loginUi.hints.setup_token": "claude setup-token으로 받은 토큰을 붙여 넣으세요. 이 토큰으로는 claude.ai 커넥터(Gmail, Calendar, Drive)를 불러올 수 없습니다.",
 	"settings.harness.loginUi.setupToken": "설정 토큰",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"newTask.cloudConfiguredDefault": "프로젝트 또는 에이전트 기본값",

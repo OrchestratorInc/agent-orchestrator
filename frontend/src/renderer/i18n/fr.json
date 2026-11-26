@@ -5166,7 +5166,7 @@
 	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
 	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…",
 	"settings.harness.loginUi.methods.setup_token": "Jeton de configuration",
-	"settings.harness.loginUi.hints.setup_token": "Collez un jeton généré par claude setup-token.",
+	"settings.harness.loginUi.hints.setup_token": "Collez un jeton généré par claude setup-token. Il ne peut pas charger vos connecteurs claude.ai (Gmail, Calendar, Drive).",
 	"settings.harness.loginUi.setupToken": "Jeton de configuration",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"newTask.cloudConfiguredDefault": "Valeur par défaut du projet ou de l’agent",

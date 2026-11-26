@@ -5011,7 +5011,7 @@
 	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
 	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…",
 	"settings.harness.loginUi.methods.setup_token": "セットアップトークン",
-	"settings.harness.loginUi.hints.setup_token": "claude setup-token で取得したトークンを貼り付けます。",
+	"settings.harness.loginUi.hints.setup_token": "claude setup-token で取得したトークンを貼り付けます。このトークンでは claude.ai のコネクタ（Gmail、Calendar、Drive）を読み込めません。",
 	"settings.harness.loginUi.setupToken": "セットアップトークン",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"newTask.cloudConfiguredDefault": "プロジェクトまたはエージェントの既定",

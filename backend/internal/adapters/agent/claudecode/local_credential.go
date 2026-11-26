@@ -17,7 +17,10 @@ import (
 //
 //   - LocalOAuthTokenPath holds the token the user picked as their login in AO's
 //     Claude login menu (option 4). It is an explicit sign-in, so it signs local
-//     sessions in even over Claude Code's own login.
+//     sessions in over API keys and other tokens Claude Code would find, but
+//     not over a usable claude.ai login of Claude Code's own: a setup token is
+//     limited to inference and would hide the user's claude.ai connectors
+//     (#9101).
 //   - CloudOAuthTokenPath holds the token the desktop app saves when Claude Code
 //     is connected to AO Cloud (frontend/src/main/cloud-auth.ts), so the same
 //     credential can also serve local sessions. Nobody chose it for local work,
@@ -96,8 +99,8 @@ func RemoveLocalOAuthToken(dataDir string) error {
 
 // AugmentRuntimeEnv signs local sessions in with a setup-token AO saved,
 // injected as CLAUDE_CODE_OAUTH_TOKEN. The token chosen in AO's login menu
-// applies even when Claude Code also has its own login; signing in through
-// another menu option removes it again. The AO Cloud token applies only when
+// applies over API keys, but not over a usable claude.ai login of Claude
+// Code's own; signing in through another menu option removes it again. The AO Cloud token applies only when
 // Claude Code has no first-party login of its own.
 //
 // Provider keys AO holds back from Claude Code are not this adapter's to
@@ -121,16 +124,21 @@ func (p *Plugin) augmentCredential(env map[string]string, dataDir string) {
 			return
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	if token := readLocalOAuthToken(dataDir); token != "" {
-		env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+		// A setup token cannot load the user's claude.ai connectors, so a
+		// usable claude.ai login of Claude Code's own (for example one made
+		// with `claude auth login` outside AO) is what sessions use (#9101).
+		if !hasSubscriptionLogin(ctx, env) {
+			env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+		}
 		return
 	}
 	token := readTokenFile(CloudOAuthTokenPath(dataDir))
 	if token == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	if hasNativeCredential(ctx, env) {
 		return
 	}
@@ -147,6 +155,18 @@ func hasNativeCredential(ctx context.Context, env map[string]string) bool {
 	}).WithClaudeSettings(ctx)
 	_, found := agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, opts)
 	return found
+}
+
+// hasSubscriptionLogin is a cheap presence check (no network) for a claude.ai
+// login Claude Code stored itself and can still use or renew. Unlike
+// hasNativeCredential it ignores API keys and tokens: only this login carries
+// the user's claude.ai connectors.
+func hasSubscriptionLogin(ctx context.Context, env map[string]string) bool {
+	opts := (agentcreds.ResolveOptions{
+		AllowKeychain: true,
+		CommandEnv:    env,
+	}).WithClaudeSettings(ctx)
+	return agentcreds.HasUsableSubscriptionLogin(ctx, opts, time.Now())
 }
 
 // RuntimeCredentialEnv is base plus the setup-token AugmentRuntimeEnv gives a

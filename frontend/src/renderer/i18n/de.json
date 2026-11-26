@@ -5011,7 +5011,7 @@
 	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
 	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…",
 	"settings.harness.loginUi.methods.setup_token": "Setup-Token",
-	"settings.harness.loginUi.hints.setup_token": "Fügen Sie ein Token aus claude setup-token ein.",
+	"settings.harness.loginUi.hints.setup_token": "Fügen Sie ein Token aus claude setup-token ein. Damit lassen sich Ihre claude.ai-Connectors (Gmail, Calendar, Drive) nicht laden.",
 	"settings.harness.loginUi.setupToken": "Setup-Token",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"newTask.cloudConfiguredDefault": "Projekt- oder Agent-Standard",

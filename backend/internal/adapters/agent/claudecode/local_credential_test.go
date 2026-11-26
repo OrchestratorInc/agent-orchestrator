@@ -30,7 +30,7 @@ func withSavedSetupToken(t *testing.T) string {
 }
 
 // Choosing the setup token in AO's login menu is an explicit sign-in, so it
-// signs sessions in even when Claude Code has a login of its own.
+// signs sessions in over API keys Claude Code would otherwise find.
 func TestAugmentRuntimeEnvSignsInWithChosenSetupToken(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -321,5 +321,36 @@ func TestRuntimeCredentialEnvChoosesTheCloudTokenAgainstHeldBackKeys(t *testing.
 	}
 	if len(base) != 1 {
 		t.Fatalf("base was changed: %v", base)
+	}
+}
+
+// A usable claude.ai login of Claude Code's own (one made with `claude auth
+// login` outside AO) wins over the menu's setup token: the token is limited to
+// inference and would hide the user's claude.ai connectors (#9101). A login
+// that can no longer be used or renewed does not.
+func TestChosenSetupTokenYieldsToUsableClaudeAILogin(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		credentials string
+		wantToken   bool
+	}{
+		{"usable claude.ai login", `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-native","refreshToken":"r","expiresAt":4102444800000}}`, false},
+		{"expired login without refresh token", `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-native","expiresAt":946684800000}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := withSavedSetupToken(t)
+			configDir := os.Getenv("CLAUDE_CONFIG_DIR")
+			if err := os.MkdirAll(configDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte(tc.credentials), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			env := map[string]string{}
+			(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
+			if got := env["CLAUDE_CODE_OAUTH_TOKEN"] == testSetupToken; got != tc.wantToken {
+				t.Fatalf("setup token injected = %v, want %v", got, tc.wantToken)
+			}
+		})
 	}
 }

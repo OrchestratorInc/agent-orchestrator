@@ -4993,7 +4993,7 @@
 	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
 	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…",
 	"settings.harness.loginUi.methods.setup_token": "设置令牌",
-	"settings.harness.loginUi.hints.setup_token": "粘贴 claude setup-token 生成的令牌。",
+	"settings.harness.loginUi.hints.setup_token": "粘贴 claude setup-token 生成的令牌。使用该令牌无法加载你的 claude.ai 连接器（Gmail、Calendar、Drive）。",
 	"settings.harness.loginUi.setupToken": "设置令牌",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"newTask.cloudConfiguredDefault": "项目或智能体默认值",

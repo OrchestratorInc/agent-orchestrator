@@ -5275,7 +5275,7 @@
 	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
 	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…",
 	"settings.harness.loginUi.methods.setup_token": "Токен настройки",
-	"settings.harness.loginUi.hints.setup_token": "Вставьте токен из claude setup-token.",
+	"settings.harness.loginUi.hints.setup_token": "Вставьте токен из claude setup-token. С ним не загружаются ваши коннекторы claude.ai (Gmail, Calendar, Drive).",
 	"settings.harness.loginUi.setupToken": "Токен настройки",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"createProject.placementQuestion": "Где агенты будут работать с этим кодом?",

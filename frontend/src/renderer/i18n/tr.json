@@ -5072,7 +5072,7 @@
 	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
 	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…",
 	"settings.harness.loginUi.methods.setup_token": "Kurulum belirteci",
-	"settings.harness.loginUi.hints.setup_token": "claude setup-token komutundan aldığınız belirteci yapıştırın.",
+	"settings.harness.loginUi.hints.setup_token": "claude setup-token komutundan aldığınız belirteci yapıştırın. Bu belirteçle claude.ai bağlayıcılarınız (Gmail, Calendar, Drive) yüklenemez.",
 	"settings.harness.loginUi.setupToken": "Kurulum belirteci",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"newTask.cloudConfiguredDefault": "Proje veya aracı varsayılanı",
