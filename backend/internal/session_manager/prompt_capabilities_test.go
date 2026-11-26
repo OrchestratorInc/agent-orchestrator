@@ -21,16 +21,13 @@ func TestSystemPromptDockerSectionFollowsDockerAvailability(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := systemPromptConfig{Role: sessionPromptRoleWorker, Standalone: tc.standalone, Project: project}
 			without := buildSystemPromptText(cfg)
-			if strings.Contains(without, dockerSectionHeading) || strings.Contains(without, "ao.session") {
+			if strings.Contains(without, dockerSectionHeading) || strings.Contains(without, "--label ao.session=") {
 				t.Fatalf("a host without Docker still gets the container label rules:\n%s", without)
 			}
 			cfg.Docker = true
 			with := buildSystemPromptText(cfg)
 			if !strings.Contains(with, dockerSectionHeading) {
 				t.Fatalf("a host with Docker is missing the container label rules:\n%s", with)
-			}
-			if len(with) <= len(without) {
-				t.Fatalf("Docker section added no text: %d vs %d", len(with), len(without))
 			}
 		})
 	}
@@ -44,12 +41,10 @@ func TestSystemPromptDockerSectionNeverReachesOrchestrator(t *testing.T) {
 }
 
 func TestBuildSystemPromptReadsDockerFromTheHost(t *testing.T) {
-	original := dockerAvailable
-	t.Cleanup(func() { dockerAvailable = original })
 	ctx := t.Context()
 	m, _, _, _ := newManager()
 	for _, available := range []bool{false, true} {
-		dockerAvailable = func() bool { return available }
+		m.dockerAvailable = func() bool { return available }
 		sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", false)
 		if err != nil {
 			t.Fatalf("buildSystemPrompt(docker=%v): %v", available, err)

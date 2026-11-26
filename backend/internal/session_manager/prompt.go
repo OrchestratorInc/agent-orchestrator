@@ -3,7 +3,6 @@ package sessionmanager
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -44,8 +43,9 @@ type systemPromptConfig struct {
 	OrchestratorRules     string
 	// TimeZone is the user's IANA zone name; empty omits the section.
 	TimeZone string
-	// Docker is whether this host can run Docker containers. The container
-	// label rules are only useful to a session that can start one.
+	// Docker is whether a docker CLI resolves on the daemon's PATH. It says
+	// nothing about whether the Docker daemon runs or its socket is reachable.
+	// The container label rules are only useful to a session that can start one.
 	Docker             bool
 	AdditionalSections []string
 }
@@ -464,8 +464,8 @@ Keep branch names inside this session namespace so Orchestrator can track every 
 
 // workerContainerLabelPrompt tells a worker how to make any Docker containers
 // it starts reapable by AO on session end (#2652). AO does not run docker
-// itself -- this is the only place the ao.session/ao.spare convention reaches
-// an agent.
+// itself -- on hosts where a docker CLI resolves, this is the only place the
+// ao.session/ao.spare convention reaches an agent.
 func workerContainerLabelPrompt() string {
 	return `## Docker Containers Started By This Session
 
@@ -501,12 +501,4 @@ func projectValue(value string) string {
 		return trimmed
 	}
 	return "not configured"
-}
-
-// dockerAvailable reports whether a docker CLI is on this host's PATH. A worker
-// can only start containers when it is, so only then does its prompt carry the
-// container label rules. A variable so tests can pick one.
-var dockerAvailable = func() bool {
-	_, err := exec.LookPath("docker")
-	return err == nil
 }

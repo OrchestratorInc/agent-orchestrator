@@ -519,6 +519,11 @@ type Manager struct {
 	// they don't need real binaries on PATH. Returns ports.ErrAgentBinaryNotFound
 	// when the binary is missing so the sentinel propagates through toAPIError.
 	lookPath func(string) (string, error)
+	// dockerAvailable reports whether a docker CLI resolves on the daemon's
+	// PATH (exec.LookPath in production). Worker prompts carry the container
+	// label rules only when it does; tests inject a stub so prompt contents do
+	// not depend on the host.
+	dockerAvailable func() bool
 	// executable resolves the daemon's own binary (os.Executable in
 	// production); its directory is prepended to spawned sessions' PATH so the
 	// workspace hook commands resolve back to this daemon. Tests inject a stub.
@@ -967,6 +972,11 @@ type Deps struct {
 	// Production wiring leaves this nil and the manager defaults to
 	// exec.LookPath; tests inject a stub so they need not seed real binaries.
 	LookPath func(string) (string, error)
+	// DockerAvailable reports whether a docker CLI resolves on the daemon's
+	// PATH; a worker's prompt carries the container label rules only when it
+	// does. Production wiring leaves this nil and the manager defaults to
+	// exec.LookPath("docker"); tests inject a stub.
+	DockerAvailable func() bool
 	// Executable overrides os.Executable for the session PATH pin (see
 	// hookPATH). Production wiring leaves this nil; tests inject a stub so they
 	// control what the test binary appears to be.
@@ -1037,6 +1047,7 @@ func New(d Deps) *Manager {
 		taskPreparationTTL:             defaultTaskPreparationTTL,
 		openTranscriptFile:             os.Open,
 		lookPath:                       d.LookPath,
+		dockerAvailable:                d.DockerAvailable,
 		executable:                     d.Executable,
 		newLaunchID:                    d.NewLaunchID,
 		codexOperationGate:             defaultCodexOperationGate(d.CodexOperationGate),
@@ -1078,6 +1089,9 @@ func New(d Deps) *Manager {
 	}
 	if m.lookPath == nil {
 		m.lookPath = exec.LookPath
+	}
+	if m.dockerAvailable == nil {
+		m.dockerAvailable = func() bool { _, err := exec.LookPath("docker"); return err == nil }
 	}
 	if m.executable == nil {
 		m.executable = agentlaunch.Executable
@@ -6746,7 +6760,6 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		Role:       promptRoleForKind(kind),
 		Standalone: projectID == "",
 		Project:    promptProjectContext(projectID, project),
-		Docker:     dockerAvailable(),
 	}
 
 	switch kind {
@@ -6762,6 +6775,13 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		}
 		cfg.OrchestratorRules = rules
 	case domain.KindWorker:
+		cfg.Docker = m.dockerAvailable()
+		if !cfg.Docker {
+			// A docker CLI reachable only through a login-shell profile looks
+			// absent here; a Codex worker can still start containers then, so
+			// log the miss for diagnosis.
+			m.logger.Debug("no docker CLI on the daemon's PATH; leaving the container label rules out of the worker prompt", "session", sessionID)
+		}
 		if projectID != "" {
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
 			if err != nil {
