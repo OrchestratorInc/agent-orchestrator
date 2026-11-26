@@ -3287,7 +3287,7 @@ describe("ChatWorkspace timeline", () => {
 	// #7759: the controller died mid-turn, so the durable turn is still "running" — but
 	// the stopped banner owns that state. The live row with its spinner and elapsed
 	// timer must go, or it would keep counting for hours next to a stopped controller.
-	it("never shows the stopped banner and the live turn spinner together", () => {
+	it("never shows the stopped banner and the live turn spinner together", async () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter(
 			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
@@ -3301,7 +3301,8 @@ describe("ChatWorkspace timeline", () => {
 			<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />,
 		);
 		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
-		expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument();
+		// The live row fades out as the turn settles (LIVE_ROW_EXIT_MS), then it is gone.
+		await waitFor(() => expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument());
 		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
 	});
 
