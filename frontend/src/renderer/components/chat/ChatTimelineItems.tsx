@@ -976,8 +976,10 @@ function useUserTextRenderer(sessionId: string, body: string, attachments: strin
 }
 
 // A list, quote or code block at either end of a message sits flush with the
-// bubble's padding instead of adding its own outer margin.
-const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+// bubble's padding instead of adding its own outer margin. Lines wrap normally:
+// `text-wrap: pretty` pulls words down to avoid a short last line after the bubble
+// has already sized itself to the full line, leaving empty room on the right.
+const USER_BODY_CLASS = "break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0";
 
 const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
 
