@@ -363,10 +363,12 @@ func globMatches(pattern, value string) bool {
 	return regexp.MustCompile("(?s)^" + expr + "$").MatchString(value)
 }
 
+// dropDataHome drops the worker's data-home and TUI-settings assignments,
+// leaving the config overlay and the OpenCode command.
 func dropDataHome(argv []string) []string {
 	out := make([]string, 0, len(argv))
 	for _, arg := range argv {
-		if !strings.HasPrefix(arg, "XDG_DATA_HOME=") {
+		if !strings.HasPrefix(arg, "XDG_DATA_HOME=") && !strings.HasPrefix(arg, "OPENCODE_CLI_CONFIG_CONTENT=") {
 			out = append(out, arg)
 		}
 	}
