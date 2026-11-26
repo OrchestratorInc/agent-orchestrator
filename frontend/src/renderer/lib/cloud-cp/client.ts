@@ -11,6 +11,13 @@ import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
 	CloudCpArtifactShareView,
+	CloudCpArtifactComment,
+	CloudCpArtifactCommentEditRequest,
+	CloudCpArtifactCommentsResult,
+	CloudCpArtifactCommentThread,
+	CloudCpArtifactCommentThreadStatus,
+	CloudCpArtifactReplyRequest,
+	CloudCpArtifactThreadCreateRequest,
 	CloudCpSharedArtifact,
 	CloudCpOffering,
 	CloudCpAgentProvider,
@@ -185,6 +192,13 @@ export interface CloudCpMutationOptions extends CloudCpRequestOptions {
 	idempotencyKey?: string;
 }
 
+export interface CloudCpArtifactCommentsListOptions extends CloudCpRequestOptions {
+	/** The link version to read; omit for the current one. */
+	version?: number;
+	/** The ETag of the copy the caller has; sent as If-None-Match. */
+	etag?: string;
+}
+
 export interface CloudCpSessionEventsOptions {
 	/** Invoked once per parsed event, in stream order. */
 	onEvent: (event: CloudCpClientEvent) => void;
@@ -272,6 +286,25 @@ export interface CloudCpClient {
 	listSharedArtifacts(options?: CloudCpRequestOptions): Promise<{ artifacts: CloudCpSharedArtifact[] }>;
 	/** A link's details with a contentUrl that opens its file for the signed-in person; 404 when it does not open for them. */
 	viewArtifactShare(linkId: string, options?: CloudCpRequestOptions): Promise<CloudCpArtifactShareView>;
+	/**
+	 * Every comment thread on one version of a share link (default: its current
+	 * one). Pass the last ETag to get notModified instead of the list when
+	 * nothing changed. 404 when the link does not open for the caller; 409
+	 * artifact_share_version_unknown for a version it never had.
+	 */
+	listArtifactShareComments(linkId: string, options?: CloudCpArtifactCommentsListOptions): Promise<CloudCpArtifactCommentsResult>;
+	/** Starts a thread on an element; retrying with the same clientId returns the same thread. */
+	createArtifactShareThread(linkId: string, body: CloudCpArtifactThreadCreateRequest, options?: CloudCpRequestOptions): Promise<CloudCpArtifactCommentThread>;
+	/** Replies to a thread; retrying with the same clientId returns the same comment. */
+	replyArtifactShareThread(linkId: string, threadId: string, body: CloudCpArtifactReplyRequest, options?: CloudCpRequestOptions): Promise<CloudCpArtifactComment>;
+	/** Resolves or reopens a thread. */
+	setArtifactShareThreadStatus(linkId: string, threadId: string, status: CloudCpArtifactCommentThreadStatus, options?: CloudCpRequestOptions): Promise<CloudCpArtifactCommentThread>;
+	/** Edits the caller's own comment; 403 forbidden for anyone else's. */
+	editArtifactShareComment(linkId: string, commentId: string, body: CloudCpArtifactCommentEditRequest, options?: CloudCpRequestOptions): Promise<CloudCpArtifactComment>;
+	/** Deletes a comment (its author or the link's owner); a thread left with none goes too. */
+	deleteArtifactShareComment(linkId: string, commentId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** Owner only, after a successful Send to agent: marks the thread sent. */
+	markArtifactShareThreadSent(linkId: string, threadId: string, options?: CloudCpRequestOptions): Promise<CloudCpArtifactCommentThread>;
 	listSessionArtifacts(
 		orgId: string,
 		sessionId: string,
@@ -713,6 +746,14 @@ interface SendOptions {
 	signal?: AbortSignal;
 	idempotencyKey?: string;
 	accept?: string;
+	headers?: Record<string, string>;
+	/** Non-2xx statuses returned to the caller instead of thrown (e.g. 304). */
+	passStatuses?: readonly number[];
+	/**
+	 * A 403 here is about the resource (someone else's comment), not a stale
+	 * org, so it must not trigger onForbidden's org re-resolution.
+	 */
+	resourceForbidden?: boolean;
 }
 
 function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
@@ -830,17 +871,18 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		});
 		if (init.body !== undefined) headers.set("Content-Type", "application/json");
 		if (init.idempotencyKey !== undefined) headers.set("Idempotency-Key", init.idempotencyKey);
+		for (const [name, value] of Object.entries(init.headers ?? {})) headers.set(name, value);
 		const response = await doFetch(buildUrl(baseUrl, path, init.query), {
 			method,
 			headers,
 			body: init.body === undefined ? undefined : JSON.stringify(init.body),
 			signal: init.signal,
 		});
-		if (!response.ok) {
+		if (!response.ok && init.passStatuses?.includes(response.status) !== true) {
 			// A 403 means the selected org is stale (membership changed) — notify so
 			// the renderer re-resolves the current org instead of stranding every
 			// org-scoped call. Fire before throwing so callers still see the error.
-			if (response.status === 403) onForbidden?.();
+			if (response.status === 403 && init.resourceForbidden !== true) onForbidden?.();
 			const error = await errorFromResponse(response);
 			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
 			throw error;
@@ -1019,6 +1061,30 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
 		listSharedArtifacts: (o) => requestJson("GET", "/me/shared-artifacts", { signal: o?.signal }),
 		viewArtifactShare: (linkId, o) => requestJson("POST", `/artifact-shares/${seg(linkId)}/view`, { signal: o?.signal }),
+		listArtifactShareComments: async (linkId, o) => {
+			const response = await send("GET", `/artifact-shares/${seg(linkId)}/comments`, {
+				query: { version: o?.version },
+				headers: o?.etag === undefined ? undefined : { "If-None-Match": o.etag },
+				passStatuses: [304],
+				resourceForbidden: true,
+				signal: o?.signal,
+			});
+			const etag = response.headers.get("ETag");
+			if (response.status === 304) return { notModified: true, etag: etag ?? o?.etag ?? "" };
+			return { notModified: false, etag, snapshot: await response.json() };
+		},
+		createArtifactShareThread: (linkId, body, o) =>
+			requestJson("POST", `/artifact-shares/${seg(linkId)}/comments/threads`, { body, resourceForbidden: true, signal: o?.signal }),
+		replyArtifactShareThread: (linkId, threadId, body, o) =>
+			requestJson("POST", `/artifact-shares/${seg(linkId)}/comments/threads/${seg(threadId)}/replies`, { body, resourceForbidden: true, signal: o?.signal }),
+		setArtifactShareThreadStatus: (linkId, threadId, status, o) =>
+			requestJson("PATCH", `/artifact-shares/${seg(linkId)}/comments/threads/${seg(threadId)}`, { body: { status }, resourceForbidden: true, signal: o?.signal }),
+		editArtifactShareComment: (linkId, commentId, body, o) =>
+			requestJson("PATCH", `/artifact-shares/${seg(linkId)}/comments/${seg(commentId)}`, { body, resourceForbidden: true, signal: o?.signal }),
+		deleteArtifactShareComment: (linkId, commentId, o) =>
+			requestVoid("DELETE", `/artifact-shares/${seg(linkId)}/comments/${seg(commentId)}`, { resourceForbidden: true, signal: o?.signal }),
+		markArtifactShareThreadSent: (linkId, threadId, o) =>
+			requestJson("POST", `/artifact-shares/${seg(linkId)}/comments/threads/${seg(threadId)}/sent`, { resourceForbidden: true, signal: o?.signal }),
 		listSessionArtifacts: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),
 		saveSessionArtifact: (orgId, sessionId, body, o) =>

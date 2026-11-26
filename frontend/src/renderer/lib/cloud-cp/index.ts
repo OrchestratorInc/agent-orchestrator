@@ -5,6 +5,7 @@ export { createCloudCpClient } from "./client";
 export type {
 	CloudCpClient,
 	CloudCpClientOptions,
+	CloudCpArtifactCommentsListOptions,
 	CloudCpMutationOptions,
 	CloudCpRequestOptions,
 	CloudCpWorkspaceRequestOptions,

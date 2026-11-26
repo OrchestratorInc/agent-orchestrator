@@ -366,6 +366,135 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/artifact-shares/{linkId}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+            };
+            cookie?: never;
+        };
+        /** @description Returns every comment thread on one version of a share link, with its comments oldest first, for a signed-in person who can open the link: its owner, anyone for a public link, or, for a private link, someone it is shared with by verified email, team or workspace. Any other link, private or not there at all, returns 404, the same as viewArtifactShare, and access is checked before anything else, so someone who loses access gets 404 on their next poll. version defaults to the link's current version; an older version is readable, and a version the link never had returns 409 artifact_share_version_unknown. The response carries an ETag of "r<revision>-v<version>", where version is the version read: revision goes up on every comment write on the link (new thread, reply, edit, delete, resolve, reopen, sent to agent), and when the account of someone who commented on the link or resolved one of its threads is deleted, so a 304 never keeps a deleted person's ID or name. A display-name change does not change it: the new name shows from the link's next comment write. Send it back in If-None-Match and an unchanged list answers 304 with no body. Without the version parameter the version read is the current one, so a republish with different bytes changes the ETag and the next poll gets 200 with the new version. With version pinned, the ETag names only that version: a 304 means its threads are unchanged, and says nothing about currentVersion, which a client learns only from a 200 (or from an unpinned read). Clients poll this at most every 30 seconds while the comments panel is open. Authors are named by display name only, never email. */
+        get: operations["listArtifactShareComments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}/comments/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts a thread on an element of one version of a share link, with its first comment, for anyone who can list the link's comments. version must be one the link has had (no later than the current one), so a comment made in a tab still showing an older version lands on that version; otherwise 409 artifact_share_version_unknown. Retrying with the same clientId returns the thread already made (201 for a new thread, 200 for that retry) instead of making a second one; 409 conflict when the caller already used the clientId for a different comment. 400 invalid_request for an empty or too-long body or a bad anchor; 413 request_too_large for a request body over 32 KiB; 404 when the link is not there or the caller cannot open it. */
+        post: operations["createArtifactShareThread"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment thread's ID. */
+                threadId: components["parameters"]["ArtifactShareThreadId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Resolves or reopens a thread. Anyone who can comment on the link may. Setting the status it already has changes nothing and returns the thread. 404 when the link, or the thread on it, is not there or the caller cannot open the link. */
+        patch: operations["setArtifactShareThreadStatus"];
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/replies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment thread's ID. */
+                threadId: components["parameters"]["ArtifactShareThreadId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Adds a reply to a thread, for anyone who can comment on the link, on an open or resolved thread. Retrying with the same clientId returns the comment already made (201 for a new reply, 200 for that retry); 409 conflict when the caller already used the clientId for a different comment. 400 invalid_request for an empty or too-long body; 413 request_too_large for a request body over 32 KiB; 404 when the link, or the thread on it, is not there or the caller cannot open the link. */
+        post: operations["replyArtifactShareThread"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/sent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment thread's ID. */
+                threadId: components["parameters"]["ArtifactShareThreadId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records that the link's owner sent the thread to an agent from the desktop app: sets sentToAgentAt to now and adds one to sentToAgentCount, so everyone sees "Sent to agent". The control plane does not contact the agent; the app sends the message itself and calls this only after that succeeded. Only the link's owner may (403 forbidden for anyone else who can open it); 404 when the link, or the thread on it, is not there or the caller cannot open the link. */
+        post: operations["markArtifactShareThreadSent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}/comments/{commentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment's ID. */
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Deletes a comment, for its author or the link's owner (403 forbidden for anyone else). When no other comment in its thread is left undeleted the whole thread goes; otherwise the comment stays as a deleted placeholder (deleted true, empty body) so its replies keep their place. 404 when the link, or the comment on it, is not there or the caller cannot open the link. */
+        delete: operations["deleteArtifactShareComment"];
+        options?: never;
+        head?: never;
+        /** @description Replaces the text of the caller's own comment and sets its editedAt. 403 forbidden for someone else's comment; 400 invalid_request for an empty or too-long body or a deleted comment; 404 when the link, or the comment on it, is not there or the caller cannot open the link. */
+        patch: operations["editArtifactShareComment"];
+        trace?: never;
+    };
     "/api/cloud/v1/me/shared-artifacts": {
         parameters: {
             query?: never;
@@ -5521,6 +5650,137 @@ export interface components {
                 grantCount: number;
             };
         };
+        /** @description The element a thread is on, as the comment bridge on the share host reports it, or for the kinds added later a line range, an image point or region, or a video moment. A version's bytes never change, so a path recorded on a version always points at the same element of that version. */
+        ArtifactShareCommentAnchor: {
+            /** @description A structural path from <body>: each step is the element's tag and its 1-based position among element siblings with the same tag, for example body>main:1>h1:1. */
+            path: string;
+            /** @description The element's tag name, lowercase for HTML elements. */
+            tag: string;
+            /** @description The first 16 hex characters of the SHA-256 of the first 200 characters of the element's normalised text, to check the path still finds the same element. */
+            textHash: string;
+            /** @description Up to 120 characters of the element's text, kept for the agent message and diagnostics. Never shown in the comments UI. */
+            excerpt: string;
+            /**
+             * @description What the thread is on. Absent means element: an element of an HTML or rendered Markdown page, picked by the comment bridge. lines: a line or range of lines of a text page (rows of a table page); path, tag, textHash and excerpt describe the first line and lines holds the range. image: a point or rectangle of an image (region). video: a moment of a video (time), optionally a point or rectangle of that frame (region). For image and video the path is body>img:1 or body>video:1, the tag img or video, the textHash that of empty text (e3b0c44298fc1c14) and the excerpt empty. Clients skip threads whose kind they don't know. lines only with kind lines; region only with image (required) or video (optional); time only with video (required).
+             * @enum {string}
+             */
+            kind?: "element" | "lines" | "image" | "video";
+            lines?: components["schemas"]["ArtifactShareCommentLineRange"];
+            /** @description Seconds from the start of the video, for kind video. */
+            time?: number;
+            region?: components["schemas"]["ArtifactShareCommentRegion"];
+        };
+        /** @description 1-based line numbers of a text page, first and last included (for a table page, data rows in file order, the header not counted). */
+        ArtifactShareCommentLineRange: {
+            start: number;
+            /** @description At least start. */
+            end: number;
+        };
+        /** @description A point or rectangle as fractions of the picture's width and height (0 to 1), from its top-left corner, so it holds at any display size. w and h of 0 make a point. x + w and y + h are at most 1. */
+        ArtifactShareCommentRegion: {
+            x: number;
+            y: number;
+            w: number;
+            h: number;
+        };
+        /** @description A commenter, by display name only; never their email. */
+        ArtifactShareCommentAuthor: {
+            /**
+             * Format: uuid
+             * @description Their user ID; null once their account is deleted.
+             */
+            id: string | null;
+            /** @description What to show: their display name, "Orchestrator user" when they have none to show, or "Former user" once their account is deleted. */
+            name: string;
+        };
+        ArtifactShareComment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            threadId: string;
+            author: components["schemas"]["ArtifactShareCommentAuthor"];
+            /** @description The ID the author's client made for this comment, so it can match its optimistic copy to the saved one. */
+            clientId: string;
+            /** @description Plain text, never HTML or Markdown; empty when deleted. */
+            body: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            editedAt: string | null;
+            /** @description A deleted comment kept as a placeholder because its thread has other comments. */
+            deleted: boolean;
+        };
+        /** @enum {string} */
+        ArtifactShareCommentThreadStatus: "open" | "resolved";
+        ArtifactShareCommentThread: {
+            /** Format: uuid */
+            id: string;
+            /** @description The link version the thread was made on. */
+            version: number;
+            status: components["schemas"]["ArtifactShareCommentThreadStatus"];
+            anchor: components["schemas"]["ArtifactShareCommentAnchor"];
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the thread itself last changed: created, resolved, reopened or sent to the agent.
+             */
+            updatedAt: string;
+            /** @description Who resolved it, while it is resolved; null when it is open. */
+            resolvedBy: components["schemas"]["ArtifactShareCommentAuthor"] | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the owner last sent it to an agent from the app.
+             */
+            sentToAgentAt: string | null;
+            sentToAgentCount: number;
+            /** @description Oldest first; the first is the thread's own comment. */
+            comments: components["schemas"]["ArtifactShareComment"][];
+        };
+        ArtifactShareCommentsSnapshot: {
+            /** @description The version these threads are on. */
+            version: number;
+            /** @description The link's current version when this snapshot was made. A 304 on a pinned version does not refresh it. */
+            currentVersion: number;
+            /**
+             * Format: int64
+             * @description The link's comment revision, the r part of the ETag: up by one on every comment write on the link and when the account of someone who commented on it or resolved one of its threads is deleted; not on a display-name change.
+             */
+            revision: number;
+            you: {
+                /** Format: uuid */
+                userId: string;
+                /** @description Whether the caller owns the link. */
+                isOwner: boolean;
+            };
+            /** @description Every thread on the version, open and resolved, oldest first. Clients group and order them by element. */
+            threads: components["schemas"]["ArtifactShareCommentThread"][];
+        };
+        /** @description Plain text of 1 to 5000 characters (Unicode code points), not only whitespace. */
+        ArtifactShareCommentBody: string;
+        /**
+         * Format: uuid
+         * @description A random ID the client makes for this one comment and reuses on retries, which makes creating it idempotent per author.
+         */
+        ArtifactShareCommentClientId: string;
+        ArtifactShareThreadCreateInput: {
+            version: number;
+            anchor: components["schemas"]["ArtifactShareCommentAnchor"];
+            body: components["schemas"]["ArtifactShareCommentBody"];
+            clientId: components["schemas"]["ArtifactShareCommentClientId"];
+        };
+        ArtifactShareReplyInput: {
+            body: components["schemas"]["ArtifactShareCommentBody"];
+            clientId: components["schemas"]["ArtifactShareCommentClientId"];
+        };
+        ArtifactShareThreadStatusInput: {
+            status: components["schemas"]["ArtifactShareCommentThreadStatus"];
+        };
+        ArtifactShareCommentEditInput: {
+            body: components["schemas"]["ArtifactShareCommentBody"];
+        };
         WorkerArtifactFile: {
             path: string;
             /** Format: int64 */
@@ -6523,6 +6783,60 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
+        /** @description not_found: the link is not there, is unpublished, or the caller cannot open it; or the thread or comment is not on this link. The same answer in every case, so it never says that a private link exists. */
+        ArtifactShareCommentsNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description invalid_request: an empty or too-long body, a bad anchor, clientId or status. */
+        ArtifactShareCommentInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description forbidden: editing someone else's comment, deleting a comment that is neither the caller's nor on the caller's link, or a non-owner marking a thread sent to the agent. */
+        ArtifactShareCommentForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description request_too_large: the request body is over 32 KiB. */
+        ArtifactShareCommentTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description conflict: the caller already used this clientId for a different comment (for example on another link). Make a new clientId. */
+        ArtifactShareCommentClientIdConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description artifact_share_version_unknown: the link has never had this version (it is later than the current one). */
+        ArtifactShareVersionUnknown: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
         /** @description The JSON body, path value, query value, or required header is invalid. */
         BadRequest: {
             headers: {
@@ -6572,6 +6886,10 @@ export interface components {
         };
     };
     parameters: {
+        /** @description The link's public ID, the slug of an ArtifactShare. */
+        ArtifactShareLinkId: string;
+        /** @description The comment thread's ID. */
+        ArtifactShareThreadId: string;
         AgentAccountId: string;
         AutomationId: string;
         CueId: string;
@@ -7278,6 +7596,262 @@ export interface operations {
                     "application/json": components["schemas"]["PublicArtifactShare"];
                 };
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    listArtifactShareComments: {
+        parameters: {
+            query?: {
+                /** @description The link version to read; defaults to the current one. */
+                version?: number;
+            };
+            header?: {
+                /** @description The ETag of the copy the client already has. */
+                "If-None-Match"?: string;
+            };
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every thread on the version read, with its comments, and the link's currentVersion as of this response. */
+            200: {
+                headers: {
+                    /** @description "r<revision>-v<version>", quoted; version is the version read, not necessarily the current one. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareCommentsSnapshot"];
+                };
+            };
+            /** @description The threads on the version read are unchanged since the If-None-Match ETag. For a pinned version this does not cover currentVersion: the cached snapshot's currentVersion may be older than the link's. */
+            304: {
+                headers: {
+                    /** @description The same ETag the client sent. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["ArtifactShareCommentsNotFound"];
+            409: components["responses"]["ArtifactShareVersionUnknown"];
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShareThread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareThreadCreateInput"];
+            };
+        };
+        responses: {
+            /** @description A retry; the thread this clientId already made. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareCommentThread"];
+                };
+            };
+            /** @description The new thread, with its first comment. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareCommentThread"];
+                };
+            };
+            400: components["responses"]["ArtifactShareCommentInvalid"];
+            404: components["responses"]["ArtifactShareCommentsNotFound"];
+            /** @description artifact_share_version_unknown when the link has never had this version; conflict when the caller already used this clientId for a different comment. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
+            default: components["responses"]["Error"];
+        };
+    };
+    setArtifactShareThreadStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment thread's ID. */
+                threadId: components["parameters"]["ArtifactShareThreadId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareThreadStatusInput"];
+            };
+        };
+        responses: {
+            /** @description The thread with its new status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareCommentThread"];
+                };
+            };
+            400: components["responses"]["ArtifactShareCommentInvalid"];
+            404: components["responses"]["ArtifactShareCommentsNotFound"];
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
+            default: components["responses"]["Error"];
+        };
+    };
+    replyArtifactShareThread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment thread's ID. */
+                threadId: components["parameters"]["ArtifactShareThreadId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareReplyInput"];
+            };
+        };
+        responses: {
+            /** @description A retry; the comment this clientId already made. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareComment"];
+                };
+            };
+            /** @description The new reply. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareComment"];
+                };
+            };
+            400: components["responses"]["ArtifactShareCommentInvalid"];
+            404: components["responses"]["ArtifactShareCommentsNotFound"];
+            409: components["responses"]["ArtifactShareCommentClientIdConflict"];
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
+            default: components["responses"]["Error"];
+        };
+    };
+    markArtifactShareThreadSent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment thread's ID. */
+                threadId: components["parameters"]["ArtifactShareThreadId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The thread with its sent-to-agent mark. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareCommentThread"];
+                };
+            };
+            403: components["responses"]["ArtifactShareCommentForbidden"];
+            404: components["responses"]["ArtifactShareCommentsNotFound"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteArtifactShareComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment's ID. */
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The comment, or its thread, is deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["ArtifactShareCommentForbidden"];
+            404: components["responses"]["ArtifactShareCommentsNotFound"];
+            default: components["responses"]["Error"];
+        };
+    };
+    editArtifactShareComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: components["parameters"]["ArtifactShareLinkId"];
+                /** @description The comment's ID. */
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareCommentEditInput"];
+            };
+        };
+        responses: {
+            /** @description The edited comment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareComment"];
+                };
+            };
+            400: components["responses"]["ArtifactShareCommentInvalid"];
+            403: components["responses"]["ArtifactShareCommentForbidden"];
+            404: components["responses"]["ArtifactShareCommentsNotFound"];
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
             default: components["responses"]["Error"];
         };
     };
