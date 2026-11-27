@@ -3,6 +3,8 @@ import type { CloudCpBrowserApproval, CloudCpClient } from "./cloud-cp";
 import { CloudCpError } from "./cloud-cp/errors";
 
 const hooks = vi.hoisted(() => ({
+	ready: true,
+	userId: "me",
 	listBrowserApprovals: vi.fn(),
 	sessions: [] as Array<{ id: string; cloud?: { orgId: string; observedState?: string; desiredState?: string; createdByUserId?: string; requestedBy?: { userId: string } } }>,
 	tap: undefined as undefined | ((target: { baseUrl: string; orgId: string; sessionId: string }, event: { type: string }) => void),
@@ -16,7 +18,7 @@ vi.mock("./cloud-cp/session-events-hub", () => ({
 	},
 }));
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test/", userId: "me", client: { listBrowserApprovals: hooks.listBrowserApprovals } }),
+	useCloudCp: () => ({ ready: hooks.ready, baseUrl: "https://cp.test/", userId: hooks.userId, client: { listBrowserApprovals: hooks.listBrowserApprovals } }),
 }));
 vi.mock("./telemetry", () => ({ captureRendererException: vi.fn() }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "p", sessions: hooks.sessions }] }) }));
@@ -148,11 +150,49 @@ describe("cloud approvals", () => {
 		await waitFor(() => expect(reader.result.current.map((request) => request.id)).toEqual(["a-1"]));
 		expect(hooks.listBrowserApprovals.mock.calls).toEqual([["org-1", "s-1"]]);
 		shell.unmount();
-		// Nothing reads it any more (signed out, say): its last list is not shown,
-		// though the query stays in the cache.
+		// Nothing reads it any more: its last list is not shown, and the reader
+		// took its lists with it.
 		await waitFor(() => expect(reader.result.current).toEqual([]));
-		expect(client.getQueryCache().findAll({ queryKey: ["approvals", "pending", "cloud"] }).length).toBeGreaterThan(0);
+		expect(client.getQueryCache().findAll({ queryKey: ["approvals", "pending", "cloud"] })).toHaveLength(0);
 		client.clear();
+	});
+
+	it("forgets one account's requests and heard sessions when it signs out", async () => {
+		const future = new Date(Date.now() + 60_000).toISOString();
+		hooks.sessions = [];
+		hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => ({
+			pending: sessionId === "s-acct" ? [cloudRequest({ id: "first-account", sessionId: "s-acct", expiresAt: future })] : [],
+		}));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const reader = renderHook(() => useCloudPendingApprovals(), { wrapper });
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		try {
+			await waitFor(() => expect(hooks.tap).toBeDefined());
+			// The first account's session announces a request on an open stream.
+			act(() => hooks.tap?.({ baseUrl: "https://cp.test", orgId: "org-1", sessionId: "s-acct" }, { type: "browser.approval_requested" }));
+			await waitFor(() => expect(reader.result.current.map((request) => request.id)).toEqual(["first-account"]));
+
+			// Sign out, then another account signs in whose reads fail.
+			hooks.ready = false;
+			shell.rerender();
+			await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: ["approvals", "pending", "cloud"] })).toHaveLength(0));
+			hooks.listBrowserApprovals.mockReset().mockRejectedValue(new CloudCpError("down", { status: 503 }));
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			hooks.ready = true;
+			hooks.userId = "someone-else";
+			shell.rerender();
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			// The earlier account's session is not read again, and its request is not shown.
+			expect(hooks.listBrowserApprovals.mock.calls.map(([, id]) => id)).not.toContain("s-acct");
+			expect(reader.result.current).toEqual([]);
+			warn.mockRestore();
+		} finally {
+			hooks.ready = true;
+			hooks.userId = "me";
+			shell.unmount();
+			client.clear();
+		}
 	});
 
 	it("reads org-wide only the sessions this person may decide", async () => {

@@ -139,6 +139,12 @@ function addHeard(ref: SessionRef) {
 	heard = [...heard, ref];
 	notifyRefs();
 }
+/** Forgets every heard session: they belong to the account that heard them. */
+function clearHeard() {
+	if (heard.length === 0) return;
+	heard = [];
+	notifyRefs();
+}
 /** A session the control plane no longer has stops being read. */
 function dropHeard(ref: SessionRef) {
 	const next = heard.filter((known) => refKey(known) !== refKey(ref));
@@ -259,6 +265,19 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 		for (const ref of watchedRefs) add(ref, true);
 		return [...found.values()];
 	}, [base, heardRefs, ready, userId, watchedRefs, workspaces.data]);
+
+	// What was read belongs to one account on one control plane. When that
+	// changes (sign-out, another account, another base URL) or the reader goes,
+	// drop its lists and the sessions it heard, so a later account never shows
+	// them, even while its own reads fail and React Query would keep old data.
+	// The docks own `watched`.
+	useEffect(
+		() => () => {
+			clearHeard();
+			queryClient.removeQueries({ queryKey: CLOUD_PENDING_PREFIX });
+		},
+		[base, queryClient, ready, userId],
+	);
 
 	useEffect(() => {
 		if (!ready) return;
