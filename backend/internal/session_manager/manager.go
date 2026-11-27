@@ -45,9 +45,11 @@ var (
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
-	ErrAgentNotExited                = errors.New("session: agent has not exited")
-	ErrAgentExitInProgress           = errors.New("session: agent exit is already in progress")
-	ErrIncompleteHandle              = errors.New("session: incomplete teardown handle")
+	// ErrSessionMoved refuses to run a session that moved to AO Cloud.
+	ErrSessionMoved        = errors.New("session: moved to AO Cloud")
+	ErrAgentNotExited      = errors.New("session: agent has not exited")
+	ErrAgentExitInProgress = errors.New("session: agent exit is already in progress")
+	ErrIncompleteHandle    = errors.New("session: incomplete teardown handle")
 	// ErrProjectNotResolvable means the spawn's project has no usable repo
 	// (unregistered, archived, or missing a path). The API maps it to a 400.
 	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
@@ -67,6 +69,9 @@ var (
 	// selected harness's catalog and the harness does not accept arbitrary model
 	// ids. The API maps it to a 400.
 	ErrUnsupportedModel = errors.New("session: model is not supported by the selected harness")
+	// ErrSpawnPermissionExceedsPolicy rejects a worker mode more permissive than
+	// the project's role setting or an orchestrator parent's mode.
+	ErrSpawnPermissionExceedsPolicy = errors.New("session: spawn permission exceeds the project or parent permission ceiling")
 	// ErrTerminalUnsupported means a terminal launch was requested for a
 	// harness that runs in Chat only. Unlike ports.ErrChatUnsupported it must
 	// not prompt a terminal retry. The API maps it to a 400.
@@ -384,6 +389,7 @@ type Store interface {
 	CommitClientRequestSession(ctx context.Context, id domain.SessionID) error
 	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error)
+	UpdateSessionEffort(ctx context.Context, id domain.SessionID, effort string) (bool, error)
 	RenameSessionIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error)
 	// UpdateSessionArtifactOutput is the only write that changes artifact_dir
 	// and session_output_type on an existing row; UpdateSession leaves them
@@ -1135,6 +1141,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	defer func() {
 		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
 	}()
+	if cfg.Transfer != nil {
+		// A moved conversation resumes in its CLI's terminal.
+		cfg.RequestedMode = domain.SessionModeTUI
+	}
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1180,16 +1190,56 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.RequireNewBranch = true
 		}
 	}
-	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" {
-		permissions, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
+	// An orchestrator's worker inherits its approval mode only when the project
+	// sets none for the role (#4898, #5954). A spawn from any session in the
+	// project may request a stricter mode, but cannot exceed the project ceiling.
+	resolvedHarness := effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
+	// Only saved project/role permissions form a ceiling. Harness defaults such
+	// as Mastra Code's native "default" mode are applied later at launch.
+	projectPermission := project.Config.AgentConfig.Permissions
+	if rolePermission := roleOverride(cfg.Kind, project.Config).AgentConfig.Permissions; rolePermission != "" {
+		projectPermission = rolePermission
+	}
+	if cfg.ParentSessionID != "" {
+		parentPermission, isOrchestrator, sameProject, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 		}
-		cfg.AgentConfig.Permissions = permissions
+		if sameProject {
+			ceiling := projectPermission
+			if ceiling == "" && isOrchestrator {
+				ceiling = parentPermission
+				if ceiling == "" {
+					ceiling = ports.PermissionModeAuto
+				}
+			}
+			requested := cfg.AgentConfig.Permissions
+			if requested == "" && resolvedHarness == domain.HarnessUnreal {
+				requested = ports.PermissionModeBypassPermissions
+			}
+			if requested != "" && ceiling != "" {
+				allowed := false
+				for _, mode := range ports.PermissionModesStrictestFirst {
+					if mode == requested {
+						allowed = true
+						break
+					}
+					if mode == ceiling {
+						break
+					}
+				}
+				if !allowed {
+					return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: requested %q exceeds %q", ErrSpawnPermissionExceedsPolicy, requested, ceiling)
+				}
+			}
+			if isOrchestrator && cfg.AgentConfig.Permissions == "" && projectPermission == "" {
+				cfg.AgentConfig.Permissions = parentPermission
+			}
+		}
 	}
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
-	cfg.Harness = effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
+	cfg.Harness = resolvedHarness
 	if cfg.Harness == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: configure project %s.agent or pass --harness", ErrMissingHarness, roleConfigName(cfg.Kind))
 	}
@@ -1216,12 +1266,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		cfg.RequestedMode = domain.SessionModeChat
 	}
-	// Unreal Agent has no interactive approval channel either, so selecting it
-	// supplies bypass permissions by default; an explicit caller-supplied
-	// permission remains authoritative and is rejected normally when the
-	// harness cannot honor it.
+	// Unreal Agent has no interactive approval channel. Its implicit bypass mode
+	// must not replace a stricter project setting; an explicit caller-supplied
+	// permission remains authoritative and is rejected if the harness cannot honor it.
 	if cfg.Harness == domain.HarnessUnreal {
 		if cfg.AgentConfig.Permissions == "" {
+			if projectPermission != "" && projectPermission != ports.PermissionModeBypassPermissions {
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: Unreal Agent requires bypass-permissions; choose it explicitly to start this session with project permission %q", ErrSpawnPermissionExceedsPolicy, projectPermission)
+			}
 			cfg.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 		}
 	}
@@ -1297,11 +1349,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.AgentConfigResolved = true
 		}
 	}
-	// Pi and Prime Agent also resolve an effort inherited from role/project
-	// settings, so a stale level is cleared instead of reaching --thinking.
-	inheritsThinking := (cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent) &&
-		strings.TrimSpace(agentConfig.Effort) != ""
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || inheritsThinking) {
+	// Resolve inherited effort too, so a harness that cannot use it stores the
+	// provider default instead of advertising a level it never launched with.
+	// OMP already accepts inherited --thinking in its TUI adapter, but does not
+	// yet expose effort in the model catalog. Explicit effort still goes through
+	// validation, as it does for other harnesses.
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || (cfg.Harness != domain.HarnessOMP && strings.TrimSpace(agentConfig.Effort) != "")) {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)
@@ -1330,6 +1383,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	}
 
 	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
+	resolvedSelection := agentConfig
+	if mode == domain.SessionModeChat {
+		resolvedSelection = cfg.AgentConfig
+	} else {
+		resolvedSelection.Model = resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig)
+		// Memcode may discover a workspace-native endpoint only after this row
+		// is created. Until then its model is not resolved for the launch.
+		if cfg.Harness == domain.HarnessMemcode {
+			resolvedSelection.Model = ""
+		}
+	}
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
@@ -1340,10 +1404,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		rec = prep.record
 	} else {
 		seed := m.seedRecord(cfg, project.Config, m.clock())
-		if mode == domain.SessionModeChat {
-			seed.Metadata.Model = cfg.AgentConfig.Model
-			seed.Metadata.Effort = cfg.AgentConfig.Effort
-		}
+		seed.Metadata.Model = resolvedSelection.Model
+		seed.Metadata.Effort = resolvedSelection.Effort
 		// Visible from its first row: without this, a view that opens the session
 		// before beginAsyncChatSpawn reads a ready session with no controller.
 		if asyncChat {
@@ -1425,6 +1487,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// spawnTexts also decides attribution for this spawn; the spawn carries
 	// that decision to its workspace setup.
 	prompt, systemPrompt, spawnAttr, err := m.spawnTexts(ctx, cfg, id)
+	if cfg.Transfer != nil {
+		// The resumed conversation already holds the task; the prompt is a note about the move.
+		prompt = cfg.Prompt
+		if note := strings.TrimSpace(cfg.Transfer.SystemNote); note != "" && err == nil {
+			systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + note)
+		}
+	}
 	if err != nil {
 		m.cleanupArtifactDir(id)
 		if prep != nil {
@@ -1466,10 +1535,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		seed := m.seedRecord(cfg, project.Config, m.clock())
 		seed.ID = id
 		seed.Metadata.ArtifactDir = artifactDir
-		if mode == domain.SessionModeChat {
-			seed.Metadata.Model = cfg.AgentConfig.Model
-			seed.Metadata.Effort = cfg.AgentConfig.Effort
-		}
+		seed.Metadata.Model = resolvedSelection.Model
+		seed.Metadata.Effort = resolvedSelection.Effort
 		if asyncChat {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
@@ -1702,6 +1769,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
 	}
+	transferNativeID := ""
+	if cfg.Transfer != nil {
+		if cfg.Transfer.NativeArchive != "" {
+			transferNativeID, err = m.placeTransferConversation(ctx, cfg.Harness, ws.Path, env, cfg.Transfer.NativeArchive)
+			if err != nil {
+				m.logger.Warn("spawn: moved conversation cannot be resumed; starting from the handoff note", "sessionID", id, "error", err)
+				transferNativeID = ""
+			}
+		}
+		if transferNativeID == "" {
+			prompt = cfg.Transfer.FallbackPrompt
+		}
+	}
 	// A text-handoff fork's agent starts with the original's conversation as
 	// its first message. It is not the session's task, so it isn't saved as one.
 	launchPrompt := prompt
@@ -1740,7 +1820,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		launchCfg.Prompt = ""
 	}
-	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
+	var argv []string
+	if transferNativeID != "" {
+		argv, err = transferRestoreArgv(ctx, agent, transferNativeID, launchCfg)
+	} else {
+		argv, err = agent.GetLaunchCommand(ctx, launchCfg)
+	}
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnLaunchCommand, err)
@@ -1819,6 +1904,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
 		Model:  resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
 		Effort: agentConfig.Effort,
+	}
+	if transferNativeID != "" {
+		metadata.AgentSessionID = transferNativeID
+		// The launch resumes that exact conversation (its restore command names
+		// it), as a native restore does, so the id is bound to this launch at
+		// once, under the same harnesses: a moved session can switch to Chat
+		// without waiting for the agent's SessionStart hook.
+		if cfg.Harness == domain.HarnessCodex || cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessAgy ||
+			m.terminalVersionRefreshSupported(cfg.Harness) {
+			metadata.AgentSessionIDLaunchID = launchID
+		}
 	}
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
@@ -1944,15 +2040,15 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
-	// Role or project settings may carry a stale Pi or Prime Agent effort that
-	// the selected model does not advertise. Clear that level instead of failing
+	// Role or project settings may carry a stale Pi, Prime Agent, or Open
+	// Interpreter effort that the selected model does not advertise. Clear it instead of failing
 	// the launch; terminals let the CLI judge levels the catalog cannot confirm.
 	// A level the request carries itself (a flagged override, or a nonempty effort
 	// in the spawn request) is explicit and still validated, so an unsupported
 	// choice is rejected rather than silently dropped.
-	inheritedPiEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
-		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent)
-	clearUnconfirmedPiEffort := inheritedPiEffort &&
+	inheritedCatalogEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
+		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent || cfg.Harness == domain.HarnessOpenInterpreter)
+	clearUnconfirmedInheritedEffort := inheritedCatalogEffort &&
 		(cfg.RequestedMode != domain.SessionModeTUI || modelChangedWithoutExplicitEffort)
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
@@ -1999,7 +2095,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		if validateClaudeModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
-		if clearUnconfirmedPiEffort {
+		if clearUnconfirmedInheritedEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -2022,7 +2118,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
 		}
 		NoteSpawnModel(ctx, modelID, false)
-		if modelChangedWithoutExplicitEffort || clearUnconfirmedPiEffort {
+		if modelChangedWithoutExplicitEffort || clearUnconfirmedInheritedEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -2070,7 +2166,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		// capabilities, including its default model when none was selected.
 		// Terminals preserve inherited effort for the CLI to validate.
 		// A level no Claude model accepts is still certain.
-		if clearUnconfirmedPiEffort {
+		if clearUnconfirmedInheritedEffort {
 			resolved.Effort = ""
 			return resolved, nil
 		}
@@ -2080,7 +2176,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		return resolved, nil
 	}
 	if !containsString(selected.Efforts, resolved.Effort) {
-		if inheritedPiEffort {
+		if inheritedCatalogEffort {
 			resolved.Effort = ""
 			return resolved, nil
 		}
@@ -2293,32 +2389,38 @@ func containsString(values []string, value string) bool {
 	return false
 }
 
-// inheritedSpawnPermissions derives a worker override from its requesting chat
-// orchestrator. The request supplies identity only: the stored conversation
-// settings remain the authority for the permission policy.
-func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (domain.PermissionMode, error) {
+// inheritedSpawnPermissions identifies an in-project parent and derives a
+// worker override only from an orchestrator. Saved Chat settings take precedence
+// over the orchestrator's starting permission mode.
+func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (domain.PermissionMode, bool, bool, error) {
 	parent, ok, err := m.store.GetSession(ctx, parentID)
 	if err != nil {
-		return "", fmt.Errorf("load parent session %s: %w", parentID, err)
+		return "", false, false, fmt.Errorf("load parent session %s: %w", parentID, err)
 	}
-	if !ok || parent.ProjectID != projectID || parent.Kind != domain.KindOrchestrator {
+	if !ok || parent.ProjectID != projectID {
+		return "", false, false, nil
+	}
+	if parent.Kind != domain.KindOrchestrator {
 		// AO_SESSION_ID is available in every session, not only orchestrators.
-		// A worker (or a stale/cross-project value) must preserve the historical
-		// project-default spawn behavior rather than gain an inherited policy.
-		return "", nil
+		// Workers do not provide an inherited mode, but the project's ceiling
+		// still applies to a worker-initiated spawn.
+		return "", false, true, nil
 	}
 	conversations, ok := m.store.(conversationSettingsStore)
 	if !ok {
-		return "", nil
+		return parent.Metadata.Permissions, true, true, nil
 	}
 	conversation, err := conversations.ConversationForSession(ctx, parentID)
 	if errors.Is(err, domain.ErrNoConversation) {
-		return "", nil
+		return parent.Metadata.Permissions, true, true, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("load parent conversation %s: %w", parentID, err)
+		return "", false, false, fmt.Errorf("load parent conversation %s: %w", parentID, err)
 	}
-	return conversation.Settings.ApprovalMode, nil
+	if conversation.Settings.ApprovalMode != "" {
+		return conversation.Settings.ApprovalMode, true, true, nil
+	}
+	return parent.Metadata.Permissions, true, true, nil
 }
 
 // loadProject loads the project record so spawn can resolve its per-project
@@ -3631,6 +3733,12 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
 	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
+	}
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3978,6 +4086,12 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	}
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
+	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
+	}
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {
@@ -4617,6 +4731,19 @@ func (m *Manager) PersistChatModel(ctx context.Context, id domain.SessionID, mod
 	return nil
 }
 
+// PersistChatEffort keeps the session's durable selection in sync with the
+// effort chosen for the next Chat turn, including clearing the override.
+func (m *Manager) PersistChatEffort(ctx context.Context, id domain.SessionID, effort string) error {
+	updated, err := m.store.UpdateSessionEffort(ctx, id, strings.TrimSpace(effort))
+	if err != nil {
+		return fmt.Errorf("persist chat effort %s: %w", id, err)
+	}
+	if !updated {
+		return fmt.Errorf("persist chat effort %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // SaveAndTeardownAll captures uncommitted work and tears down every live
 // session that has a workspace path. It is the shutdown path for the daemon:
 // each session's uncommitted work is stashed into a preserve ref, the ref is
@@ -5150,7 +5277,39 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 		if !rec.IsTerminated {
 			continue
 		}
+		// A session that moved, or whose move to AO Cloud pushed its branch and
+		// did not finish, may be running in AO Cloud: it stays stopped here
+		// until the move finishes or the user restores it.
+		if rec.MovedTo != nil || rec.MoveStarted != "" {
+			m.logger.Info("restore-all: leaving a moved or moving session stopped", "sessionID", rec.ID, "moveID", rec.MoveStarted)
+			continue
+		}
 		m.restoreAllSession(ctx, rec)
+	}
+	return nil
+}
+
+// endMoveHere ends a session's unfinished move to AO Cloud: an explicit
+// restore or resume (including a failed move's rollback) runs it here, so the
+// move is over. The store clears it only while the session is not marked
+// moved, so a move/complete that lands first wins with ErrSessionMoved and
+// the session never runs here and in AO Cloud both.
+func (m *Manager) endMoveHere(ctx context.Context, rec domain.SessionRecord) error {
+	if rec.MoveStarted == "" {
+		return nil
+	}
+	store, ok := m.store.(interface {
+		EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
+	})
+	if !ok {
+		return nil
+	}
+	ended, err := store.EndSessionMoveStarted(ctx, rec.ID, m.clock().UTC())
+	if err != nil {
+		return fmt.Errorf("end the unfinished move: %w", err)
+	}
+	if !ended {
+		return ErrSessionMoved
 	}
 	return nil
 }
@@ -6734,8 +6893,11 @@ func seedRecordWithDefault(cfg ports.SpawnConfig, projectConfig domain.ProjectCo
 		Activity:            domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
-		Mode:               domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:           domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		Mode: domain.NormalizeSessionMode(cfg.RequestedMode),
+		Metadata: domain.SessionMetadata{
+			Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions,
+			RoleAgent:   roleOverride(cfg.Kind, projectConfig).Harness,
+		},
 		RequestedOutput:    cfg.RequestedOutput,
 		OutputType:         domain.SessionOutputNone,
 		TerminateOnPRMerge: resolveTerminateOnPRMerge(cfg, projectConfig, defaultPolicy),

@@ -68,12 +68,18 @@ export function modelSheetRoute(opts: { agentId: string; projectId: string; sele
 	};
 }
 
-export function connectRoute(onConnected: () => void, hostId?: string) {
+/**
+ * Opens the manual connection page. `fromOnboarding` travels with it so the
+ * page can report the pairing itself: its result callback is released when the
+ * person leaves mid-connect, and the pairing still happened.
+ */
+export function connectRoute(onConnected: () => void, hostId?: string, fromOnboarding = false) {
 	return {
 		pathname: "/connect" as const,
 		params: {
 			resultKey: parkSheetResult(onConnected),
 			...(hostId ? { hostId } : {}),
+			...(fromOnboarding ? { from: "onboarding" } : {}),
 		},
 	};
 }

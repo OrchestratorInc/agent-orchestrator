@@ -2,6 +2,7 @@ import { act, create } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({ platform: { OS: "android" }, theme: new Proxy({}, { get: () => "#000000" }) }));
+vi.mock("./headerPill", () => ({ pillHeaderOptions: () => ({}), pillScreenLayout: undefined, PillHeaderFrame: ({ children }: { children: unknown }) => children }));
 vi.mock("react-native", () => ({ Platform: fixtures.platform, View: "View" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");

@@ -321,6 +321,7 @@ var _ ports.ChatConversation = (*conversation)(nil)
 var _ ports.ChatHistoryReader = (*conversation)(nil)
 var _ ports.ChatDeferredTurnStarter = (*conversation)(nil)
 var _ ports.ChatConfigOptionController = (*conversation)(nil)
+var _ ports.ChatModelVariantResolver = (*conversation)(nil)
 var _ ports.ChatSkillLister = (*conversation)(nil)
 var _ ports.ChatSteerer = (*conversation)(nil)
 var _ ports.ChatInputResponder = (*conversation)(nil)
@@ -754,6 +755,15 @@ func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 // expandModelVariant maps a composite model onto the base model and separate
 // variant option when that is how the live catalog offers it.
 func (c *conversation) expandModelVariant(options []SessionOption) []SessionOption {
+	// Agy also restores the separate effort saved after an opening fallback.
+	// Its two servers use different IDs for the same thought-level control.
+	if c.harness == domain.HarnessAgy {
+		for i, option := range options {
+			if option.ID == "thinking_level" {
+				options[i] = c.variantOptionFor(option)
+			}
+		}
+	}
 	if c.splitModelVariant == nil {
 		return options
 	}
@@ -774,6 +784,26 @@ func (c *conversation) expandModelVariant(options []SessionOption) []SessionOpti
 		break
 	}
 	return options
+}
+
+// ModelVariantBase is the base model a composite model id runs as, when the
+// live catalog offers that base instead of the id itself, as
+// expandModelVariant applies it.
+func (c *conversation) ModelVariantBase(model string) (string, bool) {
+	if c.splitModelVariant == nil || model == "" {
+		return "", false
+	}
+	if offered, known := c.configOptionOffers("model", model); !known || offered {
+		return "", false
+	}
+	base, _, split := c.splitModelVariant(model)
+	if !split {
+		return "", false
+	}
+	if offered, _ := c.configOptionOffers("model", base); !offered {
+		return "", false
+	}
+	return base, true
 }
 
 // markRestored names value current for option id and remembers the snapshot's

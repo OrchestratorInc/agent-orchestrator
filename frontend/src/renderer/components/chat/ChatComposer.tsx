@@ -153,6 +153,22 @@ const DEFINITIVE_SEND_REJECTIONS = new Set<string>(SEND_REJECTION_CODES);
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
+const PASTED_TEXT_ATTACHMENT_CHARS = 5000;
+
+function isPlainPasteShortcut(event: KeyboardEvent<HTMLDivElement>): boolean {
+	const key = event.key.toLowerCase();
+	const isV = /^[a-z]$/.test(key) ? key === "v" : event.code === "KeyV";
+	return isV && event.shiftKey && (event.metaKey || event.ctrlKey);
+}
+
+function pastedTextFileName(text: string, taken: string[]): string {
+	const firstLine = text.split("\n").find((line) => line.trim()) ?? "";
+	const base = firstLine.replace(/[\\/\p{Cc}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60).trim() || "pasted-text";
+	for (let index = 1; ; index++) {
+		const name = index === 1 ? `${base}.txt` : `${base} ${index}.txt`;
+		if (!taken.includes(name)) return name;
+	}
+}
 
 /**
  * The band hung on the chat box slides up out from behind it as it comes and
@@ -272,6 +288,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked = false,
 	sendBlockedReason,
 	starting,
+	restoring = false,
 	holdAttachments,
 	onHeldAttachmentsChange,
 	attachmentsRefusal,
@@ -378,6 +395,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked?: boolean;
 	sendBlockedReason?: string;
 	starting?: boolean;
+	restoring?: boolean;
 	/**
 	 * Files that cannot be staged yet (no workspace to write into) stay in the
 	 * composer with their bytes and go to `onSend` with the message, for a chat
@@ -654,6 +672,9 @@ export const ChatComposer = memo(function ChatComposer({
 	 * the user's own text.
 	 */
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
+	const plainPasteShortcut = useRef(false);
+	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
+	const textPasteUploads = useRef(new Map<string, { cancelled: boolean }>());
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -695,6 +716,8 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
+	const sentFiles = Boolean(holdAttachments || durableDelivery?.draft?.attachments.length);
+	const takesNextFiles = optimisticSend && restoring && !sentFiles;
 	const chatReferences = draftScope
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
@@ -926,7 +949,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
 	const stripConcealed = steerInFlight && sendConcealed;
-	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const stripAttachments = (stripConcealed || (sentFiles && (optimisticSend || nextDraftHasChanged)) ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		// A cloud file's reference is no daemon path: it previews from its bytes
@@ -953,6 +976,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const acceptedClearFailed = composerMutation.accepted?.result.ok === false;
 	const draftMutationPending =
 		submitting || composerMutation.pending || acceptedMutationWaiting || Boolean(durableDelivery);
+	const attachBlocked = !takesNextFiles && (fileAttachments.preparing || draftMutationPending);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -1170,7 +1194,7 @@ export const ChatComposer = memo(function ChatComposer({
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
-			if (result.draft.composer.attachments.length === 0) {
+			if (result.draft.composer.attachments.length === 0 && !fileAttachments.preparing) {
 				fileAttachments.clear();
 			} else {
 				for (const attachment of fileAttachments.getAttachments()) {
@@ -1762,7 +1786,8 @@ export const ChatComposer = memo(function ChatComposer({
 			if (
 				!savingQueuedEdit &&
 				editorClears.current !== editorClearsAtSubmit.current &&
-				textRef.current.trim()
+				(textRef.current.trim() || fileAttachments.hasPendingReads() ||
+					(draftScope && readChatSessionDraft(draftScope).composer.attachments.length > 0))
 			) {
 				// A repeat Enter re-holds the same draft; count it only once.
 				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;
@@ -1897,9 +1922,11 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
+		const textPastes = [...pendingTextPastes.current];
 		await fileAttachments.toSettledPayload();
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
+		if ((await Promise.all(textPastes)).includes(false)) return;
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
@@ -2326,6 +2353,7 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+		plainPasteShortcut.current = isPlainPasteShortcut(event);
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
 		const typing = !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete");
@@ -2427,40 +2455,63 @@ export const ChatComposer = memo(function ChatComposer({
 
 	// Images get an inline chip only beside prose that can refer to them.
 	// Image-only drafts already show every image in the attachment strip.
-	function attachFiles(files: File[]) {
+	function attachFiles(files: File[], ids?: ReadonlyMap<File, string>) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
-		void fileAttachments.addFiles(files).then((added) => {
-			if (!reservation) return;
-			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
-				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		return fileAttachments.addFiles(files, ids).then((added) => {
+			if (reservation) {
+				editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+					attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			}
+			return added;
 		});
 	}
 
-	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
-		const clipboard = event.clipboardData;
-		const files = Array.from(clipboard?.files ?? []);
-		if (files.length === 0) return;
-		// The paste is only claimed when there is no text alongside the image: a copy
-		// carrying both should still paste its text.
-		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
-		if (!hasText) event.preventDefault();
-		uiUsage.attachmentAdded("paste");
-		attachFiles(files);
+	function acceptsFiles(): boolean {
+		return canAttach && !attachBlocked && (takesNextFiles || !submitInFlight.current);
 	}
 
-	function acceptsDroppedFiles(): boolean {
-		return canAttach && !fileAttachments.preparing && !draftMutationPending && !submitInFlight.current;
+	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
+		const asText = plainPasteShortcut.current;
+		plainPasteShortcut.current = false;
+		if (!acceptsFiles()) return;
+		const clipboard = event.clipboardData;
+		const files = Array.from(clipboard?.files ?? []);
+		const text = typeof clipboard?.getData === "function" ? clipboard.getData("text/plain") : "";
+		const taken = [...visibleRetainedAttachments, ...fileAttachments.attachments, ...pendingAttachments, ...files].map((file) => file.name);
+		const textAsFile = !asText && !holdAttachments && !historyBrowse.current && !heldSubmitRef.current && !heldDuringSubmit.current && text.length >= PASTED_TEXT_ATTACHMENT_CHARS && taken.length < MAX_ATTACHMENTS;
+		if (textAsFile) files.push(new globalThis.File([text], pastedTextFileName(text, taken), { type: "text/plain" }));
+		else if (files.length === 0) return;
+		// A copy carrying both an image and text still pastes its text, unless that
+		// text becomes a file.
+		if (text === "" || textAsFile) event.preventDefault();
+		uiUsage.attachmentAdded("paste");
+		if (!textAsFile) {
+			void attachFiles(files);
+			return;
+		}
+		const pasted = files[files.length - 1]!;
+		const pastedId = crypto.randomUUID();
+		const scope = restoredSessionId.current;
+		const upload = { cancelled: false };
+		textPasteUploads.current.set(pastedId, upload);
+		const landed = attachFiles(files, new Map([[pasted, pastedId]])).then((added) => {
+			textPasteUploads.current.delete(pastedId);
+			if (upload.cancelled || added.some((attachment) => attachment.name === pasted.name)) return true;
+			if (restoredSessionId.current === scope) editor.current?.appendText(text);
+			return false;
+		});
+		pendingTextPastes.current.add(landed);
+		void landed.then(() => pendingTextPastes.current.delete(landed));
 	}
 
 	function acceptDroppedFiles(files: File[]): boolean {
-		if (!acceptsDroppedFiles() || files.length === 0) return false;
+		if (!acceptsFiles() || files.length === 0) return false;
 		uiUsage.attachmentAdded("drop");
-		attachFiles(files);
+		void attachFiles(files);
 		return true;
 	}
 
@@ -2473,8 +2524,8 @@ export const ChatComposer = memo(function ChatComposer({
 
 	// Files dropped anywhere in the window, outside any drop zone of their own,
 	// land here when this is the nearest composer (see composer-drop-targets).
-	const dropHandlersRef = useRef({ accepts: acceptsDroppedFiles, attach: acceptDroppedFiles });
-	dropHandlersRef.current = { accepts: acceptsDroppedFiles, attach: acceptDroppedFiles };
+	const dropHandlersRef = useRef({ accepts: acceptsFiles, attach: acceptDroppedFiles });
+	dropHandlersRef.current = { accepts: acceptsFiles, attach: acceptDroppedFiles };
 	const dropTarget = useMemo<ComposerDropTarget>(() => ({
 		element: () => formRef.current,
 		accepts: () => dropHandlersRef.current.accepts(),
@@ -2505,7 +2556,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, []);
 
 	const attachmentError =
-		fileAttachments.error ??
+		(sendError?.code === "SESSION_RESTORE_FAILED" ? null : fileAttachments.error) ??
 		draftPersistenceError ??
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
 		(attachmentsRefusal && fileAttachments.attachments.length > 0 && !durableDelivery ? attachmentsRefusal : null) ??
@@ -2585,7 +2636,7 @@ export const ChatComposer = memo(function ChatComposer({
 			onSubmit={(event) => void submit(event, steersDraft, "button")}
 			data-telemetry-surface="composer"
 				onDragOver={(event) => {
-					if (!canAttach || submitInFlight.current) return;
+					if (!canAttach || (submitInFlight.current && !takesNextFiles)) return;
 					event.preventDefault();
 					setDragging(true);
 				}}
@@ -2681,9 +2732,12 @@ export const ChatComposer = memo(function ChatComposer({
 									<ComposerPendingTile
 										key={file.id}
 										name={file.name}
+										mimeType={file.mimeType}
 										statusLabel={`Attaching ${file.name}`}
 										cancelLabel={`Cancel attaching ${file.name}`}
 										onCancel={() => {
+											const upload = textPasteUploads.current.get(file.id);
+											if (upload) upload.cancelled = true;
 											fileAttachments.cancelPending(file.id);
 											editor.current?.focus();
 										}}
@@ -2793,11 +2847,11 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={controlsDisabled}
+									disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 									onChange={(event) => {
-										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
+										if (!disabled && acceptsFiles()) {
 											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
-											attachFiles(Array.from(event.target.files ?? []));
+											void attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";
@@ -2816,7 +2870,7 @@ export const ChatComposer = memo(function ChatComposer({
 										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
-											disabled={controlsDisabled}
+											disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 											aria-label="Add"
 											title="Add files or change mode"
 											className={cn("size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", GHOST_PILL_CLASS)}
@@ -2837,7 +2891,7 @@ export const ChatComposer = memo(function ChatComposer({
 												icon={Paperclip}
 												title="Files"
 												description="Attach files to this message"
-												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+												disabled={queuedEditRecovery || attachBlocked}
 												onSelect={() => filePicker.current?.click()}
 											/>
 											{addMenuItems}
@@ -2850,7 +2904,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="quiet"
 										size="icon-sm"
 										shape="pill"
-										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked}
 										onClick={() => filePicker.current?.click()}
 										data-telemetry-id="composer.attach"
 										aria-label="Attach a file"

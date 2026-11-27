@@ -4431,6 +4431,37 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 	}
 }
 
+func TestSetTurnSettingsPersistsEffortBeforeRouting(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	var persisted []string
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "persist-effort-id" },
+		OnEffortChanged: func(id domain.SessionID, effort string) {
+			persisted = append(persisted, string(id)+":"+effort)
+		},
+	})
+	t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+		WorkspacePath: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, effort := range []string{"high", "high", ""} {
+		if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{ReasoningEffort: effort}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{string(testSession) + ":high", string(testSession) + ":"}
+	if !reflect.DeepEqual(persisted, want) {
+		t.Fatalf("persisted effort changes = %v, want %v", persisted, want)
+	}
+}
+
 type failConversationReadStore struct {
 	*sqlite.Store
 	reads int
@@ -7481,5 +7512,38 @@ func TestStartRejectsProviderPermissionBeforeDriverLaunch(t *testing.T) {
 	}
 	if launched {
 		t.Fatal("unsupported permission reached provider launch")
+	}
+}
+
+func TestStartTurnsOpenCodeCompactionOffInThePreparedEnvironment(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	conversation, err := st.CreateConversation(ctx, "opencode-compaction-off", domain.ConversationScopeProject, testProject, testSession, now)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := st.SetConversationSettings(ctx, conversation.ID, domain.ConversationSettings{AutoCompactWindow: domain.AutoCompactOff}, now); err != nil {
+		t.Fatalf("SetConversationSettings: %v", err)
+	}
+	var started ports.ChatStartConfig
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation(), startCfg: &started}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "opencode-compaction-off-start" },
+	})
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), testSession) })
+	// A persistent host launches with the environment prepared here, not the one passed to Start.
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessOpenCodeV2, WorkspacePath: t.TempDir(),
+		PrepareControllerEnv: func(context.Context, domain.SessionControllerOwner) (map[string]string, error) {
+			return map[string]string{"OPENCODE_CONFIG_CONTENT": `{"model":"a/b"}`}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got, want := started.Env["OPENCODE_CONFIG_CONTENT"], `{"compaction":{"auto":false},"model":"a/b"}`; got != want {
+		t.Fatalf("OpenCode config = %s, want %s", got, want)
 	}
 }
