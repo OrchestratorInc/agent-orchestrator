@@ -998,8 +998,9 @@ func (c *commandContext) setupRepoOnGitHub(ctx context.Context, opts setupOption
 		if ssh {
 			// An SSH host may be an alias (github-work) for github.com.
 			resolved, ok := c.setupSSHHostname(ctx, host)
-			if !ok && !strings.Contains(host, ".") {
-				// An alias setup cannot resolve: assume it may be GitHub.
+			if (!ok || resolved == host) && !strings.Contains(host, ".") {
+				// A dotless name SSH does not map anywhere is an alias setup
+				// cannot resolve: assume it may be GitHub, and check gh.
 				return true
 			}
 			if ok {

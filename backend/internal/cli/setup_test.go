@@ -1555,3 +1555,25 @@ func TestSetupFirstRunOKOnceTheProjectIsRegistered(t *testing.T) {
 		t.Fatalf("project = %+v first-run = %+v", stepNamed(t, res, "project"), stepNamed(t, res, "first-run"))
 	}
 }
+
+func TestSetupUnresolvedSSHAliasChecksGitHub(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "origin", "git@corp-git:org/calc.git")
+	gitIn(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitIn(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	registerOnPost(d, repo, "org/calc")
+	d.set("GET /api/v1/system/github-auth", 200, `{"id":"github-auth","satisfied":false}`)
+	deps := fakeClockDeps()
+	deps.LookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ssh" {
+			return []byte("hostname corp-git\n"), nil // ssh -G echoes an unknown alias back
+		}
+		return nil, errors.New("unexpected command")
+	}
+	out, _, _ := executeCLI(t, deps, "setup", "--path", repo, "--json")
+	if gh := stepNamed(t, decodeSetup(t, out), "github"); gh.Status != setupNeedsHuman {
+		t.Fatalf("github step = %+v; an alias setup cannot resolve must be checked like GitHub", gh)
+	}
+}
