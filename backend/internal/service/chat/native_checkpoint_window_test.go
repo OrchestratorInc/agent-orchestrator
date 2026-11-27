@@ -94,3 +94,23 @@ func TestVerifyNativeCheckpointRetriesUnsettledWithinTheWindow(t *testing.T) {
 		t.Fatalf("verifyNativeCheckpoint = %+v, %v after %d reads; want settled on the second read", boundary, err, verifier.calls)
 	}
 }
+
+func TestVerifyNativeCheckpointSettlesAnUnansweredTailOnlyAfterTheWindow(t *testing.T) {
+	unanswered := &ports.UnansweredNativeTailError{Boundary: ports.NativeCheckpointBoundary{UserMessageID: "unanswered", Interrupted: true}}
+	for name, test := range map[string]struct {
+		window  time.Duration
+		results []error
+		want    string
+	}{
+		"no reply arrives": {window: 20 * time.Millisecond, results: []error{unanswered}, want: "unanswered"},
+		"a reply lands":    {window: time.Second, results: []error{unanswered, nil}, want: "settled"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withSettleWindow(t, test.window)
+			boundary, err := verifyNativeCheckpoint(context.Background(), &slowCheckpointVerifier{results: test.results}, ports.NativeCheckpointRequest{})
+			if err != nil || boundary.UserMessageID != test.want {
+				t.Fatalf("verifyNativeCheckpoint = %+v, %v; want %s", boundary, err, test.want)
+			}
+		})
+	}
+}
