@@ -364,7 +364,10 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 		// Keep the native cache available for Settings browsing, while task
 		// pickers use only the ACP choices recorded above as runnable.
 		reported := localProviderCatalog(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
-		catalog.Models = normalize(append(catalog.Models, reported.Models...))
+		for i := range reported.Models {
+			reported.Models[i].IsDefault = false
+		}
+		catalog.Models = normalizeModels(append(catalog.Models, reported.Models...), false)
 		catalog.Providers = reported.Providers
 		return catalog, nil
 	}
@@ -811,7 +814,10 @@ func discoverACPOptionCatalog(
 			})
 		}
 	}
-	models = normalize(models)
+	// OpenCode reports the selected model explicitly. Choice names are display
+	// labels, even when they say "Default" or end in " (default)".
+	openCode := request.AgentID == "opencode" || request.AgentID == "opencode-v2"
+	models = normalizeModels(models, !openCode)
 	if len(models) == 0 {
 		return base, fmt.Errorf("%s ACP model discovery returned no models", request.AgentID)
 	}
@@ -1698,6 +1704,10 @@ func firstBool(node map[string]any, keys ...string) bool {
 }
 
 func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
+	return normalizeModels(models, true)
+}
+
+func normalizeModels(models []ports.AgentModelInfo, inferDefaults bool) []ports.AgentModelInfo {
 	byID := make(map[string]ports.AgentModelInfo, len(models))
 	for _, item := range models {
 		item.ID = strings.TrimSpace(item.ID)
@@ -1707,10 +1717,10 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		if strings.TrimSpace(item.Label) == "" {
 			item.Label = item.ID
 		}
-		if strings.HasSuffix(strings.ToLower(item.Label), " (default)") {
+		if inferDefaults && strings.HasSuffix(strings.ToLower(item.Label), " (default)") {
 			item.Label = strings.TrimSpace(item.Label[:len(item.Label)-len(" (default)")])
 			item.IsDefault = true
-		} else if strings.EqualFold(item.Label, "default") || strings.EqualFold(item.Label, "default (recommended)") {
+		} else if inferDefaults && (strings.EqualFold(item.Label, "default") || strings.EqualFold(item.Label, "default (recommended)")) {
 			item.Label = item.ID
 			item.IsDefault = true
 		}

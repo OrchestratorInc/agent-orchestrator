@@ -87,3 +87,50 @@ func TestOpenCodeDiscoveryNeverFallsBackToCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenCodeACPDefaultIgnoresChoiceAndCacheLabels(t *testing.T) {
+	for _, agentID := range []string{"opencode", "opencode-v2"} {
+		t.Run(agentID, func(t *testing.T) {
+			env := providerTestEnv(t)
+			env["XDG_CACHE_HOME"] = t.TempDir()
+			if path := providerCachePath(agentID, env); path != "" {
+				writeConfig(t, path, `{"provider":{"models":{"cached":{"name":"Cached (default)","default":true}}}}`)
+			}
+			for _, current := range []string{"provider/b", "provider/a", "", "provider/missing"} {
+				t.Run(current, func(t *testing.T) {
+					d := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+						agentID: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+							return []ports.ChatConfigOption{{
+								ID: "model", Type: ports.ChatConfigOptionSelect,
+								Current: ports.ChatConfigOptionValue{Select: current},
+								Choices: []ports.ChatConfigOptionChoice{
+									{Value: "provider/a", Name: "Default"},
+									{Value: "provider/b", Name: "Selected"},
+									{Value: "provider/c", Name: "Other (default)"},
+									{Value: "provider/d", Name: "Default (recommended)"},
+								},
+							}}, nil
+						},
+					}}
+					got, err := d.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: agentID, Env: env})
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, model := range got.Models {
+						if model.IsDefault != (model.ID == current) {
+							t.Fatalf("current=%q: model=%#v, want only ACP's current model marked default", current, model)
+						}
+						if model.ID == "provider/c" && model.Label != "Other (default)" {
+							t.Fatalf("ACP display label changed: %q", model.Label)
+						}
+					}
+					if current == "provider/b" || current == "provider/a" {
+						if !got.Models[0].IsDefault || got.Models[0].ID != current {
+							t.Fatalf("selected model is not sorted first: %#v", got.Models)
+						}
+					}
+				})
+			}
+		})
+	}
+}
