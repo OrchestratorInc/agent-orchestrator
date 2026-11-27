@@ -142,6 +142,22 @@ describe("approval hosts", () => {
 		}
 	});
 
+	it("offers no Always allow for the catch-all script category on any card", () => {
+		// The daemon refuses a site rule for "script" (eval, wait --fn, unknown
+		// commands, unreadable targets), so no card may offer one.
+		const script = { ...request("a", "ao-2"), category: "script", action: 'Run "wait --fn …"' } as PendingApproval;
+		state.pending = [script];
+		const app = renderWith(<GlobalApprovalCard />);
+		expect(screen.queryByRole("checkbox", { name: /Always allow/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+		app.unmount();
+		state.pending = [{ ...script, sessionId: "ao-1" }];
+		renderWith(<SessionChatApprovalCard sessionId="ao-1" />);
+		expect(screen.queryByRole("button", { name: "More approval options" })).not.toBeInTheDocument();
+		expect(screen.queryByText(/Always allow/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+	});
+
 	it("allows a site for good only when its box is ticked", async () => {
 		state.pending = [request("a", "ao-2")];
 		renderWith(<GlobalApprovalCard />);
