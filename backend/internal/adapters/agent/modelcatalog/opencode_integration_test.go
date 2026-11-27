@@ -29,15 +29,11 @@ func resolveRealOpenCode(t *testing.T) string {
 	return ""
 }
 
-// TestOpenCodeDiscoveryRunsAgainstRealBinary is the regression guard for the
-// "Unrecognized flag: --pure" failure: it runs the exact command the daemon
-// builds against the installed opencode and asserts a non-empty catalog.
-func TestOpenCodeDiscoveryRunsAgainstRealBinary(t *testing.T) {
+// TestOpenCodeCommandCatalogRunsAgainstRealBinary guards the CLI contract
+// still used by credential-scoped cloud discovery (including no --pure flag).
+func TestOpenCodeCommandCatalogRunsAgainstRealBinary(t *testing.T) {
 	binary := resolveRealOpenCode(t)
-	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
-		AgentID: "opencode",
-		Binary:  binary,
-	})
+	catalog, err := discoverCommandCatalog(context.Background(), "opencode", binary, "", nil, false)
 	if err != nil {
 		t.Fatalf("live opencode discovery failed: %v", err)
 	}
