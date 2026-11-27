@@ -48,3 +48,31 @@ func TestRemovePreservesEntryReplacedAfterScan(t *testing.T) {
 		}
 	}
 }
+
+// A directory AO lists is emptied file by file, never removed whole, so a file
+// written into it after the scan is kept and reported dirty.
+func TestRemovePreservesFileWrittenIntoListedDirectoryAfterScan(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".gitignore"), hookutil.GitignoreSentinel+"\n/.gitignore\n/__pycache__/\n")
+	writeFile(t, filepath.Join(root, "__pycache__", "ao_activity.pyc"), "bytecode\n")
+
+	contents, err := scanScratchContents(root)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if contents.userWork {
+		t.Fatal("scan saw user work in an AO-only folder")
+	}
+	late := filepath.Join(root, "__pycache__", "late.txt")
+	writeFile(t, late, "mine\n")
+
+	if err := contents.remove(root); !errors.Is(err, ports.ErrWorkspaceDirty) {
+		t.Fatalf("remove err = %v, want ErrWorkspaceDirty", err)
+	}
+	if _, err := os.Stat(late); err != nil {
+		t.Fatalf("file written after the scan was not preserved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "__pycache__", "ao_activity.pyc")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("AO file seen by the scan was not removed: %v", err)
+	}
+}

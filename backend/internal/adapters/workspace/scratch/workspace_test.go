@@ -311,3 +311,42 @@ func TestWorkspaceDestroyIgnoresOversizedAOGitignore(t *testing.T) {
 		t.Fatalf("file named only by an oversized marker was not preserved: %v", err)
 	}
 }
+
+// memcode keeps its native transcript under a directory its AO .gitignore
+// lists. Restore reads it back, so archiving keeps the folder once it holds
+// one, and still removes an empty transcript directory.
+func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
+	setup := func(t *testing.T) (*scratch.Workspace, ports.WorkspaceInfo, string) {
+		ws, info := createStandaloneScratch(t)
+		dir := filepath.Join(info.Path, ".memcode")
+		if err := hookutil.EnsureWorkspaceGitignore(dir, "hooks.json", "sessions/"); err != nil {
+			t.Fatalf("EnsureWorkspaceGitignore: %v", err)
+		}
+		writeScratchFile(t, filepath.Join(dir, "hooks.json"), "{}\n")
+		if err := os.MkdirAll(filepath.Join(dir, "sessions", "native-1"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		return ws, info, filepath.Join(dir, "sessions", "native-1", "messages.json")
+	}
+
+	t.Run("with a transcript", func(t *testing.T) {
+		ws, info, transcript := setup(t)
+		writeScratchFile(t, transcript, "[]\n")
+		if err := ws.Destroy(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
+			t.Fatalf("Destroy err = %v, want ErrWorkspaceDirty", err)
+		}
+		if _, err := os.Stat(transcript); err != nil {
+			t.Fatalf("memcode transcript was not preserved: %v", err)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		ws, info, _ := setup(t)
+		if err := ws.Destroy(context.Background(), info); err != nil {
+			t.Fatalf("Destroy: %v", err)
+		}
+		if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("scratch dir with an empty transcript directory still exists or stat failed differently: %v", err)
+		}
+	})
+}
