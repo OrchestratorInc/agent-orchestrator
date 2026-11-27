@@ -123,7 +123,8 @@ import { accountHandoffNote } from "./usageLimit";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
-import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
+import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates, stripSenderPrefix } from "./automationMessages";
+import { isAutomationSteer, SteerNote } from "./SteerMessage";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { SessionStartupView } from "../session/sessionStartup";
 
@@ -136,7 +137,7 @@ type TimelineRow =
 
 /**
  * The groups, with each one that has not changed since the last render kept as
- * the same object: same key, same turn and plan, and the same item objects
+ * the same object: same key, same turn (and the daemon's turn it presents) and plan, and the same item objects
  * (which the conversation keeps by identity while unchanged; see
  * reuseUnchangedRows). A memoized turn then skips its render.
  */
@@ -145,7 +146,7 @@ function useStableGroups(groups: ConversationGroup[]): ConversationGroup[] {
 	const next = new Map<string, ConversationGroup>();
 	const stable = groups.map((group) => {
 		const old = previous.current.get(group.key);
-		const kept = old && old.turn === group.turn && old.plan === group.plan && old.turnId === group.turnId && old.anchor === group.anchor &&
+		const kept = old && old.turn === group.turn && old.sourceTurn === group.sourceTurn && old.plan === group.plan && old.turnId === group.turnId && old.anchor === group.anchor &&
 			old.items.length === group.items.length && old.items.every((item, index) => item === group.items[index])
 			? old
 			: group;
@@ -634,13 +635,13 @@ function Timeline({
 								group={group}
 								sessionId={snapshot.sessionId}
 								conversationId={snapshot.conversationId}
-								canRollBack={Boolean(group.turn && onRollback && canRollbackTurn(snapshot, group.turn))}
+								canRollBack={Boolean(group.turn && group.endsTurn !== false && onRollback && canRollbackTurn(snapshot, group.turn))}
 								approvalPending={approvalPending}
 								inputPending={inputPending}
 								onDecide={rowHandlers.onDecide}
 								onResolveInput={rowHandlers.onResolveInput}
 								onRollback={onRollback ? rowHandlers.onRollback : undefined}
-								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? rowHandlers.onFork : undefined}
+								onFork={onFork && group.endsTurn !== false && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? rowHandlers.onFork : undefined}
 								editableTurns={edits?.editable}
 								onEditMessage={onEditMessage ? rowHandlers.startEdit : undefined}
 								editDraft={editDraft}
@@ -650,7 +651,7 @@ function Timeline({
 								answeredBelow={answeredBelow}
 								workedOpen={openWorked.has(group.key)}
 								onToggleWorked={rowHandlers.toggleWorked}
-								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
+								startup={placement === "turn" && group.turnId === openingTurnId && !group.continuesTurn ? startup : undefined}
 							/>}
 						/>
 						</RevealFocusedField.Provider>
@@ -700,10 +701,13 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
-	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
+	// Rows follow the daemon's turn: a part a later steer cut off reads as
+	// settled, but a command in it may still run.
+	const lifecycle = group.sourceTurn ?? group.turn;
+	const turnError = lifecycle?.state === "failed" ? lifecycle.errorMessage : undefined;
 	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
-		: group.items, group.turn);
+		: group.items, lifecycle);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
@@ -725,10 +729,13 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
+	// A stretch a later steer cut off is not where the turn ends: its actions,
+	// diff and plan draw once, under the last stretch.
+	const endsTurn = group.endsTurn !== false;
+	const summary = group.turn && endsTurn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
-	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} />;
+	const actions = endsTurn ? <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} /> : null;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
@@ -815,7 +822,7 @@ const TimelineItem = memo(function TimelineItem({
 			);
 		}
 		if (item.role === "user") {
-			return <OriginMessageView message={item} fallback={<OriginMessage message={item} />} />;
+			return <OriginMessageView message={item} fallback={<OriginMessage label={item.senderLabel || (item.origin === "automation" ? "Automation" : "Orchestrator")} text={item.text} />} />;
 		}
 		return (
 			<View style={styles.assistantRow}>
@@ -837,10 +844,20 @@ const TimelineItem = memo(function TimelineItem({
 		return <ProviderSwitchMarker activity={item} />;
 	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
-		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
-		// Another agent's message that arrived mid-turn names its sender, as one between turns does.
-		return item.detail.senderSessionId ? <OriginMessageView message={item} fallback={steered} /> : steered;
+		const detail = item.detail;
+		const text = detail.text || item.summary;
+		// Another agent's message that arrived mid-turn names its sender, as one
+		// between turns does, and is marked steered as the person's own steer is.
+		if (isAutomationSteer(detail)) {
+			const sender = detail.senderSessionId?.trim();
+			const card = <OriginMessage label={detail.senderDisplayName?.trim() || sender || "Automation"} text={sender ? stripSenderPrefix(text, sender).trim() : text} />;
+			return <View style={styles.steerRow}>{sender ? <OriginMessageView message={item} fallback={card} /> : card}<SteerNote detail={detail} /></View>;
+		}
+		const { body, attachments } = stagedAttachmentParts(text);
+		return <View style={styles.userRow}>
+			<View style={[styles.userBubble, { maxWidth: bubbleWidth }]}>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View>
+			<SteerNote detail={detail} />
+		</View>;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
@@ -1030,15 +1047,15 @@ function deliveryCopy(state?: string): string | undefined {
 	}
 }
 
-function OriginMessage({ message }: { message: Extract<ConversationItem, { kind: "message" }> }) {
+function OriginMessage({ label, text }: { label: string; text: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button");
-	const long = message.text.length > 600;
+	const long = text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
-		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
+		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{label}</Text></View>
+		{long && expanded ? <ChatMarkdown text={text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{text}</Text>}
 		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.originMore, pressed && feedback.pressed]}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
 }
@@ -1677,8 +1694,7 @@ const makeStyles = (t: Theme) => {
 		originText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 		originMore: { alignSelf: "flex-start", minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 		originMoreText: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		steerBubble: { backgroundColor: t.bgSubtle },
-		steerLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
+		steerRow: { paddingBottom: space.xs },
 		assistantRow: { paddingTop: space.sm, paddingBottom: space.xs },
 		sender: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
 		// The glyph lines up with the reply's left edge, and the row ends at its

@@ -121,6 +121,58 @@ describe("cloud conversation projection", () => {
 		expect(cloudConversationSnapshot(session(), [...base, event("chat.turn_capabilities", { turnId: "t1", steering: true })]).capabilities).toEqual(["steer"]);
 	});
 
+	it("keeps who sent a steer and whether it was deleted while the agent took it", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use the staging DB", clientMessageId: "c1" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Never mind", deleteRequested: true }),
+			event("chat.turn_steered", { turnId: "t1", text: "CI is red", origin: "automation", senderLabel: "Orchestrator" }),
+		]);
+		const steers = snapshot.items.flatMap((item) => item.kind === "activity" && item.detail?.event === "steer" ? [item.detail] : []);
+		expect(steers).toEqual([
+			{ event: "steer", text: "Use the staging DB", clientMessageId: "c1", origin: "human" },
+			{ event: "steer", text: "Never mind", clientMessageId: undefined, origin: "human", deliveredBeforeDelete: true },
+			{ event: "steer", text: "CI is red", clientMessageId: undefined, origin: "automation", senderDisplayName: "Orchestrator" },
+		]);
+	});
+
+	it("starts a new reply after a steer, so the steer's part of the turn has its own answer", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Looking" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use staging" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Switching" }),
+			event("chat.assistant_delta", { turnId: "t1", text: " to staging." }),
+			event("chat.turn_completed", { turnId: "t1" }),
+		]);
+		const groups = groupConversationByTurn(snapshot);
+		const text = (items: typeof snapshot.items) => items.map((item) => item.kind === "message" ? item.text : item.kind === "activity" ? item.detail?.event : "");
+		expect(groups.map((group) => text(group.items))).toEqual([["Go", "Looking"], ["steer", "Switching to staging."]]);
+	});
+
+	it("splits a turn at the person's steer but keeps an orchestrator's steer in the work", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Looking" }),
+			event("chat.turn_steered", { turnId: "t1", text: "CI is red", origin: "automation", senderLabel: "Orchestrator" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Checking CI" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use staging" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "On staging." }),
+			event("chat.turn_completed", { turnId: "t1" }),
+		]);
+		const text = (items: typeof snapshot.items) => items.map((item) => item.kind === "message" ? item.text : item.kind === "activity" ? item.detail?.text : "");
+		expect(groupConversationByTurn(snapshot).map((group) => text(group.items))).toEqual([
+			["Go", "Looking", "CI is red", "Checking CI"],
+			["Use staging", "On staging."],
+		]);
+	});
+
 	it("shows automation prompts by their display text and drops Codex's stdin notice", () => {
 		sequence = 0;
 		const snapshot = cloudConversationSnapshot(session({ harness: "codex" }), [
