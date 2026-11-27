@@ -746,6 +746,8 @@ const api = {
 			ipcRenderer.invoke("browser:selectTab", input) as Promise<BrowserTabsState>,
 		closeTab: (input: { viewId: string; tabId: string }) =>
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
+		muteTab: (input: { viewId: string; tabId: string; muted: boolean }) =>
+			ipcRenderer.invoke("browser:muteTab", input) as Promise<BrowserTabsState>,
 		openTab: (input: { viewId: string; url?: string }) =>
 			ipcRenderer.invoke("browser:openTab", input) as Promise<BrowserTabsState>,
 		getProfile: (viewId: string) =>

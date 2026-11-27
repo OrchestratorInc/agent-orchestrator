@@ -723,7 +723,7 @@ function MermaidFence({ code }: { code: string }) {
 }
 
 /** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
-function useWorkspaceFile(path: string | undefined) {
+export function useWorkspaceFile(path: string | undefined) {
 	const { openFile, findFile } = useContext(OpenChatLink);
 	const filePath = path && openFile ? findFile(path) : undefined;
 	if (!path || !filePath || !openFile) return undefined;

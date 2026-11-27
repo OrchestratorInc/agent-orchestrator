@@ -4431,6 +4431,37 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 	}
 }
 
+func TestSetTurnSettingsPersistsEffortBeforeRouting(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	var persisted []string
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "persist-effort-id" },
+		OnEffortChanged: func(id domain.SessionID, effort string) {
+			persisted = append(persisted, string(id)+":"+effort)
+		},
+	})
+	t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+		WorkspacePath: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, effort := range []string{"high", "high", ""} {
+		if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{ReasoningEffort: effort}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{string(testSession) + ":high", string(testSession) + ":"}
+	if !reflect.DeepEqual(persisted, want) {
+		t.Fatalf("persisted effort changes = %v, want %v", persisted, want)
+	}
+}
+
 type failConversationReadStore struct {
 	*sqlite.Store
 	reads int

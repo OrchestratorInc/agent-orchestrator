@@ -156,6 +156,11 @@ export type BrowserTabState = {
   title: string;
   active: boolean;
   favicon?: string;
+  // Whether this tab's page is currently muted (person's choice) and whether
+  // it is playing sound right now. The tab strip shows a mute toggle on a tab
+  // that is audible or muted, and neither on a quiet one.
+  muted?: boolean;
+  audible?: boolean;
   // Set when the tab shows the agent's own browser: the agent browser tab it
   // shows ("" until its viewer first reports).
   remote?: { tabId: string };
@@ -257,6 +262,12 @@ type BrowserHistoryFaviconInput = {
 type BrowserTabInput = {
   viewId: string;
   tabId: string;
+};
+
+type BrowserMuteTabInput = {
+  viewId: string;
+  tabId: string;
+  muted: boolean;
 };
 
 type BrowserOpenTabInput = {
@@ -394,6 +405,7 @@ type BrowserWebContents = Pick<
   | "getZoomFactor"
   | "goBack"
   | "goForward"
+  | "isAudioMuted"
   | "isLoading"
   | "insertCSS"
   | "loadURL"
@@ -402,6 +414,7 @@ type BrowserWebContents = Pick<
   | "removeInsertedCSS"
   | "send"
   | "sendInputEvent"
+  | "setAudioMuted"
   | "setWindowOpenHandler"
   | "stop"
   | "stopFindInPage"
@@ -667,6 +680,10 @@ type BrowserEntry = {
   // Its page as the viewers' tab lists show it: what the tab shows until its
   // own viewer reports.
   listed?: { title: string; url: string };
+  // Whether the page is playing sound right now (webContents
+  // "audio-state-changed"). Mute state itself is read live from the
+  // webContents, so there is no second copy to keep in step.
+  audible?: boolean;
   // A person is closing this agent tab (closeAgentTab): their close finishes
   // it, not its page's own report of closing meanwhile.
   closing?: boolean;
@@ -4075,6 +4092,19 @@ export function createBrowserViewHost(
     // A renderer can still show a tab removed by another close or by its page.
     return closeUserTab(session, input.tabId);
   });
+  handle("browser:muteTab", (event, input: BrowserMuteTabInput) => {
+    const session = entries.get(input.viewId);
+    if (!session || !isRendererOwned(event, input.viewId))
+      return emptyTabsState(input.viewId);
+    const entry = session.tabs.get(input.tabId);
+    if (!entry) return listTabs(session);
+    // An agent tab's page plays on the remote host; its local viewer carries
+    // no audio of its own, so muting it would not change what the person
+    // hears. The tab strip hides the control there; this guard keeps an
+    // out-of-date renderer from flipping a state that reads as sound.
+    if (entry.agentTab === undefined) entry.view.webContents.setAudioMuted(input.muted);
+    return listTabs(session);
+  });
   on("browser:panelUsed", (event, viewId: string) => {
     if (isRendererOwned(event, viewId) && entries.has(viewId))
       lastUsedViewId = viewId;
@@ -6006,6 +6036,8 @@ function tabResult(
     url,
     title,
     active,
+    muted: entry.view.webContents.isAudioMuted(),
+    ...(entry.audible ? { audible: true } : {}),
     ...(entry.favicon ? { favicon: entry.favicon } : {}),
     ...(entry.agentTab !== undefined ? { remote: { tabId: entry.agentTab } } : {}),
     untrustedExternalContent: true,
@@ -6241,6 +6273,15 @@ function wireNavEvents(
     entry.blockedNavigationGeneration += 1;
   });
   contents.on("page-title-updated", update);
+  // A page starting or stopping sound re-renders the strip: the mute toggle
+  // only shows on a tab that is audible or already muted. Audibility itself
+  // is read from the webContents — the event only says it may have changed.
+  contents.on("audio-state-changed", () => {
+    const audible = contents.isCurrentlyAudible?.() === true;
+    if (entry.audible === audible) return;
+    entry.audible = audible;
+    update();
+  });
   contents.on("did-start-loading", () => {
     update();
   });
