@@ -11,16 +11,17 @@ import (
 
 // The task catalog comes from agy models and also serves terminal sessions.
 // Only the opened ACP session can say which of those models Chat can use.
-// Reconcile before publishing the controller or dispatching its opening prompt.
-func (s *Service) reconcileAgyOpeningModel(ctx context.Context, controller *Controller) error {
+// Stage the choice before publishing the controller; a pending provider boundary
+// persists it and its notice in the activation transaction.
+func (s *Service) prepareAgyOpeningModel(ctx context.Context, controller *Controller, boundary *domain.ConversationBranch) (func(context.Context) error, error) {
 	previous := controller.Settings()
 	configurer, ok := controller.conv.(ports.ChatConfigOptionController)
 	if previous.Model == "" || !ok {
-		return nil
+		return nil, nil
 	}
 	options, err := configurer.ListConfigOptions(ctx)
 	if err != nil {
-		return fmt.Errorf("read Agy opening model: %w", err)
+		return nil, fmt.Errorf("read Agy opening model: %w", err)
 	}
 	for _, option := range options {
 		if option.ID != "model" && option.Category != "model" {
@@ -30,29 +31,35 @@ func (s *Service) reconcileAgyOpeningModel(ctx context.Context, controller *Cont
 		if live == "" || live == previous.Model || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool {
 			return choice.Value == previous.Model
 		}) {
-			return nil
+			return nil, nil
 		}
 		// A supported composite ID still names the selected base and effort.
 		// Keeping it ensures that a restart reapplies the chosen effort.
 		if resolver, ok := controller.conv.(ports.ChatModelVariantResolver); ok {
 			if base, split := resolver.ModelVariantBase(previous.Model); split && base == live {
-				return nil
+				return nil, nil
 			}
 		}
 		next, _ := settingsFromConfigOptions(previous, options)
 		next.Model = live
-		if err := s.store.UpsertActivity(ctx, controller.conversation.ID, "", domain.ConversationActivity{
+		branchID := controller.conversation.ActiveBranchID
+		if boundary != nil {
+			branchID = boundary.ID
+		}
+		notice := domain.ConversationActivity{
 			ID: s.newID(), Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusCompleted,
 			Summary:        fmt.Sprintf("%s isn't available in Agy Chat. Using %s instead.", previous.Model, live),
-			ProviderItemID: "agy-model-fallback:" + previous.Model + ":" + live,
-		}, s.now()); err != nil {
-			return fmt.Errorf("record Agy model fallback notice: %w", err)
+			ProviderItemID: branchID + ":agy-model-fallback:" + previous.Model + ":" + live,
 		}
-		if err := controller.SetSettings(ctx, next); err != nil {
-			return err
-		}
+		// This controller is unpublished and has no projection goroutine yet.
+		controller.settings = next
 		controller.conversation.Settings = next
-		return nil
+		return func(commitCtx context.Context) error {
+			if err := s.store.UpsertActivity(commitCtx, controller.conversation.ID, "", notice, s.now()); err != nil {
+				return fmt.Errorf("record Agy model fallback notice: %w", err)
+			}
+			return controller.SetSettings(commitCtx, next)
+		}, nil
 	}
-	return nil
+	return nil, nil
 }

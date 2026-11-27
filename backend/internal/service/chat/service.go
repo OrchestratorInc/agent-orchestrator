@@ -965,7 +965,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		conversation.Settings.ReasoningEffort = cfg.Effort
 		conversation.Settings.ApprovalMode = cfg.Permissions
 		// A switch target's settings are saved by the switch's commit.
-		if cfg.ProviderSwitch == nil {
+		if cfg.ProviderSwitch == nil && (cfg.Harness != domain.HarnessAgy || providerBoundaryID == "") {
 			if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
 				return nil, fmt.Errorf("record initial conversation settings: %w", err)
 			}
@@ -1352,10 +1352,30 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			return nil, err
 		}
 	}
-	if cfg.Harness == domain.HarnessAgy && providerBoundary == nil && !liveReconnect {
-		if err := s.reconcileAgyOpeningModel(ctx, controller); err != nil {
+	if cfg.Harness == domain.HarnessAgy && cfg.ProviderSwitch == nil && !liveReconnect {
+		commitModel, modelErr := s.prepareAgyOpeningModel(ctx, controller, providerBoundary)
+		if modelErr != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
-			return nil, err
+			return nil, modelErr
+		}
+		if providerBoundary != nil {
+			commitHistory := commitProviderHistory
+			commitProviderHistory = func(commitCtx context.Context) error {
+				if commitHistory != nil {
+					if err := commitHistory(commitCtx); err != nil {
+						return err
+					}
+				}
+				if commitModel != nil {
+					return commitModel(commitCtx)
+				}
+				return controller.SetSettings(commitCtx, controller.Settings())
+			}
+		} else if commitModel != nil {
+			if err := commitModel(ctx); err != nil {
+				_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+				return nil, err
+			}
 		}
 	}
 	commit, err := notifyControllerReady(

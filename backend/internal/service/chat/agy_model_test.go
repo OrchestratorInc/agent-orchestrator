@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
@@ -178,5 +179,76 @@ func TestAgyOpeningModelDoesNotAdoptALiveHostsStaleStartupSnapshot(t *testing.T)
 	snapshot, err := st.LoadConversationSnapshot(ctx, controller.ConversationID())
 	if err != nil || snapshot.Conversation.Settings.Model != "chosen-model" || len(snapshot.Activities) != 0 {
 		t.Fatalf("settings = %+v, activities = %+v, err = %v", snapshot.Conversation.Settings, snapshot.Activities, err)
+	}
+}
+
+func TestAgyOpeningModelReplacementCommitsSettingsAndNoticeAtomically(t *testing.T) {
+	fallbacks := func(activities []domain.ConversationActivity) []domain.ConversationActivity {
+		var notices []domain.ConversationActivity
+		for _, activity := range activities {
+			if strings.Contains(activity.ProviderItemID, ":agy-model-fallback:") {
+				notices = append(notices, activity)
+			}
+		}
+		return notices
+	}
+	for _, failCommit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rollback=%v", failCommit), func(t *testing.T) {
+			ctx := context.Background()
+			fixture := seedHistoricalProviderFixture(t)
+			previous := domain.ConversationSettings{Model: "old-model"}
+			if err := fixture.store.SetConversationSettings(ctx, fixture.conversation.ID, previous, fixture.now); err != nil {
+				t.Fatal(err)
+			}
+			target := fixture.target
+			target.Harness = domain.HarnessAgy
+			if err := fixture.store.UpdateSession(ctx, target); err != nil {
+				t.Fatal(err)
+			}
+			var chatStore chatsvc.Store = fixture.store
+			lcm := lifecycle.New(fixture.store, nil)
+			if failCommit {
+				wrapped := &rollbackChatSpawnStore{Store: fixture.store}
+				chatStore, lcm = wrapped, lifecycle.New(wrapped, nil)
+			}
+			provider := variantModelConversation{newFakeConversation()}
+			svc := chatsvc.New(chatsvc.Options{Store: chatStore, Sessions: fixture.store, Reader: fullSnapshotReader(fixture.store),
+				Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, Log: slog.New(slog.DiscardHandler), NewID: uuid.NewString})
+			t.Cleanup(func() { _ = svc.Stop(ctx, target.ID) })
+			_, err := svc.Start(ctx, chatsvc.StartConfig{
+				SessionID: target.ID, ProjectID: testProject, Kind: domain.KindOrchestrator,
+				Harness: domain.HarnessAgy, WorkspacePath: t.TempDir(), Model: "claude-opus-4-6-thinking",
+				ControllerReady: func(started chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+					before, err := fixture.store.LoadConversationSnapshot(ctx, fixture.conversation.ID)
+					if err != nil || before.Conversation.Settings != previous || len(fallbacks(before.Activities)) != 0 {
+						t.Fatalf("pending replacement changed old branch: %+v, err=%v", before, err)
+					}
+					if started.ProviderBoundary == nil || started.CommitProviderHistory == nil || started.Conversation.Settings.Model != "gemini-3.8-flash" {
+						t.Fatalf("replacement was not staged: %+v", started)
+					}
+					target.Metadata.Model = started.Conversation.Settings.Model
+					target.Metadata.Effort = started.Conversation.Settings.ReasoningEffort
+					return historicalControllerReady(lcm, target)(started)
+				},
+			})
+			if (err != nil) != failCommit {
+				t.Fatalf("Start error = %v, want failure=%v", err, failCommit)
+			}
+			after, err := fixture.store.LoadConversationSnapshot(ctx, fixture.conversation.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			notices := fallbacks(after.Activities)
+			if failCommit {
+				if after.Conversation.Settings != previous || after.Conversation.ActiveBranchID != fixture.root.ID || len(notices) != 0 {
+					t.Fatalf("failed replacement leaked settings or notice: %+v", after)
+				}
+			} else if after.Conversation.Settings.Model != "gemini-3.8-flash" || after.Conversation.Settings.ReasoningEffort != "low" ||
+				after.Conversation.ActiveBranchID == fixture.root.ID || len(notices) != 1 ||
+				!strings.HasPrefix(notices[0].ProviderItemID, after.Conversation.ActiveBranchID+":") ||
+				!strings.Contains(notices[0].Summary, "Using gemini-3.8-flash instead") {
+				t.Fatalf("replacement did not publish actual settings and notice: %+v", after)
+			}
+		})
 	}
 }
