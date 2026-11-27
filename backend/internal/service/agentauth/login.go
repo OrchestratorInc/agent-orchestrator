@@ -927,7 +927,8 @@ var urlTextLine = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$`)
 // terminal width is not observable here, so wrapping is proven only by a
 // following URL-only line exactly as wide as the line the link started on;
 // once proven, further full-width lines and one shorter tail line continue
-// it. A complete link followed by a short URL-like word stays unchanged.
+// it, and a tail line with trailing text contributes its leading URL run. A
+// complete link followed by a short URL-like word stays unchanged.
 func printedLoginURL(agentID, output string) string {
 	lines := strings.Split(terminalui.PlainTerminalText(output), "\n")
 	found := ""
@@ -943,7 +944,17 @@ func printedLoginURL(agentID, output string) string {
 		} else {
 			for i+1 < len(lines) {
 				next := strings.TrimSpace(lines[i+1])
-				if next == "" || !urlTextLine.MatchString(next) {
+				if next == "" {
+					break
+				}
+				if !urlTextLine.MatchString(next) {
+					// A wrapped link's tail line may hold its end plus
+					// trailing text ("...&state=AbC  Copy"): keep the
+					// leading URL run so the link is not cut short.
+					if lead := strings.Fields(next)[0]; wrapped && urlTextLine.MatchString(lead) {
+						link += lead
+						i++
+					}
 					break
 				}
 				fullWidth := len(next) == width

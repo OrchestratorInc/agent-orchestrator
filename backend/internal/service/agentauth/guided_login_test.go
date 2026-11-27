@@ -717,13 +717,22 @@ func TestPrintedLoginURL(t *testing.T) {
 	t.Parallel()
 
 	wrapped := strings.Join(agyWrappedLink, "\n")
+	// A longer state wrapped mid-value: its last full-width line ends inside
+	// state, and the tail holds the rest of it before trailing text.
+	width := len(agyWrappedLink[0])
+	stateFill := strings.Repeat("A", width-len(agyWrappedLink[3]))
+	splitState := strings.Join(agyWrappedLink[:3], "\n") + "\n" + agyWrappedLink[3] + stateFill + "\nB9z  Copy\n"
 	tests := []struct {
 		name, output, want string
 	}{
+		{"keeps the rest of a state wrapped onto a tail line with trailing text", splitState, agyLink + stateFill + "B9z"},
 		{"stitches a wrapped link", "If not:\n" + wrapped + "\n(1–20 of 29 lines)\n", agyLink},
 		{"stops at a short last line", wrapped + "\nCopy\n", agyLink},
 		{"keeps a complete link", agyShortLink + "\nCopy\n", agyShortLink},
 		{"hides a link cut short after two full lines", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n(1–20 of 29 lines)\n", ""},
+		{"keeps a tail line's link end before trailing text", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n" + agyWrappedLink[2] + "\n" + agyWrappedLink[3] + "  Copy\n", agyLink},
+		{"keeps a tail line's link end before a box border", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n" + agyWrappedLink[2] + "\n" + agyWrappedLink[3] + " │\n", agyLink},
+		{"leaves an unwrapped link's next line alone", agyShortLink + "\nCopy this link\n", agyShortLink},
 		{"hides a link whose last line was missed", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n" + agyWrappedLink[2] + "\nCopy\n", ""},
 		{"hides a link without its state", "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=y&response_type=code\n", ""},
 		{"single line", "Open " + agyShortLink + " in your browser\n", agyShortLink},
