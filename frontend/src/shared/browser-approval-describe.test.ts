@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
-import { APPROVAL_FOCUS_SCRIPT, approvalCropRect, approvalDescribeScript, describeApprovalTarget } from "./browser-approval-describe";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	APPROVAL_DISARM_PRESS_SCRIPT,
+	APPROVAL_FOCUS_SCRIPT,
+	approvalArmPressScript,
+	approvalCropRect,
+	approvalDescribeScript,
+	describeApprovalTarget,
+} from "./browser-approval-describe";
 
 // jsdom has no layout: give every element a visible box.
 beforeEach(() => {
@@ -162,5 +169,51 @@ describe("approvalCropRect", () => {
 			x: 0, y: 110, width: 380, height: 212,
 		});
 		expect(approvalCropRect(undefined, { width: 1280, height: 800 })).toBeUndefined();
+	});
+});
+
+describe("approval press guard", () => {
+	// The panel arms this before agent-browser delivers an approved Enter over
+	// CDP: page script can move focus between any check and the key.
+	const setupFocus = () => {
+		document.body.innerHTML = `<input id="q"><button id="buy">Buy now</button>`;
+		(document.getElementById("q") as HTMLInputElement).focus();
+		const { focus } = (0, eval)(approvalDescribeScript({ mode: "focused" })) as { focus: string };
+		return focus;
+	};
+	const key = (el: Element, type = "keydown") => {
+		const event = new KeyboardEvent(type, { key: "Enter", bubbles: true, cancelable: true });
+		el.dispatchEvent(event);
+		return event;
+	};
+
+	it("lets the key through on the approved element", () => {
+		const focus = setupFocus();
+		(0, eval)(approvalArmPressScript(focus));
+		expect(key(document.getElementById("q")!).defaultPrevented).toBe(false);
+		expect((0, eval)(APPROVAL_DISARM_PRESS_SCRIPT)).toEqual({ mismatch: false });
+	});
+
+	it("cancels a key that lands elsewhere and reports it", () => {
+		const focus = setupFocus();
+		(0, eval)(approvalArmPressScript(focus));
+		const buy = document.getElementById("buy")!;
+		expect(key(buy).defaultPrevented).toBe(true);
+		expect(key(buy, "keyup").defaultPrevented).toBe(true);
+		expect((0, eval)(APPROVAL_DISARM_PRESS_SCRIPT)).toEqual({ mismatch: true });
+		// Disarmed: the page's later keys are its own.
+		expect(key(buy).defaultPrevented).toBe(false);
+	});
+
+	it("ends on its own if never disarmed", () => {
+		vi.useFakeTimers();
+		try {
+			const focus = setupFocus();
+			(0, eval)(approvalArmPressScript(focus));
+			vi.advanceTimersByTime(2000);
+			expect(key(document.getElementById("buy")!).defaultPrevented).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

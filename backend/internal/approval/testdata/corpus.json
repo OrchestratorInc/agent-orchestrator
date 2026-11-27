@@ -37,7 +37,16 @@
     {"category": "security", "target": {"action": "click", "role": "button", "name": "Revoke", "pageUrl": "https://code.example/settings/apps"}},
     {"category": "account", "target": {"action": "click", "role": "button", "name": "Save changes", "isSubmit": true, "formMethod": "post", "formHasPassword": true, "pageUrl": "https://app.example/profile"}},
     {"category": "account", "target": {"action": "click", "role": "button", "name": "Continue", "isSubmit": true, "formMethod": "post", "formHasPassword": true, "formHasNewPassword": true, "pageUrl": "https://app.example/security/password"}},
-    {"category": "account", "target": {"action": "click", "role": "button", "name": "Update email", "isSubmit": true, "formMethod": "post", "pageUrl": "https://app.example/profile"}}
+    {"category": "account", "target": {"action": "click", "role": "button", "name": "Update email", "isSubmit": true, "formMethod": "post", "pageUrl": "https://app.example/profile"}},
+    {"category": "payment", "target": {"action": "click", "role": "button", "name": "Submit payment", "isSubmit": true, "formMethod": "post", "formHasPayment": false, "submitName": "Submit payment", "pageUrl": "https://shop.example/checkout"}},
+    {"category": "payment", "target": {"action": "click", "role": "button", "name": "Complete payment", "isSubmit": true, "formMethod": "post", "formHasPayment": false, "submitName": "Complete payment", "pageUrl": "https://shop.example/checkout"}},
+    {"category": "payment", "target": {"action": "click", "role": "button", "name": "Complete order", "isSubmit": true, "formMethod": "post", "formHasPayment": false, "submitName": "Complete order", "pageUrl": "https://shop.example/checkout"}},
+    {"category": "payment", "target": {"action": "click", "role": "button", "name": "Order now", "isSubmit": true, "formMethod": "post", "formHasPayment": false, "submitName": "Order now", "pageUrl": "https://shop.example/checkout"}},
+    {"category": "payment", "target": {"action": "click", "role": "button", "name": "Submit payment", "pageUrl": "https://shop.example/checkout"}},
+    {"category": "payment", "target": {"action": "click", "role": "button", "name": "Complete order", "pageUrl": "https://shop.example/checkout"}},
+    {"category": "security", "target": {"action": "click", "role": "button", "name": "Create API key", "pageUrl": "https://dev.example/settings"}},
+    {"category": "security", "target": {"action": "click", "role": "button", "name": "New token", "pageUrl": "https://dev.example/settings"}},
+    {"category": "payment", "target": {"action": "click", "role": "button", "name": "Start transfer", "pageUrl": "https://bank.example/"}}
   ],
   "benign": [
     {"target": {"action": "click", "role": "link", "name": "Home", "href": "https://shop.example/"}},
@@ -78,6 +87,11 @@
     {"target": {"action": "click", "role": "link", "name": "POST", "href": "https://docs.example/http/post"}},
     {"target": {"action": "click", "role": "button", "name": "Create Post", "pageUrl": "https://social.example/r/programming"}},
     {"target": {"action": "click", "role": "button", "name": "New message", "pageUrl": "https://mail.example/"}},
-    {"target": {"action": "click", "role": "button", "name": "Compose", "pageUrl": "https://mail.example/"}}
+    {"target": {"action": "click", "role": "button", "name": "Compose", "pageUrl": "https://mail.example/"}},
+    {"target": {"action": "click", "role": "button", "name": "Payment details", "pageUrl": "https://app.example/"}},
+    {"target": {"action": "click", "role": "button", "name": "Payment methods", "pageUrl": "https://app.example/"}},
+    {"target": {"action": "click", "role": "button", "name": "Create post", "pageUrl": "https://app.example/"}},
+    {"target": {"action": "click", "role": "button", "name": "Start a conversation", "pageUrl": "https://app.example/"}},
+    {"target": {"action": "click", "role": "button", "name": "Draft reply", "pageUrl": "https://app.example/"}}
   ]
 }

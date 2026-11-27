@@ -1,5 +1,9 @@
 import { describePanelApprovalTarget } from "./browser-approval-panel";
-import { APPROVAL_FOCUS_SCRIPT } from "../shared/browser-approval-describe";
+import {
+  APPROVAL_DISARM_PRESS_SCRIPT,
+  APPROVAL_FOCUS_SCRIPT,
+  approvalArmPressScript,
+} from "../shared/browser-approval-describe";
 import {
   sanitizeBrowserTitle,
   sanitizeBrowserURL,
@@ -4563,6 +4567,7 @@ export function createBrowserViewHost(
                   "The active tab changed while the action waited for approval, so this dialog is not the one the user approved. Check the dialog and try again.",
                 );
               }
+              let pressGuarded = false;
               if (approvalBinding && APPROVAL_BOUND_ACTIONS.has(nativeAction)) {
                 const ref = typeof nativeArgs.ref === "string" ? nativeArgs.ref.replace(/^@/, "") : undefined;
                 if (
@@ -4587,6 +4592,14 @@ export function createBrowserViewHost(
                       "Focus moved while the action waited for approval, so Enter would not reach what the user approved. Focus the field again and retry.",
                     );
                   }
+                  // Page script can still move focus before agent-browser
+                  // delivers the key: a page-side guard cancels a key that
+                  // lands anywhere but the approved element.
+                  pressGuarded = await targetEntry.view.webContents
+                    .executeJavaScriptInIsolatedWorld(APPROVAL_DESCRIBE_WORLD_ID, [
+                      { code: approvalArmPressScript(approvalBinding.focus) },
+                    ])
+                    .then(() => true, () => false);
                 }
               }
               const targetBeforeAction = agentActionTarget(targetEntry);
@@ -4620,6 +4633,22 @@ export function createBrowserViewHost(
                   );
                 }
                 throw error;
+              }
+              if (pressGuarded) {
+                // An Enter that opened a dialog leaves the page unable to
+                // answer: wait briefly, and rely on the guard ending itself.
+                const guard = (await Promise.race([
+                  targetEntry.view.webContents
+                    .executeJavaScriptInIsolatedWorld(APPROVAL_DESCRIBE_WORLD_ID, [{ code: APPROVAL_DISARM_PRESS_SCRIPT }])
+                    .catch(() => undefined),
+                  new Promise((resolve) => setTimeout(resolve, 500)),
+                ])) as { mismatch?: boolean } | undefined;
+                if (guard?.mismatch === true) {
+                  throw browserError(
+                    "BROWSER_TARGET_CHANGED",
+                    "Focus moved before the approved Enter landed, so it was held back and nothing was pressed. Focus the field again and retry.",
+                  );
+                }
               }
               if (
                 nativeAction === "tab-select" &&

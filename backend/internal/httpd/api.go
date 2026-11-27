@@ -37,6 +37,7 @@ type APIDeps struct {
 	AgentAccounts      controllers.AgentAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
+	SessionMoves       controllers.SessionMover
 	ArtifactVersions   controllers.ArtifactVersionService
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
@@ -78,10 +79,12 @@ type APIDeps struct {
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
 	TelemetryIdentity ports.TelemetryIdentityStore
 	LifetimeSessions  func(context.Context) (int64, error)
-	Mobile            *controllers.MobileController
-	BrowserLive       *BrowserLiveHub
-	Browser           controllers.BrowserService
-	BrowserChrome     controllers.BrowserChromeService
+	// DaemonVersion is this daemon's release, reported to a paired phone.
+	DaemonVersion string
+	Mobile        *controllers.MobileController
+	BrowserLive   *BrowserLiveHub
+	Browser       controllers.BrowserService
+	BrowserChrome controllers.BrowserChromeService
 	// Approvals is the gate that holds consequential agent actions for the user.
 	Approvals controllers.ApprovalService
 	// Panes relays split-pane requests from agents to the desktop window.
@@ -182,6 +185,7 @@ type API struct {
 	push          *controllers.PushController
 	imports       *controllers.ImportController
 	sessionImport *controllers.SessionImportController
+	sessionMoves  *controllers.SessionMovesController
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
@@ -257,6 +261,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		push:          &controllers.PushController{Registry: deps.Push, Devices: deps.AccessDevices},
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
+		sessionMoves:  &controllers.SessionMovesController{Svc: deps.SessionMoves},
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
@@ -270,7 +275,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
-		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
+		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions, DaemonVersion: deps.DaemonVersion},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		approvals:     &controllers.ApprovalsController{Svc: deps.Approvals},
@@ -289,6 +294,18 @@ const attachmentUploadHeader = "X-AO-Attachment-Upload"
 // for the user to approve it.
 const browserCommandBudget = approval.BrowserCommandBudget
 
+// moveCaptureRoute reports a move route that reads a session's whole worktree
+// or fetches origin, either of which can outlast the default request budget.
+// move/targets fetches origin once for each project with the repository.
+func moveCaptureRoute(req *http.Request) bool {
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions/{sessionId}/move/export", "/api/v1/sessions/{sessionId}/move/preview", "/api/v1/sessions/{sessionId}/move/transcript",
+		"/api/v1/sessions/move/targets":
+		return true
+	}
+	return false
+}
+
 // setupRoute reports a request that may run the project's Setup steps.
 func setupRoute(req *http.Request) bool {
 	if req.Method != http.MethodPost {
@@ -299,7 +316,9 @@ func setupRoute(req *http.Request) bool {
 		// The first open of an imported chat runs Setup in its new workspace.
 		"/api/v1/sessions/{sessionId}/resume-agent",
 		// A fork spawns a session, whose Setup runs in its new worktree.
-		"/api/v1/sessions/{sessionId}/fork":
+		"/api/v1/sessions/{sessionId}/fork",
+		// A session moved from AO Cloud is spawned, which runs Setup.
+		"/api/v1/sessions/move/import":
 		return true
 	}
 	return false
@@ -382,16 +401,18 @@ func (a *API) Register(root chi.Router) {
 					if setupRoute(req) {
 						budget := max(timeout, setupRequestBudget)
 						// Resuming an agent reads its whole native history, which takes
-						// over a minute for a large imported Codex thread.
+						// over a minute for a large imported Codex thread. A move from
+						// AO Cloud fetches its branch from origin before the spawn.
 						if attachmentUploadRoute(req) ||
-							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent" {
+							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent" ||
+							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/move/import" {
 							budget = max(timeout, 10*time.Minute)
 						}
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
 					// An import scan reads every local history.
-					if attachmentUploadRoute(req) || sessionImportRoute(req) {
+					if attachmentUploadRoute(req) || sessionImportRoute(req) || moveCaptureRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}
@@ -435,6 +456,7 @@ func (a *API) Register(root chi.Router) {
 			a.push.Register(r)
 			a.imports.Register(r)
 			a.sessionImport.Register(r)
+			a.sessionMoves.Register(r)
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
 			a.cues.Register(r)
