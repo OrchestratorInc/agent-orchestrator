@@ -473,6 +473,26 @@ func TestAutomationClaimHoldsLaneUntilRunningOnlyForCalls(t *testing.T) {
 	}
 }
 
+func TestInsertCalledAutomationRunRefusesAPausedAutomation(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.CreateAutomation(ctx, domain.Automation{
+		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review", Kind: domain.KindWorker,
+		Trigger: domain.AutomationTriggerCall, HookKey: "key-1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run := domain.AutomationRun{ID: "run-1", AutomationID: "automation-1", ScheduledFor: now, Status: domain.AutomationRunPending, CreatedAt: now, UpdatedAt: now}
+	if status, err := store.InsertCalledAutomationRun(ctx, run, now.Add(-time.Hour), 20); err != nil || status != domain.AutomationCallDisabled {
+		t.Fatalf("insert into a paused automation = %q %v, want disabled", status, err)
+	}
+	if _, ok, err := store.GetAutomationRun(ctx, "run-1"); err != nil || ok {
+		t.Fatalf("paused automation got run ok=%v err=%v", ok, err)
+	}
+}
+
 // Deleting a definition removes history while preserving linked sessions and
 // clearing their origin link through ON DELETE SET NULL.
 func TestAutomationDeleteCascadesRunsButPreservesSession(t *testing.T) {

@@ -72,6 +72,7 @@ const (
 	AutomationCallIgnored   AutomationCallStatus = "ignored"
 	AutomationCallDuplicate AutomationCallStatus = "duplicate"
 	AutomationCallQueueFull AutomationCallStatus = "queue_full"
+	AutomationCallDisabled  AutomationCallStatus = "disabled"
 )
 
 // AutomationTemplateCustom and AutomationUseCaseUnknown preserve compatibility

@@ -310,13 +310,21 @@ func splitLines(s string) []string {
 }
 
 // InsertCalledAutomationRun queues one hook-called run unless a run with the
-// same dedupe key was created since dedupeSince or maxPending runs already
-// wait.
+// same dedupe key was created since dedupeSince, maxPending runs already
+// wait, or the automation is off.
 func (s *Store) InsertCalledAutomationRun(ctx context.Context, run domain.AutomationRun, dedupeSince time.Time, maxPending int64) (domain.AutomationCallStatus, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	status := domain.AutomationCallAccepted
 	err := s.inTx(ctx, "insert called automation run", func(q *gen.Queries) error {
+		a, err := q.GetAutomation(ctx, run.AutomationID)
+		if err != nil {
+			return err
+		}
+		if !a.Enabled {
+			status = domain.AutomationCallDisabled
+			return nil
+		}
 		if run.DedupeKey != "" {
 			dup, err := q.AutomationRunDedupeExists(ctx, gen.AutomationRunDedupeExistsParams{
 				AutomationID: run.AutomationID, DedupeKey: nullableString(run.DedupeKey), CreatedAt: dedupeSince,

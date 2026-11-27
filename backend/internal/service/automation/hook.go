@@ -123,6 +123,8 @@ func (s *Service) Call(ctx context.Context, key string, in CallInput) (CallResul
 		return CallResult{}, apierr.Internal("HOOK_CALL_FAILED", "Failed to handle hook call")
 	}
 	switch status {
+	case domain.AutomationCallDisabled:
+		return CallResult{}, apierr.Conflict("HOOK_DISABLED", "This automation is turned off", nil)
 	case domain.AutomationCallQueueFull:
 		return CallResult{}, apierr.TooManyRequests("QUEUE_FULL", "Too many runs are already waiting for this automation")
 	case domain.AutomationCallAccepted:
