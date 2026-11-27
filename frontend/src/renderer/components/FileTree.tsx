@@ -12,7 +12,10 @@ import {
 import { sessionUiKey } from "../lib/hosts";
 import { type FilesSource, sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+import { useWorkspaceFileDownload } from "../hooks/useWorkspaceFileDownload";
+import { Download } from "@/components/app-icons";
 import { Skeleton } from "./ui/skeleton";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 type DirectoryState = { key:string; requested:string[]; open:Set<string> };
 
@@ -339,6 +342,7 @@ function WorkspaceFileTree({
 	const { t } = useTranslation();
 	const uiKey = `${sessionUiKey(sessionId, hostId)}:${JSON.stringify(source ?? {kind:"workspace"})}`;
  const snapshot = source?.kind === "snapshot";
+	const download = useWorkspaceFileDownload(sessionId, hostId);
 	const savedDirectories=useRef(new Map<string,DirectoryState>());
  const [directories, setDirectories] = useState<DirectoryState>(()=>savedDirectories.current.get(uiKey) ?? {key:uiKey,requested:[],open:new Set()});
  useEffect(()=>setDirectories(savedDirectories.current.get(uiKey) ?? {key:uiKey,requested:[],open:new Set()}),[uiKey]);
@@ -405,6 +409,7 @@ function WorkspaceFileTree({
 					flushTop={flushTop}
 					id={`workspace-files-${sessionId}`}
 					onDirectoryExpanded={normalizedFilter ? undefined : loadChildren}
+					onDownloadFile={snapshot ? undefined : download}
 					onPrefetchPath={onPrefetchPath}
 					onSelectPath={onSelectPath}
 					selectedPath={selectedPath}
@@ -473,6 +478,7 @@ function PierreTreeSurface({
 	flushTop,
 	id,
 	onDirectoryExpanded,
+	onDownloadFile,
 	onPrefetchPath,
 	onSelectPath,
 	selectedPath,
@@ -482,6 +488,7 @@ function PierreTreeSurface({
 	flushTop: boolean;
 	id: string;
 	onDirectoryExpanded?: (path: string, open: boolean) => void;
+	onDownloadFile?: (path: string) => void;
 	onPrefetchPath?: (node: TreeNode) => void;
 	onSelectPath: (node: TreeNode) => void;
 	selectedPath: string | null;
@@ -578,6 +585,17 @@ function PierreTreeSurface({
 				data-testid="workspace-file-tree"
 				id={id}
 				model={model}
+				renderContextMenu={onDownloadFile ? (item, context) => item.kind === "file" ? (
+					<DropdownMenu open onOpenChange={(open) => { if (!open) context.close(); }}>
+						<DropdownMenuTrigger asChild><span aria-hidden="true" className="block size-0" /></DropdownMenuTrigger>
+						<DropdownMenuContent align="start" data-file-tree-context-menu-root="true">
+							<DropdownMenuItem onSelect={() => { context.close(); onDownloadFile(item.path); }}>
+								<Download aria-hidden="true" />
+								{t("files.download")}
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				) : null : undefined}
 				style={treeStyle(flushTop)}
 			/>
 		</div>
