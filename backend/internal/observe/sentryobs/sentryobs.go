@@ -155,6 +155,8 @@ var safeErrorCodes = map[string]struct{}{
 	"CODEX_GLOBAL_CREDENTIAL_STORE_UNSUPPORTED": {},
 	"CODEX_RESET_CREDIT_UNSUPPORTED":            {},
 	"GITHUB_AUTH_TERMINAL_UNAVAILABLE":          {},
+	"HOOKS_UNAVAILABLE":                         {},
+	"HOOK_CALL_FAILED":                          {},
 	"INTERNAL":                                  {},
 	"INTERNAL_ERROR":                            {},
 	"MEMORY_UNSUPPORTED":                        {},

@@ -25,7 +25,6 @@ import (
 
 const (
 	maxHookPromptBytes  = 64 << 10
-	maxHookDedupeBytes  = 4 << 20
 	maxPendingCalledRun = 20
 	hookDedupeWindow    = 7 * 24 * time.Hour
 )
@@ -104,7 +103,7 @@ func (s *Service) Call(ctx context.Context, key string, in CallInput) (CallResul
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
 	tag := "hook-data-" + hex.EncodeToString(nonce)
-	prompt, _ := fillHookTemplate(rec.Prompt, data, maxHookPromptBytes, func(v string) string { return "<" + tag + ">" + v + "</" + tag + ">" })
+	prompt := fillHookTemplate(rec.Prompt, data, func(v string) string { return "<" + tag + ">" + v + "</" + tag + ">" })
 	if strings.TrimSpace(prompt) == "" {
 		return CallResult{Status: domain.AutomationCallIgnored}, nil
 	}
@@ -114,11 +113,7 @@ func (s *Service) Call(ctx context.Context, key string, in CallInput) (CallResul
 	if len(prompt) > maxHookPromptBytes {
 		return CallResult{}, apierr.Invalid("HOOK_PROMPT_TOO_LARGE", "The filled prompt is larger than 64 KiB", nil)
 	}
-	dedupe := ""
-	if d, complete := fillHookTemplate(rec.HookDedupeKey, data, maxHookDedupeBytes, nil); complete && strings.TrimSpace(d) != "" {
-		sum := sha256.Sum256([]byte(d))
-		dedupe = hex.EncodeToString(sum[:])
-	}
+	dedupe := hookDedupeKey(rec.HookDedupeKey, data)
 	now := s.clock().UTC()
 	run := domain.AutomationRun{
 		ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: rec.ID,
@@ -249,30 +244,51 @@ func hookString(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
-	b, _ := json.Marshal(v)
-	return string(b)
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func fillHookTemplate(tmpl string, data map[string]any, limit int, wrap func(string) string) (string, bool) {
-	complete, size := true, 0
-	out := hookPlaceholder.ReplaceAllStringFunc(tmpl, func(m string) string {
+func fillHookTemplate(tmpl string, data map[string]any, wrap func(string) string) string {
+	size := 0
+	return hookPlaceholder.ReplaceAllStringFunc(tmpl, func(m string) string {
 		path := hookPlaceholder.FindStringSubmatch(m)[1]
 		if !hookPath.MatchString(path) {
 			return m
 		}
 		v, ok := lookupHookPath(data, path)
-		if !ok || size > limit {
-			complete = false
+		if !ok || size > maxHookPromptBytes {
 			return ""
 		}
 		s := hookString(v)
-		if wrap != nil && strings.TrimSpace(s) != "" {
+		if strings.TrimSpace(s) != "" {
 			s = wrap(s)
 		}
 		size += len(s)
 		return s
 	})
-	return out, complete
+}
+
+func hookDedupeKey(tmpl string, data map[string]any) string {
+	matches := hookPlaceholder.FindAllStringSubmatch(tmpl, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	h := sha256.New()
+	for _, m := range matches {
+		v, ok := lookupHookPath(data, m[1])
+		if !ok || v == nil {
+			return ""
+		}
+		s := hookString(v)
+		if strings.TrimSpace(s) == "" {
+			return ""
+		}
+		fmt.Fprintf(h, "%d:%s", len(s), s)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type hookFilter struct {

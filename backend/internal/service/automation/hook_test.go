@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -210,11 +211,32 @@ func TestCallReadsFormBodiesAndSkipsDedupeWithoutItsValue(t *testing.T) {
 
 func TestFillHookTemplateStopsPastThePromptLimit(t *testing.T) {
 	data := map[string]any{"body": strings.Repeat("x", 40<<10)}
-	out, complete := fillHookTemplate(strings.Repeat("{{body}}", 1000), data, maxHookPromptBytes, nil)
-	if complete || len(out) <= maxHookPromptBytes || len(out) > 2*maxHookPromptBytes {
-		t.Fatalf("fill = %d bytes complete=%v, want just past the limit and incomplete", len(out), complete)
+	out := fillHookTemplate(strings.Repeat("{{body}}", 1000), data, func(v string) string { return v })
+	if len(out) <= maxHookPromptBytes || len(out) > 2*maxHookPromptBytes {
+		t.Fatalf("fill = %d bytes, want just past the limit", len(out))
 	}
-	if _, complete := fillHookTemplate("{{body}}{{body}}", data, maxHookDedupeBytes, nil); !complete {
-		t.Fatal("dedupe fill of two large values is incomplete, want complete")
+	if got := hookString(map[string]any{"html": "<b>&"}); got != `{"html":"<b>&"}` {
+		t.Fatalf("hookString = %s", got)
+	}
+}
+
+func TestHookDedupeKey(t *testing.T) {
+	big := map[string]any{"html": strings.Repeat("<>&", 400<<10)}
+	key := func(tmpl, body string) string {
+		var v any
+		_ = json.Unmarshal([]byte(body), &v)
+		data := map[string]any{"body": v, "headers": map[string]any{"x-delivery": "d1"}}
+		return hookDedupeKey(tmpl, data)
+	}
+	if k := hookDedupeKey("{{body}}{{headers.X-Delivery}}", map[string]any{"body": big, "headers": map[string]any{"x-delivery": "d1"}}); k == "" {
+		t.Fatal("large early value turned dedupe off")
+	}
+	for _, body := range []string{`{"a":null,"b":"1"}`, `{"a":" ","b":"1"}`, `{"b":"1"}`} {
+		if k := key("{{body.a}}{{body.b}}", body); k != "" {
+			t.Fatalf("%s gave dedupe key %q, want none", body, k)
+		}
+	}
+	if key("{{body.a}}{{body.b}}", `{"a":"x1","b":"23"}`) == key("{{body.a}}{{body.b}}", `{"a":"x12","b":"3"}`) {
+		t.Fatal("different values joined to the same dedupe key")
 	}
 }

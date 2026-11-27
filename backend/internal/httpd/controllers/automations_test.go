@@ -83,8 +83,8 @@ func TestHookCallStatusAndBodyLimit(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	(&AutomationsController{}).call(rec, httptest.NewRequest(http.MethodPost, "/hooks/key", strings.NewReader(`{}`)))
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("no service: status=%d want 501", rec.Code)
+	if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), `"HOOKS_UNAVAILABLE"`) {
+		t.Fatalf("no service: status=%d body=%s, want 501 HOOKS_UNAVAILABLE", rec.Code, rec.Body.String())
 	}
 }
 
