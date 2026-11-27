@@ -1106,6 +1106,23 @@ describe("CloudSessionChatSurface", () => {
 		},
 	);
 
+	// A cloud Claude worker reports its quota refusal as the transport's whole
+	// failure and never marks it.
+	it("reads a quota refusal in a failed turn's error as a usage limit, until the turn starts again", () => {
+		const raw = 'ACP prompt: {"code":-32603,"message":"Internal error: You\'ve hit your 5-hour limit · resets 11am (UTC)","data":{"errorKind":"rate_limit"}}: [session/query] resume=none (node:9482) Warning: canUseTool will not be invoked';
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "review it", turnId: "turn-1" }, createdAt: "2026-11-27T07:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: "2026-11-27T07:00:01Z" },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_aborted", payload: { turnId: "turn-1", attempt: 1, error: raw }, createdAt: "2026-11-27T07:00:05Z" },
+		];
+		expect(toSnapshot(session, events).turns[0]).toMatchObject({ state: "failed", errorMessage: "You've hit your 5-hour limit · resets 11am (UTC)", usageLimit: { autoResume: false } });
+		const retried = toSnapshot(session, [...events, { sessionId: session.id, sequence: 4, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: "2026-11-27T07:10:00Z" }]);
+		expect(retried.turns[0].usageLimit).toBeUndefined();
+		const other = toSnapshot(session, [...events.slice(0, 2), { sessionId: session.id, sequence: 3, type: "chat.turn_aborted", payload: { turnId: "turn-1", attempt: 1, error: "boom" }, createdAt: "2026-11-27T07:00:05Z" }]);
+		expect(other.turns[0]).toMatchObject({ state: "failed", errorMessage: "boom" });
+		expect(other.turns[0].usageLimit).toBeUndefined();
+	});
+
 	// A queued message the control plane refused when its turn came never ran:
 	// it reads as not run, with the reason, not as a run that failed.
 	it("shows a queued message refused when its turn came as not run, with its reason", () => {

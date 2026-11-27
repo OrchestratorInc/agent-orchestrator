@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { errorActivityDuplicatesTurn, providerErrorCopy, turnErrorCopy } from "./providerError";
+import { errorActivityDuplicatesTurn, providerErrorCopy, turnErrorCopy, usageLimitSentence } from "./providerError";
 import type { ConversationActivity } from "./types";
 
 const activity = (over: Partial<ConversationActivity>): ConversationActivity =>
@@ -121,5 +121,21 @@ describe("turnErrorCopy", () => {
 
 	it("shows a plain error as it is", () => {
 		expect(turnErrorCopy("  The agent process exited  ")).toEqual({ raw: "The agent process exited", folded: false });
+	});
+});
+
+describe("usageLimitSentence", () => {
+	it("reads a quota refusal out of an ACP transport failure", () => {
+		const raw = 'ACP prompt: {"code":-32603,"message":"Internal error: You’ve hit your weekly limit · resets Nov 14, 5am (Asia/Calcutta)"}: stderr';
+		expect(usageLimitSentence(raw)).toBe("You’ve hit your weekly limit · resets Nov 14, 5am (Asia/Calcutta)");
+	});
+
+	it("matches a refusal that already arrives clean", () => {
+		expect(usageLimitSentence("Usage limit reached for this account")).toBe("Usage limit reached for this account");
+	});
+
+	it("ignores failures that are not quota refusals", () => {
+		expect(usageLimitSentence('ACP session/prompt: {"code":-32603,"message":"Internal error: Insufficient balance or no resource package. Please recharge."}')).toBeUndefined();
+		expect(usageLimitSentence("The agent said the usage limit was fine")).toBeUndefined();
 	});
 });

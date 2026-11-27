@@ -13,6 +13,7 @@ import type {
 	MessageFile,
 	PlanStep,
 } from "../chat/types";
+import { usageLimitSentence } from "../chat/providerError";
 import { cloudLifecycleStage } from "./lifecycle";
 import type { CloudClientEvent, CloudSession } from "./types";
 
@@ -272,6 +273,7 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			turn.startedAt = event.createdAt;
 			turn.completedAt = undefined;
 			turn.errorMessage = undefined;
+			turn.usageLimit = undefined;
 			continue;
 		}
 		if (turn && event.type === "chat.turn_capabilities") {
@@ -282,6 +284,14 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			turn.state = event.type === "chat.turn_completed" ? "completed" : event.type === "chat.turn_interrupted" ? "interrupted" : "failed";
 			turn.completedAt = event.createdAt;
 			turn.errorMessage = str(payload.error);
+			// The cloud sends a quota refusal as its raw failure and never marks
+			// it, so the turn is marked here: it then reads as a usage limit, with
+			// the provider's sentence instead of the transport dump.
+			const limit = turn.state === "failed" && turn.errorMessage ? usageLimitSentence(turn.errorMessage) : undefined;
+			if (limit) {
+				turn.errorMessage = limit;
+				turn.usageLimit = { autoResume: false };
+			}
 			continue;
 		}
 		if (event.type === "chat.approval_requested") {

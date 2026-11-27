@@ -36,6 +36,20 @@ describe("cloud conversation projection", () => {
 		expect(done.items[1]).toMatchObject({ streaming: false });
 	});
 
+	// A cloud Claude worker reports its quota refusal as the transport's whole
+	// failure and never marks it (the screenshot in the report).
+	it("reads a quota refusal in a failed turn's error as a usage limit", () => {
+		sequence = 0;
+		const raw = 'ACP prompt: {"code":-32603,"message":"Internal error: You\'ve hit your 5-hour limit · resets 11am (UTC)","data":{"errorKind":"rate_limit"}}: [session/query] sessionId=c8cf resume=none (node:9482) [CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked';
+		const started = [event("chat.user_message", { turnId: "t1", text: "Review it" }), event("chat.turn_started", { turnId: "t1" })];
+		const failed = cloudConversationSnapshot(session(), [...started, event("chat.turn_aborted", { turnId: "t1", error: raw })]);
+		expect(failed.turns[0]).toMatchObject({ state: "failed", errorMessage: "You've hit your 5-hour limit · resets 11am (UTC)", usageLimit: { autoResume: false } });
+		// Any other failure keeps its text and no usage limit.
+		const other = cloudConversationSnapshot(session(), [...started, event("chat.turn_aborted", { turnId: "t1", error: "The worker exited" })]);
+		expect(other.turns[0]).toMatchObject({ state: "failed", errorMessage: "The worker exited" });
+		expect(other.turns[0].usageLimit).toBeUndefined();
+	});
+
 	it("shows a just-sent turn as running before a worker claims it", () => {
 		sequence = 0;
 		const snapshot = cloudConversationSnapshot(session(), [event("chat.user_message", { turnId: "t1", text: "Go" })]);

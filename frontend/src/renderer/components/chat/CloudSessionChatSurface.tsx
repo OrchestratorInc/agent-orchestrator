@@ -57,6 +57,7 @@ import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
+import { usageLimitSentence } from "../../../../../packages/shared/chat/usage-limit";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -1104,6 +1105,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
+			delete turn.usageLimit;
 			startedTurns.add(turnID);
 			// A new attempt (a retry, a new worker) waits for its own agent.
 			agentTurns.delete(turnID);
@@ -1134,6 +1136,14 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			turn.completedAt = event.createdAt;
 			const error = eventPayload(event).error;
 			turn.errorMessage = typeof error === "string" ? error : undefined;
+			// The cloud sends a quota refusal as its raw failure and never marks it,
+			// so the turn is marked here: it then reads as a usage limit, with the
+			// provider's sentence instead of the transport dump.
+			const limit = turn.state === "failed" && turn.errorMessage ? usageLimitSentence(turn.errorMessage) : undefined;
+			if (limit) {
+				turn.errorMessage = limit;
+				turn.usageLimit = { autoResume: false };
+			}
 			// No agent started on it: its prompt is loaded with no start after it
 			// (a turn starts after its prompt), or it ended at attempt 0, never
 			// claimed, which holds on a page without its prompt too.
