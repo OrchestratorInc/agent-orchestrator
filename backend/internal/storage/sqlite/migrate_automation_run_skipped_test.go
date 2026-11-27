@@ -11,7 +11,7 @@ const automationRunSkippedMigrationVersion int64 = 20261127080000000
 // and keeps rejecting unknown statuses. Down restores the exact prior schema
 // and records skipped rows as the failed rows earlier builds wrote.
 func TestAutomationRunSkippedStatusMigrationRoundTrip(t *testing.T) {
-	const baseline int64 = 20261126154409684
+	const baseline int64 = 20261126171749354
 	db := openMigratedDatabaseCopy(t, baseline)
 	var before string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='automation_runs'`).Scan(&before); err != nil {
