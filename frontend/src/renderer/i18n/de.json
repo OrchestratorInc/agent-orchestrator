@@ -609,6 +609,8 @@
 	"browser.emptyUrl": "Geben Sie eine URL ein oder klicken Sie eine im Terminal an.",
 	"browser.sessionEnded": "Session ended — browser preview unavailable.",
 	"browser.forward": "Vorwärts",
+	"browser.muteTab": "Tab stummschalten",
+	"browser.unmuteTab": "Stummschaltung des Tabs aufheben",
 	"browser.newTab": "Neuer Tab",
 	"browser.onlyTab": "Der einzige Tab kann nicht geschlossen werden",
 	"browser.openDevTools": "DevTools öffnen",

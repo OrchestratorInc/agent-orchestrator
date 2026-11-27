@@ -609,6 +609,8 @@
 	"browser.emptyUrl": "URL を入力するか、ターミナル内のリンクをクリックしてください。",
 	"browser.sessionEnded": "Session ended — browser preview unavailable.",
 	"browser.forward": "進む",
+	"browser.muteTab": "タブをミュート",
+	"browser.unmuteTab": "タブのミュート解除",
 	"browser.newTab": "新しいタブ",
 	"browser.onlyTab": "最後のタブは閉じられません",
 	"browser.openDevTools": "DevToolsを開く",

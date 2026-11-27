@@ -571,6 +571,8 @@
 	"browser.emptyUrl": "Bir URL girin veya terminalde birine tıklayın.",
 	"browser.sessionEnded": "Oturum sona erdi. Tarayıcı önizlemesi kullanılamıyor.",
 	"browser.forward": "İleri",
+	"browser.muteTab": "Sekmeyi sustur",
+	"browser.unmuteTab": "Sekmenin susturmasını kaldır",
 	"browser.newTab": "Yeni sekme",
 	"browser.onlyTab": "Tek sekme kapatılamaz",
 	"browser.openDevTools": "DevTools'u aç",
