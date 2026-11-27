@@ -75,7 +75,7 @@ export function FileMediaPreview({ active = true, hostId, kind, path, sessionId,
 			) : kind === "video" && source.kind === "artifact" ? (
 				// The artifact viewer's player is the comment workspace's, so opening comments keeps it.
 				<div className="size-full min-h-0 min-w-0">
-					<ArtifactVideoPlayer crossOrigin={crossOrigin} key={src} onError={onError} positionKey={positionKey} src={src} title={path} />
+					<ArtifactVideoPlayer active={active} crossOrigin={crossOrigin} key={src} onError={onError} positionKey={positionKey} src={src} title={path} />
 				</div>
 			) : kind === "video" ? (
 				<VideoPlayer active={active} crossOrigin={crossOrigin} label={path} onError={onError} src={src} />

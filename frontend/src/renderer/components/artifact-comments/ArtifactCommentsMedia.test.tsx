@@ -7,7 +7,7 @@ import type { CloudCpClient } from "../../lib/cloud-cp";
 import { TooltipProvider } from "../ui/tooltip";
 import { forgetMediaPlayback, mediaPlaybackKey, mediaTime, rememberMediaSource, rememberMediaTime } from "../../lib/media-playback";
 import { ArtifactCommentsWorkspace, artifactCommentsKind, type ArtifactCommentsKind } from "./ArtifactComments";
-import { ArtifactVideoPlayer } from "./ArtifactCommentsMedia";
+import { ArtifactCommentsMedia, ArtifactVideoPlayer } from "./ArtifactCommentsMedia";
 import {
 	ARTIFACT_COMMENTS_PROTOCOL_VERSION,
 	imageCommentAnchor,
@@ -444,6 +444,48 @@ describe("one player for the viewer and comment mode", () => {
 			expect(requestFullscreen).toHaveBeenCalledTimes(1);
 		} finally {
 			delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
+		}
+	});
+});
+
+describe("artifact video playback, like the app's VideoPlayer", () => {
+	it("the viewer's player autoplays at half volume, and stops autoplaying once the person pauses it", () => {
+		const view = render(<ArtifactVideoPlayer src="https://share.test/a.mp4" title="a.mp4" />);
+		const video = screen.getByLabelText<HTMLVideoElement>("a.mp4");
+		expect(video).toHaveAttribute("autoplay");
+		expect(video.volume).toBe(0.5);
+		act(() => { video.dispatchEvent(new Event("pause")); });
+		view.rerender(<ArtifactVideoPlayer src="https://share.test/a.mp4" title="a.mp4" />);
+		expect(screen.getByLabelText("a.mp4")).not.toHaveAttribute("autoplay");
+	});
+
+	it("doesn't start, and pauses if playing, while its view is hidden", () => {
+		const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+		try {
+			const view = render(<ArtifactVideoPlayer active src="https://share.test/a.mp4" title="a.mp4" />);
+			const video = screen.getByLabelText<HTMLVideoElement>("a.mp4");
+			Object.defineProperty(video, "paused", { configurable: true, value: false });
+			view.rerender(<ArtifactVideoPlayer active={false} src="https://share.test/a.mp4" title="a.mp4" />);
+			expect(screen.getByLabelText("a.mp4")).toBe(video);
+			expect(pause).toHaveBeenCalledTimes(1);
+			expect(video).not.toHaveAttribute("autoplay");
+		} finally {
+			pause.mockRestore();
+		}
+	});
+
+	it("the comment workspace's video doesn't autoplay, but still pauses when hidden", () => {
+		const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+		const props = { kind: "video" as const, onSelect: () => undefined, onSelection: () => undefined, picked: null, selected: null, src: "https://share.test/a.mp4", threads: [], title: "a.mp4" };
+		try {
+			const view = render(<ArtifactCommentsMedia {...props} />);
+			const video = screen.getByLabelText<HTMLVideoElement>("a.mp4");
+			expect(video).not.toHaveAttribute("autoplay");
+			Object.defineProperty(video, "paused", { configurable: true, value: false });
+			view.rerender(<ArtifactCommentsMedia {...props} active={false} />);
+			expect(pause).toHaveBeenCalledTimes(1);
+		} finally {
+			pause.mockRestore();
 		}
 	});
 });

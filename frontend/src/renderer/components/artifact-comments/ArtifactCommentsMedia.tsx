@@ -1,6 +1,7 @@
 import { Maximize, Minimize, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { useMainViewVisible } from "../../lib/main-view-visibility";
 import { cn } from "../../lib/utils";
 import {
 	artifactCommentAnchorKey,
@@ -32,6 +33,8 @@ const PIN = "pointer-events-auto absolute flex h-5 min-w-5 -translate-x-1/2 -tra
 
 /** How long a media URL is used for seeking before a fresh one is fetched (its view token lasts 10 minutes). */
 const URL_FRESH_FOR = 8 * 60_000;
+/** An autoplaying video starts at half volume, as the app's VideoPlayer does, so loud audio doesn't blast. */
+const AUTOPLAY_VOLUME = 0.5;
 
 /** Comments closer than this share one point on the seek bar (a fraction of its length). */
 const SAME_POINT = 0.012;
@@ -76,7 +79,9 @@ const ignore = () => undefined;
  * workspace's (without comments), so opening comments keeps the player and
  * the moment it was at.
  */
-export function ArtifactVideoPlayer({ crossOrigin, onError, positionKey, src, title }: {
+export function ArtifactVideoPlayer({ active = true, crossOrigin, onError, positionKey, src, title }: {
+	/** False while the viewer is mounted but hidden: the video then doesn't start, and pauses if playing. */
+	active?: boolean;
 	crossOrigin?: "anonymous" | "use-credentials";
 	onError?: () => void;
 	positionKey?: string;
@@ -85,6 +90,8 @@ export function ArtifactVideoPlayer({ crossOrigin, onError, positionKey, src, ti
 }) {
 	return (
 		<ArtifactCommentsMedia
+			active={active}
+			autoPlay
 			crossOrigin={crossOrigin}
 			kind="video"
 			onError={onError}
@@ -100,7 +107,7 @@ export function ArtifactVideoPlayer({ crossOrigin, onError, positionKey, src, ti
 	);
 }
 
-export function ArtifactCommentsMedia({ crossOrigin, focused = null, kind, onError, onPick, onSelect, onSelection, onShown, picked, positionKey, selected, selectedKeys, source, src, threads, title }: {
+export function ArtifactCommentsMedia({ active = true, autoPlay = false, crossOrigin, focused = null, kind, onError, onPick, onSelect, onSelection, onShown, picked, positionKey, selected, selectedKeys, source, src, threads, title }: {
 	kind: "image" | "video";
 	/** A video: the anchor key of the thread open in the popover; the frame outlines only its box. */
 	focused?: string | null;
@@ -127,6 +134,16 @@ export function ArtifactCommentsMedia({ crossOrigin, focused = null, kind, onErr
 	onError?: () => void;
 	/** A video: where it was is kept under this key, and it opens there. */
 	positionKey?: string;
+	/**
+	 * A video: false while the view is mounted but hidden (a closed inspector,
+	 * an inactive tab). It pauses then, as the app's VideoPlayer does.
+	 */
+	active?: boolean;
+	/**
+	 * A video: start on its own, at half volume, the first time it's shown,
+	 * like the app's VideoPlayer. Pausing it turns this off.
+	 */
+	autoPlay?: boolean;
 }) {
 	const { t } = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -145,6 +162,29 @@ export function ArtifactCommentsMedia({ crossOrigin, focused = null, kind, onErr
 		document.addEventListener("fullscreenchange", onChange);
 		return () => document.removeEventListener("fullscreenchange", onChange);
 	}, []);
+
+	// Only a visible video plays: hidden panes (and the main view behind
+	// Settings or the maximized Browser) stay mounted, so pause when hidden, and
+	// give a video that has never played its autoplay the first time it's
+	// shown. One the person paused stays paused.
+	const mainViewVisible = useMainViewVisible();
+	const shownNow = active && mainViewVisible;
+	const [mayAutoplay, setMayAutoplay] = useState(autoPlay);
+	const mayAutoplayRef = useRef(mayAutoplay);
+	mayAutoplayRef.current = mayAutoplay;
+	const wasShown = useRef(shownNow);
+	useEffect(() => {
+		const shown = shownNow && !wasShown.current;
+		wasShown.current = shownNow;
+		const video = videoRef.current;
+		if (kind !== "video" || !video) return;
+		if (!shownNow) {
+			if (!video.paused) video.pause();
+		} else if (shown && mayAutoplayRef.current && video.paused && (video.played?.length ?? 0) === 0) void Promise.resolve(video.play()).catch(() => {});
+	}, [kind, shownNow]);
+	useEffect(() => {
+		if (kind === "video" && autoPlay && videoRef.current) videoRef.current.volume = AUTOPLAY_VOLUME;
+	}, [autoPlay, kind, src]);
 
 	useLayoutEffect(() => {
 		const element = kind === "image" ? imageRef.current : videoRef.current;
@@ -404,6 +444,7 @@ export function ArtifactCommentsMedia({ crossOrigin, focused = null, kind, onErr
 			>
 				<video
 					aria-label={title}
+					autoPlay={mayAutoplay && shownNow}
 					crossOrigin={crossOrigin}
 					className="absolute inset-0 h-full w-full object-contain"
 					onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
@@ -429,7 +470,12 @@ export function ArtifactCommentsMedia({ crossOrigin, focused = null, kind, onErr
 						}
 						onShown?.();
 					}}
-					onPause={() => setPlaying(false)}
+					onPause={(event) => {
+						setPlaying(false);
+						// Paused by the person (not by the view hiding, nor at the end): it stays paused, even across a new file version.
+						if (shownNow && !event.currentTarget.ended) setMayAutoplay(false);
+					}}
+					onEnded={() => setMayAutoplay(false)}
 					onPlay={() => setPlaying(true)}
 					onSeeked={(event) => noteTime(event.currentTarget.currentTime)}
 					onTimeUpdate={(event) => noteTime(event.currentTarget.currentTime)}
