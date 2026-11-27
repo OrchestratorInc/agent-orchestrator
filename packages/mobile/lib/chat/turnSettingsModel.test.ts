@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
 import { nativeModelLabel, NOT_REPORTED, providerChoiceLabel, resolveDefaultChoices, splitModelChoices,
 	turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, readableModelId } from "./turnSettingsModel";
+
+// Fast mode is off in the app for now (fastMode.ts); its behaviour is still tested.
+vi.mock("./fastMode", () => ({ FAST_MODE_SHOWN: true }));
 
 // What the controls row names, all three parts read together: the model's
 // capsule, the effort's speedometer and the approval mode's symbol.

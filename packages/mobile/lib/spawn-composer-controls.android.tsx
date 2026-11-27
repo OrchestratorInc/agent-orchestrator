@@ -1,30 +1,32 @@
 import {
+	Box,
 	Column,
 	DropdownMenu,
 	DropdownMenuItem,
 	Host,
 	HorizontalDivider,
 	Icon,
-	IconButton,
+	RNHostView,
 	Text,
 	TextButton,
 } from "@expo/ui/jetpack-compose";
-import { fillMaxWidth, padding, semantics, testID } from "@expo/ui/jetpack-compose/modifiers";
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { fillMaxWidth, height, padding, semantics, testID, width } from "@expo/ui/jetpack-compose/modifiers";
+import { Fragment, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
-import { ComposerControlsRow, HarnessMark, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, SUBMENU, useCloseMenuOnBack } from "./composeMenu.android";
+import { ComposerControlsRow, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, useCloseMenuOnBack } from "./composeMenu.android";
 import { EffortSliderGauge, EffortSliderHost } from "./effort-slider-host";
-import { useEffortSliderSwitch } from "./useEffortSlider";
 import { haptics } from "./haptics";
+import { ModelWheelHost } from "./model-wheel";
+import { PermissionPickerButton, PermissionPickerHost } from "./permission-picker";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
-import { defaultModelChoice, listedModels } from "./spawnModel";
+import { useSpawnPickers } from "./spawnPickers";
 import type { Theme } from "./theme";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
-import { font, iconSize, space } from "./tokens";
+import { font, iconSize, space, touchTarget } from "./tokens";
 
-type OpenMenu = "host" | "project" | "account" | "approval" | "harness";
+type OpenMenu = "host" | "project" | "account";
 
 type MenuOption = { id: string; label: string; leading?: ReactNode; sectionBreakBefore?: boolean };
 
@@ -55,7 +57,6 @@ export function SpawnComposerControls({
 	modelLabel,
 	usesDefaultModel,
 	onSelectAgentModel,
-	onBrowseModels,
 	approvalModes,
 	approvalMode,
 	onSelectApprovalMode,
@@ -78,41 +79,20 @@ export function SpawnComposerControls({
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
-	// The agent whose models are open, one level down the agent menu, and the
-	// agent whose older models are open one level further.
-	const [openAgent, setOpenAgent] = useState<string | null>(null);
-	const [olderOpen, setOlderOpen] = useState<string | null>(null);
-	const close = () => { setOpenMenu(null); setOpenAgent(null); setOlderOpen(null); };
-	// Whether the effort slider is open, and the composer's height it floats
-	// above, live in its switch: opening it re-renders the gauge and the slider,
-	// not this whole form.
-	const effortSlider = useEffortSliderSwitch();
-	// Typing is a tap outside the slider that the keyboard, not the app, hears.
-	useEffect(() => { effortSlider.setOpen(false); }, [prompt, effortSlider]);
+	const close = () => setOpenMenu(null);
+	// The chat's own model wheels, effort slider and permission picker, over
+	// the keyboard; typing puts them away.
+	const pickers = useSpawnPickers({ agents, agentModels, harness, modelSelection, onSelectAgentModel, approvalModes, approvalMode, onSelectApprovalMode, prompt });
+	const effortSlider = pickers.effortSlider;
 	useCloseMenuOnBack(Boolean(openMenu), close);
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const accountLabel = accounts.find((account) => account.id === accountId)?.label ?? "Default account";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
-	const approvalOption = approvalModes.find((mode) => mode.id === approvalMode);
 	// The model the task runs: the one picked or pinned, else the catalog's own
 	// default by name, and the agent's name only when the catalog names none.
 	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
-	// One model in an agent's menu, ticked when it is the one the task runs.
-	const modelRow = (agentId: string) => (model: { id: string; label: string }) => (
-		<MenuRow
-			key={model.id}
-			label={model.label}
-			selected={agentId === harness && model.id === modelSelection}
-			onClick={() => {
-				close();
-				if (agentId === harness && model.id === modelSelection) return;
-				haptics.select();
-				onSelectAgentModel(agentId, model.id);
-			}}
-		/>
-	);
 	// Only a real change is worth a tick; the owner ignores a repeat anyway.
 	const choose = (current: string | null, apply: (id: string) => void) => (id: string) => {
 		close();
@@ -164,8 +144,10 @@ export function SpawnComposerControls({
 				</Column>
 			</Host>
 
-			{/* The effort slider floats just above the composer, over the rows. */}
-			<EffortSliderHost slider={effortSlider} choices={effortChoices} busy={busy} onChoose={onSelectEffort} />
+			{/* The chat's pickers, over the keyboard in a window of their own. */}
+			<EffortSliderHost slider={effortSlider} choices={effortChoices} busy={busy} onChoose={onSelectEffort} overKeyboard />
+			<PermissionPickerHost slider={pickers.permissions.slider} choices={pickers.permissions.choices} busy={busy} onChoose={pickers.permissions.choose} />
+			<ModelWheelHost {...pickers.model} busy={busy} />
 
 			<View onLayout={(event) => effortSlider.setBottom(event.nativeEvent.layout.height)}>
 				<SpawnComposer
@@ -184,87 +166,43 @@ export function SpawnComposerControls({
 					settings={
 						<ComposerControlsRow
 							// Who runs the task: the harness's mark and the model it runs.
-							// Each agent in its menu opens one level down onto its models.
+							// A tap opens the chat's model wheels, agent and model.
 							capsule={
 								<ModelCapsuleMenu
-									expanded={openMenu === "harness"}
+									expanded={false}
 									onDismiss={close}
 									harness={harness}
 									title={agentTitle}
-									onClick={() => setOpenMenu("harness")}
+									onClick={() => {
+										haptics.tap();
+										pickers.closeAllBut("model");
+										pickers.model.slider.setOpen(!pickers.model.slider.isOpen());
+									}}
 									enabled={!busy}
 									testTag="spawn-harness"
 									// The capsule shows the model alone; TalkBack hears the agent too, as VoiceOver does.
 									contentDescription={agentTitle === harnessLabel ? harnessLabel : `${harnessLabel}, ${agentTitle}`}
 								>
-									{agents.map((agent) => (
-										<DropdownMenu key={agent.id} expanded={openAgent === agent.id} properties={SUBMENU} onDismissRequest={() => setOpenAgent(null)} color={t.bgElevated}>
-											<DropdownMenu.Trigger>
-												<DropdownMenuItem onClick={() => { setOlderOpen(null); setOpenAgent((current) => current === agent.id ? null : agent.id); }} elementColors={{ textColor: t.textPrimary }} modifiers={[testID(`spawn-model-${agent.id}`)]}>
-													<DropdownMenuItem.Text>
-														<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: font.regular }}>{agent.label}</Text>
-													</DropdownMenuItem.Text>
-													<DropdownMenuItem.LeadingIcon><HarnessMark harness={agent.id} /></DropdownMenuItem.LeadingIcon>
-													<DropdownMenuItem.TrailingIcon>
-														<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />
-													</DropdownMenuItem.TrailingIcon>
-												</DropdownMenuItem>
-											</DropdownMenu.Trigger>
-											<DropdownMenu.Items>
-												{/* The default first, named when the catalog says which it is;
-												    then the newest of each family, older versions one level
-												    down as in chat; then the whole catalog. */}
-												{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map(modelRow(agent.id))}
-												{agentModels[agent.id]?.older?.length ? (
-													<>
-														<HorizontalDivider color={t.borderDefault} />
-														<DropdownMenu expanded={olderOpen === agent.id} properties={KEEP_KEYBOARD} onDismissRequest={() => setOlderOpen(null)} color={t.bgElevated}>
-															<DropdownMenu.Trigger>
-																<MenuRow
-																	label="Older models"
-																	trailing={<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />}
-																	onClick={() => setOlderOpen(agent.id)}
-																/>
-															</DropdownMenu.Trigger>
-															<DropdownMenu.Items>
-																{agentModels[agent.id]!.older!.map(modelRow(agent.id))}
-															</DropdownMenu.Items>
-														</DropdownMenu>
-													</>
-												) : null}
-												{(agentModels[agent.id]?.total ?? 0) > listedModels(agentModels[agent.id]) ? (
-													<>
-														<HorizontalDivider color={t.borderDefault} />
-														<MenuRow
-															label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`}
-															leading={<Icon source={materialDrawable("search")} size={iconSize.xl} tint={t.textSecondary} />}
-															onClick={() => { close(); onBrowseModels(agent.id); }}
-														/>
-													</>
-												) : null}
-											</DropdownMenu.Items>
-										</DropdownMenu>
-									))}
+									{null}
 								</ModelCapsuleMenu>
 							}
 							// The effort as a speedometer lit to the chosen level; a tap
-							// opens the effort slider above the composer.
-							effort={effortChoices.length ? <EffortSliderGauge slider={effortSlider} choices={effortChoices} onPress={close} disabled={busy} testID="spawn-effort" /> : null}
-							// The approval mode as its symbol alone, as the chat's; the menu
-							// and TalkBack name it.
+							// opens the effort slider over the keyboard.
+							effort={effortChoices.length ? <EffortSliderGauge slider={effortSlider} choices={effortChoices} onPress={() => { close(); pickers.closeAllBut("effort"); }} disabled={busy} testID="spawn-effort" /> : null}
+							// The approval mode as its own icon, as the chat's; a tap opens
+							// the chat's permission picker.
 							end={
-								<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
-									<DropdownMenu.Trigger>
-										<IconButton onClick={() => setOpenMenu("approval")} enabled={!busy} colors={{ contentColor: t.textSecondary }} modifiers={[testID("spawn-approval")]}>
-											<Icon source={materialDrawable("verified_user")} size={iconSize.lg} contentDescription={`Approval, ${approvalOption?.label ?? "Auto"}`} />
-										</IconButton>
-									</DropdownMenu.Trigger>
-									<DropdownMenu.Items>
-										{approvalModes.map((mode) => (
-											<MenuRow key={mode.id} label={mode.label} selected={mode.id === approvalMode} onClick={() => choose(approvalMode, onSelectApprovalMode)(mode.id)} />
-										))}
-									</DropdownMenu.Items>
-								</DropdownMenu>
+								<Box contentAlignment="center" modifiers={[width(touchTarget), height(touchTarget)]}>
+									<RNHostView matchContents>
+										<PermissionPickerButton
+											slider={pickers.permissions.slider}
+											choices={pickers.permissions.choices}
+											disabled={busy}
+											onPress={() => { close(); pickers.closeAllBut("permissions"); }}
+											testID="spawn-approval"
+										/>
+									</RNHostView>
+								</Box>
 							}
 						/>
 					}

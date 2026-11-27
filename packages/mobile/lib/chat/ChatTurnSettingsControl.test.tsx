@@ -76,6 +76,9 @@ import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import { createEffortSliderSwitch, type EffortSliderSwitch } from "../useEffortSlider";
 import type { PermissionChoice } from "../permission-picker";
 
+// Fast mode is off in the app for now (fastMode.ts); its behaviour is still tested.
+vi.mock("./fastMode", () => ({ FAST_MODE_SHOWN: true }));
+
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
 	sessionId: "s",

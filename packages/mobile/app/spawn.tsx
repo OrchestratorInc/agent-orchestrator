@@ -554,7 +554,8 @@ function SpawnPage() {
 	// some catalogs run to thousands of models.
 	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
 		agent.id,
-		menuModels(agent.id === harness ? currentModels : agentModelLists[agent.id] ?? [], agent.id === harness ? modelSelection : "__auto__"),
+		// Every model: the wheels list an agent's whole catalog, as the chat's do.
+		menuModels(agent.id === harness ? currentModels : agentModelLists[agent.id] ?? [], agent.id === harness ? modelSelection : "__auto__", Number.POSITIVE_INFINITY),
 	])), [agentModelLists, agents, currentModels, harness, modelSelection]);
 	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
 		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]

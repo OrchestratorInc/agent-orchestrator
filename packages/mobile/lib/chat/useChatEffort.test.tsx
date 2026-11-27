@@ -15,6 +15,9 @@ vi.mock("react-native", () => ({ BackHandler: { addEventListener: () => ({ remov
 import { useEffortSliderOpen, withPick } from "../useEffortSlider";
 import { EFFORT_CONFIRM_MS, useChatEffort } from "./useChatEffort";
 
+// Fast mode is off in the app for now (fastMode.ts); its behaviour is still tested.
+vi.mock("./fastMode", () => ({ FAST_MODE_SHOWN: true }));
+
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
 	sessionId: "s",

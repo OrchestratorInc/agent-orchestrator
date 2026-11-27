@@ -11,7 +11,7 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ scheme: "dark" }),
 	useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme),
 }));
-vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
+vi.mock("./haptics", () => ({ haptics: { select: fixtures.select, tap: () => {} } }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness?: string) => (harness === "codex" || harness === "opencode" ? `logo:${harness}` : null) }));
 vi.mock("./effort-gauge", async () => {
 	const React = await import("react");
@@ -22,6 +22,18 @@ vi.mock("./effort-slider", async () => {
 	return { EffortSliderOverlay: (props: object) => React.createElement("EffortSlider", props) };
 });
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
+// The chat's own pickers, tested on their own; here, what New task hands them.
+vi.mock("./model-wheel", async () => {
+	const React = await import("react");
+	return { ModelWheelHost: (props: object) => React.createElement("ModelWheelHost", props) };
+});
+vi.mock("./permission-picker", async () => {
+	const React = await import("react");
+	return {
+		PermissionPickerButton: (props: object) => React.createElement("PermissionPickerButton", props),
+		PermissionPickerHost: (props: object) => React.createElement("PermissionPickerHost", props),
+	};
+});
 const backHandlers = vi.hoisted(() => new Set<() => boolean>());
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -79,6 +91,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 		size: record("size"),
 		testID: record("testID"),
 		weight: record("weight"),
+		width: record("width"),
 		Shapes: { RoundedCorner: (radius: number) => ({ type: "roundedCorner", radius }) },
 	};
 });
@@ -164,7 +177,6 @@ describe("Android spawn selectors", () => {
 		expect(modifier(trigger(root, "spawn-host"), "semantics")?.args).toEqual([{ contentDescription: "Run on Alpha" }]);
 		expect(text(trigger(root, "spawn-project"))).toBe("Project");
 		expect(modifier(trigger(root, "spawn-project"), "semantics")?.args).toEqual([{ contentDescription: "Project, Project" }]);
-		expect(trigger(root, "spawn-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Auto");
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.expanded === false)).toBe(true);
 	});
 
@@ -195,13 +207,13 @@ describe("Android spawn selectors", () => {
 	it("closes without a change when the current choice is picked again", async () => {
 		const props = baseProps();
 		const root = await render(props);
-		await act(async () => trigger(root, "spawn-approval").props.onClick());
-		const menu = menuOf(trigger(root, "spawn-approval"));
-		expect(items(menu).map(text)).toEqual(["Auto", "Bypass permissions"]);
-		await act(async () => item(menu, "Auto").props.onClick());
-		expect(props.onSelectApprovalMode).not.toHaveBeenCalled();
+		await act(async () => trigger(root, "spawn-host").props.onClick());
+		const menu = menuOf(trigger(root, "spawn-host"));
+		expect(items(menu).map(text)).toEqual(["Alpha", "Beta"]);
+		await act(async () => item(menu, "Alpha").props.onClick());
+		expect(props.onSelectHost).not.toHaveBeenCalled();
 		expect(fixtures.select).not.toHaveBeenCalled();
-		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(false);
+		expect(menuOf(trigger(root, "spawn-host")).props.expanded).toBe(false);
 	});
 
 	it("separates Standalone agent from the projects", async () => {
@@ -230,40 +242,41 @@ describe("Android spawn model", () => {
 		expect(modifier(trigger(await render(baseProps({ agentModels: named })), "spawn-harness"), "semantics")?.args).toEqual([{ contentDescription: "Codex, GPT-6.1-Sol" }]);
 	});
 
-	// Each agent opens one level down onto its models, so an agent and its model
-	// A second tap on the open agent's row closes its models; the submenu must
-	// not close itself on that tap's down, or the row's click reopened it.
-	it("closes an agent's models when its row is tapped again", async () => {
-		const props = baseProps({ agentModels: { codex: { models: [{ id: "fable-5-1", label: "Fable 5.1" }], older: [{ id: "fable-5", label: "Fable 5" }], total: 2 }, aider: { models: [], total: 0 } } });
+	// As in chat: the capsule opens the model wheels over the keyboard, every
+	// agent and its models, the default first and starred; closing them on a
+	// model picks the agent and the model at once.
+	it("opens the chat's model wheels from the capsule, and picks an agent and its model from them", async () => {
+		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], older: [{ id: "gpt-4", label: "GPT-4" }], total: 2, defaultLabel: "GPT-6.1-Sol" }, opencode: { models: [{ id: "grok", label: "Grok Code" }], total: 1 }, aider: { models: [], total: 0 } } });
 		const root = await render(props);
+		const wheels = () => root.findByType("ModelWheelHost" as never);
+		expect(wheels().props.slider.isOpen()).toBe(false);
 		await act(async () => trigger(root, "spawn-harness").props.onClick());
-		const codex = () => menuOf(trigger(root, "spawn-model-codex"));
-		expect(codex().props.properties).toMatchObject({ focusable: false, dismissOnClickOutside: false });
-		await act(async () => trigger(root, "spawn-model-codex").props.onClick());
-		expect(codex().props.expanded).toBe(true);
-		await act(async () => trigger(root, "spawn-model-codex").props.onClick());
-		expect(codex().props.expanded).toBe(false);
-		// The menu above stays open to pick another agent.
-		expect(menuOf(trigger(root, "spawn-harness")).props.expanded).toBe(true);
+		expect(wheels().props.slider.isOpen()).toBe(true);
+		expect(wheels().props.agents.map((agent: { id: string; models: { key: string; label: string; starred?: boolean }[] }) => [agent.id, agent.models.map((model) => [model.key, model.label, Boolean(model.starred)])])).toEqual([
+			["codex", [["__auto__", "GPT-6.1-Sol", true], ["gpt-5", "GPT-5", false], ["gpt-4", "GPT-4", false]]],
+			["opencode", [["__auto__", "Default model", true], ["grok", "Grok Code", false]]],
+			["aider", [["__auto__", "Default model", true]]],
+		]);
+		expect(wheels().props).toMatchObject({ chosenAgent: "codex", chosenModel: "__auto__", settings: [] });
+		await act(async () => wheels().props.choose("opencode", "grok"));
+		expect(props.onSelectAgentModel).toHaveBeenCalledWith("opencode", "grok");
+		// The pair already in force changes nothing.
+		await act(async () => wheels().props.choose("codex", "__auto__"));
+		expect(props.onSelectAgentModel).toHaveBeenCalledOnce();
 	});
 
-	// are picked in one step.
-	it("nests each agent's models under it and picks both at once", async () => {
-		const props = baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5", usesDefaultModel: false });
+	// As in chat: the approval mode's own icon opens the permission picker.
+	it("opens the chat's permission picker from the approval mode's icon", async () => {
+		const props = baseProps();
 		const root = await render(props);
-		await act(async () => trigger(root, "spawn-harness").props.onClick());
-		const codexRow = trigger(root, "spawn-model-codex");
-		expect(text(codexRow)).toBe("Codex");
-		await act(async () => codexRow.props.onClick());
-		const codex = menuOf(trigger(root, "spawn-model-codex"));
-		expect(codex.props.expanded).toBe(true);
-		const models = codex.findByType("DropdownMenuItems" as never);
-		expect(items(models).map((node) => [text(node), isSelected(node)])).toEqual([["Default model", false], ["GPT-5", true]]);
-
-		await act(async () => item(models, "Default model").props.onClick());
-		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "__auto__");
-		expect(fixtures.select).toHaveBeenCalledOnce();
-		expect(menuOf(trigger(root, "spawn-harness")).props.expanded).toBe(false);
+		const button = root.findByType("PermissionPickerButton" as never);
+		expect(button.props.testID).toBe("spawn-approval");
+		const picker = root.findByType("PermissionPickerHost" as never);
+		expect(picker.props.choices.map((choice: { value: string; label: string; selected: boolean }) => [choice.value, choice.label, choice.selected])).toEqual([["auto", "Auto", true], ["bypass-permissions", "Bypass permissions", false]]);
+		await act(async () => picker.props.onChoose("bypass-permissions"));
+		expect(props.onSelectApprovalMode).toHaveBeenCalledWith("bypass-permissions");
+		await act(async () => picker.props.onChoose("auto"));
+		expect(props.onSelectApprovalMode).toHaveBeenCalledOnce();
 	});
 
 	// The speedometer opens the slider above the composer; the slider picks
@@ -288,11 +301,11 @@ describe("Android spawn model", () => {
 	it("keeps the keyboard up while a menu is open, and closes the menu or slider on back", async () => {
 		const root = await render(baseProps());
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.properties?.focusable === false)).toBe(true);
-		await act(async () => trigger(root, "spawn-approval").props.onClick());
-		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(true);
+		await act(async () => trigger(root, "spawn-host").props.onClick());
+		expect(menuOf(trigger(root, "spawn-host")).props.expanded).toBe(true);
 		expect(backHandlers.size).toBe(1);
 		await act(async () => { [...backHandlers][0](); });
-		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(false);
+		expect(menuOf(trigger(root, "spawn-host")).props.expanded).toBe(false);
 		expect(backHandlers.size).toBe(0);
 
 		await act(async () => gaugeOf(root).props.onPress());
@@ -304,25 +317,6 @@ describe("Android spawn model", () => {
 	it("draws no speedometer for a model that takes no effort", async () => {
 		const root = await render(baseProps({ effortChoices: [] }));
 		expect(gaugeOf(root)).toBeUndefined();
-	});
-
-	// As in chat: each family's newest at the top, older versions one level down.
-	it("folds older models one level down under Older models", async () => {
-		const props = baseProps({ agentModels: { codex: { models: [{ id: "fable-5-1", label: "Fable 5.1" }], older: [{ id: "fable-5", label: "Fable 5" }], total: 2 }, aider: { models: [], total: 0 } } });
-		const root = await render(props);
-		const models = menuOf(trigger(root, "spawn-model-codex")).findByType("DropdownMenuItems" as never);
-		expect(items(models).map(text)).toEqual(["Default model", "Fable 5.1", "Older models", "Fable 5"]);
-		await act(async () => item(models, "Fable 5").props.onClick());
-		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "fable-5");
-	});
-
-	it("opens a catalog too long for its menu whole", async () => {
-		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 8929, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } } });
-		const root = await render(props);
-		const models = menuOf(trigger(root, "spawn-model-codex")).findByType("DropdownMenuItems" as never);
-		expect(items(models).map(text)).toEqual(["GPT-6.1-Sol · Default", "GPT-5", `All models (${(8929).toLocaleString()})`]);
-		await act(async () => item(models, `All models (${(8929).toLocaleString()})`).props.onClick());
-		expect(props.onBrowseModels).toHaveBeenCalledWith("codex");
 	});
 
 	// The capsule takes what the speedometer and the approval mode leave: a long
@@ -346,8 +340,8 @@ describe("Android spawn model", () => {
 		expect(modifier(start, "weight")?.args).toEqual([1]);
 		expect(start.findAll((node) => hostType(node) === "EffortGaugeButton" || node.props.testID === "spawn-effort").length).toBeGreaterThan(0);
 		// The approval mode sits outside the weighted part, at the row's end.
-		expect(start.findAll((node) => tagged(node, "spawn-approval"))).toHaveLength(0);
-		expect(trigger(root, "spawn-approval")).toBeTruthy();
+		expect(start.findAll((node) => hostType(node) === "PermissionPickerButton")).toHaveLength(0);
+		expect(root.findAll((node) => hostType(node) === "PermissionPickerButton")).toHaveLength(1);
 	});
 
 	it("keeps the arrow when the name ellipsizes, and draws the mark alone where a few letters would not fit", async () => {

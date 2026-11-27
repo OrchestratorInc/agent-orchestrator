@@ -3,6 +3,7 @@ import { can } from "./types";
 import { approvalChoiceCopy, approvalCopy, approvalOrder } from "./approvalCopy";
 import { displayConfigOptions, isFastOption, isModeOption, optionIsEnabled, partitionConfigOptions, toggleValue } from "../../../shared/chat/config-options";
 import { agentModelDisplayLabel, isDefaultPlaceholderLabel } from "../../../shared/models/agent-model-choices";
+import { FAST_MODE_SHOWN } from "./fastMode";
 
 export type TurnSettingChoice = {
 	value: string;
@@ -282,7 +283,9 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 	if (grouped.executionMode && !modeOption) rows.push(providerRow(grouped.executionMode, "other", false));
 	// What is left: a second model or effort, and anything else the agent offers.
 	for (const option of [...otherModels, ...otherEfforts, ...grouped.extra]) rows.push(providerRow(option, "other", false));
-	return rows.sort((a, b) => controlPriority(a) - controlPriority(b));
+	// Fast mode is off for now (see fastMode.ts): no row, so no bolt and no menu entry.
+	const offered = FAST_MODE_SHOWN ? rows : rows.filter((row) => turnSettingTopic(row) !== "fast");
+	return offered.sort((a, b) => controlPriority(a) - controlPriority(b));
 }
 
 /**
