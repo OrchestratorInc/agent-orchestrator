@@ -62,6 +62,19 @@ describe("comment and mention surfaces follow DESIGN.md", () => {
 		expect(asideBoxClass()).toContain("border-dashed");
 	});
 
+	it("gives a tagged message the bubble's own text size, line height and padding in the timeline", () => {
+		expect(asideBoxClass().split(" ")).toContain("chat-bubble");
+		const css = stylesCss.replace(/\/\*[\s\S]*?\*\//g, "");
+		const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selectors]) => selectors!.split(",").map((selector) => selector.trim()));
+		const bubbleRules = rules.filter((selectors) => selectors.some((selector) => selector === ".cursor-chat-timeline .cursor-chat-human-message" || selector === "html[data-new-desktop-ui] .cursor-chat-human-message"));
+		// The line height (1.58), the 14px text and Interface v2's padding.
+		expect(bubbleRules.length).toBeGreaterThanOrEqual(3);
+		for (const selectors of bubbleRules) {
+			const scope = selectors.find((selector) => selector.endsWith(" .cursor-chat-human-message"))!.replace(/ \.cursor-chat-human-message$/, "");
+			expect(selectors, selectors.join(", ")).toContain(`${scope} .chat-bubble`);
+		}
+	});
+
 	it("gives an inline team tile its own xs size", () => {
 		render(<TeamTile name="Platform" size="xs" />);
 		const tile = document.querySelector("[data-team-tile]")!;

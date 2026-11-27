@@ -3215,6 +3215,7 @@ html.sidebar-reordering * {
 .cursor-chat-timeline .chat-md li,
 .cursor-chat-timeline .chat-md blockquote,
 .cursor-chat-timeline .cursor-chat-human-message,
+.cursor-chat-timeline .chat-bubble,
 .cursor-chat-timeline .cursor-chat-origin-message > p {
 	font-size: var(--chat-readable-font-size);
 	line-height: 1.58;
@@ -3247,7 +3248,10 @@ html.sidebar-reordering * {
 	font-size: var(--chat-readable-code-font-size);
 }
 
-.cursor-chat-timeline .cursor-chat-human-message {
+/* The bubble's text, and that of every message drawn in its shape (CHAT_BUBBLE_SHAPE:
+   a tagged message's dashed box, a focused steer), so they lay out alike. */
+.cursor-chat-timeline .cursor-chat-human-message,
+.cursor-chat-timeline .chat-bubble {
 	font-size: 14px;
 }
 
@@ -7939,7 +7943,8 @@ html[data-new-desktop-ui] .cursor-chat-composer {
 
 /* The user's message bubble tightens by 1px on every side: 9px above and
  * below and 11px at the sides (10px and 12px with the flag off). */
-html[data-new-desktop-ui] .cursor-chat-human-message {
+html[data-new-desktop-ui] .cursor-chat-human-message,
+html[data-new-desktop-ui] .chat-bubble {
 	padding: 9px 11px;
 }
 
