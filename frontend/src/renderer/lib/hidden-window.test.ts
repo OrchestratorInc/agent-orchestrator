@@ -10,7 +10,8 @@ beforeEach(() => {
 	vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
 	vi.useFakeTimers({ shouldAdvanceTime: true });
 	focusManager.setFocused(undefined);
-	client = new QueryClient();
+	// The app's own default (lib/query-client): no refetch on focus unless a read asks.
+	client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
 	client.mount();
 });
 afterEach(() => {
@@ -67,4 +68,24 @@ describe("reads in a hidden window", () => {
 		expect(queryFn.mock.calls.length).toBeGreaterThanOrEqual(5);
 		stop();
 	});
+
+	it("polls again once the window is shown after a hidden spell", async () => {
+		visibility = "visible";
+		const queryFn = vi.fn(async () => "ok");
+		const { stop } = observe({ queryKey: ["back"], queryFn, ...recoverWhileHidden(1_000) });
+		await vi.advanceTimersByTimeAsync(2_500);
+		visibility = "hidden";
+		document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+		await vi.advanceTimersByTimeAsync(5_000);
+		const whileHidden = queryFn.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(5_000);
+		// Quiet while hidden (at most the one tick that was already scheduled).
+		expect(queryFn.mock.calls.length).toBe(whileHidden);
+		visibility = "visible";
+		document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+		await vi.advanceTimersByTimeAsync(5_500);
+		expect(queryFn.mock.calls.length).toBeGreaterThanOrEqual(whileHidden + 5);
+		stop();
+	});
 });
+

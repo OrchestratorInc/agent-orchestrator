@@ -32,11 +32,18 @@ export function recoverInterval(visibleInterval: number | false = false) {
 	};
 }
 
-/** Options for a read the app needs even while its window is hidden. */
+/**
+ * Options for a read the app needs even while its window is hidden. React
+ * Query only re-evaluates a refetchInterval function when the query updates,
+ * not when the window is shown again, so showing it refetches the read
+ * ("always": even when it is fresh), and that update brings the visible
+ * interval back.
+ */
 export function recoverWhileHidden(visibleInterval: number | false = false) {
 	return {
 		retry: retryUnlessHidden,
 		refetchInterval: recoverInterval(visibleInterval),
 		refetchIntervalInBackground: true,
+		refetchOnWindowFocus: "always",
 	} as const;
 }
