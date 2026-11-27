@@ -17,7 +17,7 @@ import (
 
 func TestBuildServiceSpec(t *testing.T) {
 	env := map[string]string{"PATH": "/usr/bin", "HOME": "/h", "SECRET": "x", "AO_TELEMETRY_REMOTE": "off"}
-	spec, err := buildServiceSpec("darwin", "/h", "/opt/ao", env, 4000)
+	spec, err := buildServiceSpec("darwin", "/h", "/opt/ao", env, 4000, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestBuildServiceSpec(t *testing.T) {
 		t.Fatalf("service env carried an unrelated variable: %v", spec.Env)
 	}
 
-	spec, err = buildServiceSpec("linux", "/h", "/opt/ao", map[string]string{"AO_DATA_DIR": "/sandbox/data"}, 0)
+	spec, err = buildServiceSpec("linux", "/h", "/opt/ao", map[string]string{"AO_DATA_DIR": "/sandbox/data"}, 0, "/sandbox/data\x00")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestBuildServiceSpec(t *testing.T) {
 	}
 
 	xdg, _ := filepath.Abs("/xdg")
-	spec, err = buildServiceSpec("linux", "/h", "/opt/ao", map[string]string{"XDG_CONFIG_HOME": xdg}, 0)
+	spec, err = buildServiceSpec("linux", "/h", "/opt/ao", map[string]string{"XDG_CONFIG_HOME": xdg}, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestBuildServiceSpec(t *testing.T) {
 		t.Fatalf("XDG_CONFIG_HOME ignored: %s", spec.File)
 	}
 
-	if _, err := buildServiceSpec("windows", "/h", "/opt/ao", nil, 0); !errors.Is(err, errServiceUnsupported) {
+	if _, err := buildServiceSpec("windows", "/h", "/opt/ao", nil, 0, ""); !errors.Is(err, errServiceUnsupported) {
 		t.Fatalf("windows err = %v, want errServiceUnsupported", err)
 	}
 }
@@ -1214,6 +1214,10 @@ func TestServiceNameForDefaultAndSymlinkedPaths(t *testing.T) {
 	}
 	if spec.Name != serviceLaunchdLabel {
 		t.Fatalf("default paths gave %q, want the main %q", spec.Name, serviceLaunchdLabel)
+	}
+	// The explicit override stays: AO_DATA_DIR also moves the state dir.
+	if spec.Env["AO_DATA_DIR"] != canonicalPath(filepath.Join(home, ".ao", "data")) {
+		t.Fatalf("explicit default AO_DATA_DIR dropped from the unit: %v", spec.Env)
 	}
 	if runtime.GOOS == "windows" {
 		return

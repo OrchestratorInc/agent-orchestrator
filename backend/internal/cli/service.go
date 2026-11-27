@@ -217,10 +217,12 @@ func writeServiceStatus(w io.Writer, st serviceStatus, asJSON bool, action strin
 
 // buildServiceSpec derives the service from the platform, the ao binary and
 // the installing shell's environment.
-func buildServiceSpec(goos, home, exe string, env map[string]string, port int) (serviceSpec, error) {
+// identity is the canonical non-default data dir and run file ("" for the
+// defaults); a non-empty identity gives the service a hashed suffix.
+func buildServiceSpec(goos, home, exe string, env map[string]string, port int, identity string) (serviceSpec, error) {
 	suffix := ""
-	if env["AO_DATA_DIR"] != "" || env["AO_RUN_FILE"] != "" {
-		sum := sha256.Sum256([]byte(env["AO_DATA_DIR"] + "\x00" + env["AO_RUN_FILE"]))
+	if identity != "" {
+		sum := sha256.Sum256([]byte(identity))
 		suffix = "-" + hex.EncodeToString(sum[:4])
 	}
 	args := []string{exe, "serve", "--foreground"}
@@ -277,23 +279,29 @@ func (c *commandContext) currentServiceSpec(port int) (serviceSpec, error) {
 		return serviceSpec{}, err
 	}
 	// Canonical paths (absolute, symlinks resolved), so /tmp and
-	// /private/tmp name one service; the defaults name the main one.
+	// /private/tmp name one service; the defaults name the main one. An
+	// explicit override stays in the service env even when it names the
+	// default: AO_DATA_DIR also moves the state dir (config.ResolvePaths).
 	env["HOME"] = home
-	for key, value := range map[string][2]string{
-		"AO_DATA_DIR": {dataDir, filepath.Join(home, ".ao", "data")},
-		"AO_RUN_FILE": {runFile, filepath.Join(home, ".ao", "running.json")},
+	var identity [2]string
+	for i, item := range []struct{ key, path, def string }{
+		{"AO_DATA_DIR", dataDir, filepath.Join(home, ".ao", "data")},
+		{"AO_RUN_FILE", runFile, filepath.Join(home, ".ao", "running.json")},
 	} {
-		if env[key] == "" {
+		if env[item.key] == "" {
 			continue
 		}
-		path, def := canonicalPath(value[0]), canonicalPath(value[1])
-		if path == def {
-			delete(env, key)
-		} else {
-			env[key] = path
+		path := canonicalPath(item.path)
+		env[item.key] = path
+		if path != canonicalPath(item.def) {
+			identity[i] = path
 		}
 	}
-	return buildServiceSpec(serviceGOOS, home, exe, env, port)
+	id := ""
+	if identity != ([2]string{}) {
+		id = identity[0] + "\x00" + identity[1]
+	}
+	return buildServiceSpec(serviceGOOS, home, exe, env, port, id)
 }
 
 // canonicalPath makes p absolute and resolves symlinks in its nearest
@@ -509,8 +517,12 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	// a failed reinstall, restore the earlier definition and its state.
 	enabled := false
 	rollback := func(cause error) (serviceStatus, error) {
+		// An interrupt may have cancelled ctx; the compensating steps must
+		// still run.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), launchdServiceGoneWait)
+		defer cancel()
 		if exists {
-			if err := c.restorePreviousService(ctx, spec, previous, previousRunning, previousEnabled); err != nil {
+			if err := c.restorePreviousService(rctx, spec, previous, previousRunning, previousEnabled); err != nil {
 				return serviceStatus{}, fmt.Errorf("%w; restoring the previous service also failed: %w", cause, err)
 			}
 			return serviceStatus{}, cause
@@ -518,7 +530,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		if enabled {
 			// Keep the unit when its enablement links cannot be removed, so
 			// `ao service uninstall` can still clean them up.
-			if err := c.serviceCmd(ctx, "systemctl", "--user", "disable", spec.Name+".service"); err != nil {
+			if err := c.serviceCmd(rctx, "systemctl", "--user", "disable", spec.Name+".service"); err != nil {
 				return serviceStatus{}, fmt.Errorf("%w; rollback also failed, so %s was kept for `ao service uninstall`: %w", cause, spec.File, err)
 			}
 		}

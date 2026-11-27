@@ -91,7 +91,7 @@ Runs the Orchestrator daemon without the desktop app, for servers, scripts, and 
 | `--port <n>` | Loopback port for a new daemon. Defaults to `AO_PORT`, else `3001`. Ignored, with a warning, when a daemon is already running. |
 | `--background` | Start the daemon in the background and return once it is ready. This is the default; the flag exists for scripts that name it. |
 | `--foreground` | Run the daemon in this process, or watch the one already running, until no daemon is left (for launchd, systemd, or a terminal). |
-| `--timeout <duration>` | How long to wait for a new daemon to become ready. Default `2m`. |
+| `--timeout <duration>` | How long to wait for a background or still-booting daemon to become ready. A `--foreground` daemon run in this process starts without this limit. Default `2m`. |
 | `--json` | Print the result as JSON. |
 
 With `--json`, `ao serve` prints one object. Scripts can rely on these fields; new fields may be added, but none are renamed or removed:

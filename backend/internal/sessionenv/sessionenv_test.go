@@ -70,3 +70,17 @@ func TestScrubForDaemonCallerHostSettings(t *testing.T) {
 		t.Fatalf("plain shell: %v, want all kept", got)
 	}
 }
+
+// A marker that says "off" is treated as off, like caller detection does:
+// the caller's user settings are kept, and the marker itself still goes.
+func TestScrubForDaemonMarkerSetToFalse(t *testing.T) {
+	for _, v := range []string{"false", "0", " FALSE ", ""} {
+		in := []string{"CLAUDECODE=" + v, "CLAUDE_EFFORT=high", "PATH=/bin"}
+		if got, want := ScrubForDaemon(in), []string{"CLAUDE_EFFORT=high", "PATH=/bin"}; !slices.Equal(got, want) {
+			t.Errorf("CLAUDECODE=%q: %v, want %v", v, got, want)
+		}
+	}
+	if !MarkerSet("1") || !MarkerSet("yes") || MarkerSet("False") {
+		t.Fatal("MarkerSet disagrees with caller detection")
+	}
+}

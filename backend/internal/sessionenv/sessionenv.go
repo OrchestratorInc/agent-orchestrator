@@ -156,7 +156,7 @@ func ScrubForDaemon(env []string) []string {
 	}
 	callerIsAgentSession := false
 	for _, kv := range env {
-		if k, v, _ := strings.Cut(kv, "="); NormalizeKey(k) == "CLAUDECODE" && v != "" {
+		if k, v, _ := strings.Cut(kv, "="); NormalizeKey(k) == "CLAUDECODE" && MarkerSet(v) {
 			callerIsAgentSession = true
 		}
 	}
@@ -173,6 +173,18 @@ func ScrubForDaemon(env []string) []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// MarkerSet reports whether a caller-marker value means "set": anything but
+// empty, "0" or "false" (any case, surrounding space ignored). Caller
+// detection and the scrub share it, so a marker one treats as off the other
+// does too. The marker itself is stripped either way.
+func MarkerSet(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false":
+		return false
+	}
+	return true
 }
 
 // CaseInsensitiveEnv is true where environment names are case-insensitive, so

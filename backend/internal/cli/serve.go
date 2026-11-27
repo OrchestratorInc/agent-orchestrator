@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -160,12 +161,21 @@ func (c *commandContext) serve(ctx context.Context, out, errOut io.Writer, opts 
 	if err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
-	res, err := c.waitServeReady(ctx, cfg, child.PID, child.Exited, opts.timeout, false, nil)
+	// Forward the child's one exit notification so both the readiness wait
+	// and the loser cleanup can observe it.
+	exited := make(chan error, 1)
+	childDone := make(chan struct{})
+	go func() {
+		e := <-child.Exited
+		exited <- e
+		close(childDone)
+	}()
+	res, err := c.waitServeReady(ctx, cfg, child.PID, exited, opts.timeout, false, nil)
 	if res != nil && res.PID != child.PID {
 		// A concurrent serve won the start. Our child is waiting on the
 		// data-dir lock and would take over the moment the winner stops,
-		// so stop and reap it.
-		stopLosingChild(child)
+		// so stop and reap it, unless it already exited.
+		stopLosingChild(child, childDone)
 	}
 	if res != nil && opts.port != 0 && res.Port != opts.port && res.PID == child.PID {
 		_, _ = fmt.Fprintf(errOut, "warning: port %d was not available; the daemon is serving on port %d\n", opts.port, res.Port)
@@ -175,13 +185,18 @@ func (c *commandContext) serve(ctx context.Context, out, errOut io.Writer, opts 
 
 // stopLosingChild kills a started daemon that lost a concurrent start and
 // waits briefly for it to exit, so it cannot become a second daemon later.
-func stopLosingChild(child startedProcess) {
+func stopLosingChild(child startedProcess, done <-chan struct{}) {
+	select {
+	case <-done:
+		return // already gone
+	default:
+	}
 	if child.Kill == nil {
 		return
 	}
 	_ = child.Kill()
 	select {
-	case <-child.Exited:
+	case <-done:
 	case <-time.After(5 * time.Second):
 	}
 }
@@ -328,17 +343,26 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 		// file ends the process at once; after that, the daemon's handler
 		// shuts it down and the stop is not mistaken for an app swap.
 		running := make(chan struct{})
+		var mu sync.Mutex
+		returned := false
 		go func() {
 			select {
 			case <-ctx.Done():
-				if info, err := runfile.Read(cfg.RunFilePath); err != nil || info == nil || info.PID != os.Getpid() {
-					_ = os.Remove(marker)
-					os.Exit(0)
+				mu.Lock() // held through os.Exit, so it cannot race the return
+				if !returned {
+					if info, err := runfile.Read(cfg.RunFilePath); err != nil || info == nil || info.PID != os.Getpid() {
+						_ = os.Remove(marker)
+						os.Exit(0)
+					}
 				}
+				mu.Unlock()
 			case <-running:
 			}
 		}()
 		err := serveForegroundDaemon(env)
+		mu.Lock()
+		returned = true // from here the CLI reports err itself
+		mu.Unlock()
 		close(running)
 		if err != nil {
 			return err

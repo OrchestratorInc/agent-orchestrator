@@ -17,7 +17,7 @@ ao serve [flags]
 | `--background` | Start the daemon in the background and return once it is ready | default |
 | `--foreground` | Run the daemon in this process, or watch the one already running, until no daemon is left | - |
 | `--port int` | Loopback port for a new daemon; ignored, with a warning, when one is already running | `AO_PORT`, else `3001` |
-| `--timeout duration` | How long to wait for a new daemon to become ready | `2m` |
+| `--timeout duration` | How long to wait for a background or still-booting daemon to become ready. A `--foreground` daemon run in this process starts without this limit | `2m` |
 | `--json` | Output the result as JSON | - |
 
 ## JSON output

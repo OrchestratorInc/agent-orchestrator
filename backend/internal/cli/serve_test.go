@@ -701,6 +701,8 @@ func TestServeAcceptsConcurrentWinnerAfterChildExit(t *testing.T) {
 	srv := fakeServeDaemon(t, 5151)
 	exited := make(chan error, 1)
 	exited <- errors.New("exit status 75")
+	killCalled := false
+	start := time.Now()
 	out, _, err := executeCLI(t, Deps{
 		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
 		ProcessAlive: func(pid int) bool { return pid == 5151 },
@@ -709,7 +711,7 @@ func TestServeAcceptsConcurrentWinnerAfterChildExit(t *testing.T) {
 			if err := runfile.Write(cfg.runFile, runfile.Info{PID: 5151, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
 				t.Fatal(err)
 			}
-			return startedProcess{PID: 9, Exited: exited}, nil
+			return startedProcess{PID: 9, Exited: exited, Kill: func() error { killCalled = true; return nil }}, nil
 		},
 	}, "serve", "--json")
 	if err != nil {
@@ -717,6 +719,13 @@ func TestServeAcceptsConcurrentWinnerAfterChildExit(t *testing.T) {
 	}
 	if res := decodeServeResult(t, out); res.PID != 5151 || !res.Reused {
 		t.Fatalf("result = %#v, want the winner, reused", res)
+	}
+	// The child's exit was already seen: no kill, no wait for a second one.
+	if killCalled {
+		t.Fatal("killed a child that had already exited")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("serve took %s; it waited for an exit it had already seen", took)
 	}
 }
 
