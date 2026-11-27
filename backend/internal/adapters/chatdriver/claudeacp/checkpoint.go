@@ -508,13 +508,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
-	answer := len(turns) - 1
-	for answer > owner && !turns[answer].replied {
-		answer--
+	for _, turn := range turns[owner:] {
+		if !turn.complete {
+			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native tail still pending")
+		}
 	}
 	boundary := ports.NativeCheckpointBoundary{
 		UserMessageID: turns[owner].userID, UserText: turns[owner].user,
-		AssistantText: turns[answer].assistant, Interrupted: turns[answer].interrupted,
+		AssistantText: latest.assistant, Interrupted: latest.interrupted,
 	}
 	if unansweredTail {
 		return ports.NativeCheckpointBoundary{}, &ports.UnansweredNativeTailError{Boundary: boundary}

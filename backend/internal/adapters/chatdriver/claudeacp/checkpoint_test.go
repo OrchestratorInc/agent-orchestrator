@@ -281,18 +281,25 @@ func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
 	prompt := func(id, promptID, parent, text string) string {
 		return fmt.Sprintf(`{"type":"user","sessionId":"native","uuid":%q,"parentUuid":%q,"promptId":%q,"message":{"content":%q}}`, id, parent, promptID, text) + "\n"
 	}
-	synthetic := func(fields, text string) string {
-		return `{"type":"assistant","sessionId":"native","uuid":"filler","parentUuid":"hook-p",` + fields + `"message":{"model":"<synthetic>","content":[{"type":"text","text":` +
+	synthetic := func(parent, fields, text string) string {
+		return `{"type":"assistant","sessionId":"native","uuid":"filler","parentUuid":` + jsonString(parent) + `,` + fields + `"message":{"model":"<synthetic>","content":[{"type":"text","text":` +
 			jsonString(text) + `}],"stop_reason":"stop_sequence"}}` + "\n"
 	}
 	cancelled := prompt("user-p", "prompt-p", "assistant-0", "P") + submissionHookRecord("hook-p", "user-p", 9)
-	filler := synthetic("", "No response requested.")
+	filler := synthetic("hook-p", "", "No response requested.")
 	next := func(parent string) string {
 		return prompt("user-b", "prompt-b", parent, "B") + submissionHookRecord("hook-b", "user-b", 8) +
 			`{"type":"assistant","sessionId":"native","uuid":"answer-b","parentUuid":"hook-b","message":{"content":[{"type":"text","text":"answer B"}],"stop_reason":"end_turn"}}` + "\n"
 	}
-	localCommand := prompt("user-c", "prompt-c", "assistant-0", "<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>") +
-		prompt("stdout-c", "prompt-c", "user-c", "<local-command-stdout>Total cost: $0.01</local-command-stdout>")
+	localCommand := func(parent string) string {
+		return prompt("user-c", "prompt-c", parent, "<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>") +
+			prompt("stdout-c", "prompt-c", "user-c", "<local-command-stdout>Total cost: $0.01</local-command-stdout>")
+	}
+	noticeCutShort := prompt("note-n", "prompt-n", "assistant-0", "<task-notification>done</task-notification>") +
+		`{"type":"user","sessionId":"native","uuid":"marker-n","parentUuid":"note-n","promptId":"prompt-n","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}` + "\n" +
+		synthetic("marker-n", "", "No response requested.")
+	cutOffMidTool := prompt("user-1", "prompt-1", "assistant-0", "P1") +
+		`{"type":"assistant","sessionId":"native","uuid":"tool-1","parentUuid":"user-1","message":{"content":[{"type":"text","text":"running it"}],"stop_reason":"tool_use"}}` + "\n"
 	stray := `{"type":"system","sessionId":"native","uuid":"stray","parentUuid":"assistant-0"}` + "\n"
 	submitP := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-p", SubmissionID: "submission-9", Text: "P"}
 	submitB := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-b", SubmissionID: "submission-8", Text: "B"}
@@ -309,9 +316,12 @@ func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
 			wantUser: "user-p", interrupted: true, afterWindow: true},
 		{name: "cancelled tail resumed with filler", transcript: answered + cancelled + filler, later: []domain.NativeCheckpointObservation{submitP},
 			wantUser: "user-p", interrupted: true, afterWindow: true},
-		{name: "usage limit before a reply", transcript: answered + cancelled + synthetic(`"isApiErrorMessage":true,"error":"rate_limit",`, "You've hit your 5-hour limit · resets 7pm (Asia/Calcutta)"),
+		{name: "usage limit before a reply", transcript: answered + cancelled + synthetic("hook-p", `"isApiErrorMessage":true,"error":"rate_limit",`, "You've hit your 5-hour limit · resets 7pm (Asia/Calcutta)"),
 			later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true, afterWindow: true},
-		{name: "local command after an answered turn", transcript: answered + localCommand, wantUser: "user-0", wantAnswer: "answer A", afterWindow: true},
+		{name: "local command after an answered turn", transcript: answered + localCommand("assistant-0"), wantUser: "user-0", interrupted: true, afterWindow: true},
+		{name: "notice cut short after an answered turn", transcript: answered + noticeCutShort, wantUser: "user-0", interrupted: true},
+		{name: "local command after a turn cut off mid-tool", transcript: answered + cutOffMidTool + localCommand("tool-1"),
+			wantError: "native tail still pending"},
 		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"),
 			later: []domain.NativeCheckpointObservation{submitP, submitB, stopB}, wantUser: "user-b", wantAnswer: "answer B"},
 		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"),
