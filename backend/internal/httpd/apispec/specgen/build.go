@@ -2908,9 +2908,9 @@ func agentOperations() []operation {
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/agents/accounts/{accountId}", id: "updateAgentAccount", tag: "agents",
-			summary: "Rename an account and set or clear its color", pathParams: []any{controllers.AgentAccountIDParam{}},
+			summary: "Rename an account and set its color", pathParams: []any{controllers.AgentAccountIDParam{}},
 			reqBody: controllers.UpdateAgentAccountRequest{},
-			resps:   []respUnit{{http.StatusOK, controllers.AgentAccountResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			resps:   []respUnit{{http.StatusOK, controllers.AgentAccountResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodDelete, path: "/api/v1/agents/accounts/{accountId}", id: "removeAgentAccount", tag: "agents",

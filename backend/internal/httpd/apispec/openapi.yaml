@@ -1074,13 +1074,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "501":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Rename an account and set or clear its color
+      summary: Rename an account and set its color
       tags:
       - agents
   /api/v1/agents/accounts/{accountId}/api-key:

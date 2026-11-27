@@ -360,7 +360,7 @@ export interface paths {
         delete: operations["removeAgentAccount"];
         options?: never;
         head?: never;
-        /** Rename an account and set or clear its color */
+        /** Rename an account and set its color */
         patch: operations["updateAgentAccount"];
         trace?: never;
     };
@@ -12284,6 +12284,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
