@@ -161,6 +161,8 @@ type loginOperation struct {
 	methodSteps          []guidedStep
 	methodStepsUntouched bool
 	signingOut           bool
+	// restarted marks a login whose CLI was started afresh after signing out.
+	restarted bool
 	// restartAt, when set, is when to check whether a restart step's sign-out
 	// has landed, so the CLI can be started afresh.
 	restartAt time.Time
@@ -653,6 +655,18 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 		if !op.restartAt.IsZero() {
 			return s.restartWhenSignedOut(ctx, terminal, op)
 		}
+		if op.restarted && op.methodStepsUntouched && showsSignedInScreen(op.snapshot.AgentID, output) {
+			// The fresh CLI came back signed in: the sign-out did not land
+			// (or the probe that confirmed it failed), and its login menu
+			// will not appear. Fail now so the panel offers a retry instead
+			// of waiting for the deadline.
+			s.mu.Lock()
+			if op.snapshot.Status == "running" {
+				op.snapshot.Status = "failed"
+			}
+			s.mu.Unlock()
+			return true
+		}
 		if !op.signingOut && op.methodStepsUntouched && showsSignedInScreen(op.snapshot.AgentID, output) {
 			// The CLI is already signed in, so its login menu will only
 			// appear after signing out: replace the existing sign-in.
@@ -853,6 +867,7 @@ func (s *Service) restartWhenSignedOut(ctx context.Context, terminal guidedAuthT
 		if result, err = s.startReserved(ctx, plan); err == nil {
 			s.mu.Lock()
 			op.terminalID = result.Terminal.HandleID
+			op.restarted = true
 			s.mu.Unlock()
 			return false
 		}
@@ -1649,6 +1664,17 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// hasQuery reports whether u carries a non-empty value for every key.
+func hasQuery(u *url.URL, keys []string) bool {
+	query := u.Query()
+	for _, key := range keys {
+		if query.Get(key) == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func safeLoginURL(agentID, raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
@@ -1656,7 +1682,7 @@ func safeLoginURL(agentID, raw string) bool {
 	}
 	if rules := planByAgentID[agentID].loginURLRules; len(rules) > 0 {
 		for _, rule := range rules {
-			if u.Hostname() == rule.host && strings.HasPrefix(u.Path, rule.pathPrefix) {
+			if u.Hostname() == rule.host && strings.HasPrefix(u.Path, rule.pathPrefix) && hasQuery(u, rule.requiredQuery) {
 				return true
 			}
 		}

@@ -127,10 +127,13 @@ type guidedStep struct {
 }
 
 // loginURLRule allows a sign-in link the CLI prints in its hidden terminal to
-// be shown in the panel: https on exactly this host, under this path prefix.
+// be shown in the panel: https on exactly this host, under this path prefix,
+// carrying every required query parameter. The required parameters keep a
+// link cut short by a missed line wrap out of the panel.
 type loginURLRule struct {
-	host       string
-	pathPrefix string
+	host          string
+	pathPrefix    string
+	requiredQuery []string
 }
 
 // agyLoginPlan drives Agy's own login menu from the background UI. Agy has no
@@ -152,7 +155,8 @@ func agyLoginPlan() Plan {
 		},
 	}
 	p.signInKeepsRunning = true
-	p.loginURLRules = []loginURLRule{{host: "accounts.google.com", pathPrefix: "/o/oauth2/"}}
+	// Agy prints state last, so a link missing it was cut short.
+	p.loginURLRules = []loginURLRule{{host: "accounts.google.com", pathPrefix: "/o/oauth2/", requiredQuery: []string{"client_id", "redirect_uri", "response_type", "state"}}}
 	p.guidedPlatforms = []string{"darwin", "windows"}
 	// Signed in, Agy skips its login menu: it signs in silently, asks whether
 	// to trust the (fresh, empty) working folder, then opens its chat. It has

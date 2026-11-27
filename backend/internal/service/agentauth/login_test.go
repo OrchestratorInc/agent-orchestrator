@@ -42,6 +42,9 @@ func (f *guidedTerminalFake) OpenCommandTerminal(_ context.Context, input shellt
 	defer f.mu.Unlock()
 	f.input = input
 	f.alive = true
+	if f.opens > 0 {
+		f.output = "" // A reopened terminal starts without the old output.
+	}
 	f.opens++
 	return shellterm.ShellTerminal{HandleID: "private-auth-pty"}, nil
 }

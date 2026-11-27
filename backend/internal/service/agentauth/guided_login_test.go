@@ -42,11 +42,14 @@ const agyMenuScreen = "Welcome to the Antigravity CLI. You are currently not sig
 var agyWrappedLink = []string{
 	"https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=107100",
 	"6060591-example.apps.googleusercontent.com&code_challenge=abc&code_challenge_m",
-	"ethod=S256&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&stat",
-	"e=xyz",
+	"ethod=S256&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&resp",
+	"onse_type=code&state=xyz",
 }
 
-const agyLink = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-example.apps.googleusercontent.com&code_challenge=abc&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=xyz"
+const agyLink = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-example.apps.googleusercontent.com&code_challenge=abc&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=xyz"
+
+// agyShortLink is a complete sign-in link that fits on one line.
+const agyShortLink = "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=y&response_type=code&state=z"
 
 func waitFor(t *testing.T, what string, timeout time.Duration, done func() bool) {
 	t.Helper()
@@ -310,6 +313,40 @@ func TestGuidedLoginReplacesAnExistingSignIn(t *testing.T) {
 	}
 	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select", "type:/logout", "select", "select"}) {
 		t.Fatalf("keys = %v, want trust, /logout, then Google OAuth", got)
+	}
+}
+
+func TestGuidedLoginFailsWhenAgyRestartsStillSignedIn(t *testing.T) {
+	onPlatform(t, "darwin")
+	fastGuidedDelays(t)
+
+	pty := &guidedTerminalFake{output: agyTrustScreen}
+	prober := &switchableProberFake{state: domain.AgentAuthenticationAuthorized}
+	svc := NewWithAgentResolver(foundExecutable("agy"), prober, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the folder to be trusted", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+	pty.setOutput(agyChatScreen)
+	waitFor(t, "the sign-out", 5*time.Second, func() bool { return len(pty.pressed()) >= 3 })
+	// The probe stops finding the sign-in (it failed, say), so Agy is
+	// restarted, but the fresh agy opens signed in and never shows its menu.
+	prober.set(domain.AgentAuthenticationUnknown)
+	waitFor(t, "a fresh agy", 5*time.Second, func() bool { return pty.openCount() == 2 })
+	pty.setOutput(agyTrustScreen)
+	var current LoginSnapshot
+	waitFor(t, "the login to end", 5*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.Status != "running"
+	})
+	if current.Status != "failed" {
+		t.Fatalf("status = %q, want failed when agy restarts still signed in", current.Status)
+	}
+	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select", "type:/logout", "select"}) {
+		t.Fatalf("keys = %v, want no method step sent into a signed-in agy", got)
 	}
 }
 
@@ -685,9 +722,11 @@ func TestPrintedLoginURL(t *testing.T) {
 	}{
 		{"stitches a wrapped link", "If not:\n" + wrapped + "\n(1–20 of 29 lines)\n", agyLink},
 		{"stops at a short last line", wrapped + "\nCopy\n", agyLink},
-		{"keeps a complete link", "https://accounts.google.com/o/oauth2/auth?client_id=x\nCopy\n", "https://accounts.google.com/o/oauth2/auth?client_id=x"},
-		{"stitches a link wrapped onto two full lines", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n(1–20 of 29 lines)\n", agyWrappedLink[0] + agyWrappedLink[1]},
-		{"single line", "Open https://accounts.google.com/o/oauth2/auth?client_id=x in your browser\n", "https://accounts.google.com/o/oauth2/auth?client_id=x"},
+		{"keeps a complete link", agyShortLink + "\nCopy\n", agyShortLink},
+		{"hides a link cut short after two full lines", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n(1–20 of 29 lines)\n", ""},
+		{"hides a link whose last line was missed", agyWrappedLink[0] + "\n" + agyWrappedLink[1] + "\n" + agyWrappedLink[2] + "\nCopy\n", ""},
+		{"hides a link without its state", "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=y&response_type=code\n", ""},
+		{"single line", "Open " + agyShortLink + " in your browser\n", agyShortLink},
 		{"rejects other hosts", "https://evil.example.com/o/oauth2/auth?x=1\n", ""},
 		{"rejects other paths", "https://accounts.google.com/signin/v2?x=1\n", ""},
 		{"no link", "Signing in...\n", ""},
