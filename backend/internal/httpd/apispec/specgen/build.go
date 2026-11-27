@@ -2631,13 +2631,13 @@ func connectorOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/test", id: "testConnector", tag: "connectors",
 			summary: "Connect to the server, list its tools and save the result as the status", pathParams: one,
-			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusNotFound)...),
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusForbidden, http.StatusNotFound)...),
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/connect", id: "startConnectorSignIn", tag: "connectors",
 			summary: "Start a sign-in and return the page to open", pathParams: one,
 			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorSignInResponse{}}},
-				failures(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable)...),
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable)...),
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/connect/finish", id: "finishConnectorSignIn", tag: "connectors",
