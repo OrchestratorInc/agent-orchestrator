@@ -191,6 +191,45 @@ func (q *Queries) CountStaleBinarySessions(ctx context.Context) ([]CountStaleBin
 	return items, nil
 }
 
+const endSessionMoveStarted = `-- name: EndSessionMoveStarted :execrows
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = ''
+`
+
+type EndSessionMoveStartedParams struct {
+	UpdatedAt time.Time
+	ID        domain.SessionID
+}
+
+// Clears a move in progress unless the session has been marked moved.
+func (q *Queries) EndSessionMoveStarted(ctx context.Context, arg EndSessionMoveStartedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endSessionMoveStarted, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const endSessionMoveStartedFor = `-- name: EndSessionMoveStartedFor :execrows
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = '' AND move_started = ?
+`
+
+type EndSessionMoveStartedForParams struct {
+	UpdatedAt   time.Time
+	ID          domain.SessionID
+	MoveStarted string
+}
+
+// Clears the move in progress only while it is still this move and the
+// session has not been marked moved: abandoning an old move never clears a
+// newer one recorded in between.
+func (q *Queries) EndSessionMoveStartedFor(ctx context.Context, arg EndSessionMoveStartedForParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endSessionMoveStartedFor, arg.UpdatedAt, arg.ID, arg.MoveStarted)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getClientRequestSession = `-- name: GetClientRequestSession :one
 SELECT id, client_request_hash, client_request_committed FROM sessions WHERE client_request_id = ?
 `
@@ -227,7 +266,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, role_agent
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions WHERE id = ?
 `
 
@@ -313,6 +352,9 @@ type GetSessionRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	RoleAgent                        string
+	MovedTo                          string
+	MoveConversationPlaced           int64
+	MoveStarted                      string
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -400,6 +442,9 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.RuntimeReleasedLaunchID,
 		&i.ImportSource,
 		&i.RoleAgent,
+		&i.MovedTo,
+		&i.MoveConversationPlaced,
+		&i.MoveStarted,
 	)
 	return i, err
 }
@@ -423,7 +468,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, role_agent
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -509,6 +554,9 @@ type GetSessionByAutomationRunIDRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	RoleAgent                        string
+	MovedTo                          string
+	MoveConversationPlaced           int64
+	MoveStarted                      string
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -596,6 +644,9 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.RuntimeReleasedLaunchID,
 		&i.ImportSource,
 		&i.RoleAgent,
+		&i.MovedTo,
+		&i.MoveConversationPlaced,
+		&i.MoveStarted,
 	)
 	return i, err
 }
@@ -799,7 +850,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, role_agent
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions ORDER BY project_id, num
 `
 
@@ -885,6 +936,9 @@ type ListAllSessionsRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	RoleAgent                        string
+	MovedTo                          string
+	MoveConversationPlaced           int64
+	MoveStarted                      string
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -978,6 +1032,9 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.RuntimeReleasedLaunchID,
 			&i.ImportSource,
 			&i.RoleAgent,
+			&i.MovedTo,
+			&i.MoveConversationPlaced,
+			&i.MoveStarted,
 		); err != nil {
 			return nil, err
 		}
@@ -1146,7 +1203,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, role_agent
+    runtime_released_launch_id, import_source, role_agent, moved_to, move_conversation_placed, move_started
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -1232,6 +1289,9 @@ type ListSessionsByProjectRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	RoleAgent                        string
+	MovedTo                          string
+	MoveConversationPlaced           int64
+	MoveStarted                      string
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -1325,6 +1385,9 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.RuntimeReleasedLaunchID,
 			&i.ImportSource,
 			&i.RoleAgent,
+			&i.MovedTo,
+			&i.MoveConversationPlaced,
+			&i.MoveStarted,
 		); err != nil {
 			return nil, err
 		}
@@ -1489,6 +1552,35 @@ type MarkHarnessSessionsStaleParams struct {
 // was already marked keeps when it first went stale; the version moves on.
 func (q *Queries) MarkHarnessSessionsStale(ctx context.Context, arg MarkHarnessSessionsStaleParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markHarnessSessionsStale, arg.Since, arg.Version, arg.Harness)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markSessionMoved = `-- name: MarkSessionMoved :execrows
+UPDATE sessions SET moved_to = ?, move_started = '', updated_at = ?
+WHERE id = ? AND moved_to = '' AND move_started = ?
+    AND (is_terminated = 1 OR activity_state = 'exited')
+`
+
+type MarkSessionMovedParams struct {
+	MovedTo     string
+	UpdatedAt   time.Time
+	ID          domain.SessionID
+	MoveStarted string
+}
+
+// Records the AO Cloud session a session moved to while move_started still
+// names that move and the agent is stopped. A session resumed here since the
+// move pushed it (which clears move_started) is not marked.
+func (q *Queries) MarkSessionMoved(ctx context.Context, arg MarkSessionMovedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markSessionMoved,
+		arg.MovedTo,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.MoveStarted,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -1926,6 +2018,41 @@ type SetSessionHibernatedParams struct {
 // controller change, or lifecycle write. Generic updates leave this fact alone.
 func (q *Queries) SetSessionHibernated(ctx context.Context, arg SetSessionHibernatedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionHibernated, arg.HibernatedAt, arg.ID, arg.ExpectedRevision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionMoveConversationPlaced = `-- name: SetSessionMoveConversationPlaced :execrows
+UPDATE sessions SET move_conversation_placed = 1, updated_at = ? WHERE id = ?
+`
+
+type SetSessionMoveConversationPlacedParams struct {
+	UpdatedAt time.Time
+	ID        domain.SessionID
+}
+
+func (q *Queries) SetSessionMoveConversationPlaced(ctx context.Context, arg SetSessionMoveConversationPlacedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionMoveConversationPlaced, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionMoveStarted = `-- name: SetSessionMoveStarted :execrows
+UPDATE sessions SET move_started = ?, updated_at = ? WHERE id = ?
+`
+
+type SetSessionMoveStartedParams struct {
+	MoveStarted string
+	UpdatedAt   time.Time
+	ID          domain.SessionID
+}
+
+func (q *Queries) SetSessionMoveStarted(ctx context.Context, arg SetSessionMoveStartedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionMoveStarted, arg.MoveStarted, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

@@ -1041,8 +1041,110 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. While the session's work is moving to another machine (SESSION_MOVING), its terminal agent is not started again; agent/restart abandons the move. */
         post: operations["retrySessionStartup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description What move/export would push now: the branch, the uncommitted paths it would commit and the conversation it would carry. Changes nothing. */
+        get: operations["previewSessionMove"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stops the session's agent, then commits the session's uncommitted work, ignored files aside, as one commit on its branch and pushes the branch, so an AO daemon's move/import can continue the session from it. Delete the session once the import succeeds; if the move fails, agent/restart starts its terminal agent again. Viewers get 403. A branch the remote has commits for that the session lacks fails the push. Asked again while a move holds the session (its export running, or answered and the move neither ended nor abandoned), it answers with that move, under the same moveId (200 once answered, 202 while it runs), instead of starting another. */
+        post: operations["exportSessionMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export/{moveId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                moveId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Waits up to about 50 s on an export move/export started and answers as it does: the move once done (a late answer is adopted, no second export runs), 202 while its worker is still on it, 504 MOVE_EXPORT_TIMED_OUT once it can no longer finish. */
+        get: operations["getSessionMoveExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description Chosen by the caller; createSession names it as transcriptImportId. */
+                importId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Uploads a coding agent's conversation, gzipped, for a session moving here from another machine, before createSession starts it. The transcript names the source's working directory as /ao-moved/cwd and, for Claude Code, its project folder as /ao-moved/claude-project; the worker replaces them with its own. Uploading again under the same id replaces it; another user's id is 409. An upload no create uses is dropped after a day. */
+        put: operations["putSessionTranscriptImport"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}/sidecar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                importId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Adds the uploaded conversation's sidecar folder (subagent transcripts, saved tool output) to its upload, which must exist and be the caller's. The worker places it beside the transcript, filling in the same placeholders. Uploading the transcript again clears it. */
+        put: operations["putSessionTranscriptImportSidecar"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1203,7 +1305,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting, and for a session in Chat, which starts its agent with its next message instead (a move that holds it is still abandoned, so Chat takes messages again); a session viewer cannot restart it. On a session whose work is moving to another machine (SESSION_MOVING), once its export answered, it abandons the move: the session stays here and its agent starts again. While the export still runs it answers 409 MOVE_IN_PROGRESS. */
         post: operations["restartSessionAgent"];
         delete?: never;
         options?: never;
@@ -1927,6 +2029,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description While a session's work is moving to another machine (while a move's export is in flight and after it answered, until the session is deleted or agent/restart abandons the move), the ticket opens its terminal but its agent is not started again; a message is refused with 409 SESSION_MOVING. */
         post: operations["createTerminalTicket"];
         delete?: never;
         options?: never;
@@ -3014,6 +3117,67 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A finished move export: the pushed branch, in the shape an AO daemon's move/import takes. */
+        SessionMoveExport: {
+            /**
+             * Format: uuid
+             * @description The export this answers, as GET .../move/export/{moveId} names it.
+             */
+            moveId?: string;
+            manifest: {
+                /** Format: uuid */
+                sourceSessionId: string;
+                sourceLabel: string;
+                /** @description Lower-case github.com/<owner>/<name>. */
+                repoKey: string;
+                branch: string;
+                /** @description The pushed commit. */
+                tip: string;
+                /** @description The tip is the commit of the uncommitted work. */
+                wip: boolean;
+                harness: string;
+                model?: string;
+                displayName?: string;
+                /**
+                 * @description The session's approval mode, which the moved session keeps; for a session in Chat, the mode its last turn ran with. Absent when the session has none of its own.
+                 * @enum {string}
+                 */
+                permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+                /**
+                 * @description The interface the session was in. The daemon starts the moved session in it when its agent supports Chat there, else in the terminal (and says so). Absent from an older control plane: the daemon's default.
+                 * @enum {string}
+                 */
+                interface?: "chat" | "terminal";
+                /** @description The GitHub issue issue intake started the session for, as owner/repo#N; absent for a session intake did not start. */
+                issueId?: string;
+                /** @description URLs of the session's open pull requests (its own or claimed by it; not merged or closed); absent when it has none. */
+                pullRequests?: string[];
+            };
+            handoffNote: string;
+            /** @description The agent's conversation, checkpointed after the push, for the daemon to resume: a Claude Code, Codex, OpenCode or Cursor conversation, as that agent stores it (for OpenCode, its session export document). Absent for another agent or when none was captured. */
+            transcript?: {
+                agentSessionId: string;
+                /** @description The folder the conversation was in: for Claude Code the sandbox's Claude project folder. */
+                projectDir: string;
+                /** Format: byte */
+                transcriptGzip: string;
+                /**
+                 * Format: byte
+                 * @description The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
+                 */
+                sidecarGzip?: string;
+            };
+        };
+        /** @description An export AO Cloud's worker is still on. Ask again with its moveId (GET .../move/export/{moveId}, or POST .../move/export?moveId=) for its result; do not start another move. */
+        SessionMoveExportRunning: {
+            /** Format: uuid */
+            moveId: string;
+            /** @enum {string} */
+            status: "running";
+            /** @description The session's agent is stopped and its branch may already be pushed. */
+            branchMayBePushed?: boolean;
+            message?: string;
+        };
         RemoteHost: {
             hostId: string;
             label: string;
@@ -3386,7 +3550,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder), session.branch and session.transcriptImport for sessions moving here from another machine. Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -4845,6 +5009,8 @@ export interface components {
             coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
+            /** @description The session moved to another computer: it was deleted by the conditional delete (?moveId=) that finished its move, and continues there. It cannot be restored (restoreSession answers 409 SESSION_MOVED_AWAY). Absent or false for any other session. */
+            movedAway?: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /**
              * Format: uuid
@@ -5367,6 +5533,13 @@ export interface components {
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description Git branch to continue. A branch that exists on the repository is checked out from its commits; any other name starts a new branch from the default branch. The default branch, the session prefix and a name git refuses get 422 invalid_branch; a branch a live session of the project holds gets 409 branch_in_use. Send it only when /me offering.features lists session.branch: an older control plane rejects the whole create. */
+            branch?: string;
+            /**
+             * Format: uuid
+             * @description A conversation uploaded to transcript-imports/{importId}. The session resumes it instead of starting from prompt, which it uses only if the conversation cannot be placed. The upload must be the caller's and for this harness, else 422 transcript_import_not_found; a create uses it up. Send it only when /me offering.features lists session.transcriptImport.
+             */
+            transcriptImportId?: string;
         };
         /** @description A session create's body without projectId and kind (POST /standalone-agents). */
         CreateStandaloneAgentInput: {
@@ -8127,6 +8300,8 @@ export interface operations {
             query?: {
                 /** @description Also delete the session's artifact files. A restored session comes back without them. */
                 deleteArtifacts?: boolean;
+                /** @description Deletes the session only as the copy a move to an AO daemon left: the move/export with this moveId. Refused (409 MOVE_COPY_IN_USE) when the session was restarted or has activity after that export. */
+                moveId?: string;
             };
             header?: never;
             path: {
@@ -8144,6 +8319,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            /** @description MOVE_COPY_IN_USE: the session was used again after the move's export (moveId), so it is kept. Retrying will not delete it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -8209,6 +8393,15 @@ export interface operations {
             };
             /** @description not_found. No such session, a session of a deleted project, or one whose content was deleted for its creator's data retention. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description SESSION_MOVED_AWAY. The session moved to another computer (its movedAway is true) and continues there; to use AO Cloud again, move it from that computer. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8381,6 +8574,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description SESSION_MOVING: the session's work is moving to another machine. While a move's export is in flight, and after it answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -8455,6 +8657,246 @@ export interface operations {
                         session: components["schemas"]["Session"];
                     };
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The move as it stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        branch: string;
+                        changes: {
+                            path: string;
+                            /** @enum {string} */
+                            status: "added" | "modified" | "deleted";
+                            /** @description An added file git did not track in the sandbox, which the user may not expect the move to commit and push. */
+                            untracked?: boolean;
+                        }[];
+                        /** @description The agent's conversation the move would carry: a Claude Code, Codex, OpenCode or Cursor conversation. Absent for another agent or when there is none. */
+                        transcript?: {
+                            /**
+                             * Format: int64
+                             * @description The transcript and its sidecar folder.
+                             */
+                            bytes: number;
+                            subagents?: number;
+                        };
+                    };
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportSessionMove: {
+        parameters: {
+            query?: {
+                /** @description An export already started (from a 202): wait on it and answer with its result instead of starting another. */
+                moveId?: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pushed branch, in the shape an AO daemon's move/import takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExport"];
+                };
+            };
+            /** @description The export is still running after about 50 s. Its request lives for five minutes; ask again with its moveId (Location) after Retry-After. */
+            202: {
+                headers: {
+                    /** @description The GET route that answers for this export. */
+                    Location?: string;
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). MOVE_TURNS_QUEUED: messages are still queued for the session in AO Cloud; let them run or remove them, then move. INTERFACE_TRANSITION_IN_PROGRESS: an interface or agent switch is in progress for the session; try again once it finishes. These two are refused before the worker is asked, so nothing stopped, committed or pushed. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the session's latest conversation could not be saved to AO Cloud, so the move stopped; ask again. details.branch names the branch and details.pushedTip the commit origin now has. Another refusal of the worker's answers here too, with its code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionMoveExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                moveId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pushed branch, in the shape an AO daemon's move/import takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExport"];
+                };
+            };
+            /** @description The export is still running after about 50 s. Its request lives for five minutes; ask again with its moveId (Location) after Retry-After. */
+            202: {
+                headers: {
+                    /** @description The GET route that answers for this export. */
+                    Location?: string;
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the session's latest conversation could not be saved to AO Cloud, so the move stopped; ask again. details.branch names the branch and details.pushedTip the commit origin now has. Another refusal of the worker's answers here too, with its code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSessionTranscriptImport: {
+        parameters: {
+            query: {
+                harness: "claude-code" | "codex" | "cursor" | "opencode";
+                /** @description The conversation's id, which the agent resumes: a UUID, or for OpenCode a session id such as ses_e34d0cd52ffeMzGW05mHN4RIm7. */
+                agentSessionId: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description Chosen by the caller; createSession names it as transcriptImportId. */
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSessionTranscriptImportSidecar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -8692,6 +9134,15 @@ export interface operations {
                     "application/json": {
                         requested: boolean;
                     };
+                };
+            };
+            /** @description MOVE_IN_PROGRESS: the session's move export is still running, so the move is not abandoned and its agent is not started. Restart it once the move has finished or failed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -9096,6 +9547,15 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            /** @description SESSION_MOVING: the session's work is moving to another machine. While a move's export is in flight, and after it answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
