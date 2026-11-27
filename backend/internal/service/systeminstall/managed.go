@@ -395,8 +395,8 @@ func (s *Service) probeManagedVersion(ctx context.Context, target Target, cli, b
 // unsettledMarker, in a target's directory, says an update is switching
 // current, or switched it but could neither record the switch nor undo it
 // (or the daemon died first), so the releases sessions recorded may not be
-// the ones they run. Cleanup keeps every release of that target until none of
-// its sessions is left.
+// the ones they run. Cleanup keeps every release of that target until current
+// is recorded and none of its sessions is left.
 const unsettledMarker = ".unsettled"
 
 // ReconcileManagedReleases runs at daemon start, before any launch. A switch
@@ -595,22 +595,32 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 			gate.Unlock()
 			continue
 		}
-		// After a switch that was neither recorded nor undone, the release
-		// rows of launches since then cannot be trusted; wait for those
-		// sessions to end.
+		// current can be ahead of managed.json when an update switched it but
+		// failed before writing the file; it is what launches run, so it is
+		// kept too. Without it, nothing is known to be safe.
+		current, err := os.Readlink(filepath.Join(s.managedTargetDir(target), "current"))
+		if err != nil {
+			gate.Unlock()
+			continue
+		}
+		// After a switch that was neither recorded nor undone, keep recovery
+		// intent and every release until current is durably recorded and no
+		// session with an uncertain release remains.
 		marker := filepath.Join(s.managedTargetDir(target), unsettledMarker)
 		if _, err := os.Stat(marker); err == nil {
 			if len(sessions) > 0 {
 				gate.Unlock()
 				continue
 			}
-			_ = os.Remove(marker)
-		}
-		// current can be ahead of managed.json when an update switched it but
-		// failed before writing the file; it is what launches run, so it is
-		// kept too. Without it, nothing is known to be safe.
-		current, err := os.Readlink(filepath.Join(s.managedTargetDir(target), "current"))
-		if err != nil {
+			if err := s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(target), filepath.Base(current), time.Now().UTC()); err != nil {
+				gate.Unlock()
+				continue
+			}
+			if err := os.Remove(marker); err != nil {
+				gate.Unlock()
+				continue
+			}
+		} else if !os.IsNotExist(err) {
 			gate.Unlock()
 			continue
 		}
