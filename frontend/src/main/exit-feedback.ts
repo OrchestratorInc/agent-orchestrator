@@ -168,6 +168,7 @@ export function createExitFeedbackGate(deps: Timers & {
 	let resume: (() => void) | null = null;
 	let timer: unknown = null;
 	let secondCloseTimer: unknown = null;
+	let bypassed = false;
 
 	const arm = (ms: number) => {
 		if (timer !== null) deps.clearTimeout(timer);
@@ -246,8 +247,17 @@ export function createExitFeedbackGate(deps: Timers & {
 			arm(EXIT_FEEDBACK_DRAW_TIMEOUT_MS);
 			return true;
 		},
+		/**
+		 * The quit that went through did not end the app (hidden to the tray, or
+		 * cancelled by the chat-draft confirm), so a later quit may ask again. Only
+		 * from done: a live dialog is never dropped, and a bypassed quit stays bypassed.
+		 */
+		reset(): void {
+			if (phase === "done" && !bypassed) phase = "idle";
+		},
 		/** Marks a quit that must never be held (update restart, shutdown, forced quit). */
 		bypass(): void {
+			bypassed = true;
 			// No flush wait: the held quit resumes at once and later quits pass.
 			const next = phase === "pending" || phase === "open" || phase === "closing" ? resume : null;
 			clear();

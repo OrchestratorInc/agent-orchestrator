@@ -5217,12 +5217,19 @@ setUpdateRestartFailureHandler(() => {
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
 	// First-day exit feedback holds a user quit until the dialog is done; an
-	// update restart, a shutdown or a forced quit was bypassed before this.
-	if (exitFeedbackGate.intercept(() => app.quit())) {
+	// update restart, a shutdown or a forced quit was bypassed before this. An
+	// unsafe chat draft asks first, so a cancelled quit never spends the prompt;
+	// once confirmed, the re-entered quit reaches the gate.
+	const chatDraftConfirmPending = chatDraftRisks.length > 0 && !chatDraftQuitConfirmed;
+	if (!chatDraftConfirmPending && exitFeedbackGate.intercept(() => app.quit())) {
 		event.preventDefault();
 		return;
 	}
-	if (desktopQuit.handleBeforeQuit(event)) return;
+	if (desktopQuit.handleBeforeQuit(event)) {
+		// Hidden to the tray, not quit: a later quit may still ask.
+		exitFeedbackGate.reset();
+		return;
+	}
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
@@ -5236,6 +5243,7 @@ app.on("before-quit", (event) => {
 			preserveAgentsOnQuit = false;
 			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
+			exitFeedbackGate.reset();
 		}
 		return;
 	}

@@ -253,6 +253,28 @@ describe("createExitFeedbackGate", () => {
 		expect(gate.intercept(vi.fn())).toBe(false);
 	});
 
+	it("asks again after a quit that did not end the app", async () => {
+		const decide = vi.fn<() => "no_project" | null>(() => null);
+		const { gate, deps, quit } = setup({ decide });
+		// Too early to ask; the quit only hid the window to the tray.
+		expect(gate.intercept(quit)).toBe(false);
+		gate.reset();
+		decide.mockReturnValue("no_project");
+		expect(gate.intercept(quit)).toBe(true);
+		expect(deps.request).toHaveBeenCalledTimes(1);
+		// A live dialog is never dropped by a reset.
+		gate.reset();
+		expect(gate.phase()).toBe("pending");
+	});
+
+	it("keeps a bypassed quit bypassed through a reset", () => {
+		const { gate, deps, quit } = setup();
+		gate.bypass();
+		gate.reset();
+		expect(gate.intercept(quit)).toBe(false);
+		expect(deps.request).not.toHaveBeenCalled();
+	});
+
 	it("never holds an update restart, shutdown or forced quit", async () => {
 		const { gate, deps, quit } = setup();
 		gate.bypass();
