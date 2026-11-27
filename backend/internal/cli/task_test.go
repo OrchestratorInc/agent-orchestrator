@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -685,7 +686,14 @@ func TestTaskStartUnconfirmedDeliveryHasNoTaskID(t *testing.T) {
 }
 
 func TestExitCodeKeepsOtherExitErrorsAtOne(t *testing.T) {
-	err := exec.Command("sh", "-c", "exit 2").Run()
+	// Re-run this test binary as a helper that exits 2, so the check needs no
+	// POSIX shell (the native E2E job also runs on Windows).
+	if os.Getenv("AO_TASK_TEST_EXIT_HELPER") == "1" {
+		os.Exit(2)
+	}
+	helper := exec.Command(os.Args[0], "-test.run=^TestExitCodeKeepsOtherExitErrorsAtOne$")
+	helper.Env = append(os.Environ(), "AO_TASK_TEST_EXIT_HELPER=1")
+	err := helper.Run()
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
 		t.Fatalf("setup: %v", err)
@@ -1005,5 +1013,76 @@ func TestTaskStartAgentOrBaseWithoutWorkerIsAUsageError(t *testing.T) {
 	}
 	if d.saw("POST /api/v1/orchestrators") {
 		t.Fatal("a usage error must not start the orchestrator")
+	}
+}
+
+// Asking for a named chat turn on a terminal session is a lookup failure, not
+// a report of whatever the terminal is doing.
+func TestTaskStatusNamedTurnOnTerminalSessionFails(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"tui","provisionState":"ready","activity":{"state":"active"}}}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-1:t1", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "failed" || !strings.Contains(res["reason"].(string), "has no chat turn t1") {
+		t.Fatalf("result = %v", res)
+	}
+	// The bare session id still reports terminal activity.
+	out, _, err = executeCLI(t, fakeClockDeps(), "task", "status", "repo-1", "--json")
+	if err != nil || decodeTaskResult(t, out)["status"] != "running" {
+		t.Fatalf("bare id: err = %v, out = %s", err, out)
+	}
+}
+
+// A failed turn read just before the deadline is reported as failed even when
+// the optional sign-in guidance lookup runs past the deadline.
+func TestTaskWaitKeepsAFailureWhenGuidanceRunsPastTheDeadline(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	start := deps.Now()
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
+		if deps.Now().Sub(start) < time.Second {
+			return 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"queued"}]}`
+		}
+		return 200, `{"turns":[{"id":"t1","state":"completed"},{"id":"t2","state":"failed","failureCode":"auth_required","errorMessage":"Not logged in"}]}`
+	})
+	d.setFunc("GET /api/v1/agents/auth-plans", func() (int, string) {
+		time.Sleep(1200 * time.Millisecond) // longer than the 1s left
+		return 200, `{"plans":[{"agentId":"claude-code","displayCommand":"claude auth login"}]}`
+	})
+
+	out, _, err := executeCLI(t, deps, "task", "wait", "repo-orchestrator:t2", "--timeout", "2s", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1 (the failure that was read)", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["status"] != "failed" || !strings.Contains(res["reason"].(string), "auth_required") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// Exit 4 must match a read made at the end of the wait: a queued turn that was
+// cancelled during the last sleep is reported as failed, not "will run".
+func TestTaskWaitRereadsAQueuedTaskBeforeExitFour(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	start := deps.Now()
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
+		if deps.Now().Sub(start) < 10*time.Second {
+			return 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"queued"}]}`
+		}
+		return 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"cancelled"}]}`
+	})
+
+	out, _, err := executeCLI(t, deps, "task", "wait", "repo-orchestrator:t2", "--timeout", "10s", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "failed" || !strings.Contains(res["reason"].(string), "cancelled") {
+		t.Fatalf("result = %v", res)
 	}
 }

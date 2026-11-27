@@ -51,6 +51,13 @@ const (
 
 const defaultTaskTimeout = 120 * time.Second
 
+// taskGuidanceTimeout bounds the optional sign-in guidance lookup.
+var taskGuidanceTimeout = 5 * time.Second
+
+// taskFinalReadTimeout bounds the one extra read a wait makes after its
+// deadline, so an exit-4 "still queued" result matches a fresh read.
+var taskFinalReadTimeout = 5 * time.Second
+
 // taskPollInterval paces status reads while waiting.
 var taskPollInterval = time.Second
 
@@ -103,7 +110,9 @@ func newTaskCommand(ctx *commandContext) *cobra.Command {
 		Long: "Start a task on a project and check whether the agent really picked it up.\n\n" +
 			"By default the project's orchestrator receives the task, plans it, and starts workers.\n" +
 			"With --worker a single worker session takes it directly.\n\n" +
-			"Exit codes: 0 started (running or done), 1 failed or timed out, 2 usage error, 3 waiting on the user,\n" +
+			"Exit codes: 0 started (running or done) when the command waits; a one-shot read (status, or start\n" +
+			"without --wait) also exits 0 while starting or queued, so check status. 1 failed or timed out,\n" +
+			"2 usage error, 3 waiting on the user,\n" +
 			"4 a wait ran out while the task was still queued (it will run; do not start it again).\n" +
 			"--wait and `ao task wait` confirm the task started; poll `ao task status` for completion.\n" +
 			"With --json, stdout is {status, taskId, sessionIds, reason, fix}; status is one of\n" +
@@ -518,7 +527,11 @@ func (c *commandContext) signInFix(ctx context.Context, agent string) string {
 			DocumentationURL string `json:"documentationUrl"`
 		} `json:"plans"`
 	}
-	if err := c.getJSON(ctx, "agents/auth-plans", &plans); err == nil {
+	// Guidance is optional and has its own short budget, so it can never use
+	// up a wait's deadline and turn a confirmed failure into a timeout.
+	planCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskGuidanceTimeout)
+	defer cancel()
+	if err := c.getJSON(planCtx, "agents/auth-plans", &plans); err == nil {
 		for _, plan := range plans.Plans {
 			if plan.AgentID != agent {
 				continue
@@ -681,6 +694,8 @@ type taskObservation struct {
 	result  taskResult
 	harness string
 	phase   string
+	// readFailed: the result is a failed read, not a reading of the task.
+	readFailed bool
 	// turnID is the turn the status describes (after retries), empty for a
 	// terminal session or before the turn exists.
 	turnID string
@@ -695,7 +710,7 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	sessions := []string{id.session}
 	sess, err := c.fetchTaskSession(ctx, id.session)
 	if err != nil {
-		return taskObservation{result: failedTask(id.String(), sessions, err.Error(), "")}
+		return taskObservation{result: failedTask(id.String(), sessions, err.Error(), ""), readFailed: true}
 	}
 	var conv *taskConversation
 	if sess.Mode != "tui" && sess.ProvisionState != "provisioning" && !sess.IsTerminated {
@@ -707,9 +722,18 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 			conv = nil
 		default:
 			return taskObservation{
-				result:  failedTask(id.String(), sessions, fmt.Sprintf("read conversation of %s: %s", id.session, err.Error()), ""),
-				harness: sess.Harness,
+				result:     failedTask(id.String(), sessions, fmt.Sprintf("read conversation of %s: %s", id.session, err.Error()), ""),
+				harness:    sess.Harness,
+				readFailed: true,
 			}
+		}
+	}
+	// A named turn exists only in a Chat conversation. A terminal session's
+	// activity says nothing about that turn, so it is not reported for it.
+	if id.turn != "" && conv == nil && sess.ProvisionState != "provisioning" && !sess.IsTerminated {
+		return taskObservation{
+			result:  failedTask(id.String(), sessions, fmt.Sprintf("session %s is a terminal session and has no chat turn %s; use the session id alone (`ao task status %s`)", id.session, id.turn, id.session), ""),
+			harness: sess.Harness,
 		}
 	}
 	eval := evaluateTask(sess, conv, id.turn)
@@ -953,7 +977,7 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		if err := ctx.Err(); err != nil {
 			return failedTask(id.String(), last.SessionIDs, "interrupted while waiting: "+err.Error(), "")
 		}
-		if readErr != nil {
+		if obs.readFailed && readErr != nil {
 			break // the read ran into the deadline
 		}
 		if obs.harness != "" {
@@ -992,9 +1016,33 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 
 	// Nothing settled in time. A queued task is accepted and will still run,
 	// so it is reported apart from a failure: retrying it would send it twice.
+	finalReadFailed := false
+	if last.Status == taskStatusQueued {
+		// Re-read once, bounded, so the answer matches the task's state now:
+		// the queued turn may have started, failed or been cancelled during
+		// the last sleep.
+		finalCtx, cancel := context.WithTimeout(ctx, taskFinalReadTimeout)
+		final := c.observeTask(finalCtx, id)
+		cancel()
+		finalReadFailed = final.readFailed
+		if !final.readFailed {
+			switch final.result.Status {
+			case taskStatusFailed, taskStatusNeedsInput, taskStatusDone:
+				return final.result
+			case taskStatusQueued:
+				last = final.result
+			default:
+				last = final.result
+				phase = final.phase
+			}
+		}
+	}
 	if last.Status == taskStatusQueued {
 		last.waitTimedOut = true
 		last.Reason = fmt.Sprintf("timed out after %s while still queued behind the agent's current turn; the task is accepted and will run, so do not start it again", timeout)
+		if finalReadFailed {
+			last.Reason = fmt.Sprintf("timed out after %s; the task was queued behind the agent's current turn at the last check, and a final check could not be read; check `ao task status %s` before starting it again", timeout, id)
+		}
 		last.Fix = fmt.Sprintf("wait longer with `ao task wait %s`, or check `ao session get %s`", id, id.session)
 		return last
 	}

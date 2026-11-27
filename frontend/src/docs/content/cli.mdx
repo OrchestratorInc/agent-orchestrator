@@ -167,13 +167,13 @@ By default the project's orchestrator receives the task, plans it, and starts wo
 | `ao task status <task-id>` | Report the task's status once. Supports `--json`. |
 | `ao task wait <task-id>` | Wait until the task has started, failed, or needs you. Supports `--timeout` and `--json`. |
 
-`start --wait` behaves like `start` followed by `wait`. A task has started once its turn has finished, or has stayed running for a few seconds before `--timeout` ends. `wait` confirms that the task started, not that it finished, so an approval the agent asks for later is not seen by that call: keep calling `ao task status` or `ao task wait` until it reports `done`, `failed` or `needs_input`. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. Without `--worker`, `--agent` and `--base` exit `2` as a usage error, because the orchestrator chooses agents and branches for its workers; set project defaults with `ao project set-config` instead.
+`start --wait` behaves like `start` followed by `wait`. A task has started once its turn has finished, or has stayed running for a few seconds before `--timeout` ends. `wait` confirms that the task started, not that it finished, so an approval the agent asks for later is not seen by that call: keep calling `ao task status` or `ao task wait` until it reports `done`, `failed` or `needs_input`. This does not work for a terminal (TUI) task: its one-shot status stays `starting` at the prompt, so a task that finishes between polls never reads `done`; check that session with `ao session get <id>` instead. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. Without `--worker`, `--agent` and `--base` exit `2` as a usage error, because the orchestrator chooses agents and branches for its workers; set project defaults with `ao project set-config` instead.
 
 For a task sent to the orchestrator, the status includes the workers it started: `needs_input` if any of them needs you, `running` while the orchestrator or any worker is still working, `failed` if a worker failed after the orchestrator's turn ended, and `done` only when the orchestrator and all its workers have finished. A worker in a terminal (TUI) session never reads `done`, so the task stays `running`.
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | The task started: it is running or done. Without `--wait`, it may also still be starting. |
+| `0` | With `--wait` or `ao task wait`: the task started, running or done. A one-shot read (`ao task status`, or `start` without `--wait`) also exits `0` while the task is `starting` or `queued`, so check `status`. |
 | `1` | The task failed: the session could not start, the agent's turn failed, or `--timeout` ran out first. |
 | `2` | Usage error: the command itself needs fixing. It prints no JSON. |
 | `3` | The task is waiting on you, for example for an approval. Answer it in Orchestrator; starting the task again would run it twice. |

@@ -37,7 +37,7 @@ project's defaults with `ao project set-config <id> --worker-agent <agent>
 
 | Code | Meaning |
 |---|---|
-| `0` | The task started (running or done). Without `--wait` it may also still be `starting`. |
+| `0` | With `--wait` or `ao task wait`: the task started (`running` or `done`). A one-shot read (`ao task status`, or `start` without `--wait`) also exits `0` while the task is `starting` or `queued`, so read `status` before treating it as started. |
 | `1` | The task failed, or `--timeout` ran out before it started. |
 | `2` | Usage error: fix the command (for example pass `--project`). Prints no JSON. |
 | `3` | The task is waiting on the user, such as for an approval. Ask the user; do not start the task again. |
@@ -53,6 +53,11 @@ finished: they return once its turn has run for 5 seconds. An approval the
 agent asks for after that is not seen by that call. Keep calling
 `ao task status <task-id>` (or `ao task wait`) until `status` is `done`,
 `failed` or `needs_input`, and act on `needs_input` when it appears.
+
+That polling works for Chat sessions, which report turns. It does not work for
+a terminal (TUI) task: its one-shot status stays `starting` once the agent is
+back at its prompt, so a task that finishes between polls never reads `done`.
+For a terminal task, check the session itself with `ao session get <id>`.
 
 On the orchestrator path, the status covers the workers the orchestrator
 started for the task, not just its own turn:
